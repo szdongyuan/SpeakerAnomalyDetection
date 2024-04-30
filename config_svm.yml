@@ -1,0 +1,30 @@
+# DO NOT MOVE, UNLESS NECESSARY!!!
+
+- module_name: "preprocess"
+
+  module_config:
+
+    preprocess_method: "mfcc" # only mel_spec and mfcc are supported at this moment
+
+    preprocess_param:
+      # n_mfcc: 20
+      n_fft: 2048
+      hop_length: 512
+
+- module_name: "model"
+
+  module_config:
+
+    model_name: "EnsembleSVC" # only SimpleSVC and EnsembleSVC are supported at this moment
+
+    model_init_config:
+      n_models: 10
+      param:
+        dual: False
+        max_iter: 5000
+
+    model_fit_config:
+      balance_sample_number: True
+
+    model_predict_config:
+      acc_req: 0.8
