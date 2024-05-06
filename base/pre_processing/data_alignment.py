@@ -9,6 +9,6 @@ class DataAlignment(object):
     @staticmethod
     def data_padding(raw_inputs, padding="post"):
         padded_inputs = tf.keras.preprocessing.sequence.pad_sequences(
-            raw_inputs, padding="post"
+            raw_inputs, padding=padding
         )
         return padded_inputs
