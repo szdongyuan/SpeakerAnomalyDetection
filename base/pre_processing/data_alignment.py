@@ -12,3 +12,8 @@ class DataAlignment(object):
             raw_inputs, padding=padding
         )
         return padded_inputs
+
+    @staticmethod
+    def chop_data_head(raw_inputs, chop_length):
+        chopped_data = raw_inputs[:, chop_length:]
+        return chopped_data
