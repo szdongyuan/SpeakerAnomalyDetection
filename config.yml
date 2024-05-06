@@ -23,13 +23,13 @@
       layers_param:
         - layer_name: "Conv1D"
           layer_kwargs:
-            filters: 20
-            kernel_size: 150
+            filters: 40
+            kernel_size: 200
             activation: "relu"
             strides: 10
         - layer_name: "MaxPooling1D"
           layer_kwargs:
-            pool_size: 6
+            pool_size: 4
         - layer_name: "Conv1D"
           layer_kwargs:
             filters: 20
@@ -56,7 +56,7 @@
 
     model_fit_config:
       balance_sample_number: True
-      cycles: 15
+      cycles: 1
       epochs: 5
       batch_size: 30
 

@@ -7,7 +7,7 @@ class DisplayManager(object):
     def display_confusion_matrix(y_true, y_pred, labels=None):
         if not labels:
             labels = [["true_NG", "true_OK"], ["predict_NG", "predict_OK"]]
-        col_len_0 = max([len(label_str) for label_str in labels[0]])
+        col_len_0 = max([len(label_str) for label_str in labels[0]]) + 1
         col_len_1 = max([len(label_str) for label_str in labels[1]])
         cm = confusion_matrix(y_true=y_true, y_pred=y_pred)
         result_str = ""

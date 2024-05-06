@@ -1,4 +1,5 @@
 import json
+import os
 
 from base.display import DisplayManager
 
@@ -30,7 +31,13 @@ def train(pre_labeled_dir,
     y_train = labels
     print("finish data preparing")
 
-    model = init_model_from_config()
+    if os.path.isfile(save_model_path):
+        print("model [%s] exists, keep training" % save_model_path)
+        model = init_model_from_config()
+        model.load_model(save_model_path)
+    else:
+        print("init new model [%s]..." % save_model_path)
+        model = init_model_from_config()
     model.fit(X_train, y_train)
     ret_msg = "finish training"
 
