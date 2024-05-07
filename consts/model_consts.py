@@ -1,6 +1,7 @@
 import os
 
 from machine_learning.cnn import CNN1d
+from machine_learning.rnn import RNN
 from machine_learning.svc import EnsembleSVC, SimpleSVC
 
 DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
@@ -14,5 +15,6 @@ TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
 MODEL_LIST = {
     "EnsembleSVC": EnsembleSVC,
     "SimpleSVC": SimpleSVC,
-    "CNN1d": CNN1d
+    "CNN1d": CNN1d,
+    "RNN": RNN
 }
