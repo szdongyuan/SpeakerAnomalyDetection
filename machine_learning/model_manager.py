@@ -19,3 +19,15 @@ class ModelManager(object):
         self.pred_config = self.DEFAULT_CONFIG.get("model_predict_config")
         for config_item in model_config.get("model_predict_config", {}):
             self.pred_config[config_item] = model_config["model_predict_config"][config_item]
+
+    def fit(self):
+        pass
+
+    def predict(self):
+        pass
+
+    def save_model(self):
+        pass
+
+    def load_model(self):
+        pass
