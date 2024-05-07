@@ -1,5 +1,4 @@
 import numpy as np
-import tensorflow as tf
 from tensorflow.keras import layers, models, Input
 
 from base.pre_processing.sample_balance import balance_sample_number
@@ -67,6 +66,7 @@ class CNN1d(ModelManager):
         cycles = self.fit_config.get("cycles")
         epochs = self.fit_config.get("epochs")
         batch_size = self.fit_config.get("batch_size")
+        history = None
         for i in range(cycles):
             if self.fit_config.get("balance_sample_number"):
                 x, y = balance_sample_number(x_train, y_train)
