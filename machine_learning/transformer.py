@@ -4,6 +4,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 
+from machine_learning.model_manager import ModelManager
+
+
+class Transformer(ModelManager):
+
+    DEFAULT_CONFIG = {}
+
+    def __init__(self, model_config):
+        super().__init__(model_config)
+        self.model = None
+        self._init_model()
+
+    def _init_model(self):
+        pass
+
+    def fit(self, x_train, y_train, validation_data=None):
+        pass
+
+    def predict(self, x_test):
+        pass
+
+    def save_model(self, save_model_path):
+        pass
+
+    def load_model(self, load_model_path):
+        pass
+
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
