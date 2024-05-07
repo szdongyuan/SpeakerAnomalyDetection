@@ -20,14 +20,14 @@ class ModelManager(object):
         for config_item in model_config.get("model_predict_config", {}):
             self.pred_config[config_item] = model_config["model_predict_config"][config_item]
 
-    def fit(self):
+    def fit(self, x_train, y_train, validation_data=None):
         pass
 
-    def predict(self):
+    def predict(self, x_test):
         pass
 
-    def save_model(self):
+    def save_model(self, save_model_path):
         pass
 
-    def load_model(self):
+    def load_model(self, load_model_path):
         pass
