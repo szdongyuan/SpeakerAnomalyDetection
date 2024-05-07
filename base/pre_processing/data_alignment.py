@@ -12,3 +12,14 @@ class DataAlignment(object):
             raw_inputs, padding=padding
         )
         return padded_inputs
+
+    @staticmethod
+    def chop_data(raw_inputs, chop_head=0, chop_tail=None):
+        """
+        :param raw_inputs: numpy ndarray
+        :param chop_head: int, included in result
+        :param chop_tail: int or None, not included in result
+        :return: numpy ndarray. selected section of data
+        """
+        chopped_data = raw_inputs[:, chop_head:chop_tail]
+        return chopped_data
