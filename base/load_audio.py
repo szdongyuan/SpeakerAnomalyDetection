@@ -108,16 +108,18 @@ def pre_process_data(signals, preprocess_config, **kwargs):
         fs = kwargs.get("fs")
         for i in range(len(signals)):
             mfcc = spectral.mfcc(y=signals[i], sr=fs[i], **preprocess_kwargs)
-            mfcc_reshape = mfcc.reshape((1, mfcc.shape[0] * mfcc.shape[1]))[0]
-            processed_data.append(mfcc_reshape)
+            if preprocess_config.get("data_reshape", True):
+                mfcc = mfcc.reshape((1, mfcc.shape[0] * mfcc.shape[1]))[0]
+            processed_data.append(mfcc)
         return np.array(processed_data)
     elif method == "mel_spec":
         processed_data = []
         fs = kwargs.get("fs")
         for i in range(len(signals)):
             mel_spec = spectral.melspectrogram(y=signals[i], sr=fs[i], **preprocess_kwargs)
-            mel_spec_reshape = mel_spec.reshape((1, mel_spec.shape[0] * mel_spec.shape[1]))[0]
-            processed_data.append(mel_spec_reshape)
+            if preprocess_config.get("data_reshape", True):
+                mel_spec = mel_spec.reshape((1, mel_spec.shape[0] * mel_spec.shape[1]))[0]
+            processed_data.append(mel_spec)
         return np.array(processed_data)
     else:
         print("method [%s] not support yet" % method)
