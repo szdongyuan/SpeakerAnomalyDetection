@@ -107,7 +107,7 @@ def pre_process_data(signals, preprocess_config, **kwargs):
         processed_data = []
         fs = kwargs.get("fs")
         for i in range(len(signals)):
-            mfcc = spectral.mfcc(y=signals[i], sr=fs[i], **preprocess_kwargs)
+            mfcc = spectral.mfcc(y=signals[i], sr=fs[i], **preprocess_kwargs).T
             if preprocess_config.get("data_reshape", True):
                 mfcc = mfcc.reshape((1, mfcc.shape[0] * mfcc.shape[1]))[0]
             processed_data.append(mfcc)
@@ -116,7 +116,7 @@ def pre_process_data(signals, preprocess_config, **kwargs):
         processed_data = []
         fs = kwargs.get("fs")
         for i in range(len(signals)):
-            mel_spec = spectral.melspectrogram(y=signals[i], sr=fs[i], **preprocess_kwargs)
+            mel_spec = spectral.melspectrogram(y=signals[i], sr=fs[i], **preprocess_kwargs).T
             if preprocess_config.get("data_reshape", True):
                 mel_spec = mel_spec.reshape((1, mel_spec.shape[0] * mel_spec.shape[1]))[0]
             processed_data.append(mel_spec)
