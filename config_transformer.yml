@@ -4,41 +4,30 @@
 
   module_config:
 
-    preprocess_method: "None" # only mel_spec and mfcc are supported at this moment
+    preprocess_method: "mel_spec" # only mel_spec and mfcc are supported at this moment
 
     preprocess_param:
       # n_mfcc: 20
       n_fft: 2048
       hop_length: 512
 
+    data_reshape: False
+
 - module_name: "model"
 
   module_config:
 
-    model_name: "CNN1d"
+    model_name: "Transformer"
 
     model_init_config:
-      input_len_1: 64340
-      input_len_2: 1
+      input_len_1: 128
+      input_len_2: 126
       layers_param:
-        - layer_name: "Conv1D"
+        - layer_name: "TransformerEncoder"
           layer_kwargs:
-            filters: 10
-            kernel_size: 100
-            activation: "relu"
-            strides: 10
-        - layer_name: "MaxPooling1D"
-          layer_kwargs:
-            pool_size: 4
-        - layer_name: "Conv1D"
-          layer_kwargs:
-            filters: 20
-            kernel_size: 10
-            activation: "relu"
-            strides: 2
-        - layer_name: "MaxPooling1D"
-          layer_kwargs:
-            pool_size: 4
+            embed_dim: 126
+            dense_dim: 200
+            num_heads: 8
         - layer_name: "Flatten"
         - layer_name: "Dense"
           layer_kwargs:
@@ -46,7 +35,7 @@
             activation: "relu"
         - layer_name: "Dense"
           layer_kwargs:
-            units: 1
+            units: 2
             activation: "softmax"
       compile_param:
         optimizer: 'adam'
@@ -56,6 +45,9 @@
 
     model_fit_config:
       balance_sample_number: True
+      cycles: 15
+      epochs: 5
+      batch_size: 30
 
     model_predict_config:
       acc_req: 0.8

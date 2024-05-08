@@ -3,6 +3,7 @@ import os
 from machine_learning.cnn import CNN1d
 from machine_learning.rnn import RNN
 from machine_learning.svc import EnsembleSVC, SimpleSVC
+from machine_learning.transformer import Transformer
 
 DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
 
@@ -16,5 +17,6 @@ MODEL_LIST = {
     "EnsembleSVC": EnsembleSVC,
     "SimpleSVC": SimpleSVC,
     "CNN1d": CNN1d,
-    "RNN": RNN
+    "RNN": RNN,
+    "Transformer": Transformer
 }
