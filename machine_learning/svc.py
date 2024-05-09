@@ -2,7 +2,7 @@ import joblib
 import numpy as np
 from sklearn.svm import LinearSVC
 
-from base.pre_processing.sample_balance import balance_sample_number
+from base.sample_balance import balance_sample_number
 from machine_learning.model_manager import ModelManager
 
 

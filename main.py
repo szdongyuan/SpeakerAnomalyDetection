@@ -1,12 +1,14 @@
 import json
 import os
 
-from base.display import DisplayManager
+import numpy as np
 
-from base.load_audio import get_pre_labeled_audios, get_audio_files_and_labels, pre_process_data
+from base.display import DisplayManager
+from base.load_audio import get_pre_labeled_audios, get_audio_files_and_labels
 from base.load_config import load_config
+from base.pre_processing.preprocessing_manager import PreprocessingManager
 from consts import error_code
-from consts.model_consts import MODEL_LIST
+from consts.model_consts import MODEL_MAPPING
 
 
 DEFAULT_DATA_PATH = "audio_data/train"
@@ -27,11 +29,11 @@ def train(pre_labeled_dir,
     print("finish audio loading")
 
     preprocess_config = load_config("preprocess")
-    X_train = pre_process_data(signals, preprocess_config, fs=fs)
+    X_train = preprocess_raw_signals(signals, fs, preprocess_config)
     y_train = labels
     print("finish data preparing")
 
-    if os.path.isfile(save_model_path):
+    if save_model_path and os.path.isfile(save_model_path):
         print("model [%s] exists, keep training" % save_model_path)
         model = init_model_from_config()
         model.load_model(save_model_path)
@@ -60,7 +62,7 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
     signals, file_names, fs, labels = ret
 
     preprocess_config = load_config("preprocess")
-    X_test = pre_process_data(signals, preprocess_config, fs=fs)
+    X_test = preprocess_raw_signals(signals, fs, preprocess_config)
     y_test = labels
 
     if load_model_path:
@@ -100,7 +102,7 @@ def predict(predict_dir, load_model_path=None, model=None):
     signals, file_names, fs, _ = ret
 
     preprocess_config = load_config("preprocess")
-    X_test = pre_process_data(signals, preprocess_config, fs=fs)
+    X_test = preprocess_raw_signals(signals, fs, preprocess_config)
     if load_model_path:
         model = init_model_from_config()
         model.load_model(load_model_path)
@@ -118,6 +120,14 @@ def predict(predict_dir, load_model_path=None, model=None):
 
 def init_model_from_config():
     model_config = load_config("model")
-    model_obj = MODEL_LIST.get(model_config.get("model_name"))
+    model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
     return model
+
+
+def preprocess_raw_signals(raw_signals, fs, preprocess_config):
+    processed_data = []
+    pm = PreprocessingManager()
+    for i in range(len(raw_signals)):
+        processed_data.append(pm.process(raw_signals[i], fs[i], **preprocess_config))
+    return np.array(processed_data)

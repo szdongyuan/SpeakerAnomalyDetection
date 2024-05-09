@@ -1,7 +1,7 @@
 import numpy as np
 from tensorflow.keras import layers, models, Input
 
-from base.pre_processing.sample_balance import balance_sample_number
+from base.sample_balance import balance_sample_number
 from machine_learning.model_manager import ModelManager
 
 

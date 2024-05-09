@@ -13,7 +13,7 @@ TRAIN_NG_PATH = DEFAULT_DIR + "audio_data/train/NG"
 TEST_OK_PATH = DEFAULT_DIR + "audio_data/test/OK"
 TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
 
-MODEL_LIST = {
+MODEL_MAPPING = {
     "EnsembleSVC": EnsembleSVC,
     "SimpleSVC": SimpleSVC,
     "CNN1d": CNN1d,
