@@ -29,7 +29,6 @@ def train(pre_labeled_dir,
     print("finish audio loading")
 
     preprocess_config = load_config("preprocess")
-
     X_train = preprocess_raw_signals(signals, fs, preprocess_config)
     y_train = labels
     print("finish data preparing")

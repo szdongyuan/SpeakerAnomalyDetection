@@ -2,7 +2,6 @@ import os
 
 import numpy as np
 import librosa
-import librosa.feature.spectral as spectral
 
 from consts import error_code
 
@@ -87,40 +86,3 @@ def get_pre_labeled_audios(pre_labeled_dir):
     tot_fs = np.array(ok_fs + ng_fs)
     tot_labels = np.array(ok_labels + ng_labels)
     return error_code.OK, (tot_signals, tot_files, tot_fs, tot_labels)
-
-
-def pre_process_data(signals, preprocess_config, **kwargs):
-    """
-        Function to pre-process audio signals using the specified method.
-
-        Args:
-        - signals (list): List containing audio signals.
-        - method (str): Method for pre-processing. Default is "mfcc".
-        - **kwargs: Additional keyword arguments to be passed to the pre-processing function.
-
-        Returns:
-        - processed_data (ndarray): NumPy array containing pre-processed data.
-    """
-    method = preprocess_config.get("preprocess_method", "mfcc")
-    preprocess_kwargs = preprocess_config.get("preprocess_param", {})
-    if method == "mfcc":
-        processed_data = []
-        fs = kwargs.get("fs")
-        for i in range(len(signals)):
-            mfcc = spectral.mfcc(y=signals[i], sr=fs[i], **preprocess_kwargs).T
-            if preprocess_config.get("data_reshape", True):
-                mfcc = mfcc.reshape((1, mfcc.shape[0] * mfcc.shape[1]))[0]
-            processed_data.append(mfcc)
-        return np.array(processed_data)
-    elif method == "mel_spec":
-        processed_data = []
-        fs = kwargs.get("fs")
-        for i in range(len(signals)):
-            mel_spec = spectral.melspectrogram(y=signals[i], sr=fs[i], **preprocess_kwargs).T
-            if preprocess_config.get("data_reshape", True):
-                mel_spec = mel_spec.reshape((1, mel_spec.shape[0] * mel_spec.shape[1]))[0]
-            processed_data.append(mel_spec)
-        return np.array(processed_data)
-    else:
-        print("method [%s] not support yet" % method)
-        return signals
