@@ -10,6 +10,8 @@ class PreprocessingManager(object):
         process_mapping = {
             "mfcc": AudioFeatureExtraction.mfcc,
             "mel_spec": AudioFeatureExtraction.mel_spec,
+            "zero_crossing_rate": AudioFeatureExtraction.zero_crossing_rate,
+            "spectral_flatness": AudioFeatureExtraction.spectral_flatness,
             "sequence_process": cls.sequence_process,
             "stack_process": cls.stack_process,
         }

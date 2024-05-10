@@ -6,11 +6,6 @@
 
     preprocess_method: "None" # only mel_spec and mfcc are supported at this moment
 
-    preprocess_param:
-      # n_mfcc: 20
-      n_fft: 2048
-      hop_length: 512
-
 - module_name: "model"
 
   module_config:

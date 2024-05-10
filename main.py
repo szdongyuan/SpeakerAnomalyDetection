@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import numpy as np
 
@@ -18,8 +19,8 @@ DEFAULT_MODEL_PATH = "models/"
 
 def train(pre_labeled_dir,
           save_model_path=None,
-          predict_dir=None,
-          **kwargs):
+          predict_dir=None):
+    time_0 = time.time()
     ret_code, ret = get_pre_labeled_audios(pre_labeled_dir)
     if ret_code != error_code.OK:
         return json.dumps({"ret_code": ret_code,
@@ -31,7 +32,7 @@ def train(pre_labeled_dir,
     preprocess_config = load_config("preprocess")
     X_train = preprocess_raw_signals(signals, fs, preprocess_config)
     y_train = labels
-    print("finish data preparing")
+    print("finish data preparing, data shape %s" % str(X_train.shape))
 
     if save_model_path and os.path.isfile(save_model_path):
         print("model [%s] exists, keep training" % save_model_path)
@@ -41,13 +42,14 @@ def train(pre_labeled_dir,
         print("init new model [%s]..." % save_model_path)
         model = init_model_from_config()
     model.fit(X_train, y_train)
-    ret_msg = "finish training"
+    ret_msg = "finish training. time spent [%s] s" % (time.time() - time_0)
+    print(ret_msg)
 
     if save_model_path:
         model.save_model(save_model_path)
-        ret_msg += ", model saved."
+        ret_msg += ". model saved."
     if predict_dir:
-        return evaluate(predict_dir, model=model, verbose=True)
+        evaluate(predict_dir, model=model, verbose=True)
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": ret_msg,
                        "result": ret_msg})

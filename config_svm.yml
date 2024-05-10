@@ -7,9 +7,11 @@
     preprocess_method: "mfcc" # only mel_spec and mfcc are supported at this moment
 
     preprocess_param:
-      # n_mfcc: 20
-      n_fft: 2048
-      hop_length: 512
+      extraction_kwargs:
+        n_mfcc: 20
+        n_fft: 2048
+        hop_length: 512
+      flatten: True
 
 - module_name: "model"
 

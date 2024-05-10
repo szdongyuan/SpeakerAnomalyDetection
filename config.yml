@@ -9,13 +9,25 @@
       processor_list:
         - preprocess_method: "mfcc"
           preprocess_param:
-            n_mfcc: 20
-            n_fft: 2048
-            hop_length: 512
+            extraction_kwargs:
+              n_mfcc: 20
+              n_fft: 2048
+              hop_length: 256
         - preprocess_method: "mel_spec"
           preprocess_param:
-            n_fft: 2048
-            hop_length: 512
+            extraction_kwargs:
+              n_fft: 2048
+              hop_length: 256
+        - preprocess_method: "zero_crossing_rate"
+          preprocess_param:
+            extraction_kwargs:
+              frame_length: 2048
+              hop_length: 256
+        - preprocess_method: "spectral_flatness"
+          preprocess_param:
+            extraction_kwargs:
+              n_fft: 2048
+              hop_length: 256
 
 - module_name: "model"
 
@@ -24,12 +36,12 @@
     model_name: "Transformer"
 
     model_init_config:
-      # input_len_1: 126
-      input_len_2: 148
+      input_len_1: 252
+      input_len_2: 150
       layers_param:
         - layer_name: "TransformerEncoder"
           layer_kwargs:
-            embed_dim: 148
+            embed_dim: 150
             dense_dim: 256
             num_heads: 8
         - layer_name: "Flatten"

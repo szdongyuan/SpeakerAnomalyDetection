@@ -4,14 +4,25 @@
 
   module_config:
 
-    preprocess_method: "mel_spec" # only mel_spec and mfcc are supported at this moment
-
+    preprocess_method: "stack_process"
     preprocess_param:
-      # n_mfcc: 20
-      n_fft: 2048
-      hop_length: 512
-
-    data_reshape: False
+      processor_list:
+        - preprocess_method: "mfcc"
+          preprocess_param:
+            extraction_kwargs:
+              n_mfcc: 20
+              n_fft: 2048
+              hop_length: 256
+        - preprocess_method: "mel_spec"
+          preprocess_param:
+            extraction_kwargs:
+              n_fft: 2048
+              hop_length: 256
+        - preprocess_method: "zero_crossing_rate"
+          preprocess_param:
+            extraction_kwargs:
+              frame_length: 2048
+              hop_length: 256
 
 - module_name: "model"
 
@@ -20,13 +31,18 @@
     model_name: "Transformer"
 
     model_init_config:
-      input_len_1: 128
-      input_len_2: 126
+      input_len_1: 126
+      input_len_2: 149
       layers_param:
         - layer_name: "TransformerEncoder"
           layer_kwargs:
-            embed_dim: 126
-            dense_dim: 200
+            embed_dim: 149
+            dense_dim: 256
+            num_heads: 8
+        - layer_name: "TransformerEncoder"
+          layer_kwargs:
+            embed_dim: 148
+            dense_dim: 256
             num_heads: 8
         - layer_name: "Flatten"
         - layer_name: "Dense"
