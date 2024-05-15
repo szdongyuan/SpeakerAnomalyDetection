@@ -2,10 +2,10 @@ import numpy as np
 from tensorflow.keras import layers, models, Input
 
 from base.sample_balance import balance_sample_number
-from machine_learning.model_manager import ModelManager
+from machine_learning.model_manager import NeuralNetManager
 
 
-class RNN(ModelManager):
+class RNN(NeuralNetManager):
 
     DEFAULT_CONFIG = {"model_name": "RNN",
                       "model_init_config": {
@@ -59,27 +59,17 @@ class RNN(ModelManager):
         self.model.add(layer(**layer_kwargs))
 
     def fit(self, x_train, y_train, validation_data=None):
-        cycles = self.fit_config.get("cycles")
-        epochs = self.fit_config.get("epochs")
-        batch_size = self.fit_config.get("batch_size")
+        cycles = self.fit_config.get("cycles", 1)
+        fit_kwargs = self.parse_fit_config()
+        history = None
         for i in range(cycles):
             if self.fit_config.get("balance_sample_number"):
                 x, y = balance_sample_number(x_train, y_train)
             else:
                 x, y = x_train, y_train
-            history = self.model.fit(x, y,
-                                     epochs=epochs,
-                                     batch_size=batch_size,
-                                     validation_data=validation_data)
+            x_fit, x_valid, y_fit, y_valid = self.split_fit_valid(x, y)
+            history = self.model.fit(x_fit, y_fit,
+                                     validation_data=(x_valid, y_valid),
+                                     **fit_kwargs)
             print("finish cycle %s" % i)
         return history
-
-    def predict(self, x_test):
-        predictions = self.model.predict(x_test)
-        return np.argmax(predictions, axis=1)
-
-    def save_model(self, save_model_path):
-        self.model.save(save_model_path)
-
-    def load_model(self, load_model_path):
-        self.model = models.load_model(load_model_path)
