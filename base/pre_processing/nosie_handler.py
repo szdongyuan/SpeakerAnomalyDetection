@@ -10,14 +10,14 @@ class NoiseHandler:
     def __init__(self, directory_path):
         self.directory_path = Path(directory_path)
 
-    def process_all_audios(self):
+    def process_selected_audios(self, n=3):
         """加载所有 WAV files"""
         audio_data = []
         audio_files = list(self.directory_path.glob('*.wav'))
-        for audio_file in audio_files:
-            y, sr = librosa.load(audio_file, sr=None)
-            audio_data.append((audio_file.name, sr, y))
-        return audio_data[:3]
+        for i in range(min(n, len(audio_files))):
+            y, sr = librosa.load(audio_files[i], sr=None)
+            audio_data.append((audio_files[i].name, sr, y))
+        return audio_data
 
     @staticmethod
     def plot_waveform_and_info(file_path):
@@ -28,6 +28,7 @@ class NoiseHandler:
         plt.xlabel("Time (s)")
         plt.ylabel("Amplitude")
         plt.show()
+        plt.close()
         duration = librosa.get_duration(y=y, sr=sr)
         print(f"File: {file_path}")
         print(f"Sample Rate: {sr} Hz")
@@ -55,6 +56,7 @@ class NoiseHandler:
             plt.xlabel("Time (s)")
             plt.ylabel("Amplitude")
             plt.show()
+            plt.close()
             random_noise_samples.append((file_name, sr, y_random_sample))
             print(f"File {i}: {file_name}")
             print(f"Sample Rate: {sr} Hz")
