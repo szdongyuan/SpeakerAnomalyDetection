@@ -8,10 +8,12 @@ from machine_learning.transformer import Transformer
 DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
 
 CONFIG_PATH = DEFAULT_DIR + "config.yml"
+TRAIN_PATH = DEFAULT_DIR + "audio_data/train"
 TRAIN_OK_PATH = DEFAULT_DIR + "audio_data/train/OK"
 TRAIN_NG_PATH = DEFAULT_DIR + "audio_data/train/NG"
 TEST_OK_PATH = DEFAULT_DIR + "audio_data/test/OK"
 TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
+STORED_SAMPLE_PATH = DEFAULT_DIR + "audio_data/stored_sample"
 
 MODEL_MAPPING = {
     "EnsembleSVC": EnsembleSVC,
