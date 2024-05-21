@@ -1,7 +1,19 @@
+import librosa.core.spectrum as spectrum
 import librosa.feature.spectral as spectral
+import numpy as np
 
 
 class AudioFeatureExtraction(object):
+
+    @staticmethod
+    def spectrogram(signal, sr, **kwargs):
+        extraction_kwargs = kwargs.get("extraction_kwargs", {})
+        spec = np.abs(spectrum.stft(y=signal, **extraction_kwargs))
+        if kwargs.get("time_series_first", True):
+            spec = spec.T
+        if kwargs.get("flatten", False):
+            spec = spec.reshape((1, spec.shape[0] * spec.shape[1]))[0]
+        return spec
 
     @staticmethod
     def mfcc(signal, sr, **kwargs):

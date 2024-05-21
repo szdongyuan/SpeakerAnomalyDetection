@@ -8,6 +8,7 @@ class PreprocessingManager(object):
     @classmethod
     def get_processor(cls, process_method):
         process_mapping = {
+            "spectrogram": AudioFeatureExtraction.spectrogram,
             "mfcc": AudioFeatureExtraction.mfcc,
             "mel_spec": AudioFeatureExtraction.mel_spec,
             "zero_crossing_rate": AudioFeatureExtraction.zero_crossing_rate,
@@ -24,6 +25,8 @@ class PreprocessingManager(object):
 
         process_kwargs = kwargs.get("preprocess_param", {})
         process_handler = self.get_processor(process_method)
+        if not process_handler:
+            return signal
         return process_handler(signal, sr, **process_kwargs)
 
     @staticmethod
