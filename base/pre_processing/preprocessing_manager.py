@@ -1,6 +1,7 @@
 import numpy as np
 
 from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
+from base.pre_processing.data_alignment import DataAlignment
 
 
 class PreprocessingManager(object):
@@ -13,6 +14,7 @@ class PreprocessingManager(object):
             "mel_spec": AudioFeatureExtraction.mel_spec,
             "zero_crossing_rate": AudioFeatureExtraction.zero_crossing_rate,
             "spectral_flatness": AudioFeatureExtraction.spectral_flatness,
+            "data_padding": DataAlignment.data_padding,
             "sequence_process": cls.sequence_process,
             "stack_process": cls.stack_process,
         }

@@ -52,7 +52,7 @@ def get_audio_files_and_labels(signal_path,
         except Exception as e:
             print("something wrong")
 
-    return error_code.OK, (np.array(audio_signals), audio_file_names, fs, labels)
+    return error_code.OK, (audio_signals, audio_file_names, fs, labels)
 
 
 def get_pre_labeled_audios(pre_labeled_dir):
@@ -81,7 +81,7 @@ def get_pre_labeled_audios(pre_labeled_dir):
         return ret_code, ret
     ng_signals, ng_files, ng_fs, ng_labels = ret
 
-    tot_signals = np.vstack((ok_signals, ng_signals))
+    tot_signals = ok_signals+ ng_signals
     tot_files = np.array(ok_files + ng_files)
     tot_fs = np.array(ok_fs + ng_fs)
     tot_labels = np.array(ok_labels + ng_labels)
