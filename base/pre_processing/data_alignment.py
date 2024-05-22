@@ -9,7 +9,7 @@ class DataAlignment(object):
     @staticmethod
     def data_padding(signal, sr, **kwargs):
         dtype = kwargs.get("dtype", "float32")
-        maxlen = kwargs.get("maxlen", 259)
+        maxlen = kwargs.get("maxlen", 66150)
         padding = kwargs.get("padding", "post")
         truncating = kwargs.get("truncating", "post")
         padded_inputs = tf.keras.preprocessing.sequence.pad_sequences(

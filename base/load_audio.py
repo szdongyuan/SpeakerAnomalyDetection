@@ -82,7 +82,7 @@ def get_pre_labeled_audios(pre_labeled_dir):
     ng_signals, ng_files, ng_fs, ng_labels = ret
 
     tot_signals = ok_signals+ ng_signals
-    tot_files = ok_files + ng_files
-    tot_fs = ok_fs + ng_fs
-    tot_labels = ok_labels + ng_labels
+    tot_files = np.array(ok_files + ng_files)
+    tot_fs = np.array(ok_fs + ng_fs)
+    tot_labels = np.array(ok_labels + ng_labels)
     return error_code.OK, (tot_signals, tot_files, tot_fs, tot_labels)
