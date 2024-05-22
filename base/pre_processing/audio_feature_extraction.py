@@ -7,6 +7,17 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def spectrogram(signal, sr, **kwargs):
+        """
+        - preprocess_method: "spectrogram"
+          preprocess_param:
+            extraction_kwargs:
+              n_fft: 2048
+              hop_length: 512
+        :param signal:
+        :param sr:
+        :param kwargs:
+        :return:
+        """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         spec = np.abs(spectrum.stft(y=signal, **extraction_kwargs))
         if kwargs.get("time_series_first", True):
@@ -17,6 +28,18 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def mfcc(signal, sr, **kwargs):
+        """
+        - preprocess_method: "mfcc"
+          preprocess_param:
+            extraction_kwargs:
+              n_mfcc: 20
+              n_fft: 2048
+              hop_length: 512
+        :param signals:
+        :param sr:
+        :param kwargs:
+        :return:
+        """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         mfcc = spectral.mfcc(y=signal, sr=sr, **extraction_kwargs)
         if kwargs.get("time_series_first", True):
@@ -27,6 +50,17 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def mel_spec(signal, sr, **kwargs):
+        """
+        - preprocess_method: "mel_spec"
+          preprocess_param:
+            extraction_kwargs:
+              n_fft: 2048
+              hop_length: 256
+        :param signals:
+        :param sr:
+        :param kwargs:
+        :return:
+        """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         mel_spec = spectral.melspectrogram(y=signal, sr=sr, **extraction_kwargs)
         if kwargs.get("time_series_first", True):
@@ -37,6 +71,17 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def zero_crossing_rate(signal, sr, **kwargs):
+        """
+        - preprocess_method: "zero_crossing_rate"
+          preprocess_param:
+            extraction_kwargs:
+              frame_length: 2048
+              hop_length: 256
+        :param signals:
+        :param sr:
+        :param kwargs:
+        :return:
+        """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         zcr = spectral.zero_crossing_rate(y=signal, **extraction_kwargs)
         if kwargs.get("time_series_first", True):
@@ -47,6 +92,17 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def spectral_flatness(signal, sr, **kwargs):
+        """
+        - preprocess_method: "spectral_flatness"
+          preprocess_param:
+            extraction_kwargs:
+              n_fft: 2048
+              hop_length: 256
+        :param signals:
+        :param sr:
+        :param kwargs:
+        :return:
+        """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         spectral_flatness = spectral.spectral_flatness(y=signal, **extraction_kwargs)
         if kwargs.get("time_series_first", True):

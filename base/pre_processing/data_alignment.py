@@ -7,11 +7,19 @@ from tensorflow.keras import layers
 class DataAlignment(object):
 
     @staticmethod
-    def data_padding(raw_inputs, padding="post"):
+    def data_padding(signal, sr, **kwargs):
+        dtype = kwargs.get("dtype", "float32")
+        maxlen = kwargs.get("maxlen", 259)
+        padding = kwargs.get("padding", "post")
+        truncating = kwargs.get("truncating", "post")
         padded_inputs = tf.keras.preprocessing.sequence.pad_sequences(
-            raw_inputs, padding=padding
+            np.array([signal]),
+            padding=padding,
+            maxlen=maxlen,
+            truncating=truncating,
+            dtype=dtype,
         )
-        return padded_inputs
+        return padded_inputs[0]
 
     @staticmethod
     def chop_data(raw_inputs, chop_head=0, chop_tail=None):

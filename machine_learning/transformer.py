@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 from tensorflow.keras import layers, models, Input
 
 from base.sample_balance import balance_sample_number
@@ -68,6 +69,7 @@ class Transformer(NeuralNetManager):
             else:
                 x, y = x_train, y_train
             x_fit, x_valid, y_fit, y_valid = self.split_fit_valid(x, y)
+            print(x_fit.type, x_valid.type)
             history = self.model.fit(x_fit, y_fit,
                                      validation_data=(x_valid, y_valid),
                                      **fit_kwargs)
