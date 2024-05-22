@@ -1,5 +1,3 @@
-import numpy as np
-import tensorflow as tf
 from tensorflow.keras import layers, models, Input
 
 from base.sample_balance import balance_sample_number
