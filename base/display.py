@@ -21,3 +21,8 @@ class DisplayManager(object):
                 str_2 += "-" * (col_len_1 + 2) + "+"
             result_str += "%s\n%s\n" % (str_1, str_2)
         return result_str
+
+    @staticmethod
+    def display_pred_score(file_names, labels, pred_score):
+        for i in range(len(file_names)):
+            print(file_names[i].ljust(25), labels[i], pred_score[i])

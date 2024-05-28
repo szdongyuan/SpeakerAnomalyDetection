@@ -61,7 +61,7 @@ class EnsembleSVC(ModelManager):
             svc_kwargs = self.init_config.get("param")
             self.model_list.append(LinearSVC(**svc_kwargs))
 
-    def fit(self, x_train, y_train):
+    def fit(self, x_train, y_train, **kwargs):
         for model in self.model_list:
             if self.fit_config.get("balance_sample_number"):
                 x, y = balance_sample_number(x_train, y_train)
@@ -77,7 +77,7 @@ class EnsembleSVC(ModelManager):
         y_pred_tot = np.vstack(y_pred_tot)
         acc_req = self.pred_config.get("acc_req")
         y_pred = (np.sum(y_pred_tot, axis=0) >= len(self.model_list) * acc_req) * 1
-        return y_pred
+        return y_pred, np.round(np.sum(y_pred_tot, axis=0) / len(self.model_list), 3)
 
     def save_model(self, save_model_path):
         joblib.dump(self.model_list, save_model_path)
@@ -107,12 +107,14 @@ class SimpleSVC(ModelManager):
         svc_kwargs = self.init_config.get("param")
         self.model = LinearSVC(**svc_kwargs)
 
-    def fit(self, x_train, y_train):
+    def fit(self, x_train, y_train, **kwargs):
         self.model.fit(x_train, x_train)
         return "finished training"
 
     def predict(self, x_test):
-        return self.model.predict(x_test)
+        y_pred = self.model.predict(x_test)
+        pred_score = self.model.decision_function(x_test)
+        return y_pred, pred_score
 
     def save_model(self, save_model_path):
         joblib.dump(self.model, save_model_path)

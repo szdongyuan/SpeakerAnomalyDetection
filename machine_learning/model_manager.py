@@ -50,8 +50,8 @@ class NeuralNetManager(ModelManager):
         acc_req = self.pred_config.get("acc_req")
         if acc_req:
             y_pred = [0 if i[1] < acc_req else 1 for i in predictions]
-            return np.array(y_pred)
-        return np.argmax(predictions, axis=1)
+            return np.array(y_pred), predictions[:, 1]
+        return np.argmax(predictions, axis=1), np.round(predictions[:, 1], 3)
 
     def save_model(self, save_model_path):
         self.model.save(save_model_path)

@@ -3,15 +3,22 @@
 - module_name: "preprocess"
 
   module_config:
-
-    preprocess_method: "mfcc" # only mel_spec and mfcc are supported at this moment
-
+    preprocess_method: "sequence_process"
     preprocess_param:
-      extraction_kwargs:
-        n_mfcc: 20
-        n_fft: 2048
-        hop_length: 512
-      flatten: True
+      processor_list:
+        - preprocess_method: "data_padding"
+          preprocess_param:
+            maxlen: 132300
+        - preprocess_method: "stack_process"
+          preprocess_param:
+            processor_list:
+              - preprocess_method: "mfcc"
+                preprocess_param:
+                  extraction_kwargs:
+                    n_mfcc: 20
+                    n_fft: 2048
+                    hop_length: 256
+                  flatten: True
 
 - module_name: "model"
 

@@ -3,36 +3,21 @@
 - module_name: "preprocess"
 
   module_config:
-
-    preprocess_method: "stack_process"
+    preprocess_method: "sequence_process"
     preprocess_param:
       processor_list:
-#        - preprocess_method: "spectrogram"
-#          preprocess_param:
-#            extraction_kwargs:
-#              n_fft: 2048
-#              hop_length: 512
-        - preprocess_method: "mfcc"
+        - preprocess_method: "data_padding"
           preprocess_param:
-            extraction_kwargs:
-              n_mfcc: 20
-              n_fft: 2048
-              hop_length: 512
-#        - preprocess_method: "mel_spec"
-#          preprocess_param:
-#            extraction_kwargs:
-#              n_fft: 2048
-#              hop_length: 256
-#        - preprocess_method: "zero_crossing_rate"
-#          preprocess_param:
-#            extraction_kwargs:
-#              frame_length: 2048
-#              hop_length: 256
-#        - preprocess_method: "spectral_flatness"
-#          preprocess_param:
-#            extraction_kwargs:
-#              n_fft: 2048
-#              hop_length: 256
+            maxlen: 132300
+        - preprocess_method: "stack_process"
+          preprocess_param:
+            processor_list:
+              - preprocess_method: "mfcc"
+                preprocess_param:
+                  extraction_kwargs:
+                    n_mfcc: 20
+                    n_fft: 2048
+                    hop_length: 256
 
 - module_name: "model"
 
@@ -41,13 +26,13 @@
     model_name: "Transformer"
 
     model_init_config:
-      input_len_1: 259
+      input_len_1: 517
       input_len_2: 20
       layers_param:
         - layer_name: "TransformerEncoder"
           layer_kwargs:
             embed_dim: 20
-            dense_dim: 64
+            dense_dim: 256
             num_heads: 8
         - layer_name: "Flatten"
         - layer_name: "Dense"
@@ -66,13 +51,13 @@
 
     model_fit_config:
       balance_sample_number: False
-      cycles: 2
-      epochs: 20
+      cycles: 1
+      epochs: 5
       batch_size: 30
       early_stop: False
       class_weight:
-        0: 1
+        0: 2
         1: 1
 
     model_predict_config:
-      acc_req: 0.9
+      acc_req: 0.5
