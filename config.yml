@@ -8,7 +8,7 @@
       processor_list:
         - preprocess_method: "data_padding"
           preprocess_param:
-            maxlen: 66150
+            maxlen: 132300
         - preprocess_method: "stack_process"
           preprocess_param:
             processor_list:
@@ -17,47 +17,23 @@
                   extraction_kwargs:
                     n_mfcc: 20
                     n_fft: 2048
-                    hop_length: 512
+                    hop_length: 256
+                  flatten: True
 
 - module_name: "model"
 
   module_config:
 
-    model_name: "Transformer"
+    model_name: "SimpleSVC" # only SimpleSVC and EnsembleSVC are supported at this moment
 
     model_init_config:
-      input_len_1: 130
-      input_len_2: 20
-      layers_param:
-        - layer_name: "TransformerEncoder"
-          layer_kwargs:
-            embed_dim: 20
-            dense_dim: 64
-            num_heads: 8
-        - layer_name: "Flatten"
-        - layer_name: "Dense"
-          layer_kwargs:
-            units: 64
-            activation: "relu"
-        - layer_name: "Dense"
-          layer_kwargs:
-            units: 2
-            activation: "softmax"
-      compile_param:
-        optimizer: 'adam'
-        loss: 'sparse_categorical_crossentropy'
-        metrics:
-          - accuracy
+      n_models: 10
+      param:
+        dual: False
+        max_iter: 5000
 
     model_fit_config:
-      balance_sample_number: False
-      cycles: 2
-      epochs: 20
-      batch_size: 30
-      early_stop: False
-      class_weight:
-        0: 1
-        1: 1
+      balance_sample_number: True
 
     model_predict_config:
       acc_req: 0.8

@@ -34,13 +34,12 @@ def train(pre_labeled_dir,
     y_train = labels
     print("finish data preparing, data shape %s" % str(X_train.shape))
 
+    model = init_model_from_config()
     if save_model_path and os.path.isfile(save_model_path):
         print("model [%s] exists, keep training" % save_model_path)
-        model = init_model_from_config()
         model.load_model(save_model_path)
     else:
         print("init new model [%s]..." % save_model_path)
-        model = init_model_from_config()
     model.fit(X_train, y_train)
     ret_msg = "finish training. time spent [%s] s" % (time.time() - time_0)
     print(ret_msg)
@@ -49,7 +48,7 @@ def train(pre_labeled_dir,
         model.save_model(save_model_path)
         ret_msg += ". model saved."
     if predict_dir:
-        evaluate(predict_dir, model=model, verbose=True)
+        evaluate(predict_dir, model=model, verbose=1)
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": ret_msg,
                        "result": ret_msg})
@@ -75,7 +74,7 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
                            "ret_msg": "missing model",
                            "result": "missing model"})
 
-    y_pred = model.predict(X_test)
+    y_pred, pred_score = model.predict(X_test)
 
     len_test = len(y_test)
     acc = sum((y_pred == y_test) * 1) / len_test
@@ -83,12 +82,14 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
     display_cm = DisplayManager().display_confusion_matrix(y_test, y_pred)
     cm_info = "Confusion Matrix: \n%s" % display_cm
 
-    if kwargs.get("verbose"):
+    if kwargs.get("verbose") >= 1:
         print("number of test cases: %s" % len_test)
         print(acc_info)
         print(cm_info)
         false_prediction = [file_names[i] for i in range(len_test) if y_test[i] != y_pred[i]]
         print("false prediction %s" % false_prediction)
+        if kwargs.get("verbose") >= 2:
+            DisplayManager().display_pred_score(file_names, labels, pred_score)
 
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": "finish evaluating",
@@ -102,6 +103,7 @@ def predict(predict_dir, load_model_path=None, model=None):
                            "ret_msg": ret,
                            "result": [[ret]]})
     signals, file_names, fs, _ = ret
+    file_len = len(file_names)
 
     preprocess_config = load_config("preprocess")
     X_test = preprocess_raw_signals(signals, fs, preprocess_config)
@@ -113,8 +115,8 @@ def predict(predict_dir, load_model_path=None, model=None):
                            "ret_msg": "missing model",
                            "result": [["missing model"]]})
 
-    y_pred = model.predict(X_test)
-    result = [[file_names[i], "OK" if y_pred[i] else "NG"] for i in range(len(file_names))]
+    y_pred, pred_score = model.predict(X_test)
+    result = [[file_names[i], "OK" if y_pred[i] else "NG", pred_score[i]] for i in range(file_len)]
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": "finish predicting",
                        "result": result})

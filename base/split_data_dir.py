@@ -5,6 +5,7 @@ import numpy as np
 
 import consts.model_consts as model_consts
 
+
 def split_train_test(ratio=0.9,
                      train_ok_path=model_consts.TRAIN_OK_PATH,
                      train_ng_path=model_consts.TRAIN_NG_PATH,
