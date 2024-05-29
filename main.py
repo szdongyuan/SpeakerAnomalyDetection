@@ -82,7 +82,7 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
     display_cm = DisplayManager().display_confusion_matrix(y_test, y_pred)
     cm_info = "Confusion Matrix: \n%s" % display_cm
 
-    if kwargs.get("verbose") >= 1:
+    if kwargs.get("verbose", 0) >= 1:
         print("number of test cases: %s" % len_test)
         print(acc_info)
         print(cm_info)
@@ -116,7 +116,7 @@ def predict(predict_dir, load_model_path=None, model=None):
                            "result": [["missing model"]]})
 
     y_pred, pred_score = model.predict(X_test)
-    result = [[file_names[i], "OK" if y_pred[i] else "NG", pred_score[i]] for i in range(file_len)]
+    result = [[file_names[i], "OK" if y_pred[i] else "NG", str(pred_score[i])] for i in range(file_len)]
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": "finish predicting",
                        "result": result})
