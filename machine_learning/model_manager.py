@@ -15,6 +15,7 @@ class ModelManager(object):
         self.init_config = None
         self.fit_config = None
         self.pred_config = None
+        self.model = None
 
         self._parse_config(model_config)
 

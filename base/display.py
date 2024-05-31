@@ -1,3 +1,5 @@
+import csv
+
 from sklearn.metrics import confusion_matrix
 
 
@@ -23,6 +25,13 @@ class DisplayManager(object):
         return result_str
 
     @staticmethod
-    def display_pred_score(file_names, labels, pred_score):
-        for i in range(len(file_names)):
-            print(file_names[i].ljust(25), labels[i], pred_score[i])
+    def display_pred_score(file_names, labels, pred_score, to_csv=False):
+        if to_csv:
+            pred_data = [[file_names[i], labels[i], pred_score[i]] for i in range(len(labels))]
+            with open("pred_score.csv", "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(pred_data)
+            print("finish writing csv.")
+        else:
+            for i in range(len(labels)):
+                print(file_names[i].ljust(25), labels[i], pred_score[i])
