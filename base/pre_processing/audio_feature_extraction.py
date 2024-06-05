@@ -1,9 +1,7 @@
 import librosa.core.spectrum as spectrum
 import librosa.feature.spectral as spectral
 import numpy as np
-import librosa
 from scipy.fftpack import fft
-import matplotlib.pyplot as plt
 
 
 class AudioFeatureExtraction(object):
