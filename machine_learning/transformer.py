@@ -5,35 +5,36 @@ from machine_learning.model_manager import NeuralNetManager
 
 
 class Transformer(NeuralNetManager):
-    DEFAULT_CONFIG = {"model_name": "Transformer",
-                      "model_init_config": {
-                          "input_len_1": 50,
-                          "input_len_2": 150,
-                          "layers_param": [
-                              {"layer_name": "TransformerEncoder",
-                               "layer_kwargs": {"embed_dim": 150, "dense_dim": 200, "num_heads": 4}},
-                              {"layer_name": "Flatten"},
-                              {"layer_name": "Dense",
-                               "layer_kwargs": {"units": 64, "activation": "relu"}},
-                              {"layer_name": "Dense",
-                               "layer_kwargs": {"units": 2, "activation": "softmax"}},
-                          ],
-                          "compile_param": {"optimizer": 'adam',
-                                            "loss": 'sparse_categorical_crossentropy',
-                                            "metrics": ["accuracy"]}
-                      },
-                      "model_fit_config":
-                          {
-                              "balance_sample_number": True,
-                              "cycles": 10,
-                              "epochs": 5,
-                              "batch_size": 30,
-                          },
-                      "model_predict_config":
-                          {
-                              'acc_req': 0.8
-                          }
-                      }
+    DEFAULT_CONFIG = {
+        "model_name": "Transformer",
+        "model_init_config": {
+            "input_len_1": 50,
+            "input_len_2": 150,
+            "layers_param": [
+                {"layer_name": "TransformerEncoder",
+                 "layer_kwargs": {"embed_dim": 150, "dense_dim": 200, "num_heads": 4}},
+                {"layer_name": "Flatten"},
+                {"layer_name": "Dense",
+                 "layer_kwargs": {"units": 64, "activation": "relu"}},
+                {"layer_name": "Dense",
+                 "layer_kwargs": {"units": 2, "activation": "softmax"}},
+            ],
+            "compile_param": {"optimizer": 'adam',
+                              "loss": 'sparse_categorical_crossentropy',
+                              "metrics": ["accuracy"]}
+        },
+        "model_fit_config":
+            {
+                "balance_sample_number": True,
+                "cycles": 10,
+                "epochs": 5,
+                "batch_size": 30,
+            },
+        "model_predict_config":
+            {
+                'acc_req': 0.8
+            }
+    }
 
     def __init__(self, model_config):
         super().__init__(model_config)
@@ -86,7 +87,7 @@ class TransformerEncoder(layers.Layer):
         # Feed Forward层
         self.dense_proj = models.Sequential(
             [layers.Dense(dense_dim, activation="relu"),
-             layers.Dense(embed_dim),]
+             layers.Dense(embed_dim), ]
         )
         # Add&Norm层1
         self.layernorm_1 = layers.LayerNormalization()
