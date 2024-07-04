@@ -58,22 +58,6 @@ class Transformer(NeuralNetManager):
         layer_kwargs = layer_param.get("layer_kwargs", {})
         self.model.add(layer(**layer_kwargs))
 
-    def fit(self, x_train, y_train, validation_data=None):
-        cycles = self.fit_config.get("cycles", 1)
-        fit_kwargs = self.parse_fit_config()
-        history = None
-        for i in range(cycles):
-            if self.fit_config.get("balance_sample_number"):
-                x, y = balance_sample_number(x_train, y_train)
-            else:
-                x, y = x_train, y_train
-            x_fit, x_valid, y_fit, y_valid = self.split_fit_valid(x, y)
-            history = self.model.fit(x_fit, y_fit,
-                                     validation_data=(x_valid, y_valid),
-                                     **fit_kwargs)
-            print("finish cycle %s" % i)
-        return history
-
 
 class TransformerEncoder(layers.Layer):
     def __init__(self, embed_dim, dense_dim, num_heads=8, **kwargs):

@@ -36,7 +36,7 @@ class AudioFeatureExtraction(object):
               n_mfcc: 20
               n_fft: 2048
               hop_length: 512
-        :param signals:
+        :param signal:
         :param sr:
         :param kwargs:
         :return:
@@ -57,7 +57,7 @@ class AudioFeatureExtraction(object):
             extraction_kwargs:
               n_fft: 2048
               hop_length: 256
-        :param signals:
+        :param signal:
         :param sr:
         :param kwargs:
         :return:
@@ -78,7 +78,7 @@ class AudioFeatureExtraction(object):
             extraction_kwargs:
               frame_length: 2048
               hop_length: 256
-        :param signals:
+        :param signal:
         :param sr:
         :param kwargs:
         :return:
@@ -99,7 +99,7 @@ class AudioFeatureExtraction(object):
             extraction_kwargs:
               n_fft: 2048
               hop_length: 256
-        :param signals:
+        :param signal:
         :param sr:
         :param kwargs:
         :return:
@@ -113,7 +113,22 @@ class AudioFeatureExtraction(object):
         return spectral_flatness
 
     @staticmethod
-    def calculate_thd(signal, sr, **kwargs):
+    def sound_pressure_level(signal):
+        rms = np.sqrt(np.mean(signal ** 2))
+        p0 = 20e-6
+        spl = 20 * np.log10(rms / p0)
+        np.convolve()
+        return spl
+
+    def total_harmonic_distortion(self, signal, sr, **kwargs):
+        spec_kwargs = {"extraction_kwargs": kwargs.get("extraction_kwargs", {}),
+                       "time_series_first": True,
+                       "flatten": False}
+        spec = self.spectrogram(signal, sr, **spec_kwargs)
+
+        xf = np.fft.fftfreq(len(spec[0]), 1 / sr)[:len(spec[0]) // 2]
+        fundamental_idx = np.argmax(spec)
+
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1
@@ -146,7 +161,7 @@ class AudioFeatureExtraction(object):
         return np.array(thd_list)
 
     @staticmethod
-    def calculate_hohd(signal, sr, **kwargs):
+    def high_order_harmonic_distortion(signal, sr, **kwargs):
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1
@@ -178,13 +193,13 @@ class AudioFeatureExtraction(object):
         return np.array(hohd_list)
 
     @staticmethod
-    def calculate_nthd(signal, sr, **kwargs):
+    def intermodulation_distortion(signal, sr, **kwargs):
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1
         windows = np.array([signal[i * step_size:i * step_size + window_size] for i in range(num_windows)])
 
-        nthd_list = []
+        imd_list = []
 
         for window in windows:
             N = len(window)
@@ -209,20 +224,13 @@ class AudioFeatureExtraction(object):
             for idx in harmonic_indices:
                 clean_spectrum[idx] = 0
 
-            nthd = (np.sqrt(np.sum(clean_spectrum ** 2)) / np.sqrt(np.sum(yf ** 2))) * 100
-            nthd_list.append(nthd)
+            imd = (np.sqrt(np.sum(clean_spectrum ** 2)) / np.sqrt(np.sum(yf ** 2))) * 100
+            imd_list.append(imd)
 
-        return np.array(nthd_list)
-
-    @staticmethod
-    def calculate_spl(signal):
-        rms = np.sqrt(np.mean(signal ** 2))
-        p0 = 20e-6
-        spl = 20 * np.log10(rms / p0)
-        return spl
+        return np.array(imd_list)
 
     @staticmethod
-    def calculate_frequency_response(signal, sr, output_db="db", **kwargs):
+    def frequency_response(signal, sr, output_db="db", **kwargs):
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1

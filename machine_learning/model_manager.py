@@ -7,6 +7,8 @@ try:
 except Exception as e:
     from keras.src.callbacks import EarlyStopping
 
+from base.sample_balance import balance_sample_number
+
 
 class ModelManager(object):
     DEFAULT_CONFIG = {}
@@ -23,16 +25,18 @@ class ModelManager(object):
         self.init_config = self.DEFAULT_CONFIG.get("model_init_config")
         for config_item in model_config.get("model_init_config", {}):
             self.init_config[config_item] = model_config["model_init_config"][config_item]
+
         self.fit_config = self.DEFAULT_CONFIG.get("model_fit_config")
         for config_item in model_config.get("model_fit_config", {}):
             self.fit_config[config_item] = model_config["model_fit_config"][config_item]
+
         self.pred_config = self.DEFAULT_CONFIG.get("model_predict_config")
         for config_item in model_config.get("model_predict_config", {}):
             self.pred_config[config_item] = model_config["model_predict_config"][config_item]
 
     @staticmethod
-    def split_fit_valid(x, y):
-        return train_test_split(x, y, test_size=0.2, random_state=42)
+    def split_fit_valid(x, y, random_state=None):
+        return train_test_split(x, y, test_size=0.2, random_state=random_state)
 
     def fit(self, x_train, y_train, validation_data=None):
         pass
@@ -49,13 +53,27 @@ class ModelManager(object):
 
 class NeuralNetManager(ModelManager):
 
+    def fit(self, x_train, y_train, validation_data=None):
+        cycles = self.fit_config.get("cycles", 1)
+        fit_kwargs = self.parse_fit_config()
+        history = None
+        for i in range(cycles):
+            if self.fit_config.get("balance_sample_number"):
+                x, y = balance_sample_number(x_train, y_train)
+            else:
+                x, y = x_train, y_train
+            x_fit, x_valid, y_fit, y_valid = self.split_fit_valid(x, y)
+            history = self.model.fit(x_fit, y_fit,
+                                     validation_data=(x_valid, y_valid),
+                                     **fit_kwargs)
+            print("finish cycle %s" % i)
+        return history
+
     def predict(self, x_test):
         predictions = self.model.predict(x_test)
-        acc_req = self.pred_config.get("acc_req")
-        if acc_req:
-            y_pred = [0 if i[1] < acc_req else 1 for i in predictions]
-            return np.array(y_pred), np.round(predictions[:, 1], 3)
-        return np.argmax(predictions, axis=1), np.round(predictions[:, 1], 3)
+        acc_req = self.pred_config.get("acc_req", 0.5)
+        y_pred = [0 if i < acc_req else 1 for i in predictions]
+        return np.array(y_pred), np.round(predictions.T[0], 3)
 
     def save_model(self, save_model_path):
         self.model.save(save_model_path)
