@@ -46,8 +46,8 @@ class RNN(NeuralNetManager):
 
     def _init_model(self):
         self.model = models.Sequential()
-        self.model.add(
-            Input(shape=(self.init_config.get("input_len_1"), self.init_config.get("input_len_2"))))
+        self.model.add(Input(shape=(self.init_config.get("input_len_1"),
+                                    self.init_config.get("input_len_2"))))
         for layer_param in self.init_config.get("layers_param", []):
             self._build_layer(layer_param)
         compile_kwargs = self.init_config.get("compile_param", {})
@@ -57,19 +57,3 @@ class RNN(NeuralNetManager):
         layer = getattr(layers, layer_param.get("layer_name"))
         layer_kwargs = layer_param.get("layer_kwargs", {})
         self.model.add(layer(**layer_kwargs))
-
-    def fit(self, x_train, y_train, validation_data=None):
-        cycles = self.fit_config.get("cycles", 1)
-        fit_kwargs = self.parse_fit_config()
-        history = None
-        for i in range(cycles):
-            if self.fit_config.get("balance_sample_number"):
-                x, y = balance_sample_number(x_train, y_train)
-            else:
-                x, y = x_train, y_train
-            x_fit, x_valid, y_fit, y_valid = self.split_fit_valid(x, y)
-            history = self.model.fit(x_fit, y_fit,
-                                     validation_data=(x_valid, y_valid),
-                                     **fit_kwargs)
-            print("finish cycle %s" % i)
-        return history

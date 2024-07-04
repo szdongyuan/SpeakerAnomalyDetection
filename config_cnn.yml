@@ -13,22 +13,22 @@
     model_name: "CNN1d"
 
     model_init_config:
-      input_len_1: 64340
+      input_len_1: 220500  # 64340, 132300, 220500
       input_len_2: 1
       layers_param:
         - layer_name: "Conv1D"
           layer_kwargs:
-            filters: 10
-            kernel_size: 100
+            filters: 80
+            kernel_size: 800
             activation: "relu"
             strides: 10
         - layer_name: "MaxPooling1D"
           layer_kwargs:
-            pool_size: 4
+            pool_size: 6
         - layer_name: "Conv1D"
           layer_kwargs:
-            filters: 20
-            kernel_size: 10
+            filters: 40
+            kernel_size: 20
             activation: "relu"
             strides: 2
         - layer_name: "MaxPooling1D"
@@ -37,20 +37,33 @@
         - layer_name: "Flatten"
         - layer_name: "Dense"
           layer_kwargs:
-            units: 64
+            units: 256
             activation: "relu"
         - layer_name: "Dense"
           layer_kwargs:
             units: 1
-            activation: "softmax"
+            activation: "sigmoid"
       compile_param:
         optimizer: 'adam'
-        loss: 'sparse_categorical_crossentropy'
+        loss: 'binary_crossentropy'
         metrics:
           - accuracy
 
+    model_compile_config:
+      optimizer: "adam"
+      loss: "binary_crossentropy"
+      metrics:
+        - accuracy
+
     model_fit_config:
-      balance_sample_number: True
+      balance_sample_number: False
+      cycles: 1
+      epochs: 5
+      batch_size: 30
+      early_stop: False
+      class_weight:
+        0: 1
+        1: 1
 
     model_predict_config:
       acc_req: 0.8

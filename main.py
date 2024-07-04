@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import time
@@ -11,7 +12,6 @@ from base.pre_processing.preprocessing_manager import PreprocessingManager
 from consts import error_code
 from consts.model_consts import MODEL_MAPPING
 
-
 DEFAULT_DATA_PATH = "audio_data/train"
 DEFAULT_TEST_DATA = "audio_data/test"
 DEFAULT_MODEL_PATH = "models/"
@@ -21,7 +21,9 @@ def train(pre_labeled_dir,
           save_model_path=None,
           predict_dir=None):
     time_0 = time.time()
-    ret_code, ret = get_pre_labeled_audios(pre_labeled_dir)
+
+    data_load_config = load_config("data_load")
+    ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
     if ret_code != error_code.OK:
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
@@ -95,12 +97,16 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
         elif verbose == 3:
             dm.display_pred_score(file_names, labels, pred_score, to_csv=True)
 
+    model_detail = kwargs.get("model_detail", False)
+    if model_detail:
+        print(model.model.summary())
+
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": "finish evaluating",
                        "result": [acc_info, cm_info]})
 
 
-def predict(predict_dir, load_model_path=None, model=None):
+def predict(predict_dir, load_model_path=None, model=None, **kwargs):
     ret_code, ret = get_audio_files_and_labels(predict_dir)
     if ret_code != error_code.OK:
         return json.dumps({"ret_code": ret_code,
@@ -139,3 +145,47 @@ def preprocess_raw_signals(raw_signals, fs, preprocess_config):
     for i in range(len(raw_signals)):
         processed_data.append(pm.process(raw_signals[i], fs[i], **preprocess_config))
     return np.array(processed_data)
+
+
+parser = argparse.ArgumentParser(description='speaker anomaly detection')
+subparsers = parser.add_subparsers(help="sub-command help")
+parser.set_defaults(func="None")
+
+parser_train = subparsers.add_parser("train", help="train model")
+parser_train.add_argument("-d", "--data",
+                          required=True, help="training dataset path")
+parser_train.add_argument("-m", "--model",
+                          required=True, help="model save path")
+parser_train.add_argument("-t", "--test",
+                          help="validate dataset path")
+parser_train.set_defaults(func="train")
+
+parser_evaluate = subparsers.add_parser("evaluate", help="evaluate model")
+parser_evaluate.add_argument("-t", "--test",
+                             required=True, help="evaluate dataset path")
+parser_evaluate.add_argument("-m", "--model",
+                             required=True, help="saved model path")
+parser_evaluate.add_argument("-v", "--verbose",
+                             help="show detailed evaluate info, 0 ~ 3")
+parser_evaluate.set_defaults(func="evaluate")
+
+parser_predict = subparsers.add_parser("predict", help="predict samples")
+parser_predict.add_argument("-t", "--test",
+                            required=True, help="predict sample dir or file")
+parser_predict.add_argument("-m", "--model",
+                            required=True, help="saved model path")
+parser_predict.add_argument("-v", "--verbose",
+                            help="show detailed evaluate info, 0 ~ 3")
+parser_predict.set_defaults(func="predict")
+
+args = parser.parse_args()
+
+if __name__ == "__main__":
+    if args.func == "train":
+        train(args.data, save_model_path=args.model, predict_dir=args.test)
+    elif args.func == "evaluate":
+        evaluate(args.test, load_model_path=args.model, verbose=int(args.verbose))
+    elif args.func == "predict":
+        predict(args.test, load_model_path=args.model, verbose=int(args.verbose))
+    else:
+        print("[%s] not support" % args.func)

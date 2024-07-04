@@ -9,7 +9,7 @@ def load_config(module_name=None):
         if module_name:
             for module_config in config:
                 if module_config.get("module_name") == module_name:
-                    result = module_config.get("module_config")
+                    result = module_config.get("module_config", {})
         else:
             result = config
     return result

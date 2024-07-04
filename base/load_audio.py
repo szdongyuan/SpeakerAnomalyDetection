@@ -8,7 +8,8 @@ from consts import error_code
 
 def get_audio_files_and_labels(signal_path,
                                sr=None,
-                               with_labels=-1):
+                               with_labels=-1,
+                               **kwargs):
     """
         Function to retrieve audio files and their corresponding labels from a directory.
 
@@ -37,7 +38,10 @@ def get_audio_files_and_labels(signal_path,
     else:
         return error_code.INVALID_PATH, "invalid path [%s]" % signal_path
 
-    for signal_file in signal_files:
+    max_size = kwargs.get("max_size", len(signal_files))
+    replace = True if max_size > len(signal_files) else False
+    selected_files = np.random.choice(signal_files, size=max_size, replace=replace)
+    for signal_file in selected_files:
         single_audio_path = os.path.join(signal_path, signal_file).replace("\\", "/")
 
         try:
@@ -55,7 +59,7 @@ def get_audio_files_and_labels(signal_path,
     return error_code.OK, (audio_signals, audio_file_names, fs, labels)
 
 
-def get_pre_labeled_audios(pre_labeled_dir):
+def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
     """
         Function to retrieve pre-labeled audio files from specified directories.
 
@@ -72,11 +76,18 @@ def get_pre_labeled_audios(pre_labeled_dir):
         return error_code.INVALID_PATH, "invalid directory [%s]" % pre_labeled_dir
     signal_dir = os.path.join(pre_labeled_dir, "%s").replace("\\", "/")
 
-    ret_code, ret = get_audio_files_and_labels(signal_dir % "OK", with_labels=1)
+    load_kwargs = {}
+    if kwargs.get("max_train_size"):
+        load_kwargs["max_size"] = kwargs.get("max_train_size") // 2
+    ret_code, ret = get_audio_files_and_labels(signal_dir % "OK",
+                                               with_labels=1,
+                                               **load_kwargs)
     if ret_code != error_code.OK:
         return ret_code, ret
     ok_signals, ok_files, ok_fs, ok_labels = ret
-    ret_code, ret = get_audio_files_and_labels(signal_dir % "NG", with_labels=0)
+    ret_code, ret = get_audio_files_and_labels(signal_dir % "NG",
+                                               with_labels=0,
+                                               **load_kwargs)
     if ret_code != error_code.OK:
         return ret_code, ret
     ng_signals, ng_files, ng_fs, ng_labels = ret

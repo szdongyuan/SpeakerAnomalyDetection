@@ -41,11 +41,11 @@
             activation: "relu"
         - layer_name: "Dense"
           layer_kwargs:
-            units: 2
-            activation: "softmax"
+            units: 1
+            activation: "sigmoid"
       compile_param:
         optimizer: 'adam'
-        loss: 'sparse_categorical_crossentropy'
+        loss: 'binary_crossentropy'
         metrics:
           - accuracy
 
@@ -54,9 +54,9 @@
       cycles: 1
       epochs: 5
       batch_size: 30
-      early_stop: False
+      early_stop: True
       class_weight:
-        0: 2
+        0: 1
         1: 1
 
     model_predict_config:
