@@ -12,6 +12,21 @@ def split_train_test(ratio=0.9,
                      train_ng_path=model_consts.TRAIN_NG_PATH,
                      test_ok_path=model_consts.TEST_OK_PATH,
                      test_ng_path=model_consts.TEST_NG_PATH):
+    """
+        The dataset is divided into the training set and the testing set according to the given ratio.
+
+        Args:
+        - ratio: float
+            The ratio between the testing set and the training set.
+        - train_ok_path: string
+            The directory path that contains the "OK" training file.
+        - train_ng_path: string
+            The directory path that contains the "NG" training file.
+        - test_ok_path: string
+            The directory path that contains the "OK" testing file.
+        - test_ng_path: string
+            The directory path that contains the "NG" testing file.
+    """
     restore_split(train_ok_path, train_ng_path,
                   test_ok_path, test_ng_path)
     for file in os.listdir(train_ok_path):
@@ -24,11 +39,23 @@ def split_train_test(ratio=0.9,
             shutil.move(dir_file, test_ng_path)
     print("finish splitting")
 
-
 def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
                   train_ng_path=model_consts.TRAIN_NG_PATH,
                   test_ok_path=model_consts.TEST_OK_PATH,
                   test_ng_path=model_consts.TEST_NG_PATH):
+    """
+        Restore the test file back to the training set.
+
+        Args:
+        - train_ok_path: string
+            The directory path that contains the "OK" training file.
+        - train_ng_path: string
+            The directory path that contains the "NG" training file.
+        - test_ok_path: string
+            The directory path that contains the "OK" testing file.
+        - test_ng_path: string
+            The directory path that contains the "NG" testing file.
+    """
     for file in os.listdir(test_ok_path):
         dir_file = test_ok_path + "/" + file
         shutil.move(dir_file, train_ok_path)
@@ -39,6 +66,21 @@ def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
 
 
 def copy_from_restored_audio(source_dir_list, dest_dir=model_consts.TRAIN_PATH, over_write=True):
+
+    """
+        Copy audio files from the source directories to the destination directory.
+
+        Args:
+        - source_dir_list: list
+            List of source directories from which to copy files.
+        - dest_dir: string
+            The destination directory path of the file to be copied.
+        - over_write: bool
+            Whether to overwrite existing files.
+        Returns:
+        - error_code.OK: int
+            The code indicating a successful operation.
+    """
     ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
     if ret_code != error_code.OK:
         print(ret_msg)
