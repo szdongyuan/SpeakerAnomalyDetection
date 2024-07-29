@@ -5,9 +5,7 @@ from consts import error_code
 
 
 class FileOps(object):
-    """
-        A static method class for file operations.
-    """
+
     @staticmethod
     def create_empty_okng(dest_dir):
         """
@@ -26,7 +24,7 @@ class FileOps(object):
                 The error message.
         """
         try:
-            shutil.rmtree(dest_dir) # shutil.rmtree() 递归地删除文件
+            shutil.rmtree(dest_dir) # shutil.rmtree() remove files
             os.mkdir(dest_dir)
             os.mkdir(dest_dir + "/OK")
             os.mkdir(dest_dir + "/NG")
