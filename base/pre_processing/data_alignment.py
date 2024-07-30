@@ -31,10 +31,10 @@ class DataAlignment(object):
             - padded_inputs: array
                 A numpy array contains padded or truncated signal data.
         """
-        dtype = kwargs.get("dtype", "float32") # 返回的numpy array的数据类型。
-        maxlen = kwargs.get("maxlen", 66150) # maxlen：None或整数，为序列的最大长度。大于此长度的将被截断，小于此长度的序列将在后面填0.
-        padding = kwargs.get("padding", "post") # padding：pre或post，确定当需要补0时，在序列的起始还是结尾补。
-        truncating = kwargs.get("truncating", "post") # truncating：pre或post，确定需要截断序列时，从起始还是结尾截断。
+        dtype = kwargs.get("dtype", "float32")
+        maxlen = kwargs.get("maxlen", 66150)
+        padding = kwargs.get("padding", "post")
+        truncating = kwargs.get("truncating", "post")
         padded_inputs = tf.keras.preprocessing.sequence.pad_sequences(
             np.array([signal]),
             padding=padding,
