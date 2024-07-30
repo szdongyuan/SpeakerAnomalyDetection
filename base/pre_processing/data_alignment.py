@@ -8,10 +8,33 @@ class DataAlignment(object):
 
     @staticmethod
     def data_padding(signal, sr, **kwargs):
-        dtype = kwargs.get("dtype", "float32")
-        maxlen = kwargs.get("maxlen", 66150)
-        padding = kwargs.get("padding", "post")
-        truncating = kwargs.get("truncating", "post")
+        """
+            Pads or truncates a given audio signal to a specified length.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: float
+                The sample rate of the audio signal.
+            - **kwargs: Additional keyword arguments
+                - dtype: string
+                    The data type of the numpy array returned.
+                - maxlen: int
+                    This parameter is the maximum length of the sequence. Sequences greater than this length will be truncated,
+                    and sequences less than this length will be followed by a 0.
+                - padding: string
+                    'pre' or 'post', which determines whether 0 should be filled at the beginning or the end of the sequence.
+                - truncating: string
+                    'pre 'or' post ', which determines whether to truncate the sequence from the beginning or the end when it needs to..be truncated
+
+            Returns:
+            - padded_inputs: array
+                A numpy array contains padded or truncated signal data.
+        """
+        dtype = kwargs.get("dtype", "float32") # 返回的numpy array的数据类型。
+        maxlen = kwargs.get("maxlen", 66150) # maxlen：None或整数，为序列的最大长度。大于此长度的将被截断，小于此长度的序列将在后面填0.
+        padding = kwargs.get("padding", "post") # padding：pre或post，确定当需要补0时，在序列的起始还是结尾补。
+        truncating = kwargs.get("truncating", "post") # truncating：pre或post，确定需要截断序列时，从起始还是结尾截断。
         padded_inputs = tf.keras.preprocessing.sequence.pad_sequences(
             np.array([signal]),
             padding=padding,
@@ -24,10 +47,20 @@ class DataAlignment(object):
     @staticmethod
     def chop_data(raw_inputs, chop_head=0, chop_tail=None):
         """
-        :param raw_inputs: numpy ndarray
-        :param chop_head: int, included in result
-        :param chop_tail: int or None, not included in result
-        :return: numpy ndarray. selected section of data
+            Extract a specific part of the data.
+
+            Args:
+            - raw_inputs: array
+                Data that needs to be chopped.
+            - chop_head: int
+                The starting index of the chop(included).
+            - chop_tail: int or None, optional
+                The ending index for the chop (excluded). If None, it chops to the end of the data.
+
+            Returns:
+            - chopped_data: array
+                The selected section of data.
         """
+
         chopped_data = raw_inputs[:, chop_head:chop_tail]
         return chopped_data
