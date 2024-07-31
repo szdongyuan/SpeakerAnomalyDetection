@@ -133,13 +133,32 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
 
 
 def init_model_from_config():
+    """
+        Initialize the model based on configuration.
+
+        Returns:
+            Instantiate a model class based on the configuration.
+    """
     model_config = load_config("model")
     model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
     return model
 
-
 def preprocess_raw_signals(raw_signals, fs, preprocess_config):
+    """
+        Preprocess the original audio signal data.
+
+        Args:
+        - raw_signals: list
+            List of the original audio data.
+        - fs: list
+            List of sampling rates for the original audio data.
+        - preprocess_config:
+            Loaded data preprocessing configuration.
+
+        Returns:
+            An array containing preprocessed audio signal data.
+    """
     processed_data = []
     pm = PreprocessingManager()
     for i in range(len(raw_signals)):

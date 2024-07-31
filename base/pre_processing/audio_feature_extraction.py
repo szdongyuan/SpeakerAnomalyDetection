@@ -9,18 +9,28 @@ class AudioFeatureExtraction(object):
     @staticmethod
     def spectrogram(signal, sr, **kwargs):
         """
-        - preprocess_method: "spectrogram"
-          preprocess_param:
-            extraction_kwargs:
-              n_fft: 2048
-              hop_length: 512
-        :param signal:
-        :param sr:
-        :param kwargs:
-        :return:
+            preprocess_method: "spectrogram", which calculates the spectrogram of a given audio signal data.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - extraction_kwargs: dictionary
+                    Parameters for STFT operations.(n_fft: 2048, hop_length: 512)
+                - time_series_first: bool
+                    Whether to return a time series first or not, the default is True.
+                - flatten：bool
+                    Whether to flatten the spectral graph to 1 dimension or not, the default value is False.
+
+            Returns:
+            - spec: array
+                The spectrogram of the signal.
         """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
-        spec = np.abs(spectrum.stft(y=signal, **extraction_kwargs))
+        spec = np.abs(spectrum.stft(y=signal, **extraction_kwargs)) # The short-time Fourier transform(STFT)
+
         if kwargs.get("time_series_first", True):
             spec = spec.T
         if kwargs.get("flatten", False):
@@ -30,16 +40,23 @@ class AudioFeatureExtraction(object):
     @staticmethod
     def mfcc(signal, sr, **kwargs):
         """
-        - preprocess_method: "mfcc"
-          preprocess_param:
-            extraction_kwargs:
-              n_mfcc: 20
-              n_fft: 2048
-              hop_length: 512
-        :param signal:
-        :param sr:
-        :param kwargs:
-        :return:
+            preprocess_method: "mfcc", which calculates the Mel-frequency cepstrum coefficient (MFCCs) for the given audio signal.
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - extraction_kwargs: dictionary
+                    Parameters for mfcc operations.(n_mfcc: 20, n_fft: 2048, hop_length: 512)
+                - time_series_first: bool
+                    Whether to return a time series first or not, the default is True.
+                - flatten：bool
+                    Whether to flatten the spectral graph to 1 dimension or not, the default value is False.
+
+            Returns:
+            - mfcc: array
+                The MFCCs of the original audio signal.
         """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         mfcc = spectral.mfcc(y=signal, sr=sr, **extraction_kwargs)
@@ -52,15 +69,24 @@ class AudioFeatureExtraction(object):
     @staticmethod
     def mel_spec(signal, sr, **kwargs):
         """
-        - preprocess_method: "mel_spec"
-          preprocess_param:
-            extraction_kwargs:
-              n_fft: 2048
-              hop_length: 256
-        :param signal:
-        :param sr:
-        :param kwargs:
-        :return:
+            preprocess_method: "mel_spec", which computes the Mel-spectrogram of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - extraction_kwargs: dictionary
+                    Parameters for mel-spectrogram operations.(n_fft: 2048, hop_length: 256)
+                - time_series_first: bool
+                    Whether to return a time series first or not, the default is True.
+                - flatten：bool
+                    Whether to flatten the spectral graph to 1 dimension or not, the default value is False.
+
+            Returns:
+            - mel_spec: array
+                The Mel-spectrogram of the original audio signal.
         """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         mel_spec = spectral.melspectrogram(y=signal, sr=sr, **extraction_kwargs)
@@ -73,15 +99,24 @@ class AudioFeatureExtraction(object):
     @staticmethod
     def zero_crossing_rate(signal, sr, **kwargs):
         """
-        - preprocess_method: "zero_crossing_rate"
-          preprocess_param:
-            extraction_kwargs:
-              frame_length: 2048
-              hop_length: 256
-        :param signal:
-        :param sr:
-        :param kwargs:
-        :return:
+            preprocess_method: "zero_crossing_rate", which calculates the zero-crossing rate of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - extraction_kwargs: dictionary
+                    Parameters for zero_crossing_rate operations.(frame_length: 2048, hop_length: 256)
+                - time_series_first: bool
+                    Whether to return a time series first or not, the default is True.
+                - flatten：bool
+                    Whether to flatten the spectral graph to 1 dimension or not, the default value is False.
+
+            Returns:
+            - zcr: array
+                The zero-crossing rate of the original audio signal.
         """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         zcr = spectral.zero_crossing_rate(y=signal, **extraction_kwargs)
@@ -94,15 +129,24 @@ class AudioFeatureExtraction(object):
     @staticmethod
     def spectral_flatness(signal, sr, **kwargs):
         """
-        - preprocess_method: "spectral_flatness"
-          preprocess_param:
-            extraction_kwargs:
-              n_fft: 2048
-              hop_length: 256
-        :param signal:
-        :param sr:
-        :param kwargs:
-        :return:
+            preprocess_method: "spectral_flatness", which calculates the spectral_flatness of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - extraction_kwargs: dictionary
+                    Parameters for zero_crossing_rate operations.(n_fft: 2048, hop_length: 256)
+                - time_series_first: bool
+                    Whether to return a time series first or not, the default is True.
+                - flatten：bool
+                    Whether to flatten the spectral graph to 1 dimension or not, the default value is False.
+
+            Returns:
+            - spectral_flatness: array
+                The spectral flatness of the original audio signal.
         """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
         spectral_flatness = spectral.spectral_flatness(y=signal, **extraction_kwargs)
@@ -114,13 +158,46 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def sound_pressure_level(signal):
+        """
+            Calculates the sound pressure level (SPL) of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            Returns:
+            - spl: int
+                The sound pressure level of the given audio signal.
+        """
         rms = np.sqrt(np.mean(signal ** 2))
         p0 = 20e-6
         spl = 20 * np.log10(rms / p0)
-        np.convolve()
         return spl
 
     def total_harmonic_distortion(self, signal, sr, **kwargs):
+        """
+            Calculates the total harmonic distortion (THD) of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - extraction_kwargs: dictionary
+                    Parameters for spectrogram operations.
+                - time_series_first: bool
+                    Whether to return a time series first or not, the default is True.
+                - flatten：bool
+                    Whether to flatten the spectral graph to 1 dimension or not, the default value is False.
+                - window_size: int
+                    FFT calculates the size of the window
+                - step_size: int
+                    The step size of the window slide.
+
+            Returns:
+                An array is used to save the total harmonic distortion (THD) values for each window of the given signal.
+        """
+
         spec_kwargs = {"extraction_kwargs": kwargs.get("extraction_kwargs", {}),
                        "time_series_first": True,
                        "flatten": False}
@@ -142,6 +219,7 @@ class AudioFeatureExtraction(object):
             yf = fft(window)
 
             yf = np.abs(yf[:N // 2])
+            yf = yf * 2 / N
             xf = np.fft.fftfreq(N, 1 / sr)[:N // 2]
 
             fundamental_idx = np.argmax(yf)
@@ -162,6 +240,24 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def high_order_harmonic_distortion(signal, sr, **kwargs):
+        """
+            Calculates the High Order Harmonic Distortion (HOHD) of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - window_size: int
+                    FFT calculates the size of the window
+                - step_size: int
+                    The step size of the window slide.
+
+            Returns:
+                An array is used to save the High Order Harmonic Distortion (HOHD) values for each window of the given signal.
+        """
+
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1
@@ -175,12 +271,13 @@ class AudioFeatureExtraction(object):
             xf = np.fft.fftfreq(N, 1 / sr)
 
             yf = np.abs(yf[:N // 2])
+            yf = yf * 2 / N
             xf = xf[:N // 2]
 
             fundamental_freq = xf[np.argmax(yf)]
             fundamental_amplitude = yf[np.argmax(yf)]
 
-            harmonics = [fundamental_freq * (i + 1) for i in range(9, 35)]  # 选择第10到第35次谐波
+            harmonics = [fundamental_freq * (i + 1) for i in range(9, 35)]  # Select the 10th through 35th harmonics
             harmonic_amplitudes = []
 
             for harmonic in harmonics:
@@ -194,6 +291,23 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def intermodulation_distortion(signal, sr, **kwargs):
+        """
+            Calculates the intermodulation distortion (IMD) of the given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - **kwargs: Additional parameters
+                - window_size: int
+                    FFT calculates the size of the window
+                - step_size: int
+                    The step size of the window slide.
+
+            Returns:
+                An array is used to save the intermodulation distortion (IMD) for each window of the given signal.
+        """
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1
@@ -204,9 +318,10 @@ class AudioFeatureExtraction(object):
         for window in windows:
             N = len(window)
             yf = np.fft.fft(window)
-            xf = np.fft.fftfreq(N, 1 / sr)
+            xf = np.fft.fftfreq(N, 1 / sr) # Returns the discrete Fourier transform sampling frequency.
 
             yf = np.abs(yf[:N // 2])
+            yf = yf * 2 / N
             xf = xf[:N // 2]
 
             fundamental_index = np.argmax(yf)
@@ -231,6 +346,25 @@ class AudioFeatureExtraction(object):
 
     @staticmethod
     def frequency_response(signal, sr, output_db="db", **kwargs):
+        """
+            Calculates the frequency response of a given audio signal.
+
+            Args:
+            - signal: array
+                The audio signal data.
+            - sr: int
+                The sample rate of the audio signal.
+            - output_db: string
+                Specifies the db output format.
+            - **kwargs: Additional parameters
+                - window_size: int
+                    FFT calculates the size of the window
+                - step_size: int
+                    The step size of the window slide.
+
+            Returns:
+                An array is used to save the frequency response for each window of the given signal.
+        """
         window_size = kwargs.get("window_size", 2048)
         step_size = kwargs.get("step_size", 256)
         num_windows = (len(signal) - window_size) // step_size + 1
@@ -246,7 +380,7 @@ class AudioFeatureExtraction(object):
 
                 yf = np.fft.fft(window)
                 yf = np.abs(yf[:N // 2])
-                yf_db = 20 * np.log10(yf)
+                yf_db = 20 * np.log10(yf * 2 / N)
                 xf_list.append(yf_db)
             else:
                 xf = np.fft.fftfreq(N, 1 / sr)
