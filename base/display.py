@@ -7,6 +7,22 @@ class DisplayManager(object):
 
     @staticmethod
     def display_confusion_matrix(y_true, y_pred, labels=None):
+
+        """
+            Calculates and displays the confusion matrix as a format string.
+
+            Args:
+            - y_true: list or array
+                The true labels.
+            - y_pred: list or array
+                The Prediction labels as returned by a classifier.
+            - labels: list
+                Labels used to the confusion matrix display.
+
+            Returns:
+            - result_str: string
+                The formatted string representation of the obfuscation matrix.
+        """
         if not labels:
             labels = [["true_NG", "true_OK"], ["predict_NG", "predict_OK"]]
         col_len_0 = max([len(label_str) for label_str in labels[0]]) + 1
@@ -26,6 +42,19 @@ class DisplayManager(object):
 
     @staticmethod
     def display_pred_score(file_names, labels, pred_score, to_csv=False):
+        """
+            Display or save the predicted score for each audio file to be predicted.
+
+            Args:
+            - file_names: list
+                List containing names of audio files.
+            - labels: list
+                True label for each audio file.
+            - pred_score: list
+                Predicted score for each audio file.
+            - to_csv: bool
+                Whether to save the output to a csv file or not (default is False).
+        """
         if to_csv:
             pred_data = [[file_names[i], labels[i], pred_score[i]] for i in range(len(labels))]
             with open("pred_score.csv", "w", newline="") as f:
