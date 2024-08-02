@@ -101,9 +101,10 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
     if model_detail:
         print(model.model.summary())
 
-    return json.dumps({"ret_code": error_code.OK,
-                       "ret_msg": "finish evaluating",
-                       "result": [acc_info, cm_info]})
+    ret_str = json.dumps({"ret_code": error_code.OK,
+                          "ret_msg": "finish evaluating",
+                          "result": [acc_info, cm_info]})
+    return ret_str
 
 
 def predict(predict_dir, load_model_path=None, model=None, **kwargs):
@@ -127,9 +128,10 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
 
     y_pred, pred_score = model.predict(x_test)
     result = [[file_names[i], "OK" if y_pred[i] else "NG", str(pred_score[i])] for i in range(file_len)]
-    return json.dumps({"ret_code": error_code.OK,
-                       "ret_msg": "finish predicting",
-                       "result": result})
+    ret_str = json.dumps({"ret_code": error_code.OK,
+                          "ret_msg": "finish predicting",
+                          "result": result})
+    return ret_str
 
 
 def init_model_from_config():
@@ -203,8 +205,9 @@ if __name__ == "__main__":
     if args.func == "train":
         train(args.data, save_model_path=args.model, predict_dir=args.test)
     elif args.func == "evaluate":
-        evaluate(args.test, load_model_path=args.model, verbose=int(args.verbose))
+        verbose = int(args.verbose) if args.verbose else None
+        evaluate(args.test, load_model_path=args.model, verbose=verbose)
     elif args.func == "predict":
-        predict(args.test, load_model_path=args.model, verbose=int(args.verbose))
+        predict(args.test, load_model_path=args.model)
     else:
         print("[%s] not support" % args.func)
