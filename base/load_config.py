@@ -4,6 +4,7 @@ from consts.model_consts import CONFIG_PATH
 
 
 def load_config(module_name=None):
+    result = {}
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f.read())
         if module_name:

@@ -15,32 +15,37 @@
     model_name: "CNN1d"
 
     model_init_config:
-      input_len_1: 220500  # 64340, 132300, 220500
+      input_len_1: 132300  # 64340, 132300, 220500
       input_len_2: 1
       layers_param:
         - layer_name: "Conv1D"
           layer_kwargs:
-            filters: 100
+            filters: 40
             kernel_size: 1000
             activation: "relu"
             strides: 10
         - layer_name: "MaxPooling1D"
           layer_kwargs:
+            pool_size: 3  # 3, 5
+        - layer_name: "Conv1D"
+          layer_kwargs:
+            filters: 60
+            kernel_size: 20
+            activation: "relu"
+            strides: 6
+        - layer_name: "MaxPooling1D"
+          layer_kwargs:
             pool_size: 3
         - layer_name: "Conv1D"
           layer_kwargs:
-            filters: 40
-            kernel_size: 20
+            filters: 80
+            kernel_size: 10
             activation: "relu"
-            strides: 2
+            strides: 1
         - layer_name: "MaxPooling1D"
           layer_kwargs:
             pool_size: 3
         - layer_name: "Flatten"
-        - layer_name: "Dense"
-          layer_kwargs:
-            units: 512
-            activation: "relu"
         - layer_name: "Dense"
           layer_kwargs:
             units: 128
@@ -64,9 +69,9 @@
     model_fit_config:
       balance_sample_number: False
       cycles: 1
-      epochs: 5
+      epochs: 10
       batch_size: 30
-      early_stop: True
+      early_stop: False
       class_weight:
         0: 1
         1: 1

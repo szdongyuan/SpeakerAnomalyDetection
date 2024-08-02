@@ -38,11 +38,14 @@ def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
     print("finish restore")
 
 
-def copy_from_restored_audio(source_dir_list, dest_dir=model_consts.TRAIN_PATH, over_write=True):
-    ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
-    if ret_code != error_code.OK:
-        print(ret_msg)
-        return ret_code
+def copy_from_restored_audio(source_dir_list,
+                             dest_dir=model_consts.TRAIN_PATH,
+                             over_write=True):
+    if over_write:
+        ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
+        if ret_code != error_code.OK:
+            print(ret_msg)
+            return ret_code
 
     n_file = 0
     for source_dir in source_dir_list:
