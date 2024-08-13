@@ -18,6 +18,11 @@ TEST_OK_PATH = DEFAULT_DIR + "audio_data/test/OK"
 TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
 STORED_SAMPLE_PATH = DEFAULT_DIR + "audio_data/stored_sample"
 
+LABEL_MAP = {
+    "NG": 0,
+    "OK": 1,
+}
+
 MODEL_MAPPING = {
     "EnsembleSVC": EnsembleSVC,
     "SimpleSVC": SimpleSVC,
