@@ -115,18 +115,19 @@ class AudioFeatureExtraction(object):
         return spectral_flatness
 
     @staticmethod
-    def data_normalize(signal):
-        """To normalize audio raw data to [-1, 1]"""
-        signal_normalized = librosa.util.normalize(signal)
-        return signal_normalized
-
-    @staticmethod
     def sound_pressure_level(signal):
         rms = np.sqrt(np.mean(signal ** 2))
         p0 = 20e-6
         spl = 20 * np.log10(rms / p0)
         np.convolve()
         return spl
+
+
+    @staticmethod
+    def data_normalize(signal, sr, **kwargs):
+        """To normalize audio raw data to [-1, 1] """
+        signal_normalized = librosa.util.normalize(signal)
+        return signal_normalized
 
     def total_harmonic_distortion(self, signal, sr, **kwargs):
         spec_kwargs = {"extraction_kwargs": kwargs.get("extraction_kwargs", {}),
