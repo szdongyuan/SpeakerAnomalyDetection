@@ -23,6 +23,7 @@ class PreprocessingManager(object):
             "mfcc": AudioFeatureExtraction.mfcc,
             "mel_spec": AudioFeatureExtraction.mel_spec,
             "zero_crossing_rate": AudioFeatureExtraction.zero_crossing_rate,
+            "data_normalize": AudioFeatureExtraction.data_normalize,
             "spectral_flatness": AudioFeatureExtraction.spectral_flatness,
             "data_padding": DataAlignment.data_padding,
             "sequence_process": cls.sequence_process,

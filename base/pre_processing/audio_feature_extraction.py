@@ -1,5 +1,7 @@
 import librosa.core.spectrum as spectrum
 import librosa.feature.spectral as spectral
+import librosa.util
+
 import numpy as np
 from scipy.fftpack import fft
 
@@ -172,6 +174,13 @@ class AudioFeatureExtraction(object):
         p0 = 20e-6
         spl = 20 * np.log10(rms / p0)
         return spl
+
+
+    @staticmethod
+    def data_normalize(signal, sr, **kwargs):
+        """To normalize audio raw data to [-1, 1] """
+        signal_normalized = librosa.util.normalize(signal)
+        return signal_normalized
 
     def total_harmonic_distortion(self, signal, sr, **kwargs):
         """
