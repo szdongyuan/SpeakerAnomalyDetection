@@ -1,5 +1,7 @@
 import librosa.core.spectrum as spectrum
 import librosa.feature.spectral as spectral
+import librosa.util
+
 import numpy as np
 from scipy.fftpack import fft
 
@@ -111,6 +113,12 @@ class AudioFeatureExtraction(object):
         if kwargs.get("flatten", False):
             spectral_flatness = spectral_flatness.reshape((1, spectral_flatness.shape[0] * spectral_flatness.shape[1]))[0]
         return spectral_flatness
+
+    @staticmethod
+    def data_normalize(signal):
+        """To normalize audio raw data to [-1, 1]"""
+        signal_normalized = librosa.util.normalize(signal)
+        return signal_normalized
 
     @staticmethod
     def sound_pressure_level(signal):

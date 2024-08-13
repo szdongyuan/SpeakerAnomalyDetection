@@ -14,6 +14,7 @@ class PreprocessingManager(object):
             "mel_spec": AudioFeatureExtraction.mel_spec,
             "zero_crossing_rate": AudioFeatureExtraction.zero_crossing_rate,
             "spectral_flatness": AudioFeatureExtraction.spectral_flatness,
+            "data_normalize": AudioFeatureExtraction.data_normalize,
             "data_padding": DataAlignment.data_padding,
             "sequence_process": cls.sequence_process,
             "stack_process": cls.stack_process,
