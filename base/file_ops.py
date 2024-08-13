@@ -24,7 +24,7 @@ class FileOps(object):
                 The error message.
         """
         try:
-            shutil.rmtree(dest_dir) # shutil.rmtree() remove files
+            shutil.rmtree(dest_dir)  # shutil.rmtree() remove files
             os.mkdir(dest_dir)
             os.mkdir(dest_dir + "/OK")
             os.mkdir(dest_dir + "/NG")

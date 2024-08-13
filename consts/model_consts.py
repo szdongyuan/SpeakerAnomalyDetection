@@ -27,6 +27,11 @@ SWEEP_SIGNAL_TABLE_COLUMNS = ', '.join(['sweep_id', 'sweep_type', 'start_feq', '
                                         'sample_rate', 'sweep_duration'])
 
 
+LABEL_MAP = {
+    "NG": 0,
+    "OK": 1,
+}
+
 MODEL_MAPPING = {
     "EnsembleSVC": EnsembleSVC,
     "SimpleSVC": SimpleSVC,

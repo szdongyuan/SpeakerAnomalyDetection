@@ -2,11 +2,13 @@ import csv
 
 from sklearn.metrics import confusion_matrix
 
+from consts.model_consts import LABEL_MAP
+
 
 class DisplayManager(object):
 
     @staticmethod
-    def display_confusion_matrix(y_true, y_pred, labels=None):
+    def display_confusion_matrix(y_true, y_pred, y_labels=None):
 
         """
             Calculates and displays the confusion matrix as a format string.
@@ -16,18 +18,19 @@ class DisplayManager(object):
                 The true labels.
             - y_pred: list or array
                 The Prediction labels as returned by a classifier.
-            - labels: list
+            - y_labels: list
                 Labels used to the confusion matrix display.
 
             Returns:
             - result_str: string
                 The formatted string representation of the obfuscation matrix.
         """
-        if not labels:
-            labels = [["true_NG", "true_OK"], ["predict_NG", "predict_OK"]]
+        if not y_labels:
+            y_labels = ["NG", "OK"]
+        labels = [["true_" + i for i in y_labels], ["predict_" + i for i in y_labels]]
         col_len_0 = max([len(label_str) for label_str in labels[0]]) + 1
         col_len_1 = max([len(label_str) for label_str in labels[1]])
-        cm = confusion_matrix(y_true=y_true, y_pred=y_pred)
+        cm = confusion_matrix(y_true=y_true, y_pred=y_pred, labels=[LABEL_MAP[i] for i in y_labels])
         result_str = ""
         for i in range(len(labels[1]) + 1):
             row_title = "" if i == 0 else str(labels[0][i - 1])
