@@ -35,7 +35,6 @@ class DisplayManager(object):
         for i in range(len(labels[1]) + 1):
             row_title = "" if i == 0 else str(labels[0][i - 1])
             row_entity = labels[1] if i == 0 else cm[i - 1]
-            print(row_entity)
             str_1 = row_title.rjust(col_len_0) + " | "
             str_2 = "-" * col_len_0 + "-+"
             for j in range(len(labels[0])):
