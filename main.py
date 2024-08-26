@@ -9,7 +9,8 @@ from base.display import DisplayManager
 from base.load_audio import get_pre_labeled_audios, get_audio_files_and_labels
 from base.load_config import load_config
 from base.pre_processing.preprocessing_manager import PreprocessingManager
-from consts import error_code
+from base.split_data_dir import copy_from_restored_audio_database
+from consts import error_code, model_consts
 from consts.model_consts import MODEL_MAPPING
 
 DEFAULT_DATA_PATH = "audio_data/train"
@@ -133,6 +134,9 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
                           "result": result})
     return ret_str
 
+def load_data_from_database():
+    copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH, dest_test_dir=model_consts.TEST_PATH)
+    return error_code.OK
 
 def init_model_from_config():
     """

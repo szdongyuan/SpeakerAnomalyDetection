@@ -3,7 +3,9 @@ import shutil
 
 import numpy as np
 
+from base.db_manager import DataSave
 from base.file_ops import FileOps
+from base.load_config import load_config
 from consts import error_code, model_consts
 
 
@@ -66,37 +68,27 @@ def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
     print("finish restore")
 
 
-def copy_from_restored_audio(source_dir_list,
-                             dest_dir=model_consts.TRAIN_PATH,
-                             over_write=True):
-    """
-        Copy audio files from the source directories to the destination directory.
-
-        Args:
-        - source_dir_list: list
-            List of source directories from which to copy files.
-        - dest_dir: string
-            The destination directory path of the file to be copied.
-        - over_write: bool
-            Whether to overwrite existing files.
-        Returns:
-        - error_code.OK: int
-            The code indicating a successful operation.
-    """
-    if over_write:
+def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH, dest_test_dir=model_consts.TEST_PATH, over_write=True):
+    data_load_config = load_config("data_load")
+    query_data = DataSave(model_consts.DATABASE_PATH).query_conditions()
+    for dest_dir in [dest_train_dir, dest_test_dir]:
         ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
         if ret_code != error_code.OK:
             print(ret_msg)
             return ret_code
-
+    file_list = []
     n_file = 0
-    for source_dir in source_dir_list:
-        source_dir = model_consts.STORED_SAMPLE_PATH + "/" + source_dir
-        for audio_file in os.listdir(source_dir + "/OK"):
-            shutil.copy(source_dir + "/OK/" + audio_file, dest_dir + "/OK")
-            n_file += 1
-        for audio_file in os.listdir(source_dir + "/NG"):
-            shutil.copy(source_dir + "/NG/" + audio_file, dest_dir + "/NG")
-            n_file += 1
+    stored_sample_path = model_consts.STORED_SAMPLE_PATH
+    if not query_data:
+        return error_code.MISSING_SELECT_DATA, "No data was queried."
+    for data_item in query_data:
+        file_list.append((data_item[0], data_item[2], data_item[6]))
+    recode_date_info = data_load_config.get("recode_date")
+    train_data_date = [str(item) for item in recode_date_info.get('train_data_date')]
+    for file in file_list:
+        dest_dir = dest_train_dir if file[1] in train_data_date else dest_test_dir
+        status_dir = "OK" if file[2] == "OK" else "NG"
+        shutil.copy(f"{stored_sample_path}/{file[0]}", f"{dest_dir}/{status_dir}")
+        n_file += 1
     print("finish copy from restored audio. [%s] files" % n_file)
     return error_code.OK
