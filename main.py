@@ -134,9 +134,15 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
                           "result": result})
     return ret_str
 
+
 def load_data_from_database():
-    copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH, dest_test_dir=model_consts.TEST_PATH)
-    return error_code.OK
+    try:
+        copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH, dest_test_dir=model_consts.TEST_PATH)
+        return error_code.OK, "Successfully loaded data from the database."
+    except Exception as e:
+        err_msg = "Failed to load data from the database. %s" % (str(e))
+        return error_code.INVALID_DATA_LOADING, err_msg
+
 
 def init_model_from_config():
     """
@@ -149,6 +155,7 @@ def init_model_from_config():
     model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
     return model
+
 
 def preprocess_raw_signals(raw_signals, fs, preprocess_config):
     """

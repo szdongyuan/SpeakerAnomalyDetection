@@ -68,27 +68,31 @@ def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
     print("finish restore")
 
 
-def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH, dest_test_dir=model_consts.TEST_PATH, over_write=True):
-    data_load_config = load_config("data_load")
-    query_data = DataSave(model_consts.DATABASE_PATH).query_conditions()
-    for dest_dir in [dest_train_dir, dest_test_dir]:
-        ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
-        if ret_code != error_code.OK:
-            print(ret_msg)
-            return ret_code
-    file_list = []
-    n_file = 0
-    stored_sample_path = model_consts.STORED_SAMPLE_PATH
-    if not query_data:
-        return error_code.MISSING_SELECT_DATA, "No data was queried."
-    for data_item in query_data:
-        file_list.append((data_item[0], data_item[2], data_item[6]))
-    recode_date_info = data_load_config.get("recode_date")
-    train_data_date = [str(item) for item in recode_date_info.get('train_data_date')]
-    for file in file_list:
-        dest_dir = dest_train_dir if file[1] in train_data_date else dest_test_dir
-        status_dir = "OK" if file[2] == "OK" else "NG"
-        shutil.copy(f"{stored_sample_path}/{file[0]}", f"{dest_dir}/{status_dir}")
-        n_file += 1
-    print("finish copy from restored audio. [%s] files" % n_file)
-    return error_code.OK
+def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
+                                      dest_test_dir=model_consts.TEST_PATH, over_write=True):
+    try:
+        data_load_config = load_config("data_load")
+        query_data = DataSave(model_consts.DATABASE_PATH).query_conditions()
+        for dest_dir in [dest_train_dir, dest_test_dir]:
+            ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
+            if ret_code != error_code.OK:
+                print(ret_msg)
+                return ret_code
+        file_list = []
+        n_file = 0
+        stored_sample_path = model_consts.STORED_SAMPLE_PATH
+        if not query_data:
+            return error_code.MISSING_SELECT_DATA, "No data was queried."
+        for data_item in query_data:
+            file_list.append((data_item[0], data_item[2], data_item[6]))
+        recode_date_info = data_load_config.get("record_date")
+        train_data_date = [str(item) for item in recode_date_info.get('train_data_date', [])]
+        for file in file_list:
+            dest_dir = dest_train_dir if file[1] in train_data_date else dest_test_dir
+            status_dir = "OK" if file[2] == "OK" else "NG"
+            shutil.copy(f"{stored_sample_path}/{file[0]}", f"{dest_dir}/{status_dir}")
+            n_file += 1
+        return error_code.OK, f"finish copy from restored {n_file} audio files."
+    except Exception as e:
+        err_msg = "Failed to copy the audio file. %s" % (str(e))
+        return error_code.INVALID_QUERY, err_msg

@@ -3,7 +3,6 @@
 - module_name: "data_load"
 
   module_config:
-    database_path: "database/audio_data.db"
     product_model: Null
     sweep_type: "linear_chirp_1"
     recode_date:

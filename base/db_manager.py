@@ -40,13 +40,13 @@ class DataSave(object):
                 file_path = os.path.join(source_dir, label, audio_file).replace("\\", "/")
                 product_model = source_dir.split("/")[2].split("_")[0]
                 sample_rate = model_consts.SAMPLE_RATE
-                recode_date_time = os.path.getmtime(os.path.join(sub_folder_path, audio_file))
-                recode_date = (datetime.fromtimestamp(int(recode_date_time))).date()
+                record_date_time = os.path.getmtime(os.path.join(sub_folder_path, audio_file))
+                record_date = (datetime.fromtimestamp(int(record_date_time))).date()
                 sample_sweep_data = self.get_audio_data_sweep_info(sub_folder_path + "/" + audio_file)
                 sweep_list.append(sample_sweep_data)
                 result = self.check_database_info_equal(sweep_list, "sweep_signal_table", model_consts.SWEEP_COLUMNS,"sweep_signal_table.sweep_id")
                 (sweep_id,) = result if result else None
-                sample_data = (audio_data_id, file_path, product_model, sample_rate, recode_date, label, sweep_id)
+                sample_data = (audio_data_id, file_path, product_model, sample_rate, record_date, label, sweep_id)
                 data_list.append(sample_data)
                 n_file += 1
         print(f"{n_file} ok samples were successfully inserted.")
@@ -63,7 +63,8 @@ class DataSave(object):
                 sample_sweep_data = self.get_audio_data_sweep_info(sub_folder_path + "/" + audio_file)
                 sweep_data.append(sample_sweep_data)
         sweep_data = list(set(sweep_data))
-        result = self.check_database_info_equal(sweep_data, "sweep_signal_table", model_consts.SWEEP_COLUMNS, model_consts.SWEEP_COLUMNS)
+        result = self.check_database_info_equal(sweep_data, "sweep_signal_table",model_consts.SWEEP_COLUMNS,
+                                                model_consts.SWEEP_COLUMNS)
         sweep_data_list = []
         for i in range(len(sweep_data)):
             if sweep_data[i] in result:
@@ -77,8 +78,9 @@ class DataSave(object):
         for data_item in data_list:
             sql_select = f"select {', '.join(select_column)} from {table_name} where {base_sql}"
             self.cursor.execute(sql_select, data_item)
-            (result_item, ) = self.cursor.fetchall()
-            result.append(result_item)
+            fet_result = self.cursor.fetchall()
+            if fet_result:
+                result.extend(row for row in fet_result)
         return result
 
     def get_audio_data_sweep_info(self, file_path):
@@ -95,12 +97,9 @@ class DataSave(object):
 
     @staticmethod
     def get_data_id(data_list, id_index: int):
-        if data_list:
-            for i in range(len(data_list)):
-                data_id = str(uuid.uuid1())
-                temp_list = list(data_list[i])
-                temp_list.insert(id_index, data_id)
-                data_list[i] = tuple(temp_list)
+        for i, item in enumerate(data_list):
+            data_id = str(uuid.uuid1())
+            data_list[i] = item[:id_index] + (data_id, ) + item[id_index:]
         return data_list
 
     @staticmethod
@@ -140,15 +139,16 @@ class DataSave(object):
             params = []
             condition_mapping = self.get_data_config("data_load")
             for key, value in condition_mapping.items():
-                if key != "recode_date" and value is not None:
+                if key != "record_date" and value is not None:
                     query_conditions.append(f"{key} = ?")
                     params.append(value)
-            if condition_mapping.get("recode_date") is not None:
-                for key, data_date_list in condition_mapping.get("recode_date").items():
+            if condition_mapping.get("record_date") is not None:
+                for key, data_date_list in condition_mapping.get("record_date").items():
+                    data_date_list = [] if not data_date_list else data_date_list
                     for item in data_date_list:
                         params.append(item)
                         placeholders += '?'
-                query_conditions.append(f"recode_date in ({', '.join(placeholders)})")
+                query_conditions.append(f"record_date in ({', '.join(placeholders)})")
             if any(key in condition_mapping for key in model_consts.SWEEP_COLUMNS):
                 join_sql = "inner join sweep_signal_table on audio_data_table.sweep_id = sweep_signal_table.sweep_id"
             base_sql = f'select {model_consts.SELECT_COLUMNS} from audio_data_table '
@@ -166,7 +166,7 @@ class DataSave(object):
         data_load_config = load_config(model_name)
         data_load_config_mapping = {
             "product_model": data_load_config.get("product_model"),
-            "recode_date": data_load_config.get("recode_date"),
+            "record_date": data_load_config.get("record_date"),
             "sample_rate": data_load_config.get("sample_rate"),
             "sweep_type": data_load_config.get("sweep_type"),
             "sweep_duration": data_load_config.get("sweep_duration"),
