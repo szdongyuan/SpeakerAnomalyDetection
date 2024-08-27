@@ -8,7 +8,6 @@ class data_alignment(object):
         self.audio_data = audio_data
         self.input_data = input_data
 
-
     def onset_detect(self):
         """
         This algorithm is used for the calculation of long time delay of music signals,
