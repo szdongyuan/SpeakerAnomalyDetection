@@ -3,7 +3,7 @@ import librosa
 from scipy.signal.windows import flattop, kaiser, gaussian, nuttall, tukey
 
 
-class Add_Windows(object):
+class Windows(object):
     def __init__(self, audio_data, sr=44100):
         self.sr = sr
         self.audio_data = audio_data
