@@ -26,6 +26,7 @@ class data_alignment(object):
         delay = np.argmax(cross_correlation) - (len(self.audio_data) - 1)
         delay_frames = np.abs(delay)
         delay_seconds = delay_frames / self.sr
+
         return delay_frames, delay_seconds
 
     def phase_correlation(self, input_data, audio_data):
