@@ -18,7 +18,7 @@ def load_config(module_name=None):
     """
 
     result = {}
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding='utf-8') as f:
         config = yaml.safe_load(f.read())
         if module_name:
             for module_config in config:

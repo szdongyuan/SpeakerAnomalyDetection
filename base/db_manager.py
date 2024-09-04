@@ -26,30 +26,63 @@ class DataSave(object):
             err_msg = "Failed to connect to the database %s" % (str(e)[:40])
             return error_code.INVALID_CONNECT_DATABASE, err_msg
 
+    def create_table(self):
+        try:
+            self.connection = sqlite3.connect(self.db_name)
+            self.cursor = self.connection.cursor()
+            create_audio_data_table_sql = '''
+            create table if not exists audio_data_table(
+                audio_data_id char(100) primary key not null,
+                file_path varchar(200) not null,
+                product_model char(50) not null,
+                sample_rate integer not null,
+                record_date datetime not null,
+                labels bit not null,
+                sweep_id char(100),
+                FOREIGN KEY (sweep_id) REFERENCES sweep_signal_table (sweep_id) 
+            );
+            '''
+            create_sweep_signal_table_sql = '''
+            create table if not exists sweep_signal_table(
+                sweep_id char(100) primary key not null,
+        		sweep_type char(100) not null,
+        		start_feq integer not null,
+        		end_feq integer not null,
+        		sample_rate integer not null,
+        		sweep_duration integer not null 
+        	);
+           '''
+            self.cursor.execute(create_audio_data_table_sql)
+            self.cursor.execute(create_sweep_signal_table_sql)
+            self.connection.commit()
+            return error_code.OK, "Table creation success."
+        except Exception as e:
+            err_msg = "Failed to create table. %s" % (str(e)[:40])
+            return error_code.INVALID_CREATE_TABLE, err_msg
+
     def get_audio_data_list(self, source_dir_list, label):
         data_list = []
-        sweep_list = []
         n_file = 0
         for source_dir in source_dir_list:
             source_dir_path = os.path.join(model_consts.STORED_SAMPLE_PATH, source_dir).replace("\\", "/")
             sub_folder_path = source_dir_path + "/" + label
+            source_dir_str = source_dir.split("/")
             if not os.path.exists(sub_folder_path):
                 continue
             for index, audio_file in enumerate(os.listdir(sub_folder_path)):
                 audio_data_id = str(uuid.uuid1())
                 file_path = os.path.join(source_dir, label, audio_file).replace("\\", "/")
-                product_model = source_dir.split("/")[2].split("_")[0]
+                product_model = source_dir_str[2].split("_")[0]
                 sample_rate = model_consts.SAMPLE_RATE
-                record_date_time = os.path.getmtime(os.path.join(sub_folder_path, audio_file))
-                record_date = (datetime.fromtimestamp(int(record_date_time))).date()
+                record_date = (datetime.strptime(source_dir_str[3], "%Y%m%d")).strftime("%Y-%m-%d")
                 sample_sweep_data = self.get_audio_data_sweep_info(sub_folder_path + "/" + audio_file)
-                sweep_list.append(sample_sweep_data)
-                result = self.check_database_info_equal(sweep_list, "sweep_signal_table", model_consts.SWEEP_COLUMNS,"sweep_signal_table.sweep_id")
-                (sweep_id,) = result if result else None
+                (result, ) = self.check_database_info_equal([sample_sweep_data], "sweep_signal_table", model_consts.SWEEP_COLUMNS,
+                                                        ['sweep_signal_table.sweep_id'])
+                (sweep_id, ) = result if result else None
                 sample_data = (audio_data_id, file_path, product_model, sample_rate, record_date, label, sweep_id)
                 data_list.append(sample_data)
                 n_file += 1
-        print(f"{n_file} ok samples were successfully inserted.")
+        print(f"{n_file} audio samples were successfully inserted.")
         return data_list
 
     def sweep_signal_file_list(self, source_dir_list, label):
@@ -63,13 +96,9 @@ class DataSave(object):
                 sample_sweep_data = self.get_audio_data_sweep_info(sub_folder_path + "/" + audio_file)
                 sweep_data.append(sample_sweep_data)
         sweep_data = list(set(sweep_data))
-        result = self.check_database_info_equal(sweep_data, "sweep_signal_table",model_consts.SWEEP_COLUMNS,
+        result = self.check_database_info_equal(sweep_data, "sweep_signal_table", model_consts.SWEEP_COLUMNS,
                                                 model_consts.SWEEP_COLUMNS)
-        sweep_data_list = []
-        for i in range(len(sweep_data)):
-            if sweep_data[i] in result:
-                continue
-            sweep_data_list.append(sweep_data[i])
+        sweep_data_list = [item for item in sweep_data if item not in set(result)]
         return self.get_data_id(sweep_data_list, 0)
 
     def check_database_info_equal(self, data_list, table_name, check_column, select_column):
@@ -87,9 +116,9 @@ class DataSave(object):
         audio_sweep_data = ()
         if file_path:
             file_path_dir = file_path.split("/")
-            sweep_type = file_path_dir[10]
-            start_feq = file_path_dir[11].split("_")[1]
-            end_feq = file_path_dir[11].split("_")[2]
+            sweep_type = file_path_dir[11]
+            start_feq = file_path_dir[12].split("_")[1]
+            end_feq = file_path_dir[12].split("_")[2]
             sample_rate = model_consts.SAMPLE_RATE
             sweep_duration = self.get_wav_duration(file_path)
             audio_sweep_data = (sweep_type, int(start_feq), int(end_feq), sample_rate, sweep_duration)
@@ -120,7 +149,7 @@ class DataSave(object):
             self.connection.commit()
             return error_code.OK, "Insert data successfully."
         except Exception as e:
-            err_msg = "Failed to insert data into the database. %s" % (str(e)[:40])
+            err_msg = "Failed to insert data into the database. %s" % (str(e))
             return error_code.INVALID_INSERT, err_msg
 
     def query(self, sql_query: str):
@@ -138,17 +167,23 @@ class DataSave(object):
             query_conditions = []
             params = []
             condition_mapping = self.get_data_config("data_load")
-            for key, value in condition_mapping.items():
-                if key != "record_date" and value is not None:
-                    query_conditions.append(f"{key} = ?")
-                    params.append(value)
-            if condition_mapping.get("record_date") is not None:
-                for key, data_date_list in condition_mapping.get("record_date").items():
+            record_date_mapping = condition_mapping.get("record_date")
+            if record_date_mapping is not None:
+                for key, data_date_list in record_date_mapping.items():
                     data_date_list = [] if not data_date_list else data_date_list
                     for item in data_date_list:
                         params.append(item)
                         placeholders += '?'
-                query_conditions.append(f"record_date in ({', '.join(placeholders)})")
+                query_conditions.append(f"record_date IN ({', '.join(placeholders)})")
+            for key, value in condition_mapping.items():
+                if key == "record_date":
+                    continue
+                if isinstance(value, list) and value:
+                    query_conditions.append(f"{key} IN ({', '.join(['?'] * len(value))})")
+                    params.extend(value)
+                elif value is not None:
+                    query_conditions.append(f"{key} = ?")
+                    params.append(value)
             if any(key in condition_mapping for key in model_consts.SWEEP_COLUMNS):
                 join_sql = "inner join sweep_signal_table on audio_data_table.sweep_id = sweep_signal_table.sweep_id"
             base_sql = f'select {model_consts.SELECT_COLUMNS} from audio_data_table '

@@ -137,8 +137,8 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
 
 def load_data_from_database():
     try:
-        copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH, dest_test_dir=model_consts.TEST_PATH)
-        return error_code.OK, "Successfully loaded data from the database."
+        return copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
+                                                 dest_test_dir=model_consts.TEST_PATH)
     except Exception as e:
         err_msg = "Failed to load data from the database. %s" % (str(e))
         return error_code.INVALID_DATA_LOADING, err_msg
