@@ -9,7 +9,8 @@ from base.display import DisplayManager
 from base.load_audio import get_pre_labeled_audios, get_audio_files_and_labels
 from base.load_config import load_config
 from base.pre_processing.preprocessing_manager import PreprocessingManager
-from consts import error_code
+from base.split_data_dir import copy_from_restored_audio_database
+from consts import error_code, model_consts
 from consts.model_consts import MODEL_MAPPING
 
 DEFAULT_DATA_PATH = "audio_data/train"
@@ -134,6 +135,15 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
     return ret_str
 
 
+def load_data_from_database():
+    try:
+        return copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
+                                                 dest_test_dir=model_consts.TEST_PATH)
+    except Exception as e:
+        err_msg = "Failed to load data from the database. %s" % (str(e))
+        return error_code.INVALID_DATA_LOADING, err_msg
+
+
 def init_model_from_config():
     """
         Initialize the model based on configuration.
@@ -145,6 +155,7 @@ def init_model_from_config():
     model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
     return model
+
 
 def preprocess_raw_signals(raw_signals, fs, preprocess_config):
     """

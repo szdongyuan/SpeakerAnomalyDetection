@@ -2,6 +2,20 @@
 
 - module_name: "data_load"
 
+  module_config:
+    product_model: Null
+    sweep_type: "linear_chirp_1"
+    recode_date:
+      train_data_date:
+        - 2024-06-07
+        - 2024-06-11
+      test_data_date:
+        - 2024-06-12
+        - 2024-06-14
+    sweep_duration: "3"
+    start_feq: Null
+    end_feq: Null
+
 - module_name: "preprocess"
 
   module_config:
