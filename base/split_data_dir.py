@@ -67,6 +67,43 @@ def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
         shutil.move(dir_file, train_ng_path)
     print("finish restore")
 
+
+def copy_from_restored_audio(source_dir_list,
+                             dest_dir=model_consts.TRAIN_PATH,
+                             over_write=True):
+    """
+        Copy audio files from the source directories to the destination directory.
+
+        Args:
+        - source_dir_list: list
+            List of source directories from which to copy files.
+        - dest_dir: string
+            The destination directory path of the file to be copied.
+        - over_write: bool
+            Whether to overwrite existing files.
+        Returns:
+        - error_code.OK: int
+            The code indicating a successful operation.
+    """
+    if over_write:
+        ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
+        if ret_code != error_code.OK:
+            print(ret_msg)
+            return ret_code
+
+    n_file = 0
+    for source_dir in source_dir_list:
+        source_dir = model_consts.STORED_SAMPLE_PATH + "/" + source_dir
+        for audio_file in os.listdir(source_dir + "/OK"):
+            shutil.copy(source_dir + "/OK/" + audio_file, dest_dir + "/OK")
+            n_file += 1
+        for audio_file in os.listdir(source_dir + "/NG"):
+            shutil.copy(source_dir + "/NG/" + audio_file, dest_dir + "/NG")
+            n_file += 1
+    print("finish copy from restored audio. [%s] files" % n_file)
+    return error_code.OK
+
+
 def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
                                       dest_test_dir=model_consts.TEST_PATH, over_write=True):
     try:

@@ -179,46 +179,46 @@ def preprocess_raw_signals(raw_signals, fs, preprocess_config):
     return np.array(processed_data)
 
 
-parser = argparse.ArgumentParser(description='speaker anomaly detection')
-subparsers = parser.add_subparsers(help="sub-command help")
-parser.set_defaults(func="None")
-
-parser_train = subparsers.add_parser("train", help="train model")
-parser_train.add_argument("-d", "--data",
-                          required=True, help="training dataset path")
-parser_train.add_argument("-m", "--model",
-                          required=True, help="model save path")
-parser_train.add_argument("-t", "--test",
-                          help="validate dataset path")
-parser_train.set_defaults(func="train")
-
-parser_evaluate = subparsers.add_parser("evaluate", help="evaluate model")
-parser_evaluate.add_argument("-t", "--test",
-                             required=True, help="evaluate dataset path")
-parser_evaluate.add_argument("-m", "--model",
-                             required=True, help="saved model path")
-parser_evaluate.add_argument("-v", "--verbose",
-                             help="show detailed evaluate info, 0 ~ 3")
-parser_evaluate.set_defaults(func="evaluate")
-
-parser_predict = subparsers.add_parser("predict", help="predict samples")
-parser_predict.add_argument("-t", "--test",
-                            required=True, help="predict sample dir or file")
-parser_predict.add_argument("-m", "--model",
-                            required=True, help="saved model path")
-parser_predict.add_argument("-v", "--verbose",
-                            help="show detailed evaluate info, 0 ~ 3")
-parser_predict.set_defaults(func="predict")
-
-args = parser.parse_args()
-
-if __name__ == "__main__":
-    if args.func == "train":
-        train(args.data, save_model_path=args.model, predict_dir=args.test)
-    elif args.func == "evaluate":
-        verbose = int(args.verbose) if args.verbose else None
-        evaluate(args.test, load_model_path=args.model, verbose=verbose)
-    elif args.func == "predict":
-        predict(args.test, load_model_path=args.model)
-    else:
-        print("[%s] not support" % args.func)
+# parser = argparse.ArgumentParser(description='speaker anomaly detection')
+# subparsers = parser.add_subparsers(help="sub-command help")
+# parser.set_defaults(func="None")
+#
+# parser_train = subparsers.add_parser("train", help="train model")
+# parser_train.add_argument("-d", "--data",
+#                           required=True, help="training dataset path")
+# parser_train.add_argument("-m", "--model",
+#                           required=True, help="model save path")
+# parser_train.add_argument("-t", "--test",
+#                           help="validate dataset path")
+# parser_train.set_defaults(func="train")
+#
+# parser_evaluate = subparsers.add_parser("evaluate", help="evaluate model")
+# parser_evaluate.add_argument("-t", "--test",
+#                              required=True, help="evaluate dataset path")
+# parser_evaluate.add_argument("-m", "--model",
+#                              required=True, help="saved model path")
+# parser_evaluate.add_argument("-v", "--verbose",
+#                              help="show detailed evaluate info, 0 ~ 3")
+# parser_evaluate.set_defaults(func="evaluate")
+#
+# parser_predict = subparsers.add_parser("predict", help="predict samples")
+# parser_predict.add_argument("-t", "--test",
+#                             required=True, help="predict sample dir or file")
+# parser_predict.add_argument("-m", "--model",
+#                             required=True, help="saved model path")
+# parser_predict.add_argument("-v", "--verbose",
+#                             help="show detailed evaluate info, 0 ~ 3")
+# parser_predict.set_defaults(func="predict")
+#
+# args = parser.parse_args()
+#
+# if __name__ == "__main__":
+#     if args.func == "train":
+#         train(args.data, save_model_path=args.model, predict_dir=args.test)
+#     elif args.func == "evaluate":
+#         verbose = int(args.verbose) if args.verbose else None
+#         evaluate(args.test, load_model_path=args.model, verbose=verbose)
+#     elif args.func == "predict":
+#         predict(args.test, load_model_path=args.model)
+#     else:
+#         print("[%s] not support" % args.func)

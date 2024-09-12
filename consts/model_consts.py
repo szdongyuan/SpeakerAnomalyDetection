@@ -39,5 +39,5 @@ MODEL_MAPPING = {
     "SimpleSVC": SimpleSVC,
     "CNN1d": CNN1d,
     "RNN": RNN,
-    "Transformer": Transformer
+    "Transformer": Transformer,
 }
