@@ -8,20 +8,20 @@ class AudioThdFrequencyResponseAnalysis(object):
 
     def process_calculate(self, reference_signal: np.ndarray, recorded_signal: np.ndarray, sr, **kwargs):
         if kwargs.get("thd", True):
-            fig, ax1 = plt.subplots()
-            fig, ax2 = plt.subplots(nrows=2, ncols=3)
+            fig, ax_thd = plt.subplots()
+            fig, ax_harmonic = plt.subplots(nrows=2, ncols=3)
         if kwargs.get("frequency_response", True):
-            fig, ax3 = plt.subplots()
+            fig, ax_fr = plt.subplots()
         for i in range(len(recorded_signal)):
             if kwargs.get("thd", True):
                 thd_kwargs = kwargs.get("thd_kwargs", {})
                 x, h, thd = self.calculate_thd(reference_signal, recorded_signal[i], sr[i], **thd_kwargs)
-                plot_thd(ax1, x, thd)
-                plot_harmonic(ax2, x, h)
+                plot_thd(ax_thd, x, thd)
+                plot_harmonic(ax_harmonic, x, h)
             if kwargs.get("frequency_response", True):
                 frequency_response_kwargs = kwargs.get("frequency_response_kwargs", {})
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i], **frequency_response_kwargs)
-                plot_frequency_response(ax3, frequency_list, fr)
+                plot_frequency_response(ax_fr, frequency_list, fr)
         return plt
 
     def calculate_thd(self, reference_signal, recorded_signal, sr, **kwargs):

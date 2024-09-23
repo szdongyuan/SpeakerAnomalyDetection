@@ -2,8 +2,9 @@ import mock
 import numpy as np
 import pytest
 
-from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from matplotlib import pyplot as plt
+
+from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from unit_test.base.compare_methods import compare_dicts
 
 
