@@ -31,7 +31,7 @@ class AudioFeatureExtraction(object):
                 The spectrogram of the signal.
         """
         extraction_kwargs = kwargs.get("extraction_kwargs", {})
-        spec = np.abs(spectrum.stft(y=signal, **extraction_kwargs)) # The short-time Fourier transform(STFT)
+        spec = np.abs(spectrum.stft(y=signal, **extraction_kwargs))  # The short-time Fourier transform(STFT)
 
         if kwargs.get("time_series_first", True):
             spec = spec.T
@@ -155,7 +155,8 @@ class AudioFeatureExtraction(object):
         if kwargs.get("time_series_first", True):
             spectral_flatness = spectral_flatness.T
         if kwargs.get("flatten", False):
-            spectral_flatness = spectral_flatness.reshape((1, spectral_flatness.shape[0] * spectral_flatness.shape[1]))[0]
+            spectral_shape = spectral_flatness.shape
+            spectral_flatness = spectral_flatness.reshape((1, spectral_shape[0] * spectral_shape[1]))[0]
         return spectral_flatness
 
     @staticmethod
@@ -174,7 +175,6 @@ class AudioFeatureExtraction(object):
         p0 = 20e-6
         spl = 20 * np.log10(rms / p0)
         return spl
-
 
     @staticmethod
     def data_normalize(signal, sr, **kwargs):
@@ -327,7 +327,7 @@ class AudioFeatureExtraction(object):
         for window in windows:
             N = len(window)
             yf = np.fft.fft(window)
-            xf = np.fft.fftfreq(N, 1 / sr) # Returns the discrete Fourier transform sampling frequency.
+            xf = np.fft.fftfreq(N, 1 / sr)  # Returns the discrete Fourier transform sampling frequency.
 
             yf = np.abs(yf[:N // 2])
             yf = yf * 2 / N
