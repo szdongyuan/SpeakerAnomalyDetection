@@ -11,7 +11,7 @@ from base.load_config import load_config
 from base.pre_processing.preprocessing_manager import PreprocessingManager
 from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
-from consts.model_consts import MODEL_MAPPING
+from machine_learning import MODEL_MAPPING
 
 DEFAULT_DATA_PATH = "audio_data/train"
 DEFAULT_TEST_DATA = "audio_data/test"
