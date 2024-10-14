@@ -14,13 +14,13 @@ DEFAULT_LOG_FORMATTER = '[%(asctime)s][%(name)s] - [%(levelname)s] - [%(message)
 
 DEFAULT_LOG = {
     "log_name": LOG_DIR + "main.log",
-    "max_size": 1 * MB,
+    "max_size": 2 * MB,
     "backup_count": 9,
     "log_format": DEFAULT_LOG_FORMATTER,
 }
 AI_LOG = {
     "log_name": LOG_DIR + "ai.log",
-    "max_size": 1 * MB,
+    "max_size": 10 * KB,
     "backup_count": 9,
     "log_format": DEFAULT_LOG_FORMATTER,
 }
@@ -33,7 +33,7 @@ DEBUG_LOG = {
 
 TEST_LOG = {
     "log_name": LOG_DIR + "test.log",
-    "max_size": 10 * KB,
+    "max_size": 100 * KB,
     "backup_count": 0,
     "log_format": DEFAULT_LOG_FORMATTER,
 }

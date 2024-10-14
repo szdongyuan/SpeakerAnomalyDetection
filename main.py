@@ -22,7 +22,7 @@ DEFAULT_MODEL_PATH = "models/"
 def train(pre_labeled_dir,
           save_model_path=None,
           predict_dir=None):
-    logger = LogManager("train").get_logger()
+    logger = LogManager("train")
 
     time_0 = time.time()
 
@@ -30,7 +30,7 @@ def train(pre_labeled_dir,
     ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
-        logger.shutdown()
+        logger.shut_down()
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
                            "result": ret})
@@ -55,22 +55,23 @@ def train(pre_labeled_dir,
     if save_model_path:
         model.save_model(save_model_path)
         ret_msg += ". model saved."
+
+    logger.shut_down()
     if predict_dir:
         evaluate(predict_dir, model=model, verbose=1)
 
-    logger.shutdown()
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": ret_msg,
                        "result": ret_msg})
 
 
 def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
-    logger = LogManager("evaluate").get_logger()
+    logger = LogManager("evaluate")
 
     ret_code, ret = get_pre_labeled_audios(predict_dir)
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
-        logger.shutdown()
+        logger.shut_down()
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
                            "result": ret})
@@ -85,7 +86,7 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
         model.load_model(load_model_path)
     if not model:
         logger.error("missing model")
-        logger.shutdown()
+        logger.shut_down()
         return json.dumps({"ret_code": error_code.MISSING_MODEL,
                            "ret_msg": "missing model",
                            "result": "missing model"})
@@ -105,7 +106,7 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
         logger.info(acc_info)
         logger.info(cm_info)
         false_prediction = [file_names[i] for i in range(len_test) if y_test[i] != y_pred[i]]
-        logger.info("false prediction %s" % false_prediction)
+        logger.info("false prediction:\n%s" % false_prediction)
         if verbose == 2:
             dm.display_pred_score(file_names, labels, pred_score)
         elif verbose == 3:
@@ -119,7 +120,7 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
                           "ret_msg": "finish evaluating",
                           "result": [acc_info, cm_info]})
 
-    logger.shutdown()
+    logger.shut_down()
     return ret_str
 
 

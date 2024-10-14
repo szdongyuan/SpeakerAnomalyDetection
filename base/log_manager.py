@@ -1,4 +1,5 @@
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 
 from consts.running_consts import LOG_DIR, LOG_MAPPING, DEFAULT_LOG
@@ -11,6 +12,9 @@ class LogManager(object):
 
     @staticmethod
     def set_log_handler(thread_holder):
+        if not os.path.exists(LOG_DIR):
+            os.mkdir(LOG_DIR)
+
         logger = logging.getLogger(thread_holder)
         log_info = LOG_MAPPING.get(thread_holder, DEFAULT_LOG)
         handler = RotatingFileHandler(filename=log_info.get("log_name", LOG_DIR + "main.log"),
@@ -23,5 +27,16 @@ class LogManager(object):
         logger.addHandler(handler)
         return logger
 
-    def get_logger(self):
-        return self.logger
+    def info(self, info_str):
+        return self.logger.info(info_str)
+
+    def warning(self, warning_str):
+        return self.logger.warning(warning_str)
+
+    def error(self, error_str):
+        return self.logger.error(error_str)
+
+    def shut_down(self):
+        for h in self.logger.handlers[:]:
+            h.close()
+            self.logger.removeHandler(h)
