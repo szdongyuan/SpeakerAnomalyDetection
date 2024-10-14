@@ -8,6 +8,7 @@ import numpy as np
 from base.display import DisplayManager
 from base.load_audio import get_pre_labeled_audios, get_audio_files_and_labels
 from base.load_config import load_config
+from base.log_manager import LogManager
 from base.pre_processing.preprocessing_manager import PreprocessingManager
 from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
@@ -21,45 +22,56 @@ DEFAULT_MODEL_PATH = "models/"
 def train(pre_labeled_dir,
           save_model_path=None,
           predict_dir=None):
+    logger = LogManager("train")
+
     time_0 = time.time()
 
     data_load_config = load_config("data_load")
     ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
     if ret_code != error_code.OK:
+        logger.error("failed to load audio samples")
+        logger.shut_down()
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
                            "result": ret})
     signals, file_names, fs, labels = ret
-    print("finish audio loading")
+    logger.info("finish audio loading")
 
     preprocess_config = load_config("preprocess")
     x_train = preprocess_raw_signals(signals, fs, preprocess_config)
     y_train = labels
-    print("finish data preparing, data shape %s" % str(x_train.shape))
+    logger.info("finish data preparing, data shape %s" % str(x_train.shape))
 
     model = init_model_from_config()
     if save_model_path and os.path.isfile(save_model_path):
-        print("model [%s] exists, keep training" % save_model_path)
+        logger.info("model [%s] exists, keep training" % save_model_path)
         model.load_model(save_model_path)
     else:
-        print("init new model [%s]..." % save_model_path)
+        logger.info("init new model [%s]..." % save_model_path)
     model.fit(x_train, y_train)
     ret_msg = "finish training. time spent [%s] s" % (time.time() - time_0)
-    print(ret_msg)
+    logger.info(ret_msg)
 
     if save_model_path:
         model.save_model(save_model_path)
         ret_msg += ". model saved."
+
+    logger.shut_down()
     if predict_dir:
         evaluate(predict_dir, model=model, verbose=1)
+
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": ret_msg,
                        "result": ret_msg})
 
 
 def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
+    logger = LogManager("evaluate")
+
     ret_code, ret = get_pre_labeled_audios(predict_dir)
     if ret_code != error_code.OK:
+        logger.error("failed to load audio samples")
+        logger.shut_down()
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
                            "result": ret})
@@ -73,6 +85,8 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
         model = init_model_from_config()
         model.load_model(load_model_path)
     if not model:
+        logger.error("missing model")
+        logger.shut_down()
         return json.dumps({"ret_code": error_code.MISSING_MODEL,
                            "ret_msg": "missing model",
                            "result": "missing model"})
@@ -88,11 +102,11 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
 
     verbose = kwargs.get("verbose", 0)
     if verbose >= 1:
-        print("number of test cases: %s" % len_test)
-        print(acc_info)
-        print(cm_info)
+        logger.info("number of test cases: %s" % len_test)
+        logger.info(acc_info)
+        logger.info(cm_info)
         false_prediction = [file_names[i] for i in range(len_test) if y_test[i] != y_pred[i]]
-        print("false prediction %s" % false_prediction)
+        logger.info("false prediction:\n%s" % false_prediction)
         if verbose == 2:
             dm.display_pred_score(file_names, labels, pred_score)
         elif verbose == 3:
@@ -100,11 +114,13 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
 
     model_detail = kwargs.get("model_detail", False)
     if model_detail:
-        print(model.model.summary())
+        logger.info(model.model.summary())
 
     ret_str = json.dumps({"ret_code": error_code.OK,
                           "ret_msg": "finish evaluating",
                           "result": [acc_info, cm_info]})
+
+    logger.shut_down()
     return ret_str
 
 
