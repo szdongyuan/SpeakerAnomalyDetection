@@ -14,9 +14,9 @@ from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
 from machine_learning import MODEL_MAPPING
 
-DEFAULT_DATA_PATH = "audio_data1/train"
-DEFAULT_TEST_DATA = "audio_data1/test"
-DEFAULT_MODEL_PATH = model_consts.MODEL_PATH
+DEFAULT_DATA_PATH = "audio_data/train"
+DEFAULT_TEST_DATA = "audio_data/test"
+DEFAULT_MODEL_PATH = "models/"
 
 
 def train(pre_labeled_dir,
