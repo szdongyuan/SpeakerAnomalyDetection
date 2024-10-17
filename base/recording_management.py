@@ -10,8 +10,7 @@ from consts import error_code, model_consts
 
 class RecordingManager(object):
     def __init__(self):
-        DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
-        self.db_path = DEFAULT_DIR + model_consts.DATABASE_PATH
+        self.db_path = model_consts.DATABASE_PATH
 
     def save_recording_to_wav(self, audio_info: dict, stimulus_parameter: dict):
         try:

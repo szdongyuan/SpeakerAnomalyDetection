@@ -1,65 +1,83 @@
-from datetime import datetime
-
 import os
 import sqlite3
 import uuid
 import wave
+from datetime import datetime
 
 from base.load_config import load_config
+from base.log_manager import LogManager
 from consts import model_consts, error_code
 
 
 class DataSave(object):
-
     def __init__(self, db_name):
         self.db_name = db_name
         self.connection = None
         self.cursor = None
-        self.connect()
+        self.logger = LogManager("db_core")
 
     def connect(self):
         try:
             self.connection = sqlite3.connect(self.db_name)
             self.cursor = self.connection.cursor()
+            self.logger.info("Successfully connect to database.")
             return error_code.OK, "Successfully connect to database."
         except Exception as e:
             err_msg = "Failed to connect to the database %s" % (str(e)[:40])
+            self.logger.error(err_msg)
             return error_code.INVALID_CONNECT_DATABASE, err_msg
 
     def create_table(self):
         try:
             self.connection = sqlite3.connect(self.db_name)
             self.cursor = self.connection.cursor()
+            self.logger.info("...Creating tables...")
             create_audio_data_table_sql = '''
-            create table if not exists audio_data_table(
-                audio_data_id text primary key not null,
-                file_path text not null unique,
-                product_model text not null,
-                sample_rate integer not null check (sample_rate > 0),
-                record_date datetime not null,
-                labels blob,
-                stimulus_id text,
+            CREATE TABLE IF NOT EXISTS audio_data_table(
+                audio_data_id TEXT PRIMARY KEY,
+                file_path TEXT NOT NULL UNIQUE,
+                product_model TEXT NOT NULL,
+                sample_rate INTEGER NOT NULL CHECK (sample_rate > 0),
+                record_date DATETIME NOT NULL,
+                labels BLOB,
+                stimulus_id TEXT,
                 FOREIGN KEY (stimulus_id) REFERENCES stimulus_signal_table (stimulus_id) ON DELETE NO ACTION ON UPDATE NO ACTION   
             );
             '''
             create_stimulus_signal_table_sql = '''
-            create table if not exists stimulus_signal_table(
-                stimulus_id text primary key not null,
-                sweep_method text not null,
-        		sweep_type text not null,
-        		repeats integer not null check (repeats > 0),
-        		start_feq integer not null check (start_feq >= 0),
-        		end_feq integer not null check (end_feq > start_feq),
-        		sample_rate integer not null check (sample_rate > 0),
-        		sweep_duration integer not null check (sweep_duration > 0), 
-        	);
+            CREATE TABLE IF NOT EXISTS stimulus_signal_table(
+                stimulus_id TEXT PRIMARY KEY,
+                sweep_method TEXT NOT NULL, 
+                sweep_type TEXT NOT NULL, 
+                repeats INTEGER NOT NULL CHECK (repeats > 0), 
+                start_feq INTEGER NOT NULL CHECK (start_feq >= 0), 
+                end_feq INTEGER NOT NULL CHECK (end_feq > start_feq), 
+                sample_rate INTEGER NOT NULL CHECK (sample_rate > 0), 
+                sweep_duration INTEGER NOT NULL CHECK (sweep_duration > 0)
+            );
            '''
+            create_training_model_table_sql = '''
+            CREATE TABLE IF NOT EXISTS training_model_table(
+                model_id TEXT PRIMARY KEY,
+                model_name TEXT NOT NULL UNIQUE,
+                model_path TEXT NOT NULL UNIQUE,
+                config_path TEXT NOT NULL,
+                input_dim TEXT NOT NULL,   
+                output_dim INTEGER NOT NULL, 
+                accuracy REAL CHECK (accuracy >= 0 and accuracy <= 1),
+                update_date DATETIME NOT NULL,
+                model_description TEXT 
+            );
+            '''
             self.cursor.execute(create_audio_data_table_sql)
             self.cursor.execute(create_stimulus_signal_table_sql)
+            self.cursor.execute(create_training_model_table_sql)
             self.connection.commit()
+            self.logger.info("Table creation success.")
             return error_code.OK, "Table creation success."
         except Exception as e:
             err_msg = "Failed to create table. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
             return error_code.INVALID_CREATE_TABLE, err_msg
 
     def get_audio_data_list(self, source_dir_list, label):
@@ -85,7 +103,7 @@ class DataSave(object):
                 sample_data = (audio_data_id, file_path, product_model, sample_rate, record_date, label, stimulus_id)
                 data_list.append(sample_data)
                 n_file += 1
-        print(f"{n_file} audio samples were successfully inserted.")
+        self.logger.info(f"{n_file} audio samples were successfully inserted.")
         return data_list
 
     def stimulus_signal_file_list(self, source_dir_list, label):
@@ -108,7 +126,7 @@ class DataSave(object):
         result = []
         base_sql = ' AND '.join([f"{column} = ?" for column in check_column])
         for data_item in data_list:
-            sql_select = f"select {', '.join(select_column)} from {table_name} where {base_sql}"
+            sql_select = f"SELECT {', '.join(select_column)} FROM {table_name} WHERE {base_sql}"
             self.cursor.execute(sql_select, data_item)
             fet_result = self.cursor.fetchall()
             if fet_result:
@@ -149,14 +167,17 @@ class DataSave(object):
     def insert_audio_files_info(self, table_name, columns, data):
         try:
             if len(data) == 0:
+                self.logger.info("data empty.")
                 return error_code.OK, "data empty."
             values_num = ','.join(['?'] * len(data[0]))
-            sql = f'insert into {table_name} ({columns}) values ({values_num});'
+            sql = f'INSERT INTO {table_name} ({columns}) VALUES ({values_num});'
             self.cursor.executemany(sql, data)
             self.connection.commit()
+            self.logger.info("Insert data successfully.")
             return error_code.OK, "Insert data successfully."
         except Exception as e:
             err_msg = "Failed to insert data into the database. %s" % (str(e))
+            self.logger.error(err_msg)
             return error_code.INVALID_INSERT, err_msg
 
     def update_audio_files_info(self, table_name, update_data: dict):
@@ -167,13 +188,15 @@ class DataSave(object):
                 return error_code.INVALID_TYPE_DATA, "new_data and old_data must contain at least one key."
             set_clause = ', '.join([f"{key} = ?" for key in update_data["new_data"].keys()])
             where_clause = ' AND '.join([f"{key} = ?" for key in update_data["old_data"].keys()])
-            sql = f"update {table_name} set {set_clause} where {where_clause}"
+            sql = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
             self.cursor.execute(sql, list(update_data["new_data"].values()) +
                                 list(update_data["old_data"].values()))
             self.connection.commit()
+            self.logger.info("Update data successfully.")
             return error_code.OK, "Update data successfully."
         except Exception as e:
             err_msg = "Failed to update data into the database. %s" % (str(e))
+            self.logger.error(err_msg)
             return error_code.INVALID_UPDATE, err_msg
 
     def query(self, table_name, query_column, query_clause_data: dict, FK_related: bool):
@@ -182,15 +205,18 @@ class DataSave(object):
             if query_clause_data:
                 where_clause = ' AND '.join([f"{key} = ?" for key in query_clause_data.keys()])
                 if FK_related:
-                    join_sql = (' inner join stimulus_signal_table on audio_data_table.stimulus_id = '
+                    join_sql = (' INNER JOIN stimulus_signal_table ON audio_data_table.stimulus_id = '
                                 'stimulus_signal_table.stimulus_id')
-                sql_query = f"select {query_column} from {table_name}{join_sql} where {where_clause}"
+                sql_query = f"SELECT {query_column} FROM {table_name} {join_sql} WHERE {where_clause};"
                 self.cursor.execute(sql_query, list(query_clause_data.values()))
                 query_data = self.cursor.fetchall()
+                self.logger.info("The conditional query succeeds.")
                 return query_data, "The conditional query succeeds."
+            self.logger.info("The query condition is empty.")
             return error_code.INVALID_TYPE_DATA, "The query condition is empty."
         except Exception as e:
             err_msg = "Failed to query data from the table according to the condition. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
             return error_code.INVALID_QUERY, err_msg
 
     def query_conditions(self):
@@ -217,16 +243,17 @@ class DataSave(object):
                     query_conditions.append(f"{key} = ?")
                     params.append(value)
             if any(key in condition_mapping for key in model_consts.STIMULUS_COLUMNS):
-                join_sql = ("inner join stimulus_signal_table on audio_data_table.stimulus_id = "
-                            "sstimulus_signal_table.stimulus_id")
-            base_sql = f'select {model_consts.SELECT_COLUMNS} from audio_data_table '
+                join_sql = ("INNER JOIN stimulus_signal_table ON audio_data_table.stimulus_id = "
+                            "stimulus_signal_table.stimulus_id")
+            base_sql = f'SELECT {model_consts.SELECT_COLUMNS} FROM audio_data_table '
             if query_conditions:
-                query_sql = f'{base_sql}{join_sql} where {" AND ".join(query_conditions)}'
+                query_sql = f'{base_sql}{join_sql} WHERE {" AND ".join(query_conditions)}'
             self.cursor.execute(query_sql, params)
             query_data = self.cursor.fetchall()
             return query_data
         except Exception as e:
             err_msg = "Failed to query data from the table according to the condition. %s" % (str(e))
+            self.logger.error(err_msg)
             return error_code.INVALID_QUERY, err_msg
 
     @staticmethod
@@ -246,31 +273,39 @@ class DataSave(object):
 
     def delete_all(self, table_name):
         try:
-            sql_delete = f'delete from {table_name}'
+            sql_delete = f'DELETE FROM {table_name}'
             self.cursor.execute(sql_delete)
             self.connection.commit()
+            self.logger.info("Delete all information in the table.")
             return error_code.OK, "Delete all information in the table."
         except Exception as e:
             err_msg = "Failed to delete data from the table. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
             return error_code.INVALID_DELETE, err_msg
 
     def delete_with_condition(self, table_name, delete_condition):
         try:
             where_condition = ' AND '.join([f"{key} = ?" for key in delete_condition.keys()])
-            sql_delete = f'delete from {table_name} where {where_condition}'
+            sql_delete = f'DELETE FROM {table_name} WHERE {where_condition}'
             self.cursor.execute(sql_delete, list(delete_condition.values()))
             self.connection.commit()
+            self.logger.info("Delete the data that meets the condition.")
             return error_code.OK, "Delete the data that meets the condition."
         except Exception as e:
             err_msg = "Failed to delete data from the table. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
             return error_code.INVALID_DELETE, err_msg
 
     def close(self):
         try:
             self.connection.close()
+            self.logger.info("Database connection closed.")
+            self.logger.shut_down()
             return error_code.OK, "Database connection closed."
         except Exception as e:
             err_msg = "Error closing the connection. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
+            self.logger.shut_down()
             return error_code.INVALID_CLOSED, err_msg
 
     def __enter__(self):

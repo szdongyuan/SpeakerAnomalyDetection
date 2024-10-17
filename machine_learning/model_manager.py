@@ -8,6 +8,7 @@ except Exception as e:
     from keras.src.callbacks import EarlyStopping
 
 from base.sample_balance import balance_sample_number
+from base.training_model_management import TrainingModelManagement
 
 
 class ModelManager(object):
@@ -44,7 +45,7 @@ class ModelManager(object):
     def predict(self, x_test):
         pass
 
-    def save_model(self, save_model_path):
+    def save_model(self, save_model_path, config_path, ret_str, model_description):
         pass
 
     def load_model(self, load_model_path):
@@ -75,8 +76,11 @@ class NeuralNetManager(ModelManager):
         y_pred = [0 if i < acc_req else 1 for i in predictions]
         return np.array(y_pred), np.round(predictions.T[0], 3)
 
-    def save_model(self, save_model_path):
+    def save_model(self, save_model_path, config_path, ret_str, model_description):
         self.model.save(save_model_path)
+        tmm = TrainingModelManagement()
+        result = tmm.save_training_model_info_to_db(save_model_path, config_path,
+                                                    ret_str, model_description)
 
     def load_model(self, load_model_path):
         self.model = models.load_model(load_model_path)

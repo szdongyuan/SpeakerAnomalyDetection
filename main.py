@@ -51,14 +51,15 @@ def train(pre_labeled_dir,
     model.fit(x_train, y_train)
     ret_msg = "finish training. time spent [%s] s" % (time.time() - time_0)
     logger.info(ret_msg)
-
-    if save_model_path:
-        model.save_model(save_model_path)
-        ret_msg += ". model saved."
-
     logger.shut_down()
     if predict_dir:
-        evaluate(predict_dir, model=model, verbose=1)
+        ret_str = evaluate(predict_dir, model=model, verbose=1)
+    else:
+        ret_str = None
+
+    if save_model_path:
+        model.save_model(save_model_path, model_consts.CONFIG_PATH, ret_str, model_description="No description")
+        ret_msg += ". model saved."
 
     return json.dumps({"ret_code": error_code.OK,
                        "ret_msg": ret_msg,

@@ -45,4 +45,5 @@ LOG_MAPPING = {
     "predict": AI_LOG,
     "debug": DEBUG_LOG,
     "test": TEST_LOG,
+    "db_core": DEFAULT_LOG,
 }
