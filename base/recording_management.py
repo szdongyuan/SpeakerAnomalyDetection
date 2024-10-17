@@ -34,7 +34,7 @@ class RecordingManager(object):
             return (error_code.OK,
                     f"Recorded signal {filename} has been saved and its stimulus and recording information to database.")
         except Exception as e:
-            err_msg = "Failed to save the recorded signal file. %s" % (str(e))
+            err_msg = "Failed to save the recorded signal file. %s" % (str(e)[:40])
             return error_code.INVALID_SAVE, err_msg
 
     def save_signal_info_to_db(self, audio_info: dict, stimulus_parameter: dict):
@@ -42,16 +42,16 @@ class RecordingManager(object):
             with DataSave(self.db_path) as database:
                 stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
-                database.insert_audio_files_info('audio_data_table', model_consts.AUDIO_DATA_TABLE_COLUMNS,
-                                                 [audio_data])
+                database.insert_audio_files_info('audio_data_table',
+                                                 model_consts.DB_AUDIO_COLUMNS, [audio_data])
                 if flag:
                     database.insert_audio_files_info('stimulus_signal_table',
-                                                     model_consts.STIMULUS_SIGNAL_TABLE_COLUMNS, stimulus_data)
+                                                     model_consts.DB_STIMULUS_COLUMNS, stimulus_data)
                     return error_code.OK, "Successfully saved the recording and stimulus signals to the database."
                 else:
                     return error_code.OK, "Successfully saved the recording signals to the database."
         except Exception as e:
-            err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e))
+            err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e)[:40])
             return error_code.INVALID_SAVE, err_msg
 
     @staticmethod
@@ -59,8 +59,8 @@ class RecordingManager(object):
         flag = False
         stimulus_data = tuple(
             stimulus_parameter[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_parameter)
-        result = database.check_database_info_equal([stimulus_data], "stimulus_signal_table",
-                                                    model_consts.STIMULUS_COLUMNS, model_consts.DB_STIMULUS_COLUMNS)
+        result = database.query_matching_data([stimulus_data], "stimulus_signal_table",
+                                              model_consts.STIMULUS_COLUMNS, model_consts.DB_STIMULUS_COLUMNS)
         if result:
             stimulus_data = result
         else:
@@ -72,8 +72,8 @@ class RecordingManager(object):
     def get_audio_info_to_db(audio_info: dict, stimulus_data, database):
         audio_data = tuple(audio_info[key] for key in model_consts.AUDIO_COLUMNS if key in audio_info)
         audio_data = audio_data + (stimulus_data[0][0],)
-        result = database.check_database_info_equal([audio_data], "audio_data_table", model_consts.AUDIO_COLUMNS,
-                                                    ['audio_data_id'])
+        result = database.query_matching_data([audio_data], "audio_data_table", model_consts.AUDIO_COLUMNS,
+                                              ['audio_data_id'])
         if result:
             audio_data_id = result[0][0]
         else:
@@ -92,15 +92,13 @@ class RecordingManager(object):
             if os.path.exists(new_path):
                 return error_code.INVALID_PATH, "The new file path already exists."
             os.rename(file_path, new_path)
-            update_data = {
-                "new_data": {"file_path": new_path},
-                "old_data": {"file_path": file_path},
-            }
+            update_data = {"file_path": new_path}
+            condition_field = {"file_path": file_path}
             with DataSave(self.db_path) as database:
-                database.update_audio_files_info("audio_data_table", update_data)
+                database.update_audio_files_info("audio_data_table", update_data, condition_field)
             return error_code.OK, "The rename operation successful and the database information updated."
         except Exception as e:
-            err_msg = "The rename operation failed. %s" % (str(e))
+            err_msg = "The rename operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_RENAME, err_msg
 
     def move_audio(self, file_path, new_dir_path):
@@ -120,7 +118,7 @@ class RecordingManager(object):
                 database.update_audio_files_info("audio_data_table", update_data)
             return error_code.OK, f"The move operation succeeded."
         except Exception as e:
-            err_msg = "The move operation failed. %s" % (str(e))
+            err_msg = "The move operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_MOVE, err_msg
 
     def delete_audio(self, file_path):
@@ -133,7 +131,7 @@ class RecordingManager(object):
                 database.delete_with_condition("audio_data_table", delete_condition)
             return error_code.OK, "The file is deleted successfully."
         except Exception as e:
-            err_msg = "The delete operation failed. %s" % (str(e))
+            err_msg = "The delete operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_DELETE, err_msg
 
     def query_signal_info(self, file_path):
@@ -141,10 +139,10 @@ class RecordingManager(object):
             if os.path.exists(file_path):
                 query_clause_data = {"file_path": file_path}
                 with DataSave(self.db_path) as database:
-                    query_result, msg = database.query("audio_data_table", model_consts.SELECT_COLUMNS,
-                                                     query_clause_data, FK_related=True)
-                return query_result, "Query success."
+                    query_code, query_result = database.query("audio_data_table", model_consts.SELECT_COLUMNS,
+                                                              query_clause_data, FK_related=True)
+                    return query_code, query_result
             return error_code.INVALID_PATH, "The query file does not exist."
         except Exception as e:
-            err_msg = "The query operation failed. %s" % (str(e))
+            err_msg = "The query operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
