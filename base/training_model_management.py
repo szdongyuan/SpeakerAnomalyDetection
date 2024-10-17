@@ -19,12 +19,23 @@ class TrainingModelManagement(object):
                 training_model_data, _ = self.get_training_model_info_to_db(database, model_path, config_path, ret_str,
                                                                             model_description)
                 database.insert_audio_files_info("training_model_table",
-                                                 model_consts.TRAINING_MODEL_TABLE_COLUMNS,
-                                                 [training_model_data])
+                                                 model_consts.DB_MODEL_COLUMNS, [training_model_data])
             return error_code.OK, "Successfully saved the training model info to the database."
         except Exception as e:
-            err_msg = "Failed to save the training model info to the database. %s" % (str(e))
+            err_msg = "Failed to save the training model info to the database. %s" % (str(e)[:40])
             return error_code.INVALID_INSERT, err_msg
+
+    def delete_model_info_from_db(self, model_name: str):
+        if not model_name or not isinstance(model_name, str):
+            return error_code.INVALID_TYPE_DATA, "The model name is empty or invalid."
+        delete_condition = {"model_name": model_name}
+        try:
+            with DataSave(self.db_path) as database:
+                delete_code, msg = database.delete_with_condition("training_model_table", delete_condition)
+                return delete_code, msg
+        except Exception as e:
+            err_msg = "The delete operation failed. %s" % (str(e)[:40])
+            return error_code.INVALID_DELETE, err_msg
 
     @staticmethod
     def get_training_model_info_to_db(database, model_path, config_path, ret_str=None,
@@ -39,8 +50,8 @@ class TrainingModelManagement(object):
         output_dim = training_model.output_shape[1]
         accuracy = float(json.loads(ret_str)["result"][0].split(':')[1]) if ret_str else None
         temp_data = (model_name, model_path, config_path, input_dim, output_dim, accuracy)
-        result = database.check_database_info_equal([temp_data], "training_model_table", model_consts.MODEL_COLUMNS,
-                                                    ['model_id'])
+        result = database.query_matching_data([temp_data], "training_model_table", model_consts.MODEL_COLUMNS,
+                                              ['model_id'])
         if result:
             return error_code.INVALID_INSERT, "The model info existed."
         else:

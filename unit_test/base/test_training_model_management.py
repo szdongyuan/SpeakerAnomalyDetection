@@ -48,6 +48,25 @@ class TestTrainingModelManagement(object):
                                                     input_ret["ret_str"], input_ret["model_description"])
         assert result == result_ret
 
+    @pytest.mark.parametrize("database_ret, delete_set, model_name, result_ret", [
+        (mock.Mock(), [(error_code.INVALID_DELETE, "No data matched the condition. No data was deleted.")], "test1",
+         (error_code.INVALID_DELETE, "No data matched the condition. No data was deleted.")),
+        (mock.Mock(), [(mock.Mock(), mock.Mock())], "",
+         (error_code.INVALID_TYPE_DATA, "The model name is empty or invalid.")),
+        (mock.Mock(), [(mock.Mock(), mock.Mock())], 111,
+         (error_code.INVALID_TYPE_DATA, "The model name is empty or invalid.")),
+        (mock.Mock(), Exception('xxx'), "test1", (error_code.INVALID_DELETE, "The delete operation failed. xxx")),
+        (mock.Mock(), [(error_code.OK, "Delete the data that meets the condition.")], "save_model_to_db_test33",
+         (error_code.OK, "Delete the data that meets the condition.")),
+    ])
+    @mock.patch("base.training_model_management.DataSave")
+    def test_delete_model_info_from_db(self, mock_database, database_ret, delete_set, model_name, result_ret):
+        mock_database.return_value.__enter__.return_value = database_ret
+        mock_database.return_value.__enter__.return_value.delete_with_condition.side_effect = delete_set
+        tmm = TrainingModelManagement()
+        result = tmm.delete_model_info_from_db(model_name)
+        assert result == result_ret
+
     @pytest.mark.parametrize("input_ret, result_ret", [
         ({"database_ret": mock.Mock(),
           "id_ret": 'a111',
@@ -98,8 +117,7 @@ class TestTrainingModelManagement(object):
     @mock.patch("base.training_model_management.DataSave")
     def test_get_training_model_info_to_db(self, mock_database, mock_id, input_ret, result_ret):
         mock_database.return_value.__enter__.return_value = input_ret["database_ret"]
-        mock_database.return_value.__enter__.return_value.check_database_info_equal.return_value = input_ret[
-            "check_db_ret"]
+        mock_database.return_value.__enter__.return_value.query_matching_data.return_value = input_ret["check_db_ret"]
         mock_id.return_value = input_ret["id_ret"]
         tmm = TrainingModelManagement()
         result = tmm.get_training_model_info_to_db(input_ret["database_ret"], input_ret["model_path"],
