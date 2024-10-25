@@ -46,4 +46,5 @@ LOG_MAPPING = {
     "debug": DEBUG_LOG,
     "test": TEST_LOG,
     "db_core": DEFAULT_LOG,
+    "soundcard_core": DEFAULT_LOG,
 }
