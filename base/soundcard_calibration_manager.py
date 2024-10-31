@@ -32,21 +32,31 @@ class SoundcardCalibrationManager(object):
         self.voltages.append(voltage)
         return error_code.OK, "Successfully add data."
 
-    def fit(self, json_file_name="calibration_coefficients.json"):
+    def fit(self, threshold=0.001, json_file_name="calibration_coefficients.json"):
         """
             Fit amplitude and voltage data to obtain a linear relationship.
             Returns:
                  A tuple containing the status code and the fitting function.
         """
         if not self.amplitudes or not self.voltages:
+            self.logger.error("Amplitudes and voltages must not be empty.")
             return error_code.INVALID_DATA_LOADING, "Amplitudes and voltages must not be empty."
         if len(self.amplitudes) != len(self.voltages):
+            self.logger.error("Amplitudes and voltages must have the same length.")
             return error_code.INVALID_DATA_LOADING, "Amplitudes and voltages must have the same length."
-        coefficients = np.polyfit(self.voltages, self.amplitudes, 1)
-        save_code, msg = self.save_coefficients_to_json(coefficients, max(self.voltages), json_file_name)
-        if save_code == error_code.OK:
-            return error_code.OK, coefficients
-        return save_code, msg
+        coefficients, residuals, *_ = np.polyfit(self.voltages, self.amplitudes, 1, full=True)
+        if len(residuals) == 0:
+            self.logger.error("Residuals is empty.")
+            return error_code.INVALID_CALIBRATION, "Residuals is empty, please readjust."
+        mse = np.nanmean(residuals ** 2)
+        if mse > threshold or mse < 0 or not np.isfinite(mse):
+            self.logger.error("Calibration is not accurate, please readjust.")
+            return error_code.INVALID_CALIBRATION, "Calibration is not accurate, please readjust."
+        else:
+            save_code, msg = self.save_coefficients_to_json(coefficients, max(self.voltages), json_file_name)
+            if save_code == error_code.OK:
+                return error_code.OK, coefficients
+            return save_code, msg
 
     @staticmethod
     def predict_amplitude(coefficients, target_voltage):
@@ -80,9 +90,12 @@ class SoundcardCalibrationManager(object):
             coefficients_data = load_data.get("calibration_coefficients")
             max_voltage = load_data.get("max_voltage")
             if target_voltage > max_voltage:
+                self.logger.error("Target voltage cannot be greater than max voltage at calibration.")
                 return error_code.INVALID_DATA_LOADING, "Target voltage cannot be greater than max voltage at calibration."
+
             predict_amplitude = self.predict_amplitude(coefficients_data, target_voltage)
             return error_code.OK, predict_amplitude
+        self.logger.error("Failed to load coefficients, please calibrate first.")
         return error_code.INVALID_DATA_LOADING, "Failed to load coefficients, please calibrate first."
 
     def save_coefficients_to_json(self, coefficients, max_voltages, json_file_name):
@@ -101,7 +114,7 @@ class SoundcardCalibrationManager(object):
         if not json_file_name.endswith('.json'):
             json_file_name = os.path.splitext(json_file_name)[0]
             json_file_name += '.json'
-        json_file_path = model_consts.JSON_DIR_PATH + json_file_name
+        json_file_path = model_consts.JSON_DIR_PATH + "/" + json_file_name
         directory = os.path.dirname(json_file_path)
         if directory and not os.path.exists(directory):
             os.makedirs(directory)
@@ -131,7 +144,7 @@ class SoundcardCalibrationManager(object):
             Returns:
                     A tuple containing an error code and the loaded data or an error message.
         """
-        json_file_path = model_consts.JSON_DIR_PATH + json_file_name
+        json_file_path = model_consts.JSON_DIR_PATH + "/" + json_file_name
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
         try:
