@@ -114,7 +114,7 @@ class SoundcardCalibrationManager(object):
         if not json_file_name.endswith('.json'):
             json_file_name = os.path.splitext(json_file_name)[0]
             json_file_name += '.json'
-        json_file_path = model_consts.JSON_DIR_PATH + json_file_name
+        json_file_path = model_consts.JSON_DIR_PATH + "/" + json_file_name
         directory = os.path.dirname(json_file_path)
         if directory and not os.path.exists(directory):
             os.makedirs(directory)
@@ -144,7 +144,7 @@ class SoundcardCalibrationManager(object):
             Returns:
                     A tuple containing an error code and the loaded data or an error message.
         """
-        json_file_path = model_consts.JSON_DIR_PATH + json_file_name
+        json_file_path = model_consts.JSON_DIR_PATH + "/" + json_file_name
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
         try:
