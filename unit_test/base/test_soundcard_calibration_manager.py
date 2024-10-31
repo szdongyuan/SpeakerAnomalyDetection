@@ -24,6 +24,8 @@ class TestSoundcardCalibrationManager(object):
         ([], [0.1, 0.2], [], (error_code.INVALID_DATA_LOADING, "Amplitudes and voltages must not be empty.")),
         ([], [0.1], [1, 2], (error_code.INVALID_DATA_LOADING, "Amplitudes and voltages must have the same length.")),
         ([(error_code.OK, 'xxx')], [0.1, 0.2, 0.3], [2, 3.99, 5.97], (error_code.OK, [0.05037773, -0.00083921])),
+        ([(error_code.OK, 'xxx')], [0.1, 0.2, 0.3], [2, 2, 2],
+         (error_code.INVALID_CALIBRATION, "Residuals is empty, please readjust.")),
         ([(error_code.INVALID_SAVE, 'xxx')], [0.1, 0.2, 0.3], [2, 3.99, 5.97], (error_code.INVALID_SAVE, 'xxx')),
     ])
     @mock.patch(test_path + ".save_coefficients_to_json")
