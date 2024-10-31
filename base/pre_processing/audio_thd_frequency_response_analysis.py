@@ -1,28 +1,34 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from base.utils.plot_audio_features import plot_thd, plot_frequency_response, plot_harmonic
+from base.utils.plot_audio_features_manager import PlotManager
 
 
 class AudioThdFrequencyResponseAnalysis(object):
 
     def process_calculate(self, reference_signal: np.ndarray, recorded_signal: np.ndarray, sr, **kwargs):
+        results = {
+            "thd_fig": None,
+            "harmonic_fig": None,
+            "frequency_response_fig": None
+        }
         if kwargs.get("thd", True):
-            fig, ax_thd = plt.subplots()
-            fig, ax_harmonic = plt.subplots(nrows=2, ncols=3)
+            results["thd_fig"], ax_thd = plt.subplots(figsize=(18, 10))
+            results["harmonic_fig"], ax_harmonic = plt.subplots(nrows=2, ncols=3, figsize=(20, 10))
         if kwargs.get("frequency_response", True):
-            fig, ax_fr = plt.subplots()
+            results["frequency_response_fig"], ax_fr = plt.subplots(figsize=(13, 6))
         for i in range(len(recorded_signal)):
+            pm = PlotManager()
             if kwargs.get("thd", True):
                 thd_kwargs = kwargs.get("thd_kwargs", {})
                 x, h, thd = self.calculate_thd(reference_signal, recorded_signal[i], sr[i], **thd_kwargs)
-                plot_thd(ax_thd, x, thd)
-                plot_harmonic(ax_harmonic, x, h)
+                pm.plot_thd(ax_thd, x, thd)
+                pm.plot_harmonic(ax_harmonic, x, h)
             if kwargs.get("frequency_response", True):
                 frequency_response_kwargs = kwargs.get("frequency_response_kwargs", {})
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i], **frequency_response_kwargs)
-                plot_frequency_response(ax_fr, frequency_list, fr)
-        return plt
+                pm.plot_frequency_response(ax_fr, frequency_list, fr)
+        return results
 
     def calculate_thd(self, reference_signal, recorded_signal, sr, **kwargs):
         plot_x, plot_h, plot_thd = [], [], []
@@ -42,7 +48,7 @@ class AudioThdFrequencyResponseAnalysis(object):
     @staticmethod
     def get_harmonic(reference_signal, recorded_signal, sr, **kwargs):
         gap_len = kwargs.get("gap_len", 10)
-        delay_frames = kwargs.get("delay_frames", 9008)
+        delay_frames = kwargs.get("delay_frames", 0)
         win_len = sr // gap_len
         xf = np.fft.fftfreq(win_len, 1 / sr)
         freq_dict = {}
@@ -64,7 +70,7 @@ class AudioThdFrequencyResponseAnalysis(object):
 
     def calculate_fr(self, reference_signal, recorded_signal, sr, **kwargs):
         smooth = kwargs.get("smooth", True)
-        delay_frames = kwargs.get("delay_frames", 9008)
+        delay_frames = kwargs.get("delay_frames", 0)
         recorded_signal = recorded_signal[delay_frames:]
         ch_len = len(reference_signal)
         frequency_list = np.fft.fftfreq(ch_len, 1 / sr)[: ch_len // 2]
