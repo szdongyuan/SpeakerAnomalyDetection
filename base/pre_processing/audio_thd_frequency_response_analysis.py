@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from base.utils.plot_audio_features_manager import PlotManager
+from base.utils.plot_audio_features import PlotManager
 
 
 class AudioThdFrequencyResponseAnalysis(object):
