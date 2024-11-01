@@ -51,10 +51,12 @@ class AudioThdFrequencyResponseAnalysis(object):
         gap_len = kwargs.get("gap_len", 10)
         delay_frames = kwargs.get("delay_frames", 0)
         harmonics = kwargs.get("harmonics", list(range(6)))
+
         win_len = sr // gap_len
         xf = np.fft.fftfreq(win_len, 1 / sr)
         freq_dict = {}
         base_freq_list = []
+
         for i in range(0, len(reference_signal) - win_len - delay_frames, 3):
             input_fft = np.abs(np.fft.fft(reference_signal[i: i + win_len])[: win_len // 2])
             argmax = np.argmax(input_fft)
@@ -62,16 +64,16 @@ class AudioThdFrequencyResponseAnalysis(object):
             base_freq_list.append(base_freq)
             if freq_dict.get(base_freq, {'bf_v': 0}).get("bf_v") < np.max(input_fft):
                 freq_dict[base_freq] = {"bf_v": np.max(input_fft), "i": i, "argmax": argmax}
+
         for base_freq in freq_dict:
             i_with_delay = freq_dict[base_freq]["i"] + delay_frames
             argmax = freq_dict[base_freq]["argmax"]
-            bf_v = freq_dict[base_freq]["bf_v"]
             data_fft = np.abs(np.fft.fft(recorded_signal[i_with_delay: i_with_delay + win_len])[: win_len // 2])
             harmonic_list = []
             for j in harmonics:
                 if argmax * (j + 1) < win_len // 2:
                     harmonic_list.append(data_fft[argmax * (j + 1)])
-            freq_dict[base_freq] = {"bf_v": bf_v, "harmonic": harmonic_list}
+            freq_dict[base_freq]["harmonic"] = harmonic_list
         return freq_dict, base_freq_list
 
     def calculate_fr(self, reference_signal, recorded_signal, sr, **kwargs):
