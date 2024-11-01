@@ -108,14 +108,13 @@ def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
                                       dest_test_dir=model_consts.TEST_PATH, over_write=True):
     try:
         data_load_config = load_config("data_load")
-        query_data = DataSave(model_consts.DATABASE_PATH).query_conditions()
+        with DataSave(model_consts.DATABASE_PATH) as database:
+            query_data = database.query_conditions()
         if over_write:
             for dest_dir in [dest_train_dir, dest_test_dir]:
                 ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
                 if ret_code != error_code.OK:
-                    print(ret_msg)
-                    return ret_code
-        stored_sample_path = model_consts.STORED_SAMPLE_PATH
+                    return ret_code, ret_msg
         if not query_data:
             return error_code.MISSING_SELECT_DATA, "No data was queried."
         recode_date_info = data_load_config.get("record_date")
@@ -128,8 +127,8 @@ def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
                 dest_dir = dest_train_dir if file[2] in train_data_date else dest_test_dir
             else:
                 dest_dir = dest_train_dir
-            status_dir = "OK" if file[6] == "OK" else "NG"
-            shutil.copy(f"{stored_sample_path}/{file[0]}", f"{dest_dir}/{status_dir}")
+            status_dir = "OK" if file[-1] == "OK" else "NG"
+            shutil.copy(f"{model_consts.STORED_SAMPLE_PATH}/{file[0]}", f"{dest_dir}/{status_dir}")
             n_file += 1
         return error_code.OK, f"finish copy from restored {n_file} audio files."
     except Exception as e:
