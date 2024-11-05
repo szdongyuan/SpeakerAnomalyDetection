@@ -6,6 +6,9 @@ from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QMessageBo
 from PyQt5.QtWidgets import QPushButton, QComboBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 
+from base.db_manager import DataSave
+from consts import model_consts, error_code
+
 
 class LoginWindow(QDialog):
     def __init__(self, access_lvl=None):
@@ -82,7 +85,7 @@ class LoginWindow(QDialog):
     def check_credentials(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        access_lvl_dict = {"管理员": "admin", "工程师": "engineer", "操作员": "operator"}
+        access_lvl_dict = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
         self.access_lvl = access_lvl_dict[self.access_selection.currentText()]
 
         mac_pwd = get_mac_address() + password
@@ -91,7 +94,7 @@ class LoginWindow(QDialog):
         enc_pwd = sh.hexdigest()
         user_info = self.get_user_info_from_db(username)
 
-        if user_info.get("access_lvl") == self.access_lvl and user_info.get("password") == enc_pwd:
+        if user_info.get("access_level") == self.access_lvl and user_info.get("password") == enc_pwd:
             return True
         else:
             return False
@@ -99,9 +102,20 @@ class LoginWindow(QDialog):
     # Todo
     @staticmethod
     def get_user_info_from_db(user_name):
-        return {"user_name": "admin",
-                "access_lvl": "operator",
-                "password": "b7760302acfd1cd80cb3e22d3eeae9b3ae9cf238"}
+        query_clause_data = {"user_name": user_name}
+        with DataSave(model_consts.DATABASE_PATH) as database:
+            query_code, query_data = database.query("users_table",
+                                                    ["user_name", "access_level", "password"],
+                                                    query_clause_data)
+        if query_code == error_code.OK and query_data:
+            user_data = query_data[0]
+            return {
+                "user_name": user_data[0],
+                "access_level": user_data[1],
+                "password": user_data[2]
+            }
+        else:
+            return {}
 
     def on_exec(self):
         self.exec()
