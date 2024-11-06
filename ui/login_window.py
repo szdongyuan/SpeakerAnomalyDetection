@@ -313,17 +313,17 @@ def encrypt_password(user_name, password):
     return enc_pwd
 
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = LoginWindow()
-    window.show()
-    sys.exit(app.exec_())
-
 # if __name__ == "__main__":
 #     app = QApplication(sys.argv)
-#     window = AddAccountWindow()
+#     window = LoginWindow()
 #     window.show()
 #     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = AddAccountWindow()
+    window.show()
+    sys.exit(app.exec_())
 
 # if __name__ == "__main__":
 #     app = QApplication(sys.argv)
