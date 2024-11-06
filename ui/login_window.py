@@ -18,7 +18,7 @@ class LoginWindow(QDialog):
 
         self.pwd_checked = False
         self.access_lvl = access_lvl
-        self.logger = LogManager("db_core")
+        self.logger = LogManager("core")
         self.init_ui()
 
     def init_ui(self):
@@ -134,7 +134,7 @@ class AddAccountWindow(QDialog):
 
     def __init__(self):
         super().__init__()
-        self.logger = LogManager("db_core")
+        self.logger = LogManager("core")
         self.init_ui()
 
     def init_ui(self):
@@ -231,7 +231,7 @@ class ChangePwdWindow(QDialog):
 
     def __init__(self, user_name):
         super().__init__()
-        self.logger = LogManager("db_core")
+        self.logger = LogManager("core")
         self.user_name = user_name
         self.init_ui()
 
@@ -313,20 +313,8 @@ def encrypt_password(user_name, password):
     return enc_pwd
 
 
-# if __name__ == "__main__":
-#     app = QApplication(sys.argv)
-#     window = LoginWindow()
-#     window.show()
-#     sys.exit(app.exec_())
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = AddAccountWindow()
     window.show()
     sys.exit(app.exec_())
-
-# if __name__ == "__main__":
-#     app = QApplication(sys.argv)
-#     window = ChangePwdWindow("admin")
-#     window.show()
-#     sys.exit(app.exec_())
