@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QPushButton, QComboBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from base.db_manager import DataSave
+from base.log_manager import LogManager
 from consts import model_consts, error_code, running_consts
 
 
@@ -17,7 +18,7 @@ class LoginWindow(QDialog):
 
         self.pwd_checked = False
         self.access_lvl = access_lvl
-
+        self.logger = LogManager("db_core")
         self.init_ui()
 
     def init_ui(self):
@@ -105,15 +106,15 @@ class LoginWindow(QDialog):
         if user_info.get("access_level") == self.access_lvl and user_info.get("password") == enc_pwd:
             return True
         else:
+            self.logger.error("The password or access_level is incorrect")
             return False
 
     @staticmethod
     def get_user_info_from_db(user_name):
-        query_clause_data = {"user_name": user_name}
         with DataSave(model_consts.DATABASE_PATH) as database:
             query_code, query_data = database.query("users_table",
                                                     ["user_name", "access_level", "password"],
-                                                    query_clause_data)
+                                                    {"user_name": user_name})
         if query_code == error_code.OK and query_data:
             user_data = query_data[0]
             return {
@@ -133,7 +134,7 @@ class AddAccountWindow(QDialog):
 
     def __init__(self):
         super().__init__()
-
+        self.logger = LogManager("db_core")
         self.init_ui()
 
     def init_ui(self):
@@ -186,19 +187,41 @@ class AddAccountWindow(QDialog):
         username = self.username_input.text()
         password = self.password_input.text()
         access_lvl = running_consts.ACCESS_LVL_DICT[self.access_selection.currentText()]
-        enc_pwd = encrypt_password(username, password)
-        if self.add_user_info_to_db(username, enc_pwd, access_lvl):
-            self.info.setText("添加账号成功")
-            self.username_input.clear()
-            self.password_input.clear()
-        else:
+        if not password:
             self.info.setText("添加账号失败")
+        else:
+            enc_pwd = encrypt_password(username, password)
+            if self.add_user_info_to_db(username, enc_pwd, access_lvl):
+                self.info.setText("添加账号成功")
+                self.username_input.clear()
+                self.password_input.clear()
+            else:
+                self.info.setText("添加账号失败")
 
-    @staticmethod
-    def add_user_info_to_db(username, password, access_lvl):
-        # Todo
-        print(username, password, access_lvl)
-        return False
+    def add_user_info_to_db(self, username, password, access_lvl):
+        if not username or not password or not access_lvl:
+            self.logger.error("Username, password, and access level cannot be empty.")
+            return False
+        try:
+            with DataSave(model_consts.DATABASE_PATH) as database:
+                result = database.query_matching_data([(username,)],
+                                                      "users_table", ["user_name"],
+                                                      ["user_id"])
+                if not result:
+                    insert_code, msg = database.insert_data_into_data("users_table",
+                                                                      model_consts.USERS_COLUMNS,
+                                                                      [(username, password, access_lvl)])
+                    if insert_code == error_code.OK:
+                        self.logger.info(f"Successful to create user {username}.")
+                        return True
+                    else:
+                        self.logger.error(f"Failed to create user. {msg}")
+                        return False
+                self.logger.warning(f"This user {username} already exists.")
+                return False
+        except Exception as e:
+            self.logger.error("Failed to create user. %s" % (str(e)[:40]))
+            return False
 
     def exit_click(self):
         self.close()
@@ -208,7 +231,7 @@ class ChangePwdWindow(QDialog):
 
     def __init__(self, user_name):
         super().__init__()
-
+        self.logger = LogManager("db_core")
         self.user_name = user_name
         self.init_ui()
 
@@ -258,11 +281,28 @@ class ChangePwdWindow(QDialog):
             else:
                 QMessageBox.warning(self, "Error", "修改密码失败")
 
-    @staticmethod
-    def change_pwd_in_db(user_name, enc_pwd):
-        # Todo
-        print(user_name, enc_pwd)
-        return True
+    def change_pwd_in_db(self, user_name, enc_pwd):
+        try:
+            with DataSave(model_consts.DATABASE_PATH) as database:
+                result = database.query_matching_data([(user_name,)], "users_table",
+                                                      ["user_name"], ["password"])
+                if result:
+                    new_password_data = {"password": enc_pwd}
+                    update_code, msg = database.update_table_data("users_table", new_password_data,
+                                                                  {"user_name": user_name}, update_time=True)
+                    print(f"update_code: {update_code}, msg: {msg}")
+                    if update_code == error_code.OK:
+                        self.logger.info("Password reset succeeded.")
+                        return True
+                    else:
+                        self.logger.error(msg)
+                        return False
+                else:
+                    self.logger.warning(f"The user {user_name} does not exist.")
+                    return False
+        except Exception as e:
+            self.logger.error("Failed to reset password. %s" % (str(e)[:40]))
+            return False
 
 
 def encrypt_password(user_name, password):
@@ -278,3 +318,15 @@ if __name__ == "__main__":
     window = LoginWindow()
     window.show()
     sys.exit(app.exec_())
+
+# if __name__ == "__main__":
+#     app = QApplication(sys.argv)
+#     window = AddAccountWindow()
+#     window.show()
+#     sys.exit(app.exec_())
+
+# if __name__ == "__main__":
+#     app = QApplication(sys.argv)
+#     window = ChangePwdWindow("admin")
+#     window.show()
+#     sys.exit(app.exec_())
