@@ -20,7 +20,6 @@ class DataSave(object):
         try:
             self.connection = sqlite3.connect(self.db_name)
             self.cursor = self.connection.cursor()
-            self.logger.info("Successfully connect to database.")
             return error_code.OK, "Successfully connect to database."
         except Exception as e:
             err_msg = "Failed to connect to the database %s" % (str(e)[:40])
@@ -141,7 +140,6 @@ class DataSave(object):
                 sample_data = (audio_data_id, file_path, product_model, sample_rate, record_date, label, stimulus_id)
                 data_list.append(sample_data)
                 n_file += 1
-        self.logger.info(f"{n_file} audio samples were successfully inserted.")
         return data_list
 
     def stimulus_signal_file_list(self, source_dir_list, label):
@@ -260,7 +258,6 @@ class DataSave(object):
                 sql_query += f" WHERE {where_clause};"
             self.cursor.execute(sql_query, sql_data)
             query_data = self.cursor.fetchall()
-            self.logger.info("The conditional query succeeds.")
             return error_code.OK, query_data
         except Exception as e:
             err_msg = "Failed to query data from the table according to the condition. %s" % (str(e)[:40])
@@ -352,7 +349,6 @@ class DataSave(object):
     def close(self):
         try:
             self.connection.close()
-            self.logger.info("Database connection closed.")
             self.logger.shut_down()
             return error_code.OK, "Database connection closed."
         except Exception as e:

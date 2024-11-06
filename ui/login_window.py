@@ -1,6 +1,5 @@
 import hashlib
 import sys
-
 from getmac import get_mac_address
 from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QMessageBox
 from PyQt5.QtWidgets import QPushButton, QComboBox
@@ -18,7 +17,7 @@ class LoginWindow(QDialog):
 
         self.pwd_checked = False
         self.access_lvl = access_lvl
-        self.logger = LogManager("core")
+        self.logger = LogManager.set_log_handler("core")
         self.init_ui()
 
     def init_ui(self):
@@ -76,14 +75,14 @@ class LoginWindow(QDialog):
 
     def add_account_click(self):
         if self.check_credentials():
-            dlg = AddAccountWindow()
+            dlg = AddAccountWindow(self.logger)
             dlg.exec()
         else:
             QMessageBox.warning(self, "Error", "Username or Password is incorrect")
 
     def change_pwd_click(self):
         if self.check_credentials():
-            dlg = ChangePwdWindow(self.username_input.text())
+            dlg = ChangePwdWindow(self.username_input.text(), self.logger)
             dlg.exec()
         else:
             QMessageBox.warning(self, "Error", "Username or Password is incorrect")
@@ -132,9 +131,9 @@ class LoginWindow(QDialog):
 
 class AddAccountWindow(QDialog):
 
-    def __init__(self):
+    def __init__(self, logger):
         super().__init__()
-        self.logger = LogManager("core")
+        self.logger = logger
         self.init_ui()
 
     def init_ui(self):
@@ -229,9 +228,9 @@ class AddAccountWindow(QDialog):
 
 class ChangePwdWindow(QDialog):
 
-    def __init__(self, user_name):
+    def __init__(self, user_name, logger):
         super().__init__()
-        self.logger = LogManager("core")
+        self.logger = logger
         self.user_name = user_name
         self.init_ui()
 
