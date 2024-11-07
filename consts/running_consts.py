@@ -48,3 +48,7 @@ LOG_MAPPING = {
     "db_core": DEFAULT_LOG,
     "soundcard_core": DEFAULT_LOG,
 }
+
+# account consts
+
+ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
