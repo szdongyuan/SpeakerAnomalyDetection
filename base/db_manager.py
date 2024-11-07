@@ -20,7 +20,6 @@ class DataSave(object):
         try:
             self.connection = sqlite3.connect(self.db_name)
             self.cursor = self.connection.cursor()
-            self.logger.info("Successfully connect to database.")
             return error_code.OK, "Successfully connect to database."
         except Exception as e:
             err_msg = "Failed to connect to the database %s" % (str(e)[:40])
@@ -73,7 +72,7 @@ class DataSave(object):
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_name TEXT NOT NULL UNIQUE,
                 password TEXT NOT NULL,
-                access_level TEXT NOT NULL CHECK(access_level IN ('Engineer', 'Technician', 'Operator')),
+                access_level TEXT NOT NULL CHECK(access_level IN ('Admin', 'Engineer', 'Operator')),
                 user_created_time TEXT DEFAULT (DATETIME('now', '+8 hours')),
                 user_updated_time TEXT DEFAULT (DATETIME('now', '+8 hours'))
             )
@@ -82,8 +81,36 @@ class DataSave(object):
             self.cursor.execute(create_stimulus_signal_table_sql)
             self.cursor.execute(create_training_model_table_sql)
             self.cursor.execute(create_users_table_sql)
+            create_insert_trigger_sql = '''
+            CREATE TRIGGER IF NOT EXISTS ensure_one_admin_user
+            BEFORE INSERT ON users_table
+            FOR EACH ROW
+            WHEN NEW.access_level = 'Admin'
+            BEGIN
+                SELECT
+                    CASE
+                        WHEN (SELECT COUNT(*) FROM users_table WHERE access_level = 'Admin') > 0
+                        THEN RAISE(ABORT, 'There can only be one Admin user.')
+                    END;
+            END;
+            '''
+            create_update_trigger_sql = '''
+                        CREATE TRIGGER IF NOT EXISTS ensure_one_admin_user
+                        BEFORE UPDATE ON users_table
+                        FOR EACH ROW
+                        WHEN NEW.access_level = 'Admin' AND OLD.access_level != 'Admin'
+                        BEGIN
+                            SELECT
+                                CASE
+                                    WHEN (SELECT COUNT(*) FROM users_table WHERE access_level = 'Admin') > 0
+                                    THEN RAISE(ABORT, 'There can only be one Admin user.')
+                                END;
+                        END;
+                        '''
+            self.cursor.execute(create_insert_trigger_sql)
+            self.cursor.execute(create_update_trigger_sql)
             self.connection.commit()
-            self.logger.info("Table creation success.")
+            self.logger.info("Table and trigger creation success.")
             return error_code.OK, "Table creation success."
         except Exception as e:
             err_msg = "Failed to create table. %s" % (str(e)[:40])
@@ -113,7 +140,6 @@ class DataSave(object):
                 sample_data = (audio_data_id, file_path, product_model, sample_rate, record_date, label, stimulus_id)
                 data_list.append(sample_data)
                 n_file += 1
-        self.logger.info(f"{n_file} audio samples were successfully inserted.")
         return data_list
 
     def stimulus_signal_file_list(self, source_dir_list, label):
@@ -176,7 +202,7 @@ class DataSave(object):
             duration = frames / float(rate)
         return int(duration)
 
-    def insert_audio_files_info(self, table_name, columns, data):
+    def insert_data_into_data(self, table_name, columns, data):
         try:
             if len(data) == 0:
                 self.logger.info("data empty.")
@@ -193,7 +219,7 @@ class DataSave(object):
             self.logger.error(err_msg)
             return error_code.INVALID_INSERT, err_msg
 
-    def update_audio_files_info(self, table_name, update_data: dict, condition_field: dict, update_time=False):
+    def update_table_data(self, table_name, update_data: dict, condition_field: dict, update_time=False):
         try:
             if not isinstance(update_data, dict) or not isinstance(condition_field, dict):
                 return error_code.INVALID_TYPE_DATA, "The update_data format is incorrect."
@@ -215,12 +241,14 @@ class DataSave(object):
             self.logger.error(err_msg)
             return error_code.INVALID_UPDATE, err_msg
 
-    def query(self, table_name, query_column, query_clause_data: dict, FK_related=False):
+    def query(self, table_name, query_column, query_clause_data: dict = None, FK_related=False):
         try:
             join_sql = ''
             where_clause = ''
+            sql_data = []
             if query_clause_data:
                 where_clause = ' AND '.join([f"{key} = ?" for key in query_clause_data.keys()])
+                sql_data = list(query_clause_data.values())
             query_column = ', '.join(query_column)
             if FK_related:
                 join_sql = (' INNER JOIN stimulus_signal_table ON audio_data_table.stimulus_id = '
@@ -228,9 +256,8 @@ class DataSave(object):
             sql_query = f"SELECT {query_column} FROM {table_name} {join_sql}"
             if where_clause:
                 sql_query += f" WHERE {where_clause};"
-            self.cursor.execute(sql_query, list(query_clause_data.values()))
+            self.cursor.execute(sql_query, sql_data)
             query_data = self.cursor.fetchall()
-            self.logger.info("The conditional query succeeds.")
             return error_code.OK, query_data
         except Exception as e:
             err_msg = "Failed to query data from the table according to the condition. %s" % (str(e)[:40])
@@ -322,7 +349,6 @@ class DataSave(object):
     def close(self):
         try:
             self.connection.close()
-            self.logger.info("Database connection closed.")
             self.logger.shut_down()
             return error_code.OK, "Database connection closed."
         except Exception as e:
