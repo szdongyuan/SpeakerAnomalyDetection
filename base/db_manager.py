@@ -51,7 +51,8 @@ class DataSave(object):
                 start_feq INTEGER NOT NULL CHECK (start_feq >= 0), 
                 end_feq INTEGER NOT NULL CHECK (end_feq > start_feq), 
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0), 
-                sweep_duration INTEGER NOT NULL CHECK (sweep_duration > 0)
+                sweep_duration INTEGER NOT NULL CHECK (sweep_duration > 0),
+                is_default INTEGER NOT NULL CHECK (is_default IN (0, 1))
             );
            '''
             create_training_model_table_sql = '''
@@ -183,8 +184,15 @@ class DataSave(object):
             end_feq = relpath_str[4].split("_")[2]
             sample_rate = model_consts.SAMPLE_RATE
             sweep_duration = self.get_wav_duration(file_path)
+            select_sql = "SELECT COUNT(*) FROM stimulus_signal_table"
+            self.cursor.execute(select_sql)
+            record_count = self.cursor.fetchone()[0]
+            if record_count == 0:
+                is_default = 1
+            else:
+                is_default = 0
             audio_stimulus_data = (
-                sweep_method, sweep_type, int(repeats), int(start_feq), int(end_feq), sample_rate, sweep_duration)
+                sweep_method, sweep_type, int(repeats), int(start_feq), int(end_feq), sample_rate, sweep_duration, is_default)
         return audio_stimulus_data
 
     @staticmethod
@@ -226,9 +234,25 @@ class DataSave(object):
             set_clause = ', '.join([f"{key} = ?" for key in update_data.keys()])
             if update_time:
                 set_clause += ", user_updated_time = DATETIME('now', '+8 hours')"
-            where_clause = ' AND '.join([f"{key} = ?" for key in condition_field.keys()])
+            where_clause_parts = []
+            params = []
+            for key, value in condition_field.items():
+                if isinstance(value, dict):
+                    for op, op_value in value.items():
+                        if op == "=":
+                            where_clause_parts.append(f"{key} = ?")
+                            params.append(op_value)
+                        elif op == "!=":
+                            where_clause_parts.append(f"{key} != ?")
+                            params.append(op_value)
+                        else:
+                            return error_code.INVALID_TYPE_DATA, f"Unsupported operator: {op}"
+                else:
+                    where_clause_parts.append(f"{key} = ?")
+                    params.append(value)
+            where_clause = ' AND '.join(where_clause_parts)
             sql = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
-            self.cursor.execute(sql, list(update_data.values()) + list(condition_field.values()))
+            self.cursor.execute(sql, list(update_data.values()) + params)
             self.connection.commit()
             if self.cursor.rowcount > 0:
                 self.logger.info("Update data successfully.")
