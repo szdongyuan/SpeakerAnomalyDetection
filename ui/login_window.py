@@ -7,10 +7,12 @@ from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from base.db_manager import DataSave
 from base.log_manager import LogManager
-from consts import model_consts, error_code, running_consts
+from consts import model_consts, error_code
 
 
 class LoginWindow(QDialog):
+
+    ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
 
     def __init__(self, access_lvl=None):
         super().__init__()
@@ -97,7 +99,7 @@ class LoginWindow(QDialog):
     def check_credentials(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        self.access_lvl = running_consts.ACCESS_LVL_DICT[self.access_selection.currentText()]
+        self.access_lvl = self.ACCESS_LVL_DICT[self.access_selection.currentText()]
 
         enc_pwd = encrypt_password(username, password)
         user_info = self.get_user_info_from_db(username)
@@ -185,7 +187,7 @@ class AddAccountWindow(QDialog):
     def add_user_click(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        access_lvl = running_consts.ACCESS_LVL_DICT[self.access_selection.currentText()]
+        access_lvl = self.ACCESS_LVL_DICT[self.access_selection.currentText()]
         if not password:
             self.info.setText("添加账号失败")
         else:

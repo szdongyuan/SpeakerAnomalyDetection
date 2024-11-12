@@ -1,5 +1,6 @@
 import os
 
+from scipy.io import wavfile
 import numpy as np
 import librosa
 
@@ -97,3 +98,15 @@ def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
     tot_fs = np.array(ok_fs + ng_fs)
     tot_labels = np.array(ok_labels + ng_labels)
     return error_code.OK, (tot_signals, tot_files, tot_fs, tot_labels)
+
+
+def load_audio_simple(audio_path, sr=44100):
+    # we assume audio is mono channel
+    y, _ = librosa.load(audio_path, sr=sr)
+    return y
+
+
+def save_audio_simple(save_path, audio, sr=44100):
+    # we assume audio is mono channel
+    audio = audio.astype('float32')
+    wavfile.write(save_path, sr, audio)
