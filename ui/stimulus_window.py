@@ -16,7 +16,7 @@ class StimulusWindow(QDialog):
 
     STIMULUS_DICT = {
         "啁啾": {"name": "chirp", "sub_list": ["对数", "线性", "对数镜像", "线性镜像"]},
-        "步进": {"name": "step", "sub_list": ["对数", "线性", "对数镜像", "线性镜像"]},
+        "步进": {"name": "step", "sub_list": ["对数", "线性"]},
         "噪音": {"name": "noise", "sub_list": ["白噪音", "粉噪音"]},
     }
 
@@ -33,6 +33,7 @@ class StimulusWindow(QDialog):
         super().__init__()
         self.stimulus_info = {"name": "stimulus_1", "use_custom_stimulus": True}
         self.stimulus_signal = None
+        self.stimulus_signal_time = None
         self.refresh_stimulus_info = False
 
         self.init_ui()
@@ -140,7 +141,7 @@ class StimulusWindow(QDialog):
         self.total_time_box = QDoubleSpinBox()
         self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)
-        self.total_time_box.setRange(0.1, 60)
+        self.total_time_box.setRange(0, 60)
         self.total_time_box.editingFinished.connect(self.stimulus_changed)
         repeat_label = QLabel("信号重复")
         self.repeat_box = QSpinBox()
@@ -235,8 +236,24 @@ class StimulusWindow(QDialog):
 
         if self.stimulus_info.get("stimulus_type") and changed_flag:
             if self.stimulus_info.get("use_custom_stimulus"):
-                pass  # Todo Calculate stimulus signal from stimulus info
+                self.create_signal_from_stimulus_info()
             self.graph_stimulus()
+
+    def create_signal_from_stimulus_info(self):
+        # Todo: replace create_function
+        def create_function_1(**kwargs):
+            return ([1, 2, 3], [1, 2, 3])
+        def create_function_2(**kwargs):
+            return ([4, 5, 6], [1, 2, 3])
+        def create_function_3(**kwargs):
+            return ([7, 8, 9], [1, 2, 3])
+        create_function_dict = {
+            "chirp": create_function_1,
+            "step": create_function_2,
+            "noise": create_function_3,
+        }
+        create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
+        self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
 
     def update_stimulus_ui_value(self):
         for k, v in self.STIMULUS_DICT.items():
@@ -256,7 +273,8 @@ class StimulusWindow(QDialog):
     def graph_stimulus(self):
         print("graphing stimulus...")
         print(self.stimulus_info)
-        # Todo graph stimulus
+        print(self.stimulus_signal)
+        # Todo: graph stimulus
 
     def load_config_btn_clicked(self):
         dlg = LoadStimulusConfig()
@@ -267,16 +285,19 @@ class StimulusWindow(QDialog):
         self.stimulus_changed()
 
     def save_config_btn_clicked(self):
-        # Todo save config to db
+        # Todo: save config to db
         print("saving stimulus info")
 
     def load_wav_btn_clicked(self):
+        # Todo: implement stimulus_signal_time
         path, _ = QFileDialog.getOpenFileName(self,
                                               "打开音频",
                                               "../audio_data/stimulus",
                                               "WAV Files (*.wav)")
         if path:
             self.stimulus_signal = load_audio_simple(path, self.stimulus_info["sample_rate"])
+            sr = self.stimulus_info["sample_rate"]
+            self.stimulus_signal_time = list(range(0, len(self.stimulus_signal) / sr, 1 / sr))
             print(self.stimulus_signal)
             self.graph_stimulus()
 
@@ -291,8 +312,9 @@ class StimulusWindow(QDialog):
         print("file_name", file_name)
 
     def play_btn_clicked(self):
+        # Todo: add play modules
         print("play stimulus...")
-        print(self.stimulus_signal, self.stimulus_signal.shape)
+        print(self.stimulus_signal)
 
     def ok_btn_clicked(self):
         print("ok_btn clicked")
@@ -370,6 +392,7 @@ class LoadStimulusConfig(QDialog):
 
     @staticmethod
     def load_stimulus_config_from_db():
+        # Todo: connect this function to db
         stimulus_list = [
             {"name": 'stimulus_1', 'stimulus_method': 'chirp', 'stimulus_type': 'log',
              'start_freq': 10, 'stop_freq': 10, 'total_time': 0.1, 'repeat_times': 1, 'amplitude_type': 'RMS',
