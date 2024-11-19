@@ -43,3 +43,39 @@ class StimulusSignalManagement(object):
         except Exception as e:
             err_msg = "Failed to query the default stimulus signal. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
+
+    @staticmethod
+    def query_all_stimulus_info():
+        try:
+            with DataSave(model_consts.DATABASE_PATH) as database:
+                query_code, query_data = database.query("stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS)
+            if query_code == error_code.OK and query_data:
+                return error_code.OK, query_data
+            else:
+                return error_code.INVALID_QUERY, "Failed to query stimulus signal info or no stimulus signal info."
+        except Exception as e:
+            err_msg = "Failed to query stimulus signal. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg
+
+    @staticmethod
+    def save_stimulus_info_to_db(stimulus_info: dict):
+        stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_info)
+        try:
+            with DataSave(model_consts.DATABASE_PATH) as database:
+                is_default = database.set_default("stimulus_signal_table")
+                stimulus_config += (is_default,)
+                result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
+                                                      model_consts.STIMULUS_COLUMNS, ['stimulus_id'])
+                if not result:
+                    stimulus_config = database.get_data_id([stimulus_config], 0)
+                    insert_code, msg = database.insert_data_into_db("stimulus_signal_table",
+                                                                    model_consts.DB_STIMULUS_COLUMNS, stimulus_config)
+                    if insert_code == error_code.OK:
+                        return error_code.OK, "Successfully saved stimulus signals to the database."
+                    else:
+                        return error_code.INVALID_INSERT, msg
+                else:
+                    return error_code.INVALID_SAVE, "This stimulus signals info already exists."
+        except Exception as e:
+            err_msg = "Failed to save stimulus signals to the database. %s" % (str(e)[:40])
+            return error_code.INVALID_SAVE, err_msg

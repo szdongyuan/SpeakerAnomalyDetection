@@ -1,19 +1,24 @@
+import os.path
 import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QGroupBox, QListView
-from PyQt5.QtWidgets import QLineEdit, QLabel, QSpacerItem, QSizePolicy
-from PyQt5.QtWidgets import QMessageBox, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
+from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
+from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
-from PyQt5.QtWidgets import QPushButton, QRadioButton
+from PyQt5.QtWidgets import QPushButton
 
 from base.load_audio import load_audio_simple, save_audio_simple
+from base.log_manager import LogManager
+from base.pre_processing.swept_sine_chirps import StimulusSignal
+from base.soundcard_audio_processor import SoundcardAudioProcessor
+from base.stimulus_signal_management import StimulusSignalManagement
+from consts import error_code
 from ui.graph_widget import QmyFigureCanvas
 
 
 class StimulusWindow(QDialog):
-
     STIMULUS_DICT = {
         "啁啾": {"name": "chirp", "sub_list": ["对数", "线性", "对数镜像", "线性镜像"]},
         "步进": {"name": "step", "sub_list": ["对数", "线性"]},
@@ -31,11 +36,11 @@ class StimulusWindow(QDialog):
 
     def __init__(self):
         super().__init__()
-        self.stimulus_info = {"name": "stimulus_1", "use_custom_stimulus": True}
+        self.stimulus_info = {"name": "stimulus_chirps_1", "use_custom_stimulus": True}
         self.stimulus_signal = None
         self.stimulus_signal_time = None
         self.refresh_stimulus_info = False
-
+        self.logger = LogManager.set_log_handler("core")
         self.init_ui()
         self.stimulus_changed()
 
@@ -74,6 +79,8 @@ class StimulusWindow(QDialog):
         stimulus_type_group_box = self.create_stimulus_type_group_box()
         self.frequency_group_box = self.create_frequency_group_box()
         time_group_box = self.create_time_group_box()
+        self.step_group_box = self.create_step_group_box()
+        self.step_group_box.setDisabled(True)
         function_btn_layout = self.create_function_btn_layout()
 
         v_spacer_1 = QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding)
@@ -87,13 +94,14 @@ class StimulusWindow(QDialog):
         layout.addWidget(stimulus_type_group_box)
         layout.addWidget(self.frequency_group_box)
         layout.addWidget(time_group_box)
+        layout.addWidget(self.step_group_box)
         layout.addItem(v_spacer_2)
         layout.addLayout(output_layout)
         layout.addItem(v_spacer_3)
         layout.addLayout(function_btn_layout)
 
-        self.box_checked_enable_list = [load_config_btn, save_config_btn,
-                                        stimulus_type_group_box, self.frequency_group_box, time_group_box]
+        self.box_checked_enable_list = [load_config_btn, save_config_btn, stimulus_type_group_box,
+                                        self.frequency_group_box, time_group_box, self.step_group_box]
         self.box_checked_disable_list = [load_wav_btn]
 
         self.setLayout(layout)
@@ -119,11 +127,13 @@ class StimulusWindow(QDialog):
         self.start_freq_box = QSpinBox()
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
+        self.start_freq_box.setValue(2000)
         self.start_freq_box.editingFinished.connect(self.stimulus_changed)
         stop_freq_label = QLabel("截止频率")
         self.stop_freq_box = QSpinBox()
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
+        self.stop_freq_box.setValue(80)
         self.stop_freq_box.editingFinished.connect(self.stimulus_changed)
         h_spacer = QSpacerItem(4, 4, QSizePolicy.Expanding, QSizePolicy.Minimum)
         frequency_layout = QHBoxLayout()
@@ -142,6 +152,7 @@ class StimulusWindow(QDialog):
         self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)
         self.total_time_box.setRange(0, 60)
+        self.total_time_box.setValue(3)
         self.total_time_box.editingFinished.connect(self.stimulus_changed)
         repeat_label = QLabel("信号重复")
         self.repeat_box = QSpinBox()
@@ -158,6 +169,19 @@ class StimulusWindow(QDialog):
         time_group_box.setLayout(time_layout)
         return time_group_box
 
+    def create_step_group_box(self):
+        step_group_box = QGroupBox()
+        step_label = QLabel("步进数量")
+        self.step_box = QSpinBox()
+        self.step_box.setFixedSize(100, 20)
+        self.step_box.setRange(1, 100)
+        self.step_box.editingFinished.connect(self.stimulus_changed)
+        step_layout = QHBoxLayout()
+        step_layout.addWidget(step_label)
+        step_layout.addWidget(self.step_box)
+        step_group_box.setLayout(step_layout)
+        return step_group_box
+
     def create_amplitude_group_box(self):
         amplitude_group_box = QGroupBox("信号幅值")
         self.amplitude_combo_box = QComboBox()
@@ -165,6 +189,9 @@ class StimulusWindow(QDialog):
         self.amplitude_combo_box.currentTextChanged.connect(self.stimulus_changed)
         self.amplitude_spin_box = QDoubleSpinBox()
         self.amplitude_spin_box.setSuffix(" V")
+        self.amplitude_spin_box.setValue(self.load_amplitude_from_txt())
+        self.amplitude_spin_box.setSingleStep(0.1)
+        self.amplitude_spin_box.setMaximum(2)
         self.amplitude_spin_box.editingFinished.connect(self.stimulus_changed)
         amplitude_layout = QHBoxLayout()
         amplitude_layout.addWidget(self.amplitude_combo_box)
@@ -210,10 +237,15 @@ class StimulusWindow(QDialog):
         self.stimulus_type_combo_box.clear()
         stimulus_item = self.STIMULUS_DICT.get(stimulus_method, {})
         self.stimulus_type_combo_box.addItems(stimulus_item.get("sub_list", []))
-        if stimulus_method == "噪音":
+        if stimulus_method == "啁啾":
+            self.step_group_box.setDisabled(True)
+            self.frequency_group_box.setEnabled(True)
+        elif stimulus_method == "噪音":
             self.frequency_group_box.setDisabled(True)
+            self.step_group_box.setDisabled(True)
         else:
             self.frequency_group_box.setEnabled(True)
+            self.step_group_box.setEnabled(True)
 
     def stimulus_changed(self, changed_flag=False):
         stimulus_method = self.stimulus_method_combo_box.currentText()
@@ -226,6 +258,7 @@ class StimulusWindow(QDialog):
             "stop_freq": self.stop_freq_box.value(),
             "total_time": self.total_time_box.value(),
             "repeat_times": self.repeat_box.value(),
+            "num_steps": self.step_box.value(),
             "amplitude_type": self.amplitude_combo_box.currentText(),
             "amplitude": self.amplitude_spin_box.value(),
             "sample_rate": int(self.sample_rate_combo_box.currentText()),
@@ -240,17 +273,53 @@ class StimulusWindow(QDialog):
             self.graph_stimulus()
 
     def create_signal_from_stimulus_info(self):
-        # Todo: replace create_function
-        def create_function_1(**kwargs):
-            return ([1, 2, 3], [1, 2, 3])
-        def create_function_2(**kwargs):
-            return ([4, 5, 6], [1, 2, 3])
-        def create_function_3(**kwargs):
-            return ([7, 8, 9], [1, 2, 3])
+        def get_stimulus_info(kwargs):
+            stimulus_param = {
+                'start_freq': kwargs.get('start_freq'),
+                'stop_freq': kwargs.get('stop_freq'),
+                'stimulus_type': kwargs.get('stimulus_type'),
+                'total_time': kwargs.get('total_time'),
+                'repeat_times': kwargs.get('repeat_times'),
+                'sample_rate': kwargs.get('sample_rate'),
+                'amplitude_type': kwargs.get('amplitude_type'),
+                'amplitude': kwargs.get('amplitude')
+            }
+            return stimulus_param
+
+        def scale_signal_amplitude(data, amplitude):
+            if len(data) == 0:
+                return []
+            else:
+                return data * amplitude
+
+        def create_chirp(**kwargs):
+            params = get_stimulus_info(kwargs)
+            data, _ = StimulusSignal().generate_chirps(params['start_freq'], params['stop_freq'], params['total_time'],
+                                                       params['sample_rate'], params['stimulus_type'],
+                                                       params['repeat_times'])
+            stimulus_signal = scale_signal_amplitude(data, params['amplitude'])
+            return stimulus_signal, params['total_time']
+
+        def create_step(**kwargs):
+            params = get_stimulus_info(kwargs)
+            num_steps = kwargs.get('num_steps')
+            data, _ = StimulusSignal().generate_steps(params['start_freq'], params['stop_freq'], params['total_time'],
+                                                      params['sample_rate'], num_steps, params['stimulus_type'],
+                                                      params['repeat_times'])
+            stimulus_signal = scale_signal_amplitude(data, params['amplitude'])
+            return stimulus_signal, params['total_time']
+
+        def create_noise(**kwargs):
+            params = get_stimulus_info(kwargs)
+            data, _ = StimulusSignal().generate_noise(params['total_time'], params['sample_rate'],
+                                                      params['stimulus_type'], params['repeat_times'])
+            stimulus_signal = scale_signal_amplitude(data, params['amplitude'])
+            return stimulus_signal, params['total_time']
+
         create_function_dict = {
-            "chirp": create_function_1,
-            "step": create_function_2,
-            "noise": create_function_3,
+            "chirp": create_chirp,
+            "step": create_step,
+            "noise": create_noise,
         }
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
         self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
@@ -266,6 +335,7 @@ class StimulusWindow(QDialog):
         self.stop_freq_box.setValue(int(self.stimulus_info["stop_freq"]))
         self.total_time_box.setValue(float(self.stimulus_info["total_time"]))
         self.repeat_box.setValue(int(self.stimulus_info["repeat_times"]))
+        self.step_box.setValue(int(self.stimulus_info["num_steps"]))
         self.amplitude_combo_box.setCurrentText(self.stimulus_info["amplitude_type"])
         self.amplitude_spin_box.setValue(float(self.stimulus_info["amplitude"]))
         self.sample_rate_combo_box.setCurrentText(str(self.stimulus_info["sample_rate"]))
@@ -285,11 +355,13 @@ class StimulusWindow(QDialog):
         self.stimulus_changed()
 
     def save_config_btn_clicked(self):
-        # Todo: save config to db
-        print("saving stimulus info")
+        save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
+        if save_code == error_code.OK:
+            self.logger("Successfully saving stimulus info to database.")
+        else:
+            self.logger(f"Failed to save stimulus info to the database. {msg}")
 
     def load_wav_btn_clicked(self):
-        # Todo: implement stimulus_signal_time
         path, _ = QFileDialog.getOpenFileName(self,
                                               "打开音频",
                                               "../audio_data/stimulus",
@@ -298,7 +370,7 @@ class StimulusWindow(QDialog):
             self.stimulus_signal = load_audio_simple(path, self.stimulus_info["sample_rate"])
             sr = self.stimulus_info["sample_rate"]
             self.stimulus_signal_time = list(range(0, len(self.stimulus_signal) / sr, 1 / sr))
-            print(self.stimulus_signal)
+            # print(self.stimulus_signal)
             self.graph_stimulus()
 
     def save_wav_btn_clicked(self):
@@ -312,13 +384,39 @@ class StimulusWindow(QDialog):
         print("file_name", file_name)
 
     def play_btn_clicked(self):
-        # Todo: add play modules
-        print("play stimulus...")
-        print(self.stimulus_signal)
+        play_code, msg = SoundcardAudioProcessor().speaker_worker(self.stimulus_signal,
+                                                                  self.stimulus_info.get("sample_rate", 44100))
+        if play_code != error_code.OK:
+            self.logger(f"Failed to play the stimulus file. {msg}")
+
+    def save_amplitude_to_txt(self):
+        amplitude_value = self.stimulus_info["amplitude"]
+        dir_path = 'ui_config'
+        if not os.path.exists(dir_path):
+            os.mkdir(dir_path)
+            self.logger(f"Dir '{dir_path}' created.")
+        file_path = dir_path + "/" + "amplitude_value.txt"
+        try:
+            with open(file_path, 'w') as f:
+                f.write(str(amplitude_value))
+                self.logger(f"The amplitude value: {amplitude_value} was successfully saved to amplitude_value.txt")
+        except Exception as e:
+            self.logger("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
+
+    def load_amplitude_from_txt(self):
+        file_path = "ui_config/amplitude_value.txt"
+        try:
+            with open(file_path, 'r') as f:
+                amplitude_value = float(f.read())
+            return amplitude_value
+        except Exception as e:
+            self.logger("Failed to find amplitude value. %s" % (str(e)[:40]))
+            return 0.0
 
     def ok_btn_clicked(self):
         print("ok_btn clicked")
         self.refresh_stimulus_info = True
+        self.save_amplitude_to_txt()
         self.close()
 
     def cancel_btn_clicked(self):
@@ -356,10 +454,20 @@ class LoadStimulusConfig(QDialog):
         self.list_view = QListView()
         item_model = QStandardItemModel()
         self.loaded_stimulus = self.load_stimulus_config_from_db()
+        default_index = None
         for stimulus in self.loaded_stimulus:
             item_model.appendRow(QStandardItem(stimulus["name"]))
+            if stimulus.get('is_default') == 1:
+                default_index = item_model.index(item_model.rowCount() - 1, 0)
         self.list_view.setModel(item_model)
         self.list_view.setSelectionRectVisible(True)
+        if default_index is not None:
+            self.list_view.setCurrentIndex(default_index)
+            self.on_select_item(default_index)
+        else:
+            if item_model.rowCount() > 0:
+                self.list_view.setCurrentIndex(item_model.index(0, 0))
+                self.on_select_item(item_model.index(0, 0))
         self.list_view.clicked.connect(self.on_select_item)
 
         btn_layout = QHBoxLayout()
@@ -392,18 +500,24 @@ class LoadStimulusConfig(QDialog):
 
     @staticmethod
     def load_stimulus_config_from_db():
-        # Todo: connect this function to db
-        stimulus_list = [
-            {"name": 'stimulus_1', 'stimulus_method': 'chirp', 'stimulus_type': 'log',
-             'start_freq': 10, 'stop_freq': 10, 'total_time': 0.1, 'repeat_times': 1, 'amplitude_type': 'RMS',
-             'amplitude': 0.00, 'sample_rate': 44100},
-            {"name": 'stimulus_2', 'stimulus_method': 'noise', 'stimulus_type': 'white_noise',
-             'start_freq': 10, 'stop_freq': 10, 'total_time': 0.1, 'repeat_times': 1, 'amplitude_type': 'RMS',
-             'amplitude': 0.00, 'sample_rate': 44100},
-            {"name": 'stimulus_3', 'stimulus_method': 'step', 'stimulus_type': 'mirror_log',
-             'start_freq': 10, 'stop_freq': 10, 'total_time': 0.1, 'repeat_times': 1, 'amplitude_type': 'Peak',
-             'amplitude': 0.00, 'sample_rate': 48000},
-        ]
+        stimulus_list = []
+        query_code, query_data = StimulusSignalManagement().query_all_stimulus_info()
+        if query_code == error_code.OK:
+            for idx, info in enumerate(query_data):
+                query_data_idx = query_data[idx]
+                stimulus = {
+                    'name': f"stimulus_{query_data_idx[1]}_{idx + 1}",
+                    'stimulus_method': query_data_idx[1],
+                    'stimulus_type': query_data_idx[2],
+                    'start_freq': query_data_idx[4],
+                    'stop_freq': query_data_idx[5],
+                    'total_time': query_data_idx[7],
+                    'repeat_times': query_data_idx[3],
+                    'sample_rate': query_data_idx[6],
+                    'num_steps': query_data_idx[8],
+                    'is_default': query_data_idx[9]
+                }
+                stimulus_list.append(stimulus)
         return stimulus_list
 
 
@@ -414,4 +528,4 @@ if __name__ == "__main__":
     window.show()
     # sys.exit(app.exec_())
     result = window.on_exec()
-    print("final stimulus:", result)
+    # print("final stimulus:", result)

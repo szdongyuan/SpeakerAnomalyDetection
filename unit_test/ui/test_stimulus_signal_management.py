@@ -67,3 +67,101 @@ class TestStimulusSignalManagement(object):
         mock_database.return_value.__enter__.return_value.query.side_effect = query_set
         result = StimulusSignalManagement().query_default_stimulus_info()
         assert result == result_ret
+
+    @pytest.mark.parametrize("database_ret, query_ret, result_ret", [
+        (mock.Mock(), [(error_code.OK, [('12', 'chirp', 'log', 1, 10, 20, 44100, 3, 1, 1),
+                                        ('13', 'step', 'log', 1, 10, 20, 44100, 3, 10, 0)])],
+         (error_code.OK, [('12', 'chirp', 'log', 1, 10, 20, 44100, 3, 1, 1),
+                          ('13', 'step', 'log', 1, 10, 20, 44100, 3, 10, 0)]),
+         ),
+        (mock.Mock(), [(error_code.OK, [])],
+         (error_code.INVALID_QUERY, "Failed to query stimulus signal info or no stimulus signal info."),
+         ),
+        (mock.Mock(), [(error_code.INVALID_QUERY, [('12', 'chirp'), ('13', 'step')])],
+         (error_code.INVALID_QUERY, "Failed to query stimulus signal info or no stimulus signal info."),
+         ),
+        (mock.Mock(), Exception('xxx'),
+         (error_code.INVALID_QUERY, "Failed to query stimulus signal. xxx")
+         )
+    ])
+    @mock.patch("base.stimulus_signal_management.DataSave")
+    def test_query_all_stimulus_info(self, mock_database, database_ret, query_ret, result_ret):
+        mock_database.return_value.__enter__.return_value = database_ret
+        mock_database.return_value.__enter__.return_value.query.side_effect = query_ret
+        result = StimulusSignalManagement().query_all_stimulus_info()
+        assert result == result_ret
+
+    @pytest.mark.parametrize("input_ret, result_ret", [
+        ({"database_ret": mock.Mock(),
+          "default_ret": 0,
+          "query_match_ret": [('12',)],
+          "get_id_ret": mock.Mock(),
+          "insert_ret": mock.Mock(),
+          "stimulus_info": {"stimulus_method": 'chirp',
+                            "stimulus_type": 'log',
+                            "start_freq": 80,
+                            "stop_freq": 1000,
+                            "total_time": 3.0,
+                            "repeat_times": 1,
+                            "num_steps": 1,
+                            "sample_rate": 44100},
+          }, (error_code.INVALID_SAVE, "This stimulus signals info already exists.")
+         ),
+        ({"database_ret": mock.Mock(),
+          "default_ret": 0,
+          "query_match_ret": [],
+          "get_id_ret": [('12', 'chirp', 'log', 1, 80, 1000, 44100, 3, 1, 0)],
+          "insert_ret": [(error_code.OK, 'Successfully insert.')],
+          "stimulus_info": {"stimulus_method": 'chirp',
+                            "stimulus_type": 'log',
+                            "start_freq": 80,
+                            "stop_freq": 1000,
+                            "total_time": 3.0,
+                            "repeat_times": 1,
+                            "num_steps": 1,
+                            "sample_rate": 44100
+                            }
+          }, (error_code.OK, "Successfully saved stimulus signals to the database.")
+         ),
+        ({"database_ret": mock.Mock(),
+          "default_ret": 0,
+          "query_match_ret": [],
+          "get_id_ret": [('12', 'chirp', 'log', 1, 80, 1000, 44100, 3, 1, 0)],
+          "insert_ret": [(error_code.INVALID_INSERT, 'Failed to insert.')],
+          "stimulus_info": {"stimulus_method": 'chirp',
+                            "stimulus_type": 'log',
+                            "start_freq": 80,
+                            "stop_freq": 1000,
+                            "total_time": 3.0,
+                            "repeat_times": 1,
+                            "num_steps": 1,
+                            "sample_rate": 44100
+                            }
+          }, (error_code.INVALID_INSERT, 'Failed to insert.')
+         ),
+        ({"database_ret": mock.Mock(),
+          "default_ret": 0,
+          "query_match_ret": [],
+          "get_id_ret": Exception('xxx'),
+          "insert_ret": [(error_code.OK, 'Successfully insert.')],
+          "stimulus_info": {"stimulus_method": 'chirp',
+                            "stimulus_type": 'log',
+                            "start_freq": 80,
+                            "stop_freq": 1000,
+                            "total_time": 3.0,
+                            "repeat_times": 1,
+                            "num_steps": 1,
+                            "sample_rate": 44100
+                            }
+          }, (error_code.INVALID_SAVE, "Failed to save stimulus signals to the database. xxx")
+         ),
+    ])
+    @mock.patch("base.stimulus_signal_management.DataSave")
+    def test_save_stimulus_info_to_db(self, mock_database, input_ret, result_ret):
+        mock_database.return_value.__enter__.return_value = input_ret["database_ret"]
+        mock_database.return_value.__enter__.return_value.set_default.return_value = input_ret["default_ret"]
+        mock_database.return_value.__enter__.return_value.query_matching_data.return_value = input_ret["query_match_ret"]
+        mock_database.return_value.__enter__.return_value.get_data_id.side_effect = input_ret["get_id_ret"]
+        mock_database.return_value.__enter__.return_value.insert_data_into_db.side_effect = input_ret["insert_ret"]
+        result = StimulusSignalManagement().save_stimulus_info_to_db(input_ret["stimulus_info"])
+        assert result == result_ret
