@@ -127,13 +127,13 @@ class StimulusWindow(QDialog):
         self.start_freq_box = QSpinBox()
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
-        self.start_freq_box.setValue(1000)
+        self.start_freq_box.setValue(2000)
         self.start_freq_box.editingFinished.connect(self.stimulus_changed)
         stop_freq_label = QLabel("截止频率")
         self.stop_freq_box = QSpinBox()
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
-        self.stop_freq_box.setValue(2000)
+        self.stop_freq_box.setValue(80)
         self.stop_freq_box.editingFinished.connect(self.stimulus_changed)
         h_spacer = QSpacerItem(4, 4, QSizePolicy.Expanding, QSizePolicy.Minimum)
         frequency_layout = QHBoxLayout()
@@ -152,6 +152,7 @@ class StimulusWindow(QDialog):
         self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)
         self.total_time_box.setRange(0, 60)
+        self.total_time_box.setValue(3)
         self.total_time_box.editingFinished.connect(self.stimulus_changed)
         repeat_label = QLabel("信号重复")
         self.repeat_box = QSpinBox()
@@ -453,10 +454,20 @@ class LoadStimulusConfig(QDialog):
         self.list_view = QListView()
         item_model = QStandardItemModel()
         self.loaded_stimulus = self.load_stimulus_config_from_db()
+        default_index = None
         for stimulus in self.loaded_stimulus:
             item_model.appendRow(QStandardItem(stimulus["name"]))
+            if stimulus.get('is_default') == 1:
+                default_index = item_model.index(item_model.rowCount() - 1, 0)
         self.list_view.setModel(item_model)
         self.list_view.setSelectionRectVisible(True)
+        if default_index is not None:
+            self.list_view.setCurrentIndex(default_index)
+            self.on_select_item(default_index)
+        else:
+            if item_model.rowCount() > 0:
+                self.list_view.setCurrentIndex(item_model.index(0, 0))
+                self.on_select_item(item_model.index(0, 0))
         self.list_view.clicked.connect(self.on_select_item)
 
         btn_layout = QHBoxLayout()
@@ -503,7 +514,8 @@ class LoadStimulusConfig(QDialog):
                     'total_time': query_data_idx[7],
                     'repeat_times': query_data_idx[3],
                     'sample_rate': query_data_idx[6],
-                    'num_steps': query_data_idx[8]
+                    'num_steps': query_data_idx[8],
+                    'is_default': query_data_idx[9]
                 }
                 stimulus_list.append(stimulus)
         return stimulus_list
