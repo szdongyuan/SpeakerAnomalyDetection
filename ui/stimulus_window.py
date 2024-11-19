@@ -357,9 +357,9 @@ class StimulusWindow(QDialog):
     def save_config_btn_clicked(self):
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
         if save_code == error_code.OK:
-            self.logger("Successfully saving stimulus info to database.")
+            self.logger.info("Successfully saving stimulus info to database.")
         else:
-            self.logger(f"Failed to save stimulus info to the database. {msg}")
+            self.logger.error(f"Failed to save stimulus info to the database. {msg}")
 
     def load_wav_btn_clicked(self):
         path, _ = QFileDialog.getOpenFileName(self,
@@ -387,21 +387,21 @@ class StimulusWindow(QDialog):
         play_code, msg = SoundcardAudioProcessor().speaker_worker(self.stimulus_signal,
                                                                   self.stimulus_info.get("sample_rate", 44100))
         if play_code != error_code.OK:
-            self.logger(f"Failed to play the stimulus file. {msg}")
+            self.logger.error(f"Failed to play the stimulus file. {msg}")
 
     def save_amplitude_to_txt(self):
         amplitude_value = self.stimulus_info["amplitude"]
         dir_path = 'ui_config'
         if not os.path.exists(dir_path):
             os.mkdir(dir_path)
-            self.logger(f"Dir '{dir_path}' created.")
+            self.logger.info(f"Dir '{dir_path}' created.")
         file_path = dir_path + "/" + "amplitude_value.txt"
         try:
             with open(file_path, 'w') as f:
                 f.write(str(amplitude_value))
-                self.logger(f"The amplitude value: {amplitude_value} was successfully saved to amplitude_value.txt")
+                self.logger.info(f"The amplitude value: {amplitude_value} was successfully saved to amplitude_value.txt")
         except Exception as e:
-            self.logger("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
+            self.logger.error("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
 
     def load_amplitude_from_txt(self):
         file_path = "ui_config/amplitude_value.txt"
@@ -410,7 +410,7 @@ class StimulusWindow(QDialog):
                 amplitude_value = float(f.read())
             return amplitude_value
         except Exception as e:
-            self.logger("Failed to find amplitude value. %s" % (str(e)[:40]))
+            self.logger.error("Failed to find amplitude value. %s" % (str(e)[:40]))
             return 0.0
 
     def ok_btn_clicked(self):
