@@ -45,13 +45,14 @@ class DataSave(object):
             create_stimulus_signal_table_sql = '''
             CREATE TABLE IF NOT EXISTS stimulus_signal_table(
                 stimulus_id TEXT PRIMARY KEY,
-                sweep_method TEXT NOT NULL, 
-                sweep_type TEXT NOT NULL, 
-                repeats INTEGER NOT NULL CHECK (repeats > 0), 
-                start_feq INTEGER NOT NULL CHECK (start_feq >= 0), 
-                end_feq INTEGER NOT NULL CHECK (end_feq > start_feq), 
+                stimulus_method TEXT NOT NULL, 
+                stimulus_type TEXT NOT NULL, 
+                repeat_times INTEGER NOT NULL CHECK (repeat_times > 0), 
+                start_freq INTEGER DEFAULT NULL CHECK (start_freq >= 10), 
+                stop_freq INTEGER DEFAULT NULL CHECK (stop_freq >= start_freq AND stop_freq <= 24000), 
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0), 
-                sweep_duration INTEGER NOT NULL CHECK (sweep_duration > 0),
+                total_time INTEGER NOT NULL CHECK (total_time > 0),
+                num_steps INTEGER DEFAULT NULL CHECK (num_steps >= 0),
                 is_default INTEGER NOT NULL CHECK (is_default IN (0, 1))
             );
            '''
@@ -177,23 +178,27 @@ class DataSave(object):
         if file_path:
             relpath = os.path.relpath(file_path, model_consts.DEFAULT_DIR).replace("\\", "/")
             relpath_str = relpath.split("/")
-            sweep_type = relpath_str[3].split("_")[0]
-            sweep_method = relpath_str[3].split("_")[1]
-            repeats = relpath_str[3].split("_")[2]
-            start_feq = relpath_str[4].split("_")[1]
-            end_feq = relpath_str[4].split("_")[2]
+            stimulus_type = relpath_str[3].split("_")[0]
+            stimulus_method = relpath_str[3].split("_")[1]
+            repeat_times = relpath_str[3].split("_")[2]
+            start_freq = relpath_str[4].split("_")[1]
+            stop_feq = relpath_str[4].split("_")[2]
             sample_rate = model_consts.SAMPLE_RATE
-            sweep_duration = self.get_wav_duration(file_path)
-            select_sql = "SELECT COUNT(*) FROM stimulus_signal_table"
-            self.cursor.execute(select_sql)
-            record_count = self.cursor.fetchone()[0]
-            if record_count == 0:
-                is_default = 1
-            else:
-                is_default = 0
+            total_time = self.get_wav_duration(file_path)
+            is_default = self.set_default("stimulus_signal_table")
             audio_stimulus_data = (
-                sweep_method, sweep_type, int(repeats), int(start_feq), int(end_feq), sample_rate, sweep_duration, is_default)
+                stimulus_method, stimulus_type, int(repeat_times), int(start_freq), int(stop_feq), sample_rate, total_time, is_default)
         return audio_stimulus_data
+
+    def set_default(self, table_name):
+        select_sql = f"SELECT COUNT(*) FROM {table_name}"
+        self.cursor.execute(select_sql)
+        record_count = self.cursor.fetchone()[0]
+        if record_count == 0:
+            is_default = 1
+        else:
+            is_default = 0
+        return is_default
 
     @staticmethod
     def get_data_id(data_list, id_index: int):
@@ -210,7 +215,7 @@ class DataSave(object):
             duration = frames / float(rate)
         return int(duration)
 
-    def insert_data_into_data(self, table_name, columns, data):
+    def insert_data_into_db(self, table_name, columns, data):
         try:
             if len(data) == 0:
                 self.logger.info("data empty.")
@@ -333,11 +338,11 @@ class DataSave(object):
             "product_model": data_load_config.get("product_model"),
             "record_date": data_load_config.get("record_date"),
             "sample_rate": data_load_config.get("sample_rate"),
-            "sweep_method": data_load_config.get("sweep_method"),
-            "sweep_type": data_load_config.get("sweep_type"),
-            "sweep_duration": data_load_config.get("sweep_duration"),
-            "start_feq": data_load_config.get("start_feq"),
-            "end_feq": data_load_config.get("end_feq"),
+            "stimulus_method": data_load_config.get("stimulus_method"),
+            "stimulus_type": data_load_config.get("stimulus_type"),
+            "total_time": data_load_config.get("total_time"),
+            "start_freq": data_load_config.get("start_freq"),
+            "stop_freq": data_load_config.get("stop_freq"),
         }
         return data_load_config_mapping
 

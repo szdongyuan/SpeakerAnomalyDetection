@@ -4,6 +4,8 @@ import numpy as np
 class StimulusSignal(object):
     @staticmethod
     def generate_steps(f_begin=500, f_end=1000, t_total=4.0, sr=44100, num_steps=10, step_type="linear", repeat=1):
+        if t_total == 0:
+            return [], sr
         t_single = t_total / repeat
         t_time = t_single / num_steps
         num_samples = int(t_time * sr)
@@ -56,13 +58,13 @@ class StimulusSignal(object):
         return y_total, sr
 
     @staticmethod
-    def generate_noise(t_total=2.0, sr=44100, noise_type='white', repeat=1):
+    def generate_noise(t_total=2.0, sr=44100, noise_type='white_noise', repeat=1):
         t_single = t_total / repeat
         x_t = np.array(list(range(int(sr * t_single)))) / sr
         num_samples = len(x_t)
-        if noise_type == 'white':
+        if noise_type == 'white_noise':
             y_t = np.random.normal(0, 1, num_samples)
-        elif noise_type == 'pink':
+        elif noise_type == 'pink_noise':
             white_noise = np.random.normal(0, 1, num_samples)
             fft = np.fft.rfft(white_noise)
             freqs = np.fft.rfftfreq(num_samples, d=1/sr)
