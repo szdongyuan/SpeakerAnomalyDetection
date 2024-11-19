@@ -5,8 +5,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
 
-MODEL_PATH = DEFAULT_DIR + "models/config_kan_adaptive_spline_241108_train_linear_test_0821_unit10_3_relu_spline_3_grid_size_3_epoch_15.keras"
-CONFIG_PATH = DEFAULT_DIR + "config_kan_adaptive_spline.yml"
+MODEL_PATH = DEFAULT_DIR + "models/model_name.keras"
+CONFIG_PATH = DEFAULT_DIR + "config.yml"
 TRAIN_PATH = DEFAULT_DIR + "audio_data/train"
 TEST_PATH = DEFAULT_DIR + "audio_data/test"
 TRAIN_OK_PATH = DEFAULT_DIR + "audio_data/train/OK"
