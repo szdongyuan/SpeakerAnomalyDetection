@@ -68,6 +68,7 @@ class SoundcardAudioProcessor(object):
             sr = stimulus_params.get("sr")
             default_speaker = sc.default_speaker()
             default_speaker.play(data, samplerate=sr)
+            return error_code.OK, "play successfully"
         except Exception as e:
             err_msg = "Failed to play audio.%s" % (str(e)[:50])
             return error_code.INVALID_PLAY, err_msg

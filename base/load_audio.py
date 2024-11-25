@@ -103,7 +103,8 @@ def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
 def load_audio_simple(audio_path, sr=44100):
     # we assume audio is mono channel
     y, _ = librosa.load(audio_path, sr=sr)
-    return y
+    t = np.linspace(0, len(y) - 1, len(y)) / sr
+    return y, t
 
 
 def save_audio_simple(save_path, audio, sr=44100):
