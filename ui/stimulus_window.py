@@ -40,7 +40,7 @@ class StimulusWindow(QDialog):
         self.stimulus_signal = None
         self.stimulus_signal_time = None
         self.refresh_stimulus_info = False
-        self.logger = LogManager.set_log_handler("core")
+        self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
         self.stimulus_changed()
 
@@ -357,51 +357,51 @@ class StimulusWindow(QDialog):
     def save_config_btn_clicked(self):
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
         if save_code == error_code.OK:
-            self.logger.info("Successfully saving stimulus info to database.")
+            self.default_logger.info("Successfully saving stimulus info to database.")
         else:
-            self.logger.error(f"Failed to save stimulus info to the database. {msg}")
+            self.default_logger.error(f"Failed to save stimulus info to the database. {msg}")
 
     def load_wav_btn_clicked(self):
         path, _ = QFileDialog.getOpenFileName(self,
                                               "打开音频",
                                               "../audio_data/stimulus",
-                                              "WAV Files (*.wav)")
+                                              "WAV Files (*.wav)",
+                                              options=QFileDialog.DontUseNativeDialog)
         if path:
-            self.stimulus_signal = load_audio_simple(path, self.stimulus_info["sample_rate"])
-            sr = self.stimulus_info["sample_rate"]
-            self.stimulus_signal_time = list(range(0, len(self.stimulus_signal) / sr, 1 / sr))
-            # print(self.stimulus_signal)
+            self.stimulus_signal, self.stimulus_signal_time = load_audio_simple(path, self.stimulus_info["sample_rate"])
             self.graph_stimulus()
 
     def save_wav_btn_clicked(self):
         file_name, _ = QFileDialog.getSaveFileName(self,
                                                    "保存音频",
                                                    "../audio_data/stimulus",
-                                                   "WAV Files (*.wav)")
+                                                   "WAV Files (*.wav)",
+                                                   options=QFileDialog.DontUseNativeDialog)
         if file_name:
             sr = self.stimulus_info.get("sample_rate", 44100)
-            save_audio_simple(file_name, self.stimulus_signal, sr)
-        print("file_name", file_name)
+            save_audio_simple(file_name + ".wav", self.stimulus_signal, sr)
 
     def play_btn_clicked(self):
-        play_code, msg = SoundcardAudioProcessor().speaker_worker(self.stimulus_signal,
-                                                                  self.stimulus_info.get("sample_rate", 44100))
+        stimulus_param = {"data": self.stimulus_signal,
+                          "amplitude": self.stimulus_info["amplitude"],
+                          "sr": self.stimulus_info["sample_rate"]}
+        play_code, msg = SoundcardAudioProcessor().speaker_worker(stimulus_param)
         if play_code != error_code.OK:
-            self.logger.error(f"Failed to play the stimulus file. {msg}")
+            self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 
     def save_amplitude_to_txt(self):
         amplitude_value = self.stimulus_info["amplitude"]
         dir_path = 'ui_config'
         if not os.path.exists(dir_path):
             os.mkdir(dir_path)
-            self.logger.info(f"Dir '{dir_path}' created.")
+            self.default_logger.info(f"Dir '{dir_path}' created.")
         file_path = dir_path + "/" + "amplitude_value.txt"
         try:
             with open(file_path, 'w') as f:
                 f.write(str(amplitude_value))
-                self.logger.info(f"The amplitude value: {amplitude_value} was successfully saved to amplitude_value.txt")
+                self.default_logger.info(f"The amplitude value: {amplitude_value} was successfully saved to amplitude_value.txt")
         except Exception as e:
-            self.logger.error("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
+            self.default_logger.error("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
 
     def load_amplitude_from_txt(self):
         file_path = "ui_config/amplitude_value.txt"
@@ -410,7 +410,7 @@ class StimulusWindow(QDialog):
                 amplitude_value = float(f.read())
             return amplitude_value
         except Exception as e:
-            self.logger.error("Failed to find amplitude value. %s" % (str(e)[:40]))
+            self.default_logger.error("Failed to find amplitude value. %s" % (str(e)[:40]))
             return 0.0
 
     def ok_btn_clicked(self):
@@ -428,7 +428,7 @@ class StimulusWindow(QDialog):
         self.exec()
         if self.refresh_stimulus_info:
             return self.stimulus_info
-        return {}
+        return {}, self.stimulus_signal
 
     def update_stimulus_info(self, dict_key, v, changed_flag=False):
         if self.stimulus_info.get(dict_key) != v:
@@ -528,4 +528,4 @@ if __name__ == "__main__":
     window.show()
     # sys.exit(app.exec_())
     result = window.on_exec()
-    # print("final stimulus:", result)
+    print("final stimulus:", result)
