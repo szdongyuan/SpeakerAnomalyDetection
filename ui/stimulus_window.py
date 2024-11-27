@@ -399,7 +399,7 @@ class StimulusWindow(QDialog):
         try:
             with open(file_path, 'w') as f:
                 f.write(str(amplitude_value))
-                self.default_logger.info(f"The amplitude value: {amplitude_value} was successfully saved to amplitude_value.txt")
+                self.default_logger.info(f"The amplitude value: {amplitude_value} saved to amplitude_value.txt")
         except Exception as e:
             self.default_logger.error("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
 
@@ -443,6 +443,7 @@ class LoadStimulusConfig(QDialog):
     def __init__(self, ):
         super().__init__()
         self.selected_config = {}
+        self.loaded_stimulus = self.load_stimulus_config_from_db()
 
         self.init_ui()
 
@@ -451,24 +452,23 @@ class LoadStimulusConfig(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
 
-        self.list_view = QListView()
+        list_view = QListView()
         item_model = QStandardItemModel()
-        self.loaded_stimulus = self.load_stimulus_config_from_db()
         default_index = None
         for stimulus in self.loaded_stimulus:
             item_model.appendRow(QStandardItem(stimulus["name"]))
             if stimulus.get('is_default') == 1:
                 default_index = item_model.index(item_model.rowCount() - 1, 0)
-        self.list_view.setModel(item_model)
-        self.list_view.setSelectionRectVisible(True)
+        list_view.setModel(item_model)
+        list_view.setSelectionRectVisible(True)
         if default_index is not None:
-            self.list_view.setCurrentIndex(default_index)
+            list_view.setCurrentIndex(default_index)
             self.on_select_item(default_index)
         else:
             if item_model.rowCount() > 0:
-                self.list_view.setCurrentIndex(item_model.index(0, 0))
+                list_view.setCurrentIndex(item_model.index(0, 0))
                 self.on_select_item(item_model.index(0, 0))
-        self.list_view.clicked.connect(self.on_select_item)
+        list_view.clicked.connect(self.on_select_item)
 
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("确认")
@@ -479,7 +479,7 @@ class LoadStimulusConfig(QDialog):
         btn_layout.addWidget(cancel_btn)
 
         layout = QVBoxLayout()
-        layout.addWidget(self.list_view)
+        layout.addWidget(list_view)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
@@ -526,6 +526,5 @@ if __name__ == "__main__":
     window = StimulusWindow()
     # window = LoadStimulusConfig()
     window.show()
-    # sys.exit(app.exec_())
     result = window.on_exec()
-    print("final stimulus:", result)
+    print("final result:", result)
