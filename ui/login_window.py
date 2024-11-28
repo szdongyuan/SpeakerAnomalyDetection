@@ -291,7 +291,6 @@ class ChangePwdWindow(QDialog):
                     new_password_data = {"password": enc_pwd}
                     update_code, msg = database.update_table_data("users_table", new_password_data,
                                                                   {"user_name": user_name}, update_time=True)
-                    print(f"update_code: {update_code}, msg: {msg}")
                     if update_code == error_code.OK:
                         self.logger.info("Password reset succeeded.")
                         return True

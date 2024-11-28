@@ -285,7 +285,6 @@ class StimulusWindow(QDialog):
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
         stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
         self.stimulus_signal = stimulus_signal * self.stimulus_info['amplitude']
-        print(len(self.stimulus_signal))
 
     def update_stimulus_ui_value(self):
         for k, v in self.STIMULUS_DICT.items():
