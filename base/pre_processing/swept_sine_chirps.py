@@ -3,17 +3,20 @@ import numpy as np
 
 class StimulusSignal(object):
     @staticmethod
-    def generate_steps(f_begin=500, f_end=1000, t_total=4.0, sr=44100, num_steps=10, step_type="linear", repeat=1):
-        if t_total == 0:
-            return [], sr
-        t_single = t_total / repeat
+    def generate_steps(start_freq=500, stop_freq=1000,
+                       total_time=4.0, sample_rate=44100, num_steps=10, repeat_times=1,
+                       stimulus_type="linear",
+                       **kwargs):
+        if total_time == 0:
+            return [], sample_rate
+        t_single = total_time / repeat_times
         t_time = t_single / num_steps
-        num_samples = int(t_time * sr)
+        num_samples = int(t_time * sample_rate)
         pi = np.pi
-        if step_type == 'linear':
-            frequencies = np.linspace(f_begin, f_end, num_steps)
-        elif step_type == 'log':
-            frequencies = np.logspace(np.log10(f_begin), np.log10(f_end), num_steps)
+        if stimulus_type == 'linear':
+            frequencies = np.linspace(start_freq, stop_freq, num_steps)
+        elif stimulus_type == 'log':
+            frequencies = np.logspace(np.log10(start_freq), np.log10(stop_freq), num_steps)
         else:
             raise Exception("Invalid step type.")
         y_t = np.zeros(num_samples * num_steps)
@@ -32,46 +35,55 @@ class StimulusSignal(object):
             fr = frequencies[i]
             y_t[start:end] = np.sin(2 * pi * fr * time + phase_position)
             phase_position = (phase_position + 2 * pi * fr * time[-1]) % (2 * pi)
-        y_total = np.array(list(y_t) * repeat)
-        return y_total, sr
+        y_total = np.array(list(y_t) * repeat_times)
+        return y_total, sample_rate
 
     @staticmethod
-    def generate_chirps(f_begin=80, f_end=2000, t_total=2.0, sr=48000, chirp_type="log", repeat=1):
+    def generate_chirps(start_freq=80, stop_freq=2000,
+                        total_time=2.0, sample_rate=48000, repeat_times=1,
+                        stimulus_type="log",
+                        **kwargs):
         pi = np.pi
-        t_single = t_total / repeat
-        x_t = np.array(list(range(int(sr * t_single)))) / sr
-        if chirp_type == "log":
-            ln = np.log(f_end / f_begin)
-            y_t = np.sin(2 * pi * f_begin * t_single / ln * (np.exp(ln * x_t / t_single) - 1))
-        elif chirp_type == "linear":
-            delta_f = f_end - f_begin
-            y_t = np.sin(2 * pi * (0.5 * delta_f / t_single * x_t ** 2 + f_begin * x_t))
-        elif chirp_type == "mirror_log":
-            y_part, _ = StimulusSignal().generate_chirps(f_begin, f_end, t_single / 2, sr, "log")
+        t_single = total_time / repeat_times
+        x_t = np.array(list(range(int(sample_rate * t_single)))) / sample_rate
+        if stimulus_type == "log":
+            ln = np.log(stop_freq / start_freq)
+            y_t = np.sin(2 * pi * start_freq * t_single / ln * (np.exp(ln * x_t / t_single) - 1))
+        elif stimulus_type == "linear":
+            delta_f = stop_freq - start_freq
+            y_t = np.sin(2 * pi * (0.5 * delta_f / t_single * x_t ** 2 + start_freq * x_t))
+        elif stimulus_type == "mirror_log":
+            y_part, _ = StimulusSignal().generate_chirps(start_freq=start_freq, stop_freq=stop_freq,
+                                                         total_time=t_single / 2, sample_rate=sample_rate,
+                                                         stimulus_type="log")
             y_t = np.array(list(y_part)[::-1] + list(-1 * y_part))
-        elif chirp_type == "mirror_linear":
-            y_part, _ = StimulusSignal().generate_chirps(f_begin, f_end, t_single / 2, sr, "linear")
+        elif stimulus_type == "mirror_linear":
+            y_part, _ = StimulusSignal().generate_chirps(start_freq=start_freq, stop_freq=stop_freq,
+                                                         total_time=t_single / 2, sample_rate=sample_rate,
+                                                         stimulus_type="linear")
             y_t = np.array(list(y_part)[::-1] + list(-1 * y_part))
         else:
             raise Exception("Invalid chirp type")
-        y_total = np.array(list(y_t) * repeat)
-        return y_total, sr
+        y_total = np.array(list(y_t) * repeat_times)
+        return y_total, sample_rate
 
     @staticmethod
-    def generate_noise(t_total=2.0, sr=44100, noise_type='white_noise', repeat=1):
-        t_single = t_total / repeat
-        x_t = np.array(list(range(int(sr * t_single)))) / sr
+    def generate_noise(total_time=2.0, sample_rate=44100, repeat_times=1,
+                       stimulus_type='white_noise',
+                       **kwargs):
+        t_single = total_time / repeat_times
+        x_t = np.array(list(range(int(sample_rate * t_single)))) / sample_rate
         num_samples = len(x_t)
-        if noise_type == 'white_noise':
+        if stimulus_type == 'white_noise':
             y_t = np.random.normal(0, 1, num_samples)
-        elif noise_type == 'pink_noise':
+        elif stimulus_type == 'pink_noise':
             white_noise = np.random.normal(0, 1, num_samples)
             fft = np.fft.rfft(white_noise)
-            freqs = np.fft.rfftfreq(num_samples, d=1/sr)
+            freqs = np.fft.rfftfreq(num_samples, d=1/sample_rate)
             freqs[0] = 1
             fft /= np.sqrt(freqs)
             y_t = np.fft.irfft(fft, n=num_samples)
         else:
             raise Exception("Invalid noise type.")
-        y_total = np.array(list(y_t) * repeat)
-        return y_total, sr
+        y_total = np.array(list(y_t) * repeat_times)
+        return y_total, sample_rate
