@@ -2,7 +2,7 @@ import numpy as np
 import sys
 import threading
 
-from PyQt5.QtCore import Qt, QEvent, QTimer
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QPushButton, QVBoxLayout
 from PyQt5.QtWidgets import QApplication, QSpacerItem, QSizePolicy, QDoubleSpinBox, QMessageBox
 
@@ -39,17 +39,19 @@ class CalibrationWindow(QDialog):
         btn_layout = self.create_btn_box()
 
         v_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_3 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_4 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         layout = QVBoxLayout()
         layout.addWidget(calibration_param_box)
         layout.addItem(v_spacer_1)
         layout.addWidget(output_box)
-        layout.addItem(v_spacer_1)
-        layout.addWidget(test_box)
-        layout.addItem(v_spacer_1)
-        layout.addLayout(btn_layout)
         layout.addItem(v_spacer_2)
+        layout.addWidget(test_box)
+        layout.addItem(v_spacer_3)
+        layout.addLayout(btn_layout)
+        layout.addItem(v_spacer_4)
         self.setLayout(layout)
 
     def create_calibration_param_box(self):
@@ -90,7 +92,6 @@ class CalibrationWindow(QDialog):
         self.output_voltage_box.setFixedSize(80, 20)
         self.output_voltage_box.setRange(0, 100)
         self.output_voltage_box.setSingleStep(0.1)
-        self.output_voltage_box.installEventFilter(self)
         h_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.save_btn = QPushButton("保存")
         self.save_btn.clicked.connect(self.save_btn_clicked)
@@ -130,7 +131,7 @@ class CalibrationWindow(QDialog):
         calibration_btn.clicked.connect(self.calibration)
         reset_btn = QPushButton("重置")
         reset_btn.clicked.connect(self.reset_btn_clicked)
-        cancel_btn = QPushButton("结束")
+        cancel_btn = QPushButton("退出")
         cancel_btn.clicked.connect(self.cancel_btn_clicked)
         btn_layout.addWidget(calibration_btn)
         btn_layout.addWidget(reset_btn)
@@ -141,6 +142,7 @@ class CalibrationWindow(QDialog):
         self.output_voltage_value.clear()
         self.output_voltage_box.setValue(0)
         self.target_voltage_box.setValue(0)
+        self.calibration_nums_box.setValue(5)
         self.timer.stop()
         self.current_count = 1
         self.countdown = 10
@@ -258,21 +260,18 @@ class CalibrationWindow(QDialog):
         cal_msg.setStandardButtons(QMessageBox.Ok)
         cal_msg.exec_()
 
-    def eventFilter(self, source, event):
-        if isinstance(source, QDoubleSpinBox):
-            if event.type() == QEvent.KeyPress:
-                if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-                    return True
-        return super().eventFilter(source, event)
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            event.ignore()
+        else:
+            super().keyPressEvent(event)
 
     def cancel_btn_clicked(self):
-        print(1111)
         self.close()
-        print(2222)
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = CalibrationWindow()
-    # sys.exit(app.exec())
+    window.show()
     window.exec()
