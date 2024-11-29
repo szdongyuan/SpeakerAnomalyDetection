@@ -17,7 +17,6 @@ from base.stimulus_signal_management import StimulusSignalManagement
 from consts import error_code
 from ui.graph_widget import QmyFigureCanvas
 
-
 class StimulusWindow(QDialog):
     STIMULUS_DICT = {
         "啁啾": {"name": "chirp", "sub_list": ["对数", "线性", "对数镜像", "线性镜像"]},
