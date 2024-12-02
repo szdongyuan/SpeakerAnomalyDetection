@@ -12,8 +12,12 @@ from base.log_manager import LogManager
 from consts import model_consts, error_code, ui_style_const
 
 
+ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
+
+
 class LoginWindow(QDialog):
-    ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
+
+  
 
     def __init__(self, access_lvl=None):
         super().__init__()
@@ -115,7 +119,7 @@ class LoginWindow(QDialog):
     def check_credentials(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        self.access_lvl = self.ACCESS_LVL_DICT[self.access_selection.currentText()]
+        self.access_lvl = ACCESS_LVL_DICT[self.access_selection.currentText()]
 
         enc_pwd = encrypt_password(username, password)
         user_info = self.get_user_info_from_db(username)
@@ -227,7 +231,7 @@ class AddAccountWindow(QDialog):
     def add_user_click(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        access_lvl = self.ACCESS_LVL_DICT[self.access_selection.currentText()]
+        access_lvl = ACCESS_LVL_DICT[self.access_selection.currentText()]
         if not password:
             self.info.setText("添加账号失败")
         else:
@@ -250,8 +254,9 @@ class AddAccountWindow(QDialog):
                                                       ["user_id"])
                 if not result:
                     insert_code, msg = database.insert_data_into_db("users_table",
-                                                                    model_consts.USERS_COLUMNS,
-                                                                    [(username, password, access_lvl)])
+                                                                      model_consts.USERS_COLUMNS,
+                                                                      [(username, password, access_lvl)])
+
                     if insert_code == error_code.OK:
                         self.logger.info(f"Successful to create user {username}.")
                         return True
@@ -367,8 +372,8 @@ def encrypt_password(user_name, password):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # window = LoginWindow()
+    window = LoginWindow()
     # window = ChangePwdWindow('admin', LogManager.set_log_handler("core"))
-    window = AddAccountWindow('admin')
+    # window = AddAccountWindow(LogManager.set_log_handler("core"))
     window.show()
     sys.exit(app.exec_())
