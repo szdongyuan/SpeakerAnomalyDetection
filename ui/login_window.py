@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 from base.db_manager import DataSave
 from base.log_manager import LogManager
 from consts import model_consts, error_code, ui_style_const
-from consts.ui_style_const import qcombobox_stytle, qpushbutton_stytle, qlineedit_stytle
 
 
 class LoginWindow(QDialog):
@@ -34,9 +33,7 @@ class LoginWindow(QDialog):
 
         layout = QVBoxLayout()
 
-        # 修改 access_layout 为类成员属性
         self.access_layout = QHBoxLayout()
-        # 修改 label_access 为类成员属性
         self.label_access = QLabel("权 限：")
         self.access_selection = QComboBox()
         self.access_selection.addItem("管理员")
@@ -45,11 +42,9 @@ class LoginWindow(QDialog):
         self.access_selection.currentTextChanged.connect(self.access_add_account)
         self.access_layout.addWidget(self.label_access)
         self.access_layout.addWidget(self.access_selection)
-        # 修改管理员下拉框布局为横向填充
         self.access_selection.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         user_layout = QHBoxLayout()
-        # 修改 label_user 为类成员属性
         self.label_user = QLabel("账 号：")
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("请输入你的账号")
@@ -60,7 +55,6 @@ class LoginWindow(QDialog):
         user_layout.addWidget(self.add_account_botton)
 
         pwd_layout = QHBoxLayout()
-        # 修改 label_pwd 为类成员属性
         self.label_pwd = QLabel("密 码：")
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("请输入账号密码")
@@ -72,10 +66,8 @@ class LoginWindow(QDialog):
         pwd_layout.addWidget(self.change_pwd_botton)
 
         button_layout = QHBoxLayout()
-        # 修改 login_button 为类成员属性
         self.login_button = QPushButton(" 登  录 ")
         self. login_button.clicked.connect(self.login_click)
-        # 修改部分内容， 重新设置登录按钮的布局
         h_spacer_login_i = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         button_layout.addItem(h_spacer_login_i)
         button_layout.addWidget(self.login_button)
@@ -90,7 +82,9 @@ class LoginWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(qcombobox_stytle + qpushbutton_stytle + qlineedit_stytle)
+        self.setStyleSheet(ui_style_const.qcombobox_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlineedit_stytle)
 
     def access_add_account(self):
         if self.access_selection.currentText() != "管理员":
@@ -134,7 +128,6 @@ class LoginWindow(QDialog):
             return False
 
     def resizeEvent(self, event):
-        # print(event.size())
         new_Dialog_font = QFont("SimSun", int(9 * (event.size().height() / 200)))
         self.label_access.setFont(new_Dialog_font)
         self.access_selection.setFont(new_Dialog_font)
@@ -228,7 +221,9 @@ class AddAccountWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(qcombobox_stytle + qpushbutton_stytle + qlineedit_stytle)
+        self.setStyleSheet(ui_style_const.qcombobox_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlineedit_stytle)
 
     def add_user_click(self):
         username = self.username_input.text()
@@ -285,8 +280,6 @@ class ChangePwdWindow(QDialog):
     def init_ui(self):
         self.setWindowTitle("修改密码")
         self.setFixedSize(300, 200)
-        # self.setMaximumSize(600, 400)
-        # self.setMinimumSize(300, 200)
 
         layout = QVBoxLayout()
 
@@ -300,7 +293,7 @@ class ChangePwdWindow(QDialog):
         self.password_input.setEchoMode(QLineEdit.Password)
         pwd_layout.addWidget(label_pwd)
         pwd_layout.addWidget(self.password_input)
-        self.password_input.setPlaceholderText("请输入密码")
+        self.password_input.setPlaceholderText("请输入新的密码")
 
         confirm_pwd_layout = QHBoxLayout()
         label_confirm_pwd = QLabel("确认密码：")
@@ -329,7 +322,7 @@ class ChangePwdWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(qpushbutton_stytle + qlineedit_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qlineedit_stytle)
 
     def change_pwd_click(self):
         if self.password_input.text() != self.confirm_password_input.text():
@@ -377,7 +370,7 @@ def encrypt_password(user_name, password):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     # window = LoginWindow()
-    window = ChangePwdWindow('admin', LogManager.set_log_handler("core"))
-    # window = AddAccountWindow('admin')
+    # window = ChangePwdWindow('admin', LogManager.set_log_handler("core"))
+    window = AddAccountWindow('admin')
     window.show()
     sys.exit(app.exec_())
