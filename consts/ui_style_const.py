@@ -5,6 +5,15 @@ qpushbutton_stytle = """
                 border-radius: 3px;
                 padding: 3px;
             }
+            QPushButton:hover {
+                background-color: #5099ccff;
+                color: black;
+                border-color: #803333ff;
+            }
+            QPushButton:pressed {
+                background-color: #8099ccff;
+                border-color: #3333ff;
+            }
         """
 
 qlineedit_stytle = """
@@ -23,3 +32,57 @@ qcombobox_stytle = """
                 padding: 3px;
             }
         """
+
+qgroupbox_stytle = """
+            QGroupBox {
+                background: transparent;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding-left: 0px;
+                padding-top: 0px;
+            }
+        """
+
+qspinbox_stytle = """
+            QSpinBox {
+                background-color: rgb(225, 225, 225);
+                border: 1px solid rgb(173, 173, 173);
+                border-radius: 3px;
+                padding: 3px;
+            }
+            QSpinBox::up-button {
+                width: 20px;
+            }
+            QSpinBox::down-button {
+                width: 20px;
+            }
+        """
+
+qdoublespinbox_stytle = """
+            QDoubleSpinBox {
+                background-color: rgb(225, 225, 225);
+                border: 1px solid rgb(173, 173, 173);
+                border-radius: 3px;
+                padding: 3px;
+            }
+            QDoubleSpinBox::up-button {
+                width: 20px;
+            }
+            QDoubleSpinBox::down-button {
+                width: 20px;
+            }
+        """
+
+qdialog_stytle = """
+            QDialog {
+                border-radius: 15px;
+            }
+"""
+
+qlabel_stytle = """
+            Qlabel {
+                background-corlor: rgb(174, 171, 162);
+            }
+"""

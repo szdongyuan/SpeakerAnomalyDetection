@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QGro
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
 from PyQt5.QtWidgets import QPushButton
 import soundcard as sc
+from consts import ui_style_const
 
 
 class HardwareWindow(QDialog):
@@ -31,9 +32,10 @@ class HardwareWindow(QDialog):
 
         btn_layout = QHBoxLayout()
         h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton(" 确  定 ")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         btn_layout.addItem(h_spacer)
+        btn_layout.setContentsMargins(0, 0, 11, 0)
         btn_layout.addWidget(ok_btn)
 
         layout = QVBoxLayout()
@@ -42,9 +44,12 @@ class HardwareWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qgroupbox_stytle)
+
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
-        self.speaker_label = QLabel("设备：   %s" % self.speaker.name)
+        self.speaker_label = QLabel("设  备： %s" % self.speaker.name)
         self.speaker_channel_label = QLabel("通道数： %s" % self.speaker.channels)
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
@@ -68,7 +73,7 @@ class HardwareWindow(QDialog):
 
     def create_mic_box(self):
         mic_label_layout = QVBoxLayout()
-        self.mic_label = QLabel("设备：   %s" % self.mic.name)
+        self.mic_label = QLabel("设  备： %s" % self.mic.name)
         self.mic_channel_label = QLabel("通道数： %s" % self.mic.channels)
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
@@ -92,7 +97,7 @@ class HardwareWindow(QDialog):
         selected_speaker = dlg.on_exec()
         if selected_speaker:
             self.speaker = selected_speaker
-            self.speaker_label.setText("设备：   %s" % self.speaker.name)
+            self.speaker_label.setText("设  备：   %s" % self.speaker.name)
             self.speaker_channel_label.setText("通道数： %s" % self.speaker.channels)
 
     def select_mic_btn_clicked(self):
@@ -100,7 +105,7 @@ class HardwareWindow(QDialog):
         selected_mic = dlg.on_exec()
         if selected_mic:
             self.mic = selected_mic
-            self.mic_label.setText("设备：   %s" % self.mic.name)
+            self.mic_label.setText("设  备：   %s" % self.mic.name)
             self.mic_channel_label.setText("通道数： %s" % self.mic.channels)
 
     def calibrate_speaker_btn_clicked(self):
@@ -151,18 +156,22 @@ class DeviceListWindow(QDialog):
         list_view.clicked.connect(self.on_select_item)
 
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("确认")
+        ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(" 取  消 ")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
+        btn_layout.setSpacing(65)
+        btn_layout.setContentsMargins(40, 0, 40, 0)
 
         layout = QVBoxLayout()
         layout.addWidget(list_view)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
+
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle)
         
     def on_select_item(self, index):
         self.selected_device = self.device_list[index.row()]
@@ -211,9 +220,10 @@ class CalibrationWizard(QWizard):
 
         self.setButtonText(QWizard.NextButton, '下一步')
         self.setButtonText(QWizard.BackButton, '上一步')
-        self.setButtonText(QWizard.FinishButton, '校准')
+        self.setButtonText(QWizard.FinishButton, '校  准')
         # self.setButtonText(QWizard.CancelButton, '跳过')
         self.setOption(QWizard.NoCancelButton)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle)
 
     @staticmethod
     def create_wizard_page(title, subtitle=" ", label_txt=" ", wizard_pic=None):
@@ -235,9 +245,9 @@ class CalibrationWizard(QWizard):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # window = HardwareWindow()
+    window = HardwareWindow()
     # window = DeviceListWindow("speaker")
-    window = CalibrationWizard()
+    # window = CalibrationWizard()
     window.show()
     result = window.on_exec()
     print("final result:", result)
