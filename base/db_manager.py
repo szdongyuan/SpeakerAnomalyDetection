@@ -49,7 +49,7 @@ class DataSave(object):
                 stimulus_type TEXT NOT NULL, 
                 repeat_times INTEGER NOT NULL CHECK (repeat_times > 0), 
                 start_freq INTEGER DEFAULT NULL CHECK (start_freq >= 10), 
-                stop_freq INTEGER DEFAULT NULL CHECK (stop_freq >= start_freq AND stop_freq <= 24000), 
+                stop_freq INTEGER DEFAULT NULL CHECK (stop_freq >= 10 AND stop_freq <= 24000), 
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0), 
                 total_time INTEGER NOT NULL CHECK (total_time > 0),
                 num_steps INTEGER DEFAULT NULL CHECK (num_steps >= 0),

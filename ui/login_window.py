@@ -18,6 +18,8 @@ ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "
 
 class LoginWindow(QDialog):
 
+  
+
     def __init__(self, access_lvl=None):
         super().__init__()
 
@@ -312,6 +314,7 @@ class AddAccountWindow(QDialog):
                     insert_code, msg = database.insert_data_into_db("users_table",
                                                                       model_consts.USERS_COLUMNS,
                                                                       [(username, password, access_lvl)])
+
                     if insert_code == error_code.OK:
                         self.logger.info(f"Successful to create user {username}.")
                         return True

@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QGro
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
 from PyQt5.QtWidgets import QPushButton
 import soundcard as sc
+from ui.calibaration_window import CalibrationWindow
 from consts import ui_style_const
 
 
@@ -112,7 +113,8 @@ class HardwareWindow(QDialog):
         # Todo: calibrate speaker btn clicked
         dlg = CalibrationWizard()
         dlg.on_exec()
-        print("calibrate speaker btn clicked")
+        dlg2 = CalibrationWindow()
+        dlg2.exec()
 
     def ok_btn_clicked(self):
         self.close()
@@ -172,7 +174,7 @@ class DeviceListWindow(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(ui_style_const.qpushbutton_stytle)
-        
+
     def on_select_item(self, index):
         self.selected_device = self.device_list[index.row()]
 
@@ -196,7 +198,7 @@ class CalibrationWizard(QWizard):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowFlags(self.windowFlags()&~Qt.WindowContextHelpButtonHint)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWizardStyle(QWizard.ModernStyle)
         self.setWindowTitle("输出校准向导")
 
