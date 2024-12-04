@@ -14,7 +14,7 @@ from base.log_manager import LogManager
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.stimulus_signal_management import StimulusSignalManagement
-from consts import error_code
+from consts import error_code, ui_style_const
 from ui.graph_widget import QmyFigureCanvas
 
 
@@ -64,6 +64,7 @@ class StimulusWindow(QDialog):
         self.setWindowTitle("Stimulus Window")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setFixedSize(400, 480)
 
         custom_stimulus_layout = QGridLayout()
         custom_chk_box = QCheckBox("自定义")
@@ -85,6 +86,7 @@ class StimulusWindow(QDialog):
         custom_stimulus_layout.addItem(sl_btn_h_spacer, 0, 2)
         custom_stimulus_layout.addWidget(load_wav_btn, 0, 3)
         custom_stimulus_layout.addWidget(save_wav_btn, 1, 3)
+        custom_stimulus_layout.setContentsMargins(0, 0, 10, 0)
 
         output_layout = QHBoxLayout()
         amplitude_group_box = self.create_amplitude_group_box()
@@ -113,6 +115,7 @@ class StimulusWindow(QDialog):
         layout.addLayout(output_layout)
         layout.addItem(v_spacer_3)
         layout.addLayout(function_btn_layout)
+        layout.setContentsMargins(25, 10, 25, 20)
 
         self.box_checked_enable_list = [load_config_btn, save_config_btn, stimulus_type_group_box,
                                         self.frequency_group_box, time_group_box, self.step_group_box]
@@ -120,8 +123,14 @@ class StimulusWindow(QDialog):
 
         self.setLayout(layout)
 
+        self.setStyleSheet(ui_style_const.qcombobox_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qspinbox_stytle +
+                           ui_style_const.qdoublespinbox_stytle)
+
     def create_stimulus_type_group_box(self):
         stimulus_type_group_box = QGroupBox("激励信号类型")
+        stimulus_type_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
         self.stimulus_method_combo_box.addItems(["啁啾", "步进", "噪音"])
         stimulus_item = self.STIMULUS_DICT.get("啁啾")
         self.stimulus_type_combo_box.addItems(stimulus_item.get("sub_list"))
@@ -130,67 +139,78 @@ class StimulusWindow(QDialog):
         stimulus_type_layout = QHBoxLayout()
         stimulus_type_layout.addWidget(self.stimulus_method_combo_box)
         stimulus_type_layout.addWidget(self.stimulus_type_combo_box)
+        stimulus_type_layout.setContentsMargins(10, 10, 10, 10)
+        stimulus_type_layout.setSpacing(20)
         stimulus_type_group_box.setLayout(stimulus_type_layout)
         return stimulus_type_group_box
 
     def create_frequency_group_box(self):
         frequency_group_box = QGroupBox("频率范围 (10 - 24000Hz)")
-        start_freq_label = QLabel("起始频率")
+        frequency_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
+        start_freq_label = QLabel("起始频率：")
+        self.start_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
         self.start_freq_box.setValue(2000)
         self.start_freq_box.editingFinished.connect(self.stimulus_changed)
-        stop_freq_label = QLabel("截止频率")
+        stop_freq_label = QLabel("截止频率：")
+        self.stop_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
         self.stop_freq_box.setValue(80)
         self.stop_freq_box.editingFinished.connect(self.stimulus_changed)
-        h_spacer = QSpacerItem(4, 4, QSizePolicy.Expanding, QSizePolicy.Minimum)
         frequency_layout = QHBoxLayout()
         frequency_layout.addWidget(start_freq_label)
         frequency_layout.addWidget(self.start_freq_box)
-        frequency_layout.addItem(h_spacer)
         frequency_layout.addWidget(stop_freq_label)
         frequency_layout.addWidget(self.stop_freq_box)
         frequency_group_box.setLayout(frequency_layout)
+        frequency_layout.setContentsMargins(10, 10, 10, 10)
+        frequency_layout.setSpacing(20)
         return frequency_group_box
 
     def create_time_group_box(self):
         time_group_box = QGroupBox()
-        total_time_label = QLabel("信号时长(s)")
+        time_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
+        total_time_label = QLabel("信号时长：")
+        self.total_time_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)
         self.total_time_box.setRange(0, 60)
         self.total_time_box.setValue(3)
         self.total_time_box.editingFinished.connect(self.stimulus_changed)
-        repeat_label = QLabel("信号重复")
+        repeat_label = QLabel("信号重复：")
+        self.repeat_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.repeat_box.setRange(1, 10)
         self.repeat_box.setSuffix(" 次")
-        self.repeat_box.editingFinished.connect(self.stimulus_changed)
-        h_spacer = QSpacerItem(4, 4, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.repeat_box.valueChanged.connect(self.stimulus_changed)
         time_layout = QHBoxLayout()
         time_layout.addWidget(total_time_label)
         time_layout.addWidget(self.total_time_box)
-        time_layout.addItem(h_spacer)
         time_layout.addWidget(repeat_label)
         time_layout.addWidget(self.repeat_box)
+        time_layout.setContentsMargins(10, 10, 10, 10)
+        time_layout.setSpacing(20)
         time_group_box.setLayout(time_layout)
         return time_group_box
 
     def create_step_group_box(self):
         step_group_box = QGroupBox()
+        step_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
         step_label = QLabel("步进数量")
-        self.step_box.setFixedSize(100, 20)
+        self.step_box.setFixedSize(100, 23)
         self.step_box.setRange(1, 100)
         self.step_box.editingFinished.connect(self.stimulus_changed)
         step_layout = QHBoxLayout()
         step_layout.addWidget(step_label)
         step_layout.addWidget(self.step_box)
+        step_layout.setContentsMargins(10, 10, 10, 10)
         step_group_box.setLayout(step_layout)
         return step_group_box
 
     def create_amplitude_group_box(self):
         amplitude_group_box = QGroupBox("信号幅值")
+        amplitude_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
         self.amplitude_combo_box.addItems(["RMS", "Peak"])
         self.amplitude_combo_box.currentTextChanged.connect(self.stimulus_changed)
         self.amplitude_spin_box.setSuffix(" V")
@@ -198,34 +218,43 @@ class StimulusWindow(QDialog):
         self.amplitude_spin_box.setSingleStep(0.1)
         self.amplitude_spin_box.setMaximum(2)
         self.amplitude_spin_box.editingFinished.connect(self.stimulus_changed)
+
         amplitude_layout = QHBoxLayout()
         amplitude_layout.addWidget(self.amplitude_combo_box)
         amplitude_layout.addWidget(self.amplitude_spin_box)
+        amplitude_layout.setContentsMargins(10, 10, 6, 10)
         amplitude_group_box.setLayout(amplitude_layout)
+
         return amplitude_group_box
 
     def create_sample_rate_group_box(self):
         sample_rate_group_box = QGroupBox("采样率")
+        sample_rate_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
         self.sample_rate_combo_box.addItems(["44100", "48000"])
         self.sample_rate_combo_box.currentTextChanged.connect(self.stimulus_changed)
         sample_rate_layout = QHBoxLayout()
         sample_rate_layout.addWidget(self.sample_rate_combo_box)
+        sample_rate_layout.setContentsMargins(10, 10, 10, 10)
         sample_rate_group_box.setLayout(sample_rate_layout)
         return sample_rate_group_box
 
     def create_function_btn_layout(self):
         function_btn_layout = QHBoxLayout()
-        play_btn = QPushButton("试播")
+        play_btn = QPushButton(" 试  播 ")
+        play_btn.setStyleSheet("padding: 3px")
         play_btn.clicked.connect(self.play_btn_clicked)
-        ok_btn = QPushButton("确认")
+        ok_btn = QPushButton(" 确  认 ")
+        ok_btn.setStyleSheet("padding: 3px")
         ok_btn.clicked.connect(self.ok_btn_clicked)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(" 取  消 ")
+        cancel_btn.setStyleSheet("padding: 3px")
         cancel_btn.clicked.connect(self.cancel_btn_clicked)
         function_btn_h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         function_btn_layout.addWidget(play_btn)
         function_btn_layout.addItem(function_btn_h_spacer)
         function_btn_layout.addWidget(ok_btn)
         function_btn_layout.addWidget(cancel_btn)
+        function_btn_layout.setSpacing(20)
         return function_btn_layout
 
     def change_custom_chk_box(self, custom_box_checked):
@@ -433,12 +462,10 @@ class LoadStimulusConfig(QDialog):
         list_view.clicked.connect(self.on_select_item)
 
         btn_layout = QHBoxLayout()
-        space_item = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         ok_btn = QPushButton("确认")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
-        btn_layout.addItem(space_item)
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
 
