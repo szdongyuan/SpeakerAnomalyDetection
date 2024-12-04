@@ -1,8 +1,9 @@
 import hashlib
 import sys
 
-from PyQt5.QtGui import QFont, QIcon
 from getmac import get_mac_address
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QMessageBox, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QPushButton, QComboBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
@@ -12,8 +13,10 @@ from base.log_manager import LogManager
 from consts import model_consts, error_code, ui_style_const
 
 
+ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
+
+
 class LoginWindow(QDialog):
-    ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
 
     def __init__(self, access_lvl=None):
         super().__init__()
@@ -26,11 +29,20 @@ class LoginWindow(QDialog):
     def init_ui(self):
         self.setWindowTitle("登录")
         self.setGeometry(100, 100, 300, 200)
-        self.setMaximumSize(600, 400)
-        self.setMinimumSize(300, 200)
+        self.setMaximumSize(600, 600)
+        self.setMinimumSize(300, 400)
         self.setWindowIcon(QIcon("./ui_pic/DT_ico.ico"))
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setAutoFillBackground(True)
 
-        layout = QVBoxLayout()
+        label_background_layout = QHBoxLayout()
+        self.label_background_image = QLabel(self)
+        self.label_background_image.setFixedHeight(200)
+        self.label_background_image.setScaledContents(True)
+        label_background_layout.addWidget(self.label_background_image)
+        label_background_layout.setAlignment(Qt.AlignCenter | Qt.AlignTop)
+
+        self.login_layout = QVBoxLayout()
 
         self.access_layout = QHBoxLayout()
         self.label_access = QLabel("权 限：")
@@ -73,11 +85,18 @@ class LoginWindow(QDialog):
         h_spacer_login_ii = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         button_layout.addItem(h_spacer_login_ii)
 
-        layout.addLayout(self.access_layout)
-        layout.addLayout(user_layout)
-        layout.addLayout(pwd_layout)
-        layout.addLayout(button_layout)
-        layout.setContentsMargins(30, 20, 30, 5)
+        self.login_layout.addLayout(self.access_layout)
+        self.login_layout.addLayout(user_layout)
+        self.login_layout.addLayout(pwd_layout)
+        self.login_layout.addLayout(button_layout)
+        self.login_layout.setAlignment(Qt.AlignCenter)
+        self.login_layout.setSpacing(15)
+        self.login_layout.setContentsMargins(30, 0, 30, 5)
+
+        layout = QVBoxLayout()
+        layout.addLayout(label_background_layout)
+        layout.addLayout(self.login_layout)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.setLayout(layout)
 
@@ -115,7 +134,7 @@ class LoginWindow(QDialog):
     def check_credentials(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        self.access_lvl = self.ACCESS_LVL_DICT[self.access_selection.currentText()]
+        self.access_lvl = ACCESS_LVL_DICT[self.access_selection.currentText()]
 
         enc_pwd = encrypt_password(username, password)
         user_info = self.get_user_info_from_db(username)
@@ -127,7 +146,16 @@ class LoginWindow(QDialog):
             return False
 
     def resizeEvent(self, event):
-        new_Dialog_font = QFont("SimSun", int(9 * (event.size().height() / 200)))
+        new_Dialog_font = QFont()
+        space_size = 15
+
+        if event.size().width() / (event.size().height() / 2 ) > 1.5:
+            new_Dialog_font = QFont("SimSun", int(9 * (event.size().height() / 400)))
+            space_size = int(15 / 400 * event.size().height())
+        else:
+            new_Dialog_font = QFont("SimSun", int(9 * (event.size().width() / 300)))
+            space_size = int(15 / 300 * event.size().width())
+
         self.label_access.setFont(new_Dialog_font)
         self.access_selection.setFont(new_Dialog_font)
         self.label_user.setFont(new_Dialog_font)
@@ -137,7 +165,39 @@ class LoginWindow(QDialog):
         self.password_input.setFont(new_Dialog_font)
         self.change_pwd_botton.setFont(new_Dialog_font)
         self.login_button.setFont(new_Dialog_font)
-        self.access_layout.setContentsMargins(0, 0, int(self.add_account_botton.sizeHint().width()) + 6, 0)
+
+        self.access_layout.setContentsMargins(0,
+                                              0,
+                                              int(self.add_account_botton.sizeHint().width()) + space_size,
+                                              0)
+
+        self.login_layout.setSpacing(space_size)
+
+        original_pixmap = QPixmap("./ui_pic/ui_login_icon.png")
+        scaled_pixmap = original_pixmap.scaledToHeight(200, Qt.SmoothTransformation)
+        pixmap = QPixmap(event.size().width(), 200)
+        pixmap.fill(Qt.white)
+
+        painter = QPainter(pixmap)
+        painter.drawPixmap((event.size().width() - scaled_pixmap.width()) // 2, 0, scaled_pixmap)
+        painter.end()
+
+        painter.begin(pixmap)
+        red_width = int((event.size().width() - 300) / 2)
+        painter.setBrush(QColor(174, 171, 162))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(0, 0, red_width, 200)
+        painter.drawRect(event.size().width() - red_width, 0, red_width, 200)
+        painter.end()
+
+        self.label_background_image.setPixmap(pixmap)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
 
     @staticmethod
     def get_user_info_from_db(user_name):
@@ -227,7 +287,7 @@ class AddAccountWindow(QDialog):
     def add_user_click(self):
         username = self.username_input.text()
         password = self.password_input.text()
-        access_lvl = self.ACCESS_LVL_DICT[self.access_selection.currentText()]
+        access_lvl = ACCESS_LVL_DICT[self.access_selection.currentText()]
         if not password:
             self.info.setText("添加账号失败")
         else:
@@ -250,8 +310,9 @@ class AddAccountWindow(QDialog):
                                                       ["user_id"])
                 if not result:
                     insert_code, msg = database.insert_data_into_db("users_table",
-                                                                    model_consts.USERS_COLUMNS,
-                                                                    [(username, password, access_lvl)])
+                                                                      model_consts.USERS_COLUMNS,
+                                                                      [(username, password, access_lvl)])
+
                     if insert_code == error_code.OK:
                         self.logger.info(f"Successful to create user {username}.")
                         return True
@@ -367,8 +428,8 @@ def encrypt_password(user_name, password):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # window = LoginWindow()
+    window = LoginWindow()
     # window = ChangePwdWindow('admin', LogManager.set_log_handler("core"))
-    window = AddAccountWindow('admin')
+    # window = AddAccountWindow(LogManager.set_log_handler("core"))
     window.show()
     sys.exit(app.exec_())
