@@ -1,7 +1,7 @@
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPainter
 from PyQt5.QtGui import QPixmap, QColor, QFont
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QWizard, QWizardPage
 from PyQt5.QtWidgets import QListView, QAbstractItemView
@@ -124,6 +124,13 @@ class HardwareWindow(QDialog):
         self.exec()
         return self.speaker, self.mic
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
+
 
 class DeviceListWindow(QDialog):
 
@@ -190,6 +197,13 @@ class DeviceListWindow(QDialog):
         self.exec()
         return self.selected_device
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
+
 
 class CalibrationWizard(QWizard):
 
@@ -244,6 +258,13 @@ class CalibrationWizard(QWizard):
 
     def on_exec(self):
         self.exec()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
 
 
 if __name__ == "__main__":

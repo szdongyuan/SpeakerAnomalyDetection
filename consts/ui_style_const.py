@@ -2,6 +2,7 @@ qpushbutton_stytle = """
             QPushButton {
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
+                font-size: 11pt;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -19,6 +20,7 @@ qpushbutton_stytle = """
 qlineedit_stytle = """
             QLineEdit {
                 border: 1px solid rgb(122, 122, 122);
+                font-size: 11pt;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -28,6 +30,7 @@ qcombobox_stytle = """
             QComboBox {
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
+                font-size: 11pt;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -36,6 +39,7 @@ qcombobox_stytle = """
 qgroupbox_stytle = """
             QGroupBox {
                 background: transparent;
+                font-size: 11pt;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -49,6 +53,7 @@ qspinbox_stytle = """
             QSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
+                font-size: 11pt;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -64,6 +69,7 @@ qdoublespinbox_stytle = """
             QDoubleSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
+                font-size: 11pt;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -82,7 +88,8 @@ qdialog_stytle = """
 """
 
 qlabel_stytle = """
-            Qlabel {
+            QLabel {
                 background-corlor: rgb(174, 171, 162);
+                font-size: 11pt;
             }
 """
