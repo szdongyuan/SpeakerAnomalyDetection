@@ -1,9 +1,9 @@
 import hashlib
 import sys
 
+from getmac import get_mac_address
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
-from getmac import get_mac_address
 from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QMessageBox, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QPushButton, QComboBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
@@ -17,8 +17,6 @@ ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "
 
 
 class LoginWindow(QDialog):
-
-  
 
     def __init__(self, access_lvl=None):
         super().__init__()

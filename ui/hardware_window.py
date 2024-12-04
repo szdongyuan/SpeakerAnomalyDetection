@@ -10,8 +10,9 @@ from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QGro
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
 from PyQt5.QtWidgets import QPushButton
 import soundcard as sc
-from ui.calibaration_window import CalibrationWindow
+
 from consts import ui_style_const
+from ui.calibaration_window import CalibrationWindow
 
 
 class HardwareWindow(QDialog):
@@ -109,8 +110,8 @@ class HardwareWindow(QDialog):
             self.mic_label.setText("设  备：   %s" % self.mic.name)
             self.mic_channel_label.setText("通道数： %s" % self.mic.channels)
 
-    def calibrate_speaker_btn_clicked(self):
-        # Todo: calibrate speaker btn clicked
+    @staticmethod
+    def calibrate_speaker_btn_clicked():
         dlg = CalibrationWizard()
         dlg.on_exec()
         dlg2 = CalibrationWindow()
