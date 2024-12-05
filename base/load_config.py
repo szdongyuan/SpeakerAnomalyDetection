@@ -1,9 +1,7 @@
 import yaml
 
-from consts.model_consts import CONFIG_PATH
 
-
-def load_config(module_name=None):
+def load_config(config_path, module_name=None):
     """
         Load configuration from a YAML file. Optionally, retrieve specific module configuration.
 
@@ -18,7 +16,7 @@ def load_config(module_name=None):
     """
 
     result = {}
-    with open(CONFIG_PATH, encoding='utf-8') as f:
+    with open(config_path, encoding='utf-8') as f:
         config = yaml.safe_load(f.read())
         if module_name:
             for module_config in config:
