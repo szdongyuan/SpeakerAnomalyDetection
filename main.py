@@ -1,4 +1,4 @@
-import argparse
+# import argparse
 import json
 import os
 import time
@@ -21,12 +21,14 @@ DEFAULT_MODEL_PATH = "models/"
 
 def train(pre_labeled_dir,
           save_model_path=None,
-          predict_dir=None):
+          predict_dir=None,
+          **kwargs):
     logger = LogManager("train")
 
     time_0 = time.time()
 
-    data_load_config = load_config("data_load")
+    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    data_load_config = load_config(config_path=config_path, module_name="data_load")
     ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
@@ -37,12 +39,12 @@ def train(pre_labeled_dir,
     signals, file_names, fs, labels = ret
     logger.info("finish audio loading")
 
-    preprocess_config = load_config("preprocess")
+    preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_train = preprocess_raw_signals(signals, fs, preprocess_config)
     y_train = labels
     logger.info("finish data preparing, data shape %s" % str(x_train.shape))
 
-    model = init_model_from_config()
+    model = init_model_from_config(**kwargs)
     if save_model_path and os.path.isfile(save_model_path):
         logger.info("model [%s] exists, keep training" % save_model_path)
         model.load_model(save_model_path)
@@ -66,7 +68,10 @@ def train(pre_labeled_dir,
                        "result": ret_msg})
 
 
-def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
+def evaluate(predict_dir,
+             load_model_path=None,
+             model=None,
+             **kwargs):
     logger = LogManager("evaluate")
 
     ret_code, ret = get_pre_labeled_audios(predict_dir)
@@ -78,12 +83,13 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
                            "result": ret})
     signals, file_names, fs, labels = ret
 
-    preprocess_config = load_config("preprocess")
+    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_test = preprocess_raw_signals(signals, fs, preprocess_config)
     y_test = labels
 
     if load_model_path:
-        model = init_model_from_config()
+        model = init_model_from_config(**kwargs)
         model.load_model(load_model_path)
     if not model:
         logger.error("missing model")
@@ -125,7 +131,10 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
     return ret_str
 
 
-def predict(predict_dir, load_model_path=None, model=None, **kwargs):
+def predict(predict_dir,
+            load_model_path=None,
+            model=None,
+            **kwargs):
     ret_code, ret = get_audio_files_and_labels(predict_dir)
     if ret_code != error_code.OK:
         return json.dumps({"ret_code": ret_code,
@@ -134,10 +143,11 @@ def predict(predict_dir, load_model_path=None, model=None, **kwargs):
     signals, file_names, fs, _ = ret
     file_len = len(file_names)
 
-    preprocess_config = load_config("preprocess")
+    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_test = preprocess_raw_signals(signals, fs, preprocess_config)
     if load_model_path:
-        model = init_model_from_config()
+        model = init_model_from_config(**kwargs)
         model.load_model(load_model_path)
     if not model:
         return json.dumps({"ret_code": error_code.MISSING_MODEL,
@@ -161,14 +171,15 @@ def load_data_from_database():
         return error_code.INVALID_DATA_LOADING, err_msg
 
 
-def init_model_from_config():
+def init_model_from_config(**kwargs):
     """
         Initialize the model based on configuration.
 
         Returns:
             Instantiate a model class based on the configuration.
     """
-    model_config = load_config("model")
+    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    model_config = load_config(config_path=config_path, module_name="model")
     model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
     return model

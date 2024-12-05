@@ -310,8 +310,8 @@ class Frequency(QWidget):
 
 
 if __name__ == "__main__":
-    stimulus, sr = librosa.load("../base/stimulus.wav", sr=44100)
-    recorded, sr = librosa.load("../base/recording.wav", sr=44100)
+    stimulus, sr = librosa.load("../audio_data/analysis_samples/stimulus.wav", sr=44100)
+    recorded, _ = librosa.load("../audio_data/analysis_samples/recording.wav", sr=44100)
     signal_info = {"stimulus_signal": stimulus,
                    "recorded_signal": recorded,
                    "sample_rate": sr}
