@@ -223,7 +223,7 @@ class Spl(QWidget):
     def spl_box(self):
         spl_box = QGroupBox("声压级")
         spl_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        ref_pre_box_label = QLabel("参考电压:")
+        ref_pre_box_label = QLabel("参考声压:")
         ref_pre_box = QLineEdit()
         ref_pre_box.setText("20µPa")
         ref_pre_box.setAlignment(Qt.AlignCenter)
@@ -278,7 +278,7 @@ class Frequency(QWidget):
     def init_ui(self):
         frequency_response_box = self.frequency_response_box()
         self.fr_plot = pg.PlotWidget(title='Frequency Response')
-        self.fr_plot.setFixedSize(400, 300)
+        self.fr_plot.setFixedSize(400, 320)
         self.fr_plot.setBackground('white')
         layout = QVBoxLayout()
         layout.addWidget(frequency_response_box)
@@ -287,27 +287,11 @@ class Frequency(QWidget):
 
     def frequency_response_box(self):
         fr_box = QGroupBox("频响")
-        fr_box.setFixedSize(400, 100)
-        smooth_label = QLabel("平滑曲线")
-        smooth_check_box = QCheckBox()
-        smooth_check_box.stateChanged.connect(self.trigger_combo_box)
-        self.combo_box = QComboBox()
-        self.combo_box.addItem("1/3 Octave", 1 / 3)
-        self.combo_box.addItem("1/6 Octave", 1 / 6)
-        self.combo_box.addItem("1/12 Octave", 1 / 12)
-        self.combo_box.addItem("1/24 Octave", 1 / 24)
-        self.combo_box.setVisible(False)
-        smooth_layout = QHBoxLayout()
-        smooth_layout.addWidget(smooth_check_box)
-        smooth_layout.addWidget(self.combo_box)
-        h_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        fr_box.setFixedSize(400, 80)
         plt_btn = QPushButton('绘图')
         plt_btn.setFixedSize(100, 25)
         plt_btn.clicked.connect(self.calculate_fr)
         fr_box_layout = QHBoxLayout()
-        fr_box_layout.addWidget(smooth_label)
-        fr_box_layout.addLayout(smooth_layout)
-        fr_box_layout.addItem(h_spacer_1)
         fr_box_layout.addWidget(plt_btn)
         fr_box.setLayout(fr_box_layout)
         return fr_box
@@ -316,18 +300,7 @@ class Frequency(QWidget):
         stimulus_signal = self.signal_info["stimulus_signal"]
         recorded_signal = self.signal_info["recorded_signal"]
         sr = self.signal_info["sample_rate"]
-        if self.smooth_flag:
-            kwargs = {"smooth": True, "octave_width": self.combo_box.currentData()}
-        else:
-            kwargs = {"smooth": False}
-        if self.temp_frequency_list is None:
-            fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr,
-                                                                                  **kwargs)
-            self.temp_frequency_list = frequency_list
-        else:
-            frequency_list = self.temp_frequency_list
-            fr, _ = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr,
-                                                                     frequency_list=frequency_list, **kwargs)
+        fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr)
         self.plot_fr(frequency_list, fr)
         self.result = {"fr": fr.tolist(),
                        "frequency_list": frequency_list.tolist()
@@ -339,14 +312,7 @@ class Frequency(QWidget):
         self.fr_plot.plot(frequency_list, fr, pen='b')
         self.fr_plot.setLabel('left', 'Amplitude (dB)')
         self.fr_plot.setLabel('bottom', 'Frequency (Hz)')
-
-    def trigger_combo_box(self, state):
-        if state == 2:
-            self.combo_box.setVisible(True)
-            self.smooth_flag = True
-        else:
-            self.combo_box.setVisible(False)
-            self.smooth_flag = False
+        self.fr_plot.setLogMode(x=True, y=False)
 
 
 if __name__ == "__main__":
