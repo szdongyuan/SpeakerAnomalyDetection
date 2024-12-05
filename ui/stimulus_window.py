@@ -126,7 +126,8 @@ class StimulusWindow(QDialog):
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qspinbox_stytle +
-                           ui_style_const.qdoublespinbox_stytle)
+                           ui_style_const.qdoublespinbox_stytle +
+                           ui_style_const.qlabel_stytle)
 
     def create_stimulus_type_group_box(self):
         stimulus_type_group_box = QGroupBox("激励信号类型")

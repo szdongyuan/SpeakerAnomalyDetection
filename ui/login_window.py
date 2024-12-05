@@ -3,7 +3,7 @@ import sys
 
 from getmac import get_mac_address
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QMessageBox, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QPushButton, QComboBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
@@ -31,7 +31,7 @@ class LoginWindow(QDialog):
         self.setGeometry(100, 100, 300, 200)
         self.setMaximumSize(600, 600)
         self.setMinimumSize(300, 400)
-        self.setWindowIcon(QIcon("./ui_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon("./ui_pic/login_ui_pic/DT_ico.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setAutoFillBackground(True)
 
@@ -102,7 +102,8 @@ class LoginWindow(QDialog):
 
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle)
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle)
 
     def access_add_account(self):
         if self.access_selection.currentText() != "管理员":
@@ -146,25 +147,10 @@ class LoginWindow(QDialog):
             return False
 
     def resizeEvent(self, event):
-        new_Dialog_font = QFont()
-        space_size = 15
-
         if event.size().width() / (event.size().height() / 2 ) > 1.5:
-            new_Dialog_font = QFont("SimSun", int(9 * (event.size().height() / 400)))
             space_size = int(15 / 400 * event.size().height())
         else:
-            new_Dialog_font = QFont("SimSun", int(9 * (event.size().width() / 300)))
             space_size = int(15 / 300 * event.size().width())
-
-        self.label_access.setFont(new_Dialog_font)
-        self.access_selection.setFont(new_Dialog_font)
-        self.label_user.setFont(new_Dialog_font)
-        self.username_input.setFont(new_Dialog_font)
-        self.add_account_botton.setFont(new_Dialog_font)
-        self.label_pwd.setFont(new_Dialog_font)
-        self.password_input.setFont(new_Dialog_font)
-        self.change_pwd_botton.setFont(new_Dialog_font)
-        self.login_button.setFont(new_Dialog_font)
 
         self.access_layout.setContentsMargins(0,
                                               0,
@@ -173,7 +159,7 @@ class LoginWindow(QDialog):
 
         self.login_layout.setSpacing(space_size)
 
-        original_pixmap = QPixmap("./ui_pic/ui_login_icon.png")
+        original_pixmap = QPixmap("./ui_pic/login_ui_pic/ui_login_icon.png")
         scaled_pixmap = original_pixmap.scaledToHeight(200, Qt.SmoothTransformation)
         pixmap = QPixmap(event.size().width(), 200)
         pixmap.fill(Qt.white)
