@@ -37,10 +37,7 @@ class SignalAnalysisWindow(QDialog):
         save_btn = QPushButton("保存")
         save_btn.clicked.connect(self.save_btn_clicked)
 
-        cancel_btn = QPushButton("退出")
-        cancel_btn.clicked.connect(self.cancel_btn_clicked)
         base_btn_layout.addWidget(save_btn, 0, 0)
-        base_btn_layout.addWidget(cancel_btn, 0, 2)
 
         signal_analysis_layout.addWidget(self.tabwidget)
         signal_analysis_layout.addLayout(base_btn_layout)
@@ -71,9 +68,6 @@ class SignalAnalysisWindow(QDialog):
                 self.default_logger.info(f"The file was saved to {file_path}.")
             except Exception as e:
                 self.default_logger.error(f"Failed to save the file. {e}")
-
-    def cancel_btn_clicked(self):
-        self.close()
 
 
 class Distortion(QWidget):
