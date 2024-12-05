@@ -44,7 +44,6 @@ class CalibrationWindow(QDialog):
         v_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_3 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        # v_spacer_4 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         layout = QVBoxLayout()
         layout.addWidget(calibration_param_box)
@@ -54,7 +53,6 @@ class CalibrationWindow(QDialog):
         layout.addWidget(test_box)
         layout.addItem(v_spacer_3)
         layout.addLayout(btn_layout)
-        # layout.addItem(v_spacer_4)
         layout.setContentsMargins(12, 20, 12, 25)
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
