@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import signal
 
 from base.utils.plot_audio_features import PlotManager
 
@@ -80,36 +81,16 @@ class AudioThdFrequencyResponseAnalysis(object):
             freq_dict[base_freq]["harmonic_base"] = harmonics_base
         return freq_dict
 
-    def calculate_fr(self, reference_signal, recorded_signal, sr, frequency_list=None, **kwargs):
-        smooth = kwargs.get("smooth", False)
-        delay_frames = kwargs.get("delay_frames", 0)
-        octave_width = kwargs.get("octave_width", 1 / 3)
-        recorded_signal = recorded_signal[delay_frames:]
-        ch_len = len(reference_signal)
-        if frequency_list is None:
-            frequency_list = np.fft.fftfreq(ch_len, 1 / sr)[: ch_len // 2]
-        yf = np.abs(np.fft.fft(recorded_signal))[: ch_len // 2]
-        xf = np.abs(np.fft.fft(reference_signal))[: ch_len // 2]
-        fr = 20 * np.log10(yf / xf)
-        if smooth:
-            fr = self.smooth_curve(frequency_list, fr, octave_width)
-        return fr, frequency_list
-
     @staticmethod
-    def smooth_curve(frequencies, data, octave_width):
-        frequencies = np.where(frequencies == 0, 1e-10, frequencies)
-        log_freqs = np.log2(frequencies)
-        half_window = octave_width / 2
-        log_freqs_min = log_freqs - half_window
-        log_freqs_max = log_freqs + half_window
-        idx_min = np.searchsorted(log_freqs, log_freqs_min, side='left')
-        idx_max = np.searchsorted(log_freqs, log_freqs_max, side='right')
-        smoothed_data = np.zeros_like(data)
-        for i in range(0, len(frequencies)):
-            start_idx = idx_min[i]
-            end_idx = idx_max[i]
-            smoothed_data[i] = np.mean(data[start_idx:end_idx])
-        return smoothed_data
+    def calculate_fr(reference_signal, recorded_signal, sr):
+        num = sr // 10
+        frequency_list, pxx = signal.welch(reference_signal, sr, nfft=num)
+        _, pxy = signal.csd(recorded_signal, reference_signal, sr, nfft=num)
+        h = np.abs(pxy / pxx)
+        fr = 20 * np.log10(h)
+        start_idx = np.argmax(np.abs(np.fft.fft(reference_signal[:1024], num)[:num // 2]))
+        stop_freq = np.argmax(np.abs(np.fft.fft(reference_signal[-1024:], num)[:num // 2]))
+        return fr[start_idx:stop_freq], frequency_list[start_idx:stop_freq]
 
     @staticmethod
     def spl_calculation(recorded_signal, reference_pressure=20e-6):
