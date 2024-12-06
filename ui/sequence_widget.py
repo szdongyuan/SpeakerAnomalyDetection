@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QGridLayout
 
 from consts import ui_style_const
 
-widget_flag = True
 
 class SequenceWindow(QWidget):
 
@@ -25,6 +24,7 @@ class SequenceWindow(QWidget):
         self.collect_btn = QPushButton(" 采  集 ")
         self.analyse_btn = QPushButton(" 分  析 ")
         self.player_btn = QPushButton()
+        self.widget_flag = True
         self.init_ui()
 
     def init_ui(self):
@@ -99,8 +99,7 @@ class SequenceWindow(QWidget):
         return data_layout
 
     def create_collect_or_analyse_layout(self):
-        global widget_flag
-        if widget_flag:
+        if self.widget_flag:
             if self.collect_layout not in globals():
                 self.collect_layout = CollectWindow()
             self.sequence_layout.replaceWidget(self.analyse_layout, self.collect_layout)
@@ -119,19 +118,18 @@ class SequenceWindow(QWidget):
         self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
         self.analyse_layout.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.analyse_layout.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        # self.analyse_layout.analyse_btn.clicked(self.clicked_analyse_btn)
 
     def swap_analyse_widget(self):
-        global widget_flag
-        if not widget_flag:
+        if not self.widget_flag:
             return
-        widget_flag = False
+        self.widget_flag = False
         self.create_collect_or_analyse_layout()
 
     def swap_collect_widget(self):
-        global widget_flag
-        if widget_flag:
+        if self.widget_flag:
             return
-        widget_flag = True
+        self.widget_flag = True
         self.create_collect_or_analyse_layout()
 
     def clicked_ok_or_ng(self):
