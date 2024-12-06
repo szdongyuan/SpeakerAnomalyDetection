@@ -2,7 +2,6 @@ import json
 import os
 import uuid
 from datetime import datetime
-
 from keras.models import load_model
 
 from base.db_manager import DataSave
@@ -16,13 +15,17 @@ class TrainingModelManagement(object):
     def save_training_model_info_to_db(self, model_path, config_path, ret_str=None, model_description="No description"):
         try:
             with DataSave(self.db_path) as database:
-                training_model_data, _ = self.get_training_model_info_to_db(database, model_path, config_path, ret_str,
-                                                                            model_description)
-                database.insert_audio_files_info("training_model_table",
-                                                 model_consts.DB_MODEL_COLUMNS, [training_model_data])
-            return error_code.OK, "Successfully saved the training model info to the database."
+                code, training_model_info = self.get_training_model_info_to_db(database, model_path, config_path,
+                                                                               ret_str,
+                                                                               model_description)
+                if code == error_code.OK:
+                    database.insert_data_into_db("training_model_table",
+                                                 model_consts.DB_MODEL_COLUMNS, [training_model_info])
+                    return error_code.OK, "Successfully saved the training model info to the database."
+                else:
+                    return code, training_model_info
         except Exception as e:
-            err_msg = "Failed to save the training model info to the database. %s" % (str(e)[:40])
+            err_msg = "Failed to save the training model info to the database. %s" % (str(e)[:70])
             return error_code.INVALID_INSERT, err_msg
 
     def delete_model_info_from_db(self, model_name: str):
@@ -46,8 +49,18 @@ class TrainingModelManagement(object):
             return error_code.INVALID_PATH, "The config path does not exist."
         model_name = os.path.splitext(os.path.basename(model_path))[0]
         training_model = load_model(model_path)
-        input_dim = f"{training_model.input_shape[1]} x {training_model.input_shape[2]}"
-        output_dim = training_model.output_shape[1]
+        input_shape = training_model.input_shape
+        if len(input_shape) >= 3:
+            input_dim = f"{input_shape[1]} x {input_shape[2]}"
+        elif len(input_shape) == 2:
+            input_dim = f"{input_shape[1]}"
+        else:
+            input_dim = "Unknown"
+        output_shape = training_model.output_shape
+        if len(output_shape) >= 2:
+            output_dim = output_shape[1]
+        else:
+            output_dim = "Unknown"
         accuracy = float(json.loads(ret_str)["result"][0].split(':')[1]) if ret_str else None
         temp_data = (model_name, model_path, config_path, input_dim, output_dim, accuracy)
         result = database.query_matching_data([temp_data], "training_model_table", model_consts.MODEL_COLUMNS,
@@ -56,6 +69,33 @@ class TrainingModelManagement(object):
             return error_code.INVALID_INSERT, "The model info existed."
         else:
             model_id = str(uuid.uuid1())
-        update_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        training_model_data = (model_id,) + temp_data + (update_date, model_description)
-        return training_model_data, "The training model information has been obtained."
+            update_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            training_model_data = (model_id,) + temp_data + (update_date, model_description)
+            return error_code.OK, training_model_data
+
+    def get_model_path_from_db(self, model_name):
+        try:
+            with DataSave(self.db_path) as database:
+                query_code, query_result = database.query("training_model_table",
+                                                          ["model_path", "config_path"],
+                                                          {"model_name": model_name})
+
+                if query_code == error_code.OK and query_result:
+                    return error_code.OK, query_result
+                else:
+                    return error_code.INVALID_QUERY, "Failed to query the model's path."
+        except Exception as e:
+            err_msg = "Failed to query the model path. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg
+
+    def get_all_model_name_from_db(self):
+        try:
+            with DataSave(self.db_path) as database:
+                query_code, query_result = database.query("training_model_table", ["model_name"])
+                if query_code == error_code.OK and query_result:
+                    return error_code.OK, query_result
+                else:
+                    return error_code.INVALID_QUERY, "Failed to query all mdoel name."
+        except Exception as e:
+            err_msg = "Failed to query the all model name. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg
