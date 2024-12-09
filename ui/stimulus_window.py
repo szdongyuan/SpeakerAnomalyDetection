@@ -2,7 +2,7 @@ import os.path
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPainter, QColor
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QGroupBox, QListView
 from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
@@ -428,6 +428,13 @@ class StimulusWindow(QDialog):
             return True
         changed_flag = changed_flag or False
         return changed_flag
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
 
 
 class LoadStimulusConfig(QDialog):
