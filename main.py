@@ -14,6 +14,7 @@ from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
 from machine_learning import MODEL_MAPPING
 
+
 DEFAULT_DATA_PATH = "audio_data/train"
 DEFAULT_TEST_DATA = "audio_data/test"
 DEFAULT_MODEL_PATH = "models/"
@@ -55,7 +56,7 @@ def train(pre_labeled_dir,
     logger.info(ret_msg)
     logger.shut_down()
     if predict_dir:
-        ret_str = evaluate(predict_dir, model=model, verbose=1)
+        ret_str = evaluate(predict_dir, model=model, verbose=2)
     else:
         ret_str = None
 
@@ -99,7 +100,6 @@ def evaluate(predict_dir,
                            "result": "missing model"})
 
     y_pred, pred_score = model.predict(x_test)
-
     len_test = len(y_test)
     acc = np.sum(y_pred == y_test) / len_test
     acc_info = "accuracy: %s" % round(acc, 3)
@@ -108,16 +108,22 @@ def evaluate(predict_dir,
     cm_info = "Confusion Matrix: \n%s" % display_cm
 
     verbose = kwargs.get("verbose", 0)
-    if verbose >= 1:
+    false_prediction = [file_names[i] for i in range(len_test) if y_test[i] != y_pred[i]]
+    if verbose % 2:
         logger.info("number of test cases: %s" % len_test)
         logger.info(acc_info)
         logger.info(cm_info)
-        false_prediction = [file_names[i] for i in range(len_test) if y_test[i] != y_pred[i]]
         logger.info("false prediction:\n%s" % false_prediction)
-        if verbose == 2:
-            dm.display_pred_score(file_names, labels, pred_score)
-        elif verbose == 3:
-            dm.display_pred_score(file_names, labels, pred_score, to_csv=True)
+    if (verbose >> 1) % 2:
+        print("number of test cases: %s" % len_test)
+        print(acc_info)
+        print(cm_info)
+    if (verbose >> 2) % 2:
+        print("false prediction:\n%s" % false_prediction)
+    if (verbose >> 3) % 2:
+        dm.display_pred_score(file_names, labels, pred_score)
+    if (verbose >> 4) % 2:
+        dm.display_pred_score(file_names, labels, pred_score, to_csv=True)
 
     model_detail = kwargs.get("model_detail", False)
     if model_detail:
