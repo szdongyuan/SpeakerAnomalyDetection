@@ -2,13 +2,13 @@ import os
 import sys
 
 from PyQt5.QtCore import Qt, QEventLoop, QTimer, QThread, pyqtSignal
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QTextCursor, QIcon, QPainter, QColor
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QApplication, QComboBox, QVBoxLayout, QMessageBox, \
-    QGridLayout, QLineEdit, QFileDialog
+    QGridLayout, QLineEdit, QFileDialog, QFrame, QSplitter
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QTextEdit, QWidget, QPushButton
 
 from base.training_model_management import TrainingModelManagement
-from consts import error_code
+from consts import error_code, ui_style_const
 from main import train, evaluate, init_model_from_config
 
 
@@ -45,52 +45,75 @@ class AiWindow(QDialog):
         self.setWindowTitle("AI训练窗口")
         # self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         # self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qcombobox_stytle)
+        ai_layout = QGridLayout()
 
         base_model_wdiget = BaseModel()
-        layout = QHBoxLayout()
-        layout.addWidget(base_model_wdiget)
+        base_model_layout = QHBoxLayout()
+        base_model_layout.addWidget(base_model_wdiget)
 
         self.process = QTextEdit(self, readOnly=True)
         self.process.ensureCursorVisible()
         self.process.setLineWrapColumnOrWidth(800)
         self.process.setLineWrapMode(QTextEdit.FixedPixelWidth)
-        self.process.setFixedWidth(800)
-        self.process.setFixedHeight(600)
+        self.process.setMinimumSize(800, 600)
 
         train_group_box = QGroupBox("训练")
         train_btn_layout = QGridLayout()
-        train_dir_btn = QPushButton("训练数据路径")
-        train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
+        train_dir_label = QLabel("训练数据路径：")
+        # train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
         self.train_dir_box = QLineEdit()
+        train_dir_icon = QIcon("./ui_pic/ai_window_pic/folder-s.png")
+        train_dir_action = self.train_dir_box.addAction(train_dir_icon, QLineEdit.TrailingPosition)
+        train_dir_action.setToolTip("添加训练数据")
+        train_dir_action.triggered.connect(self.train_dir_btn_clicked)
         self.train_dir_box.setText(self.train_dir)
         self.train_btn = QPushButton("开始训练")
         self.train_btn.clicked.connect(self.train_btn_clicked)
-        train_btn_layout.addWidget(train_dir_btn, 0, 0)
+        train_btn_layout.addWidget(train_dir_label, 0, 0)
         train_btn_layout.addWidget(self.train_dir_box, 0, 1)
-        train_btn_layout.addWidget(self.train_btn, 1, 0)
+        train_btn_layout.addWidget(self.train_btn, 0, 2)
+        train_btn_layout.setSpacing(20)
         train_group_box.setLayout(train_btn_layout)
 
         evaluate_group_box = QGroupBox("评估")
         evaluate_btn_layout = QGridLayout()
-        evaluate_dir_btn = QPushButton("测试数据路径")
-        evaluate_dir_btn.clicked.connect(self.evaluate_dir_btn_clicked)
+        evaluate_dir_label = QLabel("测试数据路径：")
         self.evaluate_dir_box = QLineEdit()
+        evaluate_dir_icon = QIcon("./ui_pic/ai_window_pic/folder-s.png")
+        evaluate_dir_action = self.evaluate_dir_box.addAction(evaluate_dir_icon, QLineEdit.TrailingPosition)
+        evaluate_dir_action.setToolTip("添加测试数据")
+        evaluate_dir_action.triggered.connect(self.evaluate_dir_btn_clicked)
         self.evaluate_dir_box.setText(self.test_dir)
         self.evaluate_btn = QPushButton("开始评估")
         self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
-        evaluate_btn_layout.addWidget(evaluate_dir_btn, 0, 0)
+        evaluate_btn_layout.addWidget(evaluate_dir_label, 0, 0)
         evaluate_btn_layout.addWidget(self.evaluate_dir_box, 0, 1)
-        evaluate_btn_layout.addWidget(self.evaluate_btn, 1, 0)
+        evaluate_btn_layout.addWidget(self.evaluate_btn, 0, 2)
+        evaluate_btn_layout.setSpacing(20)
         evaluate_group_box.setLayout(evaluate_btn_layout)
 
         btn_function_layout = QVBoxLayout()
         btn_function_layout.addWidget(train_group_box)
         btn_function_layout.addWidget(evaluate_group_box)
+        btn_function_layout.addWidget(self.process)
 
-        layout.addWidget(self.process)
-        layout.addLayout(btn_function_layout)
+        splitter = QSplitter(Qt.Horizontal)
+        base_model_frame = QFrame()
+        base_model_frame.setLayout(base_model_layout)
+        base_model_layout.setContentsMargins(0,0,0,0)
+        btn_function_frame = QFrame()
+        btn_function_frame.setLayout(btn_function_layout)
+        splitter.addWidget(base_model_frame)
+        splitter.addWidget(btn_function_frame)
+        splitter.setStyleSheet("background-color: rgb(174, 171, 162, 123)")
+        ai_layout.addWidget(splitter)
 
-        self.setLayout(layout)
+        self.setLayout(ai_layout)
 
     def train_dir_btn_clicked(self):
         path = QFileDialog.getExistingDirectory(self,
@@ -148,6 +171,13 @@ class AiWindow(QDialog):
         sys.stdout = sys.__stdout__
         super().closeEvent(event)
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
+
     @staticmethod
     def load_model_path_from_config():
         file_path = "ui_config/model_path.txt"
@@ -186,7 +216,7 @@ class BaseModel(QWidget):
 
     def create_model_layout(self):
         base_model_box = QGroupBox("模型")
-        base_model_box.setFixedSize(500, 500)
+        base_model_box.setMinimumSize(500, 500)
         base_model_label = QLabel("基础模型:")
         self.base_model_combo_box = QComboBox(self)
         for model_name in self.load_model:
@@ -194,8 +224,8 @@ class BaseModel(QWidget):
         self.base_model_combo_box.currentIndexChanged.connect(self.combobox_clicked)
         new_model_btn = QPushButton("新建模型")
         self.text_edit = QTextEdit(self)
-        self.text_edit.setFixedSize(450, 400)
-        self.text_edit.setVisible(False)
+        self.text_edit.setMinimumSize(450, 400)
+        self.text_edit.setVisible(True)
         self.text_edit.setReadOnly(True)
         self.text_edit.setAlignment(Qt.AlignCenter)
         v_space_1 = QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding)
@@ -208,16 +238,17 @@ class BaseModel(QWidget):
 
         base_model_layout = QVBoxLayout()
         base_model_layout.addLayout(base_model_combo_layout)
-        base_model_layout.addItem(v_space_1)
+        # base_model_layout.addItem(v_space_1)
         base_model_layout.addWidget(self.text_edit)
-        base_model_layout.addItem(v_space_2)
+        # base_model_layout.addItem(v_space_2)
+        base_model_layout.setSpacing(20)
         base_model_box.setLayout(base_model_layout)
         return base_model_box
 
     def combobox_clicked(self):
         selected_model = self.base_model_combo_box.currentText()
         if selected_model:
-            self.text_edit.setVisible(True)
+            # self.text_edit.setVisible(True)
             model = self.load_model_structure(selected_model)
             self.save_model_path_to_config()
             if model is not None:
