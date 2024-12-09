@@ -1,30 +1,152 @@
 import os
 import sys
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QApplication, QComboBox, QVBoxLayout, QMessageBox
+from PyQt5.QtCore import Qt, QEventLoop, QTimer, QThread, pyqtSignal
+from PyQt5.QtGui import QTextCursor
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QApplication, QComboBox, QVBoxLayout, QMessageBox, \
+    QGridLayout, QLineEdit, QFileDialog
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QTextEdit, QWidget, QPushButton
 
 from base.training_model_management import TrainingModelManagement
 from consts import error_code
-from main import init_model_from_config
+from main import train, evaluate, init_model_from_config
 
 
 class AiWindow(QDialog):
 
     def __init__(self):
         super().__init__()
+        self.train_dir = self.load_default_train_test_path("train")
+        self.test_dir = self.load_default_train_test_path("evaluate")
         self.model_path = self.load_model_path_from_config()
+
         self.init_ui()
+        self.th = TrainEvaluateThread(train_dir=self.train_dir,
+                                      test_dir=self.test_dir,
+                                      model_path=self.model_path,
+                                      mode="train")
+        self.th.signalForText.connect(self.on_update_text)
+        sys.stdout = self.th
+
+    def on_update_text(self, text):
+        cursor = self.process.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        if text == "\r":
+            cursor.insertText("66666")
+            # cursor.movePosition(QTextCursor.StartOfLine)
+            # cursor.movePosition(QTextCursor.PreviousRow)
+            # cursor.movePosition(QTextCursor.StartOfLine)
+        else:
+            cursor.insertText(text)
+        self.process.setTextCursor(cursor)
+        self.process.ensureCursorVisible()
 
     def init_ui(self):
-        self.setWindowTitle("AI分析窗口")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowTitle("AI训练窗口")
+        # self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        # self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+
         base_model_wdiget = BaseModel()
         layout = QHBoxLayout()
         layout.addWidget(base_model_wdiget)
+
+        self.process = QTextEdit(self, readOnly=True)
+        self.process.ensureCursorVisible()
+        self.process.setLineWrapColumnOrWidth(800)
+        self.process.setLineWrapMode(QTextEdit.FixedPixelWidth)
+        self.process.setFixedWidth(800)
+        self.process.setFixedHeight(600)
+
+        train_group_box = QGroupBox("训练")
+        train_btn_layout = QGridLayout()
+        train_dir_btn = QPushButton("训练数据路径")
+        train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
+        self.train_dir_box = QLineEdit()
+        self.train_dir_box.setText(self.train_dir)
+        self.train_btn = QPushButton("开始训练")
+        self.train_btn.clicked.connect(self.train_btn_clicked)
+        train_btn_layout.addWidget(train_dir_btn, 0, 0)
+        train_btn_layout.addWidget(self.train_dir_box, 0, 1)
+        train_btn_layout.addWidget(self.train_btn, 1, 0)
+        train_group_box.setLayout(train_btn_layout)
+
+        evaluate_group_box = QGroupBox("评估")
+        evaluate_btn_layout = QGridLayout()
+        evaluate_dir_btn = QPushButton("测试数据路径")
+        evaluate_dir_btn.clicked.connect(self.evaluate_dir_btn_clicked)
+        self.evaluate_dir_box = QLineEdit()
+        self.evaluate_dir_box.setText(self.test_dir)
+        self.evaluate_btn = QPushButton("开始评估")
+        self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
+        evaluate_btn_layout.addWidget(evaluate_dir_btn, 0, 0)
+        evaluate_btn_layout.addWidget(self.evaluate_dir_box, 0, 1)
+        evaluate_btn_layout.addWidget(self.evaluate_btn, 1, 0)
+        evaluate_group_box.setLayout(evaluate_btn_layout)
+
+        btn_function_layout = QVBoxLayout()
+        btn_function_layout.addWidget(train_group_box)
+        btn_function_layout.addWidget(evaluate_group_box)
+
+        layout.addWidget(self.process)
+        layout.addLayout(btn_function_layout)
+
         self.setLayout(layout)
+
+    def train_dir_btn_clicked(self):
+        path = QFileDialog.getExistingDirectory(self,
+                                                "选择训练数据目录",
+                                                "../audio_data",
+                                                options=QFileDialog.DontUseNativeDialog)
+        if path:
+            self.train_dir = path
+            self.save_default_train_test_path(path, "train")
+            self.train_dir_box.setText(path)
+
+    def evaluate_dir_btn_clicked(self):
+        path = QFileDialog.getExistingDirectory(self,
+                                                "选择评估数据目录",
+                                                "../audio_data",
+                                                options=QFileDialog.DontUseNativeDialog)
+        if path:
+            self.test_dir = path
+            self.save_default_train_test_path(path, "evaluate")
+            self.evaluate_dir_box.setText(path)
+
+    def train_btn_clicked(self):
+        print("start training model...")
+        try:
+            self.t = TrainEvaluateThread(train_dir=self.train_dir,
+                                         test_dir=self.test_dir,
+                                         model_path=self.model_path,
+                                         mode="train")
+            self.t.start()
+        except Exception as e:
+            raise e
+
+        loop = QEventLoop()
+        QTimer.singleShot(2000, loop.quit)
+        loop.exec_()
+
+    def evaluate_btn_clicked(self):
+        print("start evaluating model...")
+        try:
+            self.t = TrainEvaluateThread(train_dir=self.train_dir,
+                                         test_dir=self.test_dir,
+                                         model_path=self.model_path,
+                                         mode="evaluate")
+            self.t.start()
+        except Exception as e:
+            raise e
+
+        loop = QEventLoop()
+        QTimer.singleShot(2000, loop.quit)
+        loop.exec_()
+
+    def closeEvent(self, event):
+        """Shuts down application on close."""
+        # Return stdout to defaults.
+        sys.stdout = sys.__stdout__
+        super().closeEvent(event)
 
     @staticmethod
     def load_model_path_from_config():
@@ -32,6 +154,21 @@ class AiWindow(QDialog):
         with open(file_path, 'r') as f:
             model_path = f.read()
         return model_path
+
+    @staticmethod
+    def save_default_train_test_path(path, mode="train"):
+        file_path = "ui_config/%s_data_path.txt" % mode
+        with open(file_path, 'w') as f:
+            f.write(path)
+
+    @staticmethod
+    def load_default_train_test_path(mode="train"):
+        path_file = "ui_config/%s_data_path.txt" % mode
+        if not os.path.exists(path_file):
+            return ""
+        with open(path_file, 'r') as f:
+            path = f.read()
+        return path
 
 
 class BaseModel(QWidget):
@@ -122,12 +259,37 @@ class BaseModel(QWidget):
             f.write(self.model_path)
 
 
+class TrainEvaluateThread(QThread):
+
+    signalForText = pyqtSignal(str)
+
+    def __init__(self, data=None, parent=None,
+                 train_dir=None, test_dir=None, model_path=None, mode="train"):
+        super().__init__(parent)
+        self.data = data
+        self.train_dir = train_dir
+        self.test_dir = test_dir
+        self.model_path = model_path
+        self.mode = mode
+
+    def write(self, text):
+        self.signalForText.emit(str(text))  # 发射信号
+
+    def flush(self):
+        self.signalForText.emit("\r")
+
+    def run(self):
+        try:
+            if self.mode == "train":
+                train(self.train_dir, self.model_path, self.test_dir)
+            elif self.mode == "evaluate":
+                evaluate(self.test_dir, self.model_path, verbose=7)
+        except Exception as e:
+            print(e)
+
+
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = AiWindow()
     window.show()
     window.exec()
-
-
-
-
