@@ -94,3 +94,19 @@ qlabel_stytle = """
                 font-size: 11pt;
             }
 """
+
+sequence_qlabel_stytle = """
+            QLabel {
+                "background-color: #4472c4; color: white;"
+            }
+"""
+
+sequence_qpushbutton_stytle = """
+            QPushButton {
+                background-color: #4472c4;
+                color: white;
+            }
+            QPushButton:hover {
+               border-color: #803333ff;
+            }
+"""

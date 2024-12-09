@@ -162,28 +162,24 @@ class LoginWindow(QDialog):
         original_pixmap = QPixmap("./ui_pic/login_ui_pic/ui_login_icon.png")
         scaled_pixmap = original_pixmap.scaledToHeight(200, Qt.SmoothTransformation)
         pixmap = QPixmap(event.size().width(), 200)
-        pixmap.fill(Qt.white)
+        pixmap.fill(QColor(174, 171, 162))
 
         painter = QPainter(pixmap)
         painter.drawPixmap((event.size().width() - scaled_pixmap.width()) // 2, 0, scaled_pixmap)
-        painter.end()
-
-        painter.begin(pixmap)
-        red_width = int((event.size().width() - 300) / 2)
-        painter.setBrush(QColor(174, 171, 162))
-        painter.setPen(Qt.NoPen)
-        painter.drawRect(0, 0, red_width, 200)
-        painter.drawRect(event.size().width() - red_width, 0, red_width, 200)
         painter.end()
 
         self.label_background_image.setPixmap(pixmap)
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setBrush(QColor(174, 171, 162, 123))
+        width = self.width()
+        height = self.height()
         painter.setPen(Qt.NoPen)
-        painter.drawRect(self.rect())
-        super().paintEvent(event)
+        painter.setBrush(QColor(174, 171, 162))
+        painter.drawRect(0, 0, width, 200)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.drawRect(0, 200, width, height - 200)
+        painter.end()
 
     @staticmethod
     def get_user_info_from_db(user_name):

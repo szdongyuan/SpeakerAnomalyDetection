@@ -3,7 +3,7 @@ import time
 from binascii import a2b_qp
 
 from PyQt5.QtCore import QSize, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPainter, QColor
 from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QGridLayout, QApplication, QSpacerItem, \
     QSizePolicy, QHBoxLayout, QVBoxLayout
 
@@ -38,7 +38,7 @@ class SequenceWindow(QWidget):
         self.sequence_layout.setAlignment(Qt.AlignCenter)
 
         self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
-
+        self.sequence_layout.setContentsMargins(25, 20, 25, 20)
         self.setLayout(self.sequence_layout)
 
         self.setStyleSheet(ui_style_const.qlabel_stytle +
@@ -50,8 +50,8 @@ class SequenceWindow(QWidget):
         h_spacer_btn_center = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         h_spacer_btn_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_btn_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;")
-        self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.collect_btn.setStyleSheet(ui_style_const.sequence_qlabel_stytle)
+        self.analyse_btn.setStyleSheet(ui_style_const.sequence_qlabel_stytle)
         self.collect_btn.clicked.connect(self.swap_collect_widget)
         self.analyse_btn.clicked.connect(self.swap_analyse_widget)
         button_layout.addItem(h_spacer_btn_left)
@@ -156,6 +156,13 @@ class SequenceWindow(QWidget):
             self.player_btn.setIconSize(QSize(40, 40))
         self.player_btn.setDisabled(False)
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        super().paintEvent(event)
+
 
 class CollectWindow(QWidget):
 
@@ -165,7 +172,7 @@ class CollectWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.next_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.next_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
 
         layout = QHBoxLayout()
         line_widget = QWidget()
@@ -178,7 +185,7 @@ class CollectWindow(QWidget):
         self.next_btn.setMinimumHeight(100)
         layout.addWidget(line_widget)
         layout.addWidget(self.next_btn)
-
+        layout.setSpacing(20)
         self.setLayout(layout)
 
 
@@ -188,8 +195,8 @@ class AnalyseWindow(QWidget):
         super().__init__()
         self.analyse_btn = QPushButton(" 分 析 ")
         self.ai_analyse_score_lineedit = QLineEdit()
-        self.ok_btn = QPushButton(" OK ")
-        self.ng_btn = QPushButton(" NG ")
+        self.ok_btn = QPushButton("OK")
+        self.ng_btn = QPushButton("NG")
         self.init_ui()
 
     def init_ui(self):
@@ -199,14 +206,15 @@ class AnalyseWindow(QWidget):
         signal_analyse_widget.setFixedSize(210, 200)
         ai_analyse_widget = QWidget()
         ai_analyse_layout = self.create_ai_analyse_widget()
-        # ai_analyse_widget.setFixedSize(210, 200)
         ai_analyse_widget.setLayout(ai_analyse_layout)
 
         btn_layout = QVBoxLayout()
         self.ok_btn.setIcon(QIcon("./ui_pic/sequence_pic/lvseyuan.png"))
-        self.ok_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
+        self.ok_btn.setMinimumSize(70, 35)
         self.ng_btn.setIcon(QIcon("./ui_pic/sequence_pic/hongseyuan.png"))
-        self.ng_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
+        self.ng_btn.setMinimumSize(70, 35)
         self.ok_btn.setMaximumWidth(100)
         self.ng_btn.setMaximumWidth(100)
         btn_layout.addWidget(self.ok_btn)
@@ -215,6 +223,7 @@ class AnalyseWindow(QWidget):
         layout.addWidget(signal_analyse_widget)
         layout.addWidget(ai_analyse_widget)
         layout.addLayout(btn_layout)
+        layout.setSpacing(20)
         self.setLayout(layout)
 
     def create_ai_analyse_widget(self):
@@ -229,14 +238,14 @@ class AnalyseWindow(QWidget):
 
         model_layout = QHBoxLayout()
         model_label = QLabel("模型")
-        model_label.setStyleSheet("background-color: #4472c4; color: white;")
+        model_label.setStyleSheet(ui_style_const.sequence_qlabel_stytle)
         model_lineedit = QLineEdit("/model/001.keras")
         model_lineedit.setAlignment(Qt.AlignCenter)
         model_layout.addWidget(model_label)
         model_layout.addWidget(model_lineedit)
 
         analyse_btn_layout =QHBoxLayout()
-        self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.analyse_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
         h_analyse_btn_space_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_analyse_btn_space_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         analyse_btn_layout.addItem(h_analyse_btn_space_left)
