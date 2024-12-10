@@ -19,8 +19,8 @@ class HardwareWindow(QDialog):
 
     def __init__(self):
         super().__init__()
-        self.speaker = sc.default_speaker()
-        self.mic = sc.default_microphone()
+        self.speaker = get_default_device("speaker")
+        self.mic = get_default_device("mic")
 
         self.init_ui()
 
@@ -265,6 +265,13 @@ class CalibrationWizard(QWizard):
         painter.setPen(Qt.NoPen)
         painter.drawRect(self.rect())
         super().paintEvent(event)
+
+
+def get_default_device(device):
+    if device == "mic":
+        return sc.default_microphone()
+    elif device == "speaker":
+        return sc.default_speaker()
 
 
 if __name__ == "__main__":
