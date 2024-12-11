@@ -45,11 +45,6 @@ class AiWindow(QDialog):
         self.setWindowTitle("AI训练窗口")
         # self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         # self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qcombobox_stytle)
         ai_layout = QGridLayout()
 
         base_model_wdiget = BaseModel()
@@ -72,7 +67,8 @@ class AiWindow(QDialog):
         train_dir_action.setToolTip("添加训练数据")
         train_dir_action.triggered.connect(self.train_dir_btn_clicked)
         self.train_dir_box.setText(self.train_dir)
-        self.train_btn = QPushButton("开始训练")
+        self.train_btn = QPushButton(" 开始训练 ")
+        self.train_btn.setStyleSheet("padding: 5px")
         self.train_btn.clicked.connect(self.train_btn_clicked)
         train_btn_layout.addWidget(train_dir_label, 0, 0)
         train_btn_layout.addWidget(self.train_dir_box, 0, 1)
@@ -89,7 +85,8 @@ class AiWindow(QDialog):
         evaluate_dir_action.setToolTip("添加测试数据")
         evaluate_dir_action.triggered.connect(self.evaluate_dir_btn_clicked)
         self.evaluate_dir_box.setText(self.test_dir)
-        self.evaluate_btn = QPushButton("开始评估")
+        self.evaluate_btn = QPushButton(" 开始评估 ")
+        self.evaluate_btn.setStyleSheet("padding: 5px")
         self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
         evaluate_btn_layout.addWidget(evaluate_dir_label, 0, 0)
         evaluate_btn_layout.addWidget(self.evaluate_dir_box, 0, 1)
@@ -110,10 +107,15 @@ class AiWindow(QDialog):
         btn_function_frame.setLayout(btn_function_layout)
         splitter.addWidget(base_model_frame)
         splitter.addWidget(btn_function_frame)
-        splitter.setStyleSheet("background-color: rgb(174, 171, 162, 123)")
+        splitter.setHandleWidth(0)
         ai_layout.addWidget(splitter)
 
         self.setLayout(ai_layout)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qcombobox_stytle)
 
     def train_dir_btn_clicked(self):
         path = QFileDialog.getExistingDirectory(self,
@@ -222,7 +224,8 @@ class BaseModel(QWidget):
         for model_name in self.load_model:
             self.base_model_combo_box.addItem(model_name)
         self.base_model_combo_box.currentIndexChanged.connect(self.combobox_clicked)
-        new_model_btn = QPushButton("新建模型")
+        new_model_btn = QPushButton(" 新建模型 ")
+        new_model_btn.setStyleSheet("padding: 5px")
         self.text_edit = QTextEdit(self)
         self.text_edit.setMinimumSize(450, 400)
         self.text_edit.setVisible(True)

@@ -28,7 +28,6 @@ class LoginWindow(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("登录")
-        # self.setGeometry(100, 100, 300, 200)
         self.setMaximumSize(600, 600)
         self.setMinimumSize(300, 400)
         self.setWindowIcon(QIcon("./ui_pic/login_ui_pic/DT_ico.ico"))
@@ -199,7 +198,7 @@ class LoginWindow(QDialog):
 
     def on_exec(self):
         self.exec()
-        return (self.access_lvl, self.username_input.text()) if self.pwd_checked else None
+        return (self.access_lvl, self.username_input.text()) if self.pwd_checked else (None, None)
 
 
 class AddAccountWindow(QDialog):
