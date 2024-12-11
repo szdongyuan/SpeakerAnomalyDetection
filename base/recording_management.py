@@ -41,9 +41,7 @@ class RecordingManager(object):
         try:
             with DataSave(self.db_path) as database:
                 stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
-                print(stimulus_data)
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
-                print(audio_data)
                 database.insert_data_into_db('audio_data_table',
                                              model_consts.DB_AUDIO_COLUMNS, [audio_data])
                 if flag:

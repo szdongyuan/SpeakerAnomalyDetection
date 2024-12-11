@@ -3,7 +3,7 @@ import sys
 import threading
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QPainter, QFont
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QPushButton, QVBoxLayout, QGridLayout
 from PyQt5.QtWidgets import QApplication, QSpacerItem, QSizePolicy, QDoubleSpinBox, QMessageBox
 
@@ -23,6 +23,7 @@ class CalibrationWindow(QDialog):
         self.calibration_param = {"calibration_nums": 5}
         self.current_count = 1
         self.countdown = 10
+        self.speaker = None
         self.play_flag = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_countdown)
@@ -205,7 +206,8 @@ class CalibrationWindow(QDialog):
                                          f"<span style='color: red;'>{self.countdown} </span>"
                                          f"<span style='color: black;'>s</span>")
             self.timer.start(1000)
-            threading.Thread(target=SoundcardAudioProcessor().speaker_worker, args=(stimulus_dict,)).start()
+            threading.Thread(target=SoundcardAudioProcessor().speaker_worker,
+                             args=(stimulus_dict, self.speaker)).start()
         else:
             self.play_flag = False
             self.timer.stop()
