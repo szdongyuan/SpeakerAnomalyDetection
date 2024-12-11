@@ -18,8 +18,8 @@ class UsersManagement(object):
                     return error_code.INVALID_USER_REGISTER_INFO, "This user name already exists."
                 user_info = tuple(register_user_info[key] for key in model_consts.DB_USERS_COLUMNS
                                   if key in register_user_info)
-                insert_code, msg = database.insert_audio_files_info("users_table",
-                                                                    model_consts.USERS_COLUMNS, [user_info])
+                insert_code, msg = database.insert_data_into_db("users_table",
+                                                                model_consts.USERS_COLUMNS, [user_info])
                 return insert_code, msg
         except Exception as e:
             err_msg = "Failed to create user. %s" % (str(e)[:40])
@@ -54,9 +54,9 @@ class UsersManagement(object):
         update_data = {"access_level": access_level}
         try:
             with DataSave(self.db_path) as database:
-                update_code, msg = database.update_audio_files_info("users_table", update_data,
-                                                                    {"user_name": user_name},
-                                                                    update_time=True)
+                update_code, msg = database.update_table_data("users_table", update_data,
+                                                              {"user_name": user_name},
+                                                              update_time=True)
                 if update_code != error_code.OK:
                     return update_code, msg
                 return error_code.OK, "Access level reset succeeded."
@@ -72,8 +72,8 @@ class UsersManagement(object):
                 if not result:
                     return error_code.INVALID_RESET, "The information of the user is not found."
                 new_password_data = {"password": new_password}
-                update_code, msg = database.update_audio_files_info("users_table", new_password_data,
-                                                 {"user_name": user_name}, update_time=True)
+                update_code, msg = database.update_table_data("users_table", new_password_data,
+                                                              {"user_name": user_name}, update_time=True)
                 if update_code != error_code.OK:
                     return update_code, msg
                 return error_code.OK, "Password reset succeeded."

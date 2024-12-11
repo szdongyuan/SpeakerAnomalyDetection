@@ -1,8 +1,9 @@
 import os.path
 import sys
 
+import soundcard
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPainter, QColor
+from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QGroupBox, QListView
 from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
@@ -38,6 +39,7 @@ class StimulusWindow(QDialog):
         super().__init__()
         self.stimulus_info = {"name": "stimulus_chirps_1", "use_custom_stimulus": True}
         self.stimulus_signal = None
+        self.speaker = None
         self.stimulus_signal_time = None
         self.refresh_stimulus_info = False
         self.default_logger = LogManager.set_log_handler("core")
@@ -381,7 +383,7 @@ class StimulusWindow(QDialog):
         stimulus_param = {"data": self.stimulus_signal,
                           "amplitude": self.stimulus_info["amplitude"],
                           "sr": self.stimulus_info["sample_rate"]}
-        play_code, msg = SoundcardAudioProcessor().speaker_worker(stimulus_param)
+        play_code, msg = SoundcardAudioProcessor().speaker_worker(stimulus_param, self.speaker)
         if play_code != error_code.OK:
             self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 
@@ -424,7 +426,7 @@ class StimulusWindow(QDialog):
         self.exec()
         if self.refresh_stimulus_info:
             return self.stimulus_info, self.stimulus_signal
-        return {}, self.stimulus_signal
+        return {}, None
 
     def update_stimulus_info(self, dict_key, v, changed_flag=False):
         if self.stimulus_info.get(dict_key) != v:
@@ -432,13 +434,6 @@ class StimulusWindow(QDialog):
             return True
         changed_flag = changed_flag or False
         return changed_flag
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setBrush(QColor(174, 171, 162, 123))
-        painter.setPen(Qt.NoPen)
-        painter.drawRect(self.rect())
-        super().paintEvent(event)
 
 
 class LoadStimulusConfig(QDialog):
@@ -527,6 +522,7 @@ class LoadStimulusConfig(QDialog):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = StimulusWindow()
+    window.speaker = soundcard.default_speaker()
     # window = LoadStimulusConfig()
     window.show()
     result = window.on_exec()
