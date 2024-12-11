@@ -110,3 +110,17 @@ sequence_qpushbutton_stytle = """
                border-color: #803333ff;
             }
 """
+
+main_window_menubar_stytle = """
+            QMenuBar {
+                font-size: 11pt;
+            }
+            QMenu {
+                font-size: 11pt;
+            }
+            QMenu::item {
+                font-size: 11pt;
+                padding-left: 30px;
+                padding-right: 10px;
+            }
+"""

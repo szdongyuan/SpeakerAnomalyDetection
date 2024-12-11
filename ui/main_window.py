@@ -1,10 +1,12 @@
 import sys
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QAction
+from PyQt5.QtWidgets import QApplication, QMainWindow, QAction, QLabel, QSizePolicy, QSpacerItem, QHBoxLayout, \
+    QStatusBar, QWidget
 
 from base.log_manager import LogManager
+from consts import ui_style_const
 from ui.calibaration_window import CalibrationWindow
-from ui.hardware_window import HardwareWindow, get_default_device
+from ui.hardware_window import HardwareWindow, get_default_device, DeviceListWindow
 from ui.login_window import LoginWindow, AddAccountWindow, ChangePwdWindow
 from ui.ai_window import AiWindow
 from ui.stimulus_window import StimulusWindow
@@ -52,9 +54,11 @@ class MainWindow(QMainWindow):
         self.showMaximized()
 
         self.on_login_window_init()
+        self.statusbar_layout()
 
     def init_menu(self):
         menu_bar = self.menuBar()
+        self.setStyleSheet(ui_style_const.main_window_menubar_stytle)
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
@@ -88,6 +92,29 @@ class MainWindow(QMainWindow):
         if stimulus is not None:
             self.stimulus_info = stimulus_info
             self.stimulus = stimulus
+
+    def statusbar_layout(self):
+        statusbar_widget = QWidget()
+        statusbar_widget.setFixedWidth(self.width())
+        self.user_label = QLabel()
+        self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
+        self.device_label = QLabel()
+        self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
+        h_spacer = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        statusbar_layout = QHBoxLayout()
+        statusbar_layout.addWidget(self.user_label)
+        statusbar_layout.addItem(h_spacer)
+        statusbar_layout.addWidget(self.device_label)
+        statusbar_widget.setLayout(statusbar_layout)
+
+        statusbar = QStatusBar()
+        statusbar.addWidget(statusbar_widget)
+        self.setStatusBar(statusbar)
+
+    def update_statusbar(self):
+        self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
+        self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
 
     @staticmethod
     def on_ai_window_init():
@@ -124,6 +151,7 @@ class MainWindow(QMainWindow):
     def on_hardware_window_init(self):
         dlg = HardwareWindow()
         self.speaker, self.mic = dlg.on_exec()
+        self.update_statusbar()
         print(self.speaker, self.mic)
 
     @staticmethod

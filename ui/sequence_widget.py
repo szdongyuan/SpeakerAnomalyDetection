@@ -1,6 +1,5 @@
 import sys
 import time
-from binascii import a2b_qp
 
 from PyQt5.QtCore import QSize, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor
@@ -118,7 +117,6 @@ class SequenceWindow(QWidget):
         self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
         self.analyse_layout.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.analyse_layout.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        # self.analyse_layout.analyse_btn.clicked(self.clicked_analyse_btn)
 
     def swap_analyse_widget(self):
         if not self.widget_flag:
