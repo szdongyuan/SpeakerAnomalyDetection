@@ -32,14 +32,13 @@ class MainWindow(QMainWindow):
         self.user_action_switch_account = QAction("切换用户", self)
         self.user_action_add_account = QAction("添加用户", self)
         self.user_action_change_pwd = QAction("修改密码", self)
-        self.widget_list_operator = [self.user_action_switch_account]
+        self.widget_list_operator = [self.user_action_change_pwd]
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_stimulus,
             self.function_action_test_sequence,
             self.function_action_ai_training,
             self.hardware_action_selection,
             self.hardware_action_calibration,
-            self.user_action_change_pwd,
         ]
         self.widget_list_admin = self.widget_list_engineer + [self.user_action_add_account]
 
@@ -51,10 +50,8 @@ class MainWindow(QMainWindow):
 
         self.on_access_lvl_changed()
         self.show()
-        self.showMaximized()
 
         self.on_login_window_init()
-        self.statusbar_layout()
 
     def init_menu(self):
         menu_bar = self.menuBar()
@@ -93,9 +90,9 @@ class MainWindow(QMainWindow):
             self.stimulus_info = stimulus_info
             self.stimulus = stimulus
 
-    def statusbar_layout(self):
+    def show_statusbar_layout(self):
         statusbar_widget = QWidget()
-        statusbar_widget.setFixedWidth(self.width())
+        statusbar_widget.setMinimumWidth(self.width())
         self.user_label = QLabel()
         self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
         self.device_label = QLabel()
@@ -111,6 +108,7 @@ class MainWindow(QMainWindow):
         statusbar = QStatusBar()
         statusbar.addWidget(statusbar_widget)
         self.setStatusBar(statusbar)
+        self.setStyleSheet(ui_style_const.qlabel_stytle)
 
     def update_statusbar(self):
         self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
@@ -131,9 +129,17 @@ class MainWindow(QMainWindow):
             widget.setEnabled(True)
 
     def on_login_window_init(self):
+        self.login_falgs = True
         dlg = LoginWindow()
-        self.access_lvl, self.user_name = dlg.on_exec()
+        access_lvl, user_name = dlg.on_exec()
+        if access_lvl is not None:
+            self.access_lvl, self.user_name = access_lvl, user_name
         self.on_access_lvl_changed()
+        if self.login_falgs:
+            self.login_falgs = False
+            self.show_statusbar_layout()
+        else:
+            self.update_statusbar()
         print(self.access_lvl)
 
     @staticmethod
