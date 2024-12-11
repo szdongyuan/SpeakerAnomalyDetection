@@ -41,12 +41,14 @@ class RecordingManager(object):
         try:
             with DataSave(self.db_path) as database:
                 stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
+                print(stimulus_data)
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
-                database.insert_audio_files_info('audio_data_table',
-                                                 model_consts.DB_AUDIO_COLUMNS, [audio_data])
+                print(audio_data)
+                database.insert_data_into_db('audio_data_table',
+                                             model_consts.DB_AUDIO_COLUMNS, [audio_data])
                 if flag:
-                    database.insert_audio_files_info('stimulus_signal_table',
-                                                     model_consts.DB_STIMULUS_COLUMNS, stimulus_data)
+                    database.insert_data_into_db('stimulus_signal_table',
+                                                 model_consts.DB_STIMULUS_COLUMNS, stimulus_data)
                     return error_code.OK, "Successfully saved the recording and stimulus signals to the database."
                 else:
                     return error_code.OK, "Successfully saved the recording signals to the database."
@@ -59,6 +61,8 @@ class RecordingManager(object):
         flag = False
         stimulus_data = tuple(
             stimulus_parameter[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_parameter)
+        is_default = database.set_default("stimulus_signal_table")
+        stimulus_data += (is_default,)
         result = database.query_matching_data([stimulus_data], "stimulus_signal_table",
                                               model_consts.STIMULUS_COLUMNS, model_consts.DB_STIMULUS_COLUMNS)
         if result:
@@ -95,7 +99,7 @@ class RecordingManager(object):
             update_data = {"file_path": new_path}
             condition_field = {"file_path": file_path}
             with DataSave(self.db_path) as database:
-                database.update_audio_files_info("audio_data_table", update_data, condition_field)
+                database.update_table_data("audio_data_table", update_data, condition_field)
             return error_code.OK, "The rename operation successful and the database information updated."
         except Exception as e:
             err_msg = "The rename operation failed. %s" % (str(e)[:40])
@@ -115,7 +119,7 @@ class RecordingManager(object):
                 "old_data": {"file_path": file_path},
             }
             with DataSave(self.db_path) as database:
-                database.update_audio_files_info("audio_data_table", update_data)
+                database.update_table_data("audio_data_table", update_data)
             return error_code.OK, f"The move operation succeeded."
         except Exception as e:
             err_msg = "The move operation failed. %s" % (str(e)[:40])

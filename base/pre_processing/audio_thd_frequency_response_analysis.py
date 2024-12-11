@@ -39,7 +39,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         harmonics_list = kwargs.get("harmonics", list(range(1, 6)))
         freq = self.get_harmonic(recorded_signal, freq_dict, sr, harmonics_list, gap_len, delay_frames)
         n_harmonics = len(harmonics_list)
-        for i in range(int(base_freq_list[0]), gap_len * (len(freq) + 1), gap_len):
+        for i in range(int(min(base_freq_list)), gap_len * (len(freq) + 1), gap_len):
             plot_x.append(i)
             harmonic = freq[i]["harmonic"]
             f = freq[i]["harmonic_base"]
@@ -88,9 +88,12 @@ class AudioThdFrequencyResponseAnalysis(object):
         _, pxy = signal.csd(recorded_signal, reference_signal, sr, nfft=num)
         h = np.abs(pxy / pxx)
         fr = 20 * np.log10(h)
-        start_idx = np.argmax(np.abs(np.fft.fft(reference_signal[:1024], num)[:num // 2]))
-        stop_freq = np.argmax(np.abs(np.fft.fft(reference_signal[-1024:], num)[:num // 2]))
-        return fr[start_idx:stop_freq], frequency_list[start_idx:stop_freq]
+        idx_1 = np.argmax(np.abs(np.fft.fft(reference_signal[:1024], num)[:num // 2]))
+        mid_slice = len(reference_signal) // 2
+        idx_2 = np.argmax(np.abs(np.fft.fft(reference_signal[mid_slice - 511: mid_slice + 513], num)[:num // 2]))
+        idx_3 = np.argmax(np.abs(np.fft.fft(reference_signal[-1024:], num)[:num // 2]))
+        start_idx, stop_idx = min([idx_1, idx_2, idx_3]), max([idx_1, idx_2, idx_3])
+        return fr[start_idx:stop_idx], frequency_list[start_idx:stop_idx]
 
     @staticmethod
     def spl_calculation(recorded_signal, reference_pressure=20e-6):
