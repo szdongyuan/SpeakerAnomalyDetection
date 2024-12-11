@@ -9,6 +9,7 @@ from ui.calibaration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device, DeviceListWindow
 from ui.login_window import LoginWindow, AddAccountWindow, ChangePwdWindow
 from ui.ai_window import AiWindow
+from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
 
 
@@ -47,11 +48,20 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         self.showMaximized()
         self.init_menu()
-
+        self.init_sequence_widget()
         self.on_access_lvl_changed()
         self.show()
 
         self.on_login_window_init()
+
+    def init_sequence_widget(self):
+        self.sequence_window = SequenceWindow()
+        self.setCentralWidget(self.sequence_window)
+        self.sequence_window.stimulus_info = self.stimulus_info
+        self.sequence_window.stimulus_signal = self.stimulus
+        self.sequence_window.mic = self.mic
+        self.sequence_window.speaker = self.speaker
+
 
     def init_menu(self):
         menu_bar = self.menuBar()
@@ -85,10 +95,14 @@ class MainWindow(QMainWindow):
 
     def on_stimulus_window_init(self):
         dlg = StimulusWindow()
+        dlg.speaker = self.speaker
+
         stimulus_info, stimulus = dlg.on_exec()
         if stimulus is not None:
             self.stimulus_info = stimulus_info
             self.stimulus = stimulus
+            self.sequence_window.stimulus_signal = self.stimulus
+            self.sequence_window.stimulus_info = self.stimulus_info
 
     def show_statusbar_layout(self):
         statusbar_widget = QWidget()
@@ -140,7 +154,6 @@ class MainWindow(QMainWindow):
             self.show_statusbar_layout()
         else:
             self.update_statusbar()
-        print(self.access_lvl)
 
     @staticmethod
     def on_add_account_window_init():
@@ -148,21 +161,19 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_change_pwd_window_init(self):
-        try:
-            dlg = ChangePwdWindow(self.user_name, LogManager.set_log_handler("core"))
-            dlg.exec()
-        except Exception as e:
-            print(e)
+        dlg = ChangePwdWindow(self.user_name, LogManager.set_log_handler("core"))
+        dlg.exec()
 
     def on_hardware_window_init(self):
         dlg = HardwareWindow()
         self.speaker, self.mic = dlg.on_exec()
         self.update_statusbar()
-        print(self.speaker, self.mic)
+        self.sequence_window.mic = self.mic
+        self.sequence_window.speaker = self.speaker
 
-    @staticmethod
-    def on_calibration_window_init():
+    def on_calibration_window_init(self):
         dlg = CalibrationWindow()
+        dlg.speaker = self.speaker
         dlg.exec()
 
     def on_window_close(self):

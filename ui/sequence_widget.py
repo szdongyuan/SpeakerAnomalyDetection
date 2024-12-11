@@ -1,6 +1,5 @@
 import json
 import os
-import traceback
 import numpy as np
 import pyqtgraph as pg
 import librosa
@@ -144,16 +143,13 @@ class SequenceWindow(QWidget):
         self.analyse_layout.analyse_btn.clicked.connect(self.clicked_analyse_btn)
 
     def get_model_info(self, selected_model):
-        try:
-            query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
-            if query_code == error_code.OK:
-                model_path, config_path = query_result[0]
-                return error_code.OK, (model_path, config_path)
-            else:
-                self.default_logger.error(f"Failed to get the model {selected_model} information.")
-                return error_code.INVALID_QUERY, "Failed to get the model information."
-        except Exception as e:
-            traceback.print_exc()
+        query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
+        if query_code == error_code.OK:
+            model_path, config_path = query_result[0]
+            return error_code.OK, (model_path, config_path)
+        else:
+            self.default_logger.error(f"Failed to get the model {selected_model} information.")
+            return error_code.INVALID_QUERY, "Failed to get the model information."
 
     def swap_analyse_widget(self):
         if not self.widget_flag:
@@ -223,14 +219,11 @@ class SequenceWindow(QWidget):
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.analyse_layout.ng_btn:
             self.recorded_signal_info["labels"] = 'NG'
-        try:
-            save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
-            if save_code == error_code.OK:
-                self.default_logger.info("Recorded signal successfully insert.")
-            else:
-                self.default_logger.error("Failed insert recorded signal.")
-        except Exception as e:
-            traceback.print_exc()
+        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
+        if save_code == error_code.OK:
+            self.default_logger.info("Recorded signal successfully insert.")
+        else:
+            self.default_logger.error("Failed insert recorded signal.")
 
     def clicked_analyse_btn(self):
         selected_model = self.analyse_layout.model_combo_box.currentText()
@@ -246,22 +239,19 @@ class SequenceWindow(QWidget):
             self.analyse_layout.ai_analyse_score_lineedit.setPlainText(str(result_text))
 
     def model_predict(self, model_path, **kwargs):
-        try:
-            ret_str = predict(self.recorded_path, load_model_path=model_path, **kwargs)
-            ret_dict = json.loads(ret_str)
-            predict_result = ret_dict["result"]
-            predict_label = predict_result[0][1]
-            ok_scores = float(predict_result[0][2]) * 100
-            ng_scores = 100 - ok_scores
-            result_text = (
-                f"评分：\n"
-                f"OK Score: {ok_scores:.2f}%\n"
-                f"NG Score: {ng_scores:.2f}%\n"
-                f"评分结果: {predict_label}"
-            )
-            return result_text
-        except Exception as e:
-            traceback.print_exc()
+        ret_str = predict(self.recorded_path, load_model_path=model_path, **kwargs)
+        ret_dict = json.loads(ret_str)
+        predict_result = ret_dict["result"]
+        predict_label = predict_result[0][1]
+        ok_scores = float(predict_result[0][2]) * 100
+        ng_scores = 100 - ok_scores
+        result_text = (
+            f"评分：\n"
+            f"OK Score: {ok_scores:.2f}%\n"
+            f"NG Score: {ng_scores:.2f}%\n"
+            f"评分结果: {predict_label}"
+        )
+        return result_text
 
     def clicked_player_btn(self):
         self.player_icon_flag = True
@@ -271,20 +261,17 @@ class SequenceWindow(QWidget):
 
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
         self.recorded_path, self.recorded_signal_info = self.get_recorded_info()
-        try:
-            record_code, msg = SoundcardAudioProcessor().initialize_audio_processes(recorded_dict, stimulus_dict,
-                                                                                    self.mic,
-                                                                                    self.speaker,
-                                                                                    recording_path=self.recorded_path)
-            if record_code == error_code.OK:
-                recorded_signal, sample_rate = librosa.load(self.recorded_path, sr=sample_rate)
-                self.plot_line_graph(recorded_signal, self.collect_layout.line_graph, sample_rate)
-                self.signal_info = {"stimulus_signal": self.stimulus_signal,
-                                    "recorded_signal": recorded_signal,
-                                    "sample_rate": sample_rate}
-                self.recorded_signal_info["sample_rate"] = sample_rate
-        except Exception as e:
-            traceback.print_exc()
+        record_code, msg = SoundcardAudioProcessor().initialize_audio_processes(recorded_dict, stimulus_dict,
+                                                                                self.mic,
+                                                                                self.speaker,
+                                                                                recording_path=self.recorded_path)
+        if record_code == error_code.OK:
+            recorded_signal, sample_rate = librosa.load(self.recorded_path, sr=sample_rate)
+            self.plot_line_graph(recorded_signal, self.collect_layout.line_graph, sample_rate)
+            self.signal_info = {"stimulus_signal": self.stimulus_signal,
+                                "recorded_signal": recorded_signal,
+                                "sample_rate": sample_rate}
+            self.recorded_signal_info["sample_rate"] = sample_rate
 
     def get_recorded_info(self):
         product_model = self.lineedit_type.text()
@@ -447,15 +434,12 @@ class AnalyseWindow(QWidget):
     @staticmethod
     def load_model_name_from_db():
         model_list = []
-        try:
-            query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
-            if query_code == error_code.OK:
-                for idx, name in enumerate(query_result):
-                    query_result_idx = query_result[idx]
-                    model_list.append(query_result_idx[0])
-            return model_list
-        except Exception as e:
-            traceback.print_exc()
+        query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
+        if query_code == error_code.OK:
+            for idx, name in enumerate(query_result):
+                query_result_idx = query_result[idx]
+                model_list.append(query_result_idx[0])
+        return model_list
 
 
 if __name__ == "__main__":

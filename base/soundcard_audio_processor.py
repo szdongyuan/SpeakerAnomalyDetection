@@ -65,7 +65,6 @@ class SoundcardAudioProcessor(object):
             data = stimulus_params.get("data") * stimulus_params.get("amplitude")
             sr = stimulus_params.get("sr")
             default_speaker = speaker
-            # default_speaker = sc.default_speaker()
             default_speaker.play(data, samplerate=sr)
             return error_code.OK, "play successfully"
         except Exception as e:
@@ -92,13 +91,10 @@ class SoundcardAudioProcessor(object):
             sr = record_params.get("sr")
             channels = record_params.get("channels", 1)
             default_mic = mic
-            # default_mic = sc.default_microphone()
             recorded_data = default_mic.record(numframes=num_frames, samplerate=sr, channels=channels).T[0]
             stimulus_data = np.array(stimulus_params.get("data") * stimulus_params.get("amplitude"))
             align_frames = self.calculate_alignment(stimulus_data, recorded_data)
-            print(align_frames)
             if align_frames < record_params.get("prolong_frames"):
-                # wavfile.write(stimulus_path, sr, stimulus_data.astype("float32"))
                 aligned_data = recorded_data[align_frames: align_frames + len(stimulus_data)]
                 wavfile.write(recording_path, sr, aligned_data.astype("float32"))
                 self.logger.info("Recording and stimulus saved.")

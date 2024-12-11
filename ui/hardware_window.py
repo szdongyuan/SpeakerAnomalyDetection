@@ -110,11 +110,11 @@ class HardwareWindow(QDialog):
             self.mic_label.setText("设  备：   %s" % self.mic.name)
             self.mic_channel_label.setText("通道数： %s" % self.mic.channels)
 
-    @staticmethod
-    def calibrate_speaker_btn_clicked():
+    def calibrate_speaker_btn_clicked(self):
         dlg = CalibrationWizard()
         dlg.on_exec()
         dlg2 = CalibrationWindow()
+        dlg2.speaker = self.speaker
         dlg2.exec()
 
     def ok_btn_clicked(self):
@@ -281,4 +281,3 @@ if __name__ == "__main__":
     # window = CalibrationWizard()
     window.show()
     result = window.on_exec()
-    print("final result:", result)
