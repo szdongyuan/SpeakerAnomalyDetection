@@ -325,9 +325,7 @@ class StimulusWindow(QDialog):
             "noise": StimulusSignal().generate_noise,
         }
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
-        # self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
-        stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
-        self.stimulus_signal = stimulus_signal * self.stimulus_info['amplitude']
+        self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
 
     def save_stimulus_to_json(self, stimulus_signal_path):
         json_file_path = "ui_config/stimulus.json"
