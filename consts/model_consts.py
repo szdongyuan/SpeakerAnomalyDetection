@@ -15,6 +15,7 @@ TEST_OK_PATH = DEFAULT_DIR + "audio_data/test/OK"
 TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
 STORED_SAMPLE_PATH = DEFAULT_DIR + "audio_data/stored_sample"
 STORED_RECORDED_PATH = DEFAULT_DIR + "audio_data/stored_data"
+STORED_STIMULUS_PATH = DEFAULT_DIR + "audio_data/stimulus"
 JSON_DIR_PATH = DEFAULT_DIR + "configs/calibration_config"
 
 DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"

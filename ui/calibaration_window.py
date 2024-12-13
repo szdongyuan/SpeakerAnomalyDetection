@@ -255,7 +255,7 @@ class CalibrationWindow(QDialog):
         data, sr = StimulusSignal().generate_chirps(start_freq=800, stop_freq=800, total_time=10, sample_rate=44100,
                                                     stimulus_type='linear')
         test_stimulus_dict = {"data": data, "sr": sr, "amplitude": amplitude}
-        speaker_code, msg = SoundcardAudioProcessor().speaker_worker(test_stimulus_dict)
+        speaker_code, msg = SoundcardAudioProcessor().speaker_worker(test_stimulus_dict, self.speaker)
         if speaker_code != error_code.OK:
             self.default_logger.error(f"Failed to play the audio. {msg}")
 

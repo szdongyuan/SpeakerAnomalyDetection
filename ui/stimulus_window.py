@@ -1,7 +1,8 @@
+import json
+import numpy as np
 import os.path
-import sys
-
 import soundcard
+import sys
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QGroupBox, QListView
@@ -9,13 +10,14 @@ from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
 from PyQt5.QtWidgets import QPushButton
+from scipy.io import wavfile
 
 from base.load_audio import load_audio_simple, save_audio_simple
 from base.log_manager import LogManager
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.stimulus_signal_management import StimulusSignalManagement
-from consts import error_code, ui_style_const
+from consts import error_code, ui_style_const, model_consts
 from ui.graph_widget import QmyFigureCanvas
 
 
@@ -310,6 +312,10 @@ class StimulusWindow(QDialog):
         if self.stimulus_info.get("stimulus_type") and changed_flag:
             if self.stimulus_info.get("use_custom_stimulus"):
                 self.create_signal_from_stimulus_info()
+            stimulus_name = "_".join(str(value) for value in change_dict.values())
+            stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name
+            wavfile.write(stimulus_signal_path, self.stimulus_info["sample_rate"], self.stimulus_signal.astype("float32"))
+            self.save_stimulus_to_json(stimulus_signal_path)
             self.graph_stimulus()
 
     def create_signal_from_stimulus_info(self):
@@ -319,8 +325,21 @@ class StimulusWindow(QDialog):
             "noise": StimulusSignal().generate_noise,
         }
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
+        # self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
         stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
         self.stimulus_signal = stimulus_signal * self.stimulus_info['amplitude']
+
+    def save_stimulus_to_json(self, stimulus_signal_path):
+        json_file_path = "ui_config/stimulus.json"
+        # if isinstance(self.stimulus_signal, np.ndarray):
+        #     stimulus = self.stimulus_signal.tolist()
+        data = {
+            "stimulus_info": self.stimulus_info,
+            "stimulus_signal_path": stimulus_signal_path
+        }
+        with open(json_file_path, "w") as json_file:
+            json.dump(data, json_file, indent=3)
+            self.default_logger.info(f"stimulus saved to {json_file_path}.")
 
     def update_stimulus_ui_value(self):
         for k, v in self.STIMULUS_DICT.items():
@@ -344,6 +363,7 @@ class StimulusWindow(QDialog):
         print(self.stimulus_signal)
         # Todo: graph stimulus
 
+
     def load_config_btn_clicked(self):
         dlg = LoadStimulusConfig()
         loaded_stimulus = dlg.on_exec()
@@ -356,8 +376,6 @@ class StimulusWindow(QDialog):
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Successfully saving stimulus info to database.")
-        else:
-            self.default_logger.error(f"Failed to save stimulus info to the database. {msg}")
 
     def load_wav_btn_clicked(self):
         path, _ = QFileDialog.getOpenFileName(self,

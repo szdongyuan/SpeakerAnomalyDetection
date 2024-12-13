@@ -1,9 +1,8 @@
 import json
-import os
-import numpy as np
-import pyqtgraph as pg
 import librosa
-
+import numpy as np
+import os
+import pyqtgraph as pg
 import sys
 import soundcard
 from datetime import datetime
@@ -13,6 +12,7 @@ from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplicatio
 from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
 from getmac import get_mac_address
 
+from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
@@ -28,8 +28,8 @@ class SequenceWindow(QWidget):
         super().__init__()
         self.collect_or_analyse_layout = QHBoxLayout()
         self.collect_layout = CollectWindow()
-        self.stimulus_signal = None
-        self.stimulus_info = None
+        self.recorded_path = None
+        self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
         self.mic = None
         self.speaker = None
         self.signal_info = {}
@@ -171,6 +171,25 @@ class SequenceWindow(QWidget):
         self.player_icon_flag = False
         self.update_player_icon()
 
+    def get_stimulus_from_config(self):
+        load_code, result = self.load_stimulus_from_json()
+        if load_code == error_code.OK and result:
+            info = result["stimulus_info"]
+            stimulus_signal_path = result["stimulus_signal_path"]
+            stimulus, _ = load_audio_simple(stimulus_signal_path, stimulus_info["sample_rate"])
+            return info, stimulus
+        else:
+            return None, None
+
+    @staticmethod
+    def load_stimulus_from_json():
+        json_file_path = "ui_config/stimulus.json"
+        if not os.path.exists(json_file_path):
+            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
+        with open(json_file_path, 'r') as json_file:
+            data = json.load(json_file)
+            return error_code.OK, data
+
     def save_recorded_num_to_text(self):
         dir_path = 'ui_config'
         file_path = os.path.join(dir_path, "recorded_number.txt")
@@ -191,15 +210,16 @@ class SequenceWindow(QWidget):
     @staticmethod
     def load_recorded_num_from_text():
         file_path = "ui_config/recorded_number.txt"
-        try:
-            if not os.path.exists(file_path):
-                return None
-            with open(file_path, 'r') as f:
-                lines = f.readlines()
-                recorded_count = lines[1].strip()
-                return recorded_count
-        except Exception as e:
+        if not os.path.exists(file_path):
             return None
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+            recorded_count = lines[1].strip()
+            last_datetime = lines[3].strip()
+            if last_datetime == datetime.now().strftime("%Y-%m-%d"):
+                return recorded_count
+            else:
+                return None
 
     @staticmethod
     def check_datetime(file_path, current_time):
@@ -234,7 +254,8 @@ class SequenceWindow(QWidget):
                 (model_path, config_path) = result
                 kwargs = {"config_path": config_path}
                 result_text = self.model_predict(model_path, **kwargs)
-                self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
+                if result_text is not None:
+                    self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
         else:
             self.analyse_layout.ai_analyse_score_lineedit.setPlainText(str(result_text))
 
