@@ -329,8 +329,6 @@ class StimulusWindow(QDialog):
 
     def save_stimulus_to_json(self, stimulus_signal_path):
         json_file_path = "ui_config/stimulus.json"
-        # if isinstance(self.stimulus_signal, np.ndarray):
-        #     stimulus = self.stimulus_signal.tolist()
         data = {
             "stimulus_info": self.stimulus_info,
             "stimulus_signal_path": stimulus_signal_path
