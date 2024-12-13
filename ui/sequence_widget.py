@@ -175,8 +175,8 @@ class SequenceWindow(QWidget):
         load_code, result = self.load_stimulus_from_json()
         if load_code == error_code.OK and result:
             info = result["stimulus_info"]
-            stimulus_signal_path = result["stimulus_signal_path"]
-            stimulus, _ = load_audio_simple(stimulus_signal_path, stimulus_info["sample_rate"])
+            path = result["stimulus_signal_path"]
+            stimulus, _ = load_audio_simple(path, info["sample_rate"])
             return info, stimulus
         else:
             return None, None
