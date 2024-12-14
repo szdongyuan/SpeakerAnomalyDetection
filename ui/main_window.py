@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QAction, QLabel, QSizePol
 from base.log_manager import LogManager
 from consts import ui_style_const
 from ui.calibaration_window import CalibrationWindow
-from ui.hardware_window import HardwareWindow, get_default_device, DeviceListWindow
+from ui.hardware_window import HardwareWindow, get_default_device
 from ui.login_window import LoginWindow, AddAccountWindow, ChangePwdWindow
 from ui.ai_window import AiWindow
 from ui.sequence_widget import SequenceWindow
@@ -19,8 +19,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.user_name = None
         self.access_lvl = None
-        self.stimulus = None
-        self.stimulus_info = None
         self.mic = get_default_device("mic")
         self.speaker = get_default_device("speaker")
 
@@ -57,11 +55,8 @@ class MainWindow(QMainWindow):
     def init_sequence_widget(self):
         self.sequence_window = SequenceWindow()
         self.setCentralWidget(self.sequence_window)
-        self.sequence_window.stimulus_info = self.stimulus_info
-        self.sequence_window.stimulus_signal = self.stimulus
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
-
 
     def init_menu(self):
         menu_bar = self.menuBar()
@@ -96,13 +91,7 @@ class MainWindow(QMainWindow):
     def on_stimulus_window_init(self):
         dlg = StimulusWindow()
         dlg.speaker = self.speaker
-
-        stimulus_info, stimulus = dlg.on_exec()
-        if stimulus is not None:
-            self.stimulus_info = stimulus_info
-            self.stimulus = stimulus
-            self.sequence_window.stimulus_signal = self.stimulus
-            self.sequence_window.stimulus_info = self.stimulus_info
+        dlg.on_exec()
 
     def show_statusbar_layout(self):
         statusbar_widget = QWidget()
