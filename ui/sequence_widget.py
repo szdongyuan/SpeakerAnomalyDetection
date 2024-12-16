@@ -8,7 +8,7 @@ import soundcard
 from datetime import datetime
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem
+from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem, QDialog
 from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
 from getmac import get_mac_address
 
@@ -45,9 +45,12 @@ class SequenceWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
-
+        self.setMinimumHeight(700)
         button_layout = self.create_title_btn_layout()
         layout_data = self.create_data_layout()
+        self.collect_btn.setFixedSize(100, 50)
+        self.analyse_btn.setFixedSize(100, 50)
+        self.collect_layout.next_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
 
         self.sequence_layout.addLayout(button_layout)
         self.sequence_layout.addLayout(layout_data)
@@ -58,17 +61,21 @@ class SequenceWindow(QWidget):
 
         self.setLayout(self.sequence_layout)
 
+        self.collect_layout.next_btn.setDisabled(True)
+        self.analyse_btn.setDisabled(True)
+
         self.setStyleSheet(ui_style_const.qlabel_stytle +
                            ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle)
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qcombobox_stytle)
 
     def create_title_btn_layout(self):
         button_layout = QHBoxLayout()
-        h_spacer_btn_center = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        h_spacer_btn_center = QSpacerItem(150, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         h_spacer_btn_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_btn_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;")
-        self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
+        self.analyse_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
         self.collect_btn.clicked.connect(self.swap_collect_widget)
         self.analyse_btn.clicked.connect(self.swap_analyse_widget)
         button_layout.addItem(h_spacer_btn_left)
@@ -76,67 +83,75 @@ class SequenceWindow(QWidget):
         button_layout.addItem(h_spacer_btn_center)
         button_layout.addWidget(self.analyse_btn)
         button_layout.addItem(h_spacer_btn_right)
+        button_layout.setContentsMargins(0, 40, 0, 30)
 
         return button_layout
 
     def create_data_layout(self):
         label_type = QLabel(" 型 号 ")
-        label_type.setStyleSheet("background-color: #4472c4; color: white;border: 1px solid rgb(173, 173, 173);")
-        label_type.setFixedHeight(25)
+        label_type.setStyleSheet("background-color: #4472c4; color: white;border: 1px solid rgb(173, 173, 173);"
+                                 "font-size: 17pt;")
+        label_type.setFixedHeight(40)
         self.lineedit_type = QLineEdit("S004-1")
+        self.lineedit_type.setFixedHeight(40)
+        self.lineedit_type.setStyleSheet("font-size: 17pt;")
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         label_s_or_n = QLabel("  S/N  ")
-        label_s_or_n.setStyleSheet("background-color: #4472c4; color: white;border: 1px solid rgb(173, 173, 173);")
-        label_s_or_n.setFixedHeight(25)
+        label_s_or_n.setStyleSheet("background-color: #4472c4; color: white; border: 1px solid rgb(173, 173, 173);"
+                                   "font-size: 17pt;")
+        label_s_or_n.setFixedHeight(40)
 
         result = self.load_recorded_num_from_text()
         if result is None:
             current_recorded_count = 1
         else:
             current_recorded_count = result
-        self.label_s_or_n_count = QLabel(str(current_recorded_count))
-        self.label_s_or_n_count.setAlignment(Qt.AlignCenter)
-        self.label_s_or_n_count.setStyleSheet("background-color: white; border: None")
-        self.label_s_or_n_count.setMinimumSize(100, 12)
-        self.label_s_or_n_count.setMaximumSize(100, 21)
-        self.player_btn.setFixedSize(40, 40)
-        self.player_btn.setStyleSheet("border-radius: 20px;border: 1px solid rgb(173, 173, 173);")
+        self.lineedit_s_or_n_count = QLineEdit(str(current_recorded_count))
+        self.lineedit_s_or_n_count.setFixedHeight(40)
+        self.lineedit_s_or_n_count.setAlignment(Qt.AlignCenter)
+        self.lineedit_s_or_n_count.setDisabled(True)
+        self.lineedit_s_or_n_count.setStyleSheet("font-size: 17pt;")
+        self.player_btn.setFixedSize(70, 70)
+        self.player_btn.setStyleSheet("border-radius: 35px;border: 1px solid rgb(173, 173, 173);")
         self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/bofang.png"))
-        self.player_btn.setIconSize(QSize(40, 40))
+        self.player_btn.setIconSize(QSize(70, 70))
         self.player_btn.clicked.connect(self.clicked_player_btn)
 
-        h_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        h_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        h_spacer_3 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        h_spacer_4 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        h_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        h_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        range_spacer_1 = QSpacerItem(100, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
+        range_spacer_2 = QSpacerItem(40, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
 
         data_layout = QHBoxLayout()
-        data_layout.addWidget(label_type)
         data_layout.addItem(h_spacer_1)
+        data_layout.addWidget(label_type)
         data_layout.addWidget(self.lineedit_type)
-        data_layout.addItem(h_spacer_2)
+        data_layout.addItem(range_spacer_1)
         data_layout.addWidget(label_s_or_n)
-        data_layout.addItem(h_spacer_3)
-        data_layout.addWidget(self.label_s_or_n_count)
-        data_layout.addItem(h_spacer_4)
+        data_layout.addWidget(self.lineedit_s_or_n_count)
+        data_layout.addItem(range_spacer_2)
         data_layout.addWidget(self.player_btn)
+        data_layout.addItem(h_spacer_2)
+        data_layout.setSpacing(30)
+        data_layout.setContentsMargins(0, 10, 0, 30)
+
         return data_layout
 
     def create_collect_or_analyse_layout(self):
         if self.widget_flag:
-            self.collect_layout = CollectWindow()
+            self.collect_layout.show()
             self.sequence_layout.replaceWidget(self.analyse_layout, self.collect_layout)
-            self.analyse_layout.deleteLater()
+            self.analyse_layout.close()
             self.sequence_layout.addWidget(self.collect_layout)
-            self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
-            self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;")
+            self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
+            self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
         else:
             self.analyse_layout = AnalyseWindow(self.signal_info)
             self.sequence_layout.replaceWidget(self.collect_layout, self.analyse_layout)
-            self.collect_layout.deleteLater()
+            self.collect_layout.close()
             self.sequence_layout.addWidget(self.analyse_layout)
-            self.analyse_btn.setStyleSheet("background-color: #a9d18e; color: white;")
-            self.collect_btn.setStyleSheet("background-color: #4472c4; color: white;")
+            self.analyse_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
+            self.collect_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
         self.analyse_layout.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.analyse_layout.ng_btn.clicked.connect(self.clicked_ok_or_ng)
@@ -165,11 +180,19 @@ class SequenceWindow(QWidget):
 
     def clicked_ok_or_ng(self):
         current_recorded_count = self.save_recorded_num_to_text()
-        self.label_s_or_n_count.setText(str(current_recorded_count))
+        self.lineedit_s_or_n_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
-        self.swap_collect_widget()
         self.player_icon_flag = False
         self.update_player_icon()
+        self.collect_layout.next_btn.setDisabled(True)
+        self.analyse_btn.setDisabled(True)
+        self.analyse_layout.deleteLater()
+        self.collect_layout.line_graph.clear()
+        self.signal_info.clear()
+        self.first_analyse_layout = True
+        self.swap_collect_widget()
+        self.analyse_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
+        self.collect_layout.next_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
 
     def get_stimulus_from_config(self):
         load_code, result = self.load_stimulus_from_json()
@@ -294,12 +317,17 @@ class SequenceWindow(QWidget):
                                 "sample_rate": sample_rate}
             self.recorded_signal_info["sample_rate"] = sample_rate
 
+        self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
+        self.collect_layout.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
+        self.collect_layout.next_btn.setDisabled(False)
+        self.analyse_btn.setDisabled(False)
+
     def get_recorded_info(self):
         product_model = self.lineedit_type.text()
         recording_time = datetime.now().strftime("%Y-%m-%d")
         mac_address = get_mac_address()
         mac_address = mac_address.replace(":", "") if mac_address else None
-        product_number = "{:03}".format(int(self.label_s_or_n_count.text()))
+        product_number = "{:03}".format(int(self.lineedit_s_or_n_count.text()))
         recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number + ".wav"
         recorded_path = model_consts.STORED_RECORDED_PATH + "/" + recorded_name
         recorded_signal_info = {"file_path": recorded_path, "product_model": product_model,
@@ -331,10 +359,10 @@ class SequenceWindow(QWidget):
     def update_player_icon(self):
         if self.player_icon_flag:
             self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/chongbo.png"))
-            self.player_btn.setIconSize(QSize(25, 25))
+            self.player_btn.setIconSize(QSize(40, 40))
         else:
             self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/bofang.png"))
-            self.player_btn.setIconSize(QSize(40, 40))
+            self.player_btn.setIconSize(QSize(70, 70))
         self.player_btn.setDisabled(False)
 
 
@@ -346,21 +374,26 @@ class CollectWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.next_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 17pt;")
 
         layout = QHBoxLayout()
         line_widget = QWidget()
         line_widget.setMinimumSize(500, 300)
         line_widget.setStyleSheet("border: 1px solid rgb(173, 173, 173);")
         self.line_graph = pg.PlotWidget()
+        self.line_graph.setBackground('white')
         line_layout = QHBoxLayout()
         line_layout.addWidget(self.line_graph)
         line_widget.setLayout(line_layout)
 
+        h_spacer_1 = QSpacerItem(70, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         self.next_btn.setMaximumWidth(30)
         self.next_btn.setMinimumHeight(100)
         layout.addWidget(self.line_graph)
+        layout.addItem(h_spacer_1)
         layout.addWidget(self.next_btn)
+        self.next_btn.setFixedSize(40, 120)
+        layout.setContentsMargins(100, 20, 90, 30)
 
         self.setLayout(layout)
 
@@ -379,35 +412,44 @@ class AnalyseWindow(QWidget):
 
     def init_ui(self):
         layout = QHBoxLayout()
-        self.setStyleSheet("border: 1px solid rgb(173, 173, 173);")
-        signal_analyse_widget = QWidget()
-        signal_analyse_widget.setFixedSize(600, 500)
+        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+                           "QDialog {border: 1px solid rgb(173, 173, 173);}")
+        signal_analyse_dialog = QDialog()
+        signal_analyse_dialog.setMinimumSize(600, 390)
+        signal_analyse_dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         if self.signal_info:
-            signal_analysis_window = SignalAnalysisWindow(self.signal_info)
-            signal_analyse_layout = QVBoxLayout()
-            signal_analyse_layout.addWidget(signal_analysis_window)
-            signal_analyse_widget.setLayout(signal_analyse_layout)
-        ai_analyse_widget = QWidget()
-        ai_analyse_layout = self.create_ai_analyse_widget()
-        # ai_analyse_widget.setFixedSize(210, 200)
-        ai_analyse_widget.setLayout(ai_analyse_layout)
+            signal_analyse_dialog = SignalAnalysisWindow(self.signal_info)
+        #     signal_analyse_layout = QVBoxLayout()
+        #     signal_analyse_layout.addWidget(signal_analysis_window)
+        #     signal_analyse_dialog.setLayout(signal_analyse_layout)
+        ai_analyse_dialog = QDialog()
+        ai_analyse_layout = self.create_ai_analyse_layout()
+        ai_analyse_dialog.setLayout(ai_analyse_layout)
+        ai_analyse_dialog.setMaximumWidth(400)
 
         btn_layout = QVBoxLayout()
         self.ok_btn.setIcon(QIcon("./ui_pic/sequence_pic/lvseyuan.png"))
-        self.ok_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
+        self.ok_btn.setFixedSize(100, 40)
         self.ng_btn.setIcon(QIcon("./ui_pic/sequence_pic/hongseyuan.png"))
-        self.ng_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
+        self.ng_btn.setFixedSize(100, 40)
         self.ok_btn.setMaximumWidth(100)
         self.ng_btn.setMaximumWidth(100)
         btn_layout.addWidget(self.ok_btn)
         btn_layout.addWidget(self.ng_btn)
 
-        layout.addWidget(signal_analyse_widget)
-        layout.addWidget(ai_analyse_widget)
+        h_spacer_1 = QSpacerItem(50, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        h_spacer_2 = QSpacerItem(40, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        layout.addWidget(signal_analyse_dialog)
+        layout.addItem(h_spacer_1)
+        layout.addWidget(ai_analyse_dialog)
+        layout.addItem(h_spacer_2)
         layout.addLayout(btn_layout)
+        layout.setContentsMargins(150, 20, 130, 30)
         self.setLayout(layout)
 
-    def create_ai_analyse_widget(self):
+    def create_ai_analyse_layout(self):
         ai_analyse_layout = QVBoxLayout()
 
         ai_title_layout = QHBoxLayout()
@@ -418,16 +460,20 @@ class AnalyseWindow(QWidget):
         ai_title_layout.addItem(h_title_space)
 
         model_layout = QHBoxLayout()
-        model_label = QLabel("模型")
+        model_label = QLabel(" 模型 ")
         model_label.setStyleSheet("background-color: #4472c4; color: white;")
+        model_label.setFixedHeight(25)
         self.model_combo_box = QComboBox(self)
+        self.model_combo_box.setFixedHeight(25)
         for model_name in self.load_model_name:
             self.model_combo_box.addItem(model_name)
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo_box)
+        model_layout.setSpacing(15)
 
         analyse_btn_layout = QHBoxLayout()
         self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
+        self.analyse_btn.setFixedSize(100, 25)
         h_analyse_btn_space_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_analyse_btn_space_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         analyse_btn_layout.addItem(h_analyse_btn_space_left)
@@ -437,16 +483,20 @@ class AnalyseWindow(QWidget):
         analyse_score_layout = QHBoxLayout()
         self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_lineedit.setDisabled(True)
+        self.ai_analyse_score_lineedit.setMaximumWidth(600)
+        self.ai_analyse_score_lineedit.setStyleSheet("font-size: 17pt;")
         analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
 
-        v_ai_analyse_center_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_ai_analyse_bottom_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_ai_analyse_top_space = QSpacerItem(30, 50, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        v_ai_analyse_center_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        v_ai_analyse_bottom_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
 
         ai_analyse_layout.addLayout(ai_title_layout)
         ai_analyse_layout.addLayout(model_layout)
-        ai_analyse_layout.addItem(v_ai_analyse_center_space)
+        ai_analyse_layout.addItem(v_ai_analyse_top_space)
         ai_analyse_layout.addLayout(analyse_btn_layout)
+        ai_analyse_layout.addItem(v_ai_analyse_center_space)
         ai_analyse_layout.addLayout(analyse_score_layout)
         ai_analyse_layout.addItem(v_ai_analyse_bottom_space)
 

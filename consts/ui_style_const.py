@@ -42,10 +42,11 @@ qgroupbox_stytle = """
                 font-size: 11pt;
             }
             QGroupBox::title {
-                subcontrol-origin: margin;
+                subcontrol-origin: padding;
                 subcontrol-position: top left;
                 padding-left: 0px;
                 padding-top: 0px;
+                margin-top: 0px;
             }
         """
 
@@ -97,7 +98,7 @@ qlabel_stytle = """
 
 sequence_qlabel_stytle = """
             QLabel {
-                "background-color: #4472c4; color: white;"
+                "background-color: #4472c4; color: white;font-size: 17pt;"
             }
 """
 
@@ -105,6 +106,7 @@ sequence_qpushbutton_stytle = """
             QPushButton {
                 background-color: #4472c4;
                 color: white;
+                font-size: 20pt;
             }
             QPushButton:hover {
                border-color: #803333ff;
