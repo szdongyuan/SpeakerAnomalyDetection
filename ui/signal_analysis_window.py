@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import QSizePolicy, QTabWidget, QSpacerItem, QLineEdit
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from consts import ui_style_const
+
 
 
 class SignalAnalysisWindow(QDialog):
@@ -23,6 +25,13 @@ class SignalAnalysisWindow(QDialog):
         self.setWindowTitle("音频分析窗口")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           "QTabWidget {font-size: 11pt;}" +
+                           "QPushButton {background-color: #4472c4; color: white;}" +
+                           "QPushButton:hover {background-color: #4472c4; color: white; border-color: #803333ff;}")
         signal_analysis_layout = QVBoxLayout()
 
         self.tabwidget = QTabWidget()
@@ -32,9 +41,11 @@ class SignalAnalysisWindow(QDialog):
         self.tabwidget.addTab(spl_wnd, "声压级")
         self.tabwidget.addTab(frequency_wnd, "频响")
         self.tabwidget.addTab(distortion_wnd, "失真")
+        self.tabwidget.setStyleSheet("""QTabWidget > * {border: none;}""")
 
         base_btn_layout = QGridLayout()
-        save_btn = QPushButton("保存")
+        save_btn = QPushButton("保  存")
+        save_btn.setFixedSize(100, 25)
         save_btn.clicked.connect(self.save_btn_clicked)
 
         base_btn_layout.addWidget(save_btn, 0, 0)
@@ -83,13 +94,14 @@ class Distortion(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout()
-        harmonic_group_box = QGroupBox("Harmonics")
+        harmonic_group_box = QGroupBox("谐波")
         harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         harmonic_slider_layout = self.create_harmonic_slider_layout()
+        harmonic_slider_layout.setSpacing(10)
         harmonic_group_box.setLayout(harmonic_slider_layout)
 
         self.thd_plot = pg.PlotWidget()
-        self.thd_plot.setFixedSize(400, 300)
+        # self.thd_plot.setFixedSize(400, 300)
         self.thd_plot.setBackground('white')
 
         layout.addWidget(harmonic_group_box)
@@ -106,6 +118,8 @@ class Distortion(QWidget):
         for i in range(2, 9):
             label_text = self.get_label_text(i)
             label = QLabel(label_text)
+            label.setMinimumSize(55, 20)
+            label.setStyleSheet("border: None;")
             label.setAlignment(Qt.AlignLeft)
             label.setAutoFillBackground(True)
             label.mousePressEvent = partial(self.on_label_click, value=i, label=label)
@@ -114,10 +128,11 @@ class Distortion(QWidget):
         scroll_area.setWidget(box_container)
 
         btn_layout = QVBoxLayout()
-        plt_btn = QPushButton('绘图')
-        plt_btn.setFixedSize(100, 30)
+        plt_btn = QPushButton('绘  图')
+        plt_btn.setFixedSize(100, 25)
         plt_btn.clicked.connect(self.calculate_thd)
         btn_layout.addWidget(plt_btn)
+        btn_layout.setAlignment(Qt.AlignBottom)
         harmonic_slider_layout.addWidget(scroll_area)
         harmonic_slider_layout.addStretch()
         harmonic_slider_layout.addLayout(btn_layout)
@@ -203,10 +218,10 @@ class Spl(QWidget):
     def init_ui(self):
         spl_box = self.spl_box()
         self.waveform_plot = pg.PlotWidget(title='Waveform')
-        self.waveform_plot.setFixedSize(400, 200)
+        # self.waveform_plot.setFixedSize(400, 200)
         self.waveform_plot.setBackground('white')
         self.spl_plot = pg.PlotWidget(title='Sound Pressure Level')
-        self.spl_plot.setFixedSize(400, 200)
+        # self.spl_plot.setFixedSize(400, 200)
         self.spl_plot.setBackground('white')
         layout = QVBoxLayout()
         layout.addWidget(spl_box)
@@ -217,6 +232,8 @@ class Spl(QWidget):
     def spl_box(self):
         spl_box = QGroupBox("声压级")
         spl_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        spl_box.setStyleSheet("QLabel {border:None;}"
+                              "QLineEdit {border:None;}")
         ref_pre_box_label = QLabel("参考声压:")
         ref_pre_box = QLineEdit()
         ref_pre_box.setText("20µPa")
@@ -224,7 +241,7 @@ class Spl(QWidget):
         ref_pre_box.setReadOnly(True)
         ref_pre_box.setFixedSize(100, 20)
         h_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        plt_btn = QPushButton('绘图')
+        plt_btn = QPushButton('绘  图')
         plt_btn.setFixedSize(100, 25)
         plt_btn.clicked.connect(self.calculate_spl)
         spl_box_layout = QHBoxLayout()
@@ -272,7 +289,7 @@ class Frequency(QWidget):
     def init_ui(self):
         frequency_response_box = self.frequency_response_box()
         self.fr_plot = pg.PlotWidget(title='Frequency Response')
-        self.fr_plot.setFixedSize(400, 320)
+        # self.fr_plot.setFixedSize(400, 320)
         self.fr_plot.setBackground('white')
         layout = QVBoxLayout()
         layout.addWidget(frequency_response_box)
@@ -281,8 +298,8 @@ class Frequency(QWidget):
 
     def frequency_response_box(self):
         fr_box = QGroupBox("频响")
-        fr_box.setFixedSize(400, 80)
-        plt_btn = QPushButton('绘图')
+        # fr_box.setFixedSize(400, 80)
+        plt_btn = QPushButton('绘  图')
         plt_btn.setFixedSize(100, 25)
         plt_btn.clicked.connect(self.calculate_fr)
         fr_box_layout = QHBoxLayout()

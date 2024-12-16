@@ -1,5 +1,6 @@
 import sys
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QMainWindow, QAction, QLabel, QSizePolicy, QSpacerItem, QHBoxLayout, \
     QStatusBar, QWidget
 
@@ -44,11 +45,10 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
-        self.showMaximized()
         self.init_menu()
         self.init_sequence_widget()
         self.on_access_lvl_changed()
-        self.show()
+        self.showMaximized()
 
         self.on_login_window_init()
 
@@ -94,24 +94,20 @@ class MainWindow(QMainWindow):
         dlg.on_exec()
 
     def show_statusbar_layout(self):
-        statusbar_widget = QWidget()
-        statusbar_widget.setMinimumWidth(self.width())
-        self.user_label = QLabel()
-        self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
-        self.device_label = QLabel()
-        self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
-        h_spacer = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        user_widget = QWidget()
+        device_widget = QWidget()
 
-        statusbar_layout = QHBoxLayout()
-        statusbar_layout.addWidget(self.user_label)
-        statusbar_layout.addItem(h_spacer)
-        statusbar_layout.addWidget(self.device_label)
-        statusbar_widget.setLayout(statusbar_layout)
+        self.user_label = QLabel(user_widget)
+        self.user_label.setAlignment(Qt.AlignLeft)
+        self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
+        self.device_label = QLabel(device_widget)
+        self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
 
         statusbar = QStatusBar()
-        statusbar.addWidget(statusbar_widget)
+        statusbar.addWidget(self.user_label)
+        statusbar.addPermanentWidget(self.device_label)
         self.setStatusBar(statusbar)
-        self.setStyleSheet(ui_style_const.qlabel_stytle)
+        statusbar.setStyleSheet(ui_style_const.qlabel_stytle)
 
     def update_statusbar(self):
         self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))

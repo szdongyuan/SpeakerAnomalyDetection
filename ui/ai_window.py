@@ -80,6 +80,7 @@ class AiWindow(QDialog):
         evaluate_btn_layout = QGridLayout()
         evaluate_dir_label = QLabel("测试数据路径：")
         self.evaluate_dir_box = QLineEdit()
+        self.evaluate_dir_box.setPlaceholderText("请选择测试数据路径")
         evaluate_dir_icon = QIcon("./ui_pic/ai_window_pic/folder-s.png")
         evaluate_dir_action = self.evaluate_dir_box.addAction(evaluate_dir_icon, QLineEdit.TrailingPosition)
         evaluate_dir_action.setToolTip("添加测试数据")
