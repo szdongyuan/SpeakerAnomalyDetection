@@ -1,6 +1,7 @@
 import json
 import numpy as np
 import os.path
+import pyqtgraph
 import soundcard
 import sys
 from PyQt5.QtCore import Qt
@@ -18,7 +19,6 @@ from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.stimulus_signal_management import StimulusSignalManagement
 from consts import error_code, ui_style_const, model_consts
-from ui.graph_widget import QmyFigureCanvas
 
 
 class StimulusWindow(QDialog):
@@ -68,8 +68,7 @@ class StimulusWindow(QDialog):
         self.setWindowTitle("Stimulus Window")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedSize(480, 480)
-
+        self.setFixedSize(480, 700)
         custom_stimulus_layout = QGridLayout()
         custom_chk_box = QCheckBox("自定义")
         custom_chk_box.setChecked(True)
@@ -108,7 +107,10 @@ class StimulusWindow(QDialog):
         v_spacer_3 = QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         layout = QVBoxLayout()
-        layout.addWidget(QmyFigureCanvas())
+        self.plot_stimulus = pyqtgraph.PlotWidget()
+        self.plot_stimulus.setBackground('white')
+        self.plot_stimulus.resize(400, 170)
+        layout.addWidget(self.plot_stimulus)
         layout.addItem(v_spacer_1)
         layout.addLayout(custom_stimulus_layout)
         layout.addWidget(stimulus_type_group_box)
@@ -321,7 +323,7 @@ class StimulusWindow(QDialog):
             "noise": StimulusSignal().generate_noise,
         }
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
-        self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
+        self.stimulus_signal, _ = create_function(**self.stimulus_info)
 
     def save_stimulus_to_json(self):
         json_file_path = "ui_config/stimulus.json"
@@ -353,11 +355,12 @@ class StimulusWindow(QDialog):
         self.sample_rate_combo_box.setCurrentText(str(self.stimulus_info["sample_rate"]))
 
     def graph_stimulus(self):
-        print("graphing stimulus...")
-        print(self.stimulus_info)
-        print(self.stimulus_signal)
-        # Todo: graph stimulus
-
+        self.plot_stimulus.clear()
+        sample_rate = self.stimulus_info["sample_rate"]
+        signal_duration = np.linspace(0, len(self.stimulus_signal) - 1, len(self.stimulus_signal)) / sample_rate
+        self.plot_stimulus.plot(signal_duration, self.stimulus_signal, pen='b')
+        self.plot_stimulus.setLabel('left', 'Amplitude')
+        self.plot_stimulus.setLabel('bottom', 'Time (s)')
 
     def load_config_btn_clicked(self):
         dlg = LoadStimulusConfig()
