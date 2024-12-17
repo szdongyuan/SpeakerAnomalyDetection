@@ -35,12 +35,12 @@ class SignalAnalysisWindow(QDialog):
         signal_analysis_layout = QVBoxLayout()
 
         self.tabwidget = QTabWidget()
-        spl_wnd = Spl(self.signal_info)
-        frequency_wnd = Frequency(self.signal_info)
-        distortion_wnd = Distortion(self.signal_info)
-        self.tabwidget.addTab(spl_wnd, "声压级")
-        self.tabwidget.addTab(frequency_wnd, "频响")
-        self.tabwidget.addTab(distortion_wnd, "失真")
+        self.spl_wnd = Spl(self.signal_info)
+        self.frequency_wnd = Frequency(self.signal_info)
+        self.distortion_wnd = Distortion(self.signal_info)
+        self.tabwidget.addTab(self.spl_wnd, "声压级")
+        self.tabwidget.addTab(self.frequency_wnd, "频响")
+        self.tabwidget.addTab(self.distortion_wnd, "失真")
         self.tabwidget.setStyleSheet("""QTabWidget > * {border: none;}""")
 
         base_btn_layout = QGridLayout()
@@ -55,12 +55,15 @@ class SignalAnalysisWindow(QDialog):
         self.setLayout(signal_analysis_layout)
 
     def save_btn_clicked(self):
-        current_widget = self.tabwidget.currentWidget()
-        result = current_widget.result
-        if result:
-            self.save_data_to_txt(result)
-        else:
-            self.save_failed_popup()
+        try:
+            current_widget = self.tabwidget.currentWidget()
+            result = current_widget.result
+            if result:
+                self.save_data_to_txt(result)
+            else:
+                self.save_failed_popup()
+        except Exception as e:
+            print(e)
 
     def save_failed_popup(self):
         save_failed_msg = QMessageBox(self)
@@ -71,7 +74,11 @@ class SignalAnalysisWindow(QDialog):
         save_failed_msg.exec_()
 
     def save_data_to_txt(self, result):
-        file_path, _ = QFileDialog.getSaveFileName(self, "保存数据", "", "Text Files (*.txt)")
+        file_path, _ = QFileDialog.getSaveFileName(self,
+                                                   "保存数据",
+                                                   "",
+                                                   "Text Files (*.txt)",
+                                                   options=QFileDialog.DontUseNativeDialog)
         if file_path:
             try:
                 with open(file_path, 'w') as f:

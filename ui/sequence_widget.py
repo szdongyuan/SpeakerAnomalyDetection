@@ -6,7 +6,7 @@ import pyqtgraph as pg
 import sys
 import soundcard
 from datetime import datetime
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem, QDialog
 from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
@@ -23,6 +23,7 @@ from ui.signal_analysis_window import SignalAnalysisWindow
 
 
 class SequenceWindow(QWidget):
+    signal_info_value_change = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -35,12 +36,13 @@ class SequenceWindow(QWidget):
         self.signal_info = {}
         self.analyse_layout = AnalyseWindow(self.signal_info)
         self.sequence_layout = QVBoxLayout()
-        self.player_icon_flag = False
 
         self.collect_btn = QPushButton(" 采  集 ")
         self.analyse_btn = QPushButton(" 分  析 ")
         self.player_btn = QPushButton()
         self.widget_flag = True
+        self.player_icon_flag = False
+        self.first_analyse_layout = True
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
 
@@ -68,6 +70,11 @@ class SequenceWindow(QWidget):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
                            ui_style_const.qcombobox_stytle)
+
+        self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
+        self.analyse_layout.ok_btn.clicked.connect(self.clicked_ok_or_ng)
+        self.analyse_layout.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        self.analyse_layout.analyse_btn.clicked.connect(self.clicked_analyse_btn)
 
     def create_title_btn_layout(self):
         button_layout = QHBoxLayout()
@@ -146,16 +153,12 @@ class SequenceWindow(QWidget):
             self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
             self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
         else:
-            self.analyse_layout = AnalyseWindow(self.signal_info)
+            self.analyse_layout.show()
             self.sequence_layout.replaceWidget(self.collect_layout, self.analyse_layout)
             self.collect_layout.close()
             self.sequence_layout.addWidget(self.analyse_layout)
             self.analyse_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
             self.collect_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
-        self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
-        self.analyse_layout.ok_btn.clicked.connect(self.clicked_ok_or_ng)
-        self.analyse_layout.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        self.analyse_layout.analyse_btn.clicked.connect(self.clicked_analyse_btn)
 
     def get_model_info(self, selected_model):
         query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
@@ -179,6 +182,7 @@ class SequenceWindow(QWidget):
         self.create_collect_or_analyse_layout()
 
     def clicked_ok_or_ng(self):
+        print(self)
         current_recorded_count = self.save_recorded_num_to_text()
         self.lineedit_s_or_n_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
@@ -186,9 +190,10 @@ class SequenceWindow(QWidget):
         self.update_player_icon()
         self.collect_layout.next_btn.setDisabled(True)
         self.analyse_btn.setDisabled(True)
-        self.analyse_layout.deleteLater()
         self.collect_layout.line_graph.clear()
         self.signal_info.clear()
+        self.analyse_layout.signal_info = self.signal_info
+        self.analyse_layout.close()
         self.first_analyse_layout = True
         self.swap_collect_widget()
         self.analyse_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
@@ -316,6 +321,14 @@ class SequenceWindow(QWidget):
                                 "recorded_signal": recorded_signal,
                                 "sample_rate": sample_rate}
             self.recorded_signal_info["sample_rate"] = sample_rate
+            list_update_signal_info = {self.analyse_layout,
+                                       self.analyse_layout.signal_analyse_dialog,
+                                       self.analyse_layout.signal_analyse_dialog.spl_wnd,
+                                       self.analyse_layout.signal_analyse_dialog.frequency_wnd,
+                                       self.analyse_layout.signal_analyse_dialog.distortion_wnd}
+
+            for layout in list_update_signal_info:
+                layout.signal_info = self.signal_info
 
         self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
@@ -414,14 +427,10 @@ class AnalyseWindow(QWidget):
         layout = QHBoxLayout()
         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
                            "QDialog {border: 1px solid rgb(173, 173, 173);}")
-        signal_analyse_dialog = QDialog()
-        signal_analyse_dialog.setMinimumSize(600, 390)
-        signal_analyse_dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        if self.signal_info:
-            signal_analyse_dialog = SignalAnalysisWindow(self.signal_info)
-        #     signal_analyse_layout = QVBoxLayout()
-        #     signal_analyse_layout.addWidget(signal_analysis_window)
-        #     signal_analyse_dialog.setLayout(signal_analyse_layout)
+        self.signal_analyse_dialog = SignalAnalysisWindow(self.signal_info)
+        self.signal_analyse_dialog.setMinimumSize(600, 390)
+        self.signal_analyse_dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         ai_analyse_dialog = QDialog()
         ai_analyse_layout = self.create_ai_analyse_layout()
         ai_analyse_dialog.setLayout(ai_analyse_layout)
@@ -441,7 +450,7 @@ class AnalyseWindow(QWidget):
 
         h_spacer_1 = QSpacerItem(50, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         h_spacer_2 = QSpacerItem(40, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        layout.addWidget(signal_analyse_dialog)
+        layout.addWidget(self.signal_analyse_dialog)
         layout.addItem(h_spacer_1)
         layout.addWidget(ai_analyse_dialog)
         layout.addItem(h_spacer_2)
