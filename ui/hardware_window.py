@@ -3,7 +3,7 @@ import sys
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPainter
 from PyQt5.QtGui import QPixmap, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QWizard, QWizardPage
+from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QWizard, QWizardPage, QWidget
 from PyQt5.QtWidgets import QListView, QAbstractItemView
 from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
 from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QGroupBox
@@ -219,15 +219,20 @@ class CalibrationWizard(QWizard):
 
         # Todo: add pic to wizard
         page_1 = self.create_wizard_page(title="步骤一：连接设备",
-                                         label_txt="将功放输出端正确连接至电压表或示波仪。")
+                                         label_txt="将功放输出端正确连接至电压表或示波仪。",
+                                         wizard_pic="./ui_pic/calibration_pic/fig1_device.png")
         page_2 = self.create_wizard_page(title="步骤二：播放激励信号",
-                                         label_txt="点击“播放”按钮，观察电压读数。")
+                                         label_txt="点击“播放”按钮，观察电压读数。",
+                                         wizard_pic="./ui_pic/calibration_pic/fig2_play.png")
         page_3 = self.create_wizard_page(title="步骤三：记录电压",
-                                         label_txt="待电压稳定后，记录读数。重复步骤二、三若干次（建议5次以上）。")
+                                         label_txt="待电压稳定后，记录读数。重复步骤二、三若干次（建议5次以上）。",
+                                         wizard_pic="./ui_pic/calibration_pic/fig3_save.png")
         page_4 = self.create_wizard_page(title="步骤四：校准输出",
-                                         label_txt="点击“校准”按钮。")
+                                         label_txt="点击“校准”按钮。",
+                                         wizard_pic="./ui_pic/calibration_pic/fig4_calibrate.png")
         page_5 = self.create_wizard_page(title="步骤五：测试",
-                                         label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。\n校准完成后点击“退出”即可。")
+                                         label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。\n校准完成后点击“退出”即可。",
+                                         wizard_pic="./ui_pic/calibration_pic/fig5_test.png")
         page_list = [page_1, page_2, page_3, page_4, page_5]
         for i, page in enumerate(page_list):
             self.setPage(i, page)
@@ -247,9 +252,12 @@ class CalibrationWizard(QWizard):
         layout = QVBoxLayout()
         layout.addWidget(QLabel(label_txt))
         if wizard_pic:
+            pic_layout = QHBoxLayout()
             pic_label = QLabel()
             pic_label.setPixmap(QPixmap(wizard_pic))
-            layout.addWidget(pic_label)
+            pic_layout.addWidget(pic_label)
+            pic_layout.setAlignment(Qt.AlignCenter)
+            layout.addLayout(pic_layout)
         page = QWizardPage()
         page.setTitle("<font color='white' size='6'>%s</font>" % title)
         page.setSubTitle(subtitle)
@@ -265,7 +273,6 @@ class CalibrationWizard(QWizard):
         painter.setPen(Qt.NoPen)
         painter.drawRect(self.rect())
         super().paintEvent(event)
-
 
 def get_default_device(device):
     if device == "mic":
