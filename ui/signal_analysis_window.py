@@ -55,15 +55,12 @@ class SignalAnalysisWindow(QDialog):
         self.setLayout(signal_analysis_layout)
 
     def save_btn_clicked(self):
-        try:
-            current_widget = self.tabwidget.currentWidget()
-            result = current_widget.result
-            if result:
-                self.save_data_to_txt(result)
-            else:
-                self.save_failed_popup()
-        except Exception as e:
-            print(e)
+        current_widget = self.tabwidget.currentWidget()
+        result = current_widget.result
+        if result:
+            self.save_data_to_txt(result)
+        else:
+            self.save_failed_popup()
 
     def save_failed_popup(self):
         save_failed_msg = QMessageBox(self)

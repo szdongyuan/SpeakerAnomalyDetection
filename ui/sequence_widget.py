@@ -182,7 +182,6 @@ class SequenceWindow(QWidget):
         self.create_collect_or_analyse_layout()
 
     def clicked_ok_or_ng(self):
-        print(self)
         current_recorded_count = self.save_recorded_num_to_text()
         self.lineedit_s_or_n_count.setText(str(current_recorded_count))
         self.insert_data_into_db()

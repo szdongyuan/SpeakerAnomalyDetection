@@ -283,8 +283,8 @@ def get_default_device(device):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # window = HardwareWindow()
+    window = HardwareWindow()
     # window = DeviceListWindow("speaker")
-    window = CalibrationWizard()
+    # window = CalibrationWizard()
     window.show()
     result = window.on_exec()
