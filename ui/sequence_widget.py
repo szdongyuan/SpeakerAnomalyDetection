@@ -6,7 +6,7 @@ import pyqtgraph as pg
 import sys
 import soundcard
 from datetime import datetime
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem, QDialog
 from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
@@ -23,7 +23,6 @@ from ui.signal_analysis_window import SignalAnalysisWindow
 
 
 class SequenceWindow(QWidget):
-    signal_info_value_change = pyqtSignal()
 
     def __init__(self):
         super().__init__()
