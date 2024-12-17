@@ -23,7 +23,7 @@ from ui.graph_widget import QmyFigureCanvas
 
 class StimulusWindow(QDialog):
     STIMULUS_DICT = {
-        "啁啾": {"name": "chirp", "sub_list": ["对数", "线性", "对数镜像", "线性镜像"]},
+        "啁啾": {"name": "chirp", "sub_list": ["对数镜像", "线性镜像", "对数", "线性"]},
         "步进": {"name": "step", "sub_list": ["对数", "线性"]},
         "噪音": {"name": "noise", "sub_list": ["白噪音", "粉噪音"]},
     }
@@ -156,14 +156,14 @@ class StimulusWindow(QDialog):
         self.start_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
-        self.start_freq_box.setValue(2000)
+        self.start_freq_box.setValue(80)
         self.start_freq_box.editingFinished.connect(self.stimulus_changed)
         self.start_freq_box.setMinimumWidth(100)
         stop_freq_label = QLabel("截止频率：")
         self.stop_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
-        self.stop_freq_box.setValue(80)
+        self.stop_freq_box.setValue(2000)
         self.stop_freq_box.setMinimumWidth(100)
         self.stop_freq_box.editingFinished.connect(self.stimulus_changed)
         frequency_layout = QHBoxLayout()
@@ -183,8 +183,8 @@ class StimulusWindow(QDialog):
         self.total_time_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)
-        self.total_time_box.setRange(0, 60)
-        self.total_time_box.setValue(3)
+        self.total_time_box.setRange(0.5, 60)
+        self.total_time_box.setValue(4)
         self.total_time_box.setMinimumWidth(100)
         self.total_time_box.editingFinished.connect(self.stimulus_changed)
         repeat_label = QLabel("信号重复：")
@@ -225,7 +225,7 @@ class StimulusWindow(QDialog):
         self.amplitude_spin_box.setSuffix(" V")
         self.amplitude_spin_box.setValue(self.load_amplitude_from_txt())
         self.amplitude_spin_box.setSingleStep(0.1)
-        self.amplitude_spin_box.setMaximum(2)
+        self.amplitude_spin_box.setMinimum(0.1)
         self.amplitude_spin_box.editingFinished.connect(self.stimulus_changed)
 
         amplitude_layout = QHBoxLayout()
@@ -312,10 +312,6 @@ class StimulusWindow(QDialog):
         if self.stimulus_info.get("stimulus_type") and changed_flag:
             if self.stimulus_info.get("use_custom_stimulus"):
                 self.create_signal_from_stimulus_info()
-            stimulus_name = "_".join(str(value) for value in change_dict.values())
-            stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name
-            wavfile.write(stimulus_signal_path, self.stimulus_info["sample_rate"], self.stimulus_signal.astype("float32"))
-            self.save_stimulus_to_json(stimulus_signal_path)
             self.graph_stimulus()
 
     def create_signal_from_stimulus_info(self):
@@ -327,8 +323,11 @@ class StimulusWindow(QDialog):
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
         self.stimulus_signal, self.stimulus_signal_time = create_function(**self.stimulus_info)
 
-    def save_stimulus_to_json(self, stimulus_signal_path):
+    def save_stimulus_to_json(self):
         json_file_path = "ui_config/stimulus.json"
+        stimulus_name = "_".join(str(value) for value in self.stimulus_info.values())
+        stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
+        wavfile.write(stimulus_signal_path, self.stimulus_info["sample_rate"], self.stimulus_signal.astype("float32"))
         data = {
             "stimulus_info": self.stimulus_info,
             "stimulus_signal_path": stimulus_signal_path
@@ -428,6 +427,7 @@ class StimulusWindow(QDialog):
     def ok_btn_clicked(self):
         print("ok_btn clicked")
         self.refresh_stimulus_info = True
+        self.save_stimulus_to_json()
         self.save_amplitude_to_txt()
         self.close()
 
