@@ -222,10 +222,8 @@ class Spl(QWidget):
     def init_ui(self):
         spl_box = self.spl_box()
         self.waveform_plot = pg.PlotWidget(title='Waveform')
-        # self.waveform_plot.setFixedSize(400, 200)
         self.waveform_plot.setBackground('white')
         self.spl_plot = pg.PlotWidget(title='Sound Pressure Level')
-        # self.spl_plot.setFixedSize(400, 200)
         self.spl_plot.setBackground('white')
         layout = QVBoxLayout()
         layout.addWidget(spl_box)

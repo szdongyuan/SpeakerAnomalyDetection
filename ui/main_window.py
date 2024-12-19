@@ -47,9 +47,10 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         self.init_menu()
         self.init_sequence_widget()
+        self.sequence_window.close()
         self.on_access_lvl_changed()
+        self.show_statusbar_layout()
         self.showMaximized()
-
         self.on_login_window_init()
 
     def init_sequence_widget(self):
@@ -94,20 +95,18 @@ class MainWindow(QMainWindow):
         dlg.on_exec()
 
     def show_statusbar_layout(self):
-        user_widget = QWidget()
-        device_widget = QWidget()
-
-        self.user_label = QLabel(user_widget)
+        self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
+        self.user_label.setStyleSheet(ui_style_const.qlabel_stytle)
         self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
-        self.device_label = QLabel(device_widget)
+        self.device_label = QLabel()
+        self.device_label.setStyleSheet(ui_style_const.qlabel_stytle)
         self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
 
         statusbar = QStatusBar()
         statusbar.addWidget(self.user_label)
         statusbar.addPermanentWidget(self.device_label)
         self.setStatusBar(statusbar)
-        statusbar.setStyleSheet(ui_style_const.qlabel_stytle)
 
     def update_statusbar(self):
         self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
@@ -128,17 +127,13 @@ class MainWindow(QMainWindow):
             widget.setEnabled(True)
 
     def on_login_window_init(self):
-        self.login_falgs = True
         dlg = LoginWindow()
         access_lvl, user_name = dlg.on_exec()
         if access_lvl is not None:
             self.access_lvl, self.user_name = access_lvl, user_name
-        self.on_access_lvl_changed()
-        if self.login_falgs:
-            self.login_falgs = False
-            self.show_statusbar_layout()
-        else:
+            self.sequence_window.show()
             self.update_statusbar()
+        self.on_access_lvl_changed()
 
     @staticmethod
     def on_add_account_window_init():

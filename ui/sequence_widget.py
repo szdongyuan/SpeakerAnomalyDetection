@@ -7,10 +7,11 @@ import sys
 import soundcard
 from datetime import datetime
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QRegExpValidator
 from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem, QDialog
 from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
 from getmac import get_mac_address
+from pyqtgraph.examples.syntax import QRegExp
 
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -89,7 +90,7 @@ class SequenceWindow(QWidget):
         button_layout.addItem(h_spacer_btn_center)
         button_layout.addWidget(self.analyse_btn)
         button_layout.addItem(h_spacer_btn_right)
-        button_layout.setContentsMargins(0, 40, 0, 30)
+        button_layout.setContentsMargins(80, 40, 80, 30)
 
         return button_layout
 
@@ -115,18 +116,18 @@ class SequenceWindow(QWidget):
         self.lineedit_s_or_n_count = QLineEdit(str(current_recorded_count))
         self.lineedit_s_or_n_count.setFixedHeight(40)
         self.lineedit_s_or_n_count.setAlignment(Qt.AlignCenter)
-        self.lineedit_s_or_n_count.setDisabled(True)
+        self.lineedit_s_or_n_count.setValidator(QRegExpValidator(QRegExp(r'^[0-9]*$')))
         self.lineedit_s_or_n_count.setStyleSheet("font-size: 17pt;")
-        self.player_btn.setFixedSize(70, 70)
-        self.player_btn.setStyleSheet("border-radius: 35px;border: 1px solid rgb(173, 173, 173);")
+        self.player_btn.setFixedSize(100, 100)
+        self.player_btn.setStyleSheet("border-radius: 50px;border: 1px solid rgb(173, 173, 173);")
         self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/bofang.png"))
-        self.player_btn.setIconSize(QSize(70, 70))
+        self.player_btn.setIconSize(QSize(100, 100))
         self.player_btn.clicked.connect(self.clicked_player_btn)
 
         h_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         range_spacer_1 = QSpacerItem(100, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
-        range_spacer_2 = QSpacerItem(40, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
+        range_spacer_2 = QSpacerItem(100, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
 
         data_layout = QHBoxLayout()
         data_layout.addItem(h_spacer_1)
@@ -137,9 +138,9 @@ class SequenceWindow(QWidget):
         data_layout.addWidget(self.lineedit_s_or_n_count)
         data_layout.addItem(range_spacer_2)
         data_layout.addWidget(self.player_btn)
-        data_layout.addItem(h_spacer_2)
+        # data_layout.addItem(h_spacer_2)
         data_layout.setSpacing(30)
-        data_layout.setContentsMargins(0, 10, 0, 30)
+        data_layout.setContentsMargins(80, 10, 80, 30)
 
         return data_layout
 
@@ -194,6 +195,10 @@ class SequenceWindow(QWidget):
         self.analyse_layout.close()
         self.first_analyse_layout = True
         self.swap_collect_widget()
+        self.analyse_layout.signal_analyse_dialog.spl_wnd.waveform_plot.clear()
+        self.analyse_layout.signal_analyse_dialog.spl_wnd.spl_plot.clear()
+        self.analyse_layout.signal_analyse_dialog.frequency_wnd.fr_plot.clear()
+        self.analyse_layout.signal_analyse_dialog.distortion_wnd.thd_plot.clear()
         self.analyse_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
 
@@ -370,10 +375,10 @@ class SequenceWindow(QWidget):
     def update_player_icon(self):
         if self.player_icon_flag:
             self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/chongbo.png"))
-            self.player_btn.setIconSize(QSize(40, 40))
+            self.player_btn.setIconSize(QSize(70, 70))
         else:
             self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/bofang.png"))
-            self.player_btn.setIconSize(QSize(70, 70))
+            self.player_btn.setIconSize(QSize(100, 100))
         self.player_btn.setDisabled(False)
 
 
@@ -385,7 +390,7 @@ class CollectWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 17pt;")
+        self.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 25pt;")
 
         layout = QHBoxLayout()
         line_widget = QWidget()
@@ -398,13 +403,11 @@ class CollectWindow(QWidget):
         line_widget.setLayout(line_layout)
 
         h_spacer_1 = QSpacerItem(70, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        self.next_btn.setMaximumWidth(30)
-        self.next_btn.setMinimumHeight(100)
+        self.next_btn.setFixedSize(80, 300)
         layout.addWidget(self.line_graph)
         layout.addItem(h_spacer_1)
         layout.addWidget(self.next_btn)
-        self.next_btn.setFixedSize(40, 120)
-        layout.setContentsMargins(100, 20, 90, 30)
+        layout.setContentsMargins(150, 20, 90, 30)
 
         self.setLayout(layout)
 
@@ -426,7 +429,7 @@ class AnalyseWindow(QWidget):
         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
                            "QDialog {border: 1px solid rgb(173, 173, 173);}")
         self.signal_analyse_dialog = SignalAnalysisWindow(self.signal_info)
-        self.signal_analyse_dialog.setMinimumSize(600, 390)
+        self.signal_analyse_dialog.setMinimumSize(400, 390)
         self.signal_analyse_dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         ai_analyse_dialog = QDialog()
@@ -436,24 +439,24 @@ class AnalyseWindow(QWidget):
 
         btn_layout = QVBoxLayout()
         self.ok_btn.setIcon(QIcon("./ui_pic/sequence_pic/lvseyuan.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
-        self.ok_btn.setFixedSize(100, 40)
+        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle + "font-size: 20pt;")
+        self.ok_btn.setFixedSize(100, 150)
         self.ng_btn.setIcon(QIcon("./ui_pic/sequence_pic/hongseyuan.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
-        self.ng_btn.setFixedSize(100, 40)
+        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle + "font-size: 20pt;")
+        self.ng_btn.setFixedSize(100, 150)
         self.ok_btn.setMaximumWidth(100)
         self.ng_btn.setMaximumWidth(100)
         btn_layout.addWidget(self.ok_btn)
         btn_layout.addWidget(self.ng_btn)
 
         h_spacer_1 = QSpacerItem(50, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        h_spacer_2 = QSpacerItem(40, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        h_spacer_2 = QSpacerItem(60, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         layout.addWidget(self.signal_analyse_dialog)
         layout.addItem(h_spacer_1)
         layout.addWidget(ai_analyse_dialog)
         layout.addItem(h_spacer_2)
         layout.addLayout(btn_layout)
-        layout.setContentsMargins(150, 20, 130, 30)
+        layout.setContentsMargins(150, 20, 80, 30)
         self.setLayout(layout)
 
     def create_ai_analyse_layout(self):
