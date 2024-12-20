@@ -20,7 +20,7 @@ DEFAULT_LOG = {
 }
 AI_LOG = {
     "log_name": LOG_DIR + "ai.log",
-    "max_size": 10 * KB,
+    "max_size": 2 * MB,
     "backup_count": 9,
     "log_format": DEFAULT_LOG_FORMATTER,
 }

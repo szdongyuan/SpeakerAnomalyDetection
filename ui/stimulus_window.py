@@ -442,8 +442,8 @@ class StimulusWindow(QDialog):
     def on_exec(self):
         self.exec()
         if self.refresh_stimulus_info:
-            return self.stimulus_info, self.stimulus_signal
-        return {}, None
+            return True
+        return False
 
     def update_stimulus_info(self, dict_key, v, changed_flag=False):
         if self.stimulus_info.get(dict_key) != v:

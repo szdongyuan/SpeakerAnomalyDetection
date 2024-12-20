@@ -1,8 +1,7 @@
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QAction, QLabel, QSizePolicy, QSpacerItem, QHBoxLayout, \
-    QStatusBar, QWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QAction, QLabel, QStatusBar
 
 from base.log_manager import LogManager
 from consts import ui_style_const
@@ -20,6 +19,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.user_name = None
         self.access_lvl = None
+        self.refresh_stimulus_flag = None
         self.mic = get_default_device("mic")
         self.speaker = get_default_device("speaker")
 
@@ -92,7 +92,8 @@ class MainWindow(QMainWindow):
     def on_stimulus_window_init(self):
         dlg = StimulusWindow()
         dlg.speaker = self.speaker
-        dlg.on_exec()
+        self.refresh_stimulus_flag = dlg.on_exec()
+        self.sequence_window.refresh_stimulus_flag = self.refresh_stimulus_flag
 
     def show_statusbar_layout(self):
         self.user_label = QLabel()

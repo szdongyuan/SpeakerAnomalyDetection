@@ -89,6 +89,7 @@ class Distortion(QWidget):
     def __init__(self, signal_info):
         super().__init__()
         self.signal_info = signal_info
+        self.refresh_stimulus_flag = None
         self.selected_label = None
         self.selected_harmonics = []
         self.freq_dict = None
@@ -161,10 +162,11 @@ class Distortion(QWidget):
             recorded_signal = self.signal_info["recorded_signal"]
             sample_rate = self.signal_info["sample_rate"]
             atfra = AudioThdFrequencyResponseAnalysis()
-            if self.freq_dict is None and self.base_freq_list is None:
+            if self.refresh_stimulus_flag or (self.freq_dict is None or self.base_freq_list is None):
                 self.freq_dict, self.base_freq_list = atfra.calculate_spectrum(stimulus_signal, sample_rate)
-            freq_value, harmonic, thd = atfra.calculate_thd(self.freq_dict, self.base_freq_list, recorded_signal,
-                                                            sample_rate, **kwargs)
+                self.refresh_stimulus_flag = False
+            freq_value, harmonic, thd = atfra.calculate_thd(self.freq_dict, self.base_freq_list,
+                                                            recorded_signal, sample_rate, **kwargs)
         self.plot_graph(freq_value, thd)
         if isinstance("harmonic", np.ndarray):
             harmonic = harmonic.tolist()
