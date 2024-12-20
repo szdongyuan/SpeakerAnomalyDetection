@@ -1,4 +1,6 @@
 import json
+import re
+
 import librosa
 import numpy as np
 import os
@@ -7,11 +9,10 @@ import sys
 import soundcard
 from datetime import datetime
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon, QRegExpValidator
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem, QDialog
 from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
 from getmac import get_mac_address
-from pyqtgraph.examples.syntax import QRegExp
 
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -42,7 +43,7 @@ class SequenceWindow(QWidget):
         self.analyse_btn = QPushButton(" 分  析 ")
         self.player_btn = QPushButton()
         self.widget_flag = True
-        self.player_icon_flag = False
+        self.player_status_flag = False
         self.first_analyse_layout = True
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
@@ -117,7 +118,7 @@ class SequenceWindow(QWidget):
         self.lineedit_s_or_n_count = QLineEdit(str(current_recorded_count))
         self.lineedit_s_or_n_count.setFixedHeight(40)
         self.lineedit_s_or_n_count.setAlignment(Qt.AlignCenter)
-        self.lineedit_s_or_n_count.setValidator(QRegExpValidator(QRegExp(r'^[0-9]*$')))
+        self.lineedit_s_or_n_count.textChanged.connect(self.validate_count)
         self.lineedit_s_or_n_count.setStyleSheet("font-size: 17pt;")
         self.player_btn.setFixedSize(100, 100)
         self.player_btn.setStyleSheet("border-radius: 50px;border: 1px solid rgb(173, 173, 173);")
@@ -127,23 +128,35 @@ class SequenceWindow(QWidget):
 
         h_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        range_spacer_1 = QSpacerItem(100, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
-        range_spacer_2 = QSpacerItem(100, 30, QSizePolicy.Maximum, QSizePolicy.Minimum)
+        range_spacer_1 = QSpacerItem(150, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        range_spacer_2 = QSpacerItem(10, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        range_spacer_3 = QSpacerItem(10, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
 
         data_layout = QHBoxLayout()
-        data_layout.addItem(h_spacer_1)
-        data_layout.addWidget(label_type)
-        data_layout.addWidget(self.lineedit_type)
-        data_layout.addItem(range_spacer_1)
-        data_layout.addWidget(label_s_or_n)
-        data_layout.addWidget(self.lineedit_s_or_n_count)
-        data_layout.addItem(range_spacer_2)
+        input_data_layout = QHBoxLayout()
+        input_data_layout.addItem(h_spacer_1)
+        input_data_layout.addWidget(label_type)
+        input_data_layout.addItem(range_spacer_2)
+        input_data_layout.addWidget(self.lineedit_type)
+        input_data_layout.addItem(range_spacer_1)
+        input_data_layout.addWidget(label_s_or_n)
+        input_data_layout.addItem(range_spacer_3)
+        input_data_layout.addWidget(self.lineedit_s_or_n_count)
+        input_data_layout.addItem(h_spacer_2)
+        input_data_layout.setContentsMargins(110, 0, 0, 0)
+
+        data_layout.addLayout(input_data_layout)
         data_layout.addWidget(self.player_btn)
-        # data_layout.addItem(h_spacer_2)
-        data_layout.setSpacing(30)
         data_layout.setContentsMargins(80, 10, 80, 30)
 
         return data_layout
+
+    def validate_count(self):
+        s_or_n_count = self.lineedit_s_or_n_count.text()
+        reg = r'^[0-9]*$'
+
+        if not re.match(reg,s_or_n_count):
+            self.lineedit_s_or_n_count.clear()
 
     def create_collect_or_analyse_layout(self):
         if self.widget_flag:
@@ -186,7 +199,7 @@ class SequenceWindow(QWidget):
         current_recorded_count = self.save_recorded_num_to_text()
         self.lineedit_s_or_n_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
-        self.player_icon_flag = False
+        self.player_status_flag = False
         self.update_player_icon()
         self.collect_layout.next_btn.setDisabled(True)
         self.analyse_btn.setDisabled(True)
@@ -196,12 +209,15 @@ class SequenceWindow(QWidget):
         self.analyse_layout.close()
         self.first_analyse_layout = True
         self.swap_collect_widget()
+        self.clear_plg()
+        self.analyse_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
+        self.collect_layout.next_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
+
+    def clear_plg(self):
         self.analyse_layout.signal_analyse_dialog.spl_wnd.waveform_plot.clear()
         self.analyse_layout.signal_analyse_dialog.spl_wnd.spl_plot.clear()
         self.analyse_layout.signal_analyse_dialog.frequency_wnd.fr_plot.clear()
         self.analyse_layout.signal_analyse_dialog.distortion_wnd.thd_plot.clear()
-        self.analyse_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
-        self.collect_layout.next_btn.setStyleSheet("background-color: #c0c0c0; color: white;font-size: 20pt;")
 
     def get_stimulus_from_config(self):
         load_code, result = self.load_stimulus_from_json()
@@ -304,7 +320,9 @@ class SequenceWindow(QWidget):
         return result_text
 
     def clicked_player_btn(self):
-        self.player_icon_flag = True
+        if self.player_status_flag:
+            self.clear_plg()
+        self.player_status_flag = True
         self.player_btn.setDisabled(True)
         self.update_player_icon()
         self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
@@ -325,19 +343,22 @@ class SequenceWindow(QWidget):
                                 "recorded_signal": recorded_signal,
                                 "sample_rate": sample_rate}
             self.recorded_signal_info["sample_rate"] = sample_rate
-            list_update_signal_info = {self.analyse_layout,
-                                       self.analyse_layout.signal_analyse_dialog,
-                                       self.analyse_layout.signal_analyse_dialog.spl_wnd,
-                                       self.analyse_layout.signal_analyse_dialog.frequency_wnd,
-                                       self.analyse_layout.signal_analyse_dialog.distortion_wnd}
-
-            for layout in list_update_signal_info:
-                layout.signal_info = self.signal_info
+            self.updata_signal_info()
 
         self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.setDisabled(False)
         self.analyse_btn.setDisabled(False)
+
+    def updata_signal_info(self):
+        list_update_signal_info = {self.analyse_layout,
+                                   self.analyse_layout.signal_analyse_dialog,
+                                   self.analyse_layout.signal_analyse_dialog.spl_wnd,
+                                   self.analyse_layout.signal_analyse_dialog.frequency_wnd,
+                                   self.analyse_layout.signal_analyse_dialog.distortion_wnd}
+
+        for layout in list_update_signal_info:
+            layout.signal_info = self.signal_info
 
     def get_recorded_info(self):
         product_model = self.lineedit_type.text()
@@ -374,7 +395,7 @@ class SequenceWindow(QWidget):
         line_graph.setLabel('bottom', 'Time(s)')
 
     def update_player_icon(self):
-        if self.player_icon_flag:
+        if self.player_status_flag:
             self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/chongbo.png"))
             self.player_btn.setIconSize(QSize(70, 70))
         else:
