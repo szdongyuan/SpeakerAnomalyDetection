@@ -30,6 +30,7 @@ class SequenceWindow(QWidget):
         self.collect_or_analyse_layout = QHBoxLayout()
         self.collect_layout = CollectWindow()
         self.recorded_path = None
+        self.refresh_stimulus_flag = None
         self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
         self.mic = None
         self.speaker = None
@@ -225,14 +226,11 @@ class SequenceWindow(QWidget):
         dir_path = 'ui_config'
         file_path = os.path.join(dir_path, "recorded_number.txt")
         current_time = datetime.now().strftime("%Y-%m-%d")
-        if not os.path.exists(file_path):
-            current_recorded_count = 2
+        check_flag, count = self.check_datetime(file_path, current_time)
+        if check_flag:
+            current_recorded_count = count + 1
         else:
-            check_flag, count = self.check_datetime(file_path, current_time)
-            if check_flag:
-                current_recorded_count = count + 1
-            else:
-                current_recorded_count = 1
+            current_recorded_count = 2
         with open(file_path, 'w') as f:
             f.write(f"current_recorded_count: \n{current_recorded_count}\n")
             f.write(f"Datetime: \n{current_time}\n")
@@ -309,8 +307,11 @@ class SequenceWindow(QWidget):
         self.player_icon_flag = True
         self.player_btn.setDisabled(True)
         self.update_player_icon()
+        self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
+        if self.refresh_stimulus_flag:
+            self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
+            self.refresh_stimulus_flag = False
         sample_rate = self.stimulus_info["sample_rate"]
-
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
         self.recorded_path, self.recorded_signal_info = self.get_recorded_info()
         record_code, msg = SoundcardAudioProcessor().initialize_audio_processes(recorded_dict, stimulus_dict,
@@ -352,7 +353,7 @@ class SequenceWindow(QWidget):
         return recorded_path, recorded_signal_info
 
     def get_stimulus_recorded_dict(self, sample_rate):
-        prolong = 8
+        prolong = 3
         stimulus_dict = {"data": self.stimulus_signal,
                          "amplitude": self.stimulus_info["amplitude"],
                          "sr": sample_rate
