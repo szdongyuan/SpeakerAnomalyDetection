@@ -36,18 +36,11 @@ class SoundcardAudioProcessor(object):
             self.logger.warning("The stimulus_dict is empty or invalid.")
             return error_code.INVALID_DATA_LOADING, "The stimulus_dict is empty or invalid."
         self.ensure_directory_exists(recording_path)
-        processes = [
-            multiprocessing.Process(target=self.mic_worker, args=(record_dict, stimulus_dict, recording_path, mic)),
-            multiprocessing.Process(target=self.speaker_worker, args=(stimulus_dict, speaker))
-        ]
-        for process in processes:
-            start_process_code, msg = self.start_process(process)
-            if start_process_code != error_code.OK:
-                return start_process_code, msg
-        for process in processes:
-            join_process_code, msg = self.join_process(process)
-            if join_process_code != error_code.OK:
-                return join_process_code, msg
+        pool = multiprocessing.Pool(2)
+        pool.apply_async(self.mic_worker, (record_dict, stimulus_dict, recording_path, mic))
+        pool.apply_async(self.speaker_worker, (stimulus_dict, speaker))
+        pool.close()
+        pool.join()
         self.logger.info("All processes have finished.")
         return error_code.OK, "All processes have finished."
 
