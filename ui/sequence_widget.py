@@ -21,7 +21,6 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.training_model_management import TrainingModelManagement
 from consts import ui_style_const, model_consts, error_code
 from main import predict
-from ui.abc import STFTAnalysisApp
 from ui.signal_analysis_window import SignalAnalysisWindow
 
 
