@@ -58,7 +58,9 @@ class SequenceWindow(QWidget):
 
         self.sequence_layout.addLayout(button_layout)
         self.sequence_layout.addLayout(layout_data)
+        self.analyse_layout.hide()
         self.sequence_layout.addWidget(self.collect_layout)
+        self.sequence_layout.addWidget(self.analyse_layout)
         self.sequence_layout.setAlignment(Qt.AlignCenter)
 
         self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
@@ -161,16 +163,12 @@ class SequenceWindow(QWidget):
     def create_collect_or_analyse_layout(self):
         if self.widget_flag:
             self.collect_layout.show()
-            self.sequence_layout.replaceWidget(self.analyse_layout, self.collect_layout)
             self.analyse_layout.close()
-            self.sequence_layout.addWidget(self.collect_layout)
             self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
             self.collect_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
         else:
             self.analyse_layout.show()
-            self.sequence_layout.replaceWidget(self.collect_layout, self.analyse_layout)
             self.collect_layout.close()
-            self.sequence_layout.addWidget(self.analyse_layout)
             self.analyse_btn.setStyleSheet("background-color: #a9d18e; color: white;font-size: 20pt;")
             self.collect_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
 
