@@ -1,9 +1,10 @@
 import os
 import sys
+
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QTextCursor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QGroupBox
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpacerItem, QSizePolicy
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout
+from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton
 from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget
 
 from base.training_model_management import TrainingModelManagement

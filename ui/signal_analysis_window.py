@@ -1,8 +1,9 @@
 import sys
+from functools import partial
+
 import librosa
 import numpy as np
 import pyqtgraph as pg
-from functools import partial
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGridLayout, QGroupBox, QHBoxLayout
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpacerItem

@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 from datetime import datetime
+
 from keras.models import load_model
 
 from base.db_manager import DataSave
@@ -91,7 +92,7 @@ class TrainingModelManagement(object):
     def get_all_model_name_from_db(self):
         try:
             with DataSave(self.db_path) as database:
-                query_code, query_result = database.query("training_model_table", ["model_name"])
+                query_code, query_result = database.query("training_model_table", ["model_name", "input_dim"])
                 if query_code == error_code.OK and query_result:
                     return error_code.OK, query_result
                 else:

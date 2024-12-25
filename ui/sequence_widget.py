@@ -2,11 +2,12 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
+
 import librosa
 import numpy as np
 import pyqtgraph as pg
 import soundcard
-from datetime import datetime
 from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon

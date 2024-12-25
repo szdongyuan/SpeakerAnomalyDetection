@@ -1,4 +1,5 @@
 import sys
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar
 

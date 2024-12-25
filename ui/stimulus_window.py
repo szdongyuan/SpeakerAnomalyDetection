@@ -1,6 +1,7 @@
 import json
 import os.path
 import sys
+
 import numpy as np
 import pyqtgraph
 import soundcard

@@ -1,5 +1,6 @@
 import hashlib
 import sys
+
 from getmac import get_mac_address
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
