@@ -1,24 +1,22 @@
 import json
-import numpy as np
 import os.path
+import sys
+import numpy as np
 import pyqtgraph
 import soundcard
-import sys
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QGroupBox, QListView
-from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
-from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
-from PyQt5.QtWidgets import QPushButton
 from scipy.io import wavfile
+from PyQt5.QtGui import QStandardItem, QStandardItemModel
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog
+from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListView, QPushButton
+from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QSpinBox, QVBoxLayout
 
 from base.load_audio import load_audio_simple, save_audio_simple
 from base.log_manager import LogManager
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.stimulus_signal_management import StimulusSignalManagement
-from consts import error_code, ui_style_const, model_consts
+from consts import error_code, model_consts, ui_style_const
 
 
 class StimulusWindow(QDialog):

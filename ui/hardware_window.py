@@ -1,15 +1,9 @@
 import sys
-
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPainter
-from PyQt5.QtGui import QPixmap, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QWizard, QWizardPage, QWidget
-from PyQt5.QtWidgets import QListView, QAbstractItemView
-from PyQt5.QtWidgets import QLabel, QSpacerItem, QSizePolicy
-from PyQt5.QtWidgets import QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QGroupBox
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout
-from PyQt5.QtWidgets import QPushButton
 import soundcard as sc
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel
+from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView
+from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage
 
 from consts import ui_style_const
 from ui.calibaration_window import CalibrationWindow

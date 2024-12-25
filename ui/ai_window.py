@@ -1,15 +1,14 @@
 import os
 import sys
-
-from PyQt5.QtCore import Qt, QEventLoop, QTimer, QThread, pyqtSignal
-from PyQt5.QtGui import QTextCursor, QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QApplication, QComboBox, QVBoxLayout, QMessageBox, \
-    QGridLayout, QLineEdit, QFileDialog, QFrame, QSplitter
-from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QTextEdit, QWidget, QPushButton
+from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QTextCursor
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QGroupBox
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpacerItem, QSizePolicy
+from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget
 
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
-from main import train, evaluate, init_model_from_config
+from main import evaluate, init_model_from_config, train
 
 
 class AiWindow(QDialog):
@@ -232,8 +231,7 @@ class BaseModel(QWidget):
         self.text_edit.setVisible(True)
         self.text_edit.setReadOnly(True)
         self.text_edit.setAlignment(Qt.AlignCenter)
-        v_space_1 = QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_space_2 = QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        self.set_default_model()
         base_model_combo_layout = QHBoxLayout()
 
         base_model_combo_layout.addWidget(base_model_label)
@@ -242,9 +240,7 @@ class BaseModel(QWidget):
 
         base_model_layout = QVBoxLayout()
         base_model_layout.addLayout(base_model_combo_layout)
-        # base_model_layout.addItem(v_space_1)
         base_model_layout.addWidget(self.text_edit)
-        # base_model_layout.addItem(v_space_2)
         base_model_layout.setSpacing(20)
         base_model_box.setLayout(base_model_layout)
         return base_model_box
@@ -252,7 +248,6 @@ class BaseModel(QWidget):
     def combobox_clicked(self):
         selected_model = self.base_model_combo_box.currentText()
         if selected_model:
-            # self.text_edit.setVisible(True)
             model = self.load_model_structure(selected_model)
             self.save_model_path_to_config()
             if model is not None:
@@ -264,6 +259,28 @@ class BaseModel(QWidget):
                 self.text_edit.setPlainText(str(model))
         else:
             self.text_edit.setVisible(False)
+
+    def set_default_model(self):
+        default_model_path = self.load_default_model_path()
+        if default_model_path:
+            default_model_name = os.path.basename(default_model_path)
+            default_model_name = os.path.splitext(default_model_name)[0]
+            if default_model_name in self.load_model:
+                default_index = self.load_model.index(default_model_name)
+                self.base_model_combo_box.setCurrentIndex(default_index)
+                self.combobox_clicked()
+
+    @staticmethod
+    def load_default_model_path():
+        file_path = "ui_config/model_path.txt"
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+            return ""
+        try:
+            with open(file_path, 'r') as f:
+                model_path = f.read().strip()
+                return model_path
+        except Exception as e:
+            return ""
 
     @staticmethod
     def load_model_name_from_db():

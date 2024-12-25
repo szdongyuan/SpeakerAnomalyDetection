@@ -1,17 +1,16 @@
+import sys
 import librosa
 import numpy as np
 import pyqtgraph as pg
-import sys
 from functools import partial
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog, QApplication, QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QMessageBox
-from PyQt5.QtWidgets import QGridLayout, QScrollArea, QGroupBox, QFileDialog
-from PyQt5.QtWidgets import QSizePolicy, QTabWidget, QSpacerItem, QLineEdit
+from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGridLayout, QGroupBox, QHBoxLayout
+from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpacerItem
+from PyQt5.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from consts import ui_style_const
-
 
 
 class SignalAnalysisWindow(QDialog):
