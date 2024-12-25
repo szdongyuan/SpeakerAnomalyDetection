@@ -1,14 +1,14 @@
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QAction, QLabel, QStatusBar
+from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar
 
 from base.log_manager import LogManager
 from consts import ui_style_const
+from ui.ai_window import AiWindow
 from ui.calibaration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device
-from ui.login_window import LoginWindow, AddAccountWindow, ChangePwdWindow
-from ui.ai_window import AiWindow
+from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
 

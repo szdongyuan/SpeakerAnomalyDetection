@@ -1,6 +1,7 @@
 import json
-import numpy as np
 import os
+
+import numpy as np
 
 from base.log_manager import LogManager
 from consts import error_code, model_consts
@@ -89,12 +90,8 @@ class SoundcardCalibrationManager(object):
         if load_code == error_code.OK:
             coefficients_data = load_data.get("calibration_coefficients")
             max_voltage = load_data.get("max_voltage")
-            if target_voltage > max_voltage:
-                self.logger.error("Target voltage cannot be greater than max voltage at calibration.")
-                return error_code.INVALID_DATA_LOADING, "Target voltage cannot be greater than max voltage at calibration."
-
             predict_amplitude = self.predict_amplitude(coefficients_data, target_voltage)
-            return error_code.OK, predict_amplitude
+            return error_code.OK, (predict_amplitude, max_voltage)
         self.logger.error("Failed to load coefficients, please calibrate first.")
         return error_code.INVALID_DATA_LOADING, "Failed to load coefficients, please calibrate first."
 

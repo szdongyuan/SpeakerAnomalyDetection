@@ -3,14 +3,13 @@ import sys
 
 from getmac import get_mac_address
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QMessageBox, QSpacerItem, QSizePolicy
-from PyQt5.QtWidgets import QPushButton, QComboBox
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit
+from PyQt5.QtWidgets import QMessageBox, QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout
 
 from base.db_manager import DataSave
 from base.log_manager import LogManager
-from consts import model_consts, error_code, ui_style_const
+from consts import error_code, model_consts, ui_style_const
 
 
 ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}

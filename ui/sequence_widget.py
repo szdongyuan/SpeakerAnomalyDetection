@@ -1,25 +1,25 @@
 import json
+import os
 import re
+import sys
+from datetime import datetime
 
 import librosa
 import numpy as np
-import os
 import pyqtgraph as pg
-import sys
 import soundcard
-from datetime import datetime
+from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QWidget, QLabel, QLineEdit, QPushButton, QApplication, QSpacerItem, QDialog
-from PyQt5.QtWidgets import QSizePolicy, QHBoxLayout, QVBoxLayout, QComboBox, QTextEdit
-from getmac import get_mac_address
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton
+from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.training_model_management import TrainingModelManagement
-from consts import ui_style_const, model_consts, error_code
+from consts import error_code, model_consts, ui_style_const
 from main import predict
 from ui.signal_analysis_window import SignalAnalysisWindow
 
@@ -36,7 +36,7 @@ class SequenceWindow(QWidget):
         self.mic = None
         self.speaker = None
         self.signal_info = {}
-        self.analyse_layout = AnalyseWindow(self.signal_info)
+        self.analyse_layout = AnalyseWindow()
         self.sequence_layout = QVBoxLayout()
 
         self.collect_btn = QPushButton(" 采  集 ")
@@ -76,6 +76,7 @@ class SequenceWindow(QWidget):
                            ui_style_const.qcombobox_stytle)
 
         self.collect_layout.next_btn.clicked.connect(self.swap_analyse_widget)
+        self.update_load_model_name()
         self.analyse_layout.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.analyse_layout.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         self.analyse_layout.analyse_btn.clicked.connect(self.clicked_analyse_btn)
@@ -216,6 +217,7 @@ class SequenceWindow(QWidget):
         self.analyse_layout.signal_analyse_dialog.spl_wnd.spl_plot.clear()
         self.analyse_layout.signal_analyse_dialog.frequency_wnd.fr_plot.clear()
         self.analyse_layout.signal_analyse_dialog.distortion_wnd.thd_plot.clear()
+        self.analyse_layout.ai_analyse_score_lineedit.clear()
 
     def get_stimulus_from_config(self):
         load_code, result = self.load_stimulus_from_json()
@@ -290,17 +292,40 @@ class SequenceWindow(QWidget):
 
     def clicked_analyse_btn(self):
         selected_model = self.analyse_layout.model_combo_box.currentText()
-        result_text = None
-        if selected_model:
-            code, result = self.get_model_info(selected_model)
-            if code == error_code.OK:
-                (model_path, config_path) = result
-                kwargs = {"config_path": config_path}
-                result_text = self.model_predict(model_path, **kwargs)
-                if result_text is not None:
-                    self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
+        code, result = self.get_model_info(selected_model)
+        if code != error_code.OK or not os.path.exists(result[0]):
+            if self.model_missing_popup():
+                return
         else:
-            self.analyse_layout.ai_analyse_score_lineedit.setPlainText(str(result_text))
+            self.save_analyse_model(selected_model)
+            model_path, config_path = result
+            kwargs = {"config_path": config_path}
+            result_text = self.model_predict(model_path, **kwargs)
+            self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
+
+    def model_missing_popup(self):
+        model_missing_msg = QMessageBox(self)
+        model_missing_msg.setIcon(QMessageBox.Critical)
+        model_missing_msg.setText("模型不存在，请重新选择!")
+        model_missing_msg.setWindowTitle("模型加载失败")
+        model_missing_msg.setStandardButtons(QMessageBox.Ok)
+        button = model_missing_msg.exec_()
+        return button == QMessageBox.Ok
+
+    @staticmethod
+    def save_analyse_model(selected_model):
+        file_path = "ui_config/analyse_model.txt"
+        with open(file_path, 'w') as f:
+            f.write(selected_model)
+
+    @staticmethod
+    def load_analyse_model():
+        file_path = "ui_config/analyse_model.txt"
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+            return ""
+        with open(file_path, 'r') as f:
+            model_name = f.read().strip()
+            return model_name
 
     def model_predict(self, model_path, **kwargs):
         ret_str = predict(self.recorded_path, load_model_path=model_path, **kwargs)
@@ -326,6 +351,7 @@ class SequenceWindow(QWidget):
         self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
         if self.refresh_stimulus_flag:
             self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
+            self.update_load_model_name()
             self.refresh_stimulus_flag = False
         sample_rate = self.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
@@ -341,14 +367,14 @@ class SequenceWindow(QWidget):
                                 "recorded_signal": recorded_signal,
                                 "sample_rate": sample_rate}
             self.recorded_signal_info["sample_rate"] = sample_rate
-            self.updata_signal_info()
+            self.update_signal_info()
 
         self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.setStyleSheet("background-color: #4472c4; color: white;font-size: 20pt;")
         self.collect_layout.next_btn.setDisabled(False)
         self.analyse_btn.setDisabled(False)
 
-    def updata_signal_info(self):
+    def update_signal_info(self):
         list_update_signal_info = {self.analyse_layout,
                                    self.analyse_layout.signal_analyse_dialog,
                                    self.analyse_layout.signal_analyse_dialog.spl_wnd,
@@ -357,6 +383,27 @@ class SequenceWindow(QWidget):
 
         for layout in list_update_signal_info:
             layout.signal_info = self.signal_info
+
+    def update_load_model_name(self):
+        self.analyse_layout.model_combo_box.clear()
+        model_list = self.load_model_name_from_db()
+        for model_name in model_list:
+            self.analyse_layout.model_combo_box.addItem(model_name)
+        default_model = self.load_analyse_model()
+        if default_model in model_list:
+            default_index = model_list.index(default_model)
+            self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
+
+    def load_model_name_from_db(self):
+        model_list = []
+        query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
+        if query_code == error_code.OK:
+            for idx, name in enumerate(query_result):
+                query_result_idx = query_result[idx]
+                input_dim = int(query_result_idx[1].split(' ')[0])
+                if input_dim == len(self.stimulus_signal):
+                    model_list.append(query_result_idx[0])
+        return model_list
 
     def get_recorded_info(self):
         product_model = self.lineedit_type.text()
@@ -434,12 +481,11 @@ class CollectWindow(QWidget):
 
 class AnalyseWindow(QWidget):
 
-    def __init__(self, signal_info):
+    def __init__(self):
         super().__init__()
         self.analyse_btn = QPushButton(" 分 析 ")
-        self.load_model_name = self.load_model_name_from_db()
         self.ai_analyse_score_lineedit = QTextEdit()
-        self.signal_info = signal_info
+        self.signal_info = None
         self.ok_btn = QPushButton(" OK ")
         self.ng_btn = QPushButton(" NG ")
         self.init_ui()
@@ -495,8 +541,6 @@ class AnalyseWindow(QWidget):
         model_label.setFixedHeight(25)
         self.model_combo_box = QComboBox(self)
         self.model_combo_box.setFixedHeight(25)
-        for model_name in self.load_model_name:
-            self.model_combo_box.addItem(model_name)
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo_box)
         model_layout.setSpacing(15)
@@ -531,16 +575,6 @@ class AnalyseWindow(QWidget):
         ai_analyse_layout.addItem(v_ai_analyse_bottom_space)
 
         return ai_analyse_layout
-
-    @staticmethod
-    def load_model_name_from_db():
-        model_list = []
-        query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
-        if query_code == error_code.OK:
-            for idx, name in enumerate(query_result):
-                query_result_idx = query_result[idx]
-                model_list.append(query_result_idx[0])
-        return model_list
 
 
 if __name__ == "__main__":

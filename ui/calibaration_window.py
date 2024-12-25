@@ -1,11 +1,11 @@
-import numpy as np
 import sys
 import threading
 
+import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QPushButton, QVBoxLayout, QGridLayout
-from PyQt5.QtWidgets import QApplication, QSpacerItem, QSizePolicy, QDoubleSpinBox, QMessageBox
+from PyQt5.QtWidgets import QApplication, QDialog, QDoubleSpinBox, QGridLayout, QGroupBox, QLabel
+from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QSpacerItem, QHBoxLayout, QPushButton, QVBoxLayout, QMessageBox
 
 from base.log_manager import LogManager
 from base.pre_processing.swept_sine_chirps import StimulusSignal
@@ -251,13 +251,25 @@ class CalibrationWindow(QDialog):
         calibrate_code, calibrate_result = scm.calibrate_amplitude(target_voltage)
         if calibrate_code != error_code.OK:
             self.default_logger.error(f"Failed to calculate the amplitude. {calibrate_result}")
-        amplitude = calibrate_result
+        amplitude, max_voltage = calibrate_result
+        if target_voltage > max_voltage:
+            if self.test_calibration_popup():
+                return
         data, sr = StimulusSignal().generate_chirps(start_freq=800, stop_freq=800, total_time=10, sample_rate=44100,
                                                     stimulus_type='linear')
         test_stimulus_dict = {"data": data, "sr": sr, "amplitude": amplitude}
         speaker_code, msg = SoundcardAudioProcessor().speaker_worker(test_stimulus_dict, self.speaker)
         if speaker_code != error_code.OK:
             self.default_logger.error(f"Failed to play the audio. {msg}")
+
+    def test_calibration_popup(self):
+        test_msg = QMessageBox(self)
+        test_msg.setIcon(QMessageBox.Warning)
+        test_msg.setText("目标电压过大，请重新输入!")
+        test_msg.setWindowTitle("测试失败")
+        test_msg.setStandardButtons(QMessageBox.Ok)
+        button = test_msg.exec_()
+        return button == QMessageBox.Ok
 
     def calibration(self):
         scm = SoundcardCalibrationManager()
