@@ -18,6 +18,7 @@ from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.stimulus_signal_management import StimulusSignalManagement
 from consts import error_code, model_consts, ui_style_const
+from consts.running_consts import DEFAULT_DIR
 
 
 class StimulusWindow(QDialog):
@@ -325,7 +326,7 @@ class StimulusWindow(QDialog):
         self.stimulus_signal, _ = create_function(**self.stimulus_info)
 
     def save_stimulus_to_json(self):
-        json_file_path = "ui_config/stimulus.json"
+        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
         stimulus_name = "_".join(str(value) for value in self.stimulus_info.values())
         stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
         wavfile.write(stimulus_signal_path, self.stimulus_info["sample_rate"], self.stimulus_signal.astype("float32"))
@@ -377,7 +378,7 @@ class StimulusWindow(QDialog):
     def load_wav_btn_clicked(self):
         path, _ = QFileDialog.getOpenFileName(self,
                                               "打开音频",
-                                              "../audio_data/stimulus",
+                                              DEFAULT_DIR + "audio_data/stimulus",
                                               "WAV Files (*.wav)",
                                               options=QFileDialog.DontUseNativeDialog)
         if path:
@@ -387,7 +388,7 @@ class StimulusWindow(QDialog):
     def save_wav_btn_clicked(self):
         file_name, _ = QFileDialog.getSaveFileName(self,
                                                    "保存音频",
-                                                   "../audio_data/stimulus",
+                                                   DEFAULT_DIR + "audio_data/stimulus",
                                                    "WAV Files (*.wav)",
                                                    options=QFileDialog.DontUseNativeDialog)
         if file_name:
@@ -404,7 +405,7 @@ class StimulusWindow(QDialog):
 
     def save_amplitude_to_txt(self):
         amplitude_value = self.stimulus_info["amplitude"]
-        dir_path = 'ui_config'
+        dir_path = DEFAULT_DIR + 'ui/ui_config'
         if not os.path.exists(dir_path):
             os.mkdir(dir_path)
             self.default_logger.info(f"Dir '{dir_path}' created.")
@@ -417,7 +418,7 @@ class StimulusWindow(QDialog):
             self.default_logger.error("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
 
     def load_amplitude_from_txt(self):
-        file_path = "ui_config/amplitude_value.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/amplitude_value.txt"
         try:
             with open(file_path, 'r') as f:
                 amplitude_value = float(f.read())
