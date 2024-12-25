@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import QMessageBox, QPushButton, QSpacerItem, QSizePolicy, 
 from base.db_manager import DataSave
 from base.log_manager import LogManager
 from consts import error_code, model_consts, ui_style_const
-
+from consts.running_consts import DEFAULT_DIR
 
 ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
 
@@ -29,7 +29,7 @@ class LoginWindow(QDialog):
         self.setWindowTitle("登录")
         self.setMaximumSize(600, 600)
         self.setMinimumSize(300, 400)
-        self.setWindowIcon(QIcon("./ui_pic/login_ui_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/login_ui_pic/DT_ico.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setAutoFillBackground(True)
 
@@ -157,7 +157,7 @@ class LoginWindow(QDialog):
 
         self.login_layout.setSpacing(space_size)
 
-        original_pixmap = QPixmap("./ui_pic/login_ui_pic/ui_login_icon.png")
+        original_pixmap = QPixmap(DEFAULT_DIR + "ui/ui_pic/login_ui_pic/ui_login_icon.png")
         scaled_pixmap = original_pixmap.scaledToHeight(200, Qt.SmoothTransformation)
         pixmap = QPixmap(event.size().width(), 200)
         pixmap.fill(QColor(174, 171, 162))

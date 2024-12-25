@@ -20,6 +20,7 @@ from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, model_consts, ui_style_const
+from consts.running_consts import DEFAULT_DIR
 from main import predict
 from ui.signal_analysis_window import SignalAnalysisWindow
 
@@ -125,7 +126,7 @@ class SequenceWindow(QWidget):
         self.lineedit_s_or_n_count.setStyleSheet("font-size: 17pt;")
         self.player_btn.setFixedSize(100, 100)
         self.player_btn.setStyleSheet("border-radius: 50px;border: 1px solid rgb(173, 173, 173);")
-        self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/bofang.png"))
+        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/bofang.png"))
         self.player_btn.setIconSize(QSize(100, 100))
         self.player_btn.clicked.connect(self.clicked_player_btn)
 
@@ -231,7 +232,7 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def load_stimulus_from_json():
-        json_file_path = "ui_config/stimulus.json"
+        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
         with open(json_file_path, 'r') as json_file:
@@ -239,8 +240,8 @@ class SequenceWindow(QWidget):
             return error_code.OK, data
 
     def save_recorded_num_to_text(self):
-        dir_path = 'ui_config'
-        file_path = os.path.join(dir_path, "recorded_number.txt")
+        dir_path = DEFAULT_DIR + 'ui/ui_config/'
+        file_path = dir_path + "recorded_number.txt"
         current_time = datetime.now().strftime("%Y-%m-%d")
         check_flag, count = self.check_datetime(file_path, current_time)
         if check_flag:
@@ -254,7 +255,7 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def load_recorded_num_from_text():
-        file_path = "ui_config/recorded_number.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.txt"
         if not os.path.exists(file_path):
             return None
         with open(file_path, 'r') as f:
@@ -314,13 +315,13 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def save_analyse_model(selected_model):
-        file_path = "ui_config/analyse_model.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
         with open(file_path, 'w') as f:
             f.write(selected_model)
 
     @staticmethod
     def load_analyse_model():
-        file_path = "ui_config/analyse_model.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             return ""
         with open(file_path, 'r') as f:
@@ -441,10 +442,10 @@ class SequenceWindow(QWidget):
 
     def update_player_icon(self):
         if self.player_status_flag:
-            self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/chongbo.png"))
+            self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/chongbo.png"))
             self.player_btn.setIconSize(QSize(70, 70))
         else:
-            self.player_btn.setIcon(QIcon("./ui_pic/sequence_pic/bofang.png"))
+            self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/bofang.png"))
             self.player_btn.setIconSize(QSize(100, 100))
         self.player_btn.setDisabled(False)
 
@@ -504,10 +505,10 @@ class AnalyseWindow(QWidget):
         ai_analyse_dialog.setMaximumWidth(400)
 
         btn_layout = QVBoxLayout()
-        self.ok_btn.setIcon(QIcon("./ui_pic/sequence_pic/lvseyuan.png"))
+        self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/lvseyuan.png"))
         self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle + "font-size: 20pt;")
         self.ok_btn.setFixedSize(100, 150)
-        self.ng_btn.setIcon(QIcon("./ui_pic/sequence_pic/hongseyuan.png"))
+        self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/hongseyuan.png"))
         self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle + "font-size: 20pt;")
         self.ng_btn.setFixedSize(100, 150)
         self.ok_btn.setMaximumWidth(100)

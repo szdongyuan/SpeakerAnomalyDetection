@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget
 
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
+from consts.running_consts import DEFAULT_DIR
 from main import evaluate, init_model_from_config, train
 
 
@@ -62,7 +63,8 @@ class AiWindow(QDialog):
         train_dir_label = QLabel("训练数据路径：")
         # train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
         self.train_dir_box = QLineEdit()
-        train_dir_icon = QIcon("./ui_pic/ai_window_pic/folder-s.png")
+        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
+        train_dir_icon = QIcon(icon_path)
         train_dir_action = self.train_dir_box.addAction(train_dir_icon, QLineEdit.TrailingPosition)
         train_dir_action.setToolTip("添加训练数据")
         train_dir_action.triggered.connect(self.train_dir_btn_clicked)
@@ -81,7 +83,7 @@ class AiWindow(QDialog):
         evaluate_dir_label = QLabel("测试数据路径：")
         self.evaluate_dir_box = QLineEdit()
         self.evaluate_dir_box.setPlaceholderText("请选择测试数据路径")
-        evaluate_dir_icon = QIcon("./ui_pic/ai_window_pic/folder-s.png")
+        evaluate_dir_icon = QIcon(icon_path)
         evaluate_dir_action = self.evaluate_dir_box.addAction(evaluate_dir_icon, QLineEdit.TrailingPosition)
         evaluate_dir_action.setToolTip("添加测试数据")
         evaluate_dir_action.triggered.connect(self.evaluate_dir_btn_clicked)
@@ -103,7 +105,7 @@ class AiWindow(QDialog):
         splitter = QSplitter(Qt.Horizontal)
         base_model_frame = QFrame()
         base_model_frame.setLayout(base_model_layout)
-        base_model_layout.setContentsMargins(0,0,0,0)
+        base_model_layout.setContentsMargins(0, 0, 0, 0)
         btn_function_frame = QFrame()
         btn_function_frame.setLayout(btn_function_layout)
         splitter.addWidget(base_model_frame)
@@ -121,7 +123,7 @@ class AiWindow(QDialog):
     def train_dir_btn_clicked(self):
         path = QFileDialog.getExistingDirectory(self,
                                                 "选择训练数据目录",
-                                                "../audio_data",
+                                                DEFAULT_DIR + "audio_data",
                                                 options=QFileDialog.DontUseNativeDialog)
         if path:
             self.train_dir = path
@@ -131,7 +133,7 @@ class AiWindow(QDialog):
     def evaluate_dir_btn_clicked(self):
         path = QFileDialog.getExistingDirectory(self,
                                                 "选择评估数据目录",
-                                                "../audio_data",
+                                                DEFAULT_DIR + "audio_data",
                                                 options=QFileDialog.DontUseNativeDialog)
         if path:
             self.test_dir = path
@@ -183,20 +185,20 @@ class AiWindow(QDialog):
 
     @staticmethod
     def load_model_path_from_config():
-        file_path = "ui_config/model_path.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/model_path.txt"
         with open(file_path, 'r') as f:
             model_path = f.read()
         return model_path
 
     @staticmethod
     def save_default_train_test_path(path, mode="train"):
-        file_path = "ui_config/%s_data_path.txt" % mode
+        file_path = DEFAULT_DIR + "ui/ui_config/%s_data_path.txt" % mode
         with open(file_path, 'w') as f:
             f.write(path)
 
     @staticmethod
     def load_default_train_test_path(mode="train"):
-        path_file = "ui_config/%s_data_path.txt" % mode
+        path_file = DEFAULT_DIR + "ui/ui_config/%s_data_path.txt" % mode
         if not os.path.exists(path_file):
             return ""
         with open(path_file, 'r') as f:
@@ -273,7 +275,7 @@ class BaseModel(QWidget):
 
     @staticmethod
     def load_default_model_path():
-        file_path = "ui_config/model_path.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/model_path.txt"
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             return ""
         try:
@@ -304,7 +306,7 @@ class BaseModel(QWidget):
         return model
 
     def save_model_path_to_config(self):
-        dir_path = 'ui_config'
+        dir_path = DEFAULT_DIR + 'ui/ui_config'
         if not os.path.exists(dir_path):
             os.mkdir(dir_path)
         file_path = dir_path + "/" + "model_path.txt"
