@@ -13,7 +13,6 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from consts import ui_style_const
 
 
-
 class SignalAnalysisWindow(QDialog):
     def __init__(self, signal_info):
         super().__init__()
