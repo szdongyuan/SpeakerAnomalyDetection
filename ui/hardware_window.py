@@ -1,7 +1,7 @@
 import sys
 import soundcard as sc
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel
+from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel, QIcon
 from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView
 from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage
 
@@ -20,6 +20,7 @@ class HardwareWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowTitle("硬件设置")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
@@ -145,6 +146,7 @@ class DeviceListWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowTitle("选择设备%s" % self.device_title)
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
@@ -208,6 +210,7 @@ class CalibrationWizard(QWizard):
         self.init_ui()
 
     def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWizardStyle(QWizard.ModernStyle)
         self.setWindowTitle("输出校准向导")

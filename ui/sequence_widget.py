@@ -50,6 +50,7 @@ class SequenceWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setMinimumHeight(700)
         button_layout = self.create_title_btn_layout()
         layout_data = self.create_data_layout()
