@@ -1,10 +1,12 @@
 import sys
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar
 
 from base.log_manager import LogManager
 from consts import ui_style_const
+from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
 from ui.calibaration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device
@@ -45,6 +47,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
+        self.set_title()
         self.init_menu()
         self.init_sequence_widget()
         self.sequence_window.close()
@@ -52,6 +55,11 @@ class MainWindow(QMainWindow):
         self.show_statusbar_layout()
         self.showMaximized()
         self.on_login_window_init()
+
+    def set_title(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowTitle("谛听异音检测 -0.12 beta")
+        self.setMinimumSize(1030, 760)
 
     def init_sequence_widget(self):
         self.sequence_window = SequenceWindow()

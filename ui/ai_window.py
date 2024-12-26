@@ -43,6 +43,7 @@ class AiWindow(QDialog):
         self.process.ensureCursorVisible()
 
     def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowTitle("AI训练窗口")
         # self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         # self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)

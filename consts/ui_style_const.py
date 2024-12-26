@@ -90,7 +90,6 @@ qdialog_stytle = """
 
 qlabel_stytle = """
             QLabel {
-                background-corlor: rgb(174, 171, 162);
                 border-radius: 3px;
                 font-size: 11pt;
             }

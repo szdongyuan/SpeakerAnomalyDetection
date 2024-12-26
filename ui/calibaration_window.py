@@ -3,7 +3,7 @@ import threading
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QPainter
+from PyQt5.QtGui import QColor, QPainter, QIcon
 from PyQt5.QtWidgets import QApplication, QDialog, QDoubleSpinBox, QGridLayout, QGroupBox, QLabel
 from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QSpacerItem, QHBoxLayout, QPushButton, QVBoxLayout, QMessageBox
 
@@ -12,6 +12,7 @@ from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from consts import error_code, ui_style_const
+from consts.running_consts import DEFAULT_DIR
 
 
 class CalibrationWindow(QDialog):
@@ -31,6 +32,7 @@ class CalibrationWindow(QDialog):
         self.get_calibration_param()
 
     def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowTitle("校准")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
