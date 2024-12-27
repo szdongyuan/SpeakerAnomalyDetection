@@ -41,7 +41,6 @@ class SoundcardAudioProcessor(object):
         pool.apply_async(self.speaker_worker, (stimulus_dict, speaker))
         pool.close()
         pool.join()
-        self.logger.info("All processes have finished.")
         return error_code.OK, "All processes have finished."
 
     @staticmethod
