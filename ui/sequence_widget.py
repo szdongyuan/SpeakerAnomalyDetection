@@ -504,6 +504,7 @@ class AnalyseWindow(QWidget):
         ai_analyse_layout = self.create_ai_analyse_layout()
         ai_analyse_dialog.setLayout(ai_analyse_layout)
         ai_analyse_dialog.setMaximumWidth(400)
+        ai_analyse_dialog.setMinimumWidth(300)
 
         btn_layout = QVBoxLayout()
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/lvseyuan.png"))
@@ -538,9 +539,9 @@ class AnalyseWindow(QWidget):
         ai_title_layout.addItem(h_title_space)
 
         model_layout = QHBoxLayout()
-        model_label = QLabel(" 模型 ")
+        model_label = QLabel(" 模  型 ")
         model_label.setStyleSheet("background-color: #4472c4; color: white;")
-        model_label.setFixedHeight(25)
+        model_label.setFixedSize(65, 25)
         self.model_combo_box = QComboBox(self)
         self.model_combo_box.setFixedHeight(25)
         model_layout.addWidget(model_label)
