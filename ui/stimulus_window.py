@@ -185,7 +185,7 @@ class StimulusWindow(QDialog):
         time_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
         total_time_label = QLabel("信号时长：")
         self.total_time_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.total_time_box.setSuffix(" S")
+        self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)
         self.total_time_box.setRange(0.5, 60)
         self.total_time_box.setValue(4)
@@ -227,7 +227,7 @@ class StimulusWindow(QDialog):
         self.voltage_combo_box.addItems(["RMS", "Peak"])
         self.voltage_combo_box.currentTextChanged.connect(self.stimulus_changed)
         self.voltage_spin_box.setSuffix(" V")
-        self.voltage_spin_box.setValue(self.load_amplitude_from_txt())
+        self.voltage_spin_box.setValue(self.load_voltage_from_txt())
         self.voltage_spin_box.setSingleStep(0.1)
         self.voltage_spin_box.setMinimum(0.1)
         self.voltage_spin_box.editingFinished.connect(self.stimulus_changed)
@@ -307,6 +307,7 @@ class StimulusWindow(QDialog):
             "num_steps": self.step_box.value(),
             "voltage_type": self.voltage_combo_box.currentText(),
             "voltage": self.voltage_spin_box.value(),
+            "amplitude": self.get_predict_amplitude(self.voltage_spin_box.value()),
             "sample_rate": int(self.sample_rate_combo_box.currentText()),
         }
 
@@ -317,6 +318,16 @@ class StimulusWindow(QDialog):
             if self.stimulus_info.get("use_custom_stimulus"):
                 self.create_signal_from_stimulus_info()
             self.graph_stimulus()
+
+    @staticmethod
+    def get_predict_amplitude(target_voltage):
+        code, result_amplitude = SoundcardCalibrationManager().calibrate_amplitude(target_voltage,
+                                                                                   json_file_name="calibration_coefficients.json")
+        if code == error_code.OK:
+            predict_amplitude, max_voltage = result_amplitude
+            return predict_amplitude
+        else:
+            return 0.0
 
     def create_signal_from_stimulus_info(self):
         create_function_dict = {
@@ -398,17 +409,14 @@ class StimulusWindow(QDialog):
             save_audio_simple(file_name + ".wav", self.stimulus_signal, sr)
 
     def play_btn_clicked(self):
-        code, result_amplitude = SoundcardCalibrationManager().calibrate_amplitude(self.stimulus_info["voltage"],
-                                                                                   json_file_name="calibration_coefficients.json")
-        predict_amplitude, max_voltage = result_amplitude
         stimulus_param = {"data": self.stimulus_signal,
-                          "amplitude": predict_amplitude,
+                          "amplitude": self.stimulus_info["amplitude"],
                           "sr": self.stimulus_info["sample_rate"]}
         play_code, msg = SoundcardAudioProcessor().speaker_worker(stimulus_param, self.speaker)
         if play_code != error_code.OK:
             self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 
-    def save_amplitude_to_txt(self):
+    def save_voltage_to_txt(self):
         voltage_value = self.stimulus_info["voltage"]
         dir_path = DEFAULT_DIR + 'ui/ui_config'
         if not os.path.exists(dir_path):
@@ -422,7 +430,7 @@ class StimulusWindow(QDialog):
         except Exception as e:
             self.default_logger.error("Failed to save voltage value to txt. %s" % (str(e)[:40]))
 
-    def load_amplitude_from_txt(self):
+    def load_voltage_from_txt(self):
         file_path = DEFAULT_DIR + "ui/ui_config/voltage_value.txt"
         try:
             with open(file_path, 'r') as f:
@@ -436,7 +444,7 @@ class StimulusWindow(QDialog):
         print("ok_btn clicked")
         self.refresh_stimulus_info = True
         self.save_stimulus_to_json()
-        self.save_amplitude_to_txt()
+        self.save_voltage_to_txt()
         self.close()
 
     def cancel_btn_clicked(self):
