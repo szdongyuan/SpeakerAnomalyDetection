@@ -125,3 +125,12 @@ main_window_menubar_stytle = """
                 padding-right: 10px;
             }
 """
+
+signal_analysis_tabpushbutton_stytle = """
+            QPushButton {
+                border: None;
+                color: rgb(155, 156, 156);
+                background-color: transparent;
+                font-size: 11pt;
+            }
+"""

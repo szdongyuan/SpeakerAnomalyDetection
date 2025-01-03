@@ -34,13 +34,26 @@ class SignalAnalysisWindow(QDialog):
                            "QPushButton:hover {background-color: #4472c4; color: white; border-color: #803333ff;}")
         signal_analysis_layout = QVBoxLayout()
 
+        close_spl_btn = QPushButton("×")
+        close_spl_btn.setStyleSheet(ui_style_const.signal_analysis_tabpushbutton_stytle)
+        close_spl_btn.clicked.connect(lambda : self.close_tab("声压级"))
+        close_fre_btn = QPushButton("×")
+        close_fre_btn.setStyleSheet(ui_style_const.signal_analysis_tabpushbutton_stytle)
+        close_fre_btn.clicked.connect(lambda : self.close_tab("频响"))
+        close_thd_btn = QPushButton("×")
+        close_thd_btn.setStyleSheet(ui_style_const.signal_analysis_tabpushbutton_stytle)
+        close_thd_btn.clicked.connect(lambda : self.close_tab("失真"))
+
         self.tabwidget = QTabWidget()
         self.spl_wnd = Spl(self.signal_info)
         self.frequency_wnd = Frequency(self.signal_info)
         self.distortion_wnd = Distortion(self.signal_info)
-        self.tabwidget.addTab(self.spl_wnd, "声压级")
-        self.tabwidget.addTab(self.frequency_wnd, "频响")
-        self.tabwidget.addTab(self.distortion_wnd, "失真")
+        index_spl = self.tabwidget.addTab(self.spl_wnd, "声压级")
+        index_fre = self.tabwidget.addTab(self.frequency_wnd, "频响")
+        index_thd = self.tabwidget.addTab(self.distortion_wnd, "失真")
+        self.tabwidget.tabBar().setTabButton(index_spl, 1, close_spl_btn)
+        self.tabwidget.tabBar().setTabButton(index_fre, 1, close_fre_btn)
+        self.tabwidget.tabBar().setTabButton(index_thd, 1, close_thd_btn)
         self.tabwidget.setStyleSheet("""QTabWidget > * {border: none;}""")
 
         base_btn_layout = QGridLayout()
@@ -53,6 +66,12 @@ class SignalAnalysisWindow(QDialog):
         signal_analysis_layout.addWidget(self.tabwidget)
         signal_analysis_layout.addLayout(base_btn_layout)
         self.setLayout(signal_analysis_layout)
+
+    def close_tab(self, tab_name):
+        for index in range(self.tabwidget.count()):
+            if self.tabwidget.tabText(index) == tab_name:
+                self.tabwidget.removeTab(index)
+                break
 
     def save_btn_clicked(self):
         current_widget = self.tabwidget.currentWidget()
