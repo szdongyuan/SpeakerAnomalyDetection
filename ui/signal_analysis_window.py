@@ -22,9 +22,11 @@ class SignalAnalysisWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
+        # set the dialog theme and disable help and close btutton
         self.setWindowTitle("音频分析窗口")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        # set widget style
         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle +
@@ -32,8 +34,9 @@ class SignalAnalysisWindow(QDialog):
                            "QTabWidget {font-size: 11pt;}" +
                            "QPushButton {background-color: #4472c4; color: white;}" +
                            "QPushButton:hover {background-color: #4472c4; color: white; border-color: #803333ff;}")
-        signal_analysis_layout = QVBoxLayout()
+        signal_analysis_layout = QVBoxLayout()      # create main layout
 
+        # set close tab button
         close_spl_btn = QPushButton("×")
         close_spl_btn.setStyleSheet(ui_style_const.signal_analysis_tabpushbutton_stytle)
         close_spl_btn.clicked.connect(lambda : self.close_tab("声压级"))
@@ -44,6 +47,7 @@ class SignalAnalysisWindow(QDialog):
         close_thd_btn.setStyleSheet(ui_style_const.signal_analysis_tabpushbutton_stytle)
         close_thd_btn.clicked.connect(lambda : self.close_tab("失真"))
 
+        # set three tab, show spl, frequency and thd's result
         self.tabwidget = QTabWidget()
         self.spl_wnd = Spl(self.signal_info)
         self.frequency_wnd = Frequency(self.signal_info)
@@ -54,11 +58,11 @@ class SignalAnalysisWindow(QDialog):
         self.tabwidget.tabBar().setTabButton(index_spl, 1, close_spl_btn)
         self.tabwidget.tabBar().setTabButton(index_fre, 1, close_fre_btn)
         self.tabwidget.tabBar().setTabButton(index_thd, 1, close_thd_btn)
-        self.tabwidget.setStyleSheet("""QTabWidget > * {border: none;}""")
+        self.tabwidget.setStyleSheet("""QTabWidget > * {border: none;}""")  # set tabwidget's child is no border
 
         base_btn_layout = QGridLayout()
-        save_btn = QPushButton("保  存")
-        save_btn.setFixedSize(100, 25)
+        save_btn = QPushButton("保  存")        # use to save current tab analysis data
+        save_btn.setFixedSize(100, 30)
         save_btn.clicked.connect(self.save_btn_clicked)
 
         base_btn_layout.addWidget(save_btn, 0, 0)
@@ -68,6 +72,7 @@ class SignalAnalysisWindow(QDialog):
         self.setLayout(signal_analysis_layout)
 
     def close_tab(self, tab_name):
+        # Close the corresponding TAB
         for index in range(self.tabwidget.count()):
             if self.tabwidget.tabText(index) == tab_name:
                 self.tabwidget.removeTab(index)
@@ -82,6 +87,7 @@ class SignalAnalysisWindow(QDialog):
             self.save_failed_popup()
 
     def save_failed_popup(self):
+        # the function infor us the right way to save
         save_failed_msg = QMessageBox(self)
         save_failed_msg.setIcon(QMessageBox.Critical)
         save_failed_msg.setText("请先点击绘图按钮")
@@ -90,6 +96,7 @@ class SignalAnalysisWindow(QDialog):
         save_failed_msg.exec_()
 
     def save_data_to_txt(self, result):
+        # save file to the   selected location
         file_path, _ = QFileDialog.getSaveFileName(self,
                                                    "保存数据",
                                                    "",
@@ -117,6 +124,7 @@ class Distortion(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        # layout have a child's layout and plotwidget, use to display the thd analysis results
         layout = QVBoxLayout()
         harmonic_group_box = QGroupBox("谐波")
         harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -125,7 +133,6 @@ class Distortion(QWidget):
         harmonic_group_box.setLayout(harmonic_slider_layout)
 
         self.thd_plot = pg.PlotWidget()
-        # self.thd_plot.setFixedSize(400, 300)
         self.thd_plot.setBackground('white')
 
         layout.addWidget(harmonic_group_box)
@@ -133,16 +140,18 @@ class Distortion(QWidget):
         self.setLayout(layout)
 
     def create_harmonic_slider_layout(self):
+        # harmonic_slider_layout have scroll_area and drawing button, scroll_area is used to sellect thd's step
         harmonic_slider_layout = QHBoxLayout()
         scroll_area = QScrollArea()
         scroll_area.setFixedSize(130, 120)
         box_container = QWidget()
         box_layout = QVBoxLayout()
 
+        # add step's data to scroll area, and label is clicked return row num 
         for i in range(2, 9):
             label_text = self.get_label_text(i)
             label = QLabel(label_text)
-            label.setMinimumSize(55, 20)
+            label.setMinimumSize(75, 25)
             label.setStyleSheet("border: None;")
             label.setAlignment(Qt.AlignLeft)
             label.setAutoFillBackground(True)
@@ -153,7 +162,7 @@ class Distortion(QWidget):
 
         btn_layout = QVBoxLayout()
         plt_btn = QPushButton('绘  图')
-        plt_btn.setFixedSize(100, 25)
+        plt_btn.setFixedSize(100, 30)
         plt_btn.clicked.connect(self.calculate_thd)
         btn_layout.addWidget(plt_btn)
         btn_layout.setAlignment(Qt.AlignBottom)
@@ -164,6 +173,7 @@ class Distortion(QWidget):
 
     @staticmethod
     def get_label_text(value):
+        # set the thd step
         if value == 2:
             return str(value)
         elif value >= 7:
@@ -195,6 +205,7 @@ class Distortion(QWidget):
         return self.result
 
     def plot_graph(self, freq_value, thd):
+        # Draw a graph based on the calculated thd
         self.thd_plot.clear()
         if self.check_valid_data(freq_value) and self.check_valid_data(thd):
             self.thd_plot.plot(freq_value, thd, pen='b', name="THD")
@@ -210,6 +221,7 @@ class Distortion(QWidget):
         return isinstance(data, (list, np.ndarray)) and len(data) > 0
 
     def on_label_click(self, event, value, label):
+        # Change the background to light blue when the label is selected and get the step
         palette = label.palette()
         current_color = palette.color(label.backgroundRole()).name()
         background_color = self.palette().color(self.backgroundRole()).name()
@@ -225,6 +237,7 @@ class Distortion(QWidget):
             self.selected_label = None
 
     def get_selected_harmonics(self, value):
+        # according to label row num, get step num
         if value >= 7:
             step = 5
             start = (value - step) * step - 1
@@ -241,6 +254,8 @@ class Spl(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        # this widget have a box and two PlotWidget, box dispaly the rederence sound pressure, PlotWidget is use
+        # to dispaly the waveform and Sound Pressure Level
         spl_box = self.spl_box()
         self.waveform_plot = pg.PlotWidget(title='Waveform')
         self.waveform_plot.setBackground('white')
@@ -253,6 +268,7 @@ class Spl(QWidget):
         self.setLayout(layout)
 
     def spl_box(self):
+        # spl_box have label and lineedit used to display sound pressure levels and a drawing button
         spl_box = QGroupBox("声压级")
         spl_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         spl_box.setStyleSheet("QLabel {border:None;}"
@@ -262,10 +278,10 @@ class Spl(QWidget):
         ref_pre_box.setText("20µPa")
         ref_pre_box.setAlignment(Qt.AlignCenter)
         ref_pre_box.setReadOnly(True)
-        ref_pre_box.setFixedSize(100, 20)
+        ref_pre_box.setFixedSize(100, 30)
         h_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         plt_btn = QPushButton('绘  图')
-        plt_btn.setFixedSize(100, 25)
+        plt_btn.setFixedSize(100, 30)
         plt_btn.clicked.connect(self.calculate_spl)
         spl_box_layout = QHBoxLayout()
         spl_box_layout.addWidget(ref_pre_box_label)
@@ -276,6 +292,7 @@ class Spl(QWidget):
         return spl_box
 
     def calculate_spl(self):
+        # calculate Sound Pressure Level according to recorded_signal
         recorded_signal = self.signal_info["recorded_signal"]
         sample_rate = self.signal_info["sample_rate"]
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
@@ -289,6 +306,7 @@ class Spl(QWidget):
         return self.result
 
     def plot_spl(self, signal_duration, recorded_signal, signal_spl):
+        # drawing the waveform and Sound Pressure Level
         self.waveform_plot.clear()
         self.spl_plot.clear()
         self.waveform_plot.plot(signal_duration, recorded_signal, pen='b')
@@ -310,6 +328,7 @@ class Frequency(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        # this widget have drawing button and display the Frequency Response's PlotWidget 
         frequency_response_box = self.frequency_response_box()
         self.fr_plot = pg.PlotWidget(title='Frequency Response')
         # self.fr_plot.setFixedSize(400, 320)
@@ -323,7 +342,7 @@ class Frequency(QWidget):
         fr_box = QGroupBox("频响")
         # fr_box.setFixedSize(400, 80)
         plt_btn = QPushButton('绘  图')
-        plt_btn.setFixedSize(100, 25)
+        plt_btn.setFixedSize(100, 30)
         plt_btn.clicked.connect(self.calculate_fr)
         fr_box_layout = QHBoxLayout()
         fr_box_layout.addWidget(plt_btn)
@@ -342,6 +361,7 @@ class Frequency(QWidget):
         return self.result
 
     def plot_fr(self, frequency_list, fr):
+        # drawing the Frequency Response
         self.fr_plot.clear()
         self.fr_plot.plot(frequency_list, fr, pen='b')
         self.fr_plot.setLabel('left', 'Amplitude (dB)')
