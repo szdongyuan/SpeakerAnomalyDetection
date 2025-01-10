@@ -16,7 +16,6 @@ from base.load_audio import load_audio_simple, save_audio_simple
 from base.log_manager import LogManager
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.soundcard_audio_processor import SoundcardAudioProcessor
-from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from base.stimulus_signal_management import StimulusSignalManagement
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -56,8 +55,8 @@ class StimulusWindow(QDialog):
         self.total_time_box = QDoubleSpinBox()
         self.repeat_box = QSpinBox()
         self.step_box = QSpinBox()
-        self.voltage_combo_box = QComboBox()
-        self.voltage_spin_box = QDoubleSpinBox()
+        self.amplitude_combo_box = QComboBox()
+        self.amplitude_spin_box = QDoubleSpinBox()
         self.sample_rate_combo_box = QComboBox()
 
         self.frequency_group_box = self.create_frequency_group_box()
@@ -94,9 +93,9 @@ class StimulusWindow(QDialog):
         custom_stimulus_layout.setContentsMargins(0, 0, 10, 0)
 
         output_layout = QHBoxLayout()
-        voltage_group_box = self.create_voltage_group_box()
+        amplitude_group_box = self.create_amplitude_group_box()
         sample_rate_group_box = self.create_sample_rate_group_box()
-        output_layout.addWidget(voltage_group_box)
+        output_layout.addWidget(amplitude_group_box)
         output_layout.addWidget(sample_rate_group_box)
 
         stimulus_type_group_box = self.create_stimulus_type_group_box()
@@ -221,24 +220,24 @@ class StimulusWindow(QDialog):
         step_group_box.setLayout(step_layout)
         return step_group_box
 
-    def create_voltage_group_box(self):
-        voltage_group_box = QGroupBox("输出电压")
-        voltage_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
-        self.voltage_combo_box.addItems(["RMS", "Peak"])
-        self.voltage_combo_box.currentTextChanged.connect(self.stimulus_changed)
-        self.voltage_spin_box.setSuffix(" V")
-        self.voltage_spin_box.setValue(self.load_voltage_from_txt())
-        self.voltage_spin_box.setSingleStep(0.1)
-        self.voltage_spin_box.setMinimum(0.1)
-        self.voltage_spin_box.editingFinished.connect(self.stimulus_changed)
+    def create_amplitude_group_box(self):
+        amplitude_group_box = QGroupBox("信号幅值")
+        amplitude_group_box.setStyleSheet(ui_style_const.qgroupbox_stytle)
+        self.amplitude_combo_box.addItems(["RMS", "Peak"])
+        self.amplitude_combo_box.currentTextChanged.connect(self.stimulus_changed)
+        self.amplitude_spin_box.setSuffix(" V")
+        self.amplitude_spin_box.setValue(self.load_amplitude_from_txt())
+        self.amplitude_spin_box.setSingleStep(0.1)
+        self.amplitude_spin_box.setMinimum(0.1)
+        self.amplitude_spin_box.editingFinished.connect(self.stimulus_changed)
 
-        voltage_layout = QHBoxLayout()
-        voltage_layout.addWidget(self.voltage_combo_box)
-        voltage_layout.addWidget(self.voltage_spin_box)
-        voltage_layout.setContentsMargins(10, 10, 6, 10)
-        voltage_group_box.setLayout(voltage_layout)
+        amplitude_layout = QHBoxLayout()
+        amplitude_layout.addWidget(self.amplitude_combo_box)
+        amplitude_layout.addWidget(self.amplitude_spin_box)
+        amplitude_layout.setContentsMargins(10, 10, 6, 10)
+        amplitude_group_box.setLayout(amplitude_layout)
 
-        return voltage_group_box
+        return amplitude_group_box
 
     def create_sample_rate_group_box(self):
         sample_rate_group_box = QGroupBox("采样率")
@@ -305,9 +304,8 @@ class StimulusWindow(QDialog):
             "total_time": self.total_time_box.value(),
             "repeat_times": self.repeat_box.value(),
             "num_steps": self.step_box.value(),
-            "voltage_type": self.voltage_combo_box.currentText(),
-            "voltage": self.voltage_spin_box.value(),
-            "amplitude": self.get_predict_amplitude(self.voltage_spin_box.value()),
+            "amplitude_type": self.amplitude_combo_box.currentText(),
+            "amplitude": self.amplitude_spin_box.value(),
             "sample_rate": int(self.sample_rate_combo_box.currentText()),
         }
 
@@ -318,16 +316,6 @@ class StimulusWindow(QDialog):
             if self.stimulus_info.get("use_custom_stimulus"):
                 self.create_signal_from_stimulus_info()
             self.graph_stimulus()
-
-    @staticmethod
-    def get_predict_amplitude(target_voltage):
-        code, result_amplitude = SoundcardCalibrationManager().calibrate_amplitude(target_voltage,
-                                                                                   json_file_name="calibration_coefficients.json")
-        if code == error_code.OK:
-            predict_amplitude, max_voltage = result_amplitude
-            return predict_amplitude
-        else:
-            return 0.0
 
     def create_signal_from_stimulus_info(self):
         create_function_dict = {
@@ -363,8 +351,8 @@ class StimulusWindow(QDialog):
         self.total_time_box.setValue(float(self.stimulus_info["total_time"]))
         self.repeat_box.setValue(int(self.stimulus_info["repeat_times"]))
         self.step_box.setValue(int(self.stimulus_info["num_steps"]))
-        self.voltage_combo_box.setCurrentText(self.stimulus_info["voltage_type"])
-        self.voltage_spin_box.setValue(float(self.stimulus_info["voltage"]))
+        self.amplitude_combo_box.setCurrentText(self.stimulus_info["amplitude_type"])
+        self.amplitude_spin_box.setValue(float(self.stimulus_info["amplitude"]))
         self.sample_rate_combo_box.setCurrentText(str(self.stimulus_info["sample_rate"]))
 
     def graph_stimulus(self):
@@ -412,39 +400,40 @@ class StimulusWindow(QDialog):
         stimulus_param = {"data": self.stimulus_signal,
                           "amplitude": self.stimulus_info["amplitude"],
                           "sr": self.stimulus_info["sample_rate"]}
-        play_code, msg = SoundcardAudioProcessor().speaker_worker(stimulus_param, self.speaker)
+        sap = SoundcardAudioProcessor()
+        play_code, msg = sap.sd_play(stimulus_param)
         if play_code != error_code.OK:
             self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 
-    def save_voltage_to_txt(self):
-        voltage_value = self.stimulus_info["voltage"]
+    def save_amplitude_to_txt(self):
+        amplitude_value = self.stimulus_info["amplitude"]
         dir_path = DEFAULT_DIR + 'ui/ui_config'
         if not os.path.exists(dir_path):
             os.mkdir(dir_path)
             self.default_logger.info(f"Dir '{dir_path}' created.")
-        file_path = dir_path + "/" + "voltage_value.txt"
+        file_path = dir_path + "/" + "amplitude_value.txt"
         try:
             with open(file_path, 'w') as f:
-                f.write(str(voltage_value))
-                self.default_logger.info(f"The voltage value: {voltage_value} saved to voltage_value.txt")
+                f.write(str(amplitude_value))
+                self.default_logger.info(f"The amplitude value: {amplitude_value} saved to amplitude_value.txt")
         except Exception as e:
-            self.default_logger.error("Failed to save voltage value to txt. %s" % (str(e)[:40]))
+            self.default_logger.error("Failed to save amplitude value to txt. %s" % (str(e)[:40]))
 
-    def load_voltage_from_txt(self):
-        file_path = DEFAULT_DIR + "ui/ui_config/voltage_value.txt"
+    def load_amplitude_from_txt(self):
+        file_path = DEFAULT_DIR + "ui/ui_config/amplitude_value.txt"
         try:
             with open(file_path, 'r') as f:
-                voltage_value = float(f.read())
-            return voltage_value
+                amplitude_value = float(f.read())
+            return amplitude_value
         except Exception as e:
-            self.default_logger.error("Failed to find voltage value. %s" % (str(e)[:40]))
+            self.default_logger.error("Failed to find amplitude value. %s" % (str(e)[:40]))
             return 0.0
 
     def ok_btn_clicked(self):
         print("ok_btn clicked")
         self.refresh_stimulus_info = True
         self.save_stimulus_to_json()
-        self.save_voltage_to_txt()
+        self.save_amplitude_to_txt()
         self.close()
 
     def cancel_btn_clicked(self):
