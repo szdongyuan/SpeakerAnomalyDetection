@@ -24,7 +24,6 @@ class CalibrationWindow(QDialog):
         self.calibration_param = {"calibration_nums": 5}
         self.current_count = 1
         self.countdown = 10
-        self.speaker = None
         self.play_flag = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_countdown)
@@ -200,6 +199,7 @@ class CalibrationWindow(QDialog):
 
     def play_btn_clicked(self):
         stimulus_dict = self.create_signal()
+        sap = SoundcardAudioProcessor()
         if not self.play_flag:
             self.play_flag = True
             self.play_btn.setDisabled(True)
@@ -208,8 +208,7 @@ class CalibrationWindow(QDialog):
                                          f"<span style='color: red;'>{self.countdown} </span>"
                                          f"<span style='color: black;'>s</span>")
             self.timer.start(1000)
-            threading.Thread(target=SoundcardAudioProcessor().speaker_worker,
-                             args=(stimulus_dict, self.speaker)).start()
+            threading.Thread(target=sap.sd_play, args=(stimulus_dict,)).start()
         else:
             self.play_flag = False
             self.timer.stop()
@@ -260,7 +259,8 @@ class CalibrationWindow(QDialog):
         data, sr = StimulusSignal().generate_chirps(start_freq=800, stop_freq=800, total_time=10, sample_rate=44100,
                                                     stimulus_type='linear')
         test_stimulus_dict = {"data": data, "sr": sr, "amplitude": amplitude}
-        speaker_code, msg = SoundcardAudioProcessor().speaker_worker(test_stimulus_dict, self.speaker)
+        sap = SoundcardAudioProcessor()
+        speaker_code, msg = sap.sd_play(test_stimulus_dict)
         if speaker_code != error_code.OK:
             self.default_logger.error(f"Failed to play the audio. {msg}")
 

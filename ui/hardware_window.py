@@ -1,10 +1,11 @@
 import sys
-import soundcard as sc
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel, QIcon
 from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView
-from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage
+from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage, QComboBox
 
+from base.sound_device_manager import get_device_info, get_default_device, get_api_info, change_default_device
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.calibaration_window import CalibrationWindow
@@ -47,8 +48,8 @@ class HardwareWindow(QDialog):
 
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
-        self.speaker_label = QLabel("设  备： %s" % self.speaker.name)
-        self.speaker_channel_label = QLabel("通道数： %s" % self.speaker.channels)
+        self.speaker_label = QLabel("设  备：   %s" % self.speaker["name"])
+        self.speaker_channel_label = QLabel("驱  动： %s" % get_api_info(self.speaker["hostapi"])["name"])
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
 
@@ -71,8 +72,8 @@ class HardwareWindow(QDialog):
 
     def create_mic_box(self):
         mic_label_layout = QVBoxLayout()
-        self.mic_label = QLabel("设  备： %s" % self.mic.name)
-        self.mic_channel_label = QLabel("通道数： %s" % self.mic.channels)
+        self.mic_label = QLabel("设  备：   %s" % self.mic["name"])
+        self.mic_channel_label = QLabel("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
 
@@ -95,25 +96,26 @@ class HardwareWindow(QDialog):
         selected_speaker = dlg.on_exec()
         if selected_speaker:
             self.speaker = selected_speaker
-            self.speaker_label.setText("设  备：   %s" % self.speaker.name)
-            self.speaker_channel_label.setText("通道数： %s" % self.speaker.channels)
+            self.speaker_label.setText("设  备：   %s" % self.speaker["name"])
+            self.speaker_channel_label.setText("驱  动： %s" % get_api_info(self.speaker["hostapi"])["name"])
 
     def select_mic_btn_clicked(self):
         dlg = DeviceListWindow("mic")
         selected_mic = dlg.on_exec()
         if selected_mic:
             self.mic = selected_mic
-            self.mic_label.setText("设  备：   %s" % self.mic.name)
-            self.mic_channel_label.setText("通道数： %s" % self.mic.channels)
+            self.mic_label.setText("设  备：   %s" % self.mic["name"])
+            self.mic_channel_label.setText("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
 
-    def calibrate_speaker_btn_clicked(self):
+    @staticmethod
+    def calibrate_speaker_btn_clicked():
         dlg = CalibrationWizard()
         dlg.on_exec()
         dlg2 = CalibrationWindow()
-        dlg2.speaker = self.speaker
         dlg2.exec()
 
     def ok_btn_clicked(self):
+        change_default_device(self.mic["index"], self.speaker["index"])
         self.close()
 
     def on_exec(self):
@@ -133,15 +135,17 @@ class DeviceListWindow(QDialog):
     def __init__(self, device_type):
         super().__init__()
         if device_type == "speaker":
-            self.device_list = sc.all_speakers()
+            self.device_type = "output"
             self.device_title = " —— 扬声器"
         elif device_type == "mic":
-            self.device_list = sc.all_microphones()
+            self.device_type = "input"
             self.device_title = " —— 麦克风"
-        else:
-            self.device_list = []
-            self.device_title = ""
+
         self.selected_device = None
+        self.api_info = get_device_info()
+
+        self.api_combo_box = QComboBox()
+        self.list_view = QListView()
 
         self.init_ui()
 
@@ -151,16 +155,23 @@ class DeviceListWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
 
-        list_view = QListView()
-        list_view.setSelectionMode(QAbstractItemView.SingleSelection)
-        list_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        item_model = QStandardItemModel()
-        for device in self.device_list:
-            item_model.appendRow(QStandardItem(device.name))
+        api_layout = QHBoxLayout()
+        api_label = QLabel("选择驱动")
+        self.api_combo_box.addItems([api for api in self.api_info])
+        self.api_combo_box.currentTextChanged.connect(self.update_api_device)
+        api_layout.addWidget(api_label)
+        api_layout.addWidget(self.api_combo_box)
 
-        list_view.setModel(item_model)
-        list_view.setSelectionRectVisible(True)
-        list_view.clicked.connect(self.on_select_item)
+        self.list_view.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        item_model = QStandardItemModel()
+        current_api = self.api_combo_box.currentText()
+        self.device_list = self.api_info[current_api][self.device_type]
+        for device in self.device_list:
+            item_model.appendRow(QStandardItem(device["name"]))
+        self.list_view.setModel(item_model)
+        self.list_view.setSelectionRectVisible(True)
+        self.list_view.clicked.connect(self.on_select_item)
 
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton(" 确  认 ")
@@ -173,12 +184,21 @@ class DeviceListWindow(QDialog):
         btn_layout.setContentsMargins(40, 0, 40, 0)
 
         layout = QVBoxLayout()
-        layout.addWidget(list_view)
+        layout.addLayout(api_layout)
+        layout.addWidget(self.list_view)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
 
         self.setStyleSheet(ui_style_const.qpushbutton_stytle)
+
+    def update_api_device(self):
+        item_model = QStandardItemModel()
+        current_api = self.api_combo_box.currentText()
+        self.device_list = self.api_info[current_api][self.device_type]
+        for device in self.device_list:
+            item_model.appendRow(QStandardItem(device["name"]))
+        self.list_view.setModel(item_model)
 
     def on_select_item(self, index):
         self.selected_device = self.device_list[index.row()]
@@ -272,12 +292,6 @@ class CalibrationWizard(QWizard):
         painter.drawRect(self.rect())
         super().paintEvent(event)
 
-def get_default_device(device):
-    if device == "mic":
-        return sc.default_microphone()
-    elif device == "speaker":
-        return sc.default_speaker()
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -286,3 +300,4 @@ if __name__ == "__main__":
     # window = CalibrationWizard()
     window.show()
     result = window.on_exec()
+    print(result)

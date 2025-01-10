@@ -64,8 +64,6 @@ class MainWindow(QMainWindow):
     def init_sequence_widget(self):
         self.sequence_window = SequenceWindow()
         self.setCentralWidget(self.sequence_window)
-        self.sequence_window.mic = self.mic
-        self.sequence_window.speaker = self.speaker
 
     def init_menu(self):
         menu_bar = self.menuBar()
@@ -110,7 +108,8 @@ class MainWindow(QMainWindow):
         self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
         self.device_label = QLabel()
         self.device_label.setStyleSheet(ui_style_const.qlabel_stytle)
-        self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
+        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
+        self.device_label.setText(device_txt)
 
         statusbar = QStatusBar()
         statusbar.addWidget(self.user_label)
@@ -118,7 +117,8 @@ class MainWindow(QMainWindow):
         self.setStatusBar(statusbar)
 
     def update_statusbar(self):
-        self.device_label.setText("麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic.name, speaker=self.speaker.name))
+        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
+        self.device_label.setText(device_txt)
         self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
 
     @staticmethod
