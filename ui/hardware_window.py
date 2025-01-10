@@ -1,4 +1,5 @@
 import sys
+
 import soundcard as sc
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel, QIcon

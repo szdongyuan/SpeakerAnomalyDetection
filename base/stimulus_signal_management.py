@@ -5,6 +5,20 @@ from consts import model_consts, error_code
 class StimulusSignalManagement(object):
     @staticmethod
     def update_stimulus_default(stimulus_id, is_default):
+        """
+            Update the 'is_default' field of the stimulus signal with the given stimulus_id.
+            If the stimulus is marked as the default, all other stimuli will have their 'is_default' field set to 0.
+
+            Args:
+                - stimulus_id: str
+                    The ID of the stimulus to be updated.
+                - is_default : int
+                    The value to set for 'is_default' (1 for default, 0 for not default).
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
                 query_code, query_data = database.query("stimulus_signal_table", ["is_default"],
@@ -32,6 +46,13 @@ class StimulusSignalManagement(object):
 
     @staticmethod
     def query_default_stimulus_info():
+        """
+            Query the database for all default stimulus signal information, i.e., records where 'is_default' is 1.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or query data.
+
+        """
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
                 query_code, query_data = database.query("stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS,
@@ -46,6 +67,13 @@ class StimulusSignalManagement(object):
 
     @staticmethod
     def query_all_stimulus_info():
+        """
+            Query the database for all stimulus signal information.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or query data.
+
+        """
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
                 query_code, query_data = database.query("stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS)
@@ -59,6 +87,17 @@ class StimulusSignalManagement(object):
 
     @staticmethod
     def save_stimulus_info_to_db(stimulus_info: dict):
+        """
+            Save the provided stimulus information to the database if it doesn't already exist.
+
+            Args:
+                - stimulus_info: dict
+                    Dictionary containing the stimulus signal information to be saved.
+
+                Returns:
+                    - tuple: A tuple containing an error code and a message or query data.
+
+        """
         stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_info)
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:

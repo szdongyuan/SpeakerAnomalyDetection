@@ -105,18 +105,38 @@ def copy_from_restored_audio(source_dir_list,
 
 
 def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
-                                      dest_test_dir=model_consts.TEST_PATH, over_write=True):
+                                      dest_test_dir=model_consts.TEST_PATH,
+                                      config_path=model_consts.CONFIG_PATH, over_write=True):
+    """
+        Based on the config file Settings, query the required audio files to the database
+        and copy them to the specified training and testing directory.
+
+        Args:
+        - dest_train_dir: str, optional
+            The path to the folder where the training data is stored.
+            The default values are taken from model_consts.TRAIN_PATH.
+        - dest_test_dir: str
+            The path to the folder where the test data is stored.
+            The default values are taken from model_consts.TEST_PATH.
+        - over_write: bool
+            Identifies whether to overwrite the target directory. Default to True
+        Returns:
+        - error_code.OK: int
+            tuple: A tuple containing an error code and a message.
+    """
+
     try:
-        data_load_config = load_config("data_load")
-        with DataSave(model_consts.DATABASE_PATH) as database:
-            query_data = database.query_conditions()
+        data_load_config = load_config(config_path, module_name="data_load")
+        code, result = retrieve_data_from_db(data_load_config)
+        if code == error_code.OK and result:
+            query_data = result
+        else:
+            return error_code.MISSING_SELECT_DATA, "No data was queried."
         if over_write:
             for dest_dir in [dest_train_dir, dest_test_dir]:
                 ret_code, ret_msg = FileOps().create_empty_okng(dest_dir)
                 if ret_code != error_code.OK:
                     return ret_code, ret_msg
-        if not query_data:
-            return error_code.MISSING_SELECT_DATA, "No data was queried."
         recode_date_info = data_load_config.get("record_date")
         n_file = 0
         train_data_date = []
@@ -128,9 +148,68 @@ def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
             else:
                 dest_dir = dest_train_dir
             status_dir = "OK" if file[-1] == "OK" else "NG"
-            shutil.copy(f"{model_consts.STORED_SAMPLE_PATH}/{file[0]}", f"{dest_dir}/{status_dir}")
+            shutil.copy(f"{file[0]}", f"{dest_dir}/{status_dir}")
             n_file += 1
         return error_code.OK, f"finish copy from restored {n_file} audio files."
     except Exception as e:
         err_msg = "Failed to copy the audio file. %s" % (str(e))
+        return error_code.INVALID_QUERY, err_msg
+
+
+def retrieve_data_from_db(data_load_config):
+    """
+        Retrieve data from the database.
+
+        Args:
+        - data_load_config: dict
+                The path to the folder where the training data is stored.
+                The default values are taken from model_consts.TRAIN_PATH.
+
+        Returns:
+            tuple: A tuple containing an error code and a message.
+
+    """
+    with DataSave(model_consts.DATABASE_PATH) as database:
+        code, query_clause_data = generate_query_conditions(data_load_config)
+        if code == error_code.OK and query_clause_data:
+            query_code, query_result = database.query(table_name="audio_data_table",
+                                                      query_column=model_consts.SELECT_COLUMNS,
+                                                      query_clause_data=query_clause_data,
+                                                      FK_related=True)
+            if query_code == error_code.OK and query_result:
+                return error_code.OK, query_result
+            else:
+                return error_code.INVALID_QUERY, "No data was queried."
+        else:
+            return error_code.INVALID_QUERY, "Failed to retrieve query conditions."
+
+
+def generate_query_conditions(data_load_config):
+    """
+        Generate query condition data based on the given data loading configuration.
+
+        Args:
+        - data_load_config: dict
+            The path to the folder where the training data is stored.
+            The default values are taken from model_consts.TRAIN_PATH.
+
+        Returns:
+            tuple: A tuple containing an error code and a message or .
+
+    """
+    try:
+        condition_mapping = DataSave(model_consts.DATABASE_PATH).get_data_config(data_load_config)
+        query_clause_data = {}
+        record_date_mapping = condition_mapping.get("record_date")
+        if record_date_mapping is not None:
+            query_clause_data["record_date"] = []
+            for key, data_date_list in record_date_mapping.items():
+                data_date_list = [] if not data_date_list else data_date_list
+                query_clause_data["record_date"] += data_date_list
+        for key, value in condition_mapping.items():
+            if key != "record_date" and value is not None:
+                query_clause_data[key] = value
+        return error_code.OK, query_clause_data
+    except Exception as e:
+        err_msg = f"Failed to query data: {str(e)}"
         return error_code.INVALID_QUERY, err_msg

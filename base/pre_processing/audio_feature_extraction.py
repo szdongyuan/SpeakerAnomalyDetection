@@ -1,7 +1,6 @@
 import librosa.core.spectrum as spectrum
 import librosa.feature.spectral as spectral
 import librosa.util
-
 import numpy as np
 from scipy.fftpack import fft
 

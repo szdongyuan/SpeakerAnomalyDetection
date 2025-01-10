@@ -7,6 +7,32 @@ class StimulusSignal(object):
                        total_time=4.0, sample_rate=44100, num_steps=10, repeat_times=1,
                        stimulus_type="linear",
                        **kwargs):
+        """
+            Generate a step signal with frequency transitions between a start and stop frequency.
+
+                Args:
+                    - start_freq : int, optional
+                        The starting frequency of the chirp (in Hz). Default is 500 Hz.
+                    - stop_freq: int, optional
+                        The ending frequency of the chirp (in Hz). Default is 1000 Hz.
+                    - total_time : float, optional
+                        Total duration of the chirp in seconds. Default is 4.0 seconds.
+                    - sample_rate: int, optional
+                        The sample rate (in Hz) for the signal generation. Default is 44100 Hz.
+                    - num_steps: int, optional
+                        The number steps to divide the total frequency range into. Default is 10.
+                    - repeat_times: int, optional
+                        The number of times the chirp should be repeated. Default is 1.
+                    - stimulus_type: str, optional
+                        The type of chirp to generate. Options include "log", "linear".
+                    - **kwargs (optional): Additional keyword arguments.
+
+                Returns:
+                    - y_total: ndarray
+                        The generated step signal.
+                    - sample_rate: int
+                        The sample rate used for generating the signal.
+        """
         if total_time == 0:
             return [], sample_rate
         t_single = total_time / repeat_times
@@ -40,9 +66,33 @@ class StimulusSignal(object):
 
     @staticmethod
     def generate_chirps(start_freq=80, stop_freq=2000,
-                        total_time=2.0, sample_rate=48000, repeat_times=1,
+                        total_time=2.0, sample_rate=44100, repeat_times=1,
                         stimulus_type="log",
                         **kwargs):
+        """
+            Generate a chirp signal based on the specified frequency range and stimulus type.
+
+            Args:
+                - start_freq : int, optional
+                    The starting frequency of the chirp (in Hz). Default is 80 Hz.
+                - stop_freq: int, optional
+                    The ending frequency of the chirp (in Hz). Default is 2000 Hz.
+                - total_time : float, optional
+                    Total duration of the chirp in seconds. Default is 2.0 seconds.
+                - sample_rate: int, optional
+                    The sample rate (in Hz) for the signal generation. Default is 44100 Hz.
+                - repeat_times: int, optional
+                    The number of times the chirp should be repeated. Default is 1.
+                - stimulus_type: str, optional
+                    The type of chirp to generate. Options include "log", "linear", "mirror_log", and "mirror_linear".
+                - **kwargs (optional): Additional keyword arguments.
+
+            Returns:
+                - y_total: ndarray
+                    The generated chirp signal.
+                - sample_rate: int
+                    The sample rate used for generating the signal.
+        """
         pi = np.pi
         t_single = total_time / repeat_times
         x_t = np.array(list(range(int(sample_rate * t_single)))) / sample_rate
@@ -71,6 +121,26 @@ class StimulusSignal(object):
     def generate_noise(total_time=2.0, sample_rate=44100, repeat_times=1,
                        stimulus_type='white_noise',
                        **kwargs):
+        """
+            Generate a noise signal (white noise or pink noise) based on the specified type.
+
+            Args:
+                - total_time : float, optional
+                    Total duration of the chirp in seconds. Default is 2.0 seconds.
+                - sample_rate: int, optional
+                    The sample rate (in Hz) for the signal generation. Default is 44100 Hz.
+                - repeat_times: int, optional
+                    The number of times the chirp should be repeated. Default is 1.
+                - stimulus_type: str, optional
+                    The type of chirp to generate. Options include "white_noise", "pink_noise".
+                - **kwargs (optional): Additional keyword arguments.
+
+            Returns:
+                - y_total: ndarray
+                    The generated chirp signal.
+                - sample_rate: int
+                    The sample rate used for generating the signal.
+        """
         t_single = total_time / repeat_times
         x_t = np.array(list(range(int(sample_rate * t_single)))) / sample_rate
         num_samples = len(x_t)

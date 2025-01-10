@@ -7,6 +7,19 @@ class UsersManagement(object):
         self.db_path = model_consts.DATABASE_PATH
 
     def create_user(self, register_user_info: dict):
+        """
+            Creates a new user in the database. This method checks if the registration information is provided.
+            If the username already exists in the database, an error is returned.
+            Otherwise, the user information is inserted into the `users_table`.
+
+            Args:
+            - register_user_info: dict
+                A dictionary containing the user's registration information.
+
+            Returns:
+            - tuple: A tuple containing an error code and a message.
+
+        """
         if not register_user_info:
             return error_code.INVALID_DATA_LOADING, "Missing registration information."
         try:
@@ -26,6 +39,17 @@ class UsersManagement(object):
             return error_code.INVALID_INSERT, err_msg
 
     def delete_user(self, user_name: str):
+        """
+            Deletes a user from the database based on the provided username.
+
+            Args:
+                - user_name: str
+                    The username of the user to be deleted.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         if not user_name or not isinstance(user_name, str):
             return error_code.INVALID_TYPE_DATA, "The model name is empty or invalid."
         delete_condition = {"user_name": user_name}
@@ -38,6 +62,21 @@ class UsersManagement(object):
             return error_code.INVALID_DELETE, err_msg
 
     def verify_login(self, user_name: str, password: str):
+        """
+            Verifies the login credentials by checking the provided username and password.
+
+            Args:
+                - user_name : str
+                    The username for the login attempt.
+                - password : str
+                    The password provided for the login attempt.
+
+            Returns:
+                - bool:
+                     - `True` if the username exists and the provided password matches the stored password.
+                     - `False` if the username does not exist or the password does not match.
+
+        """
         if not password:
             return False
         with DataSave(self.db_path) as database:
@@ -49,6 +88,20 @@ class UsersManagement(object):
         return False
 
     def reset_access_level(self, user_name, access_level: str):
+        """
+            Resets the access level of a user in the database.
+
+            Args:
+                - user_name : str
+                    The username whose access level is to be updated.
+                - access_level : str
+                    The new access level to be set for the user.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
+
         if access_level not in ['Engineer', 'Technician', 'Operator']:
             return error_code.INVALID_DATA_LOADING, "Invalid access_level data."
         update_data = {"access_level": access_level}
@@ -65,6 +118,19 @@ class UsersManagement(object):
             return error_code.INVALID_UPDATE, err_msg
 
     def reset_password(self, user_name: str, new_password: str):
+        """
+            Resets the password for a specified user.
+
+            Args:
+                - user_name : str
+                    The username of the user whose password is to be reset.
+                - new_password : str
+                    The new password to be set for the user.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         try:
             with DataSave(self.db_path) as database:
                 result = database.query_matching_data([(user_name,)], "users_table",
@@ -82,6 +148,21 @@ class UsersManagement(object):
             return error_code.INVALID_RESET, err_msg
 
     def query_user_access_level(self, user_name: str):
+        """
+            Queries the access level of a specified user.
+
+            This method checks the `users_table` in the database for the `access_level` of the given `user_name`.
+            If the user exists, it returns the corresponding access level.
+            If the user does not exist or an error occurs, an appropriate error message is returned.
+
+            Args:
+                - user_name : str
+                    The username for which the access level is to be queried.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or access_level.
+
+        """
         query_clause_data = {"user_name": user_name}
         try:
             with DataSave(self.db_path) as database:
@@ -96,6 +177,19 @@ class UsersManagement(object):
             return error_code.INVALID_QUERY, err_msg
 
     def query_user_info(self, user_name: str, query_column: str):
+        """
+            Queries user information based on the given user_name.
+
+            Args:
+                - user_name : str
+                    The username for which the information is to be queried.
+                - query_column : str
+                    The specific column of user data to be queried (e.g., 'password', 'access_level').
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or user info.
+
+        """
         if query_column not in model_consts.DB_USERS_COLUMNS:
             return error_code.INVALID_QUERY, "Invalid query column."
         query_clause_data = {"user_name": user_name}
@@ -113,6 +207,22 @@ class UsersManagement(object):
             return error_code.INVALID_QUERY, err_msg
 
     def query_user_list(self, access_level=None):
+        """
+            Queries a list of users from the database, optionally filtering by access level.
+
+            This method retrieves user information from the `users_table` in the database.
+            If an `access_level` is provided, the query will filter users by the specified access level.
+            If no `access_level` is provided, the query will return all users.
+
+            Args:
+                - access_level : str, optional
+                    The access level to filter the users by (e.g., 'Engineer', 'Technician', 'Operator').
+                    If not provided, all users will be returned.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or user info.
+
+        """
         query_clause_data = {}
         if access_level is not None:
             query_clause_data["access_level"] = access_level

@@ -440,6 +440,7 @@ class SequenceWindow(QWidget):
         line_graph.plot(signal_duration, recorded_signal)
         line_graph.setLabel('left', 'Amplitude')
         line_graph.setLabel('bottom', 'Time(s)')
+        line_graph.showGrid(x=True, y=True)
 
     def update_player_icon(self):
         if self.player_status_flag:

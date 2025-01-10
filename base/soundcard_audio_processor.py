@@ -1,6 +1,7 @@
 import multiprocessing
-import numpy as np
 import os
+
+import numpy as np
 from scipy import signal
 from scipy.io import wavfile
 

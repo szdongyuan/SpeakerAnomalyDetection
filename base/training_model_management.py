@@ -14,6 +14,26 @@ class TrainingModelManagement(object):
         self.db_path = model_consts.DATABASE_PATH
 
     def save_training_model_info_to_db(self, model_path, config_path, ret_str=None, model_description="No description"):
+        """
+            Saves the training model information into the database.
+
+            This method retrieves the training model information based on the provided model path and configuration file
+            , then inserts it into the 'training_model_table' of the database.
+
+            Args:
+                - model_path: str
+                    The path to the saved model file.
+                - config_path: str
+                    The path to the config file related to the model.
+                - ret_str: str, optional
+                    Used to read accuracy from it (default is None).
+                - model_description:  str, optional
+                    A description of the model (default is "No description").
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         try:
             with DataSave(self.db_path) as database:
                 code, training_model_info = self.get_training_model_info_to_db(database, model_path, config_path,
@@ -30,6 +50,17 @@ class TrainingModelManagement(object):
             return error_code.INVALID_INSERT, err_msg
 
     def delete_model_info_from_db(self, model_name: str):
+        """
+            Deletes model information from the database based on the provided model name.
+
+            Args:
+                - model_name: str
+                    The name of the model whose information is to be deleted.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         if not model_name or not isinstance(model_name, str):
             return error_code.INVALID_TYPE_DATA, "The model name is empty or invalid."
         delete_condition = {"model_name": model_name}
@@ -44,6 +75,26 @@ class TrainingModelManagement(object):
     @staticmethod
     def get_training_model_info_to_db(database, model_path, config_path, ret_str=None,
                                       model_description="No description"):
+        """
+            This function checks if the model and config paths exist, extracts model information,
+            and inserts it into the database if the model doesn't already exist in database.
+
+            Args:
+                - database: Database object
+                    The database instance used to query and insert model data.
+                - model_path: str
+                    The file path to the model file.
+                - config_path: str
+                    The file path to the model config file.
+                - ret_str: str, optional
+                    A JSON string containing the training result, used to extract accuracy.
+                - model_description: str, optional
+                    A description of the model. Default is "No description".
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or training model data.
+
+        """
         if not os.path.exists(model_path):
             return error_code.INVALID_PATH, "The model path does not exist."
         if not os.path.exists(config_path):
@@ -75,6 +126,18 @@ class TrainingModelManagement(object):
             return error_code.OK, training_model_data
 
     def get_model_path_from_db(self, model_name):
+        """
+            This function retrieves the model's path and config path from the database
+            based on the model name.
+
+            Args:
+                - model_name: str
+                    The name of the model for which to retrieve the paths.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         try:
             with DataSave(self.db_path) as database:
                 query_code, query_result = database.query("training_model_table",
@@ -90,6 +153,13 @@ class TrainingModelManagement(object):
             return error_code.INVALID_QUERY, err_msg
 
     def get_all_model_name_from_db(self):
+        """
+            This function retrieves all model names and input dimensions from the database.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message.
+
+        """
         try:
             with DataSave(self.db_path) as database:
                 query_code, query_result = database.query("training_model_table", ["model_name", "input_dim"])

@@ -4,7 +4,6 @@ import uuid
 import wave
 from datetime import datetime
 
-from base.load_config import load_config
 from base.log_manager import LogManager
 from consts import model_consts, error_code
 
@@ -17,6 +16,16 @@ class DataSave(object):
         self.logger = LogManager("db_core")
 
     def connect(self):
+        """
+            Connect to the SQLite database and initialize the cursor.
+            If the database file does not exist, SQLite will automatically create a new database.
+
+            Returns:
+            - tuple:
+                error_code.OK and a success message if the connection is successful.
+                error_code.INVALID_CONNECT_DATABASE and the error message if the connection fails.
+
+        """
         try:
             self.connection = sqlite3.connect(self.db_name)
             self.cursor = self.connection.cursor()
@@ -27,6 +36,20 @@ class DataSave(object):
             return error_code.INVALID_CONNECT_DATABASE, err_msg
 
     def create_table(self):
+        """
+            Creates the required database tables and triggers.
+            This method connects to the database and creates the following tables:
+            - audio_data_table: Stores basic information of audio data.
+            - stimulus_signal_table: Stores detailed information about stimulus signals.
+            - training_model_table: Stores detail about training models.
+            - users_table: Stores user information including access levels.
+
+            Returns:
+            - tuple:
+                error_code.OK, "Table creation success." if tables and triggers are created successfully.
+                error_code.INVALID_CREATE_TABLE, error message if table or trigger creation fails.
+
+        """
         try:
             self.connection = sqlite3.connect(self.db_name)
             self.cursor = self.connection.cursor()
@@ -37,7 +60,7 @@ class DataSave(object):
                 product_model TEXT NOT NULL,
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0),
                 record_date DATETIME NOT NULL,
-                labels BLOB,
+                labels TEXT CHECK (label IN ('OK', 'NG')),
                 stimulus_id TEXT,
                 FOREIGN KEY (stimulus_id) REFERENCES stimulus_signal_table (stimulus_id) ON DELETE NO ACTION ON UPDATE NO ACTION   
             );
@@ -160,12 +183,34 @@ class DataSave(object):
         stimulus_data_list = [item for item in stimulus_data if item not in set(result)]
         return self.get_data_id(stimulus_data_list, 0)
 
-    def query_matching_data(self, data_list, table_name, check_column, select_column, logical_operator='AND'):
+    def query_matching_data(self, conditions_list, table_name, check_column, select_column, logical_operator='AND'):
+        """
+            Queries the database to find rows that match the provided criteria.
+            This function generates a dynamic SQL query based on the input columns and values, and retrieves matching
+            rows from the specified table. The query can use 'AND' or 'OR' to combine the conditions.
+
+            Args:
+            - conditions_list : list of tuples
+                A list where each tuple contains values to check against the columns.
+            - table_name : str
+                The name of the table to query.
+            - check_column : list
+                A list of column names to check.
+            - select_column : list
+                A list of column names to select in the query.
+            - logical_operator: str
+                Logical operator to combine conditions, either 'AND' or 'OR'. Default is 'AND'.
+
+            Returns:
+            - result: list of tuples
+                A list of tuples representing the rows that match the criteria.
+                Each tuple corresponds to a row returned by the SELECT query.
+        """
         result = []
         if logical_operator not in ['AND', 'OR']:
             raise ValueError("logical_operator must be 'AND' or 'OR'.")
         base_sql = f' {logical_operator} '.join([f"{column} = ?" for column in check_column])
-        for data_item in data_list:
+        for data_item in conditions_list:
             sql_select = f"SELECT {', '.join(select_column)} FROM {table_name} WHERE {base_sql}"
             self.cursor.execute(sql_select, data_item)
             fet_result = self.cursor.fetchall()
@@ -191,6 +236,18 @@ class DataSave(object):
         return audio_stimulus_data
 
     def set_default(self, table_name):
+        """
+            Determine the default status for the table based on its record count.
+
+            Args:
+            - table_name: str
+                The name of the table to check for record count.
+
+            Returns:
+            - is_default: int
+                1 if the table is empty, 0 otherwise.
+
+        """
         select_sql = f"SELECT COUNT(*) FROM {table_name}"
         self.cursor.execute(select_sql)
         record_count = self.cursor.fetchone()[0]
@@ -202,6 +259,20 @@ class DataSave(object):
 
     @staticmethod
     def get_data_id(data_list, id_index: int):
+        """
+            Generate a unique data ID for each item in the data list and insert it at the specified index.
+
+            Args:
+            - data_list: list of tuples
+                A list of tuples where each tuple represents a data record.
+            - id_index: int
+                ID Indicates the location of the index to be inserted
+
+            Returns:
+            - data_list: list of tuples
+                The modified data list where each tuple has a unique ID inserted at the specified index.
+
+        """
         for i, item in enumerate(data_list):
             data_id = str(uuid.uuid1())
             data_list[i] = item[:id_index] + (data_id,) + item[id_index:]
@@ -209,6 +280,17 @@ class DataSave(object):
 
     @staticmethod
     def get_wav_duration(filepath):
+        """
+            Calculate the duration of the WAV file in seconds.
+
+            Args:
+            - filepath: str
+                The path to the WAV file whose duration is to be calculated.
+
+            Returns:
+            - int: The duration of the WAV file in seconds, rounded down to the nearest integer.
+
+        """
         with wave.open(filepath, 'r') as wav:
             frames = wav.getnframes()
             rate = wav.getframerate()
@@ -216,6 +298,23 @@ class DataSave(object):
         return int(duration)
 
     def insert_data_into_db(self, table_name, columns, data):
+        """
+            Inserts data into a specified table in the database.
+
+            Args:
+            - table_name: str
+                The name of the table where the data will be inserted.
+            - columns: list
+                A list of column names that corresponds to the data to be inserted.
+            - data: list of tuples
+                The data to be inserted, where each tuple represents a row.
+
+            Returns:
+            - tuple: A tuple containing an error code and a message.
+                error_code.OK, "Insert data successfully." if successful.
+                error_code.INVALID_INSERT, error message if an error occurs.
+
+        """
         try:
             if len(data) == 0:
                 self.logger.info("data empty.")
@@ -233,6 +332,26 @@ class DataSave(object):
             return error_code.INVALID_INSERT, err_msg
 
     def update_table_data(self, table_name, update_data: dict, condition_field: dict, update_time=False):
+        """
+            Updates data in the specified table based on provided conditions.
+
+            Args:
+            - table_name: str
+                The name of the table to update.
+            - update_data: dict
+                A dictionary containing column names as keys and the new values to set as values.
+            - condition_field: dict
+                A dictionary of conditions used to identify the rows to update.
+                Each key is a column name, and the value is the condition.
+            - update_time: bool, optional
+                If `True`, the `user_updated_time` column will be updated to the current timestamp
+                (`DATETIME('now', '+8 hours')`). Default is `False`.
+
+            Returns:
+                tuple: A tuple containing an error code and a message.
+
+        """
+
         try:
             if not isinstance(update_data, dict) or not isinstance(condition_field, dict):
                 return error_code.INVALID_TYPE_DATA, "The update_data format is incorrect."
@@ -271,13 +390,41 @@ class DataSave(object):
             return error_code.INVALID_UPDATE, err_msg
 
     def query(self, table_name, query_column, query_clause_data: dict = None, FK_related=False):
+        """
+            Queries data from the database with optional conditions and foreign key relationships.
+
+            Args:
+                table_name: str
+                    The name of the table to query.
+                query_column: list
+                    A list of columns to retrieve from the table
+                query_clause_data: dict, optional
+                    A dictionary representing query conditions, where the key is the column name and
+                    the value is the condition value. Default is `None`, meaning no conditions are applied.
+                FK_related: bool, optional
+                    Whether to include foreign key relationships in the query. Default is `False`.
+
+            Returns:
+                - tuple: A tuple containing an error code and a message or query data.
+                    error_code.OK, query data. if successful.
+                    error_code.INVALID_QUERY, error message if an error occurs.
+
+        """
         try:
             join_sql = ''
             where_clause = ''
             sql_data = []
             if query_clause_data:
-                where_clause = ' AND '.join([f"{key} = ?" for key in query_clause_data.keys()])
-                sql_data = list(query_clause_data.values())
+                conditions = []
+                for key, value in query_clause_data.items():
+                    if isinstance(value, list):
+                        placeholder = ', '.join(['?' for _ in value])
+                        conditions.append(f"{key} IN ({placeholder})")
+                        sql_data.extend(value)
+                    else:
+                        conditions.append(f"{key} = ?")
+                        sql_data.append(value)
+                where_clause = ' AND '.join(conditions)
             query_column = ', '.join(query_column)
             if FK_related:
                 join_sql = (' INNER JOIN stimulus_signal_table ON audio_data_table.stimulus_id = '
@@ -293,47 +440,21 @@ class DataSave(object):
             self.logger.error(err_msg)
             return error_code.INVALID_QUERY, err_msg
 
-    def query_conditions(self):
-        try:
-            placeholders = ''
-            query_conditions = []
-            params = []
-            condition_mapping = self.get_data_config("data_load")
-            record_date_mapping = condition_mapping.get("record_date")
-            if record_date_mapping is not None:
-                for key, data_date_list in record_date_mapping.items():
-                    data_date_list = [] if not data_date_list else data_date_list
-                    for item in data_date_list:
-                        params.append(item)
-                        placeholders += '?'
-                query_conditions.append(f"record_date IN ({', '.join(placeholders)})")
-            for key, value in condition_mapping.items():
-                if key == "record_date":
-                    continue
-                if isinstance(value, list) and value:
-                    query_conditions.append(f"{key} IN ({', '.join(['?'] * len(value))})")
-                    params.extend(value)
-                elif value is not None:
-                    query_conditions.append(f"{key} = ?")
-                    params.append(value)
-            if any(key in condition_mapping for key in model_consts.STIMULUS_COLUMNS):
-                join_sql = ("INNER JOIN stimulus_signal_table ON audio_data_table.stimulus_id = "
-                            "stimulus_signal_table.stimulus_id")
-            select_columns = ', '.join(model_consts.SELECT_COLUMNS)
-            base_sql = f'SELECT {select_columns} FROM audio_data_table '
-            if query_conditions:
-                query_sql = f'{base_sql}{join_sql} WHERE {" AND ".join(query_conditions)}'
-            self.cursor.execute(query_sql, params)
-            query_data = self.cursor.fetchall()
-            return query_data
-        except Exception as e:
-            err_msg = "Failed to query data from the table according to the condition. %s" % (str(e)[:40])
-            self.logger.error(err_msg)
-            return error_code.INVALID_QUERY, err_msg
-
     @staticmethod
-    def get_data_config(model_name):
-        data_load_config = load_config(model_name)
+    def get_data_config(data_load_config):
+        """
+            Load the configuration based on the given model name.
+
+            Args:
+            - model_name: str
+                The name of the model.
+
+            Returns:
+            - data_load_config_mapping: dict
+                Return the mapping of configuration values.
+
+        """
+        # data_load_config = load_config(model_name)
         data_load_config_mapping = {
             "product_model": data_load_config.get("product_model"),
             "record_date": data_load_config.get("record_date"),
@@ -347,6 +468,17 @@ class DataSave(object):
         return data_load_config_mapping
 
     def delete_all(self, table_name):
+        """
+            Delete all data from the specified table.
+
+            Args:
+            - table_name: str
+                 The name of the table from which to delete all data.
+
+            Returns:
+                tuple: A tuple containing an error code and a message.
+
+        """
         try:
             sql_delete = f'DELETE FROM {table_name}'
             self.cursor.execute(sql_delete)
@@ -359,6 +491,20 @@ class DataSave(object):
             return error_code.INVALID_DELETE, err_msg
 
     def delete_with_condition(self, table_name, delete_condition):
+        """
+            Delete data from the specified table based on the given condition.
+
+            Args:
+            - table_name: str
+                The name of the table from which to delete all data.
+            - delete_condition: dict
+                A dictionary containing the column names used as keys and their corresponding values
+                as a condition for deleting rows.
+
+            Returns:
+                tuple: A tuple containing an error code and a message.
+
+        """
         try:
             where_condition = ' AND '.join([f"{key} = ?" for key in delete_condition.keys()])
             sql_delete = f'DELETE FROM {table_name} WHERE {where_condition}'
@@ -376,6 +522,13 @@ class DataSave(object):
             return error_code.INVALID_DELETE, err_msg
 
     def close(self):
+        """
+            Close the database connection to release resources.
+
+            Returns:
+                tuple: A tuple containing an error code and a message.
+
+        """
         try:
             self.connection.close()
             self.logger.shut_down()
