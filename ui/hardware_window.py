@@ -1,12 +1,11 @@
 import sys
 import soundcard as sc
-
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel, QIcon
 from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView
 from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage
 
-from base.soundcard_audio_processor import SoundcardAudioProcessor
+from base.sound_device_manager import get_device_info, get_default_device, get_api_info, change_default_device
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.calibaration_window import CalibrationWindow
@@ -17,14 +16,12 @@ class HardwareWindow(QDialog):
 
     def __init__(self):
         super().__init__()
-        # Initialize microphones and speakers
         self.speaker = get_default_device("speaker")
         self.mic = get_default_device("mic")
 
         self.init_ui()
 
     def init_ui(self):
-        # set the icon and them for this window, Cancel help and disable the function
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowTitle("硬件设置")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -33,7 +30,6 @@ class HardwareWindow(QDialog):
         speaker_box = self.create_speaker_box()
         mic_box = self.create_mic_box()
 
-        # create btn_layout, The ok and ng buttons are included, clicked them can end this test and start next text
         btn_layout = QHBoxLayout()
         h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         ok_btn = QPushButton(" 确  定 ")
@@ -48,17 +44,14 @@ class HardwareWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        # set the window stytle
         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle)
 
     def create_speaker_box(self):
-        # speaker_box, include two label and two button,used to display speaker information, \
-        # calibrate speakers, and select speakers
         speaker_label_layout = QVBoxLayout()
-        self.speaker_label = QLabel("设  备： %s" % self.speaker.name)
-        self.speaker_channel_label = QLabel("通道数： %s" % self.speaker.channels)
+        self.speaker_label = QLabel("设  备：   %s" % self.speaker["name"])
+        self.speaker_channel_label = QLabel("驱  动： %s" % get_api_info(self.speaker["hostapi"])["name"])
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
 
@@ -80,11 +73,9 @@ class HardwareWindow(QDialog):
         return speaker_box
 
     def create_mic_box(self):
-        # mic_box, include two label and two button,used to display mic information, \
-        # calibrate mic, and select mic
         mic_label_layout = QVBoxLayout()
-        self.mic_label = QLabel("设  备： %s" % self.mic.name)
-        self.mic_channel_label = QLabel("通道数： %s" % self.mic.channels)
+        self.mic_label = QLabel("设  备：   %s" % self.mic["name"])
+        self.mic_channel_label = QLabel("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
 
@@ -92,11 +83,8 @@ class HardwareWindow(QDialog):
         select_mic_btn = QPushButton("选择麦克风")
         select_mic_btn.clicked.connect(self.select_mic_btn_clicked)
         h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        calibrate_mic_btn = QPushButton("输入校准")
-        calibrate_mic_btn.clicked.connect(self.calibrate_mic_btn_clicked)
         mic_btn_layout.addWidget(select_mic_btn)
         mic_btn_layout.addItem(h_spacer)
-        mic_btn_layout.addWidget(calibrate_mic_btn)
 
         mic_box = QGroupBox("麦克风")
         layout = QVBoxLayout()
@@ -106,40 +94,30 @@ class HardwareWindow(QDialog):
         return mic_box
 
     def select_speaker_btn_clicked(self):
-        # get the DeviceListWindow sellect speaker,and show sellect speaker
         dlg = DeviceListWindow("speaker")
         selected_speaker = dlg.on_exec()
         if selected_speaker:
             self.speaker = selected_speaker
-            self.speaker_label.setText("设  备：   %s" % self.speaker.name)
-            self.speaker_channel_label.setText("通道数： %s" % self.speaker.channels)
+            self.speaker_label.setText("设  备：   %s" % self.speaker["name"])
+            self.speaker_channel_label.setText("驱  动： %s" % get_api_info(self.speaker["hostapi"])["name"])
 
     def select_mic_btn_clicked(self):
-        # get the DeviceListWindow sellect mic,and show sellect mic
         dlg = DeviceListWindow("mic")
         selected_mic = dlg.on_exec()
         if selected_mic:
             self.mic = selected_mic
-            self.mic_label.setText("设  备：   %s" % self.mic.name)
-            self.mic_channel_label.setText("通道数： %s" % self.mic.channels)
+            self.mic_label.setText("设  备：   %s" % self.mic["name"])
+            self.mic_channel_label.setText("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
 
     def calibrate_speaker_btn_clicked(self):
-        # Start the speaker calibration wizard and open the speaker calibration screen
-        dlg = CalibrationWizard(True)
+        dlg = CalibrationWizard()
         dlg.on_exec()
         dlg2 = CalibrationWindow()
         dlg2.speaker = self.speaker
         dlg2.exec()
 
-    def calibrate_mic_btn_clicked(self):
-        # Start the mic calibration wizard and open the mic calibration screen
-        dlg = CalibrationWizard(False)
-        dlg.on_exec()
-        dlg2 = InputCalibrationWindow()
-        dlg2.mic = self.mic
-        dlg2.exec()
-
     def ok_btn_clicked(self):
+        change_default_device(self.mic["index"], self.speaker["index"])
         self.close()
 
     def on_exec(self):
@@ -155,44 +133,48 @@ class HardwareWindow(QDialog):
 
 
 class DeviceListWindow(QDialog):
-    # this dialog is used to switching audio device
 
     def __init__(self, device_type):
         super().__init__()
-        # get all speaker and mic to device list
         if device_type == "speaker":
-            self.device_list = sc.all_speakers()
+            self.device_type = "output"
             self.device_title = " —— 扬声器"
         elif device_type == "mic":
-            self.device_list = sc.all_microphones()
+            self.device_type = "input"
             self.device_title = " —— 麦克风"
-        else:
-            self.device_list = []
-            self.device_title = ""
+
         self.selected_device = None
+        self.api_info = get_device_info()
+
+        self.api_combo_box = QComboBox()
+        self.list_view = QListView()
 
         self.init_ui()
 
     def init_ui(self):
-        # set the window's icon and title, and cancel help and close function
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowTitle("选择设备%s" % self.device_title)
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
 
-        # list_view use to show all decvice
-        list_view = QListView()
-        list_view.setSelectionMode(QAbstractItemView.SingleSelection)
-        list_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        item_model = QStandardItemModel()   # create QStandardItemModel,use to add item for list_view
+        api_layout = QHBoxLayout()
+        api_label = QLabel("选择驱动")
+        self.api_combo_box.addItems([api for api in self.api_info])
+        self.api_combo_box.currentTextChanged.connect(self.update_api_device)
+        api_layout.addWidget(api_label)
+        api_layout.addWidget(self.api_combo_box)
+
+        self.list_view.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        item_model = QStandardItemModel()
+        current_api = self.api_combo_box.currentText()
+        self.device_list = self.api_info[current_api][self.device_type]
         for device in self.device_list:
-            item_model.appendRow(QStandardItem(device.name))
+            item_model.appendRow(QStandardItem(device["name"]))
+        self.list_view.setModel(item_model)
+        self.list_view.setSelectionRectVisible(True)
+        self.list_view.clicked.connect(self.on_select_item)
 
-        list_view.setModel(item_model)      # add the item_model to list_view
-        list_view.setSelectionRectVisible(True)
-        list_view.clicked.connect(self.on_select_item)
-
-        # btn_layout include ok and cancel button, use to determine whether the selection results are retained
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
@@ -204,28 +186,33 @@ class DeviceListWindow(QDialog):
         btn_layout.setContentsMargins(40, 0, 40, 0)
 
         layout = QVBoxLayout()
-        layout.addWidget(list_view)
+        layout.addLayout(api_layout)
+        layout.addWidget(self.list_view)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
 
         self.setStyleSheet(ui_style_const.qpushbutton_stytle)
 
+    def update_api_device(self):
+        item_model = QStandardItemModel()
+        current_api = self.api_combo_box.currentText()
+        self.device_list = self.api_info[current_api][self.device_type]
+        for device in self.device_list:
+            item_model.appendRow(QStandardItem(device["name"]))
+        self.list_view.setModel(item_model)
+
     def on_select_item(self, index):
-        # get the sellect device to self.selected_device
         self.selected_device = self.device_list[index.row()]
 
     def on_click_ok_btn(self):
-        # close this window
         self.close()
 
     def on_click_cancel_btn(self):
-        # clear sellect device and close this window
         self.selected_device = None
         self.close()
 
     def on_exec(self):
-        # get the sellect device 
         self.exec()
         return self.selected_device
 
@@ -239,19 +226,17 @@ class DeviceListWindow(QDialog):
 
 class CalibrationWizard(QWizard):
 
-    def __init__(self, input_or_out: bool):
+    def __init__(self):
         super().__init__()
 
-        self.input_or_out = input_or_out
         self.init_ui()
 
     def init_ui(self):
-        # set this wizard's icon
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setWizardStyle(QWizard.ModernStyle)
+        self.setWindowTitle("输出校准向导")
 
-        # create some wizard pages 
         # Todo: add pic to wizard
         page_1 = self.create_wizard_page(title="步骤一：连接设备",
                                          label_txt="将功放输出端正确连接至电压表或示波仪。",
@@ -266,33 +251,12 @@ class CalibrationWizard(QWizard):
                                          label_txt="点击“校准”按钮。",
                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig4_calibrate.png")
         page_5 = self.create_wizard_page(title="步骤五：测试",
-                                         label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。"
-                                                   "\n校准完成后点击“退出”即可。",
+                                         label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。\n校准完成后点击“退出”即可。",
                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig5_test.png")
-        page_6 = self.create_wizard_page(title="步骤一：记录电压",
-                                         label_txt="待电压稳定后，记录读数。重复步骤二、三若干次（建议5次以上）。",
-                                         )
-        page_7 = self.create_wizard_page(title="步骤二：校准输出",
-                                         label_txt="点击“校准”按钮。",
-                                         )
-        page_8 = self.create_wizard_page(title="步骤三：",
-                                         label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。"
-                                                   "\n校准完成后点击“退出”即可。",
-                                         )
-        # Create a list of outputs and inputs and add the corresponding wizard page to the list, selecting which
-        # interface to display according to input_or_out,and set this wizard's theme
         page_list = [page_1, page_2, page_3, page_4, page_5]
-        input_page_list = [page_6, page_7, page_8]
-        if self.input_or_out:
-            self.setWindowTitle("输出校准向导")
-            for i, page in enumerate(page_list):
-                self.setPage(i, page)
-        else:
-            self.setWindowTitle("输入校准向导")
-            for i, page in enumerate(input_page_list):
-                self.setPage(i, page)
-        # Set the theme background color
-        pix = QPixmap(640, 60)
+        for i, page in enumerate(page_list):
+            self.setPage(i, page)
+        pix = QPixmap(640, 64)
         pix.fill(QColor(52, 104, 192))
         self.setPixmap(QWizard.BannerPixmap, pix)
 
@@ -301,13 +265,11 @@ class CalibrationWizard(QWizard):
         self.setButtonText(QWizard.FinishButton, '校  准')
         # self.setButtonText(QWizard.CancelButton, '跳过')
         self.setOption(QWizard.NoCancelButton)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + 
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlabel_stytle)
 
     @staticmethod
     def create_wizard_page(title, subtitle=" ", label_txt=" ", wizard_pic=None):
-        # use to create page, it's argv have three string and a image, it return a returns a page that includes what
-        # step, what to do in this step, and the corresponding picture
         layout = QVBoxLayout()
         layout.addWidget(QLabel(label_txt))
         if wizard_pic:
@@ -334,7 +296,6 @@ class CalibrationWizard(QWizard):
         super().paintEvent(event)
 
 def get_default_device(device):
-    # get default mic and apeaker
     if device == "mic":
         return sc.default_microphone()
     elif device == "speaker":

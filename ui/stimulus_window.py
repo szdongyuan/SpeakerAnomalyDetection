@@ -412,7 +412,8 @@ class StimulusWindow(QDialog):
         stimulus_param = {"data": self.stimulus_signal,
                           "amplitude": self.stimulus_info["amplitude"],
                           "sr": self.stimulus_info["sample_rate"]}
-        play_code, msg = SoundcardAudioProcessor().speaker_worker(stimulus_param, self.speaker)
+        sap = SoundcardAudioProcessor()
+        play_code, msg = sap.sd_play(stimulus_param)
         if play_code != error_code.OK:
             self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 

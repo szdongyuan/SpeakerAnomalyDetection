@@ -1,6 +1,8 @@
 import multiprocessing
-import numpy as np
 import os
+
+import numpy as np
+import sounddevice as sd
 from scipy import signal
 from scipy.io import wavfile
 
@@ -12,6 +14,32 @@ class SoundcardAudioProcessor(object):
 
     def __init__(self):
         self.logger = LogManager("soundcard_core")
+
+    def sd_play_rec(self, record_dict, stimulus_dict, recording_path):
+        data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
+        prepare_frames = record_dict.get("prepare_frames", 1000)
+        prolong_frames = record_dict.get("prolong_frames", 10000)
+        prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
+        sr = stimulus_dict.get("sr")
+        rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
+        align_frames = self.calculate_alignment(prolong_data, rec_data)
+        aligned_data = rec_data[align_frames: align_frames + len(data)]
+        wavfile.write(recording_path, sr, aligned_data.astype("float32"))
+        return error_code.OK, aligned_data
+
+    @staticmethod
+    def sd_play(stimulus_params):
+        try:
+            data = stimulus_params.get("data") * stimulus_params.get("amplitude")
+            print(stimulus_params.get("amplitude"))
+            print(data)
+            sr = stimulus_params.get("sr")
+            blocking = stimulus_params.get("blocking", True)
+            sd.play(data, samplerate=sr, blocking=blocking)
+            return error_code.OK, "play successfully"
+        except Exception as e:
+            err_msg = "Failed to play audio. [%s]" % (str(e)[:50])
+            return error_code.INVALID_PLAY, err_msg
 
     def initialize_audio_processes(self, record_dict: dict, stimulus_dict: dict,
                                    mic, speaker, recording_path: str = "recording.wav"):
