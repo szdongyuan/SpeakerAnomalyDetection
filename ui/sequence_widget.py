@@ -7,7 +7,6 @@ from datetime import datetime
 import librosa
 import numpy as np
 import pyqtgraph as pg
-import soundcard
 from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon
@@ -34,8 +33,6 @@ class SequenceWindow(QWidget):
         self.recorded_path = None
         self.refresh_stimulus_flag = None
         self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-        self.mic = None
-        self.speaker = None
         self.signal_info = {}
         self.analyse_layout = AnalyseWindow()
         self.sequence_layout = QVBoxLayout()
@@ -358,12 +355,9 @@ class SequenceWindow(QWidget):
         sample_rate = self.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
         self.recorded_path, self.recorded_signal_info = self.get_recorded_info()
-        record_code, msg = SoundcardAudioProcessor().initialize_audio_processes(recorded_dict, stimulus_dict,
-                                                                                self.mic,
-                                                                                self.speaker,
-                                                                                recording_path=self.recorded_path)
+        sap = SoundcardAudioProcessor()
+        record_code, recorded_signal = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
         if record_code == error_code.OK:
-            recorded_signal, sample_rate = librosa.load(self.recorded_path, sr=sample_rate)
             self.plot_line_graph(recorded_signal, self.collect_layout.line_graph, sample_rate)
             self.signal_info = {"stimulus_signal": self.stimulus_signal,
                                 "recorded_signal": recorded_signal,
@@ -540,7 +534,7 @@ class AnalyseWindow(QWidget):
         ai_title_layout.addItem(h_title_space)
 
         model_layout = QHBoxLayout()
-        model_label = QLabel(" 模  型 ")
+        model_label = QLabel(" 模 型 ")
         model_label.setStyleSheet("background-color: #4472c4; color: white;")
         model_label.setFixedSize(65, 25)
         self.model_combo_box = QComboBox(self)
@@ -599,7 +593,5 @@ if __name__ == "__main__":
     window = SequenceWindow()
     window.stimulus_info = stimulus_info
     window.stimulus_signal = stimulus_signal
-    window.mic = soundcard.default_microphone()
-    window.speaker = soundcard.default_speaker()
     window.show()
     app.exec()

@@ -29,7 +29,7 @@
     model_name: "CNN1d"
 
     model_init_config:
-      input_len_1: 132300  # 64340, 132300, 220500
+      input_len_1: 176400  # 64340, 132300, 176400, 220500
       input_len_2: 1
       layers_param:
         - layer_name: "Conv1D"
