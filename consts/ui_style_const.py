@@ -2,7 +2,7 @@ qpushbutton_stytle = """
             QPushButton {
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
-                font-size: 11pt;
+                font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -16,30 +16,27 @@ qpushbutton_stytle = """
                 border-color: #3333ff;
             }
         """
-
 qlineedit_stytle = """
             QLineEdit {
                 border: 1px solid rgb(122, 122, 122);
-                font-size: 11pt;
+                font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
             }
         """
-
 qcombobox_stytle = """
             QComboBox {
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
-                font-size: 11pt;
+                font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
             }
         """
-
 qgroupbox_stytle = """
             QGroupBox {
                 background: transparent;
-                font-size: 11pt;
+                font-size: 20px;
             }
             QGroupBox::title {
                 subcontrol-origin: padding;
@@ -49,12 +46,11 @@ qgroupbox_stytle = """
                 margin-top: 0px;
             }
         """
-
 qspinbox_stytle = """
             QSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
-                font-size: 11pt;
+                font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -65,12 +61,11 @@ qspinbox_stytle = """
                 width: 20px;
             }
         """
-
 qdoublespinbox_stytle = """
             QDoubleSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
-                font-size: 11pt;
+                font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
             }
@@ -84,20 +79,23 @@ qdoublespinbox_stytle = """
 
 qdialog_stytle = """
             QDialog {
-                border-radius: 15px;
+                border-radius: 20px;
             }
 """
 
 qlabel_stytle = """
             QLabel {
                 border-radius: 3px;
-                font-size: 11pt;
+                font-size: 20px;
+                color: black;
             }
 """
 
 sequence_qlabel_stytle = """
             QLabel {
-                "background-color: #4472c4; color: white;font-size: 17pt;"
+                background-color: #4472c4;
+                color: white;
+                font-size: 20px;
             }
 """
 
@@ -105,7 +103,7 @@ sequence_qpushbutton_stytle = """
             QPushButton {
                 background-color: #4472c4;
                 color: white;
-                font-size: 20pt;
+                font-size: 30pt;
             }
             QPushButton:hover {
                border-color: #803333ff;
@@ -114,14 +112,44 @@ sequence_qpushbutton_stytle = """
 
 main_window_menubar_stytle = """
             QMenuBar {
-                font-size: 11pt;
+                background-color:transparent;
+                font-size: 20px;
             }
             QMenu {
-                font-size: 11pt;
+                font-size: 20px;
             }
             QMenu::item {
-                font-size: 11pt;
+                font-size: 20px;
                 padding-left: 30px;
                 padding-right: 10px;
+            }
+            QMenu::item:selected {
+                background-color: #8099ccff;
+            }
+"""
+
+signal_analysis_tabpushbutton_stytle = """
+            QPushButton {
+                border: None;
+                color: rgb(155, 156, 156);
+                background-color: transparent;
+                font-size: 20px;
+            }
+"""
+
+qframe_stytle = """
+            QFrame {
+                color: rgb(173, 173, 173);
+            }
+"""
+
+toolbar_button_stytle = """
+            QPushButton {
+                border: None;
+                background-color: transparent;
+                font-size: 20px;
+            }
+            QPushButton:hover {
+                background-color: #5099ccff;
             }
 """
