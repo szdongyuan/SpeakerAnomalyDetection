@@ -26,11 +26,10 @@ class LoginWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("登录")
         self.setMaximumSize(600, 600)
         self.setMinimumSize(300, 400)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/login_ui_pic/DT_ico.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setAutoFillBackground(True)
 
@@ -209,9 +208,9 @@ class AddAccountWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("添加账号")
-        self.setFixedSize(300, 200)
+        self.setFixedSize(350, 240)
         layout = QVBoxLayout()
 
         access_layout = QHBoxLayout()
@@ -228,7 +227,7 @@ class AddAccountWindow(QDialog):
         self.username_input = QLineEdit()
         user_layout.addWidget(label_user)
         user_layout.addWidget(self.username_input)
-        self.username_input.setPlaceholderText("请输入用户名")
+        self.username_input.setPlaceholderText("请输入用户账号")
 
         pwd_layout = QHBoxLayout()
         label_pwd = QLabel("输入密码：")
@@ -236,10 +235,12 @@ class AddAccountWindow(QDialog):
         self.password_input.setEchoMode(QLineEdit.Password)
         pwd_layout.addWidget(label_pwd)
         pwd_layout.addWidget(self.password_input)
-        self.password_input.setPlaceholderText("请输入密码")
+        self.password_input.setPlaceholderText("请输入用户密码")
 
         info_layout = QHBoxLayout()
         self.info = QLabel("")
+        self.info.setStyleSheet("color: red; font-size: 15px")
+        self.info.setAlignment(Qt.AlignCenter)
         self.info.setMaximumHeight(15)
         self.info.setMinimumHeight(10)
         info_layout.addWidget(self.info)
@@ -264,7 +265,8 @@ class AddAccountWindow(QDialog):
 
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle)
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle)
 
     def add_user_click(self):
         username = self.username_input.text()
@@ -320,9 +322,9 @@ class ChangePwdWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("修改密码")
-        self.setFixedSize(300, 200)
+        self.setFixedSize(350, 200)
 
         layout = QVBoxLayout()
 
@@ -365,10 +367,15 @@ class ChangePwdWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qlineedit_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle + 
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qlabel_stytle)
 
     def change_pwd_click(self):
-        if self.password_input.text() != self.confirm_password_input.text():
+        if not self.password_input.text():
+            QMessageBox.warning(self, "Error", "密码不能为空")
+        elif self.password_input.text() != self.confirm_password_input.text():
             QMessageBox.warning(self, "Error", "两次输入的密码不一致")
         else:
             enc_pwd = encrypt_password(self.user_name, self.password_input.text())
