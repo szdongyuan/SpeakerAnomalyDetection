@@ -10,9 +10,8 @@ import pyqtgraph as pg
 from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, \
-    QFrame
-from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QFrame
+from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
 
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -22,7 +21,7 @@ from base.training_model_management import TrainingModelManagement
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import predict
-from ui.signal_analysis_window import SignalAnalysisWindow, Spl, Frequency, Distortion
+from ui.signal_analysis_window import Spl, Frequency, Distortion
 
 
 class SequenceWindow(QWidget):
@@ -470,104 +469,79 @@ class SequenceWindow(QWidget):
         painter.drawRect(0, 0, width, 40)
         painter.end()
 
-class AnalyseWindow(QWidget):
+# class AnalyseWindow(QWidget):
 
-    def __init__(self):
-        super().__init__()
-        self.analyse_btn = QPushButton(" 分 析 ")
-        self.ai_analyse_score_lineedit = QTextEdit()
-        self.signal_info = None
+#     def __init__(self):
+#         super().__init__()
+#         self.analyse_btn = QPushButton(" 分 析 ")
+#         self.ai_analyse_score_lineedit = QTextEdit()
+#         self.signal_info = None
 
-        self.init_ui()
+#         self.init_ui()
 
-    def init_ui(self):
-        layout = QHBoxLayout()
-        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
-                           "QDialog {border: 1px solid rgb(173, 173, 173);}")
-        self.signal_analyse_dialog = SignalAnalysisWindow(self.signal_info)
-        self.signal_analyse_dialog.setMinimumSize(330, 390)
-        self.signal_analyse_dialog.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+#     def init_ui(self):
+#         layout = QHBoxLayout()
+#         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+#                            "QDialog {border: 1px solid rgb(173, 173, 173);}")
 
-        ai_analyse_dialog = QDialog()
-        ai_analyse_layout = self.create_ai_analyse_layout()
-        ai_analyse_dialog.setLayout(ai_analyse_layout)
-        ai_analyse_dialog.setMaximumWidth(400)
-        ai_analyse_dialog.setMinimumSize(260, 390)
+#         ai_analyse_dialog = QDialog()
+#         ai_analyse_layout = self.create_ai_analyse_layout()
+#         ai_analyse_dialog.setLayout(ai_analyse_layout)
 
-        btn_layout = QVBoxLayout()
-        self.ok_btn = QPushButton(" OK ")
-        self.ng_btn = QPushButton(" NG ")
-        self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/lvseyuan.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
-        self.ok_btn.setFixedSize(200, 130)
-        self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/hongseyuan.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
-        self.ng_btn.setFixedSize(200, 130)
-        self.ok_btn.setMaximumWidth(100)
-        self.ng_btn.setMaximumWidth(100)
-        btn_layout.addWidget(self.ok_btn)
-        btn_layout.addWidget(self.ng_btn)
+#         layout.addWidget(ai_analyse_dialog)
+#         layout.setContentsMargins(150, 20, 80, 30)
+#         self.setLayout(layout)
 
-        h_spacer_1 = QSpacerItem(50, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        h_spacer_2 = QSpacerItem(60, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        layout.addWidget(self.signal_analyse_dialog)
-        layout.addItem(h_spacer_1)
-        layout.addWidget(ai_analyse_dialog)
-        layout.addItem(h_spacer_2)
-        layout.addLayout(btn_layout)
-        layout.setContentsMargins(150, 20, 80, 30)
-        self.setLayout(layout)
+#     def create_ai_analyse_layout(self):
+#         ai_analyse_layout = QVBoxLayout()
 
-    def create_ai_analyse_layout(self):
-        ai_analyse_layout = QVBoxLayout()
+#         ai_title_layout = QHBoxLayout()
+#         title_label = QLabel("AI分析")
+#         title_label.setStyleSheet("border: None")
+#         h_title_space = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+#         ai_title_layout.addWidget(title_label)
+#         ai_title_layout.addItem(h_title_space)
 
-        ai_title_layout = QHBoxLayout()
-        title_label = QLabel("AI分析")
-        title_label.setStyleSheet("border: None")
-        h_title_space = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        ai_title_layout.addWidget(title_label)
-        ai_title_layout.addItem(h_title_space)
+#         model_layout = QHBoxLayout()
+#         model_label = QLabel(" 模 型 ")
+#         model_label.setStyleSheet("background-color: #4472c4; color: white;")
+#         model_label.setFixedSize(65, 25)
+#         self.model_combo_box = QComboBox(self)
+#         self.model_combo_box.setFixedHeight(25)
+#         model_layout.addWidget(model_label)
+#         model_layout.addWidget(self.model_combo_box)
+#         model_layout.setSpacing(15)
 
-        model_layout = QHBoxLayout()
-        model_label = QLabel(" 模 型 ")
-        model_label.setStyleSheet("background-color: #4472c4; color: white;")
-        model_label.setFixedSize(65, 25)
-        self.model_combo_box = QComboBox(self)
-        self.model_combo_box.setFixedHeight(25)
-        model_layout.addWidget(model_label)
-        model_layout.addWidget(self.model_combo_box)
-        model_layout.setSpacing(15)
+#         analyse_btn_layout = QHBoxLayout()
+#         self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
+#         self.analyse_btn.setFixedSize(100, 25)
+#         h_analyse_btn_space_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+#         h_analyse_btn_space_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
+#         analyse_btn_layout.addItem(h_analyse_btn_space_left)
+#         analyse_btn_layout.addWidget(self.analyse_btn)
+#         analyse_btn_layout.addItem(h_analyse_btn_space_right)
 
-        analyse_btn_layout = QHBoxLayout()
-        self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
-        self.analyse_btn.setFixedSize(100, 25)
-        h_analyse_btn_space_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        h_analyse_btn_space_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        analyse_btn_layout.addItem(h_analyse_btn_space_left)
-        analyse_btn_layout.addWidget(self.analyse_btn)
-        analyse_btn_layout.addItem(h_analyse_btn_space_right)
+#         analyse_score_layout = QHBoxLayout()
+#         self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
+#         self.ai_analyse_score_lineedit.setDisabled(True)
+#         self.ai_analyse_score_lineedit.setMaximumWidth(600)
+#         self.ai_analyse_score_lineedit.setStyleSheet("font-size: 17pt;")
+#         analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
+#         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
 
-        analyse_score_layout = QHBoxLayout()
-        self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
-        self.ai_analyse_score_lineedit.setDisabled(True)
-        self.ai_analyse_score_lineedit.setMaximumWidth(600)
-        self.ai_analyse_score_lineedit.setStyleSheet("font-size: 17pt;")
-        analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
-        analyse_score_layout.setContentsMargins(20, 0, 20, 0)
+#         v_ai_analyse_top_space = QSpacerItem(30, 50, QSizePolicy.Minimum, QSizePolicy.Minimum)
+#         v_ai_analyse_center_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+#         v_ai_analyse_bottom_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
 
-        v_ai_analyse_top_space = QSpacerItem(30, 50, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        v_ai_analyse_center_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        v_ai_analyse_bottom_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
+#         ai_analyse_layout.addLayout(ai_title_layout)
+#         ai_analyse_layout.addLayout(model_layout)
+#         ai_analyse_layout.addItem(v_ai_analyse_top_space)
+#         ai_analyse_layout.addLayout(analyse_btn_layout)
+#         ai_analyse_layout.addItem(v_ai_analyse_center_space)
+#         ai_analyse_layout.addLayout(analyse_score_layout)
+#         ai_analyse_layout.addItem(v_ai_analyse_bottom_space)
 
-        ai_analyse_layout.addLayout(ai_title_layout)
-        ai_analyse_layout.addLayout(model_layout)
-        ai_analyse_layout.addItem(v_ai_analyse_top_space)
-        ai_analyse_layout.addLayout(analyse_btn_layout)
-        ai_analyse_layout.addItem(v_ai_analyse_center_space)
-        ai_analyse_layout.addLayout(analyse_score_layout)
-        ai_analyse_layout.addItem(v_ai_analyse_bottom_space)
-
-        return ai_analyse_layout
+#         return ai_analyse_layout
 
 
 if __name__ == "__main__":

@@ -1,85 +1,80 @@
 import sys
-from functools import partial
 
 import librosa
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGridLayout, QGroupBox, QHBoxLayout
-from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpacerItem
+from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
-from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from consts import ui_style_const
 
 
-class SignalAnalysisWindow(QDialog):
-    def __init__(self, signal_info):
-        super().__init__()
-        self.signal_info = signal_info
-        self.default_logger = LogManager.set_log_handler("core")
-        self.init_ui()
+# class SignalAnalysisWindow(QDialog):
+#     def __init__(self, signal_info):
+#         super().__init__()
+#         self.signal_info = signal_info
+#         self.default_logger = LogManager.set_log_handler("core")
+#         self.init_ui()
 
-    def init_ui(self):
-        # set the dialog theme and disable help and close btutton
-        self.setWindowTitle("音频分析窗口")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        # set widget style
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           "QTabWidget {font-size: 11pt;}" +
-                           "QPushButton {background-color: #4472c4; color: white;}" +
-                           "QPushButton:hover {background-color: #4472c4; color: white; border-color: #803333ff;}")
-        signal_analysis_layout = QVBoxLayout()      # create main layout
+#     def init_ui(self):
+#         # set the dialog theme and disable help and close btutton
+#         self.setWindowTitle("音频分析窗口")
+#         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+#         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+#         # set widget style
+#         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+#                            ui_style_const.qgroupbox_stytle +
+#                            ui_style_const.qlabel_stytle +
+#                            ui_style_const.qlineedit_stytle +
+#                            "QTabWidget {font-size: 11pt;}" +
+#                            "QPushButton {background-color: #4472c4; color: white;}" +
+#                            "QPushButton:hover {background-color: #4472c4; color: white; border-color: #803333ff;}")
+#         signal_analysis_layout = QVBoxLayout()      # create main layout
 
 
-        # set three tab, show spl, frequency and thd's result
-        self.tabwidget = QTabWidget()
-        self.spl_wnd = Spl(self.signal_info)
-        self.frequency_wnd = Frequency(self.signal_info)
-        self.distortion_wnd = Distortion(self.signal_info)
-        self.spl_wnd.show()
-        self.frequency_wnd.show()
-        self.distortion_wnd.show()
+#         # set three tab, show spl, frequency and thd's result
+#         self.tabwidget = QTabWidget()
+#         self.spl_wnd = Spl(self.signal_info)
+#         self.frequency_wnd = Frequency(self.signal_info)
+#         self.distortion_wnd = Distortion(self.signal_info)
+#         self.spl_wnd.show()
+#         self.frequency_wnd.show()
+#         self.distortion_wnd.show()
 
-        base_btn_layout = QGridLayout()
-        save_btn = QPushButton("保  存")        # use to save current tab analysis data
-        save_btn.setFixedSize(100, 30)
-        # save_btn.clicked.connect(self.save_btn_clicked)
+#         base_btn_layout = QGridLayout()
+#         save_btn = QPushButton("保  存")        # use to save current tab analysis data
+#         save_btn.setFixedSize(100, 30)
+#         # save_btn.clicked.connect(self.save_btn_clicked)
 
-        base_btn_layout.addWidget(save_btn, 0, 0)
+#         base_btn_layout.addWidget(save_btn, 0, 0)
 
-        signal_analysis_layout.addWidget(self.tabwidget)
-        signal_analysis_layout.addLayout(base_btn_layout)
-        self.setLayout(signal_analysis_layout)
+#         signal_analysis_layout.addWidget(self.tabwidget)
+#         signal_analysis_layout.addLayout(base_btn_layout)
+#         self.setLayout(signal_analysis_layout)
 
-    def save_failed_popup(self):
-        # the function infor us the right way to save
-        save_failed_msg = QMessageBox(self)
-        save_failed_msg.setIcon(QMessageBox.Critical)
-        save_failed_msg.setText("请先点击绘图按钮")
-        save_failed_msg.setWindowTitle("保存失败")
-        save_failed_msg.setStandardButtons(QMessageBox.Ok)
-        save_failed_msg.exec_()
+#     def save_failed_popup(self):
+#         # the function infor us the right way to save
+#         save_failed_msg = QMessageBox(self)
+#         save_failed_msg.setIcon(QMessageBox.Critical)
+#         save_failed_msg.setText("请先点击绘图按钮")
+#         save_failed_msg.setWindowTitle("保存失败")
+#         save_failed_msg.setStandardButtons(QMessageBox.Ok)
+#         save_failed_msg.exec_()
 
-    def save_data_to_txt(self, result):
-        # save file to the   selected location
-        file_path, _ = QFileDialog.getSaveFileName(self,
-                                                   "保存数据",
-                                                   "",
-                                                   "Text Files (*.txt)",
-                                                   options=QFileDialog.DontUseNativeDialog)
-        if file_path:
-            try:
-                with open(file_path, 'w') as f:
-                    f.write(str(result))
-                self.default_logger.info(f"The file was saved to {file_path}.")
-            except Exception as e:
-                self.default_logger.error(f"Failed to save the file. {e}")
+#     def save_data_to_txt(self, result):
+#         # save file to the   selected location
+#         file_path, _ = QFileDialog.getSaveFileName(self,
+#                                                    "保存数据",
+#                                                    "",
+#                                                    "Text Files (*.txt)",
+#                                                    options=QFileDialog.DontUseNativeDialog)
+#         if file_path:
+#             try:
+#                 with open(file_path, 'w') as f:
+#                     f.write(str(result))
+#                 self.default_logger.info(f"The file was saved to {file_path}.")
+#             except Exception as e:
+#                 self.default_logger.error(f"Failed to save the file. {e}")
 
 
 class Distortion(QWidget):
@@ -106,17 +101,17 @@ class Distortion(QWidget):
         layout.addWidget(self.thd_plot)
         self.setLayout(layout)
 
-    @staticmethod
-    def get_label_text(value):
-        # set the thd step
-        if value == 2:
-            return str(value)
-        elif value >= 7:
-            start = (value - 6) * 5 + 5
-            end = (value - 6) * 5 + 10
-            return f"{start}...{end}"
-        else:
-            return f"2...{value}"
+    # @staticmethod
+    # def get_label_text(value):
+    #     # set the thd step
+    #     if value == 2:
+    #         return str(value)
+    #     elif value >= 7:
+    #         start = (value - 6) * 5 + 5
+    #         end = (value - 6) * 5 + 10
+    #         return f"{start}...{end}"
+    #     else:
+    #         return f"2...{value}"
 
     def calculate_thd(self):
         freq_value, harmonic, thd = [], [], []
@@ -238,6 +233,6 @@ if __name__ == "__main__":
                    "recorded_signal": recorded,
                    "sample_rate": sr}
     app = QApplication(sys.argv)
-    window = SignalAnalysisWindow(signal_info)
+    window = Spl(signal_info)
     window.show()
     window.exec()
