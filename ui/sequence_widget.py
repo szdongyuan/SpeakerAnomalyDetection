@@ -44,7 +44,7 @@ class SequenceWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumHeight(700)
         toolbar_layout = self.create_toolbar_layout()
         waveform_layout = self.create_waveform_layout()
@@ -74,6 +74,7 @@ class SequenceWindow(QWidget):
         self.player_btn.clicked.connect(self.clicked_player_btn)
 
         self.replayer_btn.setFixedSize(100, 40)
+        self.replayer_btn.setDisabled(True)
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
@@ -220,6 +221,8 @@ class SequenceWindow(QWidget):
         # self.analyse_layout.close()
         # self.clear_plg()
         self.line_graph.clear()
+        self.replayer_btn.setDisabled(True)
+        self.data_btn.setEnabled(False)
         
     # def clear_plg(self):
     #     self.line_graph.clear()
@@ -355,7 +358,7 @@ class SequenceWindow(QWidget):
 
     def clicked_player_btn(self):
         if self.player_status_flag:
-            self.clear_plg()
+            self.line_graph.clear()
         self.player_status_flag = True
         self.player_btn.setDisabled(True)
         self.update_player_icon()
@@ -378,6 +381,7 @@ class SequenceWindow(QWidget):
             self.recorded_signal_info["sample_rate"] = sample_rate
 
         self.data_btn.setEnabled(True)
+        self.replayer_btn.setEnabled(True)
 
     def clicked_data_btn(self):
         self.spl_wnd = Spl(self.signal_info)
