@@ -152,3 +152,9 @@ qcheckbox_stytle = """
                 font-size: 20px;
             }
 """
+
+qlistview_stytle = """
+            QListView {
+                font-size: 20px;
+            }
+"""
