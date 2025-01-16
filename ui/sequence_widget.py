@@ -389,6 +389,10 @@ class SequenceWindow(QWidget):
         self.frequency_wnd.calculate_fr()
         self.distortion_wnd.calculate_thd()
 
+        self.spl_wnd.move(300, 200)
+        self.frequency_wnd.move(340, 240)
+        self.distortion_wnd.move(380,280)
+
         self.spl_wnd.show()
         self.frequency_wnd.show()
         self.distortion_wnd.show()

@@ -153,3 +153,9 @@ toolbar_button_stytle = """
                 background-color: #5099ccff;
             }
 """
+
+qcheckbox_stytle = """
+            QCheckBox {
+                font-size: 20px;
+            }
+"""
