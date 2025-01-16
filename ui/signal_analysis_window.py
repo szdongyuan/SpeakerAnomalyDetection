@@ -91,6 +91,7 @@ class Distortion(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("谐波分析")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         # layout have a child's plotwidget, use to display the thd analysis results
         layout = QVBoxLayout()
 
@@ -160,6 +161,7 @@ class Spl(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("声压分析")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.spl_plot = pg.PlotWidget(title='Sound Pressure Level')
         self.spl_plot.setBackground('white')
         layout = QVBoxLayout()
@@ -199,6 +201,7 @@ class Frequency(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("频响分析")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.fr_plot = pg.PlotWidget(title='Frequency Response')
         # self.fr_plot.setFixedSize(400, 320)
         self.fr_plot.setBackground('white')

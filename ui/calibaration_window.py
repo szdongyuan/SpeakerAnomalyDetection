@@ -31,7 +31,7 @@ class CalibrationWindow(QDialog):
         self.get_calibration_param()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("校准")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
