@@ -82,16 +82,16 @@ class MainWindow(QMainWindow):
     
     def set_title_btn(self):
         self.min_btn = QPushButton()
-        self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/ai_window_pic/minsize.svg"))
+        self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minsize.svg"))
         self.min_btn.setStyleSheet("border: None; background-color: transparent")
         self.min_btn.clicked.connect(self.showMinimized)
         self.max_flag = True
         self.max_btn = QPushButton()
-        self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/ai_window_pic/normalsize.svg"))
+        self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.svg"))
         self.max_btn.clicked.connect(self.show_window_size)
         self.max_btn.setStyleSheet("border: None; background-color: transparent")
         self.close_btn = QPushButton()
-        self.close_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/ai_window_pic/close.svg"))
+        self.close_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/close.svg"))
         self.close_btn.setStyleSheet("border: None; background-color: transparent")
         self.close_btn.clicked.connect(self.close)
 
@@ -104,11 +104,11 @@ class MainWindow(QMainWindow):
     
     def show_window_size(self):
         if self.max_flag:
-            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/ai_window_pic/maxsize.png"))
+            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.png"))
             self.showNormal()
             self.max_flag = False
         else:
-            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/ai_window_pic/normalsize.png"))
+            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.png"))
             self.showMaximized()
             self.max_flag = True
 
@@ -262,7 +262,7 @@ class MainWindow(QMainWindow):
         painter.setBrush(QColor(208, 206, 202))
         painter.drawRect(0, 0, width, 31)
         painter.setBrush(QColor(208, 206, 202, 124))
-        painter.drawRect(0, 31, width, 40)
+        painter.drawRect(0, 31, width, 41)
         painter.drawRect(0, height - 24, width, 24)
         painter.end()
 
