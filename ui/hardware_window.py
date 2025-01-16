@@ -44,12 +44,14 @@ class HardwareWindow(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qgroupbox_stytle)
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qlabel_stytle)
 
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
         self.speaker_label = QLabel("设  备：   %s" % self.speaker["name"])
-        self.speaker_channel_label = QLabel("驱  动： %s" % get_api_info(self.speaker["hostapi"])["name"])
+        self.speaker_channel_label = QLabel("驱  动：   %s" % get_api_info(self.speaker["hostapi"])["name"])
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
 
@@ -73,7 +75,7 @@ class HardwareWindow(QDialog):
     def create_mic_box(self):
         mic_label_layout = QVBoxLayout()
         self.mic_label = QLabel("设  备：   %s" % self.mic["name"])
-        self.mic_channel_label = QLabel("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
+        self.mic_channel_label = QLabel("驱  动：   %s" % get_api_info(self.mic["hostapi"])["name"])
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
 
@@ -181,7 +183,7 @@ class DeviceListWindow(QDialog):
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
         btn_layout.setSpacing(65)
-        btn_layout.setContentsMargins(40, 0, 40, 0)
+        btn_layout.setContentsMargins(50, 0, 50, 0)
 
         layout = QVBoxLayout()
         layout.addLayout(api_layout)
@@ -190,7 +192,10 @@ class DeviceListWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qcombobox_stytle + 
+                           ui_style_const.qlistview_stytle)
 
     def update_api_device(self):
         item_model = QStandardItemModel()
@@ -263,7 +268,7 @@ class CalibrationWizard(QWizard):
         self.setButtonText(QWizard.FinishButton, '校  准')
         # self.setButtonText(QWizard.CancelButton, '跳过')
         self.setOption(QWizard.NoCancelButton)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qlabel_stytle)
 
     @staticmethod
     def create_wizard_page(title, subtitle=" ", label_txt=" ", wizard_pic=None):
