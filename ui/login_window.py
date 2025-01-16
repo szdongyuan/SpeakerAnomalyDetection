@@ -26,11 +26,10 @@ class LoginWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("登录")
         self.setMaximumSize(600, 600)
         self.setMinimumSize(300, 400)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/login_ui_pic/DT_ico.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setAutoFillBackground(True)
 
@@ -209,7 +208,7 @@ class AddAccountWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("添加账号")
         self.setFixedSize(300, 200)
         layout = QVBoxLayout()
@@ -320,7 +319,7 @@ class ChangePwdWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("修改密码")
         self.setFixedSize(300, 200)
 

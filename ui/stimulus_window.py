@@ -66,11 +66,11 @@ class StimulusWindow(QDialog):
         self.stimulus_changed()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("Stimulus Window")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedSize(480, 700)
+        self.setFixedSize(540, 700)
         custom_stimulus_layout = QGridLayout()
         custom_chk_box = QCheckBox("自定义")
         custom_chk_box.setChecked(True)
@@ -135,7 +135,8 @@ class StimulusWindow(QDialog):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qspinbox_stytle +
                            ui_style_const.qdoublespinbox_stytle +
-                           ui_style_const.qlabel_stytle)
+                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qcheckbox_stytle)
 
     def create_stimulus_type_group_box(self):
         stimulus_type_group_box = QGroupBox("激励信号类型")
