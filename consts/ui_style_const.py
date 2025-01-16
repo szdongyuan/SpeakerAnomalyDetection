@@ -1,6 +1,9 @@
 qpushbutton_stytle = """
             QPushButton {
-                border: 1px solid rgb(173, 173, 173);
+                border-left: 1px solid rgb(128, 128, 128);
+                border-top: 1px solid rgb(128, 128, 128);
+                border-right: 3px solid rgb(128, 128, 128);
+                border-bottom: 3px solid rgb(128, 128, 128);
                 background-color: rgb(225, 225, 225);
                 font-size: 20px;
                 border-radius: 3px;
@@ -85,7 +88,6 @@ qdialog_stytle = """
 
 qlabel_stytle = """
             QLabel {
-                border-radius: 3px;
                 font-size: 20px;
                 color: black;
             }
@@ -103,7 +105,7 @@ sequence_qpushbutton_stytle = """
             QPushButton {
                 background-color: #4472c4;
                 color: white;
-                font-size: 30pt;
+                font-size: 40px;
             }
             QPushButton:hover {
                border-color: #803333ff;
@@ -125,15 +127,6 @@ main_window_menubar_stytle = """
             }
             QMenu::item:selected {
                 background-color: #8099ccff;
-            }
-"""
-
-signal_analysis_tabpushbutton_stytle = """
-            QPushButton {
-                border: None;
-                color: rgb(155, 156, 156);
-                background-color: transparent;
-                font-size: 20px;
             }
 """
 
