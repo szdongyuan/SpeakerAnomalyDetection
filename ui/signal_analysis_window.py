@@ -3,10 +3,12 @@ import sys
 import librosa
 import numpy as np
 import pyqtgraph as pg
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtWidgets import QSizePolicy, QTabWidget, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from consts.running_consts import DEFAULT_DIR
 
 
 # class SignalAnalysisWindow(QDialog):

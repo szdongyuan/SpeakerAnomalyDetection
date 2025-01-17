@@ -104,11 +104,11 @@ class MainWindow(QMainWindow):
     
     def show_window_size(self):
         if self.max_flag:
-            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.png"))
+            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.svg"))
             self.showNormal()
             self.max_flag = False
         else:
-            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.png"))
+            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.svg"))
             self.showMaximized()
             self.max_flag = True
 
