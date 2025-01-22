@@ -1,3 +1,4 @@
+import os
 import sys
 
 import librosa
@@ -158,6 +159,7 @@ class Spl(QWidget):
     def __init__(self, signal_info):
         super().__init__()
         self.signal_info = signal_info
+        self.deviation_value = None
         self.result = {}
         self.init_ui()
 
@@ -177,6 +179,7 @@ class Spl(QWidget):
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_signal, reference_pressure)
+        signal_spl = signal_spl + self.deviation_value
         self.plot_spl(signal_duration, recorded_signal, signal_spl)
         self.result = {"signal_duration": signal_duration.tolist(),
                        "recorded_signal": recorded_signal.tolist(),
@@ -198,6 +201,7 @@ class Frequency(QWidget):
         self.signal_info = signal_info
         self.smooth_flag = False
         self.temp_frequency_list = None
+        self.deviation_value = None
         self.result = {}
         self.init_ui()
 
@@ -225,6 +229,7 @@ class Frequency(QWidget):
     def plot_fr(self, frequency_list, fr):
         # drawing the Frequency Response
         self.fr_plot.clear()
+        fr = fr + self.deviation_value
         self.fr_plot.plot(frequency_list, fr, pen='b')
         self.fr_plot.setLabel('left', 'Amplitude (dB)')
         self.fr_plot.setLabel('bottom', 'Frequency (Hz)')

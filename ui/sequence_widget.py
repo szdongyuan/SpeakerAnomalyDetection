@@ -32,6 +32,7 @@ class SequenceWindow(QWidget):
         self.recorded_path = None
         self.refresh_stimulus_flag = None
         self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
+        self.deviation_value = self.get_mic_deviation_value()
         self.signal_info = {}
         # self.analyse_layout = AnalyseWindow()
         self.sequence_layout = QVBoxLayout()
@@ -366,7 +367,7 @@ class SequenceWindow(QWidget):
         # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
         if self.refresh_stimulus_flag:
             self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-            self.update_load_model_name()
+            # self.update_load_model_name()
             self.refresh_stimulus_flag = False
         sample_rate = self.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
@@ -387,7 +388,8 @@ class SequenceWindow(QWidget):
         self.spl_wnd = Spl(self.signal_info)
         self.frequency_wnd = Frequency(self.signal_info)
         self.distortion_wnd = Distortion(self.signal_info)
-
+        self.frequency_wnd.deviation_value = self.deviation_value
+        self.spl_wnd.deviation_value = self.deviation_value
         self.spl_wnd.calculate_spl()
         self.frequency_wnd.calculate_fr()
         self.distortion_wnd.calculate_thd()
@@ -409,6 +411,17 @@ class SequenceWindow(QWidget):
         # if default_model in model_list:
         #     default_index = model_list.index(default_model)
         #     # self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
+
+    @staticmethod
+    def get_mic_deviation_value():
+        file_path = DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                deviation_value = lines[1].strip()
+                return float(deviation_value)
+        except Exception as e:
+            return 0.0
 
     def load_model_name_from_db(self):
         model_list = []
@@ -452,7 +465,7 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         line_graph.plot(signal_duration, recorded_signal)
-        line_graph.setLabel('left', 'Amplitude')
+        line_graph.setLabel('left', 'Amplitude(V)')
         line_graph.setLabel('bottom', 'Time(s)')
         line_graph.showGrid(x=True, y=True)
 

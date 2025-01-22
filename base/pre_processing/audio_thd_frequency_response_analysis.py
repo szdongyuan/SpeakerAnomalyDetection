@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
+from scipy.ndimage import maximum_filter
 
 from base.utils.plot_audio_features import PlotManager
 
@@ -201,7 +202,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         return fr[start_idx:stop_idx], frequency_list[start_idx:stop_idx]
 
     @staticmethod
-    def spl_calculation(recorded_signal, reference_pressure=20e-6):
+    def spl_calculation(recorded_signal, reference_pressure=20e-6, window_size=1201):
         """
             Calculate the Sound Pressure Level (SPL) of the recorded signal.
 
@@ -211,11 +212,14 @@ class AudioThdFrequencyResponseAnalysis(object):
                 - reference_pressure : float
                     The reference sound pressure, defaulting to 20 μPa (20e-6 Pa),
                     used as the baseline for SPL calculation.
+                - window_size: int
+                    The sliding window length
 
             Returns:
                 - spl_smooth : ndarray
                     The computed SPL (in dB) after smoothing.
         """
-        spl = 20 * np.log10(np.abs(recorded_signal) / reference_pressure)
+        amplitude_list = maximum_filter(np.abs(recorded_signal), size=window_size)
+        spl = 20 * np.log10(np.array(amplitude_list) / reference_pressure)
         spl_smooth = np.convolve(spl, np.ones(1102) / 1102, mode='same')
         return spl_smooth

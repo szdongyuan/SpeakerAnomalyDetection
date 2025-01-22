@@ -41,6 +41,19 @@ class SoundcardAudioProcessor(object):
             err_msg = "Failed to play audio. [%s]" % (str(e)[:50])
             return error_code.INVALID_PLAY, err_msg
 
+    @staticmethod
+    def sd_rec(recorded_dict):
+        num_frames = recorded_dict.get("num_frames", 441000)
+        sample_rate = recorded_dict.get("sample_rate", 44100)
+        channels = recorded_dict.get("channels", 1)
+        blocking = recorded_dict.get("blocking", True)
+        prolong_frames = recorded_dict.get("prolong_frames", 0)
+        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T[0]
+        if prolong_frames > 0:
+            recorded_data = recorded_data[prolong_frames:]
+
+        return error_code.OK, recorded_data
+
     def initialize_audio_processes(self, record_dict: dict, stimulus_dict: dict,
                                    mic, speaker, recording_path: str = "recording.wav"):
         """

@@ -9,9 +9,9 @@ from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
-from ui.calibaration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
+from ui.out_in_calibration_window import OutInCalibrationWindow
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
 
@@ -235,7 +235,7 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker = self.speaker
 
     def on_calibration_window_init(self):
-        dlg = CalibrationWindow()
+        dlg = OutInCalibrationWindow()
         dlg.speaker = self.speaker
         dlg.exec()
 
