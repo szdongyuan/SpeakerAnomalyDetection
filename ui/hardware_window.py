@@ -8,7 +8,6 @@ from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, 
 from base.sound_device_manager import get_device_info, get_default_device, get_api_info, change_default_device
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.calibaration_window import CalibrationWindow
 
 
 class HardwareWindow(QDialog):
@@ -59,11 +58,11 @@ class HardwareWindow(QDialog):
         select_speaker_btn = QPushButton("选择扬声器")
         select_speaker_btn.clicked.connect(self.select_speaker_btn_clicked)
         h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        calibrate_speaker_btn = QPushButton("输出校准")
-        calibrate_speaker_btn.clicked.connect(self.calibrate_speaker_btn_clicked)
+        # calibrate_speaker_btn = QPushButton("输出校准")
+        # calibrate_speaker_btn.clicked.connect(self.calibrate_speaker_btn_clicked)
         speaker_btn_layout.addWidget(select_speaker_btn)
         speaker_btn_layout.addItem(h_spacer)
-        speaker_btn_layout.addWidget(calibrate_speaker_btn)
+        # speaker_btn_layout.addWidget(calibrate_speaker_btn)
 
         speaker_box = QGroupBox("扬声器")
         layout = QVBoxLayout()
@@ -109,12 +108,12 @@ class HardwareWindow(QDialog):
             self.mic_label.setText("设  备：   %s" % self.mic["name"])
             self.mic_channel_label.setText("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
 
-    @staticmethod
-    def calibrate_speaker_btn_clicked():
-        dlg = CalibrationWizard()
-        dlg.on_exec()
-        dlg2 = CalibrationWindow()
-        dlg2.exec()
+    # @staticmethod
+    # def calibrate_speaker_btn_clicked():
+    #     dlg = CalibrationWizard()
+    #     dlg.on_exec()
+    #     dlg2 = CalibrationWindow()
+    #     dlg2.exec()
 
     def ok_btn_clicked(self):
         change_default_device(self.mic["index"], self.speaker["index"])
@@ -193,8 +192,8 @@ class DeviceListWindow(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlabel_stytle + 
-                           ui_style_const.qcombobox_stytle + 
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qcombobox_stytle +
                            ui_style_const.qlistview_stytle)
 
     def update_api_device(self):
@@ -227,75 +226,75 @@ class DeviceListWindow(QDialog):
         super().paintEvent(event)
 
 
-class CalibrationWizard(QWizard):
-
-    def __init__(self):
-        super().__init__()
-
-        self.init_ui()
-
-    def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setWizardStyle(QWizard.ModernStyle)
-        self.setWindowTitle("输出校准向导")
-
-        # Todo: add pic to wizard
-        page_1 = self.create_wizard_page(title="步骤一：连接设备",
-                                         label_txt="将功放输出端正确连接至电压表或示波仪。",
-                                         wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig1_device.png")
-        page_2 = self.create_wizard_page(title="步骤二：播放激励信号",
-                                         label_txt="点击“播放”按钮，观察电压读数。",
-                                         wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig2_play.png")
-        page_3 = self.create_wizard_page(title="步骤三：记录电压",
-                                         label_txt="待电压稳定后，记录读数。重复步骤二、三若干次（建议5次以上）。",
-                                         wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig3_save.png")
-        page_4 = self.create_wizard_page(title="步骤四：校准输出",
-                                         label_txt="点击“校准”按钮。",
-                                         wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig4_calibrate.png")
-        page_5 = self.create_wizard_page(title="步骤五：测试",
-                                         label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。\n校准完成后点击“退出”即可。",
-                                         wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig5_test.png")
-        page_list = [page_1, page_2, page_3, page_4, page_5]
-        for i, page in enumerate(page_list):
-            self.setPage(i, page)
-        pix = QPixmap(640, 64)
-        pix.fill(QColor(52, 104, 192))
-        self.setPixmap(QWizard.BannerPixmap, pix)
-
-        self.setButtonText(QWizard.NextButton, '下一步')
-        self.setButtonText(QWizard.BackButton, '上一步')
-        self.setButtonText(QWizard.FinishButton, '校  准')
-        # self.setButtonText(QWizard.CancelButton, '跳过')
-        self.setOption(QWizard.NoCancelButton)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qlabel_stytle)
-
-    @staticmethod
-    def create_wizard_page(title, subtitle=" ", label_txt=" ", wizard_pic=None):
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel(label_txt))
-        if wizard_pic:
-            pic_layout = QHBoxLayout()
-            pic_label = QLabel()
-            pic_label.setPixmap(QPixmap(wizard_pic))
-            pic_layout.addWidget(pic_label)
-            pic_layout.setAlignment(Qt.AlignCenter)
-            layout.addLayout(pic_layout)
-        page = QWizardPage()
-        page.setTitle("<font color='white' size='6'>%s</font>" % title)
-        page.setSubTitle(subtitle)
-        page.setLayout(layout)
-        return page
-
-    def on_exec(self):
-        self.exec()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setBrush(QColor(174, 171, 162, 123))
-        painter.setPen(Qt.NoPen)
-        painter.drawRect(self.rect())
-        super().paintEvent(event)
+# class CalibrationWizard(QWizard):
+#
+#     def __init__(self):
+#         super().__init__()
+#
+#         self.init_ui()
+#
+#     def init_ui(self):
+#         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+#         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+#         self.setWizardStyle(QWizard.ModernStyle)
+#         self.setWindowTitle("输出校准向导")
+#
+#         # Todo: add pic to wizard
+#         page_1 = self.create_wizard_page(title="步骤一：连接设备",
+#                                          label_txt="将功放输出端正确连接至电压表或示波仪。",
+#                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig1_device.png")
+#         page_2 = self.create_wizard_page(title="步骤二：播放激励信号",
+#                                          label_txt="点击“播放”按钮，观察电压读数。",
+#                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig2_play.png")
+#         page_3 = self.create_wizard_page(title="步骤三：记录电压",
+#                                          label_txt="待电压稳定后，记录读数。重复步骤二、三若干次（建议5次以上）。",
+#                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig3_save.png")
+#         page_4 = self.create_wizard_page(title="步骤四：校准输出",
+#                                          label_txt="点击“校准”按钮。",
+#                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig4_calibrate.png")
+#         page_5 = self.create_wizard_page(title="步骤五：测试",
+#                                          label_txt="点击“测试”按钮，若电压读数与预期差距较大可点击“重置”按钮重新校准。\n校准完成后点击“退出”即可。",
+#                                          wizard_pic=DEFAULT_DIR + "ui/ui_pic/calibration_pic/fig5_test.png")
+#         page_list = [page_1, page_2, page_3, page_4, page_5]
+#         for i, page in enumerate(page_list):
+#             self.setPage(i, page)
+#         pix = QPixmap(640, 64)
+#         pix.fill(QColor(52, 104, 192))
+#         self.setPixmap(QWizard.BannerPixmap, pix)
+#
+#         self.setButtonText(QWizard.NextButton, '下一步')
+#         self.setButtonText(QWizard.BackButton, '上一步')
+#         self.setButtonText(QWizard.FinishButton, '校  准')
+#         # self.setButtonText(QWizard.CancelButton, '跳过')
+#         self.setOption(QWizard.NoCancelButton)
+#         self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qlabel_stytle)
+#
+#     @staticmethod
+#     def create_wizard_page(title, subtitle=" ", label_txt=" ", wizard_pic=None):
+#         layout = QVBoxLayout()
+#         layout.addWidget(QLabel(label_txt))
+#         if wizard_pic:
+#             pic_layout = QHBoxLayout()
+#             pic_label = QLabel()
+#             pic_label.setPixmap(QPixmap(wizard_pic))
+#             pic_layout.addWidget(pic_label)
+#             pic_layout.setAlignment(Qt.AlignCenter)
+#             layout.addLayout(pic_layout)
+#         page = QWizardPage()
+#         page.setTitle("<font color='white' size='6'>%s</font>" % title)
+#         page.setSubTitle(subtitle)
+#         page.setLayout(layout)
+#         return page
+#
+#     def on_exec(self):
+#         self.exec()
+#
+#     def paintEvent(self, event):
+#         painter = QPainter(self)
+#         painter.setBrush(QColor(174, 171, 162, 123))
+#         painter.setPen(Qt.NoPen)
+#         painter.drawRect(self.rect())
+#         super().paintEvent(event)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class SequenceWindow(QWidget):
         self.recorded_path = None
         self.refresh_stimulus_flag = None
         self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
+        self.deviation_value = self.get_mic_deviation_value()
         self.signal_info = {}
         # self.analyse_layout = AnalyseWindow()
         self.sequence_layout = QVBoxLayout()
@@ -63,7 +64,7 @@ class SequenceWindow(QWidget):
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
-                           ui_style_const.qframe_stytle + 
+                           ui_style_const.qframe_stytle +
                            ui_style_const.qlabel_stytle)
 
     def create_toolbar_layout(self):
@@ -164,7 +165,7 @@ class SequenceWindow(QWidget):
         toolbar_layout.setSpacing(0)
 
         return toolbar_layout
-    
+
     def create_waveform_layout(self):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
@@ -198,7 +199,7 @@ class SequenceWindow(QWidget):
         s_or_n_count = self.lineedit_count.text()
         reg = r'^[0-9]*$'
 
-        if not re.match(reg,s_or_n_count):
+        if not re.match(reg, s_or_n_count):
             self.lineedit_s_or_n_count.clear()
 
     def get_model_info(self, selected_model):
@@ -223,7 +224,7 @@ class SequenceWindow(QWidget):
         self.line_graph.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
-        
+
     # def clear_plg(self):
     #     self.line_graph.clear()
     #     self.analyse_layout.signal_analyse_dialog.spl_wnd.waveform_plot.clear()
@@ -315,7 +316,7 @@ class SequenceWindow(QWidget):
     #         model_path, config_path = result
     #         kwargs = {"config_path": config_path}
     #         result_text = self.model_predict(model_path, **kwargs)
-            # self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
+    # self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
 
     def model_missing_popup(self):
         model_missing_msg = QMessageBox(self)
@@ -366,7 +367,7 @@ class SequenceWindow(QWidget):
         # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
         if self.refresh_stimulus_flag:
             self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-            self.update_load_model_name()
+            # self.update_load_model_name()
             self.refresh_stimulus_flag = False
         sample_rate = self.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
@@ -387,28 +388,40 @@ class SequenceWindow(QWidget):
         self.spl_wnd = Spl(self.signal_info)
         self.frequency_wnd = Frequency(self.signal_info)
         self.distortion_wnd = Distortion(self.signal_info)
-
+        self.frequency_wnd.deviation_value = self.deviation_value
+        self.spl_wnd.deviation_value = self.deviation_value
         self.spl_wnd.calculate_spl()
         self.frequency_wnd.calculate_fr()
         self.distortion_wnd.calculate_thd()
 
         self.spl_wnd.move(300, 200)
         self.frequency_wnd.move(340, 240)
-        self.distortion_wnd.move(380,280)
+        self.distortion_wnd.move(380, 280)
 
         self.spl_wnd.show()
         self.frequency_wnd.show()
         self.distortion_wnd.show()
 
     # def update_load_model_name(self):
-        # self.analyse_layout.model_combo_box.clear()
-        # model_list = self.load_model_name_from_db()
-        # for model_name in model_list:
-            # self.analyse_layout.model_combo_box.addItem(model_name)
-        # default_model = self.load_analyse_model()
-        # if default_model in model_list:
-        #     default_index = model_list.index(default_model)
-        #     # self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
+    # self.analyse_layout.model_combo_box.clear()
+    # model_list = self.load_model_name_from_db()
+    # for model_name in model_list:
+    # self.analyse_layout.model_combo_box.addItem(model_name)
+    # default_model = self.load_analyse_model()
+    # if default_model in model_list:
+    #     default_index = model_list.index(default_model)
+    #     # self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
+
+    @staticmethod
+    def get_mic_deviation_value():
+        file_path = DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                deviation_value = lines[1].strip()
+                return float(deviation_value)
+        except Exception as e:
+            return 0.0
 
     def load_model_name_from_db(self):
         model_list = []
@@ -452,8 +465,9 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         line_graph.plot(signal_duration, recorded_signal)
-        line_graph.setLabel('left', 'Amplitude')
+        line_graph.setLabel('left', 'Amplitude(V)')
         line_graph.setLabel('bottom', 'Time(s)')
+        line_graph.showGrid(x=True, y=True)
 
     def update_player_icon(self):
         if self.player_status_flag:
@@ -472,6 +486,7 @@ class SequenceWindow(QWidget):
         painter.setBrush(QColor(208, 206, 202))
         painter.drawRect(0, 0, width, 40)
         painter.end()
+
 
 # class AnalyseWindow(QWidget):
 
@@ -557,8 +572,9 @@ if __name__ == "__main__":
     #  'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1, 'num_steps': 1, 'amplitude_type': 'RMS',
     #  'amplitude': 0.7, 'sample_rate': 44100}
     stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp',
-     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1,
-     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
+                     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0,
+                     'repeat_times': 1,
+                     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
 
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus.wav", sr=44100)
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus111.wav", sr=44100)
