@@ -137,6 +137,7 @@ class AnalysisModelSellect(QDialog):
         load_btn = QPushButton("导入")
         save_btn = QPushButton("保存")
         ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(self.ok_btn_clicked)
         load_btn.setMinimumWidth(100)
         save_btn.setMinimumWidth(100)
         ok_btn.setMinimumWidth(100)
@@ -152,6 +153,8 @@ class AnalysisModelSellect(QDialog):
 
         return layout
     
+    def ok_btn_clicked(self):
+        self.close()
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
         self.analysis_list.setAcceptDrops(False)
