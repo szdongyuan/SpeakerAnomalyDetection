@@ -216,7 +216,7 @@ class OptionList(QListView):
         self.edit(index)
 
     def itemmove(self, index):
-        if self.index_num == None:
+        if self.index_num is None:
             return
         new_item = QStandardItem(self.start_item_name)
         if index == "top":
@@ -243,7 +243,6 @@ class OptionList(QListView):
             self.darpflag = True
             self.start_row_number = index.row()
             self.start_item_name = self.model().itemFromIndex(index).text()
-            print(f"鼠标所在行号: {self.start_item_name}")
             self.index_num = self.start_row_number
 
     def mousereleaseevent(self, e):
@@ -273,7 +272,6 @@ class OptionList(QListView):
             self.darpflag = False
         if self.start_row_number != row_number:
             self.row_num = None
-        print(row_number, self.row_num)
         if self.row_num == row_number & row_number != -1:
             self.show_dialog(self.model().itemFromIndex(index).text())
             self.row_num = None
@@ -299,18 +297,16 @@ class OptionList(QListView):
             item_model =  QStandardItemModel()
             if isinstance(item_model, QStandardItemModel):
                 item_model.dropMimeData(mime_data, Qt.MoveAction, 0, 0, QModelIndex())
+
                 for row in range(item_model.rowCount()):
                     item = item_model.item(row)
                     count = 1                      
-                    print(self.sellect_analysis_model.findItems(item.text() + f"{count}"))
                     while self.sellect_analysis_model.findItems(item.text() + f"{count}"):
-                        count += 1
-                        print(item.text() + f"{count}")             
+                        count += 1                                 
                     list_item = QStandardItem(item.text() + f"{count}")
                     self.sellect_analysis_model.insertRow(self.sellect_analysis_model.rowCount(), list_item)
                     event.acceptProposedAction()
             else:
-                print("Invalid model type.")
                 event.ignore()
         else:
             event.ignore()
