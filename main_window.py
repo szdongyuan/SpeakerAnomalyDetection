@@ -3,17 +3,18 @@ import sys
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, \
-    QSpacerItem, QSizePolicy, QPushButton, QMenuBar
+     QSpacerItem, QSizePolicy, QPushButton, QMenuBar
 
 from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
+from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
-from ui.calibration_window import CalibrationWindow
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
+from ui.analysis_model_sellect_dialog import AnalysisModelSellect
 
 
 class MainWindow(QMainWindow):
@@ -74,12 +75,12 @@ class MainWindow(QMainWindow):
         title_layout.addItem(h_spacer)
         title_layout.addLayout(title_btn_layout)
         self.setMinimumSize(1030, 760)
-        title_layout.setContentsMargins(3, 3, 5, 0)
-        self.setStyleSheet(ui_style_const.qlabel_stytle +
+        title_layout.setContentsMargins(10, 3, 15, 0)
+        self.setStyleSheet(ui_style_const.qlabel_stytle + 
                            ui_style_const.qpushbutton_stytle)
 
-        return (title_layout)
-
+        return(title_layout)
+    
     def set_title_btn(self):
         self.min_btn = QPushButton()
         self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minsize.svg"))
@@ -99,9 +100,10 @@ class MainWindow(QMainWindow):
         title_btn_layout.addWidget(self.min_btn)
         title_btn_layout.addWidget(self.max_btn)
         title_btn_layout.addWidget(self.close_btn)
+        title_btn_layout.setSpacing(20)
 
         return title_btn_layout
-
+    
     def show_window_size(self):
         if self.max_flag:
             self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.svg"))
@@ -141,11 +143,12 @@ class MainWindow(QMainWindow):
         self.function_action_stimulus.triggered.connect(self.on_stimulus_window_init)
         function_menu.addAction(self.function_action_test_sequence)
         self.function_action_test_sequence.triggered.disconnect()
+        self.function_action_test_sequence.triggered.connect(self.analysis_model_sellect)
         function_menu.addSeparator()
         function_menu.addAction(self.function_action_ai_training)
         self.function_action_ai_training.triggered.disconnect()
         self.function_action_ai_training.triggered.connect(self.on_ai_window_init)
-        function_menu.addSeparator()
+        function_menu.addSeparator() 
 
         function_menu.addAction(self.function_action_exit)
         self.function_action_exit.triggered.disconnect()
@@ -174,6 +177,10 @@ class MainWindow(QMainWindow):
         dlg.speaker = self.speaker
         self.refresh_stimulus_flag = dlg.on_exec()
         self.sequence_window.refresh_stimulus_flag = self.refresh_stimulus_flag
+
+    def analysis_model_sellect(self):
+        analysis_model_sellect_dialog = AnalysisModelSellect()
+        analysis_model_sellect_dialog.exec()
 
     def show_statusbar_layout(self):
         self.user_label = QLabel()
