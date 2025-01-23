@@ -58,7 +58,7 @@ class AnalysisModelSellect(QDialog):
         analysis_label = QLabel("可选分析")
 
         self.analysis_model = QStandardItemModel()
-        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HDHD) ", "松散颗粒 (LP) ", "AI 分析 "]
+        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HD) ", "松散颗粒 (LP) ", "AI 分析 "]
         for item in items:
             list_item = QStandardItem(item)
             self.analysis_model.appendRow(list_item)
