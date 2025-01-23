@@ -58,7 +58,7 @@ class AnalysisModelSellect(QDialog):
         analysis_label = QLabel("可选分析")
 
         self.analysis_model = QStandardItemModel()
-        items = ["SPL", "FR", "THD", "HOHD", "LP", "AI"]
+        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HDHD) ", "松散颗粒 (LP) ", "AI 分析 "]
         for item in items:
             list_item = QStandardItem(item)
             self.analysis_model.appendRow(list_item)
@@ -179,6 +179,7 @@ class OptionList(QListView):
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.row_num = None
         self.press_time = None  
+        self.index_num = None
 
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
@@ -215,8 +216,9 @@ class OptionList(QListView):
         self.edit(index)
 
     def itemmove(self, index):
+        if self.index_num == None:
+            return
         new_item = QStandardItem(self.start_item_name)
-        print(self.index_num)
         if index == "top":
             self.model().insertRow(0, new_item)
             self.model().removeRow(self.index_num + 1)
@@ -294,21 +296,16 @@ class OptionList(QListView):
     def dropevent(self, event):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
             mime_data = event.mimeData()
-            # 获取当前列表视图的数据模型
             item_model =  QStandardItemModel()
-
             if isinstance(item_model, QStandardItemModel):
-                # 直接使用现有的数据模型进行拖放操作
                 item_model.dropMimeData(mime_data, Qt.MoveAction, 0, 0, QModelIndex())
-                # 获取拖放后的数据项并添加到另一个模型 sellect_analysis_model 中
                 for row in range(item_model.rowCount()):
                     item = item_model.item(row)
                     count = 1                      
                     print(self.sellect_analysis_model.findItems(item.text() + f"{count}"))
                     while self.sellect_analysis_model.findItems(item.text() + f"{count}"):
                         count += 1
-                        print(item.text() + f"{count}")
-                                    
+                        print(item.text() + f"{count}")             
                     list_item = QStandardItem(item.text() + f"{count}")
                     self.sellect_analysis_model.insertRow(self.sellect_analysis_model.rowCount(), list_item)
                     event.acceptProposedAction()
