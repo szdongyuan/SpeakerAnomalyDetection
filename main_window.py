@@ -9,9 +9,9 @@ from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
-from ui.calibaration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
+from ui.calibration_window import CalibrationWindow
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
 
@@ -75,11 +75,11 @@ class MainWindow(QMainWindow):
         title_layout.addLayout(title_btn_layout)
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(3, 3, 5, 0)
-        self.setStyleSheet(ui_style_const.qlabel_stytle + 
+        self.setStyleSheet(ui_style_const.qlabel_stytle +
                            ui_style_const.qpushbutton_stytle)
 
-        return(title_layout)
-    
+        return (title_layout)
+
     def set_title_btn(self):
         self.min_btn = QPushButton()
         self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minsize.svg"))
@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
         title_btn_layout.addWidget(self.close_btn)
 
         return title_btn_layout
-    
+
     def show_window_size(self):
         if self.max_flag:
             self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.svg"))
@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
         function_menu.addAction(self.function_action_ai_training)
         self.function_action_ai_training.triggered.disconnect()
         self.function_action_ai_training.triggered.connect(self.on_ai_window_init)
-        function_menu.addSeparator() 
+        function_menu.addSeparator()
 
         function_menu.addAction(self.function_action_exit)
         self.function_action_exit.triggered.disconnect()
