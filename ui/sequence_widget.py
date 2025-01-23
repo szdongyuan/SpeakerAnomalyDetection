@@ -10,7 +10,8 @@ import pyqtgraph as pg
 from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QFrame
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QFrame, QTextEdit, \
+    QDialog, QComboBox
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
 
 from base.load_audio import load_audio_simple
@@ -32,7 +33,6 @@ class SequenceWindow(QWidget):
         self.recorded_path = None
         self.refresh_stimulus_flag = None
         self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-        self.deviation_value = self.get_mic_deviation_value()
         self.signal_info = {}
         # self.analyse_layout = AnalyseWindow()
         self.sequence_layout = QVBoxLayout()
@@ -64,7 +64,7 @@ class SequenceWindow(QWidget):
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
-                           ui_style_const.qframe_stytle +
+                           ui_style_const.qframe_stytle + 
                            ui_style_const.qlabel_stytle)
 
     def create_toolbar_layout(self):
@@ -165,7 +165,7 @@ class SequenceWindow(QWidget):
         toolbar_layout.setSpacing(0)
 
         return toolbar_layout
-
+    
     def create_waveform_layout(self):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
@@ -187,9 +187,11 @@ class SequenceWindow(QWidget):
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/lvseyuan.png"))
         self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
         self.ok_btn.setFixedSize(200, 130)
+        self.ok_btn.setIconSize(QSize(30, 30))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/hongseyuan.png"))
         self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
         self.ng_btn.setFixedSize(200, 130)
+        self.ng_btn.setIconSize(QSize(30, 30))
         btn_layout.addWidget(self.ok_btn)
         btn_layout.addWidget(self.ng_btn)
 
@@ -199,7 +201,7 @@ class SequenceWindow(QWidget):
         s_or_n_count = self.lineedit_count.text()
         reg = r'^[0-9]*$'
 
-        if not re.match(reg, s_or_n_count):
+        if not re.match(reg,s_or_n_count):
             self.lineedit_s_or_n_count.clear()
 
     def get_model_info(self, selected_model):
@@ -224,7 +226,7 @@ class SequenceWindow(QWidget):
         self.line_graph.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
-
+        
     # def clear_plg(self):
     #     self.line_graph.clear()
     #     self.analyse_layout.signal_analyse_dialog.spl_wnd.waveform_plot.clear()
@@ -305,18 +307,18 @@ class SequenceWindow(QWidget):
         else:
             self.default_logger.error("Failed insert recorded signal.")
 
-    # def clicked_analyse_btn(self):
-    #     # selected_model = self.analyse_layout.model_combo_box.currentText()
-    #     code, result = self.get_model_info(selected_model)
-    #     if code != error_code.OK or not os.path.exists(result[0]):
-    #         if self.model_missing_popup():
-    #             return
-    #     else:
-    #         self.save_analyse_model(selected_model)
-    #         model_path, config_path = result
-    #         kwargs = {"config_path": config_path}
-    #         result_text = self.model_predict(model_path, **kwargs)
-    # self.analyse_layout.ai_analyse_score_lineedit.setPlainText(result_text)
+    def clicked_analyse_btn(self):
+        selected_model = self.analyse.model_combo_box.currentText()
+        code, result = self.get_model_info(selected_model)
+        if code != error_code.OK or not os.path.exists(result[0]):
+            if self.model_missing_popup():
+                return
+        else:
+            self.save_analyse_model(selected_model)
+            model_path, config_path = result
+            kwargs = {"config_path": config_path}
+            result_text = self.model_predict(model_path, **kwargs)
+            self.analyse.ai_analyse_score_lineedit.setPlainText(result_text)
 
     def model_missing_popup(self):
         model_missing_msg = QMessageBox(self)
@@ -364,10 +366,10 @@ class SequenceWindow(QWidget):
         self.player_btn.setDisabled(True)
         self.update_player_icon()
         QApplication.processEvents()
-        # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
+        # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag 
         if self.refresh_stimulus_flag:
             self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-            # self.update_load_model_name()
+            self.update_load_model_name()
             self.refresh_stimulus_flag = False
         sample_rate = self.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
@@ -385,43 +387,32 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setEnabled(True)
 
     def clicked_data_btn(self):
+        self.analyse = AnalyseWindow()
         self.spl_wnd = Spl(self.signal_info)
         self.frequency_wnd = Frequency(self.signal_info)
         self.distortion_wnd = Distortion(self.signal_info)
-        self.frequency_wnd.deviation_value = self.deviation_value
-        self.spl_wnd.deviation_value = self.deviation_value
+
         self.spl_wnd.calculate_spl()
         self.frequency_wnd.calculate_fr()
         self.distortion_wnd.calculate_thd()
 
         self.spl_wnd.move(300, 200)
         self.frequency_wnd.move(340, 240)
-        self.distortion_wnd.move(380, 280)
+        self.distortion_wnd.move(380,280)
 
         self.spl_wnd.show()
         self.frequency_wnd.show()
         self.distortion_wnd.show()
 
     # def update_load_model_name(self):
-    # self.analyse_layout.model_combo_box.clear()
-    # model_list = self.load_model_name_from_db()
-    # for model_name in model_list:
-    # self.analyse_layout.model_combo_box.addItem(model_name)
-    # default_model = self.load_analyse_model()
-    # if default_model in model_list:
-    #     default_index = model_list.index(default_model)
-    #     # self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
-
-    @staticmethod
-    def get_mic_deviation_value():
-        file_path = DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
-        try:
-            with open(file_path, 'r') as f:
-                lines = f.readlines()
-                deviation_value = lines[1].strip()
-                return float(deviation_value)
-        except Exception as e:
-            return 0.0
+    #     self.analyse.model_combo_box.clear()
+    #     model_list = self.load_model_name_from_db()
+    #     for model_name in model_list:
+    #         self.analyse.model_combo_box.addItem(model_name)
+    #     default_model = self.load_analyse_model()
+    #     if default_model in model_list:
+    #         default_index = model_list.index(default_model)
+    #         # self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
 
     def load_model_name_from_db(self):
         model_list = []
@@ -467,7 +458,6 @@ class SequenceWindow(QWidget):
         line_graph.plot(signal_duration, recorded_signal)
         line_graph.setLabel('left', 'Amplitude(V)')
         line_graph.setLabel('bottom', 'Time(s)')
-        line_graph.showGrid(x=True, y=True)
 
     def update_player_icon(self):
         if self.player_status_flag:
@@ -487,71 +477,61 @@ class SequenceWindow(QWidget):
         painter.drawRect(0, 0, width, 40)
         painter.end()
 
-
-# class AnalyseWindow(QWidget):
-
+# class AnalyseWindow(QDialog):
+#
 #     def __init__(self):
 #         super().__init__()
 #         self.analyse_btn = QPushButton(" 分 析 ")
 #         self.ai_analyse_score_lineedit = QTextEdit()
 #         self.signal_info = None
-
+#
 #         self.init_ui()
-
+#
 #     def init_ui(self):
-#         layout = QHBoxLayout()
-#         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
-#                            "QDialog {border: 1px solid rgb(173, 173, 173);}")
-
-#         ai_analyse_dialog = QDialog()
+#         self.setStyleSheet(ui_style_const.qcombobox_stytle +
+#                            ui_style_const.qlabel_stytle +
+#                            ui_style_const.qpushbutton_stytle)
+#         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+#         self.setWindowTitle("AI 分析")
 #         ai_analyse_layout = self.create_ai_analyse_layout()
-#         ai_analyse_dialog.setLayout(ai_analyse_layout)
-
-#         layout.addWidget(ai_analyse_dialog)
-#         layout.setContentsMargins(150, 20, 80, 30)
-#         self.setLayout(layout)
-
+#         self.setLayout(ai_analyse_layout)
+#
 #     def create_ai_analyse_layout(self):
 #         ai_analyse_layout = QVBoxLayout()
-
+#
 #         ai_title_layout = QHBoxLayout()
-#         title_label = QLabel("AI分析")
-#         title_label.setStyleSheet("border: None")
 #         h_title_space = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-#         ai_title_layout.addWidget(title_label)
 #         ai_title_layout.addItem(h_title_space)
-
+#
 #         model_layout = QHBoxLayout()
-#         model_label = QLabel(" 模 型 ")
-#         model_label.setStyleSheet("background-color: #4472c4; color: white;")
-#         model_label.setFixedSize(65, 25)
+#         model_label = QLabel(" 模 型: ")
+#         model_label.setFixedSize(65, 30)
 #         self.model_combo_box = QComboBox(self)
 #         self.model_combo_box.setFixedHeight(25)
 #         model_layout.addWidget(model_label)
 #         model_layout.addWidget(self.model_combo_box)
 #         model_layout.setSpacing(15)
-
+#
 #         analyse_btn_layout = QHBoxLayout()
-#         self.analyse_btn.setStyleSheet("background-color: #4472c4; color: white;")
-#         self.analyse_btn.setFixedSize(100, 25)
+#         self.analyse_btn.setFixedSize(100, 30)
 #         h_analyse_btn_space_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
 #         h_analyse_btn_space_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
 #         analyse_btn_layout.addItem(h_analyse_btn_space_left)
 #         analyse_btn_layout.addWidget(self.analyse_btn)
 #         analyse_btn_layout.addItem(h_analyse_btn_space_right)
-
+#
 #         analyse_score_layout = QHBoxLayout()
 #         self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
 #         self.ai_analyse_score_lineedit.setDisabled(True)
 #         self.ai_analyse_score_lineedit.setMaximumWidth(600)
-#         self.ai_analyse_score_lineedit.setStyleSheet("font-size: 17pt;")
+#         self.ai_analyse_score_lineedit.setStyleSheet("font-size: 23pt;")
 #         analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
 #         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
-
+#
 #         v_ai_analyse_top_space = QSpacerItem(30, 50, QSizePolicy.Minimum, QSizePolicy.Minimum)
 #         v_ai_analyse_center_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
 #         v_ai_analyse_bottom_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-
+#
 #         ai_analyse_layout.addLayout(ai_title_layout)
 #         ai_analyse_layout.addLayout(model_layout)
 #         ai_analyse_layout.addItem(v_ai_analyse_top_space)
@@ -559,7 +539,7 @@ class SequenceWindow(QWidget):
 #         ai_analyse_layout.addItem(v_ai_analyse_center_space)
 #         ai_analyse_layout.addLayout(analyse_score_layout)
 #         ai_analyse_layout.addItem(v_ai_analyse_bottom_space)
-
+#
 #         return ai_analyse_layout
 
 
@@ -572,9 +552,8 @@ if __name__ == "__main__":
     #  'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1, 'num_steps': 1, 'amplitude_type': 'RMS',
     #  'amplitude': 0.7, 'sample_rate': 44100}
     stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp',
-                     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0,
-                     'repeat_times': 1,
-                     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
+     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1,
+     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
 
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus.wav", sr=44100)
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus111.wav", sr=44100)

@@ -158,3 +158,9 @@ qlistview_stytle = """
                 font-size: 20px;
             }
 """
+
+qmainwindow_stytle = """
+            QMainWindow  {
+                border-radius: 20px;
+            }
+"""
