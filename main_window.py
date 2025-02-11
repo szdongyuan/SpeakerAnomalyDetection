@@ -1,6 +1,6 @@
 import sys
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QPoint, QSize
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, \
      QSpacerItem, QSizePolicy, QPushButton, QMenuBar
@@ -21,12 +21,28 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        # set up statusbar object data
         self.user_name = None
         self.access_lvl = None
         self.refresh_stimulus_flag = None
         self.mic = get_default_device("mic")
         self.speaker = get_default_device("speaker")
 
+        # set mouse drog date
+        self.is_resizing = False
+        self.resize_direction = None
+        self.last_pos = QPoint()
+        self.wid = None
+        self.heigh = None
+        self.window_x = None 
+        self.window_y = None
+
+        # reset mouse event
+        self.mousePressEvent = self.mousepressevent
+        self.mouseReleaseEvent = self.mousereleaseevent
+        self.mouseMoveEvent = self.mousemoveevent
+
+        # set the menubar action
         self.function_action_stimulus = QAction("激励信号", self)
         self.function_action_test_sequence = QAction("测试程序", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
@@ -36,6 +52,7 @@ class MainWindow(QMainWindow):
         self.user_action_switch_account = QAction("切换用户", self)
         self.user_action_add_account = QAction("添加用户", self)
         self.user_action_change_pwd = QAction("修改密码", self)
+        # set the operator and engineer and admin power
         self.widget_list_operator = [self.user_action_change_pwd]
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_stimulus,
@@ -49,6 +66,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
+        # initialize the window layout
         self.set_title()
         self.init_menu()
         self.init_sequence_widget()
@@ -59,6 +77,7 @@ class MainWindow(QMainWindow):
         self.on_login_window_init()
 
     def set_title(self):
+        # hide the window title bar and reset the window title bar 
         self.setWindowFlags(Qt.FramelessWindowHint)
         title_layout = QHBoxLayout()
         title_btn_layout = self.set_title_btn()
@@ -77,11 +96,13 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
         self.setStyleSheet(ui_style_const.qlabel_stytle + 
-                           ui_style_const.qpushbutton_stytle)
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qmainwindow_stytle)
 
         return(title_layout)
     
     def set_title_btn(self):
+        # create three button, include minimize, switch size and close
         self.min_btn = QPushButton()
         self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minsize.svg"))
         self.min_btn.setStyleSheet("border: None; background-color: transparent")
@@ -105,16 +126,24 @@ class MainWindow(QMainWindow):
         return title_btn_layout
     
     def show_window_size(self):
+        # change the window size, and update the mouse tracking
         if self.max_flag:
             self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.svg"))
             self.showNormal()
+            self.sequence_window.setMouseTracking(True)
+            self.setMouseTracking(True)
+            self.statusBar().setMouseTracking(True)
             self.max_flag = False
         else:
             self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.svg"))
             self.showMaximized()
             self.max_flag = True
+            self.sequence_window.setMouseTracking(False)
+            self.setMouseTracking(False)
+            self.statusBar().setMouseTracking(False)
 
     def init_sequence_widget(self):
+        # create sequence widget, and set main window layout
         main_window = QWidget()
         layout = QVBoxLayout()
         self.sequence_window = SequenceWindow()
@@ -126,11 +155,14 @@ class MainWindow(QMainWindow):
         layout.setAlignment(Qt.AlignTop)
         layout.setContentsMargins(0, 0, 0, 0)
         main_window.setLayout(layout)
+        main_window.setMouseTracking(True)  # local variable start mouse tracking
         self.setCentralWidget(main_window)
+        # transmit the mic and speaker to sequence widget
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
 
     def init_menu(self):
+        # create menu bar, and link the menu bar to action
         menu_bar = QMenuBar()
         menu_bar.setStyleSheet(ui_style_const.main_window_menubar_stytle)
         function_menu = menu_bar.addMenu("功能")
@@ -173,16 +205,19 @@ class MainWindow(QMainWindow):
         return menu_bar
 
     def on_stimulus_window_init(self):
+        # set the speaker test audio
         dlg = StimulusWindow()
         dlg.speaker = self.speaker
         self.refresh_stimulus_flag = dlg.on_exec()
         self.sequence_window.refresh_stimulus_flag = self.refresh_stimulus_flag
 
     def analysis_model_sellect(self):
+        # Test items for configuring speakers
         analysis_model_sellect_dialog = AnalysisModelSellect()
         analysis_model_sellect_dialog.exec()
 
     def show_statusbar_layout(self):
+        # create status bar, show the user data and device data, and close drag status bar modify window size
         self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
         self.user_label.setStyleSheet(ui_style_const.qlabel_stytle)
@@ -193,11 +228,13 @@ class MainWindow(QMainWindow):
         self.device_label.setText(device_txt)
 
         statusbar = QStatusBar()
+        statusbar.setSizeGripEnabled(False)
         statusbar.addWidget(self.user_label)
         statusbar.addPermanentWidget(self.device_label)
         self.setStatusBar(statusbar)
 
     def update_statusbar(self):
+        # update the status bar data
         device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
         self.device_label.setText(device_txt)
         self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
@@ -208,6 +245,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_access_lvl_changed(self):
+        # Set the executable function according to the user level
         widget_dict = {"Operator": self.widget_list_operator,
                        "Engineer": self.widget_list_engineer,
                        "Admin": self.widget_list_admin}
@@ -217,6 +255,7 @@ class MainWindow(QMainWindow):
             widget.setEnabled(True)
 
     def on_login_window_init(self):
+        # check the user info, if the user info is correct, then show the main window
         dlg = LoginWindow()
         access_lvl, user_name = dlg.on_exec()
         if access_lvl is not None:
@@ -227,14 +266,17 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def on_add_account_window_init():
+        # add a new user
         dlg = AddAccountWindow(LogManager.set_log_handler("core"))
         dlg.exec()
 
     def on_change_pwd_window_init(self):
+        # change the password
         dlg = ChangePwdWindow(self.user_name, LogManager.set_log_handler("core"))
         dlg.exec()
 
     def on_hardware_window_init(self):
+        # select the mic and speaker
         dlg = HardwareWindow()
         self.speaker, self.mic = dlg.on_exec()
         self.update_statusbar()
@@ -242,20 +284,104 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker = self.speaker
 
     def on_calibration_window_init(self):
+        # calibration the mic and speaker
         dlg = CalibrationWindow()
         dlg.speaker = self.speaker
         dlg.exec()
 
     def on_window_close(self):
+        # close the window
         self.close()
 
-    def mousePressEvent(self, event):
+    def mousepressevent(self, event):
+        # If the mouse is pressed, recoed mouse move data, start the window resizing
         if event.button() == Qt.LeftButton:
             self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
+            self.wid = self.width()
+            self.heigh = self.height()
+            self.window_x = self.x()
+            self.window_y = self.y()
+            self.last_pos = event.globalPos()
+            if self.resize_direction:
+                self.is_resizing = True
+
             event.accept()
 
-    def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
+    def mousereleaseevent(self, event):
+        # If the mouse is released, stop the window resizing and clear the resize direction
+        if event.button() == Qt.LeftButton:
+            self.is_resizing = False
+            self.resize_direction = None
+            event.accept()
+
+    def mousemoveevent(self, event):
+        # record the window size, the window position, and the mouse position
+        width = self.width()
+        height = self.height()
+        right = event.pos().x() >= width - 3 and event.pos().x() <= width
+        left = event.pos().x() <= 3 and event.pos().x() >= 0
+        top = event.pos().y() <= 3 and event.pos().y() >= 0
+        bottom = event.pos().y() >= height - 3 and event.pos().y() <= height
+        
+        # Determine whether you can drag the window size, If so, record the drag direction and set the cursor stutle
+        if self.is_resizing == False:
+            if right and top:
+                self.resize_direction = "right_top"
+                self.setCursor(Qt.SizeBDiagCursor)
+            elif right and bottom:
+                self.resize_direction = "right_bottom"
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif left and top:
+                self.resize_direction = "left_top"
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif left and bottom:
+                self.resize_direction = "left_bottom"
+                self.setCursor(Qt.SizeBDiagCursor)
+            elif right:
+                self.resize_direction = 'right'
+                self.setCursor(Qt.SizeHorCursor)
+            elif bottom:
+                self.resize_direction = 'bottom'
+                self.setCursor(Qt.SizeVerCursor)
+            elif left:
+                self.resize_direction = 'left'
+                self.setCursor(Qt.SizeHorCursor)
+            elif top:
+                self.resize_direction = 'top'
+                self.setCursor(Qt.SizeVerCursor)
+            else:
+                if not self.is_resizing:
+                    self.setCursor(Qt.ArrowCursor)
+        
+        # clicked the window border, resize the window according to the direction
+        if self.is_resizing:
+            pos = event.globalPos() - self.last_pos
+            is_update_width = width - pos.x() > 1030
+            is_update_height = height - pos.y() > 760
+            if self.resize_direction == 'right':
+                self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh)
+            elif self.resize_direction == 'left' and is_update_width:
+                self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
+            elif self.resize_direction == 'bottom':
+                self.setGeometry(self.window_x, self.window_y, self.wid, self.heigh + pos.y())
+            elif self.resize_direction == 'top' and is_update_height:
+                self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid, self.heigh - pos.y())
+            elif self.resize_direction == 'right_top' and is_update_height:
+                self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid + pos.x(), self.heigh - pos.y())
+            elif self.resize_direction == 'right_bottom':
+                self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh + pos.y())
+            elif self.resize_direction == 'left_top':
+                if is_update_width and is_update_height:
+                    self.setGeometry(self.window_x + pos.x(), self.window_y + pos.y(), self.wid - pos.x(), self.heigh - pos.y())
+                elif is_update_width and not is_update_height:
+                    self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
+                elif not is_update_width and is_update_height:
+                    self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid, self.heigh - pos.y())
+            elif self.resize_direction == 'left_bottom' and is_update_width:
+                self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid -pos.x(), self.heigh + pos.y())
+           
+        # Move the window
+        if event.buttons() & Qt.LeftButton and not self.is_resizing:
             if not self.max_flag:
                 self.move(event.globalPos() - self.drag_position)
             event.accept()
@@ -267,12 +393,11 @@ class MainWindow(QMainWindow):
         height = self.height()
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(208, 206, 202))
-        painter.drawRect(0, 0, width, 31)
+        painter.drawRect(1, 1, width - 2, 31)
         painter.setBrush(QColor(208, 206, 202, 124))
-        painter.drawRect(0, 31, width, 41)
-        painter.drawRect(0, height - 24, width, 24)
+        painter.drawRect(1, 31, width - 2, 41)
+        painter.drawRect(1, height - 24, width -2, 23)
         painter.end()
-
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
