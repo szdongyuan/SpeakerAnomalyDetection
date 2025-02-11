@@ -372,7 +372,8 @@ class MainWindow(QMainWindow):
                 self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh + pos.y())
             elif self.resize_direction == 'left_top':
                 if is_update_width and is_update_height:
-                    self.setGeometry(self.window_x + pos.x(), self.window_y + pos.y(), self.wid - pos.x(), self.heigh - pos.y())
+                    self.setGeometry(self.window_x + pos.x(), self.window_y + pos.y(),
+                                     self.wid - pos.x(), self.heigh - pos.y())
                 elif is_update_width and not is_update_height:
                     self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
                 elif not is_update_width and is_update_height:
