@@ -486,7 +486,7 @@ class SequenceWindow(QWidget):
         width = self.width()
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(208, 206, 202))
-        painter.drawRect(0, 0, width, 40)
+        painter.drawRect(1, 0, width - 2, 40)
         painter.end()
 
 # class AnalyseWindow(QDialog):

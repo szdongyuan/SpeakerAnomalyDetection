@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
         self.close_btn.setStyleSheet("border: None; background-color: transparent")
         self.close_btn.clicked.connect(self.close)
 
+        self.max_btn.setMouseTracking(True)
+        self.min_btn.setMouseTracking(True)
+        self.close_btn.setMouseTracking(True)
+
         title_btn_layout = QHBoxLayout()
         title_btn_layout.addWidget(self.min_btn)
         title_btn_layout.addWidget(self.max_btn)
