@@ -7,6 +7,7 @@ from time import time
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow, HdConfigWindow, AIConfigWindow
 
 
 class AnalysisModelSellect(QDialog):
@@ -187,14 +188,20 @@ class OptionList(QListView):
         self.mousePressEvent = self.mousepressevent
         self.mouseReleaseEvent = self.mousereleaseevent 
 
-    def show_dialog(self, name):
-        dialog = QDialog(self)
-        dialog.setWindowTitle(name)
-        dialog_label = QLabel("你双击了列表项")
-        dialog_layout = QVBoxLayout()
-        dialog_layout.addWidget(dialog_label)
-        dialog.setLayout(dialog_layout)
-        dialog.exec_()
+    def show_dialog(self, name, type):
+        config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
+        config_manager = ConfigManager(config_file)
+        model = QDialog(self)
+        model.setWindowTitle(name)
+        if type == "SPL":
+            model = SplConfigWindow(config_manager)
+        elif type == "FR":
+            model = FrConfigWindow(config_manager)
+        elif type == "HD":
+            model = HdConfigWindow(config_manager)
+        elif type == "AI":
+            model = AIConfigWindow(config_manager)
+        model.exec_()
 
     def show_context_menu(self, pos):
         index = self.indexAt(pos)
@@ -273,7 +280,19 @@ class OptionList(QListView):
         if self.start_row_number != row_number:
             self.row_num = None
         if self.row_num == row_number & row_number != -1:
-            self.show_dialog(self.model().itemFromIndex(index).text())
+            name_str = self.model().itemFromIndex(index).text()
+            type = None
+            if "SPL" in name_str:
+                type = "SPL"
+            elif "FR" in name_str:
+                type = "FR"
+            elif "HD" in name_str:
+                type = "HD"
+            elif "LP" in name_str:
+                type = "LP"
+            elif "AI" in name_str:
+                type = "AI"
+            self.show_dialog(name_str, type)
             self.row_num = None
         else:
             self.row_num = row_number
@@ -310,6 +329,8 @@ class OptionList(QListView):
                 event.ignore()
         else:
             event.ignore()
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = AnalysisModelSellect()
