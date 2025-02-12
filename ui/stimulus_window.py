@@ -367,6 +367,8 @@ class StimulusWindow(QDialog):
                 widget.setStyleSheet("color: rgb(0, 0, 0);")
         self.stimulus_info["use_custom_stimulus"] = custom_box_checked
         self.stimulus_changed(True)
+        if custom_box_checked:
+            self.set_stimulus_type_connection()
 
     def set_stimulus_type_connection(self):
         """
