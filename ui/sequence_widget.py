@@ -28,24 +28,33 @@ from ui.signal_analysis_window import Spl, Frequency, Distortion
 class SequenceWindow(QWidget):
 
     def __init__(self):
+        """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
         self.collect_or_analyse_layout = QHBoxLayout()
-        self.recorded_path = None
-        self.refresh_stimulus_flag = None
-        self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-        self.deviation_value = self.get_mic_deviation_value()
-        self.signal_info = {}
+        self.recorded_path = None   # Initialize the recorded path variable
+        self.refresh_stimulus_flag = None   # Initialize the flag to indicate if stimulus needs refreshing
+        # Retrieve stimulus information and signal from configuration
+        self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()  
+        self.deviation_value = self.get_mic_deviation_value()   # Get the deviation value from the microphone
+        self.signal_info = {}   # Initialize an empty dictionary to store signal information
         # self.analyse_layout = AnalyseWindow()
         self.sequence_layout = QVBoxLayout()
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
         self.data_btn = QPushButton()
-        self.widget_flag = True
         self.player_status_flag = False
+        # Set up the default logger for logging messages
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
 
     def init_ui(self):
+        """
+            Initializes the user interface of the SequenceWindow.
+
+            This method sets up the window icon, minimum height, and creates the main layout 
+            by adding toolbar and waveform layouts. It also connects button click events to 
+            their respective handlers and applies style sheets to the widgets.
+        """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumHeight(700)
         toolbar_layout = self.create_toolbar_layout()
@@ -69,6 +78,16 @@ class SequenceWindow(QWidget):
                            ui_style_const.qlabel_stytle)
 
     def create_toolbar_layout(self):
+        """
+            Create the toolbar layout.
+
+            This method initializes and configures the toolbar layout for the application.
+            It sets up button styles, adds labels and input fields, and sets layout parameters.
+            The layout is used at the top of the interface to provide easy access to key functionalities.
+
+            Returns:
+                QHBoxLayout: The configured toolbar layout object.
+        """
         self.player_btn.setFixedSize(100, 40)
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
@@ -90,15 +109,11 @@ class SequenceWindow(QWidget):
         self.data_btn.clicked.connect(self.clicked_data_btn)
 
         type_label = QLabel(" 型 号： ")
-        # toolbar_layout.setStyleSheet("background-color: #4472c4; color: white;border: 1px solid rgb(173, 173, 173);"
-        #                          "font-size: 17pt;")
         type_label.setFixedHeight(40)
         self.lineedit_type = QLineEdit("S004-1")
         self.lineedit_type.setFixedHeight(40)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         label_count = QLabel(" 计 数： ")
-        # label_count.setStyleSheet("background-color: #4472c4; color: white; border: 1px solid rgb(173, 173, 173);"
-        #                            "font-size: 17pt;")
         label_count.setFixedHeight(40)
 
         result = self.load_recorded_num_from_text()
@@ -109,18 +124,14 @@ class SequenceWindow(QWidget):
         self.lineedit_count = QLineEdit(str(current_recorded_count))
         self.lineedit_count.setFixedHeight(40)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
-        self.lineedit_count.textChanged.connect(self.validate_count)
-        # self.lineedit_count.setStyleSheet("font-size: 17pt;")
+        self.lineedit_count.editingFinished.connect(lambda: self.validate_count(self.lineedit_count))
         label_s_or_n = QLabel("  S/N:  ")
-        # label_s_or_n.setStyleSheet("background-color: #4472c4; color: white; border: 1px solid rgb(173, 173, 173);"
-        #                            "font-size: 17pt;")
         label_s_or_n.setFixedHeight(40)
 
         self.lineedit_s_or_n = QLineEdit(str(current_recorded_count))
         self.lineedit_s_or_n.setFixedHeight(40)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
-        self.lineedit_s_or_n.textChanged.connect(self.validate_count)
-        # self.lineedit_s_or_n.setStyleSheet("font-size: 17pt;")
+        self.lineedit_s_or_n.editingFinished.connect(lambda: self.validate_count(self.lineedit_s_or_n))
 
         vertical_line_1 = QFrame()
         vertical_line_2 = QFrame()
@@ -140,8 +151,8 @@ class SequenceWindow(QWidget):
         h_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         h_spacer_3 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
 
+        # Create and configure the toolbar layout
         toolbar_layout = QHBoxLayout()
-        # toolbar_layout.addLayout(input_data_layout)
         toolbar_layout.addWidget(self.player_btn)
         toolbar_layout.addWidget(vertical_line_1)
         toolbar_layout.addWidget(self.replayer_btn)
@@ -168,10 +179,23 @@ class SequenceWindow(QWidget):
         return toolbar_layout
     
     def create_waveform_layout(self):
+        """
+            Create waveform display layout
+
+            This function is responsible for generating a horizontal layout to display the waveform and related button area.
+            It first creates a horizontal layout object and a plot widget, then sets the background color and creates
+        the button layout.
+            Finally, it adds these components to the layout and sets the layout margins.
+             
+            Returns:
+                QHBoxLayout: The configured wavefrom layout object.
+        """
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground('white')
         btn_area = self.create_waveform_btn_layout()
+        self.line_graph.setLabel('left', 'Amplitude(V)')
+        self.line_graph.setLabel('bottom', 'Time(s)')
 
         h_spacer_1 = QSpacerItem(70, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         layout.addLayout(btn_area)
@@ -182,6 +206,16 @@ class SequenceWindow(QWidget):
         return layout
 
     def create_waveform_btn_layout(self):
+        """
+            Create a button layout for waveform.
+
+            This function generates a vertical layout containing two buttons: one labeled "OK" and the other labeled "NG".
+            Each button is configured with an icon, stylesheet, fixed size, and icon size. The buttons are added to a QVBoxLayout,
+            which is then returned.
+
+            Returns:
+                QVBoxLayout: A vertical layout containing the "OK" and "NG" buttons.
+        """
         btn_layout = QVBoxLayout()
         self.ok_btn = QPushButton(" OK ")
         self.ng_btn = QPushButton(" NG ")
@@ -197,24 +231,78 @@ class SequenceWindow(QWidget):
         btn_layout.addWidget(self.ng_btn)
 
         return btn_layout
+    def validate_count(self, lineedit):
+        """
+            Validates the count input from the user.
 
-    def validate_count(self):
-        s_or_n_count = self.lineedit_count.text()
+            This method checks if the user input in the lineedit is a valid number. If the input is not a number,
+            it restores the previously recorded number. If the input is valid, it updates the recorded number and saves
+        it to a file.
+
+            Parameters:
+            lineedit (QLineEdit): The QLineEdit object containing the user's count input.
+        """
+        s_or_n_count = lineedit.text()
+        # Load the previously recorded number from a text file
+        result = self.load_recorded_num_from_text()
+        # Define a regular expression to match numbers
         reg = r'^[0-9]*$'
-
+        # Check if the user input matches the regular expression
         if not re.match(reg,s_or_n_count):
-            self.lineedit_s_or_n_count.clear()
-
-    def get_model_info(self, selected_model):
-        query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
-        if query_code == error_code.OK:
-            model_path, config_path = query_result[0]
-            return error_code.OK, (model_path, config_path)
+            # If the input is not a number, restore the previously recorded number          
+            lineedit.setText(str(result))
         else:
-            self.default_logger.error(f"Failed to get the model {selected_model} information.")
-            return error_code.INVALID_QUERY, "Failed to get the model information."
+            # If the input is a number, Open the file and write the current recorded count and date
+            count = lineedit.text()
+            dir_path = DEFAULT_DIR + 'ui/ui_config/'
+            file_path = dir_path + "recorded_number.txt"
+            current_time = datetime.now().strftime("%Y-%m-%d")
+            with open(file_path, 'w') as f:
+                f.write(f"current_recorded_count: \n{count}\n")
+                f.write(f"Datetime: \n{current_time}\n")
+        if s_or_n_count == "":
+            lineedit.setText(str(result))
+
+    # def get_model_info(self, selected_model):
+    #     """
+    #         Retrieves model path and configuration path information based on the selected model.
+
+    #         This function queries the model management system to obtain the storage path of the model and its configuration.
+    #         If the query is successful, it returns the model path and configuration path. If the query fails, it logs
+    #
+    #         an error message and returns an error code and a failure message.
+
+    #         Parameters:
+    #         selected_model (str): The name of the model to query.
+
+    #         Returns:
+    #         tuple: A tuple containing the error code and the query result or a failure message.
+    #             If the query is successful, the query result is a tuple containing the model path and configuration path.
+    #             If the query fails, it returns an error code and a failure message.
+    #     """
+    #     query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
+    #     if query_code == error_code.OK:
+    #         model_path, config_path = query_result[0]
+    #         return error_code.OK, (model_path, config_path)
+    #     else:
+    #         self.default_logger.error(f"Failed to get the model {selected_model} information.")
+    #         return error_code.INVALID_QUERY, "Failed to get the model information."
 
     def clicked_ok_or_ng(self):
+        """
+            Handles the logic when the OK or NG button is clicked.
+
+            This method performs several actions in response to a user clicking the OK or NG button:
+            1. Saves the current recorded count to a text file.
+            2. Updates the displayed recorded count in the UI.
+            3. Inserts the recorded data into the database with a label based on which button was clicked (OK/NG).
+            4. Resets the player status flag and updates the player icon accordingly.
+            5. Clears the signal information and waveform graph.
+            6. Disables the replay and data buttons to prevent further actions until the next recording.
+
+            Parameters:
+                self: The instance of the class containing this method.
+        """
         current_recorded_count = self.save_recorded_num_to_text()
         self.lineedit_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
@@ -238,6 +326,19 @@ class SequenceWindow(QWidget):
     #     QApplication.processEvents()
 
     def get_stimulus_from_config(self):
+        """
+            Retrieves stimulus information and signal from the configuration.
+
+            This function attempts to load stimulus information from a JSON configuration file and then loads the audio
+        signal based on the configuration.
+            If the loading is successful and the configuration is valid, it parses and returns the stimulus information
+        and the audio signal.
+            If the loading fails or the configuration is invalid, it returns None.
+
+            Returns:
+                tuple: A tuple containing the stimulus information dictionary and the audio signal.
+                    Returns (None, None) if the loading fails or the configuration is invalid.
+        """
         load_code, result = self.load_stimulus_from_json()
         if load_code == error_code.OK and result:
             info = result["stimulus_info"]
@@ -249,6 +350,19 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def load_stimulus_from_json():
+        """
+            Load stimulus configuration from a JSON file.
+
+            This method attempts to load stimulus configuration from a predefined JSON file path and parse the
+        configuration into a dictionary.
+            If the JSON file does not exist, it returns an appropriate error code and message.
+
+            Returns:
+                tuple: A tuple containing the error code and configuration data or error message.
+                    If the operation is successful, the error code is error_code.OK, and the configuration data is the
+                 parsed dictionary.
+                    If the operation fails, the error code is error_code.INVALID_DATA_LOADING, and the error message is a string.
+        """
         json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
@@ -257,6 +371,13 @@ class SequenceWindow(QWidget):
             return error_code.OK, data
 
     def save_recorded_num_to_text(self):
+        """
+            Save the recorded number to a text file.
+
+            This function writes the current recorded number and the current date to a specified text file.
+            If the file exists and the date matches, it updates the recorded number.
+            If the file does not exist or the date does not match, it creates a new file and writes the initial recorded number.
+        """
         dir_path = DEFAULT_DIR + 'ui/ui_config/'
         file_path = dir_path + "recorded_number.txt"
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -272,6 +393,16 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def load_recorded_num_from_text():
+        """
+            Load the recorded number from a text file.
+
+            This method reads a recorded number and the last recorded date from a specified text file.
+            If the file exists and the last recorded date matches the current date, it returns the recorded number;
+            otherwise, it returns None.
+
+            Returns:
+                int or None: The recorded number if the file exists and the date matches; otherwise, None.
+        """
         file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.txt"
         if not os.path.exists(file_path):
             return None
@@ -286,6 +417,21 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def check_datetime(file_path, current_time):
+        """
+            Check the date and count information in the given file.
+
+            This method first checks if the file exists. If it does, it opens the file and reads its content.
+            It extracts the last count and date, then compares the date with the current time.
+            If the date in the file matches the current time, it returns True and the last count value.
+            If the dates do not match or the file is empty, it returns False and None.
+            
+            Args:
+                param file_path: The path to the file storing the date and count information.
+                param current_time: The current time, used to compare with the time in the file.
+            Return: 
+                A tuple, where the first element is a boolean indicating whether the dates match;
+                the second element is the last count value if the dates match, otherwise None.
+        """
         if os.path.exists(file_path):
             with open(file_path, 'r') as f:
                 lines = f.readlines()
@@ -297,6 +443,13 @@ class SequenceWindow(QWidget):
         return False, None
 
     def insert_data_into_db(self):
+        """
+            Inserts recorded signal data into the database based on user input.
+
+            This method determines which button (OK or NG) triggered the function call and sets the corresponding label 
+            in the recorded signal information. It then attempts to save this information to the database using the 
+            `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
+        """
         button = self.sender()
         if button == self.ok_btn:
             self.recorded_signal_info["labels"] = "OK"
@@ -308,59 +461,65 @@ class SequenceWindow(QWidget):
         else:
             self.default_logger.error("Failed insert recorded signal.")
 
-    def clicked_analyse_btn(self):
-        selected_model = self.analyse.model_combo_box.currentText()
-        code, result = self.get_model_info(selected_model)
-        if code != error_code.OK or not os.path.exists(result[0]):
-            if self.model_missing_popup():
-                return
-        else:
-            self.save_analyse_model(selected_model)
-            model_path, config_path = result
-            kwargs = {"config_path": config_path}
-            result_text = self.model_predict(model_path, **kwargs)
-            self.analyse.ai_analyse_score_lineedit.setPlainText(result_text)
+    # def clicked_analyse_btn(self):
+    #     selected_model = self.analyse.model_combo_box.currentText()
+    #     code, result = self.get_model_info(selected_model)
+    #     if code != error_code.OK or not os.path.exists(result[0]):
+    #         if self.model_missing_popup():
+    #             return
+    #     else:
+    #         self.save_analyse_model(selected_model)
+    #         model_path, config_path = result
+    #         kwargs = {"config_path": config_path}
+    #         result_text = self.model_predict(model_path, **kwargs)
+    #         self.analyse.ai_analyse_score_lineedit.setPlainText(result_text)
 
-    def model_missing_popup(self):
-        model_missing_msg = QMessageBox(self)
-        model_missing_msg.setIcon(QMessageBox.Critical)
-        model_missing_msg.setText("模型不存在，请重新选择!")
-        model_missing_msg.setWindowTitle("模型加载失败")
-        model_missing_msg.setStandardButtons(QMessageBox.Ok)
-        button = model_missing_msg.exec_()
-        return button == QMessageBox.Ok
+    # def model_missing_popup(self):
+    #     model_missing_msg = QMessageBox(self)
+    #     model_missing_msg.setIcon(QMessageBox.Critical)
+    #     model_missing_msg.setText("模型不存在，请重新选择!")
+    #     model_missing_msg.setWindowTitle("模型加载失败")
+    #     model_missing_msg.setStandardButtons(QMessageBox.Ok)
+    #     button = model_missing_msg.exec_()
+    #     return button == QMessageBox.Ok
 
-    @staticmethod
-    def save_analyse_model(selected_model):
-        file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
-        with open(file_path, 'w') as f:
-            f.write(selected_model)
+    # @staticmethod
+    # def save_analyse_model(selected_model):
+    #     file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
+    #     with open(file_path, 'w') as f:
+    #         f.write(selected_model)
 
-    @staticmethod
-    def load_analyse_model():
-        file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
-        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-            return ""
-        with open(file_path, 'r') as f:
-            model_name = f.read().strip()
-            return model_name
+    # @staticmethod
+    # def load_analyse_model():
+    #     file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
+    #     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+    #         return ""
+    #     with open(file_path, 'r') as f:
+    #         model_name = f.read().strip()
+    #         return model_name
 
-    def model_predict(self, model_path, **kwargs):
-        ret_str = predict(self.recorded_path, load_model_path=model_path, **kwargs)
-        ret_dict = json.loads(ret_str)
-        predict_result = ret_dict["result"]
-        predict_label = predict_result[0][1]
-        ok_scores = float(predict_result[0][2]) * 100
-        ng_scores = 100 - ok_scores
-        result_text = (
-            f"评分：\n"
-            f"OK Score: {ok_scores:.2f}%\n"
-            f"NG Score: {ng_scores:.2f}%\n"
-            f"评分结果: {predict_label}"
-        )
-        return result_text
+    # def model_predict(self, model_path, **kwargs):
+    #     ret_str = predict(self.recorded_path, load_model_path=model_path, **kwargs)
+    #     ret_dict = json.loads(ret_str)
+    #     predict_result = ret_dict["result"]
+    #     predict_label = predict_result[0][1]
+    #     ok_scores = float(predict_result[0][2]) * 100
+    #     ng_scores = 100 - ok_scores
+    #     result_text = (
+    #         f"评分：\n"
+    #         f"OK Score: {ok_scores:.2f}%\n"
+    #         f"NG Score: {ng_scores:.2f}%\n"
+    #         f"评分结果: {predict_label}"
+    #     )
+    #     return result_text
 
     def clicked_player_btn(self):
+        """
+            Handles the event when the player button is clicked.
+            
+            This method is responsible for managing the state of the player, including resetting player-related data,
+            updating the player's icon, and preparing for the playback and recording of audio.
+        """
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
@@ -388,6 +547,9 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setEnabled(True)
 
     def clicked_data_btn(self):
+
+        # To do: add data analysis window
+
         self.spl_wnd = Spl(self.signal_info)
         self.frequency_wnd = Frequency(self.signal_info)
         self.distortion_wnd = Distortion(self.signal_info)
@@ -417,6 +579,16 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def get_mic_deviation_value():
+        """
+            Reads the microphone calibration deviation value from a specified file.
+
+            This method is static because it does not depend on the instance state of the class and can operate independently.
+            The deviation value is read from a file as it may vary based on environmental conditions and needs to be
+        dynamically adjusted.
+
+            Return: 
+                The microphone calibration deviation value. Returns 0.0 if reading the file fails.
+        """
         file_path = DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
         try:
             with open(file_path, 'r') as f:
@@ -426,18 +598,29 @@ class SequenceWindow(QWidget):
         except Exception as e:
             return 0.0
 
-    def load_model_name_from_db(self):
-        model_list = []
-        query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
-        if query_code == error_code.OK:
-            for idx, name in enumerate(query_result):
-                query_result_idx = query_result[idx]
-                input_dim = int(query_result_idx[1].split(' ')[0])
-                if input_dim == len(self.stimulus_signal):
-                    model_list.append(query_result_idx[0])
-        return model_list
+    # def load_model_name_from_db(self):
+    #     model_list = []
+    #     query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
+    #     if query_code == error_code.OK:
+    #         for idx, name in enumerate(query_result):
+    #             query_result_idx = query_result[idx]
+    #             input_dim = int(query_result_idx[1].split(' ')[0])
+    #             if input_dim == len(self.stimulus_signal):
+    #                 model_list.append(query_result_idx[0])
+    #     return model_list
 
     def get_recorded_info(self):
+        """
+            Generate recorded information.
+
+            This function generates a unique recording file name based on the current date, MAC address, product model,
+        and product number.
+            It also constructs the path for the recording file. Additionally, it creates a dictionary containing the
+        recording file path and product information.
+
+            Returns:
+                tuple: A tuple containing the recording file path and a dictionary with recording information.
+        """
         product_model = self.lineedit_type.text()
         recording_time = datetime.now().strftime("%Y-%m-%d")
         mac_address = get_mac_address()
@@ -451,6 +634,20 @@ class SequenceWindow(QWidget):
         return recorded_path, recorded_signal_info
 
     def get_stimulus_recorded_dict(self, sample_rate):
+        """
+            Generate dictionaries containing stimulus signal data and recording parameters.
+
+            This function creates two dictionaries: one for the stimulus signal data and its related information,
+            and another for the recording parameters. These dictionaries are used for subsequent signal processing and analysis.
+
+            Args:
+            - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
+
+            Returns:
+            - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
+            - recorded_dict (dict): Dictionary containing the recording parameters.
+        """
+        # Define the prolongation time to calculate the extended frame count
         prolong = 3
         stimulus_dict = {"data": self.stimulus_signal,
                          "amplitude": self.stimulus_info["amplitude"],
@@ -465,13 +662,27 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):
+        """
+            Plot a line graph of the recorded signal.
+
+            Parameters:
+            recorded_signal (list or numpy.array): The recorded signal data to be plotted.
+            line_graph (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
+            sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
+        """
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         line_graph.plot(signal_duration, recorded_signal)
-        line_graph.setLabel('left', 'Amplitude(V)')
-        line_graph.setLabel('bottom', 'Time(s)')
 
     def update_player_icon(self):
+        """
+            Update the player button's icon and size based on the player status flag.
+
+            If self.player_status_flag is True, it indicates that the player is in a paused state,
+            and the button icon is set to a pause icon. If self.player_status_flag is False,
+            it indicates that the player is in a playing state, and the button icon is set to a play icon,
+            and the button is enabled.
+        """
         if self.player_status_flag:
             self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
             self.player_btn.setIconSize(QSize(35, 35))
