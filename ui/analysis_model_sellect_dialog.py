@@ -1,10 +1,14 @@
+import json
+import re
 import sys
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem, QPixmap
-from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton, QApplication, QInputDialog, QMenu, QAction, QSpacerItem, QSizePolicy
+from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton, QApplication
+from PyQt5.QtWidgets import QMenu, QAction, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox
 from time import time
 
+from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow, HdConfigWindow, AIConfigWindow
@@ -16,7 +20,8 @@ class AnalysisModelSellect(QDialog):
         super().__init__()
 
         self.analysis_list = QListView()
-        self.sellect_list = OptionList()
+        self.default_logger = LogManager.set_log_handler("core")
+        self.sellect_list = OptionList(self.default_logger)
         self.analysis_list.setEditTriggers(QListView.NoEditTriggers)
         self.sellect_list.setEditTriggers(QListView.NoEditTriggers)
 
@@ -121,12 +126,13 @@ class AnalysisModelSellect(QDialog):
     
     def create_sellect_list_layout(self):
         sellect_analysis_label = QLabel("分析")
-        auto_analysis_box = QCheckBox("自动分析")
-        auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
+        self.auto_analysis_box = QCheckBox("自动分析")
+        self.auto_analysis_box.setChecked(self.sellect_list.config.get("auto_analysis", True))
+        self.auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
 
         analysis_title_layout = QHBoxLayout()
         analysis_title_layout.addWidget(sellect_analysis_label)
-        analysis_title_layout.addWidget(auto_analysis_box)
+        analysis_title_layout.addWidget(self.auto_analysis_box)
 
         layout = QVBoxLayout()
         layout.addLayout(analysis_title_layout)
@@ -136,7 +142,9 @@ class AnalysisModelSellect(QDialog):
     
     def create_btn_layout(self):
         load_btn = QPushButton("导入")
+        load_btn.clicked.connect(self.load_btn_clicked)
         save_btn = QPushButton("保存")
+        save_btn.clicked.connect(self.save_btn_clicked)
         ok_btn = QPushButton("确定")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         load_btn.setMinimumWidth(100)
@@ -153,9 +161,69 @@ class AnalysisModelSellect(QDialog):
         layout.setSpacing(20)
 
         return layout
+
+    def load_btn_clicked(self):
+        file_path, _ = QFileDialog.getOpenFileName(self,
+                                                   "导入配置文件",
+                                                   DEFAULT_DIR + "ui/ui_config",
+                                                   filter="JSON Files (*.json);;All Files (*)")
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    data = json.load(file)
+                    self.sellect_list.config = data
+                    self.append_row_to_select_list(data)
+            except Exception as e:
+                self.default_logger.error(f"Unable to parse JSON data in {file_path}. {e}")
+
+    def append_row_to_select_list(self, data):
+        sellect_analysis_model = self.sellect_list.sellect_analysis_model
+        sellect_analysis_model.clear()
+        for key, value in data.items():
+            if key == "auto_analysis":
+                self.auto_analysis_box.setChecked(value)
+            else:
+                list_item = QStandardItem(key)
+                sellect_analysis_model.appendRow(list_item)
     
     def ok_btn_clicked(self):
+        self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
+        self.save_analyse_config_to_json(self.sellect_list.config)
         self.close()
+
+    def ok_btn_popup(self):
+        ok_msg = QMessageBox(self)
+        ok_msg.setIcon(QMessageBox.Warning)
+        ok_msg.setText("请进行参数配置")
+        ok_msg.setWindowTitle("设置警告")
+        ok_msg.setStandardButtons(QMessageBox.Ok)
+        ok_msg.exec_()
+
+    def save_btn_clicked(self):
+        file_path, _ = QFileDialog.getSaveFileName(self,
+                                                   "保存配置文件",
+                                                   DEFAULT_DIR + "ui/ui_config",
+                                                   filter="JSON Files (*.json);;All Files (*)")
+        if file_path:
+            self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
+            try:
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    json.dump(self.sellect_list.config, file, indent=4)
+                self.default_logger.info(f"The config file has been saved to {file_path}")
+            except Exception as e:
+                self.default_logger.error(f"The config file saved failed. {e}")
+
+    def save_analyse_config_to_json(self, config_data):
+        analyse_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        try:
+            with open(analyse_config_file, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=4)
+                self.default_logger.info(f"The config info for analysis has been saved to {self.config_file}.")
+                return True
+        except Exception as e:
+            self.default_logger.error(f"The config info for analysis save failed. {e}")
+            return False
+
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
         self.analysis_list.setAcceptDrops(False)
@@ -170,17 +238,23 @@ class AnalysisModelSellect(QDialog):
         self.sellect_list.setMovement(QListView.Snap)
         self.sellect_list.setFlow(QListView.TopToBottom)
 
-class OptionList(QListView):
-    def __init__(self):
-        super().__init__()
 
+class OptionList(QListView):
+    def __init__(self, logger):
+        super().__init__()
         self.sellect_analysis_model = QStandardItemModel()
         self.setModel(self.sellect_analysis_model)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
+        self.sellect_analysis_model.dataChanged.connect(self.on_data_changed)
+        self.default_logger = logger
         self.row_num = None
         self.press_time = None  
         self.index_num = None
+        self.darpflag = None
+        self.start_row_number = None
+        self.old_name = None
+        self.config = {}
 
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
@@ -188,11 +262,12 @@ class OptionList(QListView):
         self.mousePressEvent = self.mousepressevent
         self.mouseReleaseEvent = self.mousereleaseevent 
 
-    def show_dialog(self, name, type):
+    def show_dialog(self, name):
         config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         config_manager = ConfigManager(config_file)
         model = QDialog(self)
         model.setWindowTitle(name)
+        type = self.config[name]["type"]
         if type == "SPL":
             model = SplConfigWindow(config_manager)
         elif type == "FR":
@@ -201,12 +276,31 @@ class OptionList(QListView):
             model = HdConfigWindow(config_manager)
         elif type == "AI":
             model = AIConfigWindow(config_manager)
-        model.exec_()
+        if model.exec_() == QDialog.Accepted:
+            config_data = model.on_click_ok_btn()
+            self.add_config(name, config_data)
+
+    def add_config(self, class_name, config_data):
+        if class_name in self.config:
+            self.config[class_name].update(config_data)
+        else:
+            self.config[class_name] = config_data
+
+    def load_default_config(self):
+        default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
+        try:
+            with open(default_config_file, 'r') as f:
+                default_config = json.load(f)
+            return default_config
+        except Exception as e:
+            self.default_logger.error(f"Failed to load the default config file. {e}")
+            return {}
 
     def show_context_menu(self, pos):
         index = self.indexAt(pos)
         if index.isValid():
             menu = QMenu(self)
+            menu.setStyleSheet(ui_style_const.main_window_menubar_stytle)
             delete_action = QAction("删除", self)
             delete_action.triggered.connect(lambda: self.delete_item(index))
             rename_action = QAction("重命名", self)
@@ -217,10 +311,27 @@ class OptionList(QListView):
 
     def delete_item(self, index):
         model = self.model()
+        index_name = model.data(index)
+        self.delete_item_config(index_name)
         model.removeRow(index.row())
 
+    def delete_item_config(self, name):
+        if name in self.config:
+            del self.config[name]
+
     def rename_item(self, index):
+        self.old_name = self.model().data(index)
         self.edit(index)
+
+    def on_data_changed(self, topLeft, bottomRight, roles):
+        if Qt.EditRole in roles:
+            for row in range(topLeft.row(), bottomRight.row() + 1):
+                index = self.model().index(row, topLeft.column())
+                new_name = self.model().data(index)
+                if self.old_name in self.config:
+                    value = self.config.pop(self.old_name)
+                    self.config[new_name] = value
+                self.old_name = None
 
     def itemmove(self, index):
         if self.index_num is None:
@@ -229,7 +340,7 @@ class OptionList(QListView):
         if index == "top":
             self.model().insertRow(0, new_item)
             self.model().removeRow(self.index_num + 1)
-            self.index_num  = 0
+            self.index_num = 0
         elif index == "bottom":
             self.model().insertRow(self.model().rowCount(), new_item)
             self.model().removeRow(self.index_num)
@@ -281,21 +392,11 @@ class OptionList(QListView):
             self.row_num = None
         if self.row_num == row_number & row_number != -1:
             name_str = self.model().itemFromIndex(index).text()
-            type = None
-            if "SPL" in name_str:
-                type = "SPL"
-            elif "FR" in name_str:
-                type = "FR"
-            elif "HD" in name_str:
-                type = "HD"
-            elif "LP" in name_str:
-                type = "LP"
-            elif "AI" in name_str:
-                type = "AI"
-            self.show_dialog(name_str, type)
+            self.show_dialog(name_str)
             self.row_num = None
         else:
             self.row_num = row_number
+
     def dragenterevent(self, event):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
             event.acceptProposedAction()
@@ -313,22 +414,31 @@ class OptionList(QListView):
     def dropevent(self, event):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
             mime_data = event.mimeData()
-            item_model =  QStandardItemModel()
+            item_model = QStandardItemModel()
             if isinstance(item_model, QStandardItemModel):
                 item_model.dropMimeData(mime_data, Qt.MoveAction, 0, 0, QModelIndex())
 
                 for row in range(item_model.rowCount()):
                     item = item_model.item(row)
+                    item_text = item.text()
                     count = 1                      
-                    while self.sellect_analysis_model.findItems(item.text() + f"{count}"):
+                    while self.sellect_analysis_model.findItems(item_text + f"{count}"):
                         count += 1                                 
-                    list_item = QStandardItem(item.text() + f"{count}")
+                    list_item = QStandardItem(item_text + f"{count}")
                     self.sellect_analysis_model.insertRow(self.sellect_analysis_model.rowCount(), list_item)
+                    list_item_text = list_item.text()
+                    self.get_item_default_config(item_text, list_item_text)
                     event.acceptProposedAction()
             else:
                 event.ignore()
         else:
             event.ignore()
+
+    def get_item_default_config(self, item_text, list_item_text):
+        type = ''.join(re.findall(r'[A-Za-z]', item_text))
+        data = self.load_default_config()
+        self.config[list_item_text] = data[type]
+        self.config[list_item_text]["type"] = type
 
 
 if __name__ == "__main__":

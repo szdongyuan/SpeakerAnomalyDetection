@@ -3,7 +3,7 @@ import os
 import sys
 from functools import partial
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
@@ -30,7 +30,7 @@ class SplConfigWindow(QDialog):
         layout = QVBoxLayout()
         self.smooth_chk_box = QCheckBox("是否平滑")
         self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", True))
-        self.smooth_chk_box.stateChanged.connect(self.on_smooth_checkbox_changed)
+        self.smooth_chk_box.stateChanged.connect(self.get_default_config)
         limit_layout = self.create_limit()
         btn_layout = self.create_btn()
 
@@ -80,6 +80,7 @@ class SplConfigWindow(QDialog):
         return limit_layout
 
     def on_radio_button_toggled(self):
+        self.get_default_config()
         if self.radio_button_1.isChecked():
             self.config_dir_box.setDisabled(True)
             self.line_edit_upper.setDisabled(False)
@@ -94,8 +95,10 @@ class SplConfigWindow(QDialog):
         self.label_lower = QLabel("下限：", self)
         self.line_edit_upper = QLineEdit(self)
         self.line_edit_upper.setText(self.load_config.get("upper_limit"))
+        self.line_edit_upper.textChanged.connect(self.get_default_config)
         self.line_edit_lower = QLineEdit(self)
         self.line_edit_lower.setText(self.load_config.get("lower_limit"))
+        self.line_edit_lower.textChanged.connect(self.get_default_config)
         if not self.radio_button_1.isChecked():
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
@@ -112,6 +115,7 @@ class SplConfigWindow(QDialog):
         self.config_dir_box = QLineEdit()
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
+        self.config_dir_box.textChanged.connect(self.get_default_config)
         icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
         config_dir_icon = QIcon(icon_path)
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
@@ -124,16 +128,11 @@ class SplConfigWindow(QDialog):
         return load_layout
 
     def on_limit_checkbox_changed(self, state):
+        self.get_default_config()
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
         else:
             self.limit_group_box.setDisabled(True)
-
-    def on_smooth_checkbox_changed(self, state):
-        if state == Qt.Checked:
-            self.smooth_chk_box.setDisabled(False)
-        else:
-            self.smooth_chk_box.setDisabled(True)
 
     def config_dir_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(self,
@@ -174,7 +173,9 @@ class SplConfigWindow(QDialog):
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
-        self.close()
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
 
 
 class FrConfigWindow(QDialog):
@@ -237,8 +238,10 @@ class FrConfigWindow(QDialog):
         self.label_lower = QLabel("下限：", self)
         self.line_edit_upper = QLineEdit(self)
         self.line_edit_upper.setText(self.load_config.get("upper_limit"))
+        self.line_edit_upper.textChanged.connect(self.get_default_config)
         self.line_edit_lower = QLineEdit(self)
         self.line_edit_lower.setText(self.load_config.get("lower_limit"))
+        self.line_edit_lower.textChanged.connect(self.get_default_config)
         if not self.radio_button_1.isChecked():
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
@@ -255,6 +258,7 @@ class FrConfigWindow(QDialog):
         self.config_dir_box = QLineEdit()
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
+        self.config_dir_box.textChanged.connect(self.get_default_config)
         icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
         config_dir_icon = QIcon(icon_path)
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
@@ -267,6 +271,7 @@ class FrConfigWindow(QDialog):
         return load_layout
 
     def on_radio_button_toggled(self):
+        self.get_default_config()
         if self.radio_button_1.isChecked():
             self.config_dir_box.setDisabled(True)
             self.line_edit_upper.setDisabled(False)
@@ -286,6 +291,7 @@ class FrConfigWindow(QDialog):
             self.config_dir_box.setText(file_path)
 
     def on_limit_checkbox_changed(self, state):
+        self.get_default_config()
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
         else:
@@ -320,10 +326,14 @@ class FrConfigWindow(QDialog):
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
-        self.close()
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
 
 
 class HdConfigWindow(QDialog):
+
+    selected_labels_changed = pyqtSignal()
     def __init__(self, config_manager):
         super().__init__()
         self.config_manager = config_manager
@@ -379,6 +389,7 @@ class HdConfigWindow(QDialog):
         return harmonic_slider_layout
 
     def on_select_all_changed(self, state):
+        self.get_default_config()
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
             self.selected_labels = list(range(2, 31))
@@ -395,6 +406,7 @@ class HdConfigWindow(QDialog):
                 text = label.text().strip()
                 if text.startswith("\u2713"):
                     label.setText("  " + text[1:])
+        self.selected_labels_changed.emit()
 
     def on_label_click(self, label, event):
         checked_box = "\u2713"
@@ -408,6 +420,7 @@ class HdConfigWindow(QDialog):
         else:
             self.selected_labels.append(label_value)
             label.setText(checked_box + label.text().strip())
+        self.selected_labels_changed.emit()
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
@@ -437,8 +450,9 @@ class HdConfigWindow(QDialog):
         if not self.selected_labels:
             PopupUtils().close_popup(self)
         else:
-            self.close()
-
+            config_data = self.get_default_config()
+            self.accept()
+            return config_data
 
 
 class AIConfigWindow(QDialog):
@@ -471,6 +485,7 @@ class AIConfigWindow(QDialog):
         for model_name in self.model_list:
             self.analyse_model_combo_box.addItem(model_name)
         self.analyse_model_combo_box.setCurrentText(self.load_config.get("analyse_model_name"))
+        self.analyse_model_combo_box.currentTextChanged.connect(self.get_default_config)
         analyse_model_combo_layout = QHBoxLayout()
         analyse_model_combo_layout.addWidget(analyse_model_label)
         analyse_model_combo_layout.addWidget(self.analyse_model_combo_box)
@@ -526,7 +541,9 @@ class AIConfigWindow(QDialog):
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
-        self.close()
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
 
 
 class PopupUtils(object):

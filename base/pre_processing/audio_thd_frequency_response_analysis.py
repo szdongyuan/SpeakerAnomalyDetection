@@ -202,7 +202,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         return fr[start_idx:stop_idx], frequency_list[start_idx:stop_idx]
 
     @staticmethod
-    def spl_calculation(recorded_signal, reference_pressure=20e-6, window_size=1201):
+    def spl_calculation(recorded_signal, reference_pressure=20e-6, window_size=1201, is_smooth=True):
         """
             Calculate the Sound Pressure Level (SPL) of the recorded signal.
 
@@ -221,5 +221,9 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
         amplitude_list = maximum_filter(np.abs(recorded_signal), size=window_size)
         spl = 20 * np.log10(np.array(amplitude_list) / reference_pressure)
-        spl_smooth = np.convolve(spl, np.ones(1102) / 1102, mode='same')
-        return spl_smooth
+        if is_smooth:
+            spl_smooth = np.convolve(spl, np.ones(1102) / 1102, mode='same')
+            return spl_smooth
+        else:
+            return spl
+

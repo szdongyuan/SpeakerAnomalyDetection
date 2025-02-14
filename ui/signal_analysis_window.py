@@ -1,94 +1,32 @@
+import json
 import os
 import sys
 
 import librosa
 import numpy as np
 import pyqtgraph as pg
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from base.training_model_management import TrainingModelManagement
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
-
-
-# class SignalAnalysisWindow(QDialog):
-#     def __init__(self, signal_info):
-#         super().__init__()
-#         self.signal_info = signal_info
-#         self.default_logger = LogManager.set_log_handler("core")
-#         self.init_ui()
-
-#     def init_ui(self):
-#         # set the dialog theme and disable help and close btutton
-#         self.setWindowTitle("音频分析窗口")
-#         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-#         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-#         # set widget style
-#         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-#                            ui_style_const.qgroupbox_stytle +
-#                            ui_style_const.qlabel_stytle +
-#                            ui_style_const.qlineedit_stytle +
-#                            "QTabWidget {font-size: 11pt;}" +
-#                            "QPushButton {background-color: #4472c4; color: white;}" +
-#                            "QPushButton:hover {background-color: #4472c4; color: white; border-color: #803333ff;}")
-#         signal_analysis_layout = QVBoxLayout()      # create main layout
-
-
-#         # set three tab, show spl, frequency and thd's result
-#         self.tabwidget = QTabWidget()
-#         self.spl_wnd = Spl(self.signal_info)
-#         self.frequency_wnd = Frequency(self.signal_info)
-#         self.distortion_wnd = Distortion(self.signal_info)
-#         self.spl_wnd.show()
-#         self.frequency_wnd.show()
-#         self.distortion_wnd.show()
-
-#         base_btn_layout = QGridLayout()
-#         save_btn = QPushButton("保  存")        # use to save current tab analysis data
-#         save_btn.setFixedSize(100, 30)
-#         # save_btn.clicked.connect(self.save_btn_clicked)
-
-#         base_btn_layout.addWidget(save_btn, 0, 0)
-
-#         signal_analysis_layout.addWidget(self.tabwidget)
-#         signal_analysis_layout.addLayout(base_btn_layout)
-#         self.setLayout(signal_analysis_layout)
-
-#     def save_failed_popup(self):
-#         # the function infor us the right way to save
-#         save_failed_msg = QMessageBox(self)
-#         save_failed_msg.setIcon(QMessageBox.Critical)
-#         save_failed_msg.setText("请先点击绘图按钮")
-#         save_failed_msg.setWindowTitle("保存失败")
-#         save_failed_msg.setStandardButtons(QMessageBox.Ok)
-#         save_failed_msg.exec_()
-
-#     def save_data_to_txt(self, result):
-#         # save file to the   selected location
-#         file_path, _ = QFileDialog.getSaveFileName(self,
-#                                                    "保存数据",
-#                                                    "",
-#                                                    "Text Files (*.txt)",
-#                                                    options=QFileDialog.DontUseNativeDialog)
-#         if file_path:
-#             try:
-#                 with open(file_path, 'w') as f:
-#                     f.write(str(result))
-#                 self.default_logger.info(f"The file was saved to {file_path}.")
-#             except Exception as e:
-#                 self.default_logger.error(f"Failed to save the file. {e}")
+from main import predict
 
 
 class Distortion(QWidget):
-    def __init__(self, signal_info):
+    def __init__(self):
         super().__init__()
-        self.signal_info = signal_info
+        self.signal_info = None
         self.refresh_stimulus_flag = None
         self.selected_label = None
-        self.selected_harmonics =  list(range(2, 6))
         self.freq_dict = None
         self.base_freq_list = None
+        self.analysis_config = None
+        self.selected_harmonics = []
         self.result = {}
         self.init_ui()
 
@@ -105,20 +43,10 @@ class Distortion(QWidget):
         layout.addWidget(self.thd_plot)
         self.setLayout(layout)
 
-    # @staticmethod
-    # def get_label_text(value):
-    #     # set the thd step
-    #     if value == 2:
-    #         return str(value)
-    #     elif value >= 7:
-    #         start = (value - 6) * 5 + 5
-    #         end = (value - 6) * 5 + 10
-    #         return f"{start}...{end}"
-    #     else:
-    #         return f"2...{value}"
-
     def calculate_thd(self):
         freq_value, harmonic, thd = [], [], []
+        self.selected_harmonics = self.analysis_config["selected_labels"]
+        self.selected_harmonics = [i - 1 for i in self.selected_harmonics]
         if self.selected_harmonics:
             kwargs = {"harmonics": self.selected_harmonics}
             stimulus_signal = self.signal_info["stimulus_signal"]
@@ -156,10 +84,11 @@ class Distortion(QWidget):
 
 
 class Spl(QWidget):
-    def __init__(self, signal_info):
+    def __init__(self):
         super().__init__()
-        self.signal_info = signal_info
+        self.signal_info = None
         self.deviation_value = None
+        self.analysis_config = None
         self.result = {}
         self.init_ui()
 
@@ -178,30 +107,42 @@ class Spl(QWidget):
         sample_rate = self.signal_info["sample_rate"]
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
-        signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_signal, reference_pressure)
+        signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_signal, reference_pressure,
+                                                                         is_smooth=self.analysis_config["smooth_checked"])
         signal_spl = signal_spl + self.deviation_value
-        self.plot_spl(signal_duration, recorded_signal, signal_spl)
+        if self.analysis_config["limit_checked"]:
+            if self.analysis_config["radio_button_1_checked"]:
+                self.plot_spl(signal_duration, signal_spl, upper_limit=self.analysis_config["upper_limit"],
+                              lower_limit=self.analysis_config["lower_limit"])
+            else:
+                self.plot_spl(signal_duration, recorded_signal, signal_spl)
         self.result = {"signal_duration": signal_duration.tolist(),
                        "recorded_signal": recorded_signal.tolist(),
                        "signal_spl": signal_spl.tolist(),
                        }
         return self.result
 
-    def plot_spl(self, signal_duration, recorded_signal, signal_spl):
+    def plot_spl(self, signal_duration, signal_spl, upper_limit=None, lower_limit=None):
         self.spl_plot.clear()
         self.spl_plot.plot(signal_duration, signal_spl, pen='r')
         self.spl_plot.setLabel('left', 'SPL (dB)')
         self.spl_plot.setLabel('bottom', 'Time (s)')
+        dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
+        lower_limit = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
+        self.spl_plot.addItem(lower_limit)
+        upper_limit = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
+        self.spl_plot.addItem(upper_limit)
 
 
 class Frequency(QWidget):
 
-    def __init__(self, signal_info):
+    def __init__(self):
         super().__init__()
-        self.signal_info = signal_info
+        self.signal_info = None
         self.smooth_flag = False
         self.temp_frequency_list = None
         self.deviation_value = None
+        self.analysis_config = None
         self.result = {}
         self.init_ui()
 
@@ -220,13 +161,19 @@ class Frequency(QWidget):
         recorded_signal = self.signal_info["recorded_signal"]
         sr = self.signal_info["sample_rate"]
         fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr)
-        self.plot_fr(frequency_list, fr)
+        if self.analysis_config["limit_checked"]:
+            if self.analysis_config["radio_button_1_checked"]:
+                upper_limit = self.analysis_config["upper_limit"]
+                lower_limit = self.analysis_config["lower_limit"]
+                self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
+            else:
+                self.plot_fr(frequency_list, fr)
         self.result = {"fr": fr.tolist(),
                        "frequency_list": frequency_list.tolist()
                        }
         return self.result
 
-    def plot_fr(self, frequency_list, fr):
+    def plot_fr(self, frequency_list, fr, upper_limit=None, lower_limit=None):
         # drawing the Frequency Response
         self.fr_plot.clear()
         fr = fr + self.deviation_value
@@ -234,6 +181,76 @@ class Frequency(QWidget):
         self.fr_plot.setLabel('left', 'Amplitude (dB)')
         self.fr_plot.setLabel('bottom', 'Frequency (Hz)')
         self.fr_plot.setLogMode(x=True, y=False)
+        dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
+        upper_limit = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
+        self.fr_plot.addItem(upper_limit)
+        lower_limit = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
+        self.fr_plot.addItem(lower_limit)
+
+
+class AI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.signal_info = None
+        self.analysis_config = None
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowTitle("AI 分析")
+        ai_analyse_layout = self.create_ai_analyse_layout()
+        self.setLayout(ai_analyse_layout)
+
+    def create_ai_analyse_layout(self):
+        ai_analyse_layout = QVBoxLayout()
+        analyse_score_layout = QHBoxLayout()
+        self.ai_analyse_score_lineedit = QTextEdit()
+        self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
+        self.ai_analyse_score_lineedit.setDisabled(True)
+        self.ai_analyse_score_lineedit.setMaximumSize(600, 800)
+        self.ai_analyse_score_lineedit.setMinimumSize(550, 500)
+        self.ai_analyse_score_lineedit.setStyleSheet("font-size: 23pt;")
+        analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
+        analyse_score_layout.setContentsMargins(20, 0, 20, 0)
+
+        ai_analyse_layout.addLayout(analyse_score_layout)
+
+        return ai_analyse_layout
+
+    def calculate_ai_scores(self):
+        model_name = self.analysis_config["analyse_model_name"]
+        code, result = self.get_model_info(model_name)
+        if code != error_code.OK or not os.path.exists(result[0]):
+            self.ai_analyse_score_lineedit.setPlainText("模型不存在，请重新选择！")
+        else:
+            model_path, config_path = result
+            kwargs = {"config_path": config_path}
+            result_text = self.model_predict(model_path, **kwargs)
+            self.ai_analyse_score_lineedit.setPlainText(result_text)
+
+    def model_predict(self, model_path, **kwargs):
+        ret_str = predict(self.signal_info["recorded_path"], load_model_path=model_path, **kwargs)
+        ret_dict = json.loads(ret_str)
+        predict_result = ret_dict["result"]
+        predict_label = predict_result[0][1]
+        ok_scores = float(predict_result[0][2]) * 100
+        ng_scores = 100 - ok_scores
+        result_text = (
+            f"评分：\n"
+            f"OK Score: {ok_scores:.2f}%\n"
+            f"NG Score: {ng_scores:.2f}%\n"
+            f"评分结果: {predict_label}"
+        )
+        return result_text
+
+    def get_model_info(self, selected_model):
+        query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
+        if query_code == error_code.OK:
+            model_path, config_path = query_result[0]
+            return error_code.OK, (model_path, config_path)
+        else:
+            self.default_logger.error(f"Failed to get the model {selected_model} information.")
+            return error_code.INVALID_QUERY, "Failed to get the model information."
 
 
 if __name__ == "__main__":
@@ -243,6 +260,8 @@ if __name__ == "__main__":
                    "recorded_signal": recorded,
                    "sample_rate": sr}
     app = QApplication(sys.argv)
-    window = Spl(signal_info)
+    # window = Spl(signal_info)
+    # window = AnalyseWindow()
+    window = AI()
     window.show()
-    window.exec()
+    app.exec_()
