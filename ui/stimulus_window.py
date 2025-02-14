@@ -599,8 +599,7 @@ class StimulusWindow(QDialog):
         path, _ = QFileDialog.getOpenFileName(self,
                                               "打开音频",
                                               DEFAULT_DIR + "audio_data/stimulus",
-                                              "WAV Files (*.wav)",
-                                              options=QFileDialog.DontUseNativeDialog)
+                                              "WAV Files (*.wav)")
         if path:
             self.stimulus_signal, self.stimulus_signal_time = load_audio_simple(path, self.stimulus_info["sample_rate"])
             self.graph_stimulus()
@@ -616,8 +615,7 @@ class StimulusWindow(QDialog):
         file_name, _ = QFileDialog.getSaveFileName(self,
                                                    "保存音频",
                                                    DEFAULT_DIR + "audio_data/stimulus",
-                                                   "WAV Files (*.wav)",
-                                                   options=QFileDialog.DontUseNativeDialog)
+                                                   "WAV Files (*.wav)")
         if file_name:
             sr = self.stimulus_info.get("sample_rate", 44100)
             save_audio_simple(file_name + ".wav", self.stimulus_signal, sr)
