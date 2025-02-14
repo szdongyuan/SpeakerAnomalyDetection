@@ -10,19 +10,17 @@ import pyqtgraph as pg
 from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QFrame, QTextEdit, \
-    QDialog, QComboBox
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
 
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
-from base.training_model_management import TrainingModelManagement
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from main import predict
-from ui.signal_analysis_window import Spl, Frequency, Distortion
+from ui.signal_analysis_window import Spl, Frequency, Distortion, AI
+
 
 
 class SequenceWindow(QWidget):
@@ -36,8 +34,9 @@ class SequenceWindow(QWidget):
         # Retrieve stimulus information and signal from configuration
         self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()  
         self.deviation_value = self.get_mic_deviation_value()   # Get the deviation value from the microphone
+        self.analysis_config = self.get_sequence_config_from_json()
         self.signal_info = {}   # Initialize an empty dictionary to store signal information
-        # self.analyse_layout = AnalyseWindow()
+        self.analysis_window = []
         self.sequence_layout = QVBoxLayout()
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
@@ -67,10 +66,9 @@ class SequenceWindow(QWidget):
 
         self.setLayout(self.sequence_layout)
 
-        # self.update_load_model_name()
         self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        # self.analyse_layout.analyse_btn.clicked.connect(self.clicked_analyse_btn)
+
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
@@ -106,7 +104,8 @@ class SequenceWindow(QWidget):
         self.data_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
         self.data_btn.setIconSize(QSize(35, 35))
-        self.data_btn.clicked.connect(self.clicked_data_btn)
+
+        self.data_btn.clicked.connect(self.run)
 
         type_label = QLabel(" 型 号： ")
         type_label.setFixedHeight(40)
@@ -514,22 +513,16 @@ class SequenceWindow(QWidget):
     #     return result_text
 
     def clicked_player_btn(self):
-        """
-            Handles the event when the player button is clicked.
-            
-            This method is responsible for managing the state of the player, including resetting player-related data,
-            updating the player's icon, and preparing for the playback and recording of audio.
-        """
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
         self.player_btn.setDisabled(True)
         self.update_player_icon()
+        self.analysis_config = self.get_sequence_config_from_json()
         QApplication.processEvents()
-        # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag 
+        # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
         if self.refresh_stimulus_flag:
             self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-            self.update_load_model_name()
             self.refresh_stimulus_flag = False
         sample_rate = self.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
@@ -540,42 +533,74 @@ class SequenceWindow(QWidget):
             self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
             self.signal_info = {"stimulus_signal": self.stimulus_signal,
                                 "recorded_signal": recorded_signal,
-                                "sample_rate": sample_rate}
+                                "sample_rate": sample_rate,
+                                "recorded_path": self.recorded_path}
             self.recorded_signal_info["sample_rate"] = sample_rate
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
+        if self.analysis_config["auto_analysis"]:
+            self.run()
 
-    def clicked_data_btn(self):
+    @staticmethod
+    def get_class_mapping():
+        class_mapping = {
+            "SPL": Spl,
+            "FR": Frequency,
+            "HD": Distortion,
+            "AI": AI,
+        }
+        return class_mapping
 
-        # To do: add data analysis window
+    def instance_analysis_class(self, type, params):
+        class_mapping = self.get_class_mapping()
+        if type in class_mapping.keys():
+            cls_map = class_mapping.get(type)
+            if cls_map:
+                class_instance = cls_map()
+                class_instance.signal_info = self.signal_info
+                class_instance.deviation_value = self.deviation_value
+                class_instance.analysis_config = params
+                self.analysis_window.append(class_instance)
 
-        self.spl_wnd = Spl(self.signal_info)
-        self.frequency_wnd = Frequency(self.signal_info)
-        self.distortion_wnd = Distortion(self.signal_info)
-        self.frequency_wnd.deviation_value = self.deviation_value
-        self.spl_wnd.deviation_value = self.deviation_value
-        self.spl_wnd.calculate_spl()
-        self.frequency_wnd.calculate_fr()
-        self.distortion_wnd.calculate_thd()
+    def run(self):
+        self.analysis_window = []
+        if self.analysis_config:
+            for key, value in self.analysis_config.items():
+                if isinstance(value, dict):
+                    self.instance_analysis_class(value["type"], value)
+            for instance in self.analysis_window:
+                if hasattr(instance, 'calculate_spl'):
+                    instance.calculate_spl()
+                    instance.show()
+                elif hasattr(instance, 'calculate_fr'):
+                    instance.calculate_fr()
+                    instance.show()
+                elif hasattr(instance, 'calculate_thd'):
+                    instance.calculate_thd()
+                    instance.show()
+                elif hasattr(instance, 'calculate_ai_scores'):
+                    instance.calculate_ai_scores()
+                    instance.show()
 
-        self.spl_wnd.move(300, 200)
-        self.frequency_wnd.move(340, 240)
-        self.distortion_wnd.move(380,280)
+    def get_sequence_config_from_json(self):
+        load_code, result = self.load_sequence_from_json()
+        if load_code == error_code.OK and result:
+            return result
+        else:
+            return {}
 
-        self.spl_wnd.show()
-        self.frequency_wnd.show()
-        self.distortion_wnd.show()
-
-    # def update_load_model_name(self):
-    #     self.analyse.model_combo_box.clear()
-    #     model_list = self.load_model_name_from_db()
-    #     for model_name in model_list:
-    #         self.analyse.model_combo_box.addItem(model_name)
-    #     default_model = self.load_analyse_model()
-    #     if default_model in model_list:
-    #         default_index = model_list.index(default_model)
-    #         # self.analyse_layout.model_combo_box.setCurrentIndex(default_index)
+    def load_sequence_from_json(self):
+        json_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        if not os.path.exists(json_file_path):
+            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
+        try:
+            with open(json_file_path, 'r') as json_file:
+                self.analysis_config = json.load(json_file)
+                return error_code.OK, self.analysis_config
+        except Exception as e:
+            err_msg = "Failed to load analysis sequence data from json.%s" % (str(e)[:50])
+            return error_code.INVALID_DATA_LOADING, err_msg
 
     @staticmethod
     def get_mic_deviation_value():
