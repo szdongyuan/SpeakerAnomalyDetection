@@ -195,6 +195,7 @@ class SequenceWindow(QWidget):
         btn_area = self.create_waveform_btn_layout()
         self.line_graph.setLabel('left', 'Amplitude(V)')
         self.line_graph.setLabel('bottom', 'Time(s)')
+        self.line_graph.showGrid(x=True, y=True)
 
         h_spacer_1 = QSpacerItem(70, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         layout.addLayout(btn_area)

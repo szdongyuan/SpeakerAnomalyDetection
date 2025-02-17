@@ -165,7 +165,7 @@ class AnalysisModelSellect(QDialog):
     def load_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(self,
                                                    "导入配置文件",
-                                                   DEFAULT_DIR + "ui/ui_config",
+                                                   DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
                                                    filter="JSON Files (*.json);;All Files (*)")
         if file_path:
             try:
@@ -202,7 +202,7 @@ class AnalysisModelSellect(QDialog):
     def save_btn_clicked(self):
         file_path, _ = QFileDialog.getSaveFileName(self,
                                                    "保存配置文件",
-                                                   DEFAULT_DIR + "ui/ui_config",
+                                                   DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
                                                    filter="JSON Files (*.json);;All Files (*)")
         if file_path:
             self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()

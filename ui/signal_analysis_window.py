@@ -10,6 +10,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
+from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.training_model_management import TrainingModelManagement
 from consts import error_code
@@ -111,7 +112,7 @@ class Spl(QWidget):
                                                                          is_smooth=self.analysis_config["smooth_checked"])
         signal_spl = signal_spl + self.deviation_value
         if self.analysis_config["limit_checked"]:
-            if self.analysis_config["radio_button_1_checked"]:
+            if self.analysis_config["self_defined"]:
                 self.plot_spl(signal_duration, signal_spl, upper_limit=self.analysis_config["upper_limit"],
                               lower_limit=self.analysis_config["lower_limit"])
             else:
@@ -124,14 +125,34 @@ class Spl(QWidget):
 
     def plot_spl(self, signal_duration, signal_spl, upper_limit=None, lower_limit=None):
         self.spl_plot.clear()
-        self.spl_plot.plot(signal_duration, signal_spl, pen='r')
+        self.spl_plot.plot(signal_duration, signal_spl, pen='g')
+        if lower_limit is not None and upper_limit is not None:
+            upper_limit = float(upper_limit)
+            lower_limit = float(lower_limit)
+            out_range_points = []
+            current_out_range = []
+            for i in range(len(signal_spl)):
+                if signal_spl[i] <= lower_limit or signal_spl[i] >= upper_limit:
+                    current_out_range.append((signal_duration[i], signal_spl[i]))
+                else:
+                    if current_out_range:
+                        out_range_points.append(current_out_range)
+                        current_out_range = []
+            if current_out_range:
+                out_range_points.append(current_out_range)
+
+            for points in out_range_points:
+                x = [point[0] for point in points]
+                y = [point[1] for point in points]
+                out_range_plot = pg.PlotDataItem(x, y, pen='r')
+                self.spl_plot.addItem(out_range_plot)
+            dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
+            lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
+            self.spl_plot.addItem(lower_limit1)
+            upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
+            self.spl_plot.addItem(upper_limit1)
         self.spl_plot.setLabel('left', 'SPL (dB)')
         self.spl_plot.setLabel('bottom', 'Time (s)')
-        dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
-        lower_limit = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-        self.spl_plot.addItem(lower_limit)
-        upper_limit = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-        self.spl_plot.addItem(upper_limit)
 
 
 class Frequency(QWidget):
@@ -162,7 +183,7 @@ class Frequency(QWidget):
         sr = self.signal_info["sample_rate"]
         fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr)
         if self.analysis_config["limit_checked"]:
-            if self.analysis_config["radio_button_1_checked"]:
+            if self.analysis_config["self_defined"]:
                 upper_limit = self.analysis_config["upper_limit"]
                 lower_limit = self.analysis_config["lower_limit"]
                 self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
@@ -174,18 +195,36 @@ class Frequency(QWidget):
         return self.result
 
     def plot_fr(self, frequency_list, fr, upper_limit=None, lower_limit=None):
-        # drawing the Frequency Response
         self.fr_plot.clear()
         fr = fr + self.deviation_value
-        self.fr_plot.plot(frequency_list, fr, pen='b')
+        self.fr_plot.plot(frequency_list, fr, pen='g')
+        if lower_limit is not None and upper_limit is not None:
+            upper_limit = float(upper_limit)
+            lower_limit = float(lower_limit)
+            out_range_points = []
+            current_out_range = []
+            for i in range(len(fr)):
+                if fr[i] <= lower_limit or fr[i] >= upper_limit:
+                    current_out_range.append((frequency_list[i], fr[i]))
+                else:
+                    if current_out_range:
+                        out_range_points.append(current_out_range)
+                        current_out_range = []
+            if current_out_range:
+                out_range_points.append(current_out_range)
+
+            for points in out_range_points:
+                x = [point[0] for point in points]
+                y = [point[1] for point in points]
+                out_range_plot = pg.PlotDataItem(x, y, pen='r')
+                self.fr_plot.addItem(out_range_plot)
+            dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
+            lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
+            self.fr_plot.addItem(lower_limit1)
+            upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
+            self.fr_plot.addItem(upper_limit1)
         self.fr_plot.setLabel('left', 'Amplitude (dB)')
         self.fr_plot.setLabel('bottom', 'Frequency (Hz)')
-        self.fr_plot.setLogMode(x=True, y=False)
-        dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
-        upper_limit = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-        self.fr_plot.addItem(upper_limit)
-        lower_limit = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-        self.fr_plot.addItem(lower_limit)
 
 
 class AI(QWidget):
@@ -193,6 +232,7 @@ class AI(QWidget):
         super().__init__()
         self.signal_info = None
         self.analysis_config = None
+        self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
 
     def init_ui(self):
@@ -225,10 +265,10 @@ class AI(QWidget):
         else:
             model_path, config_path = result
             kwargs = {"config_path": config_path}
-            result_text = self.model_predict(model_path, **kwargs)
+            result_text = self.model_predict(model_path, model_name, **kwargs)
             self.ai_analyse_score_lineedit.setPlainText(result_text)
 
-    def model_predict(self, model_path, **kwargs):
+    def model_predict(self, model_path, model_name, **kwargs):
         ret_str = predict(self.signal_info["recorded_path"], load_model_path=model_path, **kwargs)
         ret_dict = json.loads(ret_str)
         predict_result = ret_dict["result"]
@@ -236,7 +276,8 @@ class AI(QWidget):
         ok_scores = float(predict_result[0][2]) * 100
         ng_scores = 100 - ok_scores
         result_text = (
-            f"评分：\n"
+            f"评分: \n"
+            f"评分模型: {model_name} \n"
             f"OK Score: {ok_scores:.2f}%\n"
             f"NG Score: {ng_scores:.2f}%\n"
             f"评分结果: {predict_label}"
