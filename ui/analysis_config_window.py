@@ -56,11 +56,11 @@ class SplConfigWindow(QDialog):
         else:
             self.limit_group_box.setDisabled(True)
         self.radio_button_1 = QRadioButton("自定义")
-        self.radio_button_1.setChecked(self.load_config.get("radio_button_1_checked", True))
+        self.radio_button_1.setChecked(self.load_config.get("self_defined", True))
         self.radio_button_1.toggled.connect(self.on_radio_button_toggled)
         upper_layout = self.create_upper_lower_layout()
         self.radio_button_2 = QRadioButton("导入配置")
-        self.radio_button_2.setChecked(self.load_config.get("radio_button_2_checked", False))
+        self.radio_button_2.setChecked(self.load_config.get("import_config", False))
         self.radio_button_2.toggled.connect(self.on_radio_button_toggled)
         load_layout = self.create_config_dir_layout()
 
@@ -159,8 +159,8 @@ class SplConfigWindow(QDialog):
         default_config = {
             "smooth_checked": self.smooth_chk_box.isChecked(),
             "limit_checked": self.limit_checkbox.isChecked(),
-            "radio_button_1_checked": self.radio_button_1.isChecked(),
-            "radio_button_2_checked": self.radio_button_2.isChecked(),
+            "self_defined": self.radio_button_1.isChecked(),
+            "import_config": self.radio_button_2.isChecked(),
             "upper_limit": self.line_edit_upper.text(),
             "lower_limit": self.line_edit_lower.text(),
             "config_dir": self.config_dir_box.text()
@@ -211,11 +211,11 @@ class FrConfigWindow(QDialog):
         else:
             self.limit_group_box.setDisabled(True)
         self.radio_button_1 = QRadioButton("自定义")
-        self.radio_button_1.setChecked(self.load_config.get("radio_button_1_checked", True))
+        self.radio_button_1.setChecked(self.load_config.get("self_defined", True))
         self.radio_button_1.toggled.connect(self.on_radio_button_toggled)
         upper_layout = self.create_upper_lower_layout()
         self.radio_button_2 = QRadioButton("导入配置")
-        self.radio_button_2.setChecked(self.load_config.get("radio_button_2_checked", False))
+        self.radio_button_2.setChecked(self.load_config.get("import_config", False))
         self.radio_button_2.toggled.connect(self.on_radio_button_toggled)
         load_layout = self.create_config_dir_layout()
 
@@ -312,8 +312,8 @@ class FrConfigWindow(QDialog):
     def get_default_config(self):
         default_config = {
             "limit_checked": self.limit_checkbox.isChecked(),
-            "radio_button_1_checked": self.radio_button_1.isChecked(),
-            "radio_button_2_checked": self.radio_button_2.isChecked(),
+            "self_defined": self.radio_button_1.isChecked(),
+            "import_config": self.radio_button_2.isChecked(),
             "upper_limit": self.line_edit_upper.text(),
             "lower_limit": self.line_edit_lower.text(),
             "config_dir": self.config_dir_box.text()
@@ -352,7 +352,7 @@ class HdConfigWindow(QDialog):
         harmonic_slider_layout = self.create_harmonic_slider_layout()
         harmonic_slider_layout.setSpacing(12)
         self.select_all_check = QCheckBox("全选")
-        self.select_all_check.setChecked(self.load_config.get("all_checked"))
+        self.select_all_check.setChecked(self.load_config.get("all_checked", False))
         self.select_all_check.stateChanged.connect(self.on_select_all_changed)
         v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         harmonic_slider_layout.addItem(v_spacer_1)
