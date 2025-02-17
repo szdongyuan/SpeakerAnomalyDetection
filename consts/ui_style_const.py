@@ -5,6 +5,7 @@ qpushbutton_stytle = """
                 border-right: 3px solid rgb(128, 128, 128);
                 border-bottom: 3px solid rgb(128, 128, 128);
                 background-color: rgb(225, 225, 225);
+                font-family: 'SimSun';
                 font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
@@ -22,15 +23,21 @@ qpushbutton_stytle = """
 qlineedit_stytle = """
             QLineEdit {
                 border: 1px solid rgb(122, 122, 122);
+                font-family: 'SimSun';
                 font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
+            }
+            QLineEdit:disabled {
+                background-color: #d3d3d3;
+                color: #808080;
             }
         """
 qcombobox_stytle = """
             QComboBox {
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
+                font-family: 'SimSun';
                 font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
@@ -53,6 +60,7 @@ qspinbox_stytle = """
             QSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
+                font-family: 'SimSun';
                 font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
@@ -68,6 +76,7 @@ qdoublespinbox_stytle = """
             QDoubleSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
+                font-family: 'SimSun';
                 font-size: 20px;
                 border-radius: 3px;
                 padding: 3px;
@@ -88,6 +97,7 @@ qdialog_stytle = """
 
 qlabel_stytle = """
             QLabel {
+                font-family: 'SimSun';
                 font-size: 20px;
                 color: black;
             }
@@ -97,6 +107,7 @@ sequence_qlabel_stytle = """
             QLabel {
                 background-color: #4472c4;
                 color: white;
+                font-family: 'SimSun';
                 font-size: 20px;
             }
 """
@@ -105,6 +116,7 @@ sequence_qpushbutton_stytle = """
             QPushButton {
                 background-color: #4472c4;
                 color: white;
+                font-family: 'SimSun';
                 font-size: 40px;
             }
             QPushButton:hover {
@@ -115,12 +127,15 @@ sequence_qpushbutton_stytle = """
 main_window_menubar_stytle = """
             QMenuBar {
                 background-color:transparent;
+                font-family: 'SimSun';
                 font-size: 20px;
             }
             QMenu {
+                font-family: 'SimSun';
                 font-size: 20px;
             }
             QMenu::item {
+                font-family: 'SimSun';
                 font-size: 20px;
                 padding-left: 30px;
                 padding-right: 10px;
@@ -140,6 +155,7 @@ toolbar_button_stytle = """
             QPushButton {
                 border: None;
                 background-color: transparent;
+                font-family: 'SimSun';
                 font-size: 20px;
             }
             QPushButton:hover {
@@ -149,18 +165,45 @@ toolbar_button_stytle = """
 
 qcheckbox_stytle = """
             QCheckBox {
+                font-family: 'SimSun';
                 font-size: 20px;
             }
 """
 
 qlistview_stytle = """
             QListView {
+                font-family: 'SimSun';
                 font-size: 20px;
             }
 """
 
 qmainwindow_stytle = """
             QMainWindow  {
-                border-radius: 20px;
+                background-color: #f0f0f0;
+                border: 1px solid rgb(0, 0, 0);
+            }
+"""
+
+qradiobutton_stytle = """
+            QRadioButton {
+                font-family: 'SimSun';
+                font-size: 20px;
+            }
+"""
+
+qtabwidget_stytle = """
+            QTabWidget {
+                font-family: 'SimSun';
+                font-size: 20px;
+            }
+"""
+qtextedit_stytle = """                    
+            QTextEdit{
+                background-color: white;
+                font-family: 'SimSun';
+                font-size: 20px;
+            }
+             QTextEdit:disabled {
+                color: rgb(0, 0, 0);
             }
 """
