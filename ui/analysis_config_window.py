@@ -29,7 +29,7 @@ class SplConfigWindow(QDialog):
         self.setFixedSize(300, 350)
         layout = QVBoxLayout()
         self.smooth_chk_box = QCheckBox("是否平滑")
-        self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", True))
+        self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
         self.smooth_chk_box.stateChanged.connect(self.get_default_config)
         limit_layout = self.create_limit()
         btn_layout = self.create_btn()
@@ -191,11 +191,17 @@ class FrConfigWindow(QDialog):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setFixedSize(300, 350)
         layout = QVBoxLayout()
+        self.smooth_chk_box = QCheckBox("是否平滑")
+        self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
+        self.smooth_chk_box.stateChanged.connect(self.get_default_config)
         limit_layout = self.create_limit()
         btn_layout = self.create_btn()
         v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        layout.addLayout(limit_layout)
+        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        layout.addWidget(self.smooth_chk_box)
         layout.addItem(v_spacer_1)
+        layout.addLayout(limit_layout)
+        layout.addItem(v_spacer_2)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
@@ -311,6 +317,7 @@ class FrConfigWindow(QDialog):
 
     def get_default_config(self):
         default_config = {
+            "smooth_checked": self.smooth_chk_box.isChecked(),
             "limit_checked": self.limit_checkbox.isChecked(),
             "self_defined": self.radio_button_1.isChecked(),
             "import_config": self.radio_button_2.isChecked(),

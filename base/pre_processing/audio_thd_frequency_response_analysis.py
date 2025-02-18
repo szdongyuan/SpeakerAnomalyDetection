@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
 from scipy.ndimage import maximum_filter
+from scipy.signal import savgol_filter
 
 from base.utils.plot_audio_features import PlotManager
 
@@ -171,7 +172,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         return freq_dict
 
     @staticmethod
-    def calculate_fr(reference_signal, recorded_signal, sr):
+    def calculate_fr(reference_signal, recorded_signal, sr, is_smooth=True):
         """
             Calculate the frequency response (FR).
 
@@ -189,16 +190,22 @@ class AudioThdFrequencyResponseAnalysis(object):
                 - frequency_list : ndarray
                     The corresponding frequency list, aligned with the response (`fr`).
         """
-        num = sr // 10
-        frequency_list, pxx = signal.welch(reference_signal, sr, nfft=num)
-        _, pxy = signal.csd(recorded_signal, reference_signal, sr, nfft=num)
+        num = sr
+        hop_length = num / 2
+        window = np.hanning(num)
+        frequency_list, pxy = signal.csd(reference_signal, recorded_signal, window=window, nfft=num, noverlap=hop_length, fs=sr)
+        _, pxx = signal.welch(reference_signal, fs=sr, nperseg=num, noverlap=hop_length, window=window)
         h = np.abs(pxy / pxx)
-        fr = 20 * np.log10(h)
-        idx_1 = np.argmax(np.abs(np.fft.fft(reference_signal[:1024], num)[:num // 2]))
+        fr = 10 * np.log10(h)
+        slice_length = 1024
+        idx_1 = np.argmax(np.abs(np.fft.fft(reference_signal[:slice_length], num)[:num // 2]))
         mid_slice = len(reference_signal) // 2
-        idx_2 = np.argmax(np.abs(np.fft.fft(reference_signal[mid_slice - 511: mid_slice + 513], num)[:num // 2]))
-        idx_3 = np.argmax(np.abs(np.fft.fft(reference_signal[-1024:], num)[:num // 2]))
+        idx_2 = np.argmax(np.abs(np.fft.fft(reference_signal[mid_slice - (slice_length // 2) - 1:
+                                                             mid_slice + (slice_length // 2) + 1], num)[:num // 2]))
+        idx_3 = np.argmax(np.abs(np.fft.fft(reference_signal[-slice_length:], num)[:num // 2]))
         start_idx, stop_idx = min([idx_1, idx_2, idx_3]), max([idx_1, idx_2, idx_3])
+        if is_smooth:
+            fr = savgol_filter(fr, window_length=60, polyorder=3)
         return fr[start_idx:stop_idx], frequency_list[start_idx:stop_idx]
 
     @staticmethod
