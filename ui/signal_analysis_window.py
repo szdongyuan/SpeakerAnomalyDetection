@@ -146,13 +146,14 @@ class Spl(QWidget):
                 y = [point[1] for point in points]
                 out_range_plot = pg.PlotDataItem(x, y, pen='r')
                 self.spl_plot.addItem(out_range_plot)
-            dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
+            dashed_pen = pg.mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
             lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
             self.spl_plot.addItem(lower_limit1)
             upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
             self.spl_plot.addItem(upper_limit1)
         self.spl_plot.setLabel('left', 'SPL (dB)')
         self.spl_plot.setLabel('bottom', 'Time (s)')
+        self.spl_plot.showGrid(x=True, y=True)
 
 
 class Frequency(QWidget):
@@ -181,7 +182,8 @@ class Frequency(QWidget):
         stimulus_signal = self.signal_info["stimulus_signal"]
         recorded_signal = self.signal_info["recorded_signal"]
         sr = self.signal_info["sample_rate"]
-        fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr)
+        fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr,
+                                                                              is_smooth=self.analysis_config["smooth_checked"])
         if self.analysis_config["limit_checked"]:
             if self.analysis_config["self_defined"]:
                 upper_limit = self.analysis_config["upper_limit"]
@@ -196,7 +198,7 @@ class Frequency(QWidget):
 
     def plot_fr(self, frequency_list, fr, upper_limit=None, lower_limit=None):
         self.fr_plot.clear()
-        fr = fr + self.deviation_value
+        fr = fr + 94 + self.deviation_value
         self.fr_plot.plot(frequency_list, fr, pen='g')
         if lower_limit is not None and upper_limit is not None:
             upper_limit = float(upper_limit)
@@ -218,13 +220,14 @@ class Frequency(QWidget):
                 y = [point[1] for point in points]
                 out_range_plot = pg.PlotDataItem(x, y, pen='r')
                 self.fr_plot.addItem(out_range_plot)
-            dashed_pen = pg.mkPen(color='gray', width=1, style=Qt.DashLine)
+            dashed_pen = pg.mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
             lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
             self.fr_plot.addItem(lower_limit1)
             upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
             self.fr_plot.addItem(upper_limit1)
         self.fr_plot.setLabel('left', 'Amplitude (dB)')
         self.fr_plot.setLabel('bottom', 'Frequency (Hz)')
+        self.fr_plot.showGrid(x=True, y=True)
 
 
 class AI(QWidget):
