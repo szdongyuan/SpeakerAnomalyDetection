@@ -514,6 +514,18 @@ class SequenceWindow(QWidget):
     #     return result_text
 
     def clicked_player_btn(self):
+        """
+            Handles the play button click event. This function performs the following operations:
+            1. Clears the line graph based on the player status flag.
+            2. Updates the play button state and icon.
+            3. Retrieves the analysis configuration from the JSON file.
+            4. If the stimulus signal needs to be refreshed, fetches the stimulus signal information from the configuration.
+            5. Obtains the sample rate and generates dictionaries for the stimulus and recorded signals.
+            6. Uses the soundcard audio processor to play the stimulus signal and record the response signal.
+            7. If recording is successful, plots the recorded signal on the line graph and saves the signal information.
+            8. Enables the data button and the replay button.
+            9. If auto-analysis is configured, executes the analysis.
+        """
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
@@ -545,6 +557,15 @@ class SequenceWindow(QWidget):
 
     @staticmethod
     def get_class_mapping():
+        """
+            Retrieves the class mapping dictionary.
+
+            This method returns a dictionary where the keys are string identifiers and the values are the corresponding classes. 
+            This mapping is typically used to dynamically retrieve the appropriate class based on an identifier.
+
+            Returns:
+                dict: A dictionary containing the class mapping, in the format {"identifier": class}.
+        """
         class_mapping = {
             "SPL": Spl,
             "FR": Frequency,
@@ -554,6 +575,17 @@ class SequenceWindow(QWidget):
         return class_mapping
 
     def instance_analysis_class(self, type, params):
+        """
+            Instantiates and configures an analysis class based on the given type and parameters, 
+            and adds it to the analysis window list.
+
+            Args:
+                type (str): The type identifier of the analysis class, used to retrieve the corresponding class from the class mapping.
+                params (dict): Configuration parameters for the analysis class, which will be passed to the instantiated class object.
+
+            Returns:
+                None: This function does not return a value but adds the instantiated class object to the self.analysis_window list.
+        """
         class_mapping = self.get_class_mapping()
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
@@ -565,7 +597,17 @@ class SequenceWindow(QWidget):
                 self.analysis_window.append(class_instance)
 
     def run(self):
+        """
+            Executes the analysis tasks and displays the analysis windows.
+
+            This method initializes the analysis windows based on the configuration and creates corresponding
+            analysis instances according to the analysis types specified in the configuration. It then performs
+            the respective calculations for each instance and displays the windows. The window positions are
+            adjusted based on the screen size to ensure they do not overlap.
+        """
         self.analysis_window = []
+        width = int((self.screen().size().width() - 400) / 2)
+        height = int((self.screen().size().height() - 400) / 2) 
         if self.analysis_config:
             for key, value in self.analysis_config.items():
                 if isinstance(value, dict):
@@ -583,8 +625,20 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, 'calculate_ai_scores'):
                     instance.calculate_ai_scores()
                     instance.show()
+                instance.setGeometry(width, height, 500, 450)
+                width += 50
+                height += 50
 
     def get_sequence_config_from_json(self):
+        """
+            Retrieves the sequence configuration from a JSON file.
+
+            This method attempts to load the sequence configuration from a JSON file by calling the `load_sequence_from_json()` method.
+            If the loading is successful and the result is valid, it returns the configuration; otherwise, it returns an empty dictionary.
+
+            Returns:
+                dict: The sequence configuration if loading is successful and the result is valid; otherwise, an empty dictionary.
+        """
         load_code, result = self.load_sequence_from_json()
         if load_code == error_code.OK and result:
             return result
@@ -592,6 +646,19 @@ class SequenceWindow(QWidget):
             return {}
 
     def load_sequence_from_json(self):
+        """
+            Loads analysis sequence configuration data from a specified JSON file.
+
+            This function first checks if the JSON file exists. If not, it returns an error code and message.
+            If the file exists, it attempts to read and parse the JSON file content, storing it in the class's
+            `analysis_config` attribute. If any exception occurs during reading or parsing, it catches the
+            exception and returns the corresponding error code and message.
+
+            Returns:
+                tuple: A tuple containing two elements:
+                    - The first element is an error code indicating the result status of the operation.
+                    - The second element is either an error message or the parsed JSON data.
+        """
         json_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."

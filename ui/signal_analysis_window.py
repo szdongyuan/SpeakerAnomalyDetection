@@ -6,14 +6,14 @@ import librosa
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.training_model_management import TrainingModelManagement
-from consts import error_code
+from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import predict
 
@@ -244,29 +244,48 @@ class AI(QWidget):
     def create_ai_analyse_layout(self):
         ai_analyse_layout = QVBoxLayout()
         analyse_score_layout = QHBoxLayout()
-        self.ai_analyse_score_lineedit = QTextEdit()
-        self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
-        self.ai_analyse_score_lineedit.setDisabled(True)
-        self.ai_analyse_score_lineedit.setMaximumSize(600, 800)
-        self.ai_analyse_score_lineedit.setMinimumSize(550, 500)
-        self.ai_analyse_score_lineedit.setStyleSheet("font-size: 23pt;")
-        analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
+        self.ai_analyse_score_textedit = QTextEdit()
+        self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
+        self.ai_analyse_score_textedit.setDisabled(True)
+        self.ai_analyse_score_textedit.setMaximumSize(600, 800)
+        self.ai_analyse_score_textedit.setMinimumSize(550, 500)
+        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_stytle)
+        analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
 
         ai_analyse_layout.addLayout(analyse_score_layout)
 
         return ai_analyse_layout
 
+    def highlight_keywords(self, keyword, text_edit):
+        cursor = text_edit.textCursor()
+        format = QTextCharFormat()
+        format.setForeground(QColor("red"))
+
+        matches = []
+        cursor.movePosition(QTextCursor.Start)
+        while True:
+            cursor = text_edit.document().find(keyword, cursor)
+            if cursor.isNull():
+                break
+            matches.append(cursor)
+
+        if len(matches) == 2:
+            second_match = matches[1]
+            second_match.mergeCharFormat(format)
+
     def calculate_ai_scores(self):
         model_name = self.analysis_config["analyse_model_name"]
         code, result = self.get_model_info(model_name)
         if code != error_code.OK or not os.path.exists(result[0]):
-            self.ai_analyse_score_lineedit.setPlainText("模型不存在，请重新选择！")
+            self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
         else:
             model_path, config_path = result
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
-            self.ai_analyse_score_lineedit.setPlainText(result_text)
+            self.ai_analyse_score_textedit.setPlainText(result_text)
+            self.highlight_keywords("ok", self.ai_analyse_score_textedit)
+            self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
         ret_str = predict(self.signal_info["recorded_path"], load_model_path=model_path, **kwargs)
