@@ -625,9 +625,10 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, 'calculate_ai_scores'):
                     instance.calculate_ai_scores()
                     instance.show()
-                instance.setGeometry(width, height, 500, 450)
-                width += 50
-                height += 50
+                instance.setGeometry(width, height, 600, 500)
+                instance.setMinimumSize(QSize(600, 500))
+                width += 20
+                height += 20
 
     def get_sequence_config_from_json(self):
         """

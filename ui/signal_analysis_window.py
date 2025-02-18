@@ -247,8 +247,7 @@ class AI(QWidget):
         self.ai_analyse_score_textedit = QTextEdit()
         self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_textedit.setDisabled(True)
-        self.ai_analyse_score_textedit.setMaximumSize(600, 800)
-        self.ai_analyse_score_textedit.setMinimumSize(550, 500)
+
         self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_stytle)
         analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
@@ -271,8 +270,8 @@ class AI(QWidget):
             matches.append(cursor)
 
         if len(matches) == 2:
-            second_match = matches[1]
-            second_match.mergeCharFormat(format)
+            first_match = matches[0]
+            first_match.mergeCharFormat(format)
 
     def calculate_ai_scores(self):
         model_name = self.analysis_config["analyse_model_name"]
@@ -284,7 +283,6 @@ class AI(QWidget):
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
             self.ai_analyse_score_textedit.setPlainText(result_text)
-            self.highlight_keywords("ok", self.ai_analyse_score_textedit)
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
@@ -295,11 +293,11 @@ class AI(QWidget):
         ok_scores = float(predict_result[0][2]) * 100
         ng_scores = 100 - ok_scores
         result_text = (
-            f"评分: \n"
-            f"评分模型: {model_name} \n"
-            f"OK Score: {ok_scores:.2f}%\n"
-            f"NG Score: {ng_scores:.2f}%\n"
-            f"评分结果: {predict_label}"
+            f"评分结果: {predict_label} \n \n"
+            f"\u00A0\u00A0评分模型: {model_name}\n"
+            f"\u00A0\u00A0OK Score: {ok_scores:.2f}%\n"
+            f"\u00A0\u00A0NG Score: {ng_scores:.2f}%"
+           
         )
         return result_text
 

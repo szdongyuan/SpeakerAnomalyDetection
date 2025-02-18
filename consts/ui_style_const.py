@@ -201,7 +201,7 @@ qtextedit_stytle = """
             QTextEdit{
                 background-color: white;
                 font-family: 'SimSun';
-                font-size: 20px;
+                font-size: 30px;
             }
              QTextEdit:disabled {
                 color: rgb(0, 0, 0);
