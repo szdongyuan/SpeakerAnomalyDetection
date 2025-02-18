@@ -618,7 +618,7 @@ class StimulusWindow(QDialog):
                                                    "WAV Files (*.wav)")
         if file_name:
             sr = self.stimulus_info.get("sample_rate", 44100)
-            save_audio_simple(file_name + ".wav", self.stimulus_signal, sr)
+            save_audio_simple(file_name, self.stimulus_signal, sr)
 
     def play_btn_clicked(self):
         """
