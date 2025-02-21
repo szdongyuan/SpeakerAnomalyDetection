@@ -37,6 +37,8 @@ class SequenceWindow(QWidget):
         self.analysis_config = self.get_sequence_config_from_json()
         self.signal_info = {}   # Initialize an empty dictionary to store signal information
         self.analysis_window = []
+        self.default_ai = None
+        self.default_ai_result = None
         self.sequence_layout = QVBoxLayout()
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
@@ -315,6 +317,8 @@ class SequenceWindow(QWidget):
         self.line_graph.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
+        self.default_ai_result = None
+        self.default_ai = None
         
     # def clear_plg(self):
     #     self.line_graph.clear()
@@ -451,7 +455,8 @@ class SequenceWindow(QWidget):
             `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
         """
         button = self.sender()
-        if button == self.ok_btn:
+        print(111)
+        if button == self.ok_btn or self.default_ai_result:
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.ng_btn:
             self.recorded_signal_info["labels"] = 'NG'
@@ -574,7 +579,7 @@ class SequenceWindow(QWidget):
         }
         return class_mapping
 
-    def instance_analysis_class(self, type, params):
+    def instance_analysis_class(self, key, type, params):
         """
             Instantiates and configures an analysis class based on the given type and parameters, 
             and adds it to the analysis window list.
@@ -590,7 +595,9 @@ class SequenceWindow(QWidget):
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
-                class_instance = cls_map()
+                class_instance = cls_map(key)
+                if self.analysis_config["default_ai"] == key:
+                    self.default_ai = class_instance
                 class_instance.signal_info = self.signal_info
                 class_instance.deviation_value = self.deviation_value
                 class_instance.analysis_config = params
@@ -611,7 +618,7 @@ class SequenceWindow(QWidget):
         if self.analysis_config:
             for key, value in self.analysis_config.items():
                 if isinstance(value, dict):
-                    self.instance_analysis_class(value["type"], value)
+                    self.instance_analysis_class(key, value["type"], value)
             for instance in self.analysis_window:
                 if hasattr(instance, 'calculate_spl'):
                     instance.calculate_spl()
@@ -629,6 +636,15 @@ class SequenceWindow(QWidget):
                 instance.setMinimumSize(QSize(600, 500))
                 width += 20
                 height += 20
+            if self.default_ai:
+                if self.default_ai.result == "OK":
+                    for instance in self.analysis_window:
+                        instance.close()
+                    print(self.default_ai.result)
+                    self.default_ai_result = True
+                    self.clicked_ok_or_ng()
+                    print(self.default_ai_result)
+
 
     def get_sequence_config_from_json(self):
         """
