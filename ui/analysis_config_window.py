@@ -11,22 +11,22 @@ from PyQt5.QtWidgets import QSpacerItem, QVBoxLayout, QWidget
 
 from base.log_manager import LogManager
 from base.training_model_management import TrainingModelManagement
-from consts import error_code
+from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 
 
 class SplConfigWindow(QDialog):
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get("SPL", {})
+        self.load_config = self.config_manager.load_config().get(model_type, {})
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setFixedSize(300, 350)
+        self.setFixedSize(350, 350)
         layout = QVBoxLayout()
         self.smooth_chk_box = QCheckBox("是否平滑")
         self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
@@ -44,17 +44,22 @@ class SplConfigWindow(QDialog):
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qcheckbox_stytle + 
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qlineedit_stytle + 
+                           ui_style_const.qradiobutton_stytle +
+                           ui_style_const.qpushbutton_stytle)
 
     def create_limit(self):
-        self.limit_checkbox = QCheckBox("限制", self)
+        self.limit_checkbox = QCheckBox("阈值", self)
         self.limit_checkbox.setChecked(self.load_config.get("limit_checked", False))
         self.limit_checkbox.stateChanged.connect(self.on_limit_checkbox_changed)
-        self.limit_group_box = QGroupBox("选择限制", self)
+        self.limit_group_box = QGroupBox("选择阈值", self)
         self.limit_group_box.setMinimumSize(180, 180)
-        if self.limit_checkbox.isChecked():
-            self.limit_group_box.setDisabled(False)
-        else:
+        if not self.limit_checkbox.isChecked():
             self.limit_group_box.setDisabled(True)
+            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
         self.radio_button_1 = QRadioButton("自定义")
         self.radio_button_1.setChecked(self.load_config.get("self_defined", True))
         self.radio_button_1.toggled.connect(self.on_radio_button_toggled)
@@ -85,10 +90,16 @@ class SplConfigWindow(QDialog):
             self.config_dir_box.setDisabled(True)
             self.line_edit_upper.setDisabled(False)
             self.line_edit_lower.setDisabled(False)
+            self.config_dir_label.setStyleSheet("color: rgb(162, 162, 162);")
+            self.label_upper.setStyleSheet("color: rgb(0, 0, 0);")
+            self.label_lower.setStyleSheet("color: rgb(0, 0, 0);")
         elif self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(False)
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
+            self.label_upper.setStyleSheet("color: rgb(162, 162, 162);")
+            self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
+            self.config_dir_label.setStyleSheet("color: rgb(0, 0, 0);")
 
     def create_upper_lower_layout(self):
         self.label_upper = QLabel("上限：", self)
@@ -103,7 +114,10 @@ class SplConfigWindow(QDialog):
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
 
+        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
+
         upper_layout = QHBoxLayout()
+        upper_layout.addItem(h_spacer_1)
         upper_layout.addWidget(self.label_upper)
         upper_layout.addWidget(self.line_edit_upper)
         upper_layout.addWidget(self.label_lower)
@@ -111,7 +125,7 @@ class SplConfigWindow(QDialog):
         return upper_layout
 
     def create_config_dir_layout(self):
-        config_dir_label = QLabel("配置文件路径：")
+        self.config_dir_label = QLabel("配置文件路径：")
         self.config_dir_box = QLineEdit()
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
@@ -122,8 +136,10 @@ class SplConfigWindow(QDialog):
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self.config_dir_btn_clicked)
         self.config_dir_box.setText(self.load_config.get("config_dir"))
+        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
-        load_layout.addWidget(config_dir_label)
+        load_layout.addItem(h_spacer_1)
+        load_layout.addWidget(self.config_dir_label)
         load_layout.addWidget(self.config_dir_box)
         return load_layout
 
@@ -131,8 +147,11 @@ class SplConfigWindow(QDialog):
         self.get_default_config()
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
+            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
+            self.on_radio_button_toggled()
         else:
             self.limit_group_box.setDisabled(True)
+            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def config_dir_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(self,
@@ -179,17 +198,17 @@ class SplConfigWindow(QDialog):
 
 
 class FrConfigWindow(QDialog):
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get("FR", {})
+        self.load_config = self.config_manager.load_config().get(model_type, {})
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setFixedSize(300, 350)
+        self.setFixedSize(350, 350)
         layout = QVBoxLayout()
         self.smooth_chk_box = QCheckBox("是否平滑")
         self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
@@ -204,18 +223,23 @@ class FrConfigWindow(QDialog):
         layout.addItem(v_spacer_2)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qcheckbox_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qradiobutton_stytle)
 
     def create_limit(self):
-        self.limit_checkbox = QCheckBox("限制", self)
+        self.limit_checkbox = QCheckBox("阈值", self)
         self.limit_checkbox.setChecked(self.load_config.get("limit_checked", False))
         v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         self.limit_checkbox.stateChanged.connect(self.on_limit_checkbox_changed)
-        self.limit_group_box = QGroupBox("选择限制", self)
+        self.limit_group_box = QGroupBox("选择阈值", self)
         self.limit_group_box.setMinimumSize(180, 180)
-        if self.limit_checkbox.isChecked():
-            self.limit_group_box.setDisabled(False)
-        else:
+        if not self.limit_checkbox.isChecked():
             self.limit_group_box.setDisabled(True)
+            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
         self.radio_button_1 = QRadioButton("自定义")
         self.radio_button_1.setChecked(self.load_config.get("self_defined", True))
         self.radio_button_1.toggled.connect(self.on_radio_button_toggled)
@@ -251,8 +275,13 @@ class FrConfigWindow(QDialog):
         if not self.radio_button_1.isChecked():
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
+            self.label_upper.setStyleSheet("color:rgb(162, 162, 162);")
+            self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
+
+        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
 
         upper_layout = QHBoxLayout()
+        upper_layout.addItem(h_spacer_1)
         upper_layout.addWidget(self.label_upper)
         upper_layout.addWidget(self.line_edit_upper)
         upper_layout.addWidget(self.label_lower)
@@ -260,10 +289,11 @@ class FrConfigWindow(QDialog):
         return upper_layout
 
     def create_config_dir_layout(self):
-        config_dir_label = QLabel("配置文件路径：")
+        self.config_dir_label = QLabel("配置文件路径：")
         self.config_dir_box = QLineEdit()
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
+            self.config_dir_label.setStyleSheet("color: rgb(162, 162, 162);")
         self.config_dir_box.textChanged.connect(self.get_default_config)
         icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
         config_dir_icon = QIcon(icon_path)
@@ -271,8 +301,10 @@ class FrConfigWindow(QDialog):
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self.config_dir_btn_clicked)
         self.config_dir_box.setText(self.load_config.get("config_dir"))
+        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
-        load_layout.addWidget(config_dir_label)
+        load_layout.addItem(h_spacer_1)
+        load_layout.addWidget(self.config_dir_label)
         load_layout.addWidget(self.config_dir_box)
         return load_layout
 
@@ -282,10 +314,16 @@ class FrConfigWindow(QDialog):
             self.config_dir_box.setDisabled(True)
             self.line_edit_upper.setDisabled(False)
             self.line_edit_lower.setDisabled(False)
+            self.label_upper.setStyleSheet("color: rgb(0, 0, 0);")
+            self.label_lower.setStyleSheet("color: rgb(0, 0, 0);")
+            self.config_dir_label.setStyleSheet("color: rgb(162, 162, 162);")
         elif self.radio_button_2.isChecked():
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
             self.config_dir_box.setDisabled(False)
+            self.label_upper.setStyleSheet("color:rgb(162, 162, 162);")
+            self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
+            self.config_dir_label.setStyleSheet("color: rgb(0, 0, 0);")
 
     def config_dir_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(self,
@@ -300,8 +338,10 @@ class FrConfigWindow(QDialog):
         self.get_default_config()
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
+            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
         else:
             self.limit_group_box.setDisabled(True)
+            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
@@ -341,10 +381,10 @@ class FrConfigWindow(QDialog):
 class HdConfigWindow(QDialog):
 
     selected_labels_changed = pyqtSignal()
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get("HD", {})
+        self.load_config = self.config_manager.load_config().get(model_type, {})
         self.selected_labels = self.load_config.get("selected_labels", [])
         self.init_ui()
 
@@ -371,6 +411,10 @@ class HdConfigWindow(QDialog):
         layout.addItem(v_spacer_2)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qcheckbox_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlabel_stytle)
 
     def create_harmonic_slider_layout(self):
         harmonic_slider_layout = QVBoxLayout()
@@ -380,10 +424,13 @@ class HdConfigWindow(QDialog):
         self.box_layout = QVBoxLayout()
         for i in range(2, 31):
             label = QLabel("  " + str(i))
+            label.setFixedSize(90, 25)
             label.setAlignment(Qt.AlignLeft)
             label.setStyleSheet("QLabel:focus { outline: none; }")
             label.setAutoFillBackground(True)
             label.mousePressEvent = partial(self.on_label_click, label)
+            label.enterEvent = partial(self.on_label_enter, label)
+            label.leaveEvent = partial(self.on_label_leave, label)
             if i in self.selected_labels:
                 label.setText("\u2713" + label.text().strip())
             self.box_layout.addWidget(label)
@@ -399,6 +446,7 @@ class HdConfigWindow(QDialog):
         self.get_default_config()
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
+            self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
             self.selected_labels = list(range(2, 31))
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
@@ -407,6 +455,7 @@ class HdConfigWindow(QDialog):
                     label.setText("\u2713" + text)
         else:
             self.scroll_area.setDisabled(False)
+            self.scroll_area.setStyleSheet("color: rgb(0, 0, 0);")
             self.selected_labels = []
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
@@ -428,6 +477,13 @@ class HdConfigWindow(QDialog):
             self.selected_labels.append(label_value)
             label.setText(checked_box + label.text().strip())
         self.selected_labels_changed.emit()
+
+    def on_label_enter(self, label, event):
+        label.setStyleSheet("background-color: #5099ccff;")
+
+    def on_label_leave(self, label, event):
+        label.setStyleSheet("background-color: transparent;")
+
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
@@ -463,11 +519,11 @@ class HdConfigWindow(QDialog):
 
 
 class AIConfigWindow(QDialog):
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
         self.model_list = self.load_model_name_from_db()
-        self.load_config = self.config_manager.load_config().get("AI", {})
+        self.load_config = self.config_manager.load_config().get(model_type, {})
         self.init_ui()
 
     def init_ui(self):
@@ -483,6 +539,10 @@ class AIConfigWindow(QDialog):
         layout.addItem(v_spacer_1)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qcombobox_stytle)
 
     def create_model_layout(self):
         model_box = QGroupBox("模型")
