@@ -455,7 +455,6 @@ class SequenceWindow(QWidget):
             `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
         """
         button = self.sender()
-        print(111)
         if button == self.ok_btn or self.default_ai_result:
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.ng_btn:
@@ -640,11 +639,8 @@ class SequenceWindow(QWidget):
                 if self.default_ai.result == "OK":
                     for instance in self.analysis_window:
                         instance.close()
-                    print(self.default_ai.result)
                     self.default_ai_result = True
                     self.clicked_ok_or_ng()
-                    print(self.default_ai_result)
-
 
     def get_sequence_config_from_json(self):
         """
