@@ -147,20 +147,31 @@ class AnalysisModelSellect(QDialog):
         save_btn.clicked.connect(self.save_btn_clicked)
         ok_btn = QPushButton("确定")
         ok_btn.clicked.connect(self.ok_btn_clicked)
+        clear_btn = QPushButton("清空")
+        clear_btn.clicked.connect(self.clear_btn_clicked)
         load_btn.setMinimumWidth(100)
         save_btn.setMinimumWidth(100)
         ok_btn.setMinimumWidth(100)
+        clear_btn.setMinimumWidth(100)
 
         space = QSpacerItem(30, 50, QSizePolicy.Expanding, QSizePolicy.Minimum)
 
         layout = QHBoxLayout()
         layout.addItem(space)
+        layout.addWidget(clear_btn)
         layout.addWidget(load_btn)
         layout.addWidget(save_btn)
         layout.addWidget(ok_btn)
         layout.setSpacing(20)
 
         return layout
+    
+    def clear_btn_clicked(self):
+        self.sellect_list.config = {}
+        self.sellect_list.model().clear()
+        self.sellect_list.default_ai = None
+        self.sellect_list.prev_sellect_ai = None
+        self.sellect_list.all_ai_item = []
 
     def load_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(self,
@@ -171,23 +182,14 @@ class AnalysisModelSellect(QDialog):
             try:
                 with open(file_path, 'r', encoding='utf-8') as file:
                     data = json.load(file)
-                    self.sellect_list.config = data
-                    self.append_row_to_select_list(data)
+                    self.sellect_list.temp_config = data
+                    self.sellect_list.load_model_config()
             except Exception as e:
                 self.default_logger.error(f"Unable to parse JSON data in {file_path}. {e}")
-
-    def append_row_to_select_list(self, data):
-        sellect_analysis_model = self.sellect_list.sellect_analysis_model
-        sellect_analysis_model.clear()
-        for key, value in data.items():
-            if key == "auto_analysis":
-                self.auto_analysis_box.setChecked(value)
-            else:
-                list_item = QStandardItem(key)
-                sellect_analysis_model.appendRow(list_item)
     
     def ok_btn_clicked(self):
         self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
+        self.sellect_list.config["default_ai"] = self.sellect_list.default_ai
         self.save_analyse_config_to_json(self.sellect_list.config)
         self.close()
 
@@ -206,6 +208,7 @@ class AnalysisModelSellect(QDialog):
                                                    filter="JSON Files (*.json);;All Files (*)")
         if file_path:
             self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
+            self.sellect_list.config["default_ai"] = self.sellect_list.default_ai
             try:
                 with open(file_path, 'w', encoding='utf-8') as file:
                     json.dump(self.sellect_list.config, file, indent=4)
@@ -254,7 +257,16 @@ class OptionList(QListView):
         self.darpflag = None
         self.start_row_number = None
         self.old_name = None
+        self.prev_sellect_ai = None
+        self.really_old_name = None
+        self.default_ai = None
+        self.is_select_ai = False
+        self.load_temp_flag = True
         self.config = {}
+        self.temp_config = {}
+        self.prev_config_list = []
+        self.all_ai_item = []
+        self.load_model_config()
 
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
@@ -263,19 +275,28 @@ class OptionList(QListView):
         self.mouseReleaseEvent = self.mousereleaseevent 
 
     def show_dialog(self, name):
+        if "\u2605" in name:
+            name = name.replace("\u2605", "\xa0")
         config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
-        config_manager = ConfigManager(config_file)
+        prev_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        model_type = None
+        if name in self.prev_config_list:
+            config_manager = ConfigManager(prev_config_file)
+            model_type = name
+        else:
+            config_manager = ConfigManager(config_file)
+            model_type = self.config[name]["type"]
         model = QDialog(self)
-        model.setWindowTitle(name)
         type = self.config[name]["type"]
         if type == "SPL":
-            model = SplConfigWindow(config_manager)
+            model = SplConfigWindow(config_manager, model_type)
         elif type == "FR":
-            model = FrConfigWindow(config_manager)
+            model = FrConfigWindow(config_manager, model_type)
         elif type == "HD":
-            model = HdConfigWindow(config_manager)
+            model = HdConfigWindow(config_manager, model_type)
         elif type == "AI":
-            model = AIConfigWindow(config_manager)
+            model = AIConfigWindow(config_manager, model_type)
+        model.setWindowTitle(name)
         if model.exec_() == QDialog.Accepted:
             config_data = model.on_click_ok_btn()
             self.add_config(name, config_data)
@@ -286,6 +307,9 @@ class OptionList(QListView):
         else:
             self.config[class_name] = config_data
 
+    def store_ai_item(self, name):
+        self.all_ai_item.append(name)
+
     def load_default_config(self):
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         try:
@@ -294,6 +318,36 @@ class OptionList(QListView):
             return default_config
         except Exception as e:
             self.default_logger.error(f"Failed to load the default config file. {e}")
+            return {}
+        
+    def load_model_config(self):
+        if self.load_temp_flag:
+            self.temp_config = self.load_temp_config()
+            self.load_temp_flag = False
+        self.model().clear()
+        self.config.clear()
+        for key, value in self.temp_config.items():
+            if key != "auto_analysis" and key != "default_ai":
+                self.add_config(key, value)
+                self.prev_config_list.append(key)
+                if value["type"] == "AI":
+                    self.store_ai_item(key)
+                if key == self.temp_config["default_ai"]:
+                    self.default_ai = key
+                    key = key.replace("\xa0", "")
+                    self.model().appendRow(QStandardItem("\u2605" + key))
+                    last_row = self.model().rowCount() - 1
+                    self.prev_sellect_ai = self.model().index(last_row, 0)
+                else:
+                    self.model().appendRow(QStandardItem(key))
+    def load_temp_config(self):
+        temp_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        try:
+            with open(temp_config_file, 'r') as f:
+                temp_config = json.load(f)
+                return temp_config
+        except Exception as e:
+            self.default_logger.error(f"Failed to load the temp config file. {e}")
             return {}
 
     def show_context_menu(self, pos):
@@ -305,11 +359,48 @@ class OptionList(QListView):
             delete_action.triggered.connect(lambda: self.delete_item(index))
             rename_action = QAction("重命名", self)
             rename_action.triggered.connect(lambda: self.rename_item(index))
+            self.sellect_ai_action = QAction("设为评判模型", self)
+            self.sellect_ai_action.triggered.connect(lambda: self.sellect_ai(index))
+            if self.check_item_isai(index.data()) or "\u2605" in index.data():
+                self.sellect_ai_action.setEnabled(True)
+                if "\u2605" in index.data():
+                    self.sellect_ai_action.setText("取消设定")
+                else:
+                    self.sellect_ai_action.setText("设为评判模型")
+            else:
+                self.sellect_ai_action.setEnabled(False)
+            menu.addAction(self.sellect_ai_action)
             menu.addAction(delete_action)
             menu.addAction(rename_action)
             menu.exec_(self.mapToGlobal(pos))
 
+    def valid_char(self, text):
+        valid_chars = text.replace("\xa0", "")
+        return valid_chars
+
+    def sellect_ai(self, index):
+        is_ai = self.check_item_isai(index.data()) or "\u2605" in index.data()
+        if is_ai:
+            if "\u2605" in index.data():
+                self.old_name  = index.data()
+                new_name = index.data().replace("\u2605", "")
+                self.model().setData(index, new_name)
+                self.default_ai = None
+            else:
+                if not self.prev_sellect_ai:
+                    self.prev_sellect_ai = index
+                else:
+                    prev_new_name = self.prev_sellect_ai.data().replace("\u2605", "")
+                    self.model().setData(self.prev_sellect_ai, prev_new_name)
+                    self.prev_sellect_ai = index
+                self.default_ai = "\xa0" + index.data()
+                self.is_select_ai = True
+                new_name = "\u2605" + self.valid_char(index.data())
+                self.model().setData(index, new_name)
+
     def delete_item(self, index):
+        if "\u2605" in index.data():
+             self.default_ai = None
         model = self.model()
         index_name = model.data(index)
         self.delete_item_config(index_name)
@@ -321,35 +412,78 @@ class OptionList(QListView):
 
     def rename_item(self, index):
         self.old_name = self.model().data(index)
+        self.is_select_ai = "\u2605" in self.model().data(index)
         self.edit(index)
+
+    def check_item_isai(self, name):
+        if name in self.all_ai_item:
+            return True
+        else:
+            return False
 
     def on_data_changed(self, topLeft, bottomRight, roles):
         if Qt.EditRole in roles:
             for row in range(topLeft.row(), bottomRight.row() + 1):
                 index = self.model().index(row, topLeft.column())
                 new_name = self.model().data(index)
-                if self.old_name in self.config:
-                    value = self.config.pop(self.old_name)
-                    self.config[new_name] = value
-                self.old_name = None
+                really_new_name = new_name.replace(" ", "")
+                if new_name != self.old_name and really_new_name:
+                    if self.is_select_ai:
+                        if "\u2605" in new_name:
+                            self.default_ai = new_name.replace("\u2605","\xa0")
+                            self.old_name = new_name
+                            self.model().setData(index, new_name)
+                        else:
+                            self.updata_config_file(self.old_name.replace("\u2605","\xa0"), "\xa0" + new_name)
+                            self.default_ai = new_name.replace("\u2605","\xa0")
+                            self.updata_ai_list(new_name, self.old_name.replace("\u2605","\xa0"))
+                            self.old_name = new_name
+                            self.default_ai = new_name
+                            self.model().setData(index, "\u2605" + new_name)
+                        self.is_select_ai = False
+                    else:
+                        self.updata_config_file(self.old_name, "\xa0" + new_name)
+                        if not "\u2605" in self.old_name:
+                            self.updata_ai_list(new_name, self.old_name)
+                        self.old_name = "\xa0" + new_name
+                        self.model().setData(index, "\xa0" + new_name)
+                else:
+                    self.model().setData(index, self.old_name)
+
+    def updata_ai_list(self, new_name, old_name):
+        if not new_name in self.all_ai_item:
+            index = self.all_ai_item.index(old_name)
+            self.all_ai_item[index] = "\xa0" + new_name
+            
+    def updata_config_file(self, old_name, new_name):
+        if old_name in self.config:
+            value = self.config.pop(old_name)
+            self.config[new_name] = value
 
     def itemmove(self, index):
         if self.index_num is None:
             return
-        new_item = QStandardItem(self.start_item_name)
+        item_index = self.model().index(self.index_num, 0) 
+        text = self.model().itemFromIndex(item_index).text()
+        print(self.index_num, text)
+        new_item = QStandardItem(text)
         if index == "top":
+            print("top")
             self.model().insertRow(0, new_item)
             self.model().removeRow(self.index_num + 1)
             self.index_num = 0
         elif index == "bottom":
+            print("bottom")
             self.model().insertRow(self.model().rowCount(), new_item)
             self.model().removeRow(self.index_num)
             self.index_num = self.model().rowCount() - 1
         elif index == "up" and self.index_num != 0:
+            print("up")
             self.model().insertRow(self.index_num - 1, new_item)
             self.model().removeRow(self.index_num + 1)
             self.index_num -= 1
         elif index == "down" and self.index_num != self.model().rowCount() - 1:
+            print("down")
             self.model().insertRow(self.index_num + 2, new_item) 
             self.model().removeRow(self.index_num)
             self.index_num += 1
@@ -360,8 +494,8 @@ class OptionList(QListView):
         if index.isValid():
             self.darpflag = True
             self.start_row_number = index.row()
-            self.start_item_name = self.model().itemFromIndex(index).text()
-            self.index_num = self.start_row_number
+            self.start_index = index
+        e.accept()
 
     def mousereleaseevent(self, e):
         t1 = time()
@@ -371,22 +505,28 @@ class OptionList(QListView):
                 self.row_num = None
         self.press_time = t1
         index = self.indexAt(e.pos())
+        
         row_number = index.row()
         if self.darpflag:       
-            new_item = QStandardItem(self.start_item_name)
+            new_item = QStandardItem(self.start_index.data())
             if row_number == -1:
                 self.model().insertRow(self.model().rowCount(), new_item)
                 self.model().removeRow(self.start_row_number)
                 self.setCurrentIndex(self.model().index(self.model().rowCount() - 1, 0))
+                self.start_row_number = self.model().rowCount() - 1
             else:
                 self.model().insertRow(row_number, new_item)
                 if row_number > self.start_row_number:
                     self.model().removeRow(self.start_row_number)
                     self.setCurrentIndex(self.model().index(row_number - 1, 0))
+                    self.start_row_number = row_number - 1
                 else:
                     self.model().removeRow(self.start_row_number + 1)
                     self.setCurrentIndex(self.model().index(row_number, 0))
-                
+                    self.start_row_number = row_number
+            # Update the starting item name and index number, and end the drag-and-drop state
+            self.start_item_name = new_item.text()
+            self.index_num = self.start_row_number
             self.darpflag = False
         if self.start_row_number != row_number:
             self.row_num = None
@@ -396,20 +536,34 @@ class OptionList(QListView):
             self.row_num = None
         else:
             self.row_num = row_number
+        e.accept()
 
     def dragenterevent(self, event):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
-            event.acceptProposedAction()
+            item_model = QStandardItemModel()
+            item_model.dropMimeData(event.mimeData(), Qt.MoveAction, 0, 0, QModelIndex())
+            item_text = item_model.item(0).text()
+
+            if "松散颗粒 (LP)" in item_text:
+                event.ignore()
+            else:
+                event.accept()
         else:
             event.ignore()
 
     def dragmoveevent(self, event):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
             event.setDropAction(Qt.MoveAction)
-            event.acceptProposedAction()
+            item_model = QStandardItemModel()
+            item_model.dropMimeData(event.mimeData(), Qt.MoveAction, 0, 0, QModelIndex())
+            item_text = item_model.item(0).text()
+
+            if "松散颗粒 (LP)" in item_text:
+                event.ignore()
+            else:
+                event.accept()
         else:
             event.ignore()
-
 
     def dropevent(self, event):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
@@ -421,14 +575,21 @@ class OptionList(QListView):
                 for row in range(item_model.rowCount()):
                     item = item_model.item(row)
                     item_text = item.text()
-                    count = 1                      
-                    while self.sellect_analysis_model.findItems(item_text + f"{count}"):
-                        count += 1                                 
-                    list_item = QStandardItem(item_text + f"{count}")
-                    self.sellect_analysis_model.insertRow(self.sellect_analysis_model.rowCount(), list_item)
+                    count = 1                    
+                    item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
+                    item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
+                    while  item_exist or item_star_exist:
+                        count += 1 
+                        item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
+                        item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")                                
+
+                    list_item = QStandardItem("\xa0" + item_text + f"{count}")
+                    self.model().insertRow(self.model().rowCount(), list_item)
                     list_item_text = list_item.text()
+                    if "AI" in item_text:
+                        self.store_ai_item(list_item_text)
                     self.get_item_default_config(item_text, list_item_text)
-                    event.acceptProposedAction()
+                    event.accept()
             else:
                 event.ignore()
         else:
