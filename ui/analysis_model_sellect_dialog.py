@@ -527,7 +527,6 @@ class OptionList(QListView):
         self.updata_sellect_ai(old_index, new_index, True)
 
     def updata_sellect_ai(self, old_index, new_index, step_index: bool):
-        print(old_index, new_index)
         if old_index == new_index:
             return
         sellect_ai_row = self.prev_sellect_ai.row()
@@ -543,9 +542,7 @@ class OptionList(QListView):
                     self.prev_sellect_ai = self.model().index(new_index - 1, 0)
                 elif new_index < old_index:
                     self.prev_sellect_ai = self.model().index(new_index, 0)
-                print(self.prev_sellect_ai.data())
             else:
-                print(222)
                 self.prev_sellect_ai = self.model().index(new_index, 0)
         
     def mousepressevent(self, e):
