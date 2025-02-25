@@ -23,7 +23,7 @@ DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"
 SAMPLE_RATE = 44100
 POSITIVE_SAMPLE_LABEL = "OK"
 NEGATIVE_SAMPLE_LABEL = "NG"
-DB_AUDIO_COLUMNS = ['audio_data_id', 'file_path', 'product_model', 'sample_rate', 'record_date', 'labels', 'stimulus_id']
+DB_AUDIO_COLUMNS = ['audio_data_id', 'file_path', 'product_model', 'sample_rate', 'record_date', 'labels', 'barcode', 'stimulus_id']
 DB_STIMULUS_COLUMNS = ['stimulus_id', 'stimulus_method', 'stimulus_type', 'repeat_times', 'start_freq', 'stop_freq', 'sample_rate',
                        'total_time', 'num_steps', 'is_default']
 DB_MODEL_COLUMNS = ['model_id', 'model_name', 'model_path', 'config_path', 'input_dim', 'output_dim', 'accuracy', 'update_date', 'model_description']
