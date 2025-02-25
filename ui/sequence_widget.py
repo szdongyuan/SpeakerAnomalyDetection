@@ -2,25 +2,26 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import datetime
 
 import librosa
 import numpy as np
 import pyqtgraph as pg
 from getmac import get_mac_address
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
 
+from base.barcode_scanning_processor import BarcodeScanner
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
-from consts import error_code, model_consts, ui_style_const
+from consts import ui_style_const, error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
-from ui.signal_analysis_window import Spl, Frequency, Distortion, AI
-
+from ui.signal_analysis_window import Spl, Distortion, AI, Frequency
 
 
 class SequenceWindow(QWidget):
@@ -44,6 +45,12 @@ class SequenceWindow(QWidget):
         self.replayer_btn = QPushButton()
         self.data_btn = QPushButton()
         self.player_status_flag = False
+        self.scanner_barcode_thread = None
+        self.barcode_scanner = BarcodeScanner()
+        self.scanner_emitter = ScannerEmitter()
+        self.vendor_id = None
+        self.product_id = None
+
         # Set up the default logger for logging messages
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
@@ -110,14 +117,19 @@ class SequenceWindow(QWidget):
         self.data_btn.clicked.connect(self.run)
 
         type_label = QLabel(" 型 号： ")
+        data = self.load_last_recorded_info()
+        if data:
+            product_model = data.get("product_model", 'S004-1')
+        else:
+            product_model = "S004-1"
         type_label.setFixedHeight(40)
-        self.lineedit_type = QLineEdit("S004-1")
+        self.lineedit_type = QLineEdit(product_model)
         self.lineedit_type.setFixedHeight(40)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         label_count = QLabel(" 计 数： ")
         label_count.setFixedHeight(40)
 
-        result = self.load_recorded_num_from_text()
+        result = self.load_recorded_num_from_json()
         if result is None:
             current_recorded_count = 1
         else:
@@ -126,13 +138,19 @@ class SequenceWindow(QWidget):
         self.lineedit_count.setFixedHeight(40)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
         self.lineedit_count.editingFinished.connect(lambda: self.validate_count(self.lineedit_count))
+
+        self.barcode_scanner_box = QCheckBox(self)
+        self.barcode_scanner_box.setChecked(False)
+        self.barcode_scanner_box.stateChanged.connect(self.clicked_scanner)
+
         label_s_or_n = QLabel("  S/N:  ")
         label_s_or_n.setFixedHeight(40)
 
-        self.lineedit_s_or_n = QLineEdit(str(current_recorded_count))
+        self.lineedit_s_or_n = QLineEdit(self)
+        self.lineedit_s_or_n.setDisabled(True)
+        self.lineedit_s_or_n.setReadOnly(True)
         self.lineedit_s_or_n.setFixedHeight(40)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
-        self.lineedit_s_or_n.editingFinished.connect(lambda: self.validate_count(self.lineedit_s_or_n))
 
         vertical_line_1 = QFrame()
         vertical_line_2 = QFrame()
@@ -168,6 +186,7 @@ class SequenceWindow(QWidget):
         toolbar_layout.addWidget(self.lineedit_count)
         toolbar_layout.addItem(h_spacer_2)
         toolbar_layout.addWidget(vertical_line_5)
+        toolbar_layout.addWidget(self.barcode_scanner_box)
         toolbar_layout.addWidget(label_s_or_n)
         toolbar_layout.addWidget(self.lineedit_s_or_n)
         toolbar_layout.addItem(h_spacer_3)
@@ -246,7 +265,7 @@ class SequenceWindow(QWidget):
         """
         s_or_n_count = lineedit.text()
         # Load the previously recorded number from a text file
-        result = self.load_recorded_num_from_text()
+        result = self.load_recorded_num_from_json()
         # Define a regular expression to match numbers
         reg = r'^[0-9]*$'
         # Check if the user input matches the regular expression
@@ -264,6 +283,69 @@ class SequenceWindow(QWidget):
                 f.write(f"Datetime: \n{current_time}\n")
         if s_or_n_count == "":
             lineedit.setText(str(result))
+
+    def scanner_barcode_process(self):
+        if self.barcode_scanner_box.isChecked():
+            self.lineedit_s_or_n.setEnabled(True)
+            device = self.get_match_hid_device()
+            if device:
+                if self.scanner_barcode_thread is None:
+                    self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode,
+                                                                   args=(device,))
+                    self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
+                    self.scanner_barcode_thread.start()
+        else:
+            self.lineedit_s_or_n.setDisabled(True)
+            if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
+                self.barcode_scanner.stop_scanning()
+                self.scanner_barcode_thread.join()
+                self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
+                self.scanner_barcode_thread = None
+
+    def scan_barcode(self, device):
+        barcode = self.barcode_scanner.read_raw_data(device)
+        if barcode:
+            self.scanner_emitter.signal_emitter.emit(barcode)
+
+    def on_barcode_received(self, barcode):
+        if barcode:
+            self.lineedit_s_or_n.setText(barcode)
+            self.clicked_player_btn()
+            self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
+            if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
+                self.scanner_barcode_thread.join()
+            self.scanner_barcode_thread = None
+
+    def clicked_scanner(self):
+        if self.barcode_scanner_box.isChecked():
+            self.lineedit_s_or_n.setEnabled(True)
+            self.scanner_barcode_process()
+        else:
+            self.lineedit_s_or_n.setDisabled(True)
+
+    def get_match_hid_device(self):
+        hid_params = self.load_scanner_hid_params()
+        if hid_params:
+            vendor_id, product_id = hid_params
+            self.vendor_id = int(vendor_id, 16)
+            self.product_id = int(product_id, 16)
+            device = self.barcode_scanner.find_scanner(self.vendor_id, self.product_id)
+            return device
+        return None
+
+    def load_scanner_hid_params(self):
+        file_path = DEFAULT_DIR + "ui/ui_config/scanner_hid_config.txt"
+        if not os.path.exists(file_path):
+            return None
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                vendor_id = lines[1].strip()
+                product_id = lines[3].strip()
+                return vendor_id, product_id
+        except Exception as e:
+            self.default_logger.error(f"Failed to read the config params of the scanner hid. {e}")
+            return None
 
     # def get_model_info(self, selected_model):
     #     """
@@ -305,7 +387,7 @@ class SequenceWindow(QWidget):
             Parameters:
                 self: The instance of the class containing this method.
         """
-        current_recorded_count = self.save_recorded_num_to_text()
+        current_recorded_count = self.save_recorded_num_to_json()
         self.lineedit_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
         self.player_status_flag = False
@@ -314,11 +396,13 @@ class SequenceWindow(QWidget):
         # self.analyse_layout.signal_info = self.signal_info
         # self.analyse_layout.close()
         # self.clear_plg()
+        self.lineedit_s_or_n.clear()
         self.line_graph.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
         self.default_ai_result = None
         self.default_ai = None
+        self.scanner_barcode_process()
         
     # def clear_plg(self):
     #     self.line_graph.clear()
@@ -374,7 +458,7 @@ class SequenceWindow(QWidget):
             data = json.load(json_file)
             return error_code.OK, data
 
-    def save_recorded_num_to_text(self):
+    def save_recorded_num_to_json(self):
         """
             Save the recorded number to a text file.
 
@@ -383,20 +467,26 @@ class SequenceWindow(QWidget):
             If the file does not exist or the date does not match, it creates a new file and writes the initial recorded number.
         """
         dir_path = DEFAULT_DIR + 'ui/ui_config/'
-        file_path = dir_path + "recorded_number.txt"
+        file_path = dir_path + "recorded_number.json"
         current_time = datetime.now().strftime("%Y-%m-%d")
-        check_flag, count = self.check_datetime(file_path, current_time)
+        check_flag, count = self.check_datetime(current_time)
         if check_flag:
             current_recorded_count = count + 1
         else:
             current_recorded_count = 2
+
+        data = {
+            "product_model": self.lineedit_type.text(),
+            "current_recorded_count": current_recorded_count,
+            "scanner_barcode": self.lineedit_s_or_n.text(),
+            "scanner_barcode_check": self.barcode_scanner_box.isChecked(),
+            "datetime": current_time
+        }
         with open(file_path, 'w') as f:
-            f.write(f"current_recorded_count: \n{current_recorded_count}\n")
-            f.write(f"Datetime: \n{current_time}\n")
+            json.dump(data, f, indent=4)
         return current_recorded_count
 
-    @staticmethod
-    def load_recorded_num_from_text():
+    def load_last_recorded_info(self):
         """
             Load the recorded number from a text file.
 
@@ -407,20 +497,38 @@ class SequenceWindow(QWidget):
             Returns:
                 int or None: The recorded number if the file exists and the date matches; otherwise, None.
         """
-        file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.txt"
+        file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.json"
         if not os.path.exists(file_path):
             return None
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-            recorded_count = lines[1].strip()
-            last_datetime = lines[3].strip()
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                return data
+        except Exception as e:
+            self.default_logger.error(f"Failed to read the info of recorded number：{e}")
+            return None
+
+    def load_recorded_num_from_json(self):
+        """
+            Load the recorded number from a text file.
+
+            This method reads a recorded number and the last recorded date from a specified text file.
+            If the file exists and the last recorded date matches the current date, it returns the recorded number;
+            otherwise, it returns None.
+
+            Returns:
+                int or None: The recorded number if the file exists and the date matches; otherwise, None.
+        """
+        result = self.load_last_recorded_info()
+        if result:
+            last_datetime = result.get("datetime")
+            recorded_count = result.get("current_recorded_count")
             if last_datetime == datetime.now().strftime("%Y-%m-%d"):
                 return recorded_count
-            else:
-                return None
+        else:
+            return None
 
-    @staticmethod
-    def check_datetime(file_path, current_time):
+    def check_datetime(self, current_time):
         """
             Check the date and count information in the given file.
 
@@ -428,22 +536,20 @@ class SequenceWindow(QWidget):
             It extracts the last count and date, then compares the date with the current time.
             If the date in the file matches the current time, it returns True and the last count value.
             If the dates do not match or the file is empty, it returns False and None.
-            
+
             Args:
                 param file_path: The path to the file storing the date and count information.
                 param current_time: The current time, used to compare with the time in the file.
-            Return: 
+            Return:
                 A tuple, where the first element is a boolean indicating whether the dates match;
                 the second element is the last count value if the dates match, otherwise None.
         """
-        if os.path.exists(file_path):
-            with open(file_path, 'r') as f:
-                lines = f.readlines()
-                if lines:
-                    last_count = int(lines[1].strip())
-                    last_date = lines[3].strip()
-                    if last_date == current_time:
-                        return True, last_count
+        result = self.load_last_recorded_info()
+        if result:
+            last_count = result.get("current_recorded_count")
+            last_date = result.get("datetime")
+            if last_date == current_time:
+                return True, last_count
         return False, None
 
     def insert_data_into_db(self):
@@ -734,10 +840,16 @@ class SequenceWindow(QWidget):
         mac_address = get_mac_address()
         mac_address = mac_address.replace(":", "") if mac_address else None
         product_number = "{:03}".format(int(self.lineedit_count.text()))
-        recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number + ".wav"
+        barcode = self.lineedit_s_or_n.text()
+        recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number
+        if barcode:
+            recorded_name = recorded_name + "_BC" + barcode
+        else:
+            barcode = None
+        recorded_name = recorded_name + '.wav'
         recorded_path = model_consts.STORED_RECORDED_PATH + "/" + recorded_name
         recorded_signal_info = {"file_path": recorded_path, "product_model": product_model,
-                                "record_date": recording_time
+                                "record_date": recording_time, "barcode": barcode
                                 }
         return recorded_path, recorded_signal_info
 
@@ -807,6 +919,11 @@ class SequenceWindow(QWidget):
         painter.setBrush(QColor(208, 206, 202))
         painter.drawRect(1, 0, width - 2, 40)
         painter.end()
+
+
+class ScannerEmitter(QObject):
+    signal_emitter = pyqtSignal(str)
+
 
 # class AnalyseWindow(QDialog):
 #
