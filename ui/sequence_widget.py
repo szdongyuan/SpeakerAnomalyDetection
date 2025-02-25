@@ -615,7 +615,7 @@ class SequenceWindow(QWidget):
         width = int((self.screen().size().width() - 400) / 2)
         height = int((self.screen().size().height() - 400) / 2) 
         if self.analysis_config:
-            item_sort_list =  self.analysis_config.get("display_sequence")
+            item_sort_list =  self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
                 key_config = self.analysis_config.get(key)
                 if isinstance(key_config, dict):
