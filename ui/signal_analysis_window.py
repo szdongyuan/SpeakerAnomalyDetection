@@ -19,7 +19,7 @@ from main import predict
 
 
 class Distortion(QWidget):
-    def __init__(self):
+    def __init__(self, title_name):
         super().__init__()
         self.signal_info = None
         self.refresh_stimulus_flag = None
@@ -30,6 +30,7 @@ class Distortion(QWidget):
         self.selected_harmonics = []
         self.result = {}
         self.init_ui()
+        self.setWindowTitle(title_name)
 
     def init_ui(self):
         self.setWindowTitle("谐波分析")
@@ -85,13 +86,14 @@ class Distortion(QWidget):
 
 
 class Spl(QWidget):
-    def __init__(self):
+    def __init__(self, title_name):
         super().__init__()
         self.signal_info = None
         self.deviation_value = None
         self.analysis_config = None
         self.result = {}
         self.init_ui()
+        self.setWindowTitle(title_name)
 
     def init_ui(self):
         self.setWindowTitle("声压分析")
@@ -158,7 +160,7 @@ class Spl(QWidget):
 
 class Frequency(QWidget):
 
-    def __init__(self):
+    def __init__(self, title_name):
         super().__init__()
         self.signal_info = None
         self.smooth_flag = False
@@ -167,6 +169,7 @@ class Frequency(QWidget):
         self.analysis_config = None
         self.result = {}
         self.init_ui()
+        self.setWindowTitle(title_name)
 
     def init_ui(self):
         self.setWindowTitle("频响分析")
@@ -231,12 +234,14 @@ class Frequency(QWidget):
 
 
 class AI(QWidget):
-    def __init__(self):
+    def __init__(self, title_name):
         super().__init__()
         self.signal_info = None
         self.analysis_config = None
+        self.result = None
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
+        self.setWindowTitle(title_name)
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
@@ -295,11 +300,12 @@ class AI(QWidget):
         predict_label = predict_result[0][1]
         ok_scores = float(predict_result[0][2]) * 100
         ng_scores = 100 - ok_scores
+        self.result = predict_label
         result_text = (
             f"评分结果: {predict_label} \n \n"
-            f"\u00A0\u00A0评分模型: {model_name}\n"
-            f"\u00A0\u00A0OK Score: {ok_scores:.2f}%\n"
-            f"\u00A0\u00A0NG Score: {ng_scores:.2f}%"
+            f"\xa0\xa0评分模型: {model_name}\n"
+            f"\xa0\xa0OK Score: {ok_scores:.2f}%\n"
+            f"\xa0\xa0NG Score: {ng_scores:.2f}%"
            
         )
         return result_text
