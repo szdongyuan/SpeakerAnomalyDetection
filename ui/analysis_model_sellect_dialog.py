@@ -172,6 +172,7 @@ class AnalysisModelSellect(QDialog):
         self.sellect_list.default_ai = None
         self.sellect_list.prev_sellect_ai = None
         self.sellect_list.all_ai_item = []
+        self.sellect_list.display_sequence_list = []
 
     def load_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(self,
@@ -190,6 +191,7 @@ class AnalysisModelSellect(QDialog):
     def ok_btn_clicked(self):
         self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
         self.sellect_list.config["default_ai"] = self.sellect_list.default_ai
+        self.sellect_list.config["display_sequence"] = self.sellect_list.display_sequence_list
         self.save_analyse_config_to_json(self.sellect_list.config)
         self.close()
 
@@ -262,10 +264,12 @@ class OptionList(QListView):
         self.default_ai = None
         self.is_select_ai = False
         self.load_temp_flag = True
+        self.is_updata_config = False
         self.config = {}
         self.temp_config = {}
         self.prev_config_list = []
         self.all_ai_item = []
+        self.display_sequence_list = []
         self.load_model_config()
 
         self.dragEnterEvent = self.dragenterevent
@@ -326,20 +330,24 @@ class OptionList(QListView):
             self.load_temp_flag = False
         self.model().clear()
         self.config.clear()
+        self.display_sequence_list.clear()
         for key, value in self.temp_config.items():
-            if key != "auto_analysis" and key != "default_ai":
+            if key != "auto_analysis" and key != "default_ai" and key != "display_sequence":
                 self.add_config(key, value)
-                self.prev_config_list.append(key)
-                if value["type"] == "AI":
+                if "AI" == value.get("type"):
                     self.store_ai_item(key)
-                if key == self.temp_config["default_ai"]:
-                    self.default_ai = key
-                    key = key.replace("\xa0", "")
-                    self.model().appendRow(QStandardItem("\u2605" + key))
-                    last_row = self.model().rowCount() - 1
-                    self.prev_sellect_ai = self.model().index(last_row, 0)
-                else:
-                    self.model().appendRow(QStandardItem(key))
+        model_item_list = self.temp_config.get("display_sequence", "")
+        for item_name in model_item_list:
+            self.display_sequence_list.append(item_name)
+            self.prev_config_list.append(item_name)
+            if item_name == self.temp_config.get("default_ai", ""):
+                self.default_ai = item_name
+                item_name = item_name.replace("\xa0", "")
+                self.model().appendRow(QStandardItem("\u2605" + item_name))
+                last_row = self.model().rowCount() - 1
+                self.prev_sellect_ai = self.model().index(last_row, 0)
+            else:
+                self.model().appendRow(QStandardItem(item_name))
     def load_temp_config(self):
         temp_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
         try:
@@ -400,7 +408,10 @@ class OptionList(QListView):
 
     def delete_item(self, index):
         if "\u2605" in index.data():
-             self.default_ai = None
+            self.display_sequence_list.remove(self.default_ai)
+            self.default_ai = None
+        else:
+            self.display_sequence_list.remove(index.data())
         model = self.model()
         index_name = model.data(index)
         self.delete_item_config(index_name)
@@ -411,6 +422,7 @@ class OptionList(QListView):
             del self.config[name]
 
     def rename_item(self, index):
+        self.is_updata_config = True
         self.old_name = self.model().data(index)
         self.is_select_ai = "\u2605" in self.model().data(index)
         self.edit(index)
@@ -442,13 +454,21 @@ class OptionList(QListView):
                             self.model().setData(index, "\u2605" + new_name)
                         self.is_select_ai = False
                     else:
-                        self.updata_config_file(self.old_name, "\xa0" + new_name)
-                        if not "\u2605" in self.old_name:
+                        if self.is_updata_config:
+                            self.updata_config_file(self.old_name, "\xa0" + new_name)
+                            self.is_updata_config = False
                             self.updata_ai_list(new_name, self.old_name)
                         self.old_name = "\xa0" + new_name
                         self.model().setData(index, "\xa0" + new_name)
                 else:
                     self.model().setData(index, self.old_name)
+
+    def swap_list_index(self, list:list, old_index, new_index):
+        if old_index == new_index:
+            return
+        old_name = list[old_index]
+        list.pop(old_index)
+        list.insert(new_index, old_name)
 
     def updata_ai_list(self, new_name, old_name):
         if not new_name in self.all_ai_item:
@@ -465,39 +485,81 @@ class OptionList(QListView):
             return
         item_index = self.model().index(self.index_num, 0) 
         text = self.model().itemFromIndex(item_index).text()
-        print(self.index_num, text)
         new_item = QStandardItem(text)
         if index == "top":
-            print("top")
             self.model().insertRow(0, new_item)
             self.model().removeRow(self.index_num + 1)
+            self.swap_list_index(self.display_sequence_list, self.index_num, 0)
+            self.updata_sellect_ai(self.index_num, 0, False)
             self.index_num = 0
         elif index == "bottom":
-            print("bottom")
             self.model().insertRow(self.model().rowCount(), new_item)
             self.model().removeRow(self.index_num)
+            self.swap_list_index(self.display_sequence_list, self.index_num, self.model().rowCount() - 1)
+            self.updata_sellect_ai(self.index_num, self.model().rowCount() - 1, False)
             self.index_num = self.model().rowCount() - 1
         elif index == "up" and self.index_num != 0:
-            print("up")
             self.model().insertRow(self.index_num - 1, new_item)
             self.model().removeRow(self.index_num + 1)
+            self.swap_list_index(self.display_sequence_list, self.index_num, self.index_num - 1)
+            self.updata_sellect_ai(self.index_num, self.index_num - 1, False)
             self.index_num -= 1
         elif index == "down" and self.index_num != self.model().rowCount() - 1:
-            print("down")
             self.model().insertRow(self.index_num + 2, new_item) 
             self.model().removeRow(self.index_num)
+            self.swap_list_index(self.display_sequence_list, self.index_num, self.index_num + 1)
+            self.updata_sellect_ai(self.index_num, self.index_num + 1, False)
             self.index_num += 1
         self.setCurrentIndex(self.model().index(self.index_num, 0))
 
+    def updata_model_list(self, new_item: QStandardItem, old_index, new_index, step_index: bool):
+        self.model().insertRow(new_index, new_item)
+        if step_index:
+            self.model().removeRow(old_index)
+            self.setCurrentIndex(self.model().index(new_index - 1, 0))
+            self.swap_list_index(self.display_sequence_list, old_index, new_index - 1)
+            self.start_row_number = new_index - 1
+        else:
+            self.model().removeRow(old_index + 1)
+            self.setCurrentIndex(self.model().index(new_index, 0))
+            self.swap_list_index(self.display_sequence_list, old_index, new_index)
+            self.start_row_number = new_index
+        self.updata_sellect_ai(old_index, new_index, True)
+
+    def updata_sellect_ai(self, old_index, new_index, step_index: bool):
+        if old_index == new_index:
+            return
+        sellect_ai_row = self.prev_sellect_ai.row()
+        if sellect_ai_row < old_index and sellect_ai_row >= new_index:
+            sellect_ai_row = sellect_ai_row + 1
+            self.prev_sellect_ai = self.model().index(sellect_ai_row, 0)
+        elif sellect_ai_row > old_index and sellect_ai_row <= new_index:
+            sellect_ai_row = sellect_ai_row - 1
+            self.prev_sellect_ai = self.model().index(sellect_ai_row, 0)
+        elif sellect_ai_row == old_index:
+            if step_index:  
+                if new_index > old_index:
+                    self.prev_sellect_ai = self.model().index(new_index - 1, 0)
+                elif new_index < old_index:
+                    self.prev_sellect_ai = self.model().index(new_index, 0)
+            else:
+                self.prev_sellect_ai = self.model().index(new_index, 0)
+        
     def mousepressevent(self, e):
         index = self.indexAt(e.pos())
-        if index.isValid():
-            self.darpflag = True
-            self.start_row_number = index.row()
-            self.start_index = index
+        if Qt.LeftButton == e.button():
+            if index.isValid():
+                self.darpflag = True
+                self.start_index = index
+                self.start_row_number = index.row()
+        if Qt.RightButton == e.button():
+            self.setCurrentIndex(self.indexAt(e.pos()))
+            self.index_num = index.row()
         e.accept()
 
     def mousereleaseevent(self, e):
+        if Qt.LeftButton != e.button():
+            return
         t1 = time()
         if self.press_time != None:
             time_area = t1 - self.press_time
@@ -510,20 +572,12 @@ class OptionList(QListView):
         if self.darpflag:       
             new_item = QStandardItem(self.start_index.data())
             if row_number == -1:
-                self.model().insertRow(self.model().rowCount(), new_item)
-                self.model().removeRow(self.start_row_number)
-                self.setCurrentIndex(self.model().index(self.model().rowCount() - 1, 0))
-                self.start_row_number = self.model().rowCount() - 1
+                self.updata_model_list(new_item, self.start_row_number, self.model().rowCount(), True)
             else:
-                self.model().insertRow(row_number, new_item)
                 if row_number > self.start_row_number:
-                    self.model().removeRow(self.start_row_number)
-                    self.setCurrentIndex(self.model().index(row_number - 1, 0))
-                    self.start_row_number = row_number - 1
+                    self.updata_model_list(new_item, self.start_row_number, row_number, True)
                 else:
-                    self.model().removeRow(self.start_row_number + 1)
-                    self.setCurrentIndex(self.model().index(row_number, 0))
-                    self.start_row_number = row_number
+                    self.updata_model_list(new_item, self.start_row_number, row_number, 0)
             # Update the starting item name and index number, and end the drag-and-drop state
             self.start_item_name = new_item.text()
             self.index_num = self.start_row_number
@@ -588,6 +642,7 @@ class OptionList(QListView):
                     list_item_text = list_item.text()
                     if "AI" in item_text:
                         self.store_ai_item(list_item_text)
+                    self.display_sequence_list.append(list_item_text)
                     self.get_item_default_config(item_text, list_item_text)
                     event.accept()
             else:
