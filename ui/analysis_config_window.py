@@ -134,8 +134,9 @@ class SplConfigWindow(QDialog):
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self.config_dir_btn_clicked)
-        config_dir_name = os.path.basename(self.load_config.get("config_dir"))
-        self.config_dir_box.setText(config_dir_name)
+        if self.load_config.get("config_dir"):
+            config_dir_name = os.path.basename(self.load_config.get("config_dir"))
+            self.config_dir_box.setText(config_dir_name)
         h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
         load_layout.addItem(h_spacer_1)
@@ -302,8 +303,9 @@ class FrConfigWindow(QDialog):
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self.config_dir_btn_clicked)
-        config_dir_name = os.path.basename(self.load_config.get("config_dir"))
-        self.config_dir_box.setText(config_dir_name)
+        if self.load_config.get("config_dir"):
+            config_dir_name = os.path.basename(self.load_config.get("config_dir"))
+            self.config_dir_box.setText(config_dir_name)
         h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
         load_layout.addItem(h_spacer_1)
@@ -367,7 +369,7 @@ class FrConfigWindow(QDialog):
             "import_config": self.radio_button_2.isChecked(),
             "upper_limit": self.line_edit_upper.text(),
             "lower_limit": self.line_edit_lower.text(),
-            "config_dir": self.config_dir_box.text()
+            "config_dir": self.file_path
         }
         return default_config
 
