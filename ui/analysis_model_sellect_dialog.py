@@ -281,17 +281,22 @@ class OptionList(QListView):
     def show_dialog(self, name):
         if "\u2605" in name:
             name = name.replace("\u2605", "\xa0")
+        if not name in self.display_sequence_list:
+            return
         config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         prev_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
         model_type = None
+        config_manager = None
         if name in self.prev_config_list:
             config_manager = ConfigManager(prev_config_file)
             model_type = name
         else:
             config_manager = ConfigManager(config_file)
-            model_type = self.config[name]["type"]
+            model_type = self.config.get(name)["type"]
         model = QDialog(self)
-        type = self.config[name]["type"]
+        type = self.config.get(name)["type"]
+        if self.config.get(name):
+            config_manager.config = self.config
         if type == "SPL":
             model = SplConfigWindow(config_manager, model_type)
         elif type == "FR":
@@ -542,7 +547,7 @@ class OptionList(QListView):
                     self.prev_sellect_ai = self.model().index(new_index - 1, 0)
                 elif new_index < old_index:
                     self.prev_sellect_ai = self.model().index(new_index, 0)
-            else:
+            else:  
                 self.prev_sellect_ai = self.model().index(new_index, 0)
         
     def mousepressevent(self, e):

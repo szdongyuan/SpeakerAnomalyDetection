@@ -671,6 +671,8 @@ class ConfigManager(object):
 
     def load_config(self):
         try:
+            if not self.config is None:
+                return self.config
             with open(self.config_file, 'r') as f:
                 self.config = json.load(f)
             return self.config
