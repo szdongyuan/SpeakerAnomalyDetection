@@ -20,13 +20,15 @@ class SplConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.file_path = None
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setFixedSize(350, 350)
+        self.setMinimumSize(350, 350)
+        self.resize(350, 350)
         layout = QVBoxLayout()
         self.smooth_chk_box = QCheckBox("是否平滑")
         self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
@@ -64,7 +66,7 @@ class SplConfigWindow(QDialog):
         self.radio_button_1.setChecked(self.load_config.get("self_defined", True))
         self.radio_button_1.toggled.connect(self.on_radio_button_toggled)
         upper_layout = self.create_upper_lower_layout()
-        self.radio_button_2 = QRadioButton("导入配置")
+        self.radio_button_2 = QRadioButton("导入配置文件")
         self.radio_button_2.setChecked(self.load_config.get("import_config", False))
         self.radio_button_2.toggled.connect(self.on_radio_button_toggled)
         load_layout = self.create_config_dir_layout()
@@ -90,7 +92,6 @@ class SplConfigWindow(QDialog):
             self.config_dir_box.setDisabled(True)
             self.line_edit_upper.setDisabled(False)
             self.line_edit_lower.setDisabled(False)
-            self.config_dir_label.setStyleSheet("color: rgb(162, 162, 162);")
             self.label_upper.setStyleSheet("color: rgb(0, 0, 0);")
             self.label_lower.setStyleSheet("color: rgb(0, 0, 0);")
         elif self.radio_button_2.isChecked():
@@ -99,7 +100,6 @@ class SplConfigWindow(QDialog):
             self.line_edit_lower.setDisabled(True)
             self.label_upper.setStyleSheet("color: rgb(162, 162, 162);")
             self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
-            self.config_dir_label.setStyleSheet("color: rgb(0, 0, 0);")
 
     def create_upper_lower_layout(self):
         self.label_upper = QLabel("上限：", self)
@@ -125,7 +125,6 @@ class SplConfigWindow(QDialog):
         return upper_layout
 
     def create_config_dir_layout(self):
-        self.config_dir_label = QLabel("配置文件路径：")
         self.config_dir_box = QLineEdit()
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
@@ -135,11 +134,11 @@ class SplConfigWindow(QDialog):
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self.config_dir_btn_clicked)
-        self.config_dir_box.setText(self.load_config.get("config_dir"))
+        config_dir_name = os.path.basename(self.load_config.get("config_dir"))
+        self.config_dir_box.setText(config_dir_name)
         h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
         load_layout.addItem(h_spacer_1)
-        load_layout.addWidget(self.config_dir_label)
         load_layout.addWidget(self.config_dir_box)
         return load_layout
 
@@ -154,13 +153,14 @@ class SplConfigWindow(QDialog):
             self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def config_dir_btn_clicked(self):
-        file_path, _ = QFileDialog.getOpenFileName(self,
+        self.file_path, _ = QFileDialog.getOpenFileName(self,
                                                    "选择配置文件路径",
                                                    DEFAULT_DIR + "ui/ui_config",
                                                    filter="All Files (*);;")
-        if file_path:
-            self.config_dir = file_path
-            self.config_dir_box.setText(file_path)
+        if self.file_path:
+            self.config_dir = self.file_path
+            config_dir_name = os.path.basename(self.file_path)
+            self.config_dir_box.setText(config_dir_name)
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
@@ -182,7 +182,7 @@ class SplConfigWindow(QDialog):
             "import_config": self.radio_button_2.isChecked(),
             "upper_limit": self.line_edit_upper.text(),
             "lower_limit": self.line_edit_lower.text(),
-            "config_dir": self.config_dir_box.text()
+            "config_dir": self.file_path
         }
         return default_config
 
@@ -202,13 +202,15 @@ class FrConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.file_path = None
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setFixedSize(350, 350)
+        self.setMinimumSize(350, 350)
+        self.resize(350, 350)
         layout = QVBoxLayout()
         self.smooth_chk_box = QCheckBox("是否平滑")
         self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
@@ -300,7 +302,8 @@ class FrConfigWindow(QDialog):
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self.config_dir_btn_clicked)
-        self.config_dir_box.setText(self.load_config.get("config_dir"))
+        config_dir_name = os.path.basename(self.load_config.get("config_dir"))
+        self.config_dir_box.setText(config_dir_name)
         h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
         load_layout.addItem(h_spacer_1)
@@ -326,13 +329,14 @@ class FrConfigWindow(QDialog):
             self.config_dir_label.setStyleSheet("color: rgb(0, 0, 0);")
 
     def config_dir_btn_clicked(self):
-        file_path, _ = QFileDialog.getOpenFileName(self,
+        self.file_path, _ = QFileDialog.getOpenFileName(self,
                                                    "选择配置文件路径",
                                                    DEFAULT_DIR + "ui/ui_config",
                                                    filter="All Files (*);;")
-        if file_path:
-            self.config_dir = file_path
-            self.config_dir_box.setText(file_path)
+        if self.file_path:
+            self.config_dir = self.file_path
+            config_dir_name = os.path.basename(self.file_path)
+        self.config_dir_box.setText(config_dir_name)
 
     def on_limit_checkbox_changed(self, state):
         self.get_default_config()
@@ -392,7 +396,8 @@ class HdConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setFixedSize(300, 350)
+        self.setMinimumSize(300, 350)
+        self.resize(350, 350)
         layout = QVBoxLayout()
         harmonic_group_box = QGroupBox("谐波失真")
         harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -530,7 +535,8 @@ class AIConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setFixedSize(300, 350)
+        self.setMinimumSize(350, 350)
+        self.resize(350, 350)
         layout = QVBoxLayout()
         model_box = self.create_model_layout()
         btn_layout = self.create_btn()
@@ -549,6 +555,8 @@ class AIConfigWindow(QDialog):
         model_box.setMinimumSize(150, 150)
         analyse_model_label = QLabel("分析模型:")
         self.analyse_model_combo_box = QComboBox(self)
+        self.analyse_model_combo_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.analyse_model_combo_box.setFixedHeight(30)
         for model_name in self.model_list:
             self.analyse_model_combo_box.addItem(model_name)
         self.analyse_model_combo_box.setCurrentText(self.load_config.get("analyse_model_name"))
@@ -556,6 +564,7 @@ class AIConfigWindow(QDialog):
         analyse_model_combo_layout = QHBoxLayout()
         analyse_model_combo_layout.addWidget(analyse_model_label)
         analyse_model_combo_layout.addWidget(self.analyse_model_combo_box)
+        analyse_model_combo_layout.setSpacing(10)
         model_box.setLayout(analyse_model_combo_layout)
         return model_box
 
