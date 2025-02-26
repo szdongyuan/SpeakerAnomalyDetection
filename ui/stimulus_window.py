@@ -4,7 +4,7 @@ import sys
 
 import numpy as np
 import pyqtgraph
-import soundcard
+import sounddevice as sd
 from PyQt5.QtCore import Qt
 from scipy.io import wavfile
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
@@ -896,7 +896,7 @@ class LoadStimulusConfig(QDialog):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = StimulusWindow()
-    window.speaker = soundcard.default_speaker()
+    window.speaker = sd.default.device[1]
     # window = LoadStimulusConfig()
     window.show()
     result = window.on_exec()

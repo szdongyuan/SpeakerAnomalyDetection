@@ -14,9 +14,11 @@ TRAIN_NG_PATH = DEFAULT_DIR + "audio_data/train/NG"
 TEST_OK_PATH = DEFAULT_DIR + "audio_data/test/OK"
 TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
 STORED_SAMPLE_PATH = DEFAULT_DIR + "audio_data/stored_sample"
-STORED_RECORDED_PATH = DEFAULT_DIR + "audio_data/stored_data"
+STORED_RECORDED_PATH = "audio_data/stored_data"
+STORED_RECORDED_OK_PATH = "audio_data/stored_data/OK"
+STORED_RECORDED_NG_PATH = "audio_data/stored_data/NG"
 STORED_STIMULUS_PATH = DEFAULT_DIR + "audio_data/stimulus"
-JSON_DIR_PATH = DEFAULT_DIR + "configs/calibration_config"
+JSON_DIR_PATH = DEFAULT_DIR + "ui/ui_config"
 
 DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"
 

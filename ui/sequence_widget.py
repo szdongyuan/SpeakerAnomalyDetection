@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 from datetime import datetime
@@ -346,7 +347,7 @@ class SequenceWindow(QWidget):
         return None
 
     def load_scanner_hid_params(self):
-        file_path = DEFAULT_DIR + "ui/ui_config/scanner_hid_config.txt"
+        file_path = DEFAULT_DIR + "configs/scanner_barcode_config/scanner_hid_config.txt"
         if not os.path.exists(file_path):
             return None
         try:
@@ -576,8 +577,8 @@ class SequenceWindow(QWidget):
         """
             Inserts recorded signal data into the database based on user input.
 
-            This method determines which button (OK or NG) triggered the function call and sets the corresponding label 
-            in the recorded signal information. It then attempts to save this information to the database using the 
+            This method determines which button (OK or NG) triggered the function call and sets the corresponding label
+            in the recorded signal information. It then attempts to save this information to the database using the
             `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
         """
         button = self.sender()
@@ -585,11 +586,30 @@ class SequenceWindow(QWidget):
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.ng_btn:
             self.recorded_signal_info["labels"] = 'NG'
+        move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
+        if move_recorded_path:
+            self.recorded_signal_info["file_path"] = move_recorded_path
         save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully insert.")
         else:
             self.default_logger.error("Failed insert recorded signal.")
+
+    def move_wav_to_dir(self, label):
+        dir_paths = [model_consts.STORED_RECORDED_OK_PATH, model_consts.STORED_RECORDED_NG_PATH]
+        for path in dir_paths:
+            if not os.path.exists(path):
+                os.makedirs(path)
+        file_name = os.path.basename(self.recorded_path)
+        target_path = ''
+        if file_name:
+            if label == 'OK':
+                target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
+            elif label == 'NG':
+                target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
+            shutil.move(self.recorded_path, target_path)
+            print(f"已将{self.recorded_path}系统到{target_path}")
+        return target_path
 
     # def clicked_analyse_btn(self):
     #     selected_model = self.analyse.model_combo_box.currentText()
