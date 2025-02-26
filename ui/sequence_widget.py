@@ -587,8 +587,10 @@ class SequenceWindow(QWidget):
         elif button == self.ng_btn:
             self.recorded_signal_info["labels"] = 'NG'
         move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
+        file_path = self.recorded_signal_info["file_path"]
         if move_recorded_path:
-            self.recorded_signal_info["file_path"] = move_recorded_path
+            file_path = move_recorded_path
+        self.recorded_signal_info["file_path"] = file_path.replace(file_path, "")
         save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully insert.")
