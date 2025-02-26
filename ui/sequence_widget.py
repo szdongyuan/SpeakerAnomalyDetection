@@ -590,7 +590,7 @@ class SequenceWindow(QWidget):
         file_path = self.recorded_signal_info["file_path"]
         if move_recorded_path:
             file_path = move_recorded_path
-        self.recorded_signal_info["file_path"] = file_path.replace(file_path, "")
+        self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
         save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully insert.")
