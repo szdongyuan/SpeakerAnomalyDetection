@@ -138,9 +138,9 @@ class SequenceWindow(QWidget):
             current_recorded_count = result
         self.lineedit_count = QLineEdit(str(current_recorded_count))
         self.lineedit_count.setFixedHeight(40)
-        self.lineedit_count.setAlignment(Qt.AlignCenter)
-        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
+        self.lineedit_count.setAlignment(Qt.AlignCenter)       
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_lose_focus(self.lineedit_count))
+        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
 
         self.barcode_scanner_box = QCheckBox("S/N:  ", self)
         self.barcode_scanner_box.setChecked(False)
@@ -486,6 +486,8 @@ class SequenceWindow(QWidget):
             current_recorded_count = int(count) + 1
         else:
             current_recorded_count = 2
+        if self.lineedit_count.text() == "":
+            self.lineedit_count.setText(str(count))
         if count != int(self.lineedit_count.text()):
             current_recorded_count = int(self.lineedit_count.text())
             if start_position == "ok_ng":
@@ -670,8 +672,8 @@ class SequenceWindow(QWidget):
         self.recorded_path, self.recorded_signal_info = self.get_recorded_info()
         sap = SoundcardAudioProcessor()
         record_code, recorded_signal = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
-        if record_code == error_code.OK: 
-            self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)    
+        if record_code == error_code.OK:
+            self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
             self.signal_info = {"stimulus_signal": self.stimulus_signal,
                                 "recorded_signal": recorded_signal,
                                 "sample_rate": sample_rate,
