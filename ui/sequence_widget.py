@@ -610,7 +610,6 @@ class SequenceWindow(QWidget):
             elif label == 'NG':
                 target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
             shutil.move(self.recorded_path, target_path)
-            print(f"已将{self.recorded_path}系统到{target_path}")
         return target_path
 
     # def clicked_analyse_btn(self):
