@@ -12,7 +12,7 @@ import pyqtgraph as pg
 from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
@@ -403,6 +403,9 @@ class SequenceWindow(QWidget):
             Parameters:
                 self: The instance of the class containing this method.
         """
+        if not self.player_status_flag:
+            QMessageBox.warning(self, "警告", "请先录制声音！")
+            return
         current_recorded_count = self.save_recorded_num_to_json("ok_ng")
         self.lineedit_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
