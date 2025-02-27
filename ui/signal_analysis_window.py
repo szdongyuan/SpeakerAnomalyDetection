@@ -314,7 +314,8 @@ class AI(QWidget):
         query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
         if query_code == error_code.OK:
             model_path, config_path = query_result[0]
-            return error_code.OK, (model_path, config_path)
+            really_config_path = DEFAULT_DIR + config_path
+            return error_code.OK, (model_path, really_config_path)
         else:
             self.default_logger.error(f"Failed to get the model {selected_model} information.")
             return error_code.INVALID_QUERY, "Failed to get the model information."

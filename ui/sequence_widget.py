@@ -257,6 +257,9 @@ class SequenceWindow(QWidget):
     
     def lineedit_lose_focus(self, lineedit):
         lineedit.clearFocus()
+        if lineedit.text() == "":
+            result_count, _ = self.load_recorded_num_from_json()
+            lineedit.setText(str(result_count))
 
     def validate_count(self, lineedit, is_s_or_n: bool):
         """
