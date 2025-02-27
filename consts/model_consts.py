@@ -6,7 +6,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
 
 MODEL_PATH = DEFAULT_DIR + "models/model_name.keras"
-CONFIG_PATH = DEFAULT_DIR + "config.yml"
+CONFIG_PATH = "configs/ai_model_config/config.yml"
 TRAIN_PATH = DEFAULT_DIR + "audio_data/train"
 TEST_PATH = DEFAULT_DIR + "audio_data/test"
 TRAIN_OK_PATH = DEFAULT_DIR + "audio_data/train/OK"

@@ -437,7 +437,8 @@ class BaseModel(QWidget):
         model = None
         if query_code == error_code.OK:
             self.model_path, config_path = query_result[0]
-            kwargs = {"config_path": config_path}
+            really_config_path = DEFAULT_DIR + config_path
+            kwargs = {"config_path": really_config_path}
             model = init_model_from_config(**kwargs)
             model.load_model(self.model_path)
         return model

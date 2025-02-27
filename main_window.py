@@ -1,6 +1,6 @@
 import sys
 
-from PyQt5.QtCore import Qt, QPoint, QSize
+from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, \
      QSpacerItem, QSizePolicy, QPushButton, QMenuBar
@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
 
         # set the menubar action
         self.function_action_stimulus = QAction("激励信号", self)
-        self.function_action_test_sequence = QAction("测试程序", self)
+        self.function_action_test_sequence = QAction("分析队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_action_exit = QAction("退出", self)
         self.hardware_action_selection = QAction("硬件选择", self)

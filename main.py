@@ -28,7 +28,8 @@ def train(pre_labeled_dir,
 
     time_0 = time.time()
 
-    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
     data_load_config = load_config(config_path=config_path, module_name="data_load")
     ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
     if ret_code != error_code.OK:
@@ -84,7 +85,8 @@ def evaluate(predict_dir,
                            "result": ret})
     signals, file_names, fs, labels = ret
 
-    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
     preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_test = preprocess_raw_signals(signals, fs, preprocess_config)
     y_test = labels
@@ -149,7 +151,8 @@ def predict(predict_dir,
     signals, file_names, fs, _ = ret
     file_len = len(file_names)
 
-    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
     preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_test = preprocess_raw_signals(signals, fs, preprocess_config)
     if load_model_path:
@@ -184,7 +187,8 @@ def init_model_from_config(**kwargs):
         Returns:
             Instantiate a model class based on the configuration.
     """
-    config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
     model_config = load_config(config_path=config_path, module_name="model")
     model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
