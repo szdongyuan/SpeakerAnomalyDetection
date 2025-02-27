@@ -72,7 +72,7 @@ class StimulusWindow(QDialog):
     def init_ui(self):
         # set window titlebar stytle
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setWindowTitle("Stimulus Window")
+        self.setWindowTitle("激励信号")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setFixedSize(540, 700)
