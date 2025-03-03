@@ -46,6 +46,7 @@ def train(pre_labeled_dir,
     y_train = labels
     logger.info("finish data preparing, data shape %s" % str(x_train.shape))
 
+    kwargs["config_path"] = config_path
     model = init_model_from_config(**kwargs)
     if save_model_path and os.path.isfile(save_model_path):
         logger.info("model [%s] exists, keep training" % save_model_path)
@@ -92,6 +93,7 @@ def evaluate(predict_dir,
     y_test = labels
 
     if load_model_path:
+        kwargs["config_path"] = config_path
         model = init_model_from_config(**kwargs)
         model.load_model(load_model_path)
     if not model:
@@ -151,8 +153,7 @@ def predict(predict_dir,
     signals, file_names, fs, _ = ret
     file_len = len(file_names)
 
-    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
-    config_path = model_consts.DEFAULT_DIR + save_config_path
+    config_path = kwargs.get("config_path", model_consts.DEFAULT_DIR + model_consts.CONFIG_PATH)
     preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_test = preprocess_raw_signals(signals, fs, preprocess_config)
     if load_model_path:
@@ -187,8 +188,7 @@ def init_model_from_config(**kwargs):
         Returns:
             Instantiate a model class based on the configuration.
     """
-    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
-    config_path = model_consts.DEFAULT_DIR + save_config_path
+    config_path = kwargs.get("config_path", model_consts.DEFAULT_DIR + model_consts.CONFIG_PATH)
     model_config = load_config(config_path=config_path, module_name="model")
     model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
     model = model_obj(model_config)
