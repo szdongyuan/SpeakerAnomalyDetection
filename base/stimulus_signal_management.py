@@ -62,8 +62,9 @@ class StimulusSignalManagement(object):
         stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_info)
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
-                is_default = database.set_default("stimulus_signal_table")
-                stimulus_config += (is_default,)
+                if len(stimulus_config) != len(model_consts.STIMULUS_COLUMNS):
+                    is_default = database.set_default("stimulus_signal_table")
+                    stimulus_config += (is_default,)
                 result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
                                                       model_consts.STIMULUS_COLUMNS, ['stimulus_id'])
                 if not result:
