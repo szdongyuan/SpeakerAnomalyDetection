@@ -31,13 +31,13 @@ class SequenceWindow(QWidget):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
         self.collect_or_analyse_layout = QHBoxLayout()
-        self.recorded_path = None   # Initialize the recorded path variable
-        self.refresh_stimulus_flag = None   # Initialize the flag to indicate if stimulus needs refreshing
+        self.recorded_path = None  # Initialize the recorded path variable
+        self.refresh_stimulus_flag = None  # Initialize the flag to indicate if stimulus needs refreshing
         # Retrieve stimulus information and signal from configuration
-        self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()  
-        self.deviation_value = self.get_mic_deviation_value()   # Get the deviation value from the microphone
+        self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
+        self.deviation_value = self.get_mic_deviation_value()  # Get the deviation value from the microphone
         self.analysis_config = self.get_sequence_config_from_json()
-        self.signal_info = {}   # Initialize an empty dictionary to store signal information
+        self.signal_info = {}  # Initialize an empty dictionary to store signal information
         self.analysis_window = []
         self.default_ai = None
         self.default_ai_result = None
@@ -83,8 +83,8 @@ class SequenceWindow(QWidget):
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
-                           ui_style_const.qframe_stytle + 
-                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qframe_stytle +
+                           ui_style_const.qlabel_stytle +
                            ui_style_const.qcheckbox_stytle)
 
     def create_toolbar_layout(self):
@@ -139,7 +139,7 @@ class SequenceWindow(QWidget):
             current_recorded_count = result
         self.lineedit_count = QLineEdit(str(current_recorded_count))
         self.lineedit_count.setFixedHeight(40)
-        self.lineedit_count.setAlignment(Qt.AlignCenter)       
+        self.lineedit_count.setAlignment(Qt.AlignCenter)
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_lose_focus(self.lineedit_count))
         self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
 
@@ -199,7 +199,7 @@ class SequenceWindow(QWidget):
         toolbar_layout.setSpacing(0)
 
         return toolbar_layout
-    
+
     def create_waveform_layout(self):
         """
             Create waveform display layout
@@ -254,7 +254,7 @@ class SequenceWindow(QWidget):
         btn_layout.addWidget(self.ng_btn)
 
         return btn_layout
-    
+
     def lineedit_lose_focus(self, lineedit):
         lineedit.clearFocus()
         if lineedit.text() == "":
@@ -283,7 +283,7 @@ class SequenceWindow(QWidget):
         else:
             reg = r'^[0-9]*[a-z]*[A-Z]*$'
         # Check if the user input matches the regular expression
-        if not re.match(reg,s_or_n_count):
+        if not re.match(reg, s_or_n_count):
             # If the input is not a number, restore the previously recorded number          
             if is_s_or_n:
                 lineedit.setText(str(result_count))
@@ -301,22 +301,13 @@ class SequenceWindow(QWidget):
                 lineedit.setText(str(result_scanner_barcode))
 
     def scanner_barcode_process(self):
-        if self.barcode_scanner_box.isChecked():
-            self.lineedit_s_or_n.setEnabled(True)
-            device = self.get_match_hid_device()
-            if device:
-                if self.scanner_barcode_thread is None:
-                    self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode,
-                                                                   args=(device,))
-                    self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
-                    self.scanner_barcode_thread.start()
-        else:
-            self.lineedit_s_or_n.setDisabled(True)
-            if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
-                self.barcode_scanner.stop_scanning()
-                self.scanner_barcode_thread.join()
-                self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
-                self.scanner_barcode_thread = None
+        device = self.get_match_hid_device()
+        if device:
+            if self.scanner_barcode_thread is None:
+                self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode,
+                                                               args=(device,))
+                self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
+                self.scanner_barcode_thread.start()
 
     def scan_barcode(self, device):
         barcode = self.barcode_scanner.read_raw_data(device)
@@ -337,7 +328,14 @@ class SequenceWindow(QWidget):
             self.lineedit_s_or_n.setEnabled(True)
             self.scanner_barcode_process()
         else:
+            self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
+            self.barcode_scanner.stop_scanning()
+            self.scanner_barcode_thread = None
+            try:
+                self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
+            except Exception as e:
+                pass
 
     def get_match_hid_device(self):
         hid_params = self.load_scanner_hid_params()
@@ -421,8 +419,8 @@ class SequenceWindow(QWidget):
         self.data_btn.setEnabled(False)
         self.default_ai_result = None
         self.default_ai = None
-        self.scanner_barcode_process()
-        
+        self.clicked_scanner()
+
     # def clear_plg(self):
     #     self.line_graph.clear()
     #     self.analyse_layout.signal_analyse_dialog.spl_wnd.waveform_plot.clear()
@@ -477,7 +475,7 @@ class SequenceWindow(QWidget):
             data = json.load(json_file)
             return error_code.OK, data
 
-    def save_recorded_num_to_json(self, start_position = None):
+    def save_recorded_num_to_json(self, start_position=None):
         """
             Save the recorded number to a text file.
 
@@ -766,9 +764,9 @@ class SequenceWindow(QWidget):
         """
         self.analysis_window = []
         width = int((self.screen().size().width() - 400) / 2)
-        height = int((self.screen().size().height() - 400) / 2) 
+        height = int((self.screen().size().height() - 400) / 2)
         if self.analysis_config:
-            item_sort_list =  self.analysis_config.get("display_sequence", [])
+            item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
                 key_config = self.analysis_config.get(key)
                 if isinstance(key_config, dict):
@@ -940,7 +938,7 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         line_graph.plot(signal_duration, recorded_signal)
-        QApplication.processEvents()    
+        QApplication.processEvents()
 
     def update_player_icon(self):
         """
@@ -1048,8 +1046,9 @@ if __name__ == "__main__":
     #  'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1, 'num_steps': 1, 'amplitude_type': 'RMS',
     #  'amplitude': 0.7, 'sample_rate': 44100}
     stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp',
-     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1,
-     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
+                     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0,
+                     'repeat_times': 1,
+                     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
 
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus.wav", sr=44100)
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus111.wav", sr=44100)
