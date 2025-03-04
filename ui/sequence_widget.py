@@ -99,12 +99,14 @@ class SequenceWindow(QWidget):
                 QHBoxLayout: The configured toolbar layout object.
         """
         self.player_btn.setFixedSize(100, 40)
+        self.player_btn.setToolTip("播放")
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.clicked.connect(self.clicked_player_btn)
 
         self.replayer_btn.setFixedSize(100, 40)
+        self.replayer_btn.setToolTip("重播")
         self.replayer_btn.setDisabled(True)
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
@@ -112,6 +114,7 @@ class SequenceWindow(QWidget):
         self.replayer_btn.clicked.connect(self.clicked_player_btn)
 
         self.data_btn.setFixedSize(100, 40)
+        self.data_btn.setToolTip("分析")
         self.data_btn.setEnabled(False)
         self.data_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
@@ -281,7 +284,7 @@ class SequenceWindow(QWidget):
         if is_s_or_n:
             reg = r'^[0-9]*$'
         else:
-            reg = r'^[0-9]*[a-z]*[A-Z]*$'
+            reg = r'^[0-9a-zA-Z]*$'
         # Check if the user input matches the regular expression
         if not re.match(reg, s_or_n_count):
             # If the input is not a number, restore the previously recorded number          
