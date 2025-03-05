@@ -20,7 +20,7 @@ class SplConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.file_path = None
+        self.file_path = self.load_config.get("config_dir", None)
         self.init_ui()
 
     def init_ui(self):
@@ -189,7 +189,7 @@ class SplConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        save_flag = self.config_manager.save_config("SPL", config_data)
+        save_flag = self.config_manager.save_default_config("SPL", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
@@ -203,7 +203,7 @@ class FrConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.file_path = None
+        self.file_path = self.load_config.get("config_dir", None)
         self.init_ui()
 
     def init_ui(self):
@@ -375,7 +375,7 @@ class FrConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        save_flag = self.config_manager.save_config("FR", config_data)
+        save_flag = self.config_manager.save_default_config("FR", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
@@ -513,7 +513,7 @@ class HdConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        save_flag = self.config_manager.save_config("HD", config_data)
+        save_flag = self.config_manager.save_default_config("HD", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
@@ -615,7 +615,7 @@ class AIConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        save_flag = self.config_manager.save_config("AI", config_data)
+        save_flag = self.config_manager.save_default_config("AI", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
@@ -668,16 +668,36 @@ class ConfigManager(object):
         except Exception as e:
             self.default_logger.error(f"The config info for {type} analysis save failed. {e}")
             return False
+        
+    def save_default_config(self, type, config_data):
+        default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
+        default_config = {}
+        try:
+            with open(default_config_file, 'r') as f:
+                default_config = json.load(f)
+                if type in default_config:
+                    default_config[type].update(config_data)
+                else:
+                    default_config[type] = config_data
+            with open(default_config_file, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=4)
+                self.default_logger.info(f"The config info for {type} analysis has been saved to {default_config_file}.")
+                return True
+        except Exception as e:
+            self.default_logger.error(f"Failed to load the default config file. {e}")
+            return False
 
     def load_config(self):
         try:
-            if not self.config is None:
+            if self.config:
                 return self.config
             with open(self.config_file, 'r') as f:
+                print(111)
+                print(f)
                 self.config = json.load(f)
             return self.config
         except Exception as e:
-            self.default_logger.error(f"Failed to load the default config file. {e}")
+            self.default_logger.error(f"Failed to load the default or temp config file. {e}")
             return {}
 
 
