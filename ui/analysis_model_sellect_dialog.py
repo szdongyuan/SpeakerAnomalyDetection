@@ -191,6 +191,7 @@ class AnalysisModelSellect(QDialog):
     def ok_btn_clicked(self):
         self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
         self.sellect_list.config["default_ai"] = self.sellect_list.default_ai
+        self.check_list_item_unique(self.sellect_list.display_sequence_list)
         self.sellect_list.config["display_sequence"] = self.sellect_list.display_sequence_list
         self.save_analyse_config_to_json(self.sellect_list.config)
         self.close()
@@ -211,6 +212,8 @@ class AnalysisModelSellect(QDialog):
         if file_path:
             self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
             self.sellect_list.config["default_ai"] = self.sellect_list.default_ai
+            self.check_list_item_unique(self.sellect_list.display_sequence_list)
+            self.sellect_list.config["display_sequence"] = self.sellect_list.display_sequence_list
             try:
                 with open(file_path, 'w', encoding='utf-8') as file:
                     json.dump(self.sellect_list.config, file, indent=4)
@@ -223,7 +226,7 @@ class AnalysisModelSellect(QDialog):
         try:
             with open(analyse_config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4)
-                self.default_logger.info(f"The config info for analysis has been saved to {self.config_file}.")
+                self.default_logger.info(f"The config info for analysis has been saved to {analyse_config_file}.")
                 return True
         except Exception as e:
             self.default_logger.error(f"The config info for analysis save failed. {e}")
@@ -242,6 +245,14 @@ class AnalysisModelSellect(QDialog):
         self.sellect_list.setDragDropOverwriteMode(False)
         self.sellect_list.setMovement(QListView.Snap)
         self.sellect_list.setFlow(QListView.TopToBottom)
+
+    def check_list_item_unique(self, display_list):
+        if len(display_list) != len(set(display_list)):
+            temp_list = display_list[:]
+            display_list.clear()
+            for item in temp_list:
+                if item not in display_list:
+                    display_list.append(item)
 
 
 class OptionList(QListView):
@@ -297,6 +308,7 @@ class OptionList(QListView):
         type = self.config.get(name)["type"]
         if self.config.get(name):
             config_manager.config = self.config
+            model_type = name
         if type == "SPL":
             model = SplConfigWindow(config_manager, model_type)
         elif type == "FR":
@@ -335,6 +347,8 @@ class OptionList(QListView):
             self.load_temp_flag = False
         self.model().clear()
         self.config.clear()
+        self.prev_sellect_ai = None
+        self.prev_config_list.clear()
         self.display_sequence_list.clear()
         for key, value in self.temp_config.items():
             if key != "auto_analysis" and key != "default_ai" and key != "display_sequence":
@@ -374,8 +388,12 @@ class OptionList(QListView):
             rename_action.triggered.connect(lambda: self.rename_item(index))
             self.sellect_ai_action = QAction("设为评判模型", self)
             self.sellect_ai_action.triggered.connect(lambda: self.sellect_ai(index))
-            if self.check_item_isai(index.data()) or "\u2605" in index.data():
-                self.sellect_ai_action.setEnabled(True)
+            self.old_name = index.data()
+            if self.check_item_isai(index.data()) or "\u2605" in index.data() :
+                if self.prev_sellect_ai is None or self.prev_sellect_ai == index:
+                    self.sellect_ai_action.setEnabled(True)
+                else:
+                    self.sellect_ai_action.setEnabled(False)
                 if "\u2605" in index.data():
                     self.sellect_ai_action.setText("取消设定")
                 else:
@@ -395,44 +413,51 @@ class OptionList(QListView):
         is_ai = self.check_item_isai(index.data()) or "\u2605" in index.data()
         if is_ai:
             if "\u2605" in index.data():
-                self.old_name  = index.data()
                 new_name = index.data().replace("\u2605", "")
                 self.model().setData(index, new_name)
+                self.model().setData(index, new_name)
                 self.default_ai = None
+                self.prev_sellect_ai = None
             else:
-                if not self.prev_sellect_ai:
+                if self.prev_sellect_ai is None:
                     self.prev_sellect_ai = index
                 else:
                     prev_new_name = self.prev_sellect_ai.data().replace("\u2605", "")
+                    self.model().setData(self.prev_sellect_ai, prev_new_name)
                     self.model().setData(self.prev_sellect_ai, prev_new_name)
                     self.prev_sellect_ai = index
                 self.default_ai = "\xa0" + index.data()
                 self.is_select_ai = True
                 new_name = "\u2605" + self.valid_char(index.data())
                 self.model().setData(index, new_name)
-
     def delete_item(self, index):
         if "\u2605" in index.data():
             self.display_sequence_list.remove(self.default_ai)
+            self.delete_item_config(self.default_ai)
             self.default_ai = None
+            self.prev_sellect_ai = None
         else:
             self.display_sequence_list.remove(index.data())
-        model = self.model()
-        index_name = model.data(index)
-        self.delete_item_config(index_name)
+            self.delete_item_config(index.data())
+        model = self.model() 
         model.removeRow(index.row())
 
     def delete_item_config(self, name):
+        if not name:
+            return
         if name in self.config:
             del self.config[name]
+        if name in self.prev_config_list:
+            self.prev_config_list.remove(name)
 
     def rename_item(self, index):
         self.is_updata_config = True
-        self.old_name = self.model().data(index)
         self.is_select_ai = "\u2605" in self.model().data(index)
         self.edit(index)
 
     def check_item_isai(self, name):
+        if not name:
+            return None
         if name in self.all_ai_item:
             return True
         else:
@@ -444,49 +469,111 @@ class OptionList(QListView):
                 index = self.model().index(row, topLeft.column())
                 new_name = self.model().data(index)
                 really_new_name = new_name.replace(" ", "")
-                if new_name != self.old_name and really_new_name:
+                if new_name != self.old_name and really_new_name:                   
+                    if new_name in self.display_sequence_list:
+                        QMessageBox.warning(self, "警告", "模型名称重复，请重新输入！")
+                        self.model().setData(index, self.old_name)
+                        return
                     if self.is_select_ai:
                         if "\u2605" in new_name:
                             self.default_ai = new_name.replace("\u2605","\xa0")
+                            if self.default_ai != self.old_name:
+                                self.updata_config_data(self.old_name.replace("\u2605","\xa0"), self.default_ai, self.display_sequence_list)
                             self.old_name = new_name
                             self.model().setData(index, new_name)
                         else:
-                            self.updata_config_file(self.old_name.replace("\u2605","\xa0"), "\xa0" + new_name)
+                            self.updata_config_data(self.old_name.replace("\u2605","\xa0"), new_name, self.display_sequence_list)
                             self.default_ai = new_name.replace("\u2605","\xa0")
-                            self.updata_ai_list(new_name, self.old_name.replace("\u2605","\xa0"))
                             self.old_name = new_name
                             self.default_ai = new_name
                             self.model().setData(index, "\u2605" + new_name)
                         self.is_select_ai = False
                     else:
                         if self.is_updata_config:
-                            self.updata_config_file(self.old_name, "\xa0" + new_name)
+                            self.updata_config_data(self.old_name, new_name, self.display_sequence_list)
                             self.is_updata_config = False
-                            self.updata_ai_list(new_name, self.old_name)
                         self.old_name = "\xa0" + new_name
-                        self.model().setData(index, "\xa0" + new_name)
+                        self.rename_item_space_equal(new_name, index)
                 else:
+                    if new_name == self.old_name:
+                        return 
                     self.model().setData(index, self.old_name)
 
     def swap_list_index(self, list:list, old_index, new_index):
-        if old_index == new_index:
+        if old_index == new_index or not list:
             return
         old_name = list[old_index]
         list.pop(old_index)
         list.insert(new_index, old_name)
 
     def updata_ai_list(self, new_name, old_name):
+        if not old_name in self.all_ai_item or old_name == new_name:
+            return
         if not new_name in self.all_ai_item:
             index = self.all_ai_item.index(old_name)
-            self.all_ai_item[index] = "\xa0" + new_name
+            if self.chack_item_name_have_space(new_name) is True:
+                self.all_ai_item[index] = new_name
+            elif self.chack_item_name_have_space(new_name) is False:
+                self.all_ai_item[index] = "\xa0" + new_name
+
+    def updata_display_sequence_list(self, list, old_name, new_name):
+        if not old_name or not new_name or old_name == new_name:
+            return
+        try:
+            index = list.index(old_name)
+        except ValueError:
+            return
+        if self.chack_item_name_have_space(new_name) is True:
+            list[index] = new_name
+        elif self.chack_item_name_have_space(new_name) is False:
+            list[index] = "\xa0" + new_name
+
+    def chack_item_name_have_space(self, name):
+        if not name:
+            return None
+        if name.find("\xa0") == 0:
+            return True
+        else:
+            return False
+        
+    def rename_item_space_equal(self, name, index):
+        if not name or not index:
+            return
+        if self.chack_item_name_have_space(name) is True:
+            self.model().setData(index, name)
+            return name
+        elif self.chack_item_name_have_space(name) is False:
+            self.model().setData(index, "\xa0" + name)
+            return "\xa0" + name
             
     def updata_config_file(self, old_name, new_name):
+        if not old_name or not new_name:
+            return
         if old_name in self.config:
             value = self.config.pop(old_name)
-            self.config[new_name] = value
+            if self.chack_item_name_have_space(new_name) is True:
+                self.config[new_name] = value
+            elif self.chack_item_name_have_space(new_name) is False:
+                self.config["\xa0" + new_name] = value
+            
+    def updata_prev_config_list(self, old_name, new_name):       
+        if not old_name or not new_name or old_name == new_name:
+            return
+        try:
+            index = self.prev_config_list.index(old_name)
+        except ValueError:
+            return
+        self.prev_config_list[index] = new_name
+
+    def updata_config_data(self, old_name, new_name, list):
+        if not new_name in list:
+            self.updata_config_file(old_name, new_name)
+            self.updata_display_sequence_list(list, old_name, new_name)
+        self.updata_prev_config_list(old_name, new_name)
+        self.updata_ai_list(new_name, old_name)
 
     def itemmove(self, index):
-        if self.index_num is None:
+        if self.index_num is None or not index:
             return
         item_index = self.model().index(self.index_num, 0) 
         text = self.model().itemFromIndex(item_index).text()
@@ -518,6 +605,8 @@ class OptionList(QListView):
         self.setCurrentIndex(self.model().index(self.index_num, 0))
 
     def updata_model_list(self, new_item: QStandardItem, old_index, new_index, step_index: bool):
+        if not new_item:
+            return
         self.model().insertRow(new_index, new_item)
         if step_index:
             self.model().removeRow(old_index)
@@ -532,7 +621,7 @@ class OptionList(QListView):
         self.updata_sellect_ai(old_index, new_index, True)
 
     def updata_sellect_ai(self, old_index, new_index, step_index: bool):
-        if old_index == new_index:
+        if old_index == new_index or old_index == -1 or new_index == -1 or not self.prev_sellect_ai: 
             return
         sellect_ai_row = self.prev_sellect_ai.row()
         if sellect_ai_row < old_index and sellect_ai_row >= new_index:
@@ -572,7 +661,7 @@ class OptionList(QListView):
                 self.row_num = None
         self.press_time = t1
         index = self.indexAt(e.pos())
-        
+        self.setCurrentIndex(index)
         row_number = index.row()
         if self.darpflag:       
             new_item = QStandardItem(self.start_index.data())
@@ -656,6 +745,8 @@ class OptionList(QListView):
             event.ignore()
 
     def get_item_default_config(self, item_text, list_item_text):
+        if not item_text or not list_item_text:
+            return
         type = ''.join(re.findall(r'[A-Za-z]', item_text))
         data = self.load_default_config()
         self.config[list_item_text] = data[type]
