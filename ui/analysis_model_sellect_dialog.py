@@ -30,7 +30,7 @@ class AnalysisModelSellect(QDialog):
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setWindowTitle("方法选择")
+        self.setWindowTitle("分析队列")
 
         analysis_list_layout = self.create_analysis_list_layout()
         sellect_list_layout = self.create_sellect_list_layout()
