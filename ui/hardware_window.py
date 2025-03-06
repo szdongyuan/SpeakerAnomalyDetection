@@ -2,7 +2,7 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel, QIcon
-from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView
+from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView, QFrame
 from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage, QComboBox
 
 from base.sound_device_manager import get_device_info, get_default_device, get_api_info, change_default_device
@@ -181,12 +181,20 @@ class DeviceListWindow(QDialog):
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
-        btn_layout.setSpacing(65)
-        btn_layout.setContentsMargins(50, 0, 50, 0)
+        btn_layout.setSpacing(105)
+        btn_layout.setContentsMargins(30, 0, 30, 0)
+
+        item_spacer = QSpacerItem(7, 15, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFixedHeight(20)
+        line.setStyleSheet(ui_style_const.hardware_qframe_stytle)
 
         layout = QVBoxLayout()
         layout.addLayout(api_layout)
+        layout.addWidget(line)
         layout.addWidget(self.list_view)
+        layout.addItem(item_spacer)
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
