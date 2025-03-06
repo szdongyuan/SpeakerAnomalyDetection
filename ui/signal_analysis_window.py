@@ -5,6 +5,7 @@ import sys
 import librosa
 import numpy as np
 import pyqtgraph as pg
+from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
@@ -113,22 +114,27 @@ class Spl(QWidget):
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_signal, reference_pressure,
                                                                          is_smooth=self.analysis_config["smooth_checked"])
         signal_spl = signal_spl + self.deviation_value
-        if self.analysis_config["limit_checked"]:
-            if self.analysis_config["self_defined"]:
-                self.plot_spl(signal_duration, signal_spl, upper_limit=self.analysis_config["upper_limit"],
-                              lower_limit=self.analysis_config["lower_limit"])
+        limit_checked = self.analysis_config.get("limit_checked")
+        self_defined = self.analysis_config.get("self_defined")
+        if limit_checked:
+            if self_defined:
+                upper_limit = self.analysis_config.get("upper_limit")
+                lower_limit = self.analysis_config.get("lower_limit")
+                self.plot_spl(signal_duration, signal_spl, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
-                self.plot_spl(signal_duration, recorded_signal, signal_spl)
+                self.plot_spl(signal_duration, signal_spl)
+        else:
+            self.plot_spl(signal_duration, signal_spl)
         self.result = {"signal_duration": signal_duration.tolist(),
                        "recorded_signal": recorded_signal.tolist(),
                        "signal_spl": signal_spl.tolist(),
                        }
         return self.result
 
-    def plot_spl(self, signal_duration, signal_spl, upper_limit=None, lower_limit=None):
+    def plot_spl(self, signal_duration, signal_spl, upper_limit="", lower_limit=""):
         self.spl_plot.clear()
-        self.spl_plot.plot(signal_duration, signal_spl, pen='g')
-        if lower_limit is not None and upper_limit is not None:
+        self.spl_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
+        if lower_limit and upper_limit:
             upper_limit = float(upper_limit)
             lower_limit = float(lower_limit)
             out_range_points = []
@@ -187,23 +193,27 @@ class Frequency(QWidget):
         sr = self.signal_info["sample_rate"]
         fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr,
                                                                               is_smooth=self.analysis_config["smooth_checked"])
-        if self.analysis_config["limit_checked"]:
-            if self.analysis_config["self_defined"]:
-                upper_limit = self.analysis_config["upper_limit"]
-                lower_limit = self.analysis_config["lower_limit"]
+        limit_checked = self.analysis_config.get("limit_checked")
+        self_defined = self.analysis_config.get("self_defined")
+        if limit_checked:
+            if self_defined:
+                upper_limit = self.analysis_config.get("upper_limit")
+                lower_limit = self.analysis_config.get("lower_limit")
                 self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
                 self.plot_fr(frequency_list, fr)
+        else:
+            self.plot_fr(frequency_list, fr)
         self.result = {"fr": fr.tolist(),
                        "frequency_list": frequency_list.tolist()
                        }
         return self.result
 
-    def plot_fr(self, frequency_list, fr, upper_limit=None, lower_limit=None):
+    def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
         self.fr_plot.clear()
         fr = fr + 94 + self.deviation_value
-        self.fr_plot.plot(frequency_list, fr, pen='g')
-        if lower_limit is not None and upper_limit is not None:
+        self.fr_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77)))
+        if lower_limit and upper_limit:
             upper_limit = float(upper_limit)
             lower_limit = float(lower_limit)
             out_range_points = []
