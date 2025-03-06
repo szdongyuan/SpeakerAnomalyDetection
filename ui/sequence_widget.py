@@ -306,7 +306,7 @@ class SequenceWindow(QWidget):
     def scanner_barcode_process(self):
         device = self.get_match_hid_device()
         if device:
-            if self.scanner_barcode_thread is None:
+            if self.scanner_barcode_thread is None or not self.scanner_barcode_thread.is_alive():
                 self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode,
                                                                args=(device,))
                 self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
@@ -320,7 +320,11 @@ class SequenceWindow(QWidget):
     def on_barcode_received(self, barcode):
         if barcode:
             self.lineedit_s_or_n.setText(barcode)
-            self.clicked_player_btn()
+            try:
+                self.clicked_player_btn()
+            except Exception as e:
+                self.scanner_popup()
+                self.default_logger.error(f"An error message occurred in the analysis window. {e}")
             self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
             if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
                 self.scanner_barcode_thread.join()
@@ -338,7 +342,7 @@ class SequenceWindow(QWidget):
             try:
                 self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
             except Exception as e:
-                pass
+                self.default_logger.error(e)
 
     def get_match_hid_device(self):
         hid_params = self.load_scanner_hid_params()
@@ -363,6 +367,14 @@ class SequenceWindow(QWidget):
         except Exception as e:
             self.default_logger.error(f"Failed to read the config params of the scanner hid. {e}")
             return None
+
+    def scanner_popup(self):
+        error_msg = QMessageBox(self)
+        error_msg.setIcon(QMessageBox.Warning)
+        error_msg.setText("分析报错，详情请查看日志！")
+        error_msg.setWindowTitle("分析报错")
+        error_msg.setStandardButtons(QMessageBox.Ok)
+        error_msg.exec_()
 
     # def get_model_info(self, selected_model):
     #     """
