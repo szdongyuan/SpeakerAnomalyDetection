@@ -713,12 +713,19 @@ class ConfigManager(object):
         
 
 def check_upper_lower_limit(config_data: dict, parent):
-    print(config_data["upper_limit"], config_data["lower_limit"])
-    if int(config_data["upper_limit"]) <= int(config_data["lower_limit"]):
+    if config_data["limit_checked"] is False: return False
+    is_upper_limit_effect = len(config_data["upper_limit"]) > 0
+    is_lower_limit_effect = len(config_data["lower_limit"]) > 0
+    is_limit_effect = is_lower_limit_effect and is_upper_limit_effect
+    if is_limit_effect:
+        if int(config_data["upper_limit"]) <= int(config_data["lower_limit"]):
+            PopupUtils().config_data_erorr_popup(parent)
+            return True
+        else:
+            return False
+    else:
         PopupUtils().config_data_erorr_popup(parent)
         return True
-    else:
-        return False
 
 
 if __name__ == "__main__":
