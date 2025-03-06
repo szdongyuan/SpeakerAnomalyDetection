@@ -189,11 +189,13 @@ class SplConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
+        if check_upper_lower_limit(config_data, self): return
         save_flag = self.config_manager.save_default_config("SPL", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
+        if check_upper_lower_limit(config_data, self): return
         self.accept()
         return config_data
 
@@ -375,11 +377,13 @@ class FrConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
+        if check_upper_lower_limit(config_data, self): return
         save_flag = self.config_manager.save_default_config("FR", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
+        if check_upper_lower_limit(config_data, self): return
         self.accept()
         return config_data
 
@@ -648,6 +652,15 @@ class PopupUtils(object):
         close_msg.setStandardButtons(QMessageBox.Ok)
         close_msg.exec_()
 
+    @staticmethod
+    def config_data_erorr_popup(parent):
+        config_data_erorr_msg = QMessageBox(parent)
+        config_data_erorr_msg.setIcon(QMessageBox.Warning)
+        config_data_erorr_msg.setText("上下限配置数据错误，请检查配置")
+        config_data_erorr_msg.setWindowTitle("设置警告")
+        config_data_erorr_msg.setStandardButtons(QMessageBox.Ok)
+        config_data_erorr_msg.exec_()
+
 
 class ConfigManager(object):
     def __init__(self, config_file):
@@ -692,13 +705,20 @@ class ConfigManager(object):
             if self.config:
                 return self.config
             with open(self.config_file, 'r') as f:
-                print(111)
-                print(f)
                 self.config = json.load(f)
             return self.config
         except Exception as e:
             self.default_logger.error(f"Failed to load the default or temp config file. {e}")
             return {}
+        
+
+def check_upper_lower_limit(config_data: dict, parent):
+    print(config_data["upper_limit"], config_data["lower_limit"])
+    if int(config_data["upper_limit"]) <= int(config_data["lower_limit"]):
+        PopupUtils().config_data_erorr_popup(parent)
+        return True
+    else:
+        return False
 
 
 if __name__ == "__main__":
