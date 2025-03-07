@@ -164,7 +164,7 @@ def predict(predict_dir,
                            "ret_msg": "missing model",
                            "result": [["missing model"]]})
 
-    y_pred, pred_score = model.predict(x_test, verbose=0)
+    y_pred, pred_score = model.predict(x_test, acc_req=None, verbose=0)
     result = [[file_names[i], "OK" if y_pred[i] else "NG", str(pred_score[i])] for i in range(file_len)]
     ret_str = json.dumps({"ret_code": error_code.OK,
                           "ret_msg": "finish predicting",

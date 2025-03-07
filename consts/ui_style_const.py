@@ -150,6 +150,11 @@ qframe_stytle = """
                 color: rgb(173, 173, 173);
             }
 """
+hardware_qframe_stytle = """
+            QFrame {
+                color: rgb(204, 204, 204);
+            }
+"""
 
 toolbar_button_stytle = """
             QPushButton {

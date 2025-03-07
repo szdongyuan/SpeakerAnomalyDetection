@@ -461,8 +461,8 @@ class SequenceWindow(QWidget):
         """
         load_code, result = self.load_stimulus_from_json()
         if load_code == error_code.OK and result:
-            info = result["stimulus_info"]
-            path = result["stimulus_signal_path"]
+            info = result.get("stimulus_info")
+            path = result.get("stimulus_signal_path")
             stimulus, _ = load_audio_simple(path, info["sample_rate"])
             return info, stimulus
         else:
@@ -984,72 +984,6 @@ class SequenceWindow(QWidget):
 
 class ScannerEmitter(QObject):
     signal_emitter = pyqtSignal(str)
-
-
-# class AnalyseWindow(QDialog):
-#
-#     def __init__(self):
-#         super().__init__()
-#         self.analyse_btn = QPushButton(" 分 析 ")
-#         self.ai_analyse_score_lineedit = QTextEdit()
-#         self.signal_info = None
-#
-#         self.init_ui()
-#
-#     def init_ui(self):
-#         self.setStyleSheet(ui_style_const.qcombobox_stytle +
-#                            ui_style_const.qlabel_stytle +
-#                            ui_style_const.qpushbutton_stytle)
-#         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-#         self.setWindowTitle("AI 分析")
-#         ai_analyse_layout = self.create_ai_analyse_layout()
-#         self.setLayout(ai_analyse_layout)
-#
-#     def create_ai_analyse_layout(self):
-#         ai_analyse_layout = QVBoxLayout()
-#
-#         ai_title_layout = QHBoxLayout()
-#         h_title_space = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-#         ai_title_layout.addItem(h_title_space)
-#
-#         model_layout = QHBoxLayout()
-#         model_label = QLabel(" 模 型: ")
-#         model_label.setFixedSize(65, 30)
-#         self.model_combo_box = QComboBox(self)
-#         self.model_combo_box.setFixedHeight(25)
-#         model_layout.addWidget(model_label)
-#         model_layout.addWidget(self.model_combo_box)
-#         model_layout.setSpacing(15)
-#
-#         analyse_btn_layout = QHBoxLayout()
-#         self.analyse_btn.setFixedSize(100, 30)
-#         h_analyse_btn_space_left = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-#         h_analyse_btn_space_right = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-#         analyse_btn_layout.addItem(h_analyse_btn_space_left)
-#         analyse_btn_layout.addWidget(self.analyse_btn)
-#         analyse_btn_layout.addItem(h_analyse_btn_space_right)
-#
-#         analyse_score_layout = QHBoxLayout()
-#         self.ai_analyse_score_lineedit.setAlignment(Qt.AlignCenter)
-#         self.ai_analyse_score_lineedit.setDisabled(True)
-#         self.ai_analyse_score_lineedit.setMaximumWidth(600)
-#         self.ai_analyse_score_lineedit.setStyleSheet("font-size: 23pt;")
-#         analyse_score_layout.addWidget(self.ai_analyse_score_lineedit)
-#         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
-#
-#         v_ai_analyse_top_space = QSpacerItem(30, 50, QSizePolicy.Minimum, QSizePolicy.Minimum)
-#         v_ai_analyse_center_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-#         v_ai_analyse_bottom_space = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
-#
-#         ai_analyse_layout.addLayout(ai_title_layout)
-#         ai_analyse_layout.addLayout(model_layout)
-#         ai_analyse_layout.addItem(v_ai_analyse_top_space)
-#         ai_analyse_layout.addLayout(analyse_btn_layout)
-#         ai_analyse_layout.addItem(v_ai_analyse_center_space)
-#         ai_analyse_layout.addLayout(analyse_score_layout)
-#         ai_analyse_layout.addItem(v_ai_analyse_bottom_space)
-#
-#         return ai_analyse_layout
 
 
 if __name__ == "__main__":

@@ -100,9 +100,11 @@ def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
     return error_code.OK, (tot_signals, tot_files, tot_fs, tot_labels)
 
 
-def load_audio_simple(audio_path, sr=44100):
+def load_audio_simple(audio_path, sr=None):
+    if not audio_path:
+        return None, None
     # we assume audio is mono channel
-    y, _ = librosa.load(audio_path, sr=sr)
+    y, sr = librosa.load(audio_path, sr=sr)
     t = np.linspace(0, len(y) - 1, len(y)) / sr
     return y, t
 

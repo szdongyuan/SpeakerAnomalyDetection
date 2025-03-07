@@ -29,7 +29,6 @@ class MainWindow(QMainWindow):
         self.speaker = get_default_device("speaker")
 
         # set mouse drog date
-        self.is_resizing = False
         self.resize_direction = None
         self.last_pos = QPoint()
         self.wid = None
@@ -306,15 +305,11 @@ class MainWindow(QMainWindow):
             self.window_x = self.x()
             self.window_y = self.y()
             self.last_pos = event.globalPos()
-            if self.resize_direction:
-                self.is_resizing = True
-
             event.accept()
 
     def mousereleaseevent(self, event):
         # If the mouse is released, stop the window resizing and clear the resize direction
         if event.button() == Qt.LeftButton:
-            self.is_resizing = False
             self.resize_direction = None
             event.accept()
 
@@ -322,13 +317,43 @@ class MainWindow(QMainWindow):
         # record the window size, the window position, and the mouse position
         width = self.width()
         height = self.height()
-        right = event.pos().x() >= width - 3 and event.pos().x() <= width
-        left = event.pos().x() <= 3 and event.pos().x() >= 0
-        top = event.pos().y() <= 3 and event.pos().y() >= 0
-        bottom = event.pos().y() >= height - 3 and event.pos().y() <= height
-        
-        # Determine whether you can drag the window size, If so, record the drag direction and set the cursor stutle
-        if self.is_resizing == False:
+        right = event.pos().x() >= width - 1 and event.pos().x() <= width
+        left = event.pos().x() <= 1 and event.pos().x() >= 0
+        top = event.pos().y() <= 1 and event.pos().y() >= 0
+        bottom = event.pos().y() >= height - 1 and event.pos().y() <= height
+
+        if event.buttons() & Qt.LeftButton:
+            # Move the window
+            if not self.max_flag and not self.resize_direction:
+                self.move(event.globalPos() - self.drag_position)
+            # clicked the window border, resize the window according to the direction
+            pos = event.globalPos() - self.last_pos
+            is_update_width = width - pos.x() > 1030
+            is_update_height = height - pos.y() > 760
+            if self.resize_direction == 'right':
+                self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh)
+            elif self.resize_direction == 'left' and is_update_width:
+                self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
+            elif self.resize_direction == 'bottom':
+                self.setGeometry(self.window_x, self.window_y, self.wid, self.heigh + pos.y())
+            elif self.resize_direction == 'top' and is_update_height:
+                self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid, self.heigh - pos.y())
+            elif self.resize_direction == 'right_top' and is_update_height:
+                self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid + pos.x(), self.heigh - pos.y())
+            elif self.resize_direction == 'right_bottom':
+                self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh + pos.y())
+            elif self.resize_direction == 'left_top':
+                if is_update_width and is_update_height:
+                    self.setGeometry(self.window_x + pos.x(), self.window_y + pos.y(),
+                                     self.wid - pos.x(), self.heigh - pos.y())
+                elif is_update_width and not is_update_height:
+                    self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
+                elif not is_update_width and is_update_height:
+                    self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid, self.heigh - pos.y())
+            elif self.resize_direction == 'left_bottom' and is_update_width:
+                self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh + pos.y())
+        else:
+            # Determine whether you can drag the window size, If so, record the drag direction and set the cursor stutle
             if right and top:
                 self.resize_direction = "right_top"
                 self.setCursor(Qt.SizeBDiagCursor)
@@ -354,42 +379,9 @@ class MainWindow(QMainWindow):
                 self.resize_direction = 'top'
                 self.setCursor(Qt.SizeVerCursor)
             else:
-                if not self.is_resizing:
-                    self.setCursor(Qt.ArrowCursor)
-        
-        # clicked the window border, resize the window according to the direction
-        if self.is_resizing:
-            pos = event.globalPos() - self.last_pos
-            is_update_width = width - pos.x() > 1030
-            is_update_height = height - pos.y() > 760
-            if self.resize_direction == 'right':
-                self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh)
-            elif self.resize_direction == 'left' and is_update_width:
-                self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
-            elif self.resize_direction == 'bottom':
-                self.setGeometry(self.window_x, self.window_y, self.wid, self.heigh + pos.y())
-            elif self.resize_direction == 'top' and is_update_height:
-                self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid, self.heigh - pos.y())
-            elif self.resize_direction == 'right_top' and is_update_height:
-                self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid + pos.x(), self.heigh - pos.y())
-            elif self.resize_direction == 'right_bottom':
-                self.setGeometry(self.window_x, self.window_y, self.wid + pos.x(), self.heigh + pos.y())
-            elif self.resize_direction == 'left_top':
-                if is_update_width and is_update_height:
-                    self.setGeometry(self.window_x + pos.x(), self.window_y + pos.y(),
-                                     self.wid - pos.x(), self.heigh - pos.y())
-                elif is_update_width and not is_update_height:
-                    self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid - pos.x(), self.heigh)
-                elif not is_update_width and is_update_height:
-                    self.setGeometry(self.window_x, self.window_y + pos.y(), self.wid, self.heigh - pos.y())
-            elif self.resize_direction == 'left_bottom' and is_update_width:
-                self.setGeometry(self.window_x + pos.x(), self.window_y, self.wid -pos.x(), self.heigh + pos.y())
-           
-        # Move the window
-        if event.buttons() & Qt.LeftButton and not self.is_resizing:
-            if not self.max_flag:
-                self.move(event.globalPos() - self.drag_position)
-            event.accept()
+                self.resize_direction = None
+                self.setCursor(Qt.ArrowCursor)
+        event.accept()
 
     def paintEvent(self, event):
         # Set the window Background-color

@@ -567,6 +567,8 @@ class AIConfigWindow(QDialog):
             self.analyse_model_combo_box.addItem(model_name)
         self.analyse_model_combo_box.setCurrentText(self.load_config.get("analyse_model_name"))
         self.analyse_model_combo_box.currentTextChanged.connect(self.get_default_config)
+        if self.analyse_model_combo_box.count() == 0:
+            PopupUtils.miss_popup(self)
         analyse_model_combo_layout = QHBoxLayout()
         analyse_model_combo_layout.addWidget(analyse_model_label)
         analyse_model_combo_layout.addWidget(self.analyse_model_combo_box)
@@ -649,6 +651,15 @@ class PopupUtils(object):
         close_msg.setIcon(QMessageBox.Warning)
         close_msg.setText("请选择谐波失真阶数")
         close_msg.setWindowTitle("设置警告")
+        close_msg.setStandardButtons(QMessageBox.Ok)
+        close_msg.exec_()
+
+    @staticmethod
+    def miss_popup(parent):
+        close_msg = QMessageBox(parent)
+        close_msg.setIcon(QMessageBox.Warning)
+        close_msg.setText("没有可用的AI模型选型，请检查配置！")
+        close_msg.setWindowTitle("模型缺失")
         close_msg.setStandardButtons(QMessageBox.Ok)
         close_msg.exec_()
 

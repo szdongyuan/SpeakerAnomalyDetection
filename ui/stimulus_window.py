@@ -8,7 +8,7 @@ import sounddevice as sd
 from PyQt5.QtCore import Qt
 from scipy.io import wavfile
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListView, QPushButton
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QSpinBox, QVBoxLayout
 
@@ -46,7 +46,7 @@ class StimulusWindow(QDialog):
         self.stimulus_info = {"name": "stimulus_chirps_1", "use_custom_stimulus": True}
         self.stimulus_signal = None
         self.speaker = None
-        self.stimulus_signal_time = None
+        self.load_wav_path = ""
         self.refresh_stimulus_info = False
         self.default_logger = LogManager.set_log_handler("core")
         self.box_checked_enable_list = []
@@ -68,6 +68,11 @@ class StimulusWindow(QDialog):
         self.step_group_box = self.create_step_group_box()
         self.init_ui()
         self.stimulus_changed()
+        old_stimulus_info = self.get_stimulus_info_from_json()
+        if old_stimulus_info:
+            self.old_stimulus_signal_length = old_stimulus_info.get("total_time") * old_stimulus_info.get("sample_rate")
+        else:
+            self.old_stimulus_signal_length = self.stimulus_info.get("total_time") * self.stimulus_info.get("sample_rate")
 
     def init_ui(self):
         # set window titlebar stytle
@@ -78,9 +83,9 @@ class StimulusWindow(QDialog):
         self.setFixedSize(540, 700)
         # create layout to strore custom button layout
         custom_stimulus_layout = QGridLayout()
-        custom_chk_box = QCheckBox("自定义")
-        custom_chk_box.setChecked(True)
-        custom_chk_box.stateChanged.connect(lambda: self.change_custom_chk_box(custom_chk_box.isChecked()))
+        self.custom_chk_box = QCheckBox("自定义")
+        self.custom_chk_box.setChecked(True)
+        self.custom_chk_box.stateChanged.connect(lambda: self.change_custom_chk_box(self.custom_chk_box.isChecked()))
         load_config_btn = QPushButton("导入配置")
         load_config_btn.clicked.connect(self.load_config_btn_clicked)
         save_config_btn = QPushButton("保存配置")
@@ -91,7 +96,7 @@ class StimulusWindow(QDialog):
         save_wav_btn = QPushButton("保存音频")
         save_wav_btn.clicked.connect(self.save_wav_btn_clicked)
         sl_btn_h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        custom_stimulus_layout.addWidget(custom_chk_box, 0, 0)
+        custom_stimulus_layout.addWidget(self.custom_chk_box, 0, 0)
         custom_stimulus_layout.addWidget(load_config_btn, 0, 1)
         custom_stimulus_layout.addWidget(save_config_btn, 1, 1)
         custom_stimulus_layout.addItem(sl_btn_h_spacer, 0, 2)
@@ -145,7 +150,7 @@ class StimulusWindow(QDialog):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qspinbox_stytle +
                            ui_style_const.qdoublespinbox_stytle +
-                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qlabel_stytle +
                            ui_style_const.qcheckbox_stytle +
                            ui_style_const.qgroupbox_stytle)
 
@@ -226,9 +231,9 @@ class StimulusWindow(QDialog):
         total_time_label = QLabel("信号时长：")
         self.total_time_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.total_time_box.setSuffix(" s")
-        self.total_time_box.setDecimals(1)      # Allow one decimal place
-        self.total_time_box.setRange(0.5, 60)   # Set range 0.5-60 seconds
-        self.total_time_box.setValue(4)         # Set default value
+        self.total_time_box.setDecimals(1)  # Allow one decimal place
+        self.total_time_box.setRange(0.5, 60)  # Set range 0.5-60 seconds
+        self.total_time_box.setValue(4)  # Set default value
         self.total_time_box.setMinimumWidth(100)
         self.total_time_box.editingFinished.connect(self.stimulus_changed)
         repeat_label = QLabel("信号重复：")
@@ -379,13 +384,13 @@ class StimulusWindow(QDialog):
         fetches the corresponding sublist from `STIMULUS_DICT`,and adds it to `stimulus_type_combo_box`. Next, it
         enables or disables related controls and sets their styles based on the selected stimulus method.
         """
-         # Get the currently selected stimulus method
+        # Get the currently selected stimulus method
         stimulus_method = self.stimulus_method_combo_box.currentText()
         self.stimulus_type_combo_box.clear()
         # Fetch the corresponding sublist from the dictionary and add it to the stimulus type combo box
         stimulus_item = self.STIMULUS_DICT.get(stimulus_method, {})
         self.stimulus_type_combo_box.addItems(stimulus_item.get("sub_list", []))
-         # Adjust the state and style of related controls based on the selected stimulus method
+        # Adjust the state and style of related controls based on the selected stimulus method
         if stimulus_method == "啁啾":
             self.step_group_box.setDisabled(True)
             self.frequency_group_box.setEnabled(True)
@@ -502,8 +507,7 @@ class StimulusWindow(QDialog):
             self: The class instance containing stimulus information (stimulus_info) and stimulus signal (stimulus_signal).
         """
         # Construct the path for the JSON file
-        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
-         # Generate the name of the stimulus signal based on the stimulus information
+        # Generate the name of the stimulus signal based on the stimulus information
         stimulus_name = "_".join(str(value) for value in self.stimulus_info.values())
         # Construct the path for the WAV file and save the stimulus signal as a WAV file
         stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
@@ -514,6 +518,13 @@ class StimulusWindow(QDialog):
             "stimulus_signal_path": stimulus_signal_path
         }
         # Write the dictionary data to the JSON file and log the operation
+        self.save_json_file(data)
+        # with open(json_file_path, "w") as json_file:
+        #     json.dump(data, json_file, indent=3)
+        #     self.default_logger.info(f"stimulus saved to {json_file_path}.")
+
+    def save_json_file(self, data):
+        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
         with open(json_file_path, "w") as json_file:
             json.dump(data, json_file, indent=3)
             self.default_logger.info(f"stimulus saved to {json_file_path}.")
@@ -596,13 +607,56 @@ class StimulusWindow(QDialog):
             and stores the audio signal and its time information in the class attributes. 
             It then calls the plotting function to display the audio waveform.
         """
-        path, _ = QFileDialog.getOpenFileName(self,
-                                              "打开音频",
-                                              DEFAULT_DIR + "audio_data/stimulus",
-                                              "WAV Files (*.wav)")
-        if path:
-            self.stimulus_signal, self.stimulus_signal_time = load_audio_simple(path, self.stimulus_info["sample_rate"])
+        self.load_wav_path, _ = QFileDialog.getOpenFileName(self,
+                                                            "打开音频",
+                                                            DEFAULT_DIR + "audio_data/stimulus",
+                                                            "WAV Files (*.wav)")
+        if self.load_wav_path:
+            self.stimulus_signal, _ = load_audio_simple(self.load_wav_path, self.stimulus_info["sample_rate"])
             self.graph_stimulus()
+
+    def get_stimulus_info_from_json(self):
+        """
+            Retrieves stimulus information and signal from the configuration.
+
+            This function attempts to load stimulus information from a JSON configuration file and then loads the audio
+        signal based on the configuration.
+            If the loading is successful and the configuration is valid, it parses and returns the stimulus information
+        and the audio signal.
+            If the loading fails or the configuration is invalid, it returns None.
+
+            Returns:
+                tuple: A tuple containing the stimulus information dictionary and the audio signal.
+                    Returns (None, None) if the loading fails or the configuration is invalid.
+        """
+        load_code, result = self.load_stimulus_info_from_json()
+        if load_code == error_code.OK and result:
+            info = result.get("stimulus_info")
+            return info
+        else:
+            return {}
+
+    @staticmethod
+    def load_stimulus_info_from_json():
+        """
+            Load stimulus configuration from a JSON file.
+
+            This method attempts to load stimulus configuration from a predefined JSON file path and parse the
+        configuration into a dictionary.
+            If the JSON file does not exist, it returns an appropriate error code and message.
+
+            Returns:
+                tuple: A tuple containing the error code and configuration data or error message.
+                    If the operation is successful, the error code is error_code.OK, and the configuration data is the
+                 parsed dictionary.
+                    If the operation fails, the error code is error_code.INVALID_DATA_LOADING, and the error message is a string.
+        """
+        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
+        if not os.path.exists(json_file_path):
+            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
+        with open(json_file_path, 'r') as json_file:
+            data = json.load(json_file)
+            return error_code.OK, data
 
     def save_wav_btn_clicked(self):
         """
@@ -649,7 +703,7 @@ class StimulusWindow(QDialog):
             If an exception occurs during the saving process, the function will log the error message.
         """
         # Retrieve the voltage value from the stimulus_info dictionary
-        voltage_value = self.stimulus_info["voltage"]
+        voltage_value = self.voltage_spin_box.value()
         # If the dir_path does not exist, create it and log the creation
         dir_path = DEFAULT_DIR + 'ui/ui_config'
         if not os.path.exists(dir_path):
@@ -689,9 +743,53 @@ class StimulusWindow(QDialog):
 
     def ok_btn_clicked(self):
         self.refresh_stimulus_info = True
-        self.save_stimulus_to_json()
+        if not self.custom_chk_box.isChecked():
+            data = self.load_stimulus_wav()
+            if not data:
+                self.miss_popup()
+                return
+            else:
+                self.save_json_file(data)
+                self.set_ai_popup()
+        else:
+            self.save_stimulus_to_json()
+            stimulus_signal_length = self.stimulus_info.get("sample_rate") * self.stimulus_info.get("total_time")
+            if self.old_stimulus_signal_length != stimulus_signal_length:
+                self.set_ai_popup()
         self.save_voltage_to_txt()
         self.close()
+
+    def load_stimulus_wav(self):
+        # if not self.custom_chk_box.isChecked():
+        sample_rate = int(self.sample_rate_combo_box.currentText())
+        total_time = float(len(self.stimulus_signal) // sample_rate)
+        self.stimulus_info["total_time"] = total_time
+        self.stimulus_info["sample_rate"] = sample_rate
+        data = {}
+        if self.load_wav_path:
+            data = {
+                "stimulus_info": self.stimulus_info,
+                "stimulus_signal_path": self.load_wav_path
+            }
+        return data
+
+    def miss_popup(self):
+        error_msg = QMessageBox(self)
+        error_msg.setIcon(QMessageBox.Warning)
+        error_msg.setText("请先配置激励信号！")
+        error_msg.setWindowTitle("未配置激励信号")
+        error_msg.setStandardButtons(QMessageBox.Ok)
+        button = error_msg.exec_()
+        return button == QMessageBox.Ok
+
+    def set_ai_popup(self):
+        error_msg = QMessageBox(self)
+        error_msg.setIcon(QMessageBox.Warning)
+        error_msg.setText("激励信号变化，请重新配置AI分析模型！")
+        error_msg.setWindowTitle("配置AI模型")
+        error_msg.setStandardButtons(QMessageBox.Ok)
+        button = error_msg.exec_()
+        return button == QMessageBox.Ok
 
     def cancel_btn_clicked(self):
         """
@@ -791,7 +889,7 @@ class LoadStimulusConfig(QDialog):
         list_view.setModel(item_model)
         list_view.setSelectionRectVisible(True)
 
-         # Set the default selected item and trigger the selection event
+        # Set the default selected item and trigger the selection event
         if default_index is not None:
             list_view.setCurrentIndex(default_index)
             self.on_select_item(default_index)
