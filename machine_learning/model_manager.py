@@ -70,9 +70,10 @@ class NeuralNetManager(ModelManager):
             print("finish cycle %s" % i)
         return history
 
-    def predict(self, x_test, verbose=1):
+    def predict(self, x_test, acc_req=None, verbose=1):
         predictions = self.model.predict(x_test, verbose=verbose)
-        acc_req = self.pred_config.get("acc_req", 0.5)
+        if not acc_req:
+            acc_req = self.pred_config.get("acc_req", 0.5)
         y_pred = [0 if i < acc_req else 1 for i in predictions]
         return np.array(y_pred), np.round(predictions.T[0], 3)
 
