@@ -46,10 +46,10 @@ class StimulusSignal(object):
         pi = np.pi
         t_single = total_time / repeat_times
         x_t = np.array(list(range(int(sample_rate * t_single)))) / sample_rate
-        if stimulus_type == "log":
+        if stimulus_type == "log" and start_freq != stop_freq:
             ln = np.log(stop_freq / start_freq)
             y_t = np.sin(2 * pi * start_freq * t_single / ln * (np.exp(ln * x_t / t_single) - 1))
-        elif stimulus_type == "linear":
+        elif stimulus_type == "linear" or stimulus_type == "log":
             delta_f = stop_freq - start_freq
             y_t = np.sin(2 * pi * (0.5 * delta_f / t_single * x_t ** 2 + start_freq * x_t))
         elif stimulus_type == "mirror_log":
