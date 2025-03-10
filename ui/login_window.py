@@ -374,16 +374,16 @@ class ChangePwdWindow(QDialog):
 
     def change_pwd_click(self):
         if not self.password_input.text():
-            QMessageBox.warning(self, "Error", "密码不能为空")
+            QMessageBox.warning(self, "错误", "密码不能为空")
         elif self.password_input.text() != self.confirm_password_input.text():
-            QMessageBox.warning(self, "Error", "两次输入的密码不一致")
+            QMessageBox.warning(self, "错误", "两次输入的密码不一致")
         else:
             enc_pwd = encrypt_password(self.user_name, self.password_input.text())
             if self.change_pwd_in_db(self.user_name, enc_pwd):
-                QMessageBox.information(self, "Success", "修改密码成功")
+                QMessageBox.information(self, "成功", "修改密码成功")
                 self.close()
             else:
-                QMessageBox.warning(self, "Error", "修改密码失败")
+                QMessageBox.warning(self, "失败", "修改密码失败")
 
     def change_pwd_in_db(self, user_name, enc_pwd):
         try:

@@ -75,6 +75,7 @@ class AiWindow(QDialog):
         train_dir_label = QLabel("训练数据路径：")
         # train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
         self.train_dir_box = QLineEdit()
+        self.train_dir_box.setPlaceholderText("请选择训练数据路径")
         icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
         train_dir_icon = QIcon(icon_path)
         train_dir_action = self.train_dir_box.addAction(train_dir_icon, QLineEdit.TrailingPosition)
