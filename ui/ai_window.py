@@ -36,13 +36,14 @@ class AiWindow(QDialog):
     def on_update_text(self, text):
         cursor = self.process.textCursor()
         cursor.movePosition(QTextCursor.End)
-        if text == "\r":
-            cursor.insertText("66666")
+        if text != "\r":
+            cursor.insertText(text)
+            # cursor.insertText("66666")
             # cursor.movePosition(QTextCursor.StartOfLine)
             # cursor.movePosition(QTextCursor.PreviousRow)
             # cursor.movePosition(QTextCursor.StartOfLine)
-        else:
-            cursor.insertText(text)
+        # else:
+        #     cursor.insertText(text)
         self.process.setTextCursor(cursor)
         self.process.ensureCursorVisible()
 
