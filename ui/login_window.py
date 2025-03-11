@@ -1,7 +1,7 @@
 import hashlib
 import sys
+import uuid
 
-from getmac import get_mac_address
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit
@@ -414,6 +414,12 @@ def encrypt_password(user_name, password):
     sh.update(mac_pwd.encode("utf-8"))
     enc_pwd = sh.hexdigest()
     return enc_pwd
+
+
+def get_mac_address():
+    mac = uuid.getnode()
+    mac_address = ":".join(("%012x" % mac)[i:i + 2] for i in range(0, 12, 2))
+    return mac_address
 
 
 if __name__ == "__main__":
