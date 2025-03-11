@@ -9,7 +9,6 @@ from datetime import datetime
 import librosa
 import numpy as np
 import pyqtgraph as pg
-from getmac import get_mac_address
 from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
@@ -23,6 +22,7 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from consts import ui_style_const, error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.signal_analysis_window import Spl, Distortion, AI, Frequency
+from ui.login_window import get_mac_address
 
 
 class SequenceWindow(QWidget):
