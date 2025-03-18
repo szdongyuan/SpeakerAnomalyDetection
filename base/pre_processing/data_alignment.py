@@ -34,16 +34,16 @@ class DataAlignment(object):
         truncating = kwargs.get("truncating", "post")
         signal_length = len(signal)
         if signal_length > maxlen:
-            if truncating == "pre":
-                padded_inputs = signal[-maxlen:]
-            else:
+            if truncating == "post":
                 padded_inputs = signal[:maxlen]
+            else:
+                padded_inputs = signal[-maxlen:]
         elif signal_length < maxlen:
             padding_length = maxlen - signal_length
-            if padding == "pre":
-                padded_inputs = np.pad(signal, (padding_length, 0), mode='constant', constant_values=0)
-            else:
+            if padding == "post":
                 padded_inputs = np.pad(signal, (0, padding_length), mode='constant', constant_values=0)
+            else:
+                padded_inputs = np.pad(signal, (padding_length, 0), mode='constant', constant_values=0)
         else:
             padded_inputs = signal
         return np.array(padded_inputs, dtype=dtype)
