@@ -1,7 +1,4 @@
 import numpy as np
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
 
 
 class DataAlignment(object):
@@ -35,14 +32,21 @@ class DataAlignment(object):
         maxlen = kwargs.get("maxlen", 66150)
         padding = kwargs.get("padding", "post")
         truncating = kwargs.get("truncating", "post")
-        padded_inputs = tf.keras.preprocessing.sequence.pad_sequences(
-            np.array([signal]),
-            padding=padding,
-            maxlen=maxlen,
-            truncating=truncating,
-            dtype=dtype,
-        )
-        return padded_inputs[0]
+        signal_length = len(signal)
+        if signal_length > maxlen:
+            if truncating == "pre":
+                padded_inputs = signal[-maxlen:]
+            else:
+                padded_inputs = signal[:maxlen]
+        elif signal_length < maxlen:
+            padding_length = maxlen - signal_length
+            if padding == "pre":
+                padded_inputs = np.pad(signal, (padding_length, 0), mode='constant', constant_values=0)
+            else:
+                padded_inputs = np.pad(signal, (0, padding_length), mode='constant', constant_values=0)
+        else:
+            padded_inputs = signal
+        return np.array(padded_inputs, dtype=dtype)
 
     @staticmethod
     def chop_data(raw_inputs, chop_head=0, chop_tail=None):
