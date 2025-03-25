@@ -59,15 +59,14 @@ class StimulusSignalManagement(object):
 
     @staticmethod
     def save_stimulus_info_to_db(stimulus_info: dict):
-        stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_info)
+        stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
-                if len(stimulus_config) != len(model_consts.STIMULUS_COLUMNS):
+                result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
+                                                      model_consts.STIMULUS_CONFIG_COLUMNS, ['stimulus_id'])
+                if not result:
                     is_default = database.set_default("stimulus_signal_table")
                     stimulus_config += (is_default,)
-                result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
-                                                      model_consts.STIMULUS_COLUMNS, ['stimulus_id'])
-                if not result:
                     stimulus_config = database.get_data_id([stimulus_config], 0)
                     insert_code, msg = database.insert_data_into_db("stimulus_signal_table",
                                                                     model_consts.DB_STIMULUS_COLUMNS, stimulus_config)
