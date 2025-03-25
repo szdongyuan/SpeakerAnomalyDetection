@@ -75,7 +75,7 @@ class StimulusSignalManagement(object):
                     else:
                         return error_code.INVALID_INSERT, msg
                 else:
-                    return error_code.INVALID_SAVE, "This stimulus signals info already exists."
+                    return error_code.INVALID_INSERT, "This stimulus signals info already exists."
         except Exception as e:
             err_msg = "Failed to save stimulus signals to the database. %s" % (str(e)[:40])
             return error_code.INVALID_SAVE, err_msg
