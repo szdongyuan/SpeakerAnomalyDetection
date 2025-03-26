@@ -3,7 +3,7 @@ import os
 import sys
 from functools import partial
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
@@ -522,7 +522,7 @@ class HdConfigWindow(QDialog):
 
     def on_click_ok_btn(self):
         if not self.selected_labels:
-            PopupUtils().close_popup(self)
+            QMessageBox.warning(self, "设置警告", "请选择谐波失真阶数")
         else:
             config_data = self.get_default_config()
             self.accept()
@@ -555,6 +555,10 @@ class AIConfigWindow(QDialog):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlabel_stytle +
                            ui_style_const.qcombobox_stytle)
+        
+    def cheack_model_list(self):
+        if self.analyse_model_combo_box.count() == 0:
+            QMessageBox.warning(self, "设置警告", "没有可用的AI模型选型,请检查配置!")
 
     def create_model_layout(self):
         model_box = QGroupBox("模型")
@@ -567,8 +571,7 @@ class AIConfigWindow(QDialog):
             self.analyse_model_combo_box.addItem(model_name)
         self.analyse_model_combo_box.setCurrentText(self.load_config.get("analyse_model_name"))
         self.analyse_model_combo_box.currentTextChanged.connect(self.get_default_config)
-        if self.analyse_model_combo_box.count() == 0:
-            PopupUtils.miss_popup(self)
+        QTimer.singleShot(5, self.cheack_model_list)
         analyse_model_combo_layout = QHBoxLayout()
         analyse_model_combo_layout.addWidget(analyse_model_label)
         analyse_model_combo_layout.addWidget(self.analyse_model_combo_box)
@@ -617,7 +620,7 @@ class AIConfigWindow(QDialog):
         default_config = {
             "analyse_model_name": self.analyse_model_combo_box.currentText()
         }
-        return default_config
+        return default_config  
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
@@ -631,6 +634,22 @@ class AIConfigWindow(QDialog):
 
 
 class PopupUtils(object):
+    # """
+    #     noicon : 0
+    #     warning : 2
+    #     question : 4
+    #     information : 1
+    #     critical : 3
+    # """
+    # @staticmethod
+    # def popup_massagebox(parent, title, message, icon_type:int):
+    #     msg = QMessageBox(parent)
+    #     msg.setIcon(icon_type)
+    #     msg.setText(message)
+    #     msg.setWindowTitle(title)
+    #     msg.setStandardButtons(QMessageBox.Ok)
+    #     msg.exec_()
+
     @staticmethod
     def save_popup(parent, success_flag=True):
         save_msg = QMessageBox(parent)
@@ -642,35 +661,7 @@ class PopupUtils(object):
             save_msg.setIcon(QMessageBox.Critical)
             save_msg.setText("设置失败，请重试")
             save_msg.setWindowTitle("设置失败")
-        save_msg.setStandardButtons(QMessageBox.Ok)
         save_msg.exec_()
-
-    @staticmethod
-    def close_popup(parent):
-        close_msg = QMessageBox(parent)
-        close_msg.setIcon(QMessageBox.Warning)
-        close_msg.setText("请选择谐波失真阶数")
-        close_msg.setWindowTitle("设置警告")
-        close_msg.setStandardButtons(QMessageBox.Ok)
-        close_msg.exec_()
-
-    @staticmethod
-    def miss_popup(parent):
-        close_msg = QMessageBox(parent)
-        close_msg.setIcon(QMessageBox.Warning)
-        close_msg.setText("没有可用的AI模型选型，请检查配置！")
-        close_msg.setWindowTitle("模型缺失")
-        close_msg.setStandardButtons(QMessageBox.Ok)
-        close_msg.exec_()
-
-    @staticmethod
-    def config_data_erorr_popup(parent):
-        config_data_erorr_msg = QMessageBox(parent)
-        config_data_erorr_msg.setIcon(QMessageBox.Warning)
-        config_data_erorr_msg.setText("上下限配置数据错误，请检查配置")
-        config_data_erorr_msg.setWindowTitle("设置警告")
-        config_data_erorr_msg.setStandardButtons(QMessageBox.Ok)
-        config_data_erorr_msg.exec_()
 
 
 class ConfigManager(object):
@@ -730,12 +721,12 @@ def check_upper_lower_limit(config_data: dict, parent):
     is_limit_effect = is_lower_limit_effect and is_upper_limit_effect
     if is_limit_effect:
         if int(config_data["upper_limit"]) <= int(config_data["lower_limit"]):
-            PopupUtils().config_data_erorr_popup(parent)
+            QMessageBox.warning(parent, "设置警告", "上下限配置数据错误，请检查配置!")
             return True
         else:
             return False
     else:
-        PopupUtils().config_data_erorr_popup(parent)
+        QMessageBox.warning(parent, "设置警告", "上下限配置数据错误，请检查配置!")
         return True
 
 
