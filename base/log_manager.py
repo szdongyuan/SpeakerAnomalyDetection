@@ -22,7 +22,6 @@ class LogManager(object):
             if isinstance(handler, ConcurrentRotatingFileHandler):
                 has_rotating_handler = True
                 break
-        #
         if not has_rotating_handler:
             handler = ConcurrentRotatingFileHandler(filename=log_info.get("log_name", LOG_DIR + "main.log"),
                                           maxBytes=log_info.get("max_size", 1 << 20),
