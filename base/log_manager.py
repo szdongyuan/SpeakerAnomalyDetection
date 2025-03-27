@@ -1,6 +1,6 @@
 import logging
 import os
-from concurrent_log_handler import ConcurrentRotatingFileHandler
+from logging.handlers import RotatingFileHandler
 
 from consts.running_consts import LOG_DIR, LOG_MAPPING, DEFAULT_LOG
 
@@ -17,21 +17,14 @@ class LogManager(object):
 
         logger = logging.getLogger(thread_holder)
         log_info = LOG_MAPPING.get(thread_holder, DEFAULT_LOG)
-        has_rotating_handler = False
-        for handler in logger.handlers:
-            if isinstance(handler, ConcurrentRotatingFileHandler):
-                has_rotating_handler = True
-                break
-        #####
-        if not has_rotating_handler:
-            handler = ConcurrentRotatingFileHandler(filename=log_info.get("log_name", LOG_DIR + "main.log"),
-                                          maxBytes=log_info.get("max_size", 1 << 20),
-                                          backupCount=log_info.get("backup_count", 10))
-            logger.setLevel(level=logging.INFO)
-            handler.setLevel(logging.INFO)
-            formatter = logging.Formatter(log_info.get("log_format"))
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
+        handler = RotatingFileHandler(filename=log_info.get("log_name", LOG_DIR + "main.log"),
+                                      maxBytes=log_info.get("max_size", 1 << 20),
+                                      backupCount=log_info.get("backup_count", 10))
+        logger.setLevel(level=logging.INFO)
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter(log_info.get("log_format"))
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
         return logger
 
     def info(self, info_str):
