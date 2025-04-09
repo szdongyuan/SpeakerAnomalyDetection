@@ -97,6 +97,7 @@ class LoginWindow(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.setLayout(layout)
+        self.login_button.setDefault(True)
 
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +

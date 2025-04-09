@@ -2,6 +2,7 @@ import os
 import shutil
 
 from consts import error_code
+from consts.running_consts import DEFAULT_DIR
 
 
 class FileOps(object):
@@ -32,3 +33,13 @@ class FileOps(object):
         except Exception as e:
             err_msg = "failed to create [%s], %s" % (dest_dir, str(e)[:40])
             return error_code.INVALID_PATH, err_msg
+        
+    @staticmethod
+    def get_relative_path(file_path: str, base_path: str = DEFAULT_DIR):
+        """
+            Get the relative path of a file with respect to a base path.
+        """
+        relative_path = os.path.relpath(file_path, base_path)
+        relative_path = relative_path.replace("\\", "/")
+        relative_path = relative_path.replace("../", "")
+        return relative_path
