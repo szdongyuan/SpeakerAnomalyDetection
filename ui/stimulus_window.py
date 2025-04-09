@@ -472,7 +472,6 @@ class StimulusWindow(QDialog):
             Retrieves the maximum input voltage from the calibration coefficients.
         """
         code, data = SoundcardCalibrationManager().load_data_from_json("calibration_coefficients.json")
-        print(code,data)
         if code == error_code.OK:
             return data["max_voltage"]
         else:
