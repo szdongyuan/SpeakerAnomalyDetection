@@ -838,7 +838,7 @@ class StimulusWindow(QDialog):
                 bool: Returns True if `refresh_stimulus_info` is True, indicating that the stimulus
                     information needs to be refreshed; otherwise, returns False.
         """
-        self.exec() 
+        self.exec()
         if self.refresh_stimulus_info:
             return True
         return False
