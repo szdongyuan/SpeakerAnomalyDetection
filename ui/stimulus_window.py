@@ -55,7 +55,7 @@ class StimulusWindow(QDialog):
         self.default_logger = LogManager.set_log_handler("core")
         self.box_checked_enable_dict = {}
         self.box_checked_disable_list = []
-        self.file_dialog_dir = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/"
+        # self.file_dialog_dir = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/"
 
         # create variable to set stimulus signal data
         self.stimulus_method_combo_box = QComboBox()
@@ -524,9 +524,9 @@ class StimulusWindow(QDialog):
         # Construct the path for the WAV file and save the stimulus signal as a WAV file
         stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
         wavfile.write(stimulus_signal_path, self.stimulus_info["sample_rate"], self.stimulus_signal.astype("float32"))
-        stimulus_signal_path = FileOps.get_relative_path(stimulus_signal_path, self.file_dialog_dir)
+        stimulus_signal_path = FileOps.get_relative_path(stimulus_signal_path, DEFAULT_DIR)
         if self.load_stimulus_signal_path:
-            self.load_stimulus_signal_path = FileOps.get_relative_path(self.load_stimulus_signal_path, self.file_dialog_dir)
+            self.load_stimulus_signal_path = FileOps.get_relative_path(self.load_stimulus_signal_path, DEFAULT_DIR)
         # Create a dictionary containing the stimulus information and WAV file path
         data = {
             "stimulus_info": self.stimulus_info,
@@ -732,34 +732,6 @@ class StimulusWindow(QDialog):
         if play_code != error_code.OK:
             self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 
-    # def save_voltage_to_txt(self):
-    #     """
-    #         Save the voltage value to a text file.
-
-    #         This function retrieves the voltage value from the `self.stimulus_info` dictionary and saves it to a
-    #     specified text file.
-    #         If the target directory does not exist, the function will create it and log the creation information.
-    #         If an exception occurs during the saving process, the function will log the error message.
-    #     """
-    #     # Retrieve the voltage value from the stimulus_info dictionary
-    #     voltage_value = self.voltage_spin_box.value()
-    #     # If the dir_path does not exist, create it and log the creation
-    #     dir_path = DEFAULT_DIR + 'ui/ui_config'
-    #     if not os.path.exists(dir_path):
-    #         os.mkdir(dir_path)
-    #         self.default_logger.info(f"Dir '{dir_path}' created.")
-    #     # Define the file path
-    #     file_path = dir_path + "/" + "voltage_value.txt"
-    #     try:
-    #         # Open the file and write the voltage value, log the action
-    #         with open(file_path, 'w') as f:
-    #             f.write(str(voltage_value))
-    #             self.default_logger.info(f"The voltage value: {voltage_value} saved to voltage_value.txt")
-    #     except Exception as e:
-    #         # If saving fails, log the error~       
-    #         self.default_logger.error("Failed to save voltage value to txt. %s" % (str(e)[:40]))
-
-
     def ok_btn_clicked(self):
         self.refresh_stimulus_info = True
         if not self.custom_chk_box.isChecked():
@@ -768,8 +740,8 @@ class StimulusWindow(QDialog):
                 self.miss_popup()
                 return
             else:
-                data["stimulus_signal_path"] = FileOps.get_relative_path(data["stimulus_signal_path"], self.file_dialog_dir)
-                data["load_stimulus_signal_path"] = FileOps.get_relative_path(data["load_stimulus_signal_path"], self.file_dialog_dir)
+                data["stimulus_signal_path"] = FileOps.get_relative_path(data["stimulus_signal_path"], DEFAULT_DIR)
+                data["load_stimulus_signal_path"] = FileOps.get_relative_path(data["load_stimulus_signal_path"], DEFAULT_DIR)
                 self.save_json_file(data)
                 if self.load_wav_path != self.load_stimulus_signal_path:
                     self.set_ai_popup()
