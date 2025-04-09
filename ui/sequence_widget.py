@@ -67,10 +67,10 @@ class SequenceWindow(QWidget):
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumHeight(700)
-        toolbar_layout = self.create_toolbar_layout()
+        layout = self.create_layout()
         waveform_layout = self.create_waveform_layout()
 
-        self.sequence_layout.addLayout(toolbar_layout)
+        self.sequence_layout.addLayout(layout)
         self.sequence_layout.addLayout(waveform_layout)
         self.sequence_layout.setAlignment(Qt.AlignCenter)
         self.sequence_layout.setContentsMargins(0, 0, 0, 0)
@@ -87,7 +87,7 @@ class SequenceWindow(QWidget):
                            ui_style_const.qlabel_stytle +
                            ui_style_const.qcheckbox_stytle)
 
-    def create_toolbar_layout(self):
+    def create_layout(self):
         """
             Create the toolbar layout.
 
@@ -130,7 +130,7 @@ class SequenceWindow(QWidget):
             product_model = "S004-1"
         type_label.setFixedHeight(40)
         self.lineedit_type = QLineEdit(product_model)
-        self.lineedit_type.setFixedHeight(40)
+        self.lineedit_type.setFixedHeight(35)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         label_count = QLabel(" 计 数： ")
         label_count.setFixedHeight(40)
@@ -141,7 +141,7 @@ class SequenceWindow(QWidget):
         else:
             current_recorded_count = result
         self.lineedit_count = QLineEdit(str(current_recorded_count))
-        self.lineedit_count.setFixedHeight(40)
+        self.lineedit_count.setFixedHeight(35)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_lose_focus(self.lineedit_count))
         self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
@@ -152,7 +152,7 @@ class SequenceWindow(QWidget):
 
         self.lineedit_s_or_n = QLineEdit(self)
         self.lineedit_s_or_n.setDisabled(True)
-        self.lineedit_s_or_n.setFixedHeight(40)
+        self.lineedit_s_or_n.setFixedHeight(35)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
         self.lineedit_s_or_n.editingFinished.connect(lambda: self.validate_count(self.lineedit_s_or_n, False))
 
@@ -162,46 +162,50 @@ class SequenceWindow(QWidget):
         vertical_line_4 = QFrame()
         vertical_line_5 = QFrame()
         vertical_line_6 = QFrame()
+        vertical_line_7 = QFrame()
+        vertical_line_8 = QFrame()
         vertical_line_1.setFrameShape(QFrame.VLine)
         vertical_line_2.setFrameShape(QFrame.VLine)
         vertical_line_3.setFrameShape(QFrame.VLine)
         vertical_line_4.setFrameShape(QFrame.VLine)
         vertical_line_5.setFrameShape(QFrame.VLine)
         vertical_line_6.setFrameShape(QFrame.VLine)
-        h_spacer = QSpacerItem(30, 30, QSizePolicy.Expanding, QSizePolicy.Minimum)
-
-        h_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        h_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        h_spacer_3 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        h_spacer_4 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
+        vertical_line_7.setFrameShape(QFrame.HLine)
+        vertical_line_8.setFrameShape(QFrame.HLine)
+        vertical_line_7.setFixedHeight(1)
+        vertical_line_8.setFixedHeight(1)
 
         # Create and configure the toolbar layout
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.addWidget(self.player_btn)
-        toolbar_layout.addWidget(vertical_line_1)
-        toolbar_layout.addWidget(self.replayer_btn)
-        toolbar_layout.addWidget(vertical_line_2)
-        toolbar_layout.addWidget(self.data_btn)
-        toolbar_layout.addWidget(vertical_line_3)
-        toolbar_layout.addWidget(type_label)
-        toolbar_layout.addWidget(self.lineedit_type)
-        toolbar_layout.addItem(h_spacer_1)
-        toolbar_layout.addWidget(vertical_line_4)
-        toolbar_layout.addWidget(label_count)
-        toolbar_layout.addWidget(self.lineedit_count)
-        toolbar_layout.addItem(h_spacer_2)
-        toolbar_layout.addWidget(vertical_line_5)
-        toolbar_layout.addItem(h_spacer_3)
-        toolbar_layout.addWidget(self.barcode_scanner_box)
-        toolbar_layout.addWidget(self.lineedit_s_or_n)
-        toolbar_layout.addItem(h_spacer_4)
-        toolbar_layout.addWidget(vertical_line_6)
-        toolbar_layout.addItem(h_spacer)
+        tools_layout = QVBoxLayout()
+        layout = QHBoxLayout()
+        layout.addWidget(self.player_btn)
+        layout.addWidget(vertical_line_1)
+        layout.addWidget(self.replayer_btn)
+        layout.addWidget(vertical_line_2)
+        layout.addWidget(self.data_btn)
+        layout.addWidget(vertical_line_3)
+        layout.addWidget(type_label)
+        layout.addWidget(self.lineedit_type)
+        layout.addSpacing(10)
+        layout.addWidget(vertical_line_4)
+        layout.addWidget(label_count)
+        layout.addWidget(self.lineedit_count)
+        layout.addSpacing(10)
+        layout.addWidget(vertical_line_5)
+        layout.addSpacing(10)
+        layout.addWidget(self.barcode_scanner_box)
+        layout.addWidget(self.lineedit_s_or_n)
+        layout.addSpacing(10)
+        layout.addWidget(vertical_line_6)
+        layout.addStretch(30)
+        layout.setContentsMargins(4, 0, 0, 0)
+        tools_layout.addWidget(vertical_line_7)
+        tools_layout.addLayout(layout)
+        tools_layout.addWidget(vertical_line_8)
 
-        toolbar_layout.setContentsMargins(4, 0, 0, 0)
-        toolbar_layout.setSpacing(0)
+        tools_layout.setSpacing(0)
 
-        return toolbar_layout
+        return tools_layout
 
     def create_waveform_layout(self):
         """
@@ -287,7 +291,7 @@ class SequenceWindow(QWidget):
             reg = r'^[0-9a-zA-Z]*$'
         # Check if the user input matches the regular expression
         if not re.match(reg, s_or_n_count):
-            # If the input is not a number, restore the previously recorded number          
+            # If the input is not a number, restore the previously recorded number
             if is_s_or_n:
                 lineedit.setText(str(result_count))
             else:
@@ -435,15 +439,6 @@ class SequenceWindow(QWidget):
         self.default_ai_result = None
         self.default_ai = None
         self.clicked_scanner()
-
-    # def clear_plg(self):
-    #     self.line_graph.clear()
-    #     self.analyse_layout.signal_analyse_dialog.spl_wnd.waveform_plot.clear()
-    #     self.analyse_layout.signal_analyse_dialog.spl_wnd.spl_plot.clear()
-    #     self.analyse_layout.signal_analyse_dialog.frequency_wnd.fr_plot.clear()
-    #     self.analyse_layout.signal_analyse_dialog.distortion_wnd.thd_plot.clear()
-    #     self.analyse_layout.ai_analyse_score_lineedit.clear()
-    #     QApplication.processEvents()
 
     def get_stimulus_from_config(self):
         """
@@ -630,58 +625,6 @@ class SequenceWindow(QWidget):
                 target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
             shutil.move(self.recorded_path, target_path)
         return target_path
-
-    # def clicked_analyse_btn(self):
-    #     selected_model = self.analyse.model_combo_box.currentText()
-    #     code, result = self.get_model_info(selected_model)
-    #     if code != error_code.OK or not os.path.exists(result[0]):
-    #         if self.model_missing_popup():
-    #             return
-    #     else:
-    #         self.save_analyse_model(selected_model)
-    #         model_path, config_path = result
-    #         kwargs = {"config_path": config_path}
-    #         result_text = self.model_predict(model_path, **kwargs)
-    #         self.analyse.ai_analyse_score_lineedit.setPlainText(result_text)
-
-    # def model_missing_popup(self):
-    #     model_missing_msg = QMessageBox(self)
-    #     model_missing_msg.setIcon(QMessageBox.Critical)
-    #     model_missing_msg.setText("模型不存在，请重新选择!")
-    #     model_missing_msg.setWindowTitle("模型加载失败")
-    #     model_missing_msg.setStandardButtons(QMessageBox.Ok)
-    #     button = model_missing_msg.exec_()
-    #     return button == QMessageBox.Ok
-
-    # @staticmethod
-    # def save_analyse_model(selected_model):
-    #     file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
-    #     with open(file_path, 'w') as f:
-    #         f.write(selected_model)
-
-    # @staticmethod
-    # def load_analyse_model():
-    #     file_path = DEFAULT_DIR + "ui/ui_config/analyse_model.txt"
-    #     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-    #         return ""
-    #     with open(file_path, 'r') as f:
-    #         model_name = f.read().strip()
-    #         return model_name
-
-    # def model_predict(self, model_path, **kwargs):
-    #     ret_str = predict(self.recorded_path, load_model_path=model_path, **kwargs)
-    #     ret_dict = json.loads(ret_str)
-    #     predict_result = ret_dict["result"]
-    #     predict_label = predict_result[0][1]
-    #     ok_scores = float(predict_result[0][2]) * 100
-    #     ng_scores = 100 - ok_scores
-    #     result_text = (
-    #         f"评分：\n"
-    #         f"OK Score: {ok_scores:.2f}%\n"
-    #         f"NG Score: {ng_scores:.2f}%\n"
-    #         f"评分结果: {predict_label}"
-    #     )
-    #     return result_text
 
     def clicked_player_btn(self):
         """
@@ -871,17 +814,6 @@ class SequenceWindow(QWidget):
                 return float(deviation_value)
         except Exception as e:
             return 0.0
-
-    # def load_model_name_from_db(self):
-    #     model_list = []
-    #     query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
-    #     if query_code == error_code.OK:
-    #         for idx, name in enumerate(query_result):
-    #             query_result_idx = query_result[idx]
-    #             input_dim = int(query_result_idx[1].split(' ')[0])
-    #             if input_dim == len(self.stimulus_signal):
-    #                 model_list.append(query_result_idx[0])
-    #     return model_list
 
     def get_recorded_info(self):
         """
