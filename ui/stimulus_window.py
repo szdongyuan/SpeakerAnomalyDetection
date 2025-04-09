@@ -55,7 +55,6 @@ class StimulusWindow(QDialog):
         self.default_logger = LogManager.set_log_handler("core")
         self.box_checked_enable_dict = {}
         self.box_checked_disable_list = []
-        # self.file_dialog_dir = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/"
 
         # create variable to set stimulus signal data
         self.stimulus_method_combo_box = QComboBox()
