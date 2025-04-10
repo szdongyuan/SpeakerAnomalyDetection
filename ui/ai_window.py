@@ -587,7 +587,6 @@ class TrainEvaluateThread(QThread):
             and it can handle exceptions that may occur during execution to ensure the robustness of the program.
         """
         try:
-            print(self.model_path)
             if self.mode == "train":
                 train(self.train_dir, self.model_path, self.test_dir)
             elif self.mode == "evaluate":
