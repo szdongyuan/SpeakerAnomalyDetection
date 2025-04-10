@@ -89,7 +89,7 @@ class MytableView(QTableView):
         self.horizontalHeader().sectionClicked.connect(self.clear_sellect_model_row)
         self.verticalHeader().sectionClicked.connect(self.on_column_clicked)
         self.clicked.connect(self.on_item_clicked)
-        "Set up a slot function for multi - selection."
+        # Set up a slot function for multi - selection.
         self.selectionModel().selectionChanged.connect(self.clear_sellect_model_row)
         self.setStyleSheet(ui_style_const.qlabel_stytle)
 
@@ -121,13 +121,6 @@ class MytableView(QTableView):
         self.setColumnWidth(2, 90)
         self.setColumnWidth(3, 60)
 
-    def check_model_name_is_special(self, model_name: str):
-        special_char = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]
-        if model_name is not None:
-            for i in special_char:
-                if i in model_name:
-                    return True
-
     def on_data_changed(self, index: QStandardItem, is_edit_item):
         if index.data() != "":
             if is_edit_item:
@@ -144,10 +137,6 @@ class MytableView(QTableView):
                     model_data = {"old_name": old_name, "model_name": model_name, "model_path": self.model_info[index.row()][-1]}
                     model_path = DEFAULT_DIR + self.model_info[index.row()][-1]
                     if model_name is not None:
-                        if self.check_model_name_is_special(model_name):
-                            self.model().setData(index, self.model_info[index.row()][index.column()])
-                            QMessageBox.warning(self, "警告", "模型名称不能包含特殊字符")
-                            return
                         try:
                             new_model_path = model_path.replace(old_name, model_name)
                             rename(model_path, new_model_path)
@@ -162,7 +151,11 @@ class MytableView(QTableView):
                     old_description = self.model_info[index.row()][index.column()]
                     model_description = new_model_info
                     model_data = {"old_name": old_name, "old_description" : old_description, "model_description": model_description}
-                self.model_management.update_model_info_to_db(model_data)
+                code, error = self.model_management.update_model_info_to_db(model_data)
+                if code == error_code.OK:
+                    self.logger.info(error)
+                else:
+                    self.logger.error("update model info to db error. [%s]" % error)
                 self.model().clear()
                 self.load_model_info_from_db()
             else:
@@ -223,9 +216,6 @@ class MytableView(QTableView):
 
     def copy_file(self, source_path: str, model_name: str, model_type: str):
         if source_path and model_name and model_type:
-            if self.check_model_name_is_special(model_name):
-                QMessageBox.warning(self, "警告", "模型名称不能包含特殊字符")
-                return
             if not path.isfile(source_path):
                 self.logger.error("source file is empty")
                 return error_code.INVALID_PATH
@@ -283,15 +273,17 @@ class MytableView(QTableView):
             model_obj_data = SetModelConfig(model_name=model_name, dim=dim_dict)
             model_obj_data.model_input_dim_box.setEnabled(False)
             model_obj_data.model_output_dim_box.setEnabled(False)
-            model_config = model_obj_data.exec()
         else:
             model_obj_data = SetModelConfig(model_name=model_name)
-            model_config = model_obj_data.exec()
+        model_config = model_obj_data.exec()
         return model_config
         
     def check_model_config(self, model_name: str = None, model_type: str = "keras", recursion_num: int = 0, action_type:str = None):
         if recursion_num > 2:
             self.logger.error("get model config error")
+            selection_model = self.selectionModel()
+            if selection_model.hasSelection():
+                selection_model.clearSelection()
             return {}
         model_config = self.get_model_config(model_name = model_name, action_type = action_type)
         target_dir = DEFAULT_DIR + "models/"     
@@ -347,7 +339,6 @@ class MytableView(QTableView):
                                                  "选择模型文件",
                                                  home_directory, 
                                                  "KERAS Files (*.keras);;"
-                                                 "PKL Files (*.pkl);;"
                                                  "All Files (*)")[0]
         if path.isfile(model_path):
             model_name = path.basename(model_path)
@@ -533,15 +524,15 @@ class SetModelConfig(QDialog):
         else:
             return {}
         
-    def closeEvent(self, a0):
+    def closeEvent(self, close_event):
         if self.clicked_ok_close:
             if not self.check_model_name(self.config["model_name"]):
-                a0.ignore()
+                close_event.ignore()
                 self.clicked_ok_close = False
             else:
-                a0.accept()
+                close_event.accept()
         else:
-            a0.accept()
+            close_event.accept()
 
 class CustomStandardItemModel(QStandardItemModel):
     def __init__(self, rows, columns, editable_column: list, parent=None):

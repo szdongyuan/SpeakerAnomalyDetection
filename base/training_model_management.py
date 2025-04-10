@@ -57,8 +57,6 @@ class TrainingModelManagement(object):
             return error_code.INVALID_DATA_LOADING, "The model info is empty."
         
     def update_model_info_to_db(self, model_data: dict):
-        if not isinstance(model_data, dict):
-            return error_code.INVALID_TYPE_DATA, "The model data is empty or invalid."
         try:
             with DataSave(self.db_path) as database:
                 result = database.query_matching_data([(model_data.get("old_name"),)], "training_model_table", ["model_name"],
@@ -77,8 +75,11 @@ class TrainingModelManagement(object):
                         condition_field = {"model_name": model_data["old_name"],
                                            "model_description": model_data["old_description"]}
                     database.update_table_data("training_model_table", update_data, condition_field)
+                    return error_code.OK, "Successfully update the model info to the database."
+                else:
+                    return error_code.INVALID_UPDATE, "The model name does not exist."
         except Exception as e:
-            err_msg = "Failed to save the model info to the database. %s" % (str(e)[:70])
+            err_msg = "Failed to update the model info to the database. %s" % (str(e)[:70])
             return error_code.INVALID_INSERT, err_msg
 
     def delete_model_info_from_db(self, model_name: str):

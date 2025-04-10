@@ -23,7 +23,6 @@ class AiWindow(QDialog):
             loading the model path, initializing the UI, and setting up the thread.
         """
         super().__init__()
-        print(self)
         self.train_dir = self.load_default_train_test_path("train")
         self.test_dir = self.load_default_train_test_path("evaluate")
         self.model_path = self.load_model_path_from_config()
@@ -61,7 +60,6 @@ class AiWindow(QDialog):
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("AI训练窗口")
-        # self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setMinimumWidth(730)
 
@@ -74,18 +72,6 @@ class AiWindow(QDialog):
         btn_function_layout.addWidget(base_model_wdiget)
         btn_function_layout.addWidget(train_group_box)
         btn_function_layout.addWidget(evaluate_group_box)
-        # btn_function_layout.addWidget(self.process)
-
-        # splitter = QSplitter(Qt.Vertical)
-        # base_model_frame = QFrame()
-        # base_model_frame.setLayout(base_model_layout)
-        # base_model_layout.setContentsMargins(0, 0, 0, 0)
-        # btn_function_frame = QFrame()
-        # btn_function_frame.setLayout(btn_function_layout)
-        # splitter.addWidget(base_model_frame)
-        # splitter.addWidget(btn_function_frame)
-        # splitter.setHandleWidth(0)
-        # ai_layout.addWidget(splitter)
 
         self.setLayout(btn_function_layout)
         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
@@ -98,7 +84,6 @@ class AiWindow(QDialog):
         train_group_box = QGroupBox("训练")
         train_layout = QVBoxLayout()
         train_dir_label = QLabel("训练数据路径：")
-        # train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
         self.train_dir_lineedit = QLineEdit()
         self.train_dir_lineedit.setPlaceholderText("请选择训练数据路径")
         icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
@@ -351,8 +336,10 @@ class BaseModel(QWidget):
         flag = False
         for model_name in self.load_model:
             self.base_model_combobox.addItem(model_name)
-            if model_name == current_text: flag = True
-        if flag: self.base_model_combobox.setCurrentText(current_text)
+            if model_name == current_text:
+                flag = True
+        if flag:
+            self.base_model_combobox.setCurrentText(current_text)
 
     def create_model_box(self):
         """
@@ -600,8 +587,8 @@ class TrainEvaluateThread(QThread):
             and it can handle exceptions that may occur during execution to ensure the robustness of the program.
         """
         try:
+            print(self.model_path)
             if self.mode == "train":
-                print(self.train_dir, "\n", self.model_path, "\n", self.test_dir)
                 train(self.train_dir, self.model_path, self.test_dir)
             elif self.mode == "evaluate":
                 evaluate(self.test_dir, self.model_path, verbose=7)
@@ -660,22 +647,21 @@ class Process_Widget(QDialog):
         self.model_structure_texteditor.setReadOnly(True)
         self.model_structure_texteditor.ensureCursorVisible()
         self.model_structure_texteditor.setLineWrapMode(QTextEdit.NoWrap)
-        # self.model_structure_texteditor.setAlignment(Qt.AlignCenter)
         self.model_structure_texteditor.setMinimumSize(720, 450)
 
         layout = QVBoxLayout()
         layout.addWidget(self.model_structure_texteditor)
         return layout
     
-    def closeEvent(self, a0):
+    def closeEvent(self, close_event):
         if self.current_thread:
             if self.current_thread.isRunning():
                 QMessageBox.warning(self, "警告", "请等待模型训练结束!")
-                a0.ignore()
+                close_event.ignore()
             else:
-                a0.accept()
+                close_event.accept()
         else:
-            a0.accept()
+            close_event.accept()
     
     def show_widget(self):
         self.setWindowModality(Qt.WindowModal)
