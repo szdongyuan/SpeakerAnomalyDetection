@@ -421,7 +421,7 @@ class SetModelConfig(QDialog):
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle)
          
-    def check_special_char(self, model_name:str):
+    def check_model_name(self, model_name:str):
         input_str = model_name
         reg = r'^[A-Za-z0-9_]*$'
         if not match(reg, input_str):
@@ -534,7 +534,7 @@ class SetModelConfig(QDialog):
             return {}
         
     def closeEvent(self, a0):
-        if not self.check_special_char(self.config["model_name"]):
+        if not self.check_model_name(self.config["model_name"]):
             a0.ignore()
         else:
             a0.accept()
