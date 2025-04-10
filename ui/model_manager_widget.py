@@ -421,12 +421,14 @@ class SetModelConfig(QDialog):
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle)
          
-    def check_special_char(self, lineedit: QLineEdit):
-        input_str = lineedit.text()
-        reg = r"^[^\\/:*?\"<>|]*$"
+    def check_special_char(self, model_name:str):
+        input_str = model_name
+        reg = r'^[A-Za-z0-9_]*$'
         if not match(reg, input_str):
-            QMessageBox.warning(self, "警告", "输入非法字符!")
-            lineedit.setText("")
+            print("输入字符串中包含特殊字符")
+            QMessageBox.warning(self, "警告", "模型名称只能由大小写字母、数字和下划线组成!")
+            return False
+        return True
 
     def create_model_name_box(self):
         model_name_box = QGroupBox()
@@ -434,7 +436,6 @@ class SetModelConfig(QDialog):
         model_name_edit = QLineEdit()
         model_name_edit.setText(self.model_name)
         model_name_edit.setPlaceholderText("请输入模型名称")
-        model_name_edit.textChanged.connect(lambda: self.check_special_char(model_name_edit))
         model_name_edit.editingFinished.connect(self.on_model_name_edit_finished)
 
         model_name_layout = QHBoxLayout()
@@ -531,7 +532,12 @@ class SetModelConfig(QDialog):
             return self.config
         else:
             return {}
-
+        
+    def closeEvent(self, a0):
+        if not self.check_special_char(self.config["model_name"]):
+            a0.ignore()
+        else:
+            a0.accept()
 
 class CustomStandardItemModel(QStandardItemModel):
     def __init__(self, rows, columns, editable_column: list, parent=None):
@@ -545,6 +551,13 @@ class CustomStandardItemModel(QStandardItemModel):
             else:
                 return Qt.ItemIsEnabled | Qt.ItemIsSelectable
         return super().flags(index)
+    
+    def setData(self, index, value, role=Qt.EditRole):
+        if index.column() == 0:
+            if not match(r'^[A-Za-z0-9_]*$', str(value)):
+                QMessageBox.warning(self.parent(), "警告", "模型名称只能由大小写字母、数字和下划线组成!")
+                return False
+        return super().setData(index, value, role)
     
     
 if __name__ == '__main__':
