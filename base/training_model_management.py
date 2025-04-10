@@ -6,6 +6,7 @@ from datetime import datetime
 from keras.models import load_model
 
 from base.db_manager import DataSave
+from base.file_ops import FileOps
 from consts import model_consts, error_code
 
 
@@ -15,6 +16,8 @@ class TrainingModelManagement(object):
 
     def save_training_model_info_to_db(self, model_path, config_path, ret_str=None, model_description="No description"):
         try:
+            if os.path.isabs(model_path):
+                model_path = FileOps.get_relative_path(model_path, model_consts.DEFAULT_DIR)
             with DataSave(self.db_path) as database:
                 code, training_model_info = self.get_training_model_info_to_db(database, model_path, config_path,
                                                                                ret_str,
@@ -27,6 +30,56 @@ class TrainingModelManagement(object):
                     return code, training_model_info
         except Exception as e:
             err_msg = "Failed to save the training model info to the database. %s" % (str(e)[:70])
+            return error_code.INVALID_INSERT, err_msg
+        
+    def register_new_model_info_to_db(self, 
+                                      model_name: str = None,
+                                      config_path: str = model_consts.CONFIG_PATH, 
+                                      input_dim: str = None,
+                                      output_dim: str = None,
+                                      model_description="No description",
+                                      model_type:str = "keras"):
+        if model_name and input_dim and output_dim:
+            try:
+                with DataSave(self.db_path) as database:
+                    model_id = str(uuid.uuid1())
+                    update_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    model_path = "models/" + model_name + "." + model_type
+                    model_info = [model_id, model_name, model_path, config_path, input_dim, output_dim, None, update_date, model_description]
+                    database.insert_data_into_db("training_model_table",
+                                                 model_consts.DB_MODEL_COLUMNS, 
+                                                 [model_info])
+                    return error_code.OK, "Successfully saved the model info to the database."
+            except Exception as e:
+                err_msg = "Failed to save the model info to the database. %s" % (str(e)[:70])
+                return error_code.INVALID_INSERT, err_msg
+        else:
+            return error_code.INVALID_DATA_LOADING, "The model info is empty."
+        
+    def update_model_info_to_db(self, model_data: dict):
+        try:
+            with DataSave(self.db_path) as database:
+                result = database.query_matching_data([(model_data.get("old_name"),)], "training_model_table", ["model_name"],
+                                                      ['model_id'])
+                if result:
+                    if model_data.get("model_name", False):
+                        base_name = os.path.basename(model_data["model_path"])
+                        model_path = "models/" + base_name.replace(model_data["old_name"], model_data["model_name"])
+                        update_data = {"model_name": model_data["model_name"],
+                                       "model_path": model_path}
+                        condition_field = {"model_name": model_data["old_name"],
+                                           "model_path": model_data["model_path"]}
+                    else:
+                        update_data = {"model_name": model_data["old_name"],
+                                       "model_description": model_data["model_description"]}
+                        condition_field = {"model_name": model_data["old_name"],
+                                           "model_description": model_data["old_description"]}
+                    database.update_table_data("training_model_table", update_data, condition_field)
+                    return error_code.OK, "Successfully update the model info to the database."
+                else:
+                    return error_code.INVALID_UPDATE, "The model name does not exist."
+        except Exception as e:
+            err_msg = "Failed to update the model info to the database. %s" % (str(e)[:70])
             return error_code.INVALID_INSERT, err_msg
 
     def delete_model_info_from_db(self, model_name: str):
@@ -100,3 +153,16 @@ class TrainingModelManagement(object):
         except Exception as e:
             err_msg = "Failed to query the all model name. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
+        
+    def get_all_model_info_from_db(self):
+        try:
+            with DataSave(self.db_path) as database:
+                query_code, query_result = database.query("training_model_table", ["model_name", "input_dim", "output_dim", "accuracy", "model_description", "model_path"])
+                if query_code == error_code.OK and query_result:
+                    return error_code.OK, query_result
+                else:
+                    return error_code.INVALID_QUERY, "Failed to query all mdoel name."
+        except Exception as e:
+            err_msg = "Failed to query the all model name. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg
+        

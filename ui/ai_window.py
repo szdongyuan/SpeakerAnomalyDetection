@@ -2,20 +2,22 @@ import os
 import sys
 
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QTextCursor
+from PyQt5.QtGui import QIcon, QTextCursor
 from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton
-from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget, QMessageBox
 
+from base.file_ops import FileOps
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import evaluate, init_model_from_config, train
+from ui.model_manager_widget import ModelInfoList
 
 
 class AiWindow(QDialog):
 
-    def __init__(self):
+    def __init__(self, logger):
         """
             Initialization function, responsible for setting up training and testing directories, 
             loading the model path, initializing the UI, and setting up the thread.
@@ -24,6 +26,8 @@ class AiWindow(QDialog):
         self.train_dir = self.load_default_train_test_path("train")
         self.test_dir = self.load_default_train_test_path("evaluate")
         self.model_path = self.load_model_path_from_config()
+        self.logger = logger
+        self.process = Process_Widget()
 
         self.init_ui()
         self.th = TrainEvaluateThread(train_dir=self.train_dir,
@@ -34,7 +38,7 @@ class AiWindow(QDialog):
         sys.stdout = self.th
 
     def on_update_text(self, text):
-        cursor = self.process.textCursor()
+        cursor = self.process.model_structure_texteditor.textCursor()
         cursor.movePosition(QTextCursor.End)
         if text != "\r":
             cursor.insertText(text)
@@ -44,8 +48,8 @@ class AiWindow(QDialog):
             # cursor.movePosition(QTextCursor.StartOfLine)
         # else:
         #     cursor.insertText(text)
-        self.process.setTextCursor(cursor)
-        self.process.ensureCursorVisible()
+        self.process.model_structure_texteditor.setTextCursor(cursor)
+        self.process.model_structure_texteditor.ensureCursorVisible()
 
     def init_ui(self):
         """
@@ -56,82 +60,92 @@ class AiWindow(QDialog):
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("AI训练窗口")
-        # self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        # self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        ai_layout = QGridLayout()
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(730)
 
-        base_model_wdiget = BaseModel()
-        base_model_layout = QHBoxLayout()
-        base_model_layout.addWidget(base_model_wdiget)
+        base_model_wdiget = BaseModel(self.logger)
 
-        self.process = QTextEdit(self, readOnly=True)
-        self.process.ensureCursorVisible()
-        self.process.setLineWrapColumnOrWidth(800)
-        self.process.setLineWrapMode(QTextEdit.FixedPixelWidth)
-        self.process.setMinimumSize(800, 600)
-
-        train_group_box = QGroupBox("训练")
-        train_btn_layout = QGridLayout()
-        train_dir_label = QLabel("训练数据路径：")
-        # train_dir_btn.clicked.connect(self.train_dir_btn_clicked)
-        self.train_dir_box = QLineEdit()
-        self.train_dir_box.setPlaceholderText("请选择训练数据路径")
-        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
-        train_dir_icon = QIcon(icon_path)
-        train_dir_action = self.train_dir_box.addAction(train_dir_icon, QLineEdit.TrailingPosition)
-        train_dir_action.setToolTip("添加训练数据")
-        train_dir_action.triggered.connect(self.train_dir_btn_clicked)
-        self.train_dir_box.setText(self.train_dir)
-        self.train_btn = QPushButton(" 开始训练 ")
-        self.train_btn.setStyleSheet("padding: 5px")
-        self.train_btn.clicked.connect(self.train_btn_clicked)
-        train_btn_layout.addWidget(train_dir_label, 0, 0)
-        train_btn_layout.addWidget(self.train_dir_box, 0, 1)
-        train_btn_layout.addWidget(self.train_btn, 0, 2)
-        train_btn_layout.setSpacing(20)
-        train_group_box.setLayout(train_btn_layout)
-
-        evaluate_group_box = QGroupBox("评估")
-        evaluate_btn_layout = QGridLayout()
-        evaluate_dir_label = QLabel("测试数据路径：")
-        self.evaluate_dir_box = QLineEdit()
-        self.evaluate_dir_box.setPlaceholderText("请选择测试数据路径")
-        evaluate_dir_icon = QIcon(icon_path)
-        evaluate_dir_action = self.evaluate_dir_box.addAction(evaluate_dir_icon, QLineEdit.TrailingPosition)
-        evaluate_dir_action.setToolTip("添加测试数据")
-        evaluate_dir_action.triggered.connect(self.evaluate_dir_btn_clicked)
-        self.evaluate_dir_box.setText(self.test_dir)
-        self.evaluate_btn = QPushButton(" 开始评估 ")
-        self.evaluate_btn.setStyleSheet("padding: 5px")
-        self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
-        evaluate_btn_layout.addWidget(evaluate_dir_label, 0, 0)
-        evaluate_btn_layout.addWidget(self.evaluate_dir_box, 0, 1)
-        evaluate_btn_layout.addWidget(self.evaluate_btn, 0, 2)
-        evaluate_btn_layout.setSpacing(20)
-        evaluate_group_box.setLayout(evaluate_btn_layout)
+        train_group_box = self.create_train_group_box()
+        evaluate_group_box = self.create_evaluate_group_box()
 
         btn_function_layout = QVBoxLayout()
+        btn_function_layout.addWidget(base_model_wdiget)
         btn_function_layout.addWidget(train_group_box)
         btn_function_layout.addWidget(evaluate_group_box)
-        btn_function_layout.addWidget(self.process)
 
-        splitter = QSplitter(Qt.Horizontal)
-        base_model_frame = QFrame()
-        base_model_frame.setLayout(base_model_layout)
-        base_model_layout.setContentsMargins(0, 0, 0, 0)
-        btn_function_frame = QFrame()
-        btn_function_frame.setLayout(btn_function_layout)
-        splitter.addWidget(base_model_frame)
-        splitter.addWidget(btn_function_frame)
-        splitter.setHandleWidth(0)
-        ai_layout.addWidget(splitter)
-
-        self.setLayout(ai_layout)
+        self.setLayout(btn_function_layout)
         self.setStyleSheet(ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
                            ui_style_const.qlabel_stytle +
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qcombobox_stytle)
+        
+    def create_train_group_box(self):
+        train_group_box = QGroupBox("训练")
+        train_layout = QVBoxLayout()
+        train_dir_label = QLabel("训练数据路径：")
+        self.train_dir_lineedit = QLineEdit()
+        self.train_dir_lineedit.setPlaceholderText("请选择训练数据路径")
+        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
+        train_dir_icon = QIcon(icon_path)
+        train_dir_action = self.train_dir_lineedit.addAction(train_dir_icon, QLineEdit.TrailingPosition)
+        train_dir_action.setToolTip("添加训练数据")
+        train_dir_action.triggered.connect(self.train_dir_btn_clicked)
+        self.train_dir_lineedit.setText(self.train_dir)
+        self.train_btn = QPushButton(" 开始训练 ")
+        self.train_btn.setStyleSheet("padding: 5px")
+        self.train_btn.clicked.connect(self.train_btn_clicked)
+
+        train_lineedit_layout = QHBoxLayout()
+        train_lineedit_layout.addWidget(train_dir_label)
+        train_lineedit_layout.addSpacing(10)
+        train_lineedit_layout.addWidget(self.train_dir_lineedit)
+
+        train_btn_layout = QHBoxLayout()
+        train_btn_layout.addStretch()
+        train_btn_layout.addWidget(self.train_btn)
+
+        train_layout.addLayout(train_lineedit_layout)
+        train_layout.addSpacing(13)
+        train_layout.addLayout(train_btn_layout)
+        train_layout.addSpacing(13)
+
+        train_group_box.setLayout(train_layout)
+        
+        return train_group_box
+    
+    def create_evaluate_group_box(self):
+        evaluate_group_box = QGroupBox("评估")
+        evaluate_layout = QVBoxLayout()
+        evaluate_dir_label = QLabel("测试数据路径：")
+        self.evaluate_dir_lineedit = QLineEdit()
+        self.evaluate_dir_lineedit.setPlaceholderText("请选择测试数据路径")
+        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
+        evaluate_dir_icon = QIcon(icon_path)
+        evaluate_dir_action = self.evaluate_dir_lineedit.addAction(evaluate_dir_icon, QLineEdit.TrailingPosition)
+        evaluate_dir_action.setToolTip("添加测试数据")
+        evaluate_dir_action.triggered.connect(self.evaluate_dir_btn_clicked)
+        self.evaluate_dir_lineedit.setText(self.test_dir)
+        self.evaluate_btn = QPushButton(" 开始评估 ")
+        self.evaluate_btn.setStyleSheet("padding: 5px")
+        self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
+
+        evaluate_dir_layout = QHBoxLayout()
+        evaluate_dir_layout.addWidget(evaluate_dir_label)
+        evaluate_dir_layout.addSpacing(10)
+        evaluate_dir_layout.addWidget(self.evaluate_dir_lineedit)
+
+        evaluate_btn_layout = QHBoxLayout()
+        evaluate_btn_layout.addStretch()
+        evaluate_btn_layout.addWidget(self.evaluate_btn)
+
+        evaluate_layout.addLayout(evaluate_dir_layout)
+        evaluate_layout.addSpacing(13)
+        evaluate_layout.addLayout(evaluate_btn_layout)
+        evaluate_layout.addSpacing(13)
+        evaluate_group_box.setLayout(evaluate_layout)
+        
+        return evaluate_group_box
 
     def train_dir_btn_clicked(self):
         """
@@ -173,12 +187,20 @@ class AiWindow(QDialog):
             It starts the model training process using a separate thread to avoid blocking the UI.
         """
         print("start training model...")
+        self.model_path = self.load_model_path_from_config()
         try:
+            self.train_btn.setEnabled(False)
+            self.evaluate_btn.setEnabled(False)
             self.t = TrainEvaluateThread(train_dir=self.train_dir,
                                          test_dir=self.test_dir,
                                          model_path=self.model_path,
                                          mode="train")
             self.t.start()
+            self.process.current_thread = self.t
+            self.process.show_widget()
+            if self.process.exec():
+                self.train_btn.setEnabled(True)
+                self.evaluate_btn.setEnabled(True)
         except Exception as e:
             raise e
 
@@ -197,12 +219,20 @@ class AiWindow(QDialog):
                 - model_path (str): Path to the model file.
         """
         print("start evaluating model...")
+        self.model_path = self.load_model_path_from_config()
         try:
+            self.train_btn.setEnabled(False)
+            self.evaluate_btn.setEnabled(False)
             self.t = TrainEvaluateThread(train_dir=self.train_dir,
                                          test_dir=self.test_dir,
                                          model_path=self.model_path,
                                          mode="evaluate")
             self.t.start()
+            self.process.current_thread = self.t
+            self.process.show_widget()
+            if self.process.exec():
+                self.train_btn.setEnabled(True)
+                self.evaluate_btn.setEnabled(True)
         except Exception as e:
             raise e
 
@@ -215,13 +245,6 @@ class AiWindow(QDialog):
         # Return stdout to defaults.
         sys.stdout = sys.__stdout__
         super().closeEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setBrush(QColor(174, 171, 162, 123))
-        painter.setPen(Qt.NoPen)
-        painter.drawRect(self.rect())
-        super().paintEvent(event)
 
     @staticmethod
     def load_model_path_from_config():
@@ -236,7 +259,7 @@ class AiWindow(QDialog):
         """
         file_path = DEFAULT_DIR + "ui/ui_config/model_path.txt"
         with open(file_path, 'r') as f:
-            model_path = f.read()
+            model_path = DEFAULT_DIR + f.read()
         return model_path
 
     @staticmethod
@@ -280,15 +303,17 @@ class AiWindow(QDialog):
 
 
 class BaseModel(QWidget):
-    def __init__(self):
+    def __init__(self, logger):
         """
             Initialize the class constructor.
             loads the model name from the database, initializes the model path as an empty string,
             and finally calls the method to initialize the user interface.
         """
         super().__init__()
-        self.load_model = self.load_model_name_from_db()
+        self.load_model = None
         self.model_path = ""
+        self.logger = logger
+        self.summary_text = None
         self.init_ui()
 
     def init_ui(self):
@@ -299,11 +324,24 @@ class BaseModel(QWidget):
         layout to the main layout.
         """
         base_model_layout = QVBoxLayout()
-        base_model_box = self.create_model_layout()
+        base_model_box = self.create_model_box()
         base_model_layout.addWidget(base_model_box)
+        base_model_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(base_model_layout)
 
-    def create_model_layout(self):
+    def update_base_model_combobox(self):
+        current_text = self.base_model_combobox.currentText()
+        self.base_model_combobox.clear()
+        self.load_model = self.load_model_name_from_db()
+        flag = False
+        for model_name in self.load_model:
+            self.base_model_combobox.addItem(model_name)
+            if model_name == current_text:
+                flag = True
+        if flag:
+            self.base_model_combobox.setCurrentText(current_text)
+
+    def create_model_box(self):
         """
             Create the model layout
 
@@ -312,32 +350,64 @@ class BaseModel(QWidget):
             and a text edit area for displaying model information.
         """
         base_model_box = QGroupBox("模型")
-        base_model_box.setMinimumSize(500, 500)
+        base_model_box.setMinimumWidth(350)
+        combobox_layout = self.create_model_combobox_layout()
+        button_layout = self.create_btn_layout()
+
+        model_layout = QVBoxLayout()
+        model_layout.addLayout(combobox_layout)
+        model_layout.addSpacing(13)
+        model_layout.addLayout(button_layout)
+        model_layout.addSpacing(13)
+        base_model_box.setLayout(model_layout)
+
+        return base_model_box
+    
+    def create_model_combobox_layout(self): 
         base_model_label = QLabel("基础模型:")
-        self.base_model_combo_box = QComboBox(self)
-        for model_name in self.load_model:
-            self.base_model_combo_box.addItem(model_name)
-        self.base_model_combo_box.currentIndexChanged.connect(self.combobox_clicked)
-        new_model_btn = QPushButton(" 新建模型 ")
-        new_model_btn.setStyleSheet("padding: 5px")
-        self.text_edit = QTextEdit(self)
-        self.text_edit.setMinimumSize(450, 400)
-        self.text_edit.setVisible(True)
-        self.text_edit.setReadOnly(True)
-        self.text_edit.setAlignment(Qt.AlignCenter)
+        self.base_model_combobox = QComboBox(self)
+        self.base_model_combobox.setMinimumWidth(350)
+        self.update_base_model_combobox()
+        self.base_model_combobox.currentIndexChanged.connect(self.combobox_clicked)
         self.set_default_model()
+
+        model_structure_btn = QPushButton(" 模型结构 ")
+        model_structure_btn.setStyleSheet("padding: 5px")
+        model_structure_btn.clicked.connect(self.on_model_structure_btn_clicked)
+
         base_model_combo_layout = QHBoxLayout()
 
         base_model_combo_layout.addWidget(base_model_label)
-        base_model_combo_layout.addWidget(self.base_model_combo_box)
-        base_model_combo_layout.addWidget(new_model_btn)
+        base_model_combo_layout.addSpacing(50)
+        base_model_combo_layout.addWidget(self.base_model_combobox)
+        base_model_combo_layout.addStretch()
+        base_model_combo_layout.addWidget(model_structure_btn)
 
-        base_model_layout = QVBoxLayout()
-        base_model_layout.addLayout(base_model_combo_layout)
-        base_model_layout.addWidget(self.text_edit)
-        base_model_layout.setSpacing(20)
-        base_model_box.setLayout(base_model_layout)
-        return base_model_box
+        base_model_combo_layout.setSpacing(20)
+        return base_model_combo_layout
+    
+    def create_btn_layout(self):
+        model_manage_btn = QPushButton(" 模型管理 ")
+        model_manage_btn.setStyleSheet("padding: 5px")
+        model_manage_btn.clicked.connect(self.on_model_manage_btn_clicked)
+        
+
+        base_btn_layout = QHBoxLayout()
+        base_btn_layout.addStretch()
+        base_btn_layout.addWidget(model_manage_btn)
+
+        return base_btn_layout
+    
+    def on_model_structure_btn_clicked(self):
+        model_structure = AiBrainModelStructure(model_structure=self.summary_text, 
+                                                model_name=self.base_model_combobox.currentText())
+        model_structure.exec()
+    
+    def on_model_manage_btn_clicked(self):
+        model_info_list = ModelInfoList(self.logger)
+        model_info_list.exec()
+        self.update_base_model_combobox()
+        self.set_default_model()
 
     def combobox_clicked(self):
         """
@@ -346,19 +416,15 @@ class BaseModel(QWidget):
             It updates the displayed model structure summary based on the user's selection in the combo box.
             If no model is selected or if the model fails to load, it hides or clears the text edit widget accordingly.
         """
-        selected_model = self.base_model_combo_box.currentText()
+        self.summary_text = None
+        selected_model = self.base_model_combobox.currentText()
         if selected_model:
             model = self.load_model_structure(selected_model)
             self.save_model_path_to_config()
             if model is not None:
                 model_summary = []
                 model.model.summary(print_fn=lambda x: model_summary.append(x))
-                summary_text = "\n".join(model_summary)
-                self.text_edit.setPlainText(summary_text)
-            else:
-                self.text_edit.setPlainText(str(model))
-        else:
-            self.text_edit.setVisible(False)
+                self.summary_text = "\n".join(model_summary)
 
     def set_default_model(self):
         """
@@ -377,8 +443,8 @@ class BaseModel(QWidget):
             default_model_name = os.path.splitext(default_model_name)[0]
             if default_model_name in self.load_model:
                 default_index = self.load_model.index(default_model_name)
-                self.base_model_combo_box.setCurrentIndex(default_index)
-                self.combobox_clicked()
+                self.base_model_combobox.setCurrentIndex(default_index)
+            self.combobox_clicked()
 
     @staticmethod
     def load_default_model_path():
@@ -439,6 +505,7 @@ class BaseModel(QWidget):
         model = None
         if query_code == error_code.OK:
             self.model_path, config_path = query_result[0]
+            self.model_path = DEFAULT_DIR + self.model_path
             really_config_path = DEFAULT_DIR + config_path
             kwargs = {"config_path": really_config_path}
             model = init_model_from_config(**kwargs)
@@ -458,7 +525,8 @@ class BaseModel(QWidget):
             os.mkdir(dir_path)
         file_path = dir_path + "/" + "model_path.txt"
         with open(file_path, 'w') as f:
-            f.write(self.model_path)
+            model_path = FileOps.get_relative_path(self.model_path, DEFAULT_DIR)
+            f.write(model_path)
 
 
 class TrainEvaluateThread(QThread):
@@ -525,6 +593,82 @@ class TrainEvaluateThread(QThread):
                 evaluate(self.test_dir, self.model_path, verbose=7)
         except Exception as e:
             print(e)
+
+
+class AiBrainModelStructure(QDialog):
+    def __init__(self, parent=None, model_structure = None, model_name: str = None):
+        super().__init__(parent)
+        self.model_structure = model_structure
+
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("AI模型结构")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        layout = self.create_text_edit()
+        self.setLayout(layout)
+
+    def create_text_edit(self):
+        model_structure_texteditor = QTextEdit()
+        model_structure_texteditor.setReadOnly(True)
+        model_structure_texteditor.setLineWrapMode(QTextEdit.NoWrap)
+        model_structure_texteditor.setAlignment(Qt.AlignCenter)
+        model_structure_texteditor.setMinimumSize(700, 450)
+        self.set_text_data(model_structure_texteditor)
+
+        layout = QVBoxLayout()
+        layout.addWidget(model_structure_texteditor)
+        return layout
+    
+    def set_text_data(self, text_edit: QTextEdit):
+        if self.model_structure is None:
+            text_edit.setPlainText("模型结构为空")
+        else:
+            text_edit.setPlainText(self.model_structure)
+
+
+
+class Process_Widget(QDialog):
+    def __init__(self, thread: TrainEvaluateThread = None):
+        super().__init__()
+
+        self.model_structure_texteditor = QTextEdit()
+        self.current_thread = thread
+
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("训练评估")
+        layout = self.create_text_edit()
+        self.setLayout(layout)
+
+    def create_text_edit(self):
+        self.model_structure_texteditor.setReadOnly(True)
+        self.model_structure_texteditor.ensureCursorVisible()
+        self.model_structure_texteditor.setLineWrapMode(QTextEdit.NoWrap)
+        self.model_structure_texteditor.setMinimumSize(720, 450)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.model_structure_texteditor)
+        return layout
+    
+    def closeEvent(self, close_event):
+        if self.current_thread:
+            if self.current_thread.isRunning():
+                QMessageBox.warning(self, "警告", "请等待模型训练结束!")
+                close_event.ignore()
+            else:
+                close_event.accept()
+        else:
+            close_event.accept()
+    
+    def show_widget(self):
+        self.setWindowModality(Qt.WindowModal)
+        self.show()
+
+    def exec(self):
+        super().exec()
+        return True
 
 
 if __name__ == '__main__':

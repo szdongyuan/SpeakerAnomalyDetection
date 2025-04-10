@@ -212,3 +212,21 @@ qtextedit_stytle = """
                 color: rgb(0, 0, 0);
             }
 """
+
+qtableview_stytle = """
+            QTableView {
+                font-family: 'SimSun';
+                font-size: 20px;
+            }
+            QHeaderView::section {
+                font-family: 'SimSun';
+                font-size: 20px;
+            }
+            QTableView::item {
+                border-top: 1px solid rgb(130, 135, 144);
+                color: black;
+            }
+            QTableView::item:selected {
+                background-color: rgb(0, 120, 215);
+            }
+"""
