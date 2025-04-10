@@ -141,7 +141,7 @@ class MytableView(QTableView):
                             new_model_path = model_path.replace(old_name, model_name)
                             rename(model_path, new_model_path)
                         except Exception as e:
-                            QMessageBox.warning(self, "警告", "%s" % str(e)[:31])
+                            QMessageBox.warning(self, "警告", "%s" % str(e))
                             self.logger.error("rename model [%s] error. [%s]" % (model_path, e))
                             self.model().setData(index, self.model_info[index.row()][index.column()])
                             self.is_edit_item = False
