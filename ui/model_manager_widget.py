@@ -534,8 +534,12 @@ class SetModelConfig(QDialog):
             return {}
         
     def closeEvent(self, a0):
-        if not self.check_model_name(self.config["model_name"]):
-            a0.ignore()
+        if self.clicked_ok_close:
+            if not self.check_model_name(self.config["model_name"]):
+                a0.ignore()
+                self.clicked_ok_close = False
+            else:
+                a0.accept()
         else:
             a0.accept()
 
