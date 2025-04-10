@@ -1,3 +1,4 @@
+from re import match
 import sys
 from os import path, makedirs, remove, rename
 from shutil import copy2
@@ -419,6 +420,13 @@ class SetModelConfig(QDialog):
                            ui_style_const.qlineedit_stytle + 
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle)
+         
+    def check_special_char(self, lineedit: QLineEdit):
+        input_str = lineedit.text()
+        reg = r"^[^\\/:*?\"<>|]*$"
+        if not match(reg, input_str):
+            QMessageBox.warning(self, "警告", "输入非法字符!")
+            lineedit.setText("")
 
     def create_model_name_box(self):
         model_name_box = QGroupBox()
@@ -426,6 +434,7 @@ class SetModelConfig(QDialog):
         model_name_edit = QLineEdit()
         model_name_edit.setText(self.model_name)
         model_name_edit.setPlaceholderText("请输入模型名称")
+        model_name_edit.textChanged.connect(lambda: self.check_special_char(model_name_edit))
         model_name_edit.editingFinished.connect(self.on_model_name_edit_finished)
 
         model_name_layout = QHBoxLayout()
