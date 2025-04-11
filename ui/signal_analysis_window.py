@@ -332,6 +332,63 @@ class AI(QWidget):
             return error_code.INVALID_QUERY, "Failed to get the model information."
 
 
+class Spectrogram(QWidget):
+    def __init__(self, title_name):
+        super().__init__()
+        self.signal_info = None
+        self.deviation_value = None
+        self.analysis_config = None
+        self.init_ui()
+        self.setWindowTitle(title_name)
+
+    def init_ui(self):
+        self.setWindowTitle("频谱分析")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.plot_widget = pg.PlotWidget(title="Spectrogram")
+        self.plot_widget.setBackground('white')
+        self.img_item = pg.ImageItem()
+        self.plot_widget.addItem(self.img_item)
+        layout = QVBoxLayout()
+        layout.addWidget(self.plot_widget)
+        self.setLayout(layout)
+
+    def calculate_spec(self):
+        recorded_signal = self.signal_info.get("recorded_signal")
+        sample_rate = self.signal_info.get("sample_rate")
+        n_fft = self.analysis_config.get("fft_size", 2048)
+        hop_length = self.analysis_config.get("hop_length", 512)
+        color_map = self.analysis_config.get("color_map", "inferno")
+        window_func = self.analysis_config.get("window_func", "hann")
+        spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
+        spec_dB = 20 * np.log10(spec + 1e-10)
+        freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+        times = librosa.times_like(spec_dB, sr=sample_rate, hop_length=hop_length)
+        self.plot_spec(spec_dB, freqs, times, color_map)
+
+
+    def plot_spec(self, spec_db, freqs, times, color_map):
+        times_max = times.max()
+        freqs_max = freqs.max()
+        self.img_item.setImage(spec_db.T)
+        self.img_item.setRect(pg.QtCore.QRectF(times[0], freqs[0], times_max - times[0], freqs_max - freqs[0]))
+        self.plot_widget.addItem(self.img_item)
+        self.plot_widget.setLabel('bottom', "Times (s)")
+        self.plot_widget.setLabel('left', "Frequency (Hz)")
+
+        pos = np.linspace(0.0, 1.0, 10)
+        colors = pg.colormap.get(color_map).getLookupTable(nPts=10)
+        cmap = pg.ColorMap(pos, colors)
+        db_min, db_max = spec_db.min(), spec_db.max()
+        if db_min == db_max:
+            db_max = db_min + 1
+        lut = cmap.getLookupTable(nPts=256)
+        self.img_item.setLookupTable(lut)
+        self.img_item.setLevels([db_min, db_max])
+        colorbar = pg.ColorBarItem(values=(db_min, db_max), width=20, colorMap=cmap)
+        colorbar.setImageItem(self.img_item, insert_in=self.plot_widget.getPlotItem())
+
+
+
 if __name__ == "__main__":
     stimulus, sr = librosa.load("../audio_data/analysis_samples/stimulus.wav", sr=44100)
     recorded, _ = librosa.load("../audio_data/analysis_samples/recording.wav", sr=44100)

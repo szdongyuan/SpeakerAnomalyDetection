@@ -5,14 +5,15 @@ import sys
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem, QPixmap
-from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton, QApplication, QMenu, \
-     QAction, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton
+from PyQt5.QtWidgets import QApplication, QMenu, QAction, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox
 from time import time
 
 from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow, HdConfigWindow, AIConfigWindow
+from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow
+from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow
 
 
 class AnalysisModelSellect(QDialog):
@@ -92,7 +93,7 @@ class AnalysisModelSellect(QDialog):
         analysis_label = QLabel("可选分析")
 
         self.analysis_model = QStandardItemModel()
-        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HD) ", "松散颗粒 (LP) ", "AI 分析 "]
+        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HD) ", "松散颗粒 (LP) ", "AI 分析 ", "频谱分析 (Spec)"]
         for item in items:
             list_item = QStandardItem(item)
             self.analysis_model.appendRow(list_item)
@@ -396,6 +397,8 @@ class OptionList(QListView):
             model = HdConfigWindow(config_manager, name)
         elif type == "AI":
             model = AIConfigWindow(config_manager, name)
+        elif type == "Spec":
+            model = SpecConfigWindow(config_manager, name)
         return model
 
     def load_config(self, config_file):
