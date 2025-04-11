@@ -476,6 +476,7 @@ class StimulusWindow(QDialog):
             return data["max_voltage"]
         else:
             self.is_close_window = True
+            return 0.0
 
 
     def create_signal_from_stimulus_info(self):
