@@ -9,15 +9,19 @@ from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget, QMessage
 
 from base.file_ops import FileOps
 from base.training_model_management import TrainingModelManagement
+from base.log_manager import LogManager
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import evaluate, init_model_from_config, train
 from ui.model_manager_widget import ModelInfoList
 
 
+default_log = LogManager.set_log_handler("AI")
+
+
 class AiWindow(QDialog):
 
-    def __init__(self, logger):
+    def __init__(self, logger = default_log):
         """
             Initialization function, responsible for setting up training and testing directories, 
             loading the model path, initializing the UI, and setting up the thread.
@@ -673,7 +677,6 @@ class Process_Widget(QDialog):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    from base.log_manager import LogManager
-    window = AiWindow(LogManager.set_log_handler("core"))
+    window = AiWindow()
     window.show()
     window.exec()
