@@ -1,5 +1,5 @@
 import enum
 
 class RequestTypeEnum(enum.Enum):
-    EMERGENCY_STOP = "0"
-    RUN_TEST = "102"
+    EMERGENCY_STOP = 0
+    RUN_TEST = 102

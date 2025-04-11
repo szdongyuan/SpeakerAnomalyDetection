@@ -56,7 +56,6 @@ class SequenceWindow(QWidget):
         self.product_id = None
         self.recorded_signal_info = {}
         self.tcp_server = TcpServer(host='127.0.0.1', port=50000, callback=self.deal_package)
-        sign.run_test_sign.connect(self.clicked_player_btn, Qt.AutoConnection)
 
         # Set up the default logger for logging messages
         self.default_logger = LogManager.set_log_handler("core")
@@ -84,6 +83,7 @@ class SequenceWindow(QWidget):
 
         self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        sign.run_test_sign.connect(self.clicked_player_btn, Qt.AutoConnection)
 
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
@@ -335,8 +335,15 @@ class SequenceWindow(QWidget):
             self.barcode_scanner_box.setEnabled(True)
             self.tcp_server.stop()
 
-    def generate_request_id(self, RequestType,Timestamp):
-        return f"{RequestType}@{Timestamp}"
+    def generate_request_id(self, request_type,timestamp):
+        """
+        Args:
+            request_type: int
+            timestamp: str
+        Returns:
+           "102@2025-04-11T10:06:47"
+        """
+        return f"{request_type}@{timestamp}"
 
     def deal_package(self, info):
         """
@@ -353,16 +360,16 @@ class SequenceWindow(QWidget):
         ok, data = self.check_format(info)
         if not ok:
             return data
-        RequestType = data.get("RequestType")
-        IsSync = data.get("IsSync")
-        Timestamp = data.get("Timestamp")
-        request_id = self.generate_request_id(RequestType,Timestamp)
+        request_type = int(data.get("RequestType"))
+        is_sync = data.get("IsSync")
+        timestamp = data.get("Timestamp")
+        request_id = self.generate_request_id(request_type,timestamp)
         if request_id == self.tcp_server.request_id:
             return "pass"
         else:
             self.tcp_server.request_id = request_id
         # allocating task
-        if data.get("RequestType") == RequestTypeEnum.RUN_TEST.value:
+        if request_type == RequestTypeEnum.RUN_TEST.value:
             sign.run_test_sign.emit()
         return "ok"
 
@@ -371,7 +378,7 @@ class SequenceWindow(QWidget):
             data = json.loads(info)
         except json.JSONDecodeError as e:
             return False, "error, json format error"
-        req_type = data.get("RequestType")
+        req_type = int(data.get("RequestType"))
         is_sync = data.get("IsSync")
         timestamp = data.get("Timestamp")
         if req_type not in [rte.value for rte in RequestTypeEnum]:

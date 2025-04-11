@@ -1,6 +1,8 @@
 import socket
 import threading
+
 from base.log_manager import LogManager
+from consts.running_consts import tcp_service_recv_bytes
 
 
 class TcpServer:
@@ -43,7 +45,7 @@ class TcpServer:
                     if not self.stop_flag:
                         break
                     try:
-                        recved = client_socket.recv(1024)
+                        recved = client_socket.recv(tcp_service_recv_bytes)
                         if not recved:
                             self.default_logger.info(f"client No data sent or has been closed")
                             break

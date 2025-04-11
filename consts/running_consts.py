@@ -48,3 +48,5 @@ LOG_MAPPING = {
     "db_core": DEFAULT_LOG,
     "soundcard_core": DEFAULT_LOG,
 }
+
+tcp_service_recv_bytes = 1024
