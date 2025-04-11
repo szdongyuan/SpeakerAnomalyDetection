@@ -72,7 +72,7 @@ class MytableView(QTableView):
         self.list_model = CustomStandardItemModel(0, 5, [0, 4])
         self.model_management = TrainingModelManagement()
         self.setModel(self.list_model)
-        self.model_info = None
+        self.model_info = list()
         self.is_edit_item = True
         self.sellect_model_row = None
 
@@ -243,7 +243,9 @@ class MytableView(QTableView):
             return error_code.COPY_FILE_ERROR
 
     def register_model_info_to_db(self, model_name: str, model_config: dict, model_type: str):
-        result = any(model_name in row for row in self.model_info)
+        result= False
+        if self.model_info:
+            result = any(model_name in row for row in self.model_info)
         if result:
             self.logger.error("model_name is exist")
             return True
@@ -270,39 +272,18 @@ class MytableView(QTableView):
             dim_dict["input_left"] = self.model_info[self.sellect_model_row][1].split(" x ")[0]
             dim_dict["input_right"] = self.model_info[self.sellect_model_row][1].split(" x ")[1]
             dim_dict["output_dim"] = self.model_info[self.sellect_model_row][2]
-            model_obj_data = SetModelConfig(model_name=model_name, dim=dim_dict)
+            model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name, dim=dim_dict)
             model_obj_data.model_input_dim_box.setEnabled(False)
             model_obj_data.model_output_dim_box.setEnabled(False)
         else:
-            model_obj_data = SetModelConfig(model_name=model_name)
+            model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name)
         model_config = model_obj_data.exec()
         return model_config
-        
-    def check_model_config(self, model_name: str = None, model_type: str = "keras", recursion_num: int = 0, action_type:str = None):
-        if recursion_num > 2:
-            self.logger.error("get model config error")
-            selection_model = self.selectionModel()
-            if selection_model.hasSelection():
-                selection_model.clearSelection()
-            return {}
-        model_config = self.get_model_config(model_name = model_name, action_type = action_type)
-        target_dir = DEFAULT_DIR + "models/"     
-        makedirs(target_dir, exist_ok = True)
-        if model_config.get("model_name", False):
-            target_path = path.join(target_dir, model_config["model_name"] + "." + model_type)
-            if path.exists(target_path):
-                result = any(model_config["model_name"] in row for row in self.model_info)
-                if result is False:
-                    return model_config
-                QMessageBox.warning(self, "警告", "模型已存在, 请请重新设置!")
-                recursion_num = recursion_num + 1
-                model_config = self.check_model_config(recursion_num = recursion_num, action_type = action_type)
-            return model_config
     
     def updata_model_info(self, model_path: str, model_name: str = None, model_type: str = "keras", action_type: str = None):
         if not model_path:
             return
-        model_config = self.check_model_config(model_name, model_type, action_type = action_type)
+        model_config = self.get_model_config(model_name = model_name, action_type = action_type)
         is_success_register = False
         if model_config:
             code= self.copy_file(model_path, model_config["model_name"], model_type)
@@ -369,14 +350,15 @@ class MytableView(QTableView):
 
 
 class SetModelConfig(QDialog):
-    def __init__(self, parent=None, model_name: str = None, dim: dict = None):
-        super().__init__(parent) 
+    def __init__(self, model_info: list, model_name: str = None, dim: dict = None):
+        super().__init__() 
         self.config = {"model_name": model_name, "output_dim": None,}
         self.model_name = model_name
         self.dim = dim
         self.input_dim_left: str = None
         self.input_dim_right: str = None
         self.clicked_ok_close = False
+        self.model_info = model_info
 
         self.init_ui()
 
@@ -411,13 +393,19 @@ class SetModelConfig(QDialog):
                            ui_style_const.qlineedit_stytle + 
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle)
-         
+        
     def check_model_name(self, model_name:str):
         input_str = model_name
         reg = r'^[A-Za-z0-9_]*$'
         if not match(reg, input_str):
             print("输入字符串中包含特殊字符")
             QMessageBox.warning(self, "警告", "模型名称只能由大小写字母、数字和下划线组成!")
+            return False
+        result = False
+        if self.model_info:
+            result = any(self.config["model_name"] in row for row in self.model_info)
+        if result:
+            QMessageBox.warning(self, "警告", "模型名称已存在！")
             return False
         return True
 

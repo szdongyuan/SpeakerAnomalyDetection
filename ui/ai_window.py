@@ -160,7 +160,7 @@ class AiWindow(QDialog):
         if path:
             self.train_dir = path
             self.save_default_train_test_path(path, "train")
-            self.train_dir_box.setText(path)
+            self.train_dir_lineedit.setText(path)
 
     def evaluate_dir_btn_clicked(self):
         """
@@ -179,7 +179,7 @@ class AiWindow(QDialog):
         if path:
             self.test_dir = path
             self.save_default_train_test_path(path, "evaluate")
-            self.evaluate_dir_box.setText(path)
+            self.evaluate_dir_lineedit.setText(path)
 
     def train_btn_clicked(self):
         """
@@ -673,6 +673,7 @@ class Process_Widget(QDialog):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = AiWindow()
+    from base.log_manager import LogManager
+    window = AiWindow(LogManager.set_log_handler("core"))
     window.show()
     window.exec()
