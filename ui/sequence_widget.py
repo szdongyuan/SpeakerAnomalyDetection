@@ -15,11 +15,14 @@ from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushB
 from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
+from base.utils.custom_signals import sign
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
+from base.tcp_service import TcpServer
 from consts import ui_style_const, error_code, model_consts
+from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.signal_analysis_window import Spl, Distortion, AI, Frequency
 from ui.login_window import get_mac_address
@@ -52,6 +55,7 @@ class SequenceWindow(QWidget):
         self.vendor_id = None
         self.product_id = None
         self.recorded_signal_info = {}
+        self.tcp_server = TcpServer(host='127.0.0.1', port=50000, callback=self.deal_package)
 
         # Set up the default logger for logging messages
         self.default_logger = LogManager.set_log_handler("core")
@@ -79,6 +83,7 @@ class SequenceWindow(QWidget):
 
         self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        sign.run_test_sign.connect(self.clicked_player_btn, Qt.AutoConnection)
 
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
@@ -150,6 +155,10 @@ class SequenceWindow(QWidget):
         self.barcode_scanner_box.setChecked(False)
         self.barcode_scanner_box.stateChanged.connect(self.clicked_scanner)
 
+        self.scanner_tcp = QCheckBox(" TCP", self)
+        self.scanner_tcp.setChecked(False)
+        self.scanner_tcp.stateChanged.connect(self.is_clicked_tcp)
+
         self.lineedit_s_or_n = QLineEdit(self)
         self.lineedit_s_or_n.setDisabled(True)
         self.lineedit_s_or_n.setFixedHeight(35)
@@ -196,8 +205,10 @@ class SequenceWindow(QWidget):
         layout.addWidget(self.barcode_scanner_box)
         layout.addWidget(self.lineedit_s_or_n)
         layout.addSpacing(10)
+        layout.addWidget(self.scanner_tcp)
+        layout.addSpacing(10)
         layout.addWidget(vertical_line_6)
-        layout.addStretch(30)
+        layout.addStretch()
         layout.setContentsMargins(4, 0, 0, 0)
         tools_layout.addWidget(vertical_line_7)
         tools_layout.addLayout(layout)
@@ -316,6 +327,68 @@ class SequenceWindow(QWidget):
                 self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
                 self.scanner_barcode_thread.start()
 
+    def is_clicked_tcp(self):
+        if self.scanner_tcp.isChecked():
+            self.barcode_scanner_box.setEnabled(False)
+            self.tcp_server.start()
+        else:
+            self.barcode_scanner_box.setEnabled(True)
+            self.tcp_server.stop()
+
+    def generate_request_id(self, request_type,timestamp):
+        """
+        Args:
+            request_type: int
+            timestamp: str
+        Returns:
+           "102@2025-04-11T10:06:47"
+        """
+        return f"{request_type}@{timestamp}"
+
+    def deal_package(self, info):
+        """
+        info: {
+                  "RequestType": "0-9999",
+                  "RequestContent": {
+                    "User": "Alice",
+                    "Action": "ScanBarcode"
+                  },
+                  "IsSync": false,
+                  "Timestamp": "2025-04-09T16:30:00"
+              }
+        """
+        ok, data = self.check_format(info)
+        if not ok:
+            return data
+        request_type = int(data.get("RequestType"))
+        is_sync = data.get("IsSync")
+        timestamp = data.get("Timestamp")
+        request_id = self.generate_request_id(request_type,timestamp)
+        if request_id == self.tcp_server.request_id:
+            return "pass"
+        else:
+            self.tcp_server.request_id = request_id
+        # allocating task
+        if request_type == RequestTypeEnum.RUN_TEST.value:
+            sign.run_test_sign.emit()
+        return "ok"
+
+    def check_format(self, info):
+        try:
+            data = json.loads(info)
+        except json.JSONDecodeError as e:
+            return False, "error, json format error"
+        req_type = int(data.get("RequestType"))
+        is_sync = data.get("IsSync")
+        timestamp = data.get("Timestamp")
+        if req_type not in [rte.value for rte in RequestTypeEnum]:
+            return False, "error, RequestType error"
+        if not isinstance(is_sync, bool):
+            return False, "error, IsSync type error"
+        if not timestamp or not isinstance(timestamp, str):
+            return False, "error, Timestamp type error "
+        return True, data
+
     def scan_barcode(self, device):
         barcode = self.barcode_scanner.read_raw_data(device)
         if barcode:
@@ -336,9 +409,11 @@ class SequenceWindow(QWidget):
 
     def clicked_scanner(self):
         if self.barcode_scanner_box.isChecked():
+            self.scanner_tcp.setEnabled(False)
             self.lineedit_s_or_n.setEnabled(True)
             self.scanner_barcode_process()
         else:
+            self.scanner_tcp.setEnabled(True)
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
             self.barcode_scanner.stop_scanning()
