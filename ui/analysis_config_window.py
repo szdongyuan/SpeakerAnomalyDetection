@@ -5,7 +5,7 @@ from functools import partial
 
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QSpinBox
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
 from PyQt5.QtWidgets import QSpacerItem, QVBoxLayout, QWidget
 
@@ -46,10 +46,10 @@ class SplConfigWindow(QDialog):
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcheckbox_stytle + 
+        self.setStyleSheet(ui_style_const.qcheckbox_stytle +
                            ui_style_const.qgroupbox_stytle +
                            ui_style_const.qlabel_stytle +
-                           ui_style_const.qlineedit_stytle + 
+                           ui_style_const.qlineedit_stytle +
                            ui_style_const.qradiobutton_stytle +
                            ui_style_const.qpushbutton_stytle)
 
@@ -155,9 +155,9 @@ class SplConfigWindow(QDialog):
 
     def config_dir_btn_clicked(self):
         self.file_path, _ = QFileDialog.getOpenFileName(self,
-                                                   "选择配置文件路径",
-                                                   DEFAULT_DIR + "ui/ui_config",
-                                                   filter="All Files (*);;")
+                                                        "选择配置文件路径",
+                                                        DEFAULT_DIR + "ui/ui_config",
+                                                        filter="All Files (*);;")
         if self.file_path:
             self.config_dir = self.file_path
             config_dir_name = os.path.basename(self.file_path)
@@ -232,7 +232,7 @@ class FrConfigWindow(QDialog):
                            ui_style_const.qlineedit_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qlabel_stytle +
                            ui_style_const.qradiobutton_stytle)
 
     def create_limit(self):
@@ -334,9 +334,9 @@ class FrConfigWindow(QDialog):
 
     def config_dir_btn_clicked(self):
         self.file_path, _ = QFileDialog.getOpenFileName(self,
-                                                   "选择配置文件路径",
-                                                   DEFAULT_DIR + "ui/ui_config",
-                                                   filter="All Files (*);;")
+                                                        "选择配置文件路径",
+                                                        DEFAULT_DIR + "ui/ui_config",
+                                                        filter="All Files (*);;")
         if self.file_path:
             self.config_dir = self.file_path
             config_dir_name = os.path.basename(self.file_path)
@@ -389,8 +389,8 @@ class FrConfigWindow(QDialog):
 
 
 class HdConfigWindow(QDialog):
-
     selected_labels_changed = pyqtSignal()
+
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
@@ -495,7 +495,6 @@ class HdConfigWindow(QDialog):
     def on_label_leave(self, label, event):
         label.setStyleSheet("background-color: transparent;")
 
-
     def create_btn(self):
         btn_layout = QHBoxLayout()
         default_btn = QPushButton(" 设为默认 ")
@@ -555,7 +554,7 @@ class AIConfigWindow(QDialog):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlabel_stytle +
                            ui_style_const.qcombobox_stytle)
-        
+
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:
             QMessageBox.warning(self, "设置警告", "没有可用的AI模型选型,请检查配置!")
@@ -620,11 +619,128 @@ class AIConfigWindow(QDialog):
         default_config = {
             "analyse_model_name": self.analyse_model_combo_box.currentText()
         }
-        return default_config  
+        return default_config
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("AI", config_data)
+        PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_click_ok_btn(self):
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
+
+
+class SpecConfigWindow(QDialog):
+    def __init__(self, config_manager, model_type):
+        super().__init__()
+        self.config_manager = config_manager
+        self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setMinimumSize(350, 350)
+        self.resize(350, 350)
+        layout = QVBoxLayout()
+        spec_param_group_box = QGroupBox("频谱图参数配置")
+        param_layout = self.create_spec_param()
+        spec_param_group_box.setLayout(param_layout)
+        btn_layout = self.create_btn()
+        v_spacer_1 = QSpacerItem(8, 8, QSizePolicy.Minimum, QSizePolicy.Expanding)
+
+        layout.addWidget(spec_param_group_box)
+        layout.addItem(v_spacer_1)
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qcombobox_stytle)
+
+    def create_spec_param(self):
+        fft_size_label = QLabel("FFT 大小")
+        self.fft_size_box = QComboBox()
+        fft_sizes = [str(2**i) for i in range(7, 15)]
+        self.fft_size_box.addItems(fft_sizes)
+        fft_size = str(self.load_config.get("n_fft", 2048))
+        self.fft_size_box.setCurrentText(fft_size)
+        fft_layout = QHBoxLayout()
+        fft_layout.addWidget(fft_size_label)
+        fft_layout.addWidget(self.fft_size_box)
+
+        hop_length_label = QLabel("步长")
+        self.hop_length_box = QComboBox()
+        hop_lengths = [str(2 ** i) for i in range(5, 13)]
+        self.hop_length_box.addItems(hop_lengths)
+        hop_length = str(self.load_config.get("hop_length", 512))
+        self.hop_length_box.setCurrentText(hop_length)
+        hop_layout = QHBoxLayout()
+        hop_layout.addWidget(hop_length_label)
+        hop_layout.addWidget(self.hop_length_box)
+
+        window_func_label = QLabel("窗口函数")
+        self.window_func_box = QComboBox()
+        self.window_func_box.addItems(['hann', 'hamming', 'blackman'])
+        window_func = self.load_config.get("window_func", "hann")
+        self.window_func_box.setCurrentText(window_func)
+        window_layout = QHBoxLayout()
+        window_layout.addWidget(window_func_label)
+        window_layout.addWidget(self.window_func_box)
+
+        colormap_label = QLabel("色图")
+        self.colormap_box = QComboBox()
+        self.colormap_box.addItems(["viridis", "plasma", "magma", "inferno"])
+        color_map = self.load_config.get("color_map", "viridis")
+        self.colormap_box.setCurrentText(color_map)
+        colormap_layout = QHBoxLayout()
+        colormap_layout.addWidget(colormap_label)
+        colormap_layout.addWidget(self.colormap_box)
+
+        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_3 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_4 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_5 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_6 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        param_layout = QVBoxLayout()
+        param_layout.addItem(v_spacer_2)
+        param_layout.addLayout(fft_layout)
+        param_layout.addItem(v_spacer_3)
+        param_layout.addLayout(hop_layout)
+        param_layout.addItem(v_spacer_4)
+        param_layout.addLayout(window_layout)
+        param_layout.addItem(v_spacer_5)
+        param_layout.addLayout(colormap_layout)
+        param_layout.addItem(v_spacer_6)
+        return param_layout
+
+    def create_btn(self):
+        btn_layout = QHBoxLayout()
+        default_btn = QPushButton(" 设为默认 ")
+        default_btn.clicked.connect(self.on_default_btn_clicked)
+        ok_btn = QPushButton(" 确  认 ")
+        ok_btn.clicked.connect(self.on_click_ok_btn)
+        h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        btn_layout.addWidget(default_btn)
+        btn_layout.addItem(h_spacer_btn1)
+        btn_layout.addWidget(ok_btn)
+        return btn_layout
+
+    def get_default_config(self):
+        default_config = {
+            "n_fft": int(self.fft_size_box.currentText()),
+            "hop_length": int(self.hop_length_box.currentText()),
+            "window_func": self.window_func_box.currentText(),
+            "color_map": self.colormap_box.currentText(),
+        }
+        return default_config
+
+    def on_default_btn_clicked(self):
+        config_data = self.get_default_config()
+        save_flag = self.config_manager.save_default_config("Spec", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
@@ -683,7 +799,7 @@ class ConfigManager(object):
         except Exception as e:
             self.default_logger.error(f"The config info for {type} analysis save failed. {e}")
             return False
-        
+
     def save_default_config(self, type, config_data):
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         default_config = {}
@@ -712,7 +828,7 @@ class ConfigManager(object):
         except Exception as e:
             self.default_logger.error(f"Failed to load the default or temp config file. {e}")
             return {}
-        
+
 
 def check_upper_lower_limit(config_data: dict, parent):
     if config_data["limit_checked"] is False: return False

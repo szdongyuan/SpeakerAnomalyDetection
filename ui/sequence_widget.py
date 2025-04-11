@@ -24,7 +24,7 @@ from base.tcp_service import TcpServer
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
-from ui.signal_analysis_window import Spl, Distortion, AI, Frequency
+from ui.signal_analysis_window import Spl, Distortion, AI, Frequency, Spectrogram
 from ui.login_window import get_mac_address
 
 
@@ -759,6 +759,7 @@ class SequenceWindow(QWidget):
             "FR": Frequency,
             "HD": Distortion,
             "AI": AI,
+            "Spec": Spectrogram,
         }
         return class_mapping
 
@@ -816,6 +817,9 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, 'calculate_ai_scores'):
                     instance.calculate_ai_scores()
+                    instance.show()
+                elif hasattr(instance, 'calculate_spec'):
+                    instance.calculate_spec()
                     instance.show()
                 instance.setGeometry(width, height, 600, 500)
                 instance.setMinimumSize(QSize(600, 500))
