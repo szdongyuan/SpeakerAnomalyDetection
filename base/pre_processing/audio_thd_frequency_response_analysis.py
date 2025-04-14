@@ -46,11 +46,13 @@ class AudioThdFrequencyResponseAnalysis(object):
                 x, h, thd = self.calculate_thd(freq_dict, base_freq_list, recorded_signal[i], sr[i], **thd_kwargs)
                 pm.plot_thd(ax_thd, x, thd)
                 pm.plot_harmonic(ax_harmonic, x, h)
+
+                ## 1234567890
             if kwargs.get("frequency_response", True):
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i])
                 pm.plot_frequency_response(ax_fr, frequency_list, fr)
-
-                # xxxx
+                ## 1234567890
+                # 9876543210
         return results
 
     def calculate_thd(self, freq_dict, base_freq_list, recorded_signal, sr, **kwargs):
