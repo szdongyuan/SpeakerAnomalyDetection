@@ -2,3 +2,4 @@
 *.pyc
 /audio_data
 /log
+/models
