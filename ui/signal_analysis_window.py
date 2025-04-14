@@ -18,7 +18,6 @@ from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import predict
 
-
 class Distortion(QWidget):
     def __init__(self, title_name):
         super().__init__()
