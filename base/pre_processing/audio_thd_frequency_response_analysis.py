@@ -46,28 +46,9 @@ class AudioThdFrequencyResponseAnalysis(object):
                 x, h, thd = self.calculate_thd(freq_dict, base_freq_list, recorded_signal[i], sr[i], **thd_kwargs)
                 pm.plot_thd(ax_thd, x, thd)
                 pm.plot_harmonic(ax_harmonic, x, h)
-
-                ## 1234567890
             if kwargs.get("frequency_response", True):
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i])
                 pm.plot_frequency_response(ax_fr, frequency_list, fr)
-                ## 1234567890
-                # 9876543210
-                ### basdsadasds
-                ## basdsadasds
-                ### basdsadasds
-                ## basdsadasds
-                ### basdsadasds
-                ## basdsadasds
-                ### basdsadasds
-                ## basdsadasds
-
-
-                ## aaaaa
-
-
-                #555555
-                
         return results
 
     def calculate_thd(self, freq_dict, base_freq_list, recorded_signal, sr, **kwargs):
@@ -139,34 +120,16 @@ class AudioThdFrequencyResponseAnalysis(object):
                     A list containing the base frequency for each time window.
         """
         win_len = sr // gap_len
-        hop_length = 3
-        noverlap = win_len - hop_length
-        if noverlap < 0:
-             noverlap = 0 
-
-        f, t, Zxx = signal.stft(reference_signal, fs=sr, nperseg=win_len, noverlap=noverlap,
-                                nfft=win_len, return_onesided=True, boundary=None, padded=False, window='boxcar')
-
-        abs_Zxx = np.abs(Zxx)
-        argmax_indices = np.argmax(abs_Zxx, axis=0)
-        all_base_freqs = f[argmax_indices] 
-        max_amplitudes = np.max(abs_Zxx, axis=0) 
-
+        xf = np.fft.fftfreq(win_len, 1 / sr)
+        base_freq_list = []
         freq_dict = {}
-        num_windows = abs_Zxx.shape[1]
-
-        for j in range(num_windows):
-            base_freq = all_base_freqs[j]
-            amplitude = max_amplitudes[j]
-            i = j * hop_length
-            argmax = argmax_indices[j]
-
-            # Update dict if this window has a higher amplitude for this base_freq
-            if amplitude > freq_dict.get(base_freq, {'bf_v': -1.0}).get("bf_v"):
-                 freq_dict[base_freq] = {"bf_v": amplitude, "i": i, "argmax": argmax}
-
-        base_freq_list = list(all_base_freqs)
-
+        for i in range(0, len(reference_signal) - win_len - delay_frames, 3):
+            input_fft = np.abs(np.fft.fft(reference_signal[i: i + win_len])[: win_len // 2])
+            argmax = np.argmax(input_fft)
+            base_freq = xf[argmax]
+            base_freq_list.append(base_freq)
+            if freq_dict.get(base_freq, {'bf_v': 0}).get("bf_v") < np.max(input_fft):
+                freq_dict[base_freq] = {"bf_v": np.max(input_fft), "i": i, "argmax": argmax}
         return freq_dict, base_freq_list
 
     @staticmethod
