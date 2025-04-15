@@ -1,10 +1,10 @@
 from re import match
-import sys
 from shutil import copy2
-from os import path, makedirs, remove, rename, listdir
+import os
+import sys
 
-from PyQt5.QtCore import  Qt, QSize
-from PyQt5.QtGui import  QStandardItemModel, QStandardItem, QIcon
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGroupBox, QLabel, QLineEdit, QMessageBox
 from PyQt5.QtWidgets import QVBoxLayout, QTableView, QHeaderView, QPushButton, QHBoxLayout, QComboBox, QSizePolicy
 
@@ -139,7 +139,7 @@ class MytableView(QTableView):
                     if model_name is not None:
                         try:
                             new_model_path = model_path.replace(old_name, model_name)
-                            rename(model_path, new_model_path)
+                            os.rename(model_path, new_model_path)
                         except Exception as e:
                             QMessageBox.warning(self, "警告", "%s" % str(e))
                             self.logger.error("rename model [%s] error. [%s]" % (model_path, e))
@@ -214,7 +214,7 @@ class MytableView(QTableView):
 
     def check_model_file(self, model_path: str):
         model_path = DEFAULT_DIR + model_path
-        if not path.exists(model_path):
+        if not os.path.exists(model_path):
             model_path = model_path.replace("consts/../", "")
             QMessageBox.warning(self, "警告", "模型文件不存在: %s" % model_path)
 
@@ -234,25 +234,25 @@ class MytableView(QTableView):
             return True
     def copy_file(self, source_path: str, model_name: str, model_type: str):
         if source_path and model_name and model_type:
-            if not path.isfile(source_path):
+            if not os.path.isfile(source_path):
                 self.logger.error("source file is empty")
                 return error_code.INVALID_PATH
             target_dir = DEFAULT_DIR+ "models/"
-            makedirs(target_dir, exist_ok=True)
-            target_path = path.join(target_dir, model_name + "." + model_type)
-            if path.exists(target_path):
+            os.makedirs(target_dir, exist_ok=True)
+            target_path = os.path.join(target_dir, model_name + "." + model_type)
+            if os.path.exists(target_path):
                 # if source file with target file is same file, don't override file, return OK
-                if path.samefile(source_path, target_path):
+                if os.path.samefile(source_path, target_path):
                     return error_code.OK
                 if self.override_model_file_part():
                     self.logger.info("source file is same as target file, Deleting the target file...")
-                    remove(target_path)
+                    os.remove(target_path)
                 else:
                     return error_code.OK
             try:
                 copy2(source_path, target_path)
                 self.logger.info("copy file success")
-                if path.isfile(target_path):
+                if os.path.isfile(target_path):
                     return error_code.OK
                 else:
                     QMessageBox.warning(self, "警告", "模型文件复制失败")
@@ -341,20 +341,20 @@ class MytableView(QTableView):
         item = self.model().item(self.sellect_model_row, 0)
         if item:
             model_path = DEFAULT_DIR + self.model_info[item.row()][-1]
-            if path.isfile(model_path):
+            if os.path.isfile(model_path):
                 model_type = model_path.split(".")[-1]
                 self.updata_model_info(model_path = model_path, model_type = model_type, action_type="new")
                 self.sellect_model_row = None
 
     def register_model_info(self):
-        home_directory = path.expanduser("~")
+        home_directory = os.path.expanduser("~")
         model_path = QFileDialog.getOpenFileName(self, 
                                                  "选择模型文件",
                                                  home_directory, 
                                                  "KERAS Files (*.keras);;"
                                                  "All Files (*)")[0]
-        if path.isfile(model_path):
-            model_name = path.basename(model_path)
+        if os.path.isfile(model_path):
+            model_name = os.path.basename(model_path)
             model_name = model_name.split(".")[0]
             model_type = model_path.split(".")[-1]
         else:
@@ -368,14 +368,14 @@ class MytableView(QTableView):
             return
         path_index = len(self.model_info[0]) - 1
         model_path = DEFAULT_DIR + self.model_info[self.sellect_model_row][path_index]
-        if path.isfile(model_path):
+        if os.path.isfile(model_path):
             try:
-                remove(model_path)
+                os.remove(model_path)
             except Exception as e:
                 error_data = str(e).replace("consts/../", "")
                 QMessageBox.warning(self, "警告", "%s" % error_data)
                 self.logger.error(e)
-        if not path.exists(model_path):
+        if not os.path.exists(model_path):
             self.del_model_in_model_info()
             self.sellect_model_row = None
             self.logger.info("delete model info success")
@@ -539,9 +539,9 @@ class SetModelConfig(QDialog):
     def get_yaml_files(self):
         directory = DEFAULT_DIR + "/configs/ai_model_config"
         yaml_files = []
-        for filename in listdir(directory):
+        for filename in os.listdir(directory):
             if filename.endswith('.yml'):
-                yaml_file = path.basename(filename).split('.yml')[0]
+                yaml_file = os.path.basename(filename).split('.yml')[0]
                 yaml_files.append(yaml_file)
         return yaml_files
     
