@@ -1,12 +1,13 @@
 import socket
 import threading
+import time
 
 from base.log_manager import LogManager
 from consts.running_consts import tcp_service_recv_bytes
 
 
 class TcpServer:
-    def __init__(self, host='127.0.0.1', port=50000, callback=None):
+    def __init__(self, host=None, port=None, callback=None):
         self.host = host
         self.port = port
         self.callback = callback
@@ -55,11 +56,11 @@ class TcpServer:
                         client_socket.send(f'{res}'.encode())
 
                     except OSError as e:
-                        print(f"server_socket accept error: {e}")
+                        self.default_logger.error(f"server_socket accept error: {e}")
                         break
                 print("client close")
                 self.default_logger.info(f"client close")
                 client_socket.close()
             except Exception as e:
-                self.default_logger.info(f"tcp service except: {e}")
-                print(f"tcp service except: {e}")
+                self.default_logger.error(f"tcp service except: {e}")
+                time.sleep(1)
