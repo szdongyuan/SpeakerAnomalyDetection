@@ -97,7 +97,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         return plot_x, plot_h, plot_thd
 
     @staticmethod
-    def calculate_spectrum(reference_signal, sr, gap_len=10, delay_frames=0):
+    def calculate_spectrum(reference_signal, sr, win_len = 4410, hop_length = 3, window = 'boxcar'):
         """
             Calculate the spectrum of the reference signal, returning the base frequency
             and its maximum amplitude for each time window.
@@ -119,14 +119,12 @@ class AudioThdFrequencyResponseAnalysis(object):
                 - base_freq_list: list
                     A list containing the base frequency for each time window.
         """
-        win_len = sr // gap_len
-        hop_length = 3
         noverlap = win_len - hop_length
         if noverlap < 0:
              noverlap = 0 
 
         f, t, xf = signal.stft(reference_signal, fs=sr, nperseg=win_len, noverlap=noverlap,
-                                nfft=win_len, return_onesided=True, boundary=None, padded=False, window='boxcar')
+                                nfft=win_len, return_onesided=True, boundary=None, padded=False, window=window)
 
         abs_xf = np.abs(xf)
         argmax_indices = np.argmax(abs_xf, axis=0)
