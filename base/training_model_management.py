@@ -39,7 +39,7 @@ class TrainingModelManagement(object):
                                       output_dim: str = None,
                                       model_description="No description",
                                       model_type:str = "keras"):
-        if model_name and input_dim and output_dim:
+        if model_name and input_dim and output_dim and config_path:
             try:
                 with DataSave(self.db_path) as database:
                     model_id = str(uuid.uuid1())
@@ -157,7 +157,7 @@ class TrainingModelManagement(object):
     def get_all_model_info_from_db(self):
         try:
             with DataSave(self.db_path) as database:
-                query_code, query_result = database.query("training_model_table", ["model_name", "input_dim", "output_dim", "accuracy", "model_description", "model_path"])
+                query_code, query_result = database.query("training_model_table", ["model_name", "input_dim", "output_dim", "accuracy", "model_description", "config_path", "model_path"])
                 if query_code == error_code.OK and query_result:
                     return error_code.OK, query_result
                 else:
