@@ -29,6 +29,7 @@ from ui.login_window import get_mac_address
 
 
 class SequenceWindow(QWidget):
+    tcp_server = None
 
     def __init__(self):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
@@ -55,8 +56,11 @@ class SequenceWindow(QWidget):
         self.vendor_id = None
         self.product_id = None
         self.recorded_signal_info = {}
-        self.tcp_server = TcpServer(host='127.0.0.1', port=50000, callback=self.deal_package)
-
+        self.ip_format = True
+        self.port_format = True
+        self.tcp_ip = None
+        self.tcp_port = None
+        self.get_tcp_config()
         # Set up the default logger for logging messages
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
@@ -155,15 +159,32 @@ class SequenceWindow(QWidget):
         self.barcode_scanner_box.setChecked(False)
         self.barcode_scanner_box.stateChanged.connect(self.clicked_scanner)
 
-        self.scanner_tcp = QCheckBox(" TCP", self)
+        self.scanner_tcp = QCheckBox(" TCP ", self)
         self.scanner_tcp.setChecked(False)
         self.scanner_tcp.stateChanged.connect(self.is_clicked_tcp)
+
+        self.ip_label = QLabel(" IP:")
+        self.ip_edit = QLineEdit(self)
+        self.ip_edit.setPlaceholderText(f"{self.tcp_ip}")
+        self.ip_edit.setDisabled(True)
+        self.ip_edit.setFixedHeight(35)
+        self.ip_edit.setAlignment(Qt.AlignCenter)
+
+        self.port_label = QLabel(" Port:")
+        self.port_edit = QLineEdit(self)
+        self.port_edit.setPlaceholderText(f"{self.tcp_port}")
+        self.port_edit.setDisabled(True)
+        self.port_edit.setFixedHeight(35)
+        self.port_edit.setFixedWidth(80)
+        self.port_edit.setAlignment(Qt.AlignCenter)
 
         self.lineedit_s_or_n = QLineEdit(self)
         self.lineedit_s_or_n.setDisabled(True)
         self.lineedit_s_or_n.setFixedHeight(35)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
         self.lineedit_s_or_n.editingFinished.connect(lambda: self.validate_count(self.lineedit_s_or_n, False))
+        self.ip_edit.editingFinished.connect(self.validate_ip)
+        self.port_edit.editingFinished.connect(self.validate_port)
 
         vertical_line_1 = QFrame()
         vertical_line_2 = QFrame()
@@ -173,12 +194,14 @@ class SequenceWindow(QWidget):
         vertical_line_6 = QFrame()
         vertical_line_7 = QFrame()
         vertical_line_8 = QFrame()
+        vertical_line_9 = QFrame()
         vertical_line_1.setFrameShape(QFrame.VLine)
         vertical_line_2.setFrameShape(QFrame.VLine)
         vertical_line_3.setFrameShape(QFrame.VLine)
         vertical_line_4.setFrameShape(QFrame.VLine)
         vertical_line_5.setFrameShape(QFrame.VLine)
         vertical_line_6.setFrameShape(QFrame.VLine)
+        vertical_line_9.setFrameShape(QFrame.VLine)
         vertical_line_7.setFrameShape(QFrame.HLine)
         vertical_line_8.setFrameShape(QFrame.HLine)
         vertical_line_7.setFixedHeight(1)
@@ -205,7 +228,17 @@ class SequenceWindow(QWidget):
         layout.addWidget(self.barcode_scanner_box)
         layout.addWidget(self.lineedit_s_or_n)
         layout.addSpacing(10)
+        layout.addWidget(vertical_line_9)
+        layout.addSpacing(10)
         layout.addWidget(self.scanner_tcp)
+        layout.addSpacing(10)
+        layout.addWidget(self.ip_label)
+        layout.addSpacing(10)
+        layout.addWidget(self.ip_edit)
+        layout.addSpacing(10)
+        layout.addWidget(self.port_label)
+        layout.addSpacing(10)
+        layout.addWidget(self.port_edit)
         layout.addSpacing(10)
         layout.addWidget(vertical_line_6)
         layout.addStretch()
@@ -217,6 +250,54 @@ class SequenceWindow(QWidget):
         tools_layout.setSpacing(0)
 
         return tools_layout
+
+    def validate_ip(self):
+        ip = self.ip_edit.text()
+        pattern = r'^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$'
+        if not re.match(pattern, ip):
+            self.ip_format = False
+            QMessageBox.warning(self, "无效 IP", "每个段的值必须在 0 到 255 之间。")
+            self.ip_edit.setFocus()
+            self.scanner_tcp.setEnabled(False)
+            return False
+        self.ip_format = True
+        self.update_scanner_tcp_state()
+
+    def validate_port(self):
+        port_text = self.port_edit.text()
+        if not port_text.isdigit():
+            self.port_format = False
+            QMessageBox.warning(self, "无效端口", "端口号必须是数字")
+            self.port_edit.setFocus()
+            self.scanner_tcp.setEnabled(False)
+            return False
+        port = int(port_text)
+        if not (0 < port < 65536):
+            self.port_format = False
+            QMessageBox.warning(self, "无效端口", "请输入 1 到 65535 之间的端口号")
+            self.port_edit.setFocus()
+            self.scanner_tcp.setEnabled(False)
+            return False
+        self.port_format = True
+        self.update_scanner_tcp_state()
+
+    def update_scanner_tcp_state(self):
+        if self.ip_format and self.port_format:
+            self.scanner_tcp.setEnabled(True)
+            self.write_tcp_config(self.ip_edit.text(), self.port_edit.text())
+            return True
+        elif self.ip_format is False and self.port_format is True:
+            QMessageBox.warning(self, "无效 IP", "ip 不对")
+            self.scanner_tcp.setEnabled(False)
+            return False
+        elif self.ip_format is True and self.port_format is False:
+            QMessageBox.warning(self, "无效 端口", "端口 不对")
+            self.scanner_tcp.setEnabled(False)
+            return False
+        else:
+            QMessageBox.warning(self, "无效", "端口和ip都不对")
+            self.scanner_tcp.setEnabled(False)
+            return False
 
     def create_waveform_layout(self):
         """
@@ -327,13 +408,48 @@ class SequenceWindow(QWidget):
                 self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
                 self.scanner_barcode_thread.start()
 
+    def write_tcp_config(self, ip, port):
+        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
+        if ip:
+            self.tcp_ip = ip
+        if port:
+            self.tcp_port = port
+        try:
+            with open(file_path, 'w') as f:
+                f.write(f"ip = {self.tcp_ip}\n")
+                f.write(f"port = {self.tcp_port}\n")
+            self.default_logger.info(f"write_tcp_config_success: {file_path}")
+        except Exception as e:
+            self.default_logger.error(f"write_tcp_config_error: {e}")
+
+    def get_tcp_config(self):
+        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
+        with open(file_path, 'r') as f:
+            config_data = f.readlines()
+            ip = config_data[0].split('=')[1].strip()
+            port_text = config_data[1].split('=')[1].strip()
+            port = int(port_text)
+            self.tcp_ip = ip
+            self.tcp_port = port
+
     def is_clicked_tcp(self):
         if self.scanner_tcp.isChecked():
+            self.ip_edit.setEnabled(True)
+            self.port_edit.setEnabled(True)
             self.barcode_scanner_box.setEnabled(False)
-            self.tcp_server.start()
+            self.get_tcp_config()
+            if hasattr(self, 'tcp_server') and SequenceWindow.tcp_server:
+                SequenceWindow.tcp_server.stop()
+                SequenceWindow.tcp_server = None
+            SequenceWindow.tcp_server = TcpServer(host=self.tcp_ip, port=self.tcp_port, callback=self.deal_package)
+            SequenceWindow.tcp_server.start()
         else:
+            self.ip_edit.setEnabled(False)
+            self.port_edit.setEnabled(False)
             self.barcode_scanner_box.setEnabled(True)
-            self.tcp_server.stop()
+            if hasattr(self, 'tcp_server') and SequenceWindow.tcp_server:
+                SequenceWindow.tcp_server.stop()
+                SequenceWindow.tcp_server = None
 
     def generate_request_id(self, request_type,timestamp):
         """
@@ -364,10 +480,10 @@ class SequenceWindow(QWidget):
         is_sync = data.get("IsSync")
         timestamp = data.get("Timestamp")
         request_id = self.generate_request_id(request_type,timestamp)
-        if request_id == self.tcp_server.request_id:
+        if request_id == SequenceWindow.tcp_server.request_id:
             return "pass"
         else:
-            self.tcp_server.request_id = request_id
+            SequenceWindow.tcp_server.request_id = request_id
         # allocating task
         if request_type == RequestTypeEnum.RUN_TEST.value:
             sign.run_test_sign.emit()
