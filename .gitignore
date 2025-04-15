@@ -1,0 +1,12 @@
+/.venv
+*.pyc
+/audio_data
+/log
+/models
+/configs
+/ui/ui_config
+/ui/ui_pic
+/database
+/stimulus
+*.wav
+*.png
