@@ -164,7 +164,8 @@ class AiWindow(QDialog):
             self.save_default_train_test_path(path, "evaluate")
             self.evaluate_dir_lineedit.setText(path)
 
-    def on_update_text(self, text, process_edit: QTextEdit):
+    @staticmethod
+    def on_update_text(text, process_edit: QTextEdit):
         cursor = process_edit.model_structure_texteditor.textCursor()
         cursor.movePosition(QTextCursor.End)
         if text == "\n":
