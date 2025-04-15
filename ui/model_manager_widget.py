@@ -241,7 +241,7 @@ class MytableView(QTableView):
             makedirs(target_dir, exist_ok=True)
             target_path = path.join(target_dir, model_name + "." + model_type)
             if path.exists(target_path):
-                # if them is same file, order to ensure the file exists. return OK
+                # if source file with target file is same file, don't override file, return OK
                 if path.samefile(source_path, target_path):
                     return error_code.OK
                 if self.override_model_file_part():
