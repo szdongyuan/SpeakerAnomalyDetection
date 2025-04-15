@@ -1,7 +1,7 @@
 from re import match
 import sys
-from os import path, makedirs, remove, rename, listdir
 from shutil import copy2
+from os import path, makedirs, remove, rename, listdir
 
 from PyQt5.QtCore import  Qt, QSize
 from PyQt5.QtGui import  QStandardItemModel, QStandardItem, QIcon
@@ -143,8 +143,8 @@ class MytableView(QTableView):
                         except Exception as e:
                             QMessageBox.warning(self, "警告", "%s" % str(e))
                             self.logger.error("rename model [%s] error. [%s]" % (model_path, e))
-                            self.model().setData(index, self.model_info[index.row()][index.column()])
                             self.is_edit_item = False
+                            self.model().setData(index, self.model_info[index.row()][index.column()])
                             return
                 else:
                     old_name = self.model_info[index.row()][0]
@@ -241,6 +241,9 @@ class MytableView(QTableView):
             makedirs(target_dir, exist_ok=True)
             target_path = path.join(target_dir, model_name + "." + model_type)
             if path.exists(target_path):
+                # if them is same file, order to ensure the file exists. return OK
+                if path.samefile(source_path, target_path):
+                    return error_code.OK
                 if self.override_model_file_part():
                     self.logger.info("source file is same as target file, Deleting the target file...")
                     remove(target_path)
