@@ -303,6 +303,12 @@ class MainWindow(QMainWindow):
         # close the window
         self.close()
 
+    def closeEvent(self, event):
+        if hasattr(SequenceWindow, 'tcp_server') and SequenceWindow.tcp_server:
+            SequenceWindow.tcp_server.stop()
+            SequenceWindow.tcp_server = None
+        event.accept()
+
     def mousepressevent(self, event):
         # If the mouse is pressed, recoed mouse move data, start the window resizing
         if event.button() == Qt.LeftButton:

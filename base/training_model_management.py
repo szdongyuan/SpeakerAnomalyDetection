@@ -14,14 +14,13 @@ class TrainingModelManagement(object):
     def __init__(self):
         self.db_path = model_consts.DATABASE_PATH
 
-    def save_training_model_info_to_db(self, model_path, config_path, ret_str=None, model_description="No description"):
+    def save_training_model_info_to_db(self, signal_length, model_path, config_path, ret_str=None, model_description="No description"):
         try:
             if os.path.isabs(model_path):
                 model_path = FileOps.get_relative_path(model_path, model_consts.DEFAULT_DIR)
             with DataSave(self.db_path) as database:
-                code, training_model_info = self.get_training_model_info_to_db(database, model_path, config_path,
-                                                                               ret_str,
-                                                                               model_description)
+                code, training_model_info = self.get_training_model_info_to_db(database, signal_length, model_path,
+                                                                               config_path, ret_str, model_description)
                 if code == error_code.OK:
                     database.insert_data_into_db("training_model_table",
                                                  model_consts.DB_MODEL_COLUMNS, [training_model_info])
@@ -95,7 +94,7 @@ class TrainingModelManagement(object):
             return error_code.INVALID_DELETE, err_msg
 
     @staticmethod
-    def get_training_model_info_to_db(database, model_path, config_path, ret_str=None,
+    def get_training_model_info_to_db(database, signal_length, model_path, config_path, ret_str=None,
                                       model_description="No description"):
         if not os.path.exists(model_path):
             return error_code.INVALID_PATH, "The model path does not exist."
@@ -103,13 +102,7 @@ class TrainingModelManagement(object):
             return error_code.INVALID_PATH, "The config path does not exist."
         model_name = os.path.splitext(os.path.basename(model_path))[0]
         training_model = load_model(model_path)
-        input_shape = training_model.input_shape
-        if len(input_shape) >= 3:
-            input_dim = f"{input_shape[1]} x {input_shape[2]}"
-        elif len(input_shape) == 2:
-            input_dim = f"{input_shape[1]}"
-        else:
-            input_dim = "Unknown"
+        input_dim = f"{signal_length} x {1}"
         output_shape = training_model.output_shape
         if len(output_shape) >= 2:
             output_dim = output_shape[1]
