@@ -164,25 +164,20 @@ class AiWindow(QDialog):
             self.save_default_train_test_path(path, "evaluate")
             self.evaluate_dir_lineedit.setText(path)
 
-    def on_update_text(self, text, process_edit: QTextEdit):
+    @staticmethod
+    def on_update_text(text, process_edit: QTextEdit):
         cursor = process_edit.model_structure_texteditor.textCursor()
         cursor.movePosition(QTextCursor.End)
-        enter_flag = False
         if text == "\n":
             cursor.insertText("\r")
         elif text.startswith("\n"):
-            if enter_flag:
-                cursor.insertText(text)
-                cursor.insertText("\r")
-            else:
-                content = text.lstrip('\n')
-                cursor.movePosition(QTextCursor.StartOfLine)
-                cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
-                cursor.removeSelectedText()
-                cursor.insertText(content)
+            content = text.lstrip('\n')
+            cursor.movePosition(QTextCursor.StartOfLine)
+            cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.insertText(content)
         elif not "\r" in text:
             cursor.insertText(text)
-            enter_flag = True
         process_edit.model_structure_texteditor.setTextCursor(cursor)
         process_edit.model_structure_texteditor.ensureCursorVisible()
 
