@@ -1,16 +1,16 @@
 from re import match
 import sys
-from os import path, makedirs, remove, rename
+from os import path, makedirs, remove, rename, listdir
 from shutil import copy2
 
 from PyQt5.QtCore import  Qt, QSize
 from PyQt5.QtGui import  QStandardItemModel, QStandardItem, QIcon
 from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGroupBox, QLabel, QLineEdit, QMessageBox
-from PyQt5.QtWidgets import QVBoxLayout, QTableView, QHeaderView, QPushButton, QHBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout, QTableView, QHeaderView, QPushButton, QHBoxLayout, QComboBox, QSizePolicy
 
 from base.training_model_management import TrainingModelManagement
 from base.log_manager import LogManager
-from consts import error_code, ui_style_const
+from consts import error_code, ui_style_const, model_consts
 from consts.running_consts import DEFAULT_DIR
 
 
@@ -184,11 +184,16 @@ class MytableView(QTableView):
             query_result = list(map(list, query_result))
             self.model_info = query_result
         self.create_model_stytle()
+
+    def clear_selected_cells(self):
+        selection_model = self.selectionModel()
+        if selection_model.hasSelection():
+            selection_model.clearSelection()
         
     def add_model_info_to_model(self, model_info):
         for idx, model_info in enumerate(model_info):
             model_info_items = []
-            model_name, input_dim, output_dim, precision, model_description, model_path = model_info
+            model_name, input_dim, output_dim, precision, model_description, _, model_path = model_info
             item_model_name = QStandardItem(model_name)
             item_model_name.setToolTip(model_name)
             item_input_dim = QStandardItem(str(input_dim))
@@ -211,9 +216,22 @@ class MytableView(QTableView):
         model_path = DEFAULT_DIR + model_path
         if not path.exists(model_path):
             model_path = model_path.replace("consts/../", "")
-            print(model_path)
             QMessageBox.warning(self, "警告", "模型文件不存在: %s" % model_path)
 
+    def override_model_file_part(self):
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("文件存在")
+        msg_box.setText("目标文件已存在，是否覆盖？")
+        
+        msg_box.addButton("是", QMessageBox.YesRole)
+        no_btn = msg_box.addButton("否", QMessageBox.NoRole)
+        msg_box.exec_()
+        
+        if msg_box.clickedButton() == no_btn:
+            self.logger.warning("user cancel override the file")
+            return False
+        else:
+            return True
     def copy_file(self, source_path: str, model_name: str, model_type: str):
         if source_path and model_name and model_type:
             if not path.isfile(source_path):
@@ -223,8 +241,10 @@ class MytableView(QTableView):
             makedirs(target_dir, exist_ok=True)
             target_path = path.join(target_dir, model_name + "." + model_type)
             if path.exists(target_path):
-                if path.samefile(source_path, target_path):
-                    self.logger.info("source file is same as target file")
+                if self.override_model_file_part():
+                    self.logger.info("source file is same as target file, Deleting the target file...")
+                    remove(target_path)
+                else:
                     return error_code.OK
             try:
                 copy2(source_path, target_path)
@@ -250,11 +270,17 @@ class MytableView(QTableView):
             self.logger.error("model_name is exist")
             return True
         if model_name and model_config and model_type:
-            code, code_str = self.model_management.register_new_model_info_to_db(model_name,
-                                                                                input_dim=model_config.get("input_dim"), 
-                                                                                output_dim=model_config.get("output_dim"),
-                                                                                model_description=model_config.get("model_description", "No description"),
-                                                                                model_type = model_type)
+            config_path = model_consts.CONFIG_PATH
+            if model_config.get("config_path"):
+                config_path = model_consts.CONFIG_PATH.replace("config", model_config["config_path"])
+            else:
+                QMessageBox.warning(self, "警告", "未找到模型配置文件，已使用默认配置文件!")
+            code, code_str = self.model_management.register_new_model_info_to_db(model_name = model_name,
+                                                                                 config_path = config_path,
+                                                                                 input_dim = model_config.get("input_dim"), 
+                                                                                 output_dim = model_config.get("output_dim"),
+                                                                                 model_description = model_config.get("model_description", "No description"),
+                                                                                 model_type = model_type)
             if code == error_code.INVALID_INSERT:
                 self.logger.error(code_str)
                 return False
@@ -272,11 +298,13 @@ class MytableView(QTableView):
             dim_dict["input_left"] = self.model_info[self.sellect_model_row][1].split(" x ")[0]
             dim_dict["input_right"] = self.model_info[self.sellect_model_row][1].split(" x ")[1]
             dim_dict["output_dim"] = self.model_info[self.sellect_model_row][2]
-            model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name, dim=dim_dict)
+            dim_dict["config_path"] = self.model_info[self.sellect_model_row][-2]
+            model_obj_data = SetModelConfig(model_info = self.model_info, model_name = model_name, dim = dim_dict)
             model_obj_data.model_input_dim_box.setEnabled(False)
             model_obj_data.model_output_dim_box.setEnabled(False)
+            model_obj_data.model_config_box.setEnabled(False)
         else:
-            model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name)
+            model_obj_data = SetModelConfig(model_info = self.model_info, model_name = model_name)
         model_config = model_obj_data.exec()
         return model_config
     
@@ -300,6 +328,7 @@ class MytableView(QTableView):
                 self.logger.error("copy file error")
                 return
         else:
+            self.clear_selected_cells()
             return
 
     def set_new_model_info(self):
@@ -364,12 +393,14 @@ class SetModelConfig(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("设置模型信息")
+        self.setMinimumWidth(600)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         if self.dim:
             self.input_dim_left = self.dim["input_left"]
             self.input_dim_right = self.dim["input_right"]
             self.config["output_dim"] = self.dim["output_dim"]
+            self.config["config_path"] = self.dim["config_path"]
         else:
             self.input_dim_left = "176400"
             self.input_dim_right = "1"
@@ -377,6 +408,7 @@ class SetModelConfig(QDialog):
         model_name_box = self.create_model_name_box()
         self.model_input_dim_box = self.create_inpot_dim_box()
         self.model_output_dim_box = self.create_output_dim_box()
+        self.model_config_box = self.create_model_config_box()
         model_description_box = self.create_model_description_box()
         btn_layout = self.create_btn_layout()
 
@@ -384,6 +416,7 @@ class SetModelConfig(QDialog):
         layout.addWidget(model_name_box)
         layout.addWidget(self.model_input_dim_box)
         layout.addWidget(self.model_output_dim_box)
+        layout.addWidget(self.model_config_box)
         layout.addWidget(model_description_box)
         layout.addLayout(btn_layout)
 
@@ -392,13 +425,13 @@ class SetModelConfig(QDialog):
         self.setStyleSheet(ui_style_const.qpushbutton_stytle + 
                            ui_style_const.qlineedit_stytle + 
                            ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle)
+                           ui_style_const.qlabel_stytle + 
+                           ui_style_const.qcombobox_stytle)
         
     def check_model_name(self, model_name:str):
         input_str = model_name
         reg = r'^[A-Za-z0-9_]*$'
         if not match(reg, input_str):
-            print("输入字符串中包含特殊字符")
             QMessageBox.warning(self, "警告", "模型名称只能由大小写字母、数字和下划线组成!")
             return False
         result = False
@@ -460,6 +493,25 @@ class SetModelConfig(QDialog):
         output_dim_box.setLayout(output_dim_layout)
         return output_dim_box
     
+    def create_model_config_box(self):
+        model_config_box = QGroupBox()
+        model_config_label = QLabel("模型配置:")
+        model_config_combobox = QComboBox()
+        size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        model_config_combobox.setSizePolicy(size_policy)
+        yaml_files = self.get_yaml_files()
+        model_config_combobox.currentTextChanged.connect(self.on_combobox_clicked)
+        for yaml_file in yaml_files:
+            model_config_combobox.addItem(yaml_file)
+        model_config_combobox.setCurrentText(self.config["config_path"])
+        layout = QHBoxLayout()
+        layout.addWidget(model_config_label)   
+        layout.addStretch()
+        layout.addWidget(model_config_combobox)
+        model_config_box.setLayout(layout)
+
+        return model_config_box
+    
     def create_model_description_box(self):
         model_description_box = QGroupBox()
         model_description_label = QLabel("模型描述:")
@@ -481,6 +533,18 @@ class SetModelConfig(QDialog):
         btn_layout.addWidget(ok_btn)
         return btn_layout
     
+    def get_yaml_files(self):
+        directory = DEFAULT_DIR + "/configs/ai_model_config"
+        yaml_files = []
+        for filename in listdir(directory):
+            if filename.endswith('.yml'):
+                yaml_file = path.basename(filename).split('.yml')[0]
+                yaml_files.append(yaml_file)
+        return yaml_files
+    
+    def on_combobox_clicked(self):
+        self.config["config_path"]= self.sender().currentText()
+
     def on_model_name_edit_finished(self):
         self.config["model_name"] = self.sender().text()
 
@@ -497,7 +561,8 @@ class SetModelConfig(QDialog):
         self.config["model_description"] = self.sender().text()
 
     def on_close(self):
-        if self.config.get("model_name", None) and self.input_dim_left and self.input_dim_right and self.config.get("output_dim", None):
+        if self.config.get("model_name", None) and self.input_dim_left and \
+            self.input_dim_right and self.config.get("output_dim", None) and self.config.get("config_path", None):
             self.clicked_ok_close = True
             self.close()
         else:

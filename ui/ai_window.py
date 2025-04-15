@@ -3,9 +3,9 @@ import sys
 
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QTextCursor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton
-from PyQt5.QtWidgets import QSplitter, QTextEdit, QVBoxLayout, QWidget, QMessageBox
+from PyQt5.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QMessageBox
 
 from base.file_ops import FileOps
 from base.training_model_management import TrainingModelManagement
@@ -31,15 +31,8 @@ class AiWindow(QDialog):
         self.test_dir = self.load_default_train_test_path("evaluate")
         self.model_path = self.load_model_path_from_config()
         self.logger = logger
-        self.process = Process_Widget()
 
         self.init_ui()
-        self.th = TrainEvaluateThread(train_dir=self.train_dir,
-                                      test_dir=self.test_dir,
-                                      model_path=self.model_path,
-                                      mode="train")
-        self.th.signalForText.connect(self.on_update_text)
-        sys.stdout = self.th
 
     def on_update_text(self, text):
         cursor = self.process.model_structure_texteditor.textCursor()
@@ -185,26 +178,58 @@ class AiWindow(QDialog):
             self.save_default_train_test_path(path, "evaluate")
             self.evaluate_dir_lineedit.setText(path)
 
+    def on_update_text(self, text, process_edit: QTextEdit):
+        cursor = process_edit.model_structure_texteditor.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        enter_flag = False
+        if text == "\n":
+            cursor.insertText("\r")
+        elif text.startswith("\n"):
+            if enter_flag:
+                cursor.insertText(text)
+                cursor.insertText("\r")
+            else:
+                content = text.lstrip('\n')
+                cursor.movePosition(QTextCursor.StartOfLine)
+                cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                cursor.insertText(content)
+                cursor.movePosition(QTextCursor.StartOfLine)  # 关键：重置光标到行首
+        elif not "\r" in text:
+            cursor.insertText(text)
+            enter_flag = True
+        process_edit.model_structure_texteditor.setTextCursor(cursor)
+        process_edit.model_structure_texteditor.ensureCursorVisible()
+
+
+    def train_or_evaluate_model(self, mode: str, action_str: str):
+        process = Process_Widget()
+
+        self.train_btn.setEnabled(False)
+        self.evaluate_btn.setEnabled(False)
+        t = TrainEvaluateThread(train_dir=self.train_dir,
+                                        test_dir=self.test_dir,
+                                        model_path=self.model_path,
+                                        mode=mode)
+        process.current_thread = t
+        t.signalForText.connect(lambda text, process_edit = process: self.on_update_text(text, process_edit))
+        sys.stdout = t
+        print(action_str)
+        t.start()
+        process.show_widget()
+        if process.exec():
+            sys.stdout = sys.__stdout__
+            self.train_btn.setEnabled(True)
+            self.evaluate_btn.setEnabled(True)
+
     def train_btn_clicked(self):
         """
             This function is triggered when the train button is clicked.
             It starts the model training process using a separate thread to avoid blocking the UI.
         """
-        print("start training model...")
         self.model_path = self.load_model_path_from_config()
         try:
-            self.train_btn.setEnabled(False)
-            self.evaluate_btn.setEnabled(False)
-            self.t = TrainEvaluateThread(train_dir=self.train_dir,
-                                         test_dir=self.test_dir,
-                                         model_path=self.model_path,
-                                         mode="train")
-            self.t.start()
-            self.process.current_thread = self.t
-            self.process.show_widget()
-            if self.process.exec():
-                self.train_btn.setEnabled(True)
-                self.evaluate_btn.setEnabled(True)
+            self.train_or_evaluate_model("train", "start training model...")
         except Exception as e:
             raise e
 
@@ -222,21 +247,9 @@ class AiWindow(QDialog):
                 - test_dir (str): Directory for testing data.
                 - model_path (str): Path to the model file.
         """
-        print("start evaluating model...")
         self.model_path = self.load_model_path_from_config()
         try:
-            self.train_btn.setEnabled(False)
-            self.evaluate_btn.setEnabled(False)
-            self.t = TrainEvaluateThread(train_dir=self.train_dir,
-                                         test_dir=self.test_dir,
-                                         model_path=self.model_path,
-                                         mode="evaluate")
-            self.t.start()
-            self.process.current_thread = self.t
-            self.process.show_widget()
-            if self.process.exec():
-                self.train_btn.setEnabled(True)
-                self.evaluate_btn.setEnabled(True)
+            self.train_or_evaluate_model("evaluate", "start evaluating model...")
         except Exception as e:
             raise e
 
@@ -608,6 +621,7 @@ class AiBrainModelStructure(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("AI模型结构")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         layout = self.create_text_edit()
         self.setLayout(layout)
@@ -643,6 +657,7 @@ class Process_Widget(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("训练评估")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         layout = self.create_text_edit()
         self.setLayout(layout)
 
