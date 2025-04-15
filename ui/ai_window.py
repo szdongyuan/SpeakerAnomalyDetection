@@ -34,20 +34,6 @@ class AiWindow(QDialog):
 
         self.init_ui()
 
-    def on_update_text(self, text):
-        cursor = self.process.model_structure_texteditor.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        if text != "\r":
-            cursor.insertText(text)
-            # cursor.insertText("66666")
-            # cursor.movePosition(QTextCursor.StartOfLine)
-            # cursor.movePosition(QTextCursor.PreviousRow)
-            # cursor.movePosition(QTextCursor.StartOfLine)
-        # else:
-        #     cursor.insertText(text)
-        self.process.model_structure_texteditor.setTextCursor(cursor)
-        self.process.model_structure_texteditor.ensureCursorVisible()
-
     def init_ui(self):
         """
             Initialize the user interface.
@@ -194,7 +180,6 @@ class AiWindow(QDialog):
                 cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
                 cursor.removeSelectedText()
                 cursor.insertText(content)
-                cursor.movePosition(QTextCursor.StartOfLine)  # 关键：重置光标到行首
         elif not "\r" in text:
             cursor.insertText(text)
             enter_flag = True
