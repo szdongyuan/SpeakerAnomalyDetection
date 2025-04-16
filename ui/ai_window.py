@@ -565,7 +565,7 @@ class TrainEvaluateThread(QThread):
         self.train_dir = train_dir
         self.test_dir = test_dir
         self.model_path = model_path
-        self.config_path = {"config_path": config_path}
+        self.kwargs = {"config_path": config_path}
         self.mode = mode
 
     def write(self, text):
@@ -603,9 +603,9 @@ class TrainEvaluateThread(QThread):
         """
         try:
             if self.mode == "train":
-                train(self.train_dir, self.model_path, self.test_dir, **self.config_path)
+                train(self.train_dir, self.model_path, self.test_dir, **self.kwargs)
             elif self.mode == "evaluate":
-                evaluate(self.test_dir, self.model_path, verbose=7, **self.config_path)
+                evaluate(self.test_dir, self.model_path, verbose=7, **self.kwargs)
         except Exception as e:
             print(e)
 
