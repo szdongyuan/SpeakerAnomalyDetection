@@ -58,9 +58,9 @@ def train(pre_labeled_dir,
     logger.info(ret_msg)
     logger.shut_down()
     if predict_dir:
-        kwargs["config_path"] = save_config_path
-        kwargs["verbose"] = 2
-        ret_str = evaluate(predict_dir, model=model, **kwargs)
+        evaluate_kwargs = {"config_path": save_config_path,
+                           "verbose": 2}
+        ret_str = evaluate(predict_dir, model=model, **evaluate_kwargs)
     else:
         ret_str = None
 
