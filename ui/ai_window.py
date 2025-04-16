@@ -165,6 +165,18 @@ class AiWindow(QDialog):
             self.evaluate_dir_lineedit.setText(path)
 
     @staticmethod
+    def get_model_info(model_path, logger: LogManager):
+        base_file = os.path.basename(model_path)
+        selected_model = base_file.split(".")[0]
+        query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
+        if query_code == error_code.OK:
+            _, config_path = query_result[0]
+            return error_code.OK, config_path
+        else:
+            logger.error(f"Failed to get the model {selected_model} information.")
+            return error_code.INVALID_QUERY, "Failed to get the model information."
+
+    @staticmethod
     def on_update_text(text, process_edit: QTextEdit):
         cursor = process_edit.model_structure_texteditor.textCursor()
         cursor.movePosition(QTextCursor.End)
@@ -184,23 +196,27 @@ class AiWindow(QDialog):
 
     def train_or_evaluate_model(self, mode: str, action_str: str):
         process = Process_Widget()
-
-        self.train_btn.setEnabled(False)
-        self.evaluate_btn.setEnabled(False)
-        t = TrainEvaluateThread(train_dir=self.train_dir,
-                                        test_dir=self.test_dir,
-                                        model_path=self.model_path,
-                                        mode=mode)
-        process.current_thread = t
-        t.signalForText.connect(lambda text, process_edit = process: self.on_update_text(text, process_edit))
-        sys.stdout = t
-        print(action_str)
-        t.start()
-        process.show_widget()
-        if process.exec():
-            sys.stdout = sys.__stdout__
-            self.train_btn.setEnabled(True)
-            self.evaluate_btn.setEnabled(True)
+        code, result = self.get_model_info(self.model_path, self.logger)
+        if code != error_code.OK:
+            QMessageBox.warning(self, "警告", "模型不存在！")
+        else:
+            self.train_btn.setEnabled(False)
+            self.evaluate_btn.setEnabled(False)
+            t = TrainEvaluateThread(train_dir=self.train_dir,
+                                    test_dir=self.test_dir,
+                                    model_path=self.model_path,
+                                    config_path=result,
+                                    mode=mode)
+            process.current_thread = t
+            t.signalForText.connect(lambda text, process_edit = process: self.on_update_text(text, process_edit))
+            sys.stdout = t
+            print(action_str)
+            t.start()
+            process.show_widget()
+            if process.exec():
+                sys.stdout = sys.__stdout__
+                self.train_btn.setEnabled(True)
+                self.evaluate_btn.setEnabled(True)
 
     def train_btn_clicked(self):
         """
@@ -531,7 +547,7 @@ class TrainEvaluateThread(QThread):
     signalForText = pyqtSignal(str)
 
     def __init__(self, data=None, parent=None,
-                 train_dir=None, test_dir=None, model_path=None, mode="train"):
+                 train_dir=None, test_dir=None, model_path=None, config_path=None, mode="train"):
         """
             Initialize the class instance
 
@@ -541,6 +557,7 @@ class TrainEvaluateThread(QThread):
             train_dir: Directory for training data, used to load training data
             test_dir: Directory for test data, used to load test data
             model_path: Path to the model, used to save a trained model or load an existing model
+            config_path: Path to the configuration file, used to load the configuration file
             mode: Mode, default is "train", indicating training mode
         """
         super().__init__(parent)
@@ -548,6 +565,7 @@ class TrainEvaluateThread(QThread):
         self.train_dir = train_dir
         self.test_dir = test_dir
         self.model_path = model_path
+        self.config_path = {"config_path": config_path}
         self.mode = mode
 
     def write(self, text):
@@ -585,9 +603,9 @@ class TrainEvaluateThread(QThread):
         """
         try:
             if self.mode == "train":
-                train(self.train_dir, self.model_path, self.test_dir)
+                train(self.train_dir, self.model_path, self.test_dir, **self.config_path)
             elif self.mode == "evaluate":
-                evaluate(self.test_dir, self.model_path, verbose=7)
+                evaluate(self.test_dir, self.model_path, verbose=7, **self.config_path)
         except Exception as e:
             print(e)
 

@@ -64,7 +64,7 @@ def train(pre_labeled_dir,
 
     if save_model_path:
         signal_length = len(signals[0])
-        model.save_model(signal_length, save_model_path, model_consts.CONFIG_PATH, ret_str, model_description="No description")
+        model.save_model(signal_length, save_model_path, save_config_path, ret_str, model_description="No description")
         ret_msg += ". model saved."
 
     return json.dumps({"ret_code": error_code.OK,
