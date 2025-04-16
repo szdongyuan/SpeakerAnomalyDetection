@@ -292,7 +292,7 @@ class AI(QWidget):
 
     def calculate_ai_scores(self):
         model_name = self.analysis_config["analyse_model_name"]
-        code, result = self.get_model_info(model_name)
+        code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
             self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
         else:
@@ -319,7 +319,8 @@ class AI(QWidget):
         )
         return result_text
 
-    def get_model_info(self, selected_model):
+    @staticmethod
+    def get_model_info(selected_model, logger: LogManager):
         query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
         if query_code == error_code.OK:
             model_path, config_path = query_result[0]
@@ -327,7 +328,7 @@ class AI(QWidget):
             really_config_path = DEFAULT_DIR + config_path
             return error_code.OK, (really_model_path, really_config_path)
         else:
-            self.default_logger.error(f"Failed to get the model {selected_model} information.")
+            logger.error(f"Failed to get the model {selected_model} information.")
             return error_code.INVALID_QUERY, "Failed to get the model information."
 
 
@@ -341,7 +342,6 @@ class Spectrogram(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowTitle("频谱分析")
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.plot_widget = pg.PlotWidget(title="Spectrogram")
         self.plot_widget.setBackground('white')
