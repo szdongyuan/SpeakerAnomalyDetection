@@ -22,6 +22,7 @@ class AnalysisModelSellect(QDialog):
         super().__init__()
 
         self.analysis_list = QListView()
+        self.analysis_list.setSelectionMode(QListView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
         self.sellect_list = OptionList(self.default_logger)
         self.analysis_list.setEditTriggers(QListView.NoEditTriggers)
@@ -39,14 +40,17 @@ class AnalysisModelSellect(QDialog):
         btn_layout = self.create_btn_layout()
         move_btn_layout = self.move_item_btn_layout()  
 
-        arrow_label = QLabel()
-        arrow_label.setPixmap(QPixmap(DEFAULT_DIR + "ui/ui_pic/sellect_analysis_model/jiantou.svg"))
-        arrow_label.setFixedSize(50, 50)
-        arrow_label.setScaledContents(True)
+        add_analysis_btn = QPushButton()
+        add_analysis_btn.setToolTip("添加分析")
+        add_analysis_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
+        add_analysis_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sellect_analysis_model/jiantou.svg"))
+        add_analysis_btn.setFixedSize(50, 50)
+        add_analysis_btn.setIconSize(QSize(50, 50))
+        add_analysis_btn.clicked.connect(self.add_analysis_btn_clicked)
 
         analysis_layout = QHBoxLayout()
         analysis_layout.addLayout(analysis_list_layout)
-        analysis_layout.addWidget(arrow_label)
+        analysis_layout.addWidget(add_analysis_btn)
         analysis_layout.addLayout(sellect_list_layout)
         analysis_layout.addLayout(move_btn_layout)
 
@@ -63,6 +67,14 @@ class AnalysisModelSellect(QDialog):
                            ui_style_const.qcheckbox_stytle +
                            ui_style_const.qlistview_stytle)
         
+    def add_analysis_btn_clicked(self):
+        if self.analysis_list.currentIndex().row() != -1:
+            text = self.analysis_list.currentIndex().data()
+            if not "松散颗粒" in text:
+                self.sellect_list.set_new_analysis_config(text)
+            else:
+                QMessageBox.warning(self, "提示", "暂不支持此功能")
+        
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
         self.analysis_list.setAcceptDrops(False)
@@ -70,6 +82,7 @@ class AnalysisModelSellect(QDialog):
         self.analysis_list.setDefaultDropAction(Qt.CopyAction)
 
         self.sellect_list.setDragEnabled(True)
+        self.sellect_list.setAcceptDrops(True)
         self.sellect_list.setDragDropMode(QListView.DragDrop)
         self.sellect_list.setDefaultDropAction(Qt.MoveAction)
         self.sellect_list.setDropIndicatorShown(True)
@@ -92,12 +105,15 @@ class AnalysisModelSellect(QDialog):
     def create_analysis_list_layout(self):
         analysis_label = QLabel("可选分析")
 
-        self.analysis_model = QStandardItemModel()
-        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HD) ", "松散颗粒 (LP) ", "AI 分析 ", "频谱分析 (Spec)"]
+        self.analysis_model = AnalysisModel()
+        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HD) ", "松散颗粒 (LP) ", "AI 分析 ", "频谱分析 (Spec) "]
         for item in items:
-            list_item = QStandardItem(item)
+            list_item = QStandardItem(item.lstrip())
+            list_item.setData(item, Qt.DisplayRole)
             self.analysis_model.appendRow(list_item)
         self.analysis_list.setModel(self.analysis_model)
+        index = self.analysis_model.index(0, 0)
+        self.analysis_list.setCurrentIndex(index)
 
         layout = QVBoxLayout()
         layout.addWidget(analysis_label)
@@ -233,6 +249,7 @@ class AnalysisModelSellect(QDialog):
         
 
 class OptionList(QListView):
+
     def __init__(self, logger):
         super().__init__()
         self.sellect_analysis_model = QStandardItemModel()
@@ -659,62 +676,43 @@ class OptionList(QListView):
         e.accept()
 
     def dragenterevent(self, event):
-        if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
-            item_model = QStandardItemModel()
-            item_model.dropMimeData(event.mimeData(), Qt.MoveAction, 0, 0, QModelIndex())
-            item_text = item_model.item(0).text()
-
-            if "松散颗粒 (LP)" in item_text:
+        if event.mimeData().hasText():
+            if "松散颗粒 (LP)" in event.mimeData().text():
                 event.ignore()
             else:
-                event.accept()
+                event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragmoveevent(self, event):
-        if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
-            event.setDropAction(Qt.MoveAction)
-            item_model = QStandardItemModel()
-            item_model.dropMimeData(event.mimeData(), Qt.MoveAction, 0, 0, QModelIndex())
-            item_text = item_model.item(0).text()
-
-            if "松散颗粒 (LP)" in item_text:
-                event.ignore()
-            else:
-                event.accept()
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropevent(self, event):
-        if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
-            mime_data = event.mimeData()
-            item_model = QStandardItemModel()
-            if isinstance(item_model, QStandardItemModel):
-                item_model.dropMimeData(mime_data, Qt.MoveAction, 0, 0, QModelIndex())
-
-                for row in range(item_model.rowCount()):
-                    item = item_model.item(row)
-                    item_text = item.text()
-                    count = 1                    
-                    item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
-                    item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
-                    while  item_exist or item_star_exist:
-                        count += 1 
-                        item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
-                        item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")                                
-
-                    list_item = QStandardItem("\xa0" + item_text + f"{count}")
-                    self.model().insertRow(self.model().rowCount(), list_item)
-                    list_item_text = list_item.text()
-                    if "AI" in item_text:
-                        self.store_ai_item(self.all_ai_item, list_item_text)
-                    self.config["display_sequence"].append(list_item_text)
-                    self.get_item_default_config(item_text, list_item_text)
-                    event.accept()
-            else:
-                event.ignore()
+        if event.mimeData().hasText():
+            text = event.mimeData().text().lstrip()
+            self.set_new_analysis_config(text)
+            event.accept()
         else:
             event.ignore()
+
+    def set_new_analysis_config(self, item_text):
+        count = 1                    
+        item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
+        item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
+        while  item_exist or item_star_exist:
+            count += 1 
+            item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
+            item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
+        list_item = QStandardItem("\xa0" + item_text + f"{count}")
+        self.model().insertRow(self.model().rowCount(), list_item)
+        list_item_text = list_item.text()
+        if "AI" in item_text:
+            self.store_ai_item(self.all_ai_item, list_item_text)
+        self.config["display_sequence"].append(list_item_text)
+        self.get_item_default_config(item_text, list_item_text)
 
     def get_item_default_config(self, item_text, list_item_text):
         if not item_text or not list_item_text:
@@ -724,6 +722,18 @@ class OptionList(QListView):
         data = self.load_config(default_config_file)
         self.config[list_item_text] = data[type]
         self.config[list_item_text]["type"] = type
+
+class AnalysisModel(QStandardItemModel):
+
+    def mimeTypes(self):
+        return ['text/plain']
+
+    def mimeData(self, indexes):
+        mime_data = super().mimeData(indexes)
+        texts = [index.data(Qt.DisplayRole) for index in indexes if index.isValid()]
+        mime_data.setText('\n'.join(texts))
+        return mime_data
+    
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
