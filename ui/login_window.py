@@ -425,8 +425,8 @@ def get_mac_address():
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = LoginWindow()
-    # window = ChangePwdWindow('admin', LogManager.set_log_handler("core"))
+    # window = LoginWindow()
+    window = ChangePwdWindow('admin', LogManager.set_log_handler("core"))
     # window = AddAccountWindow(LogManager.set_log_handler("core"))
     window.show()
     sys.exit(app.exec_())
