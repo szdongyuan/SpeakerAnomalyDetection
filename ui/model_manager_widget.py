@@ -232,6 +232,7 @@ class MytableView(QTableView):
             return False
         else:
             return True
+        
     def copy_file(self, source_path: str, model_name: str, model_type: str):
         if source_path and model_name and model_type:
             if not os.path.isfile(source_path):
@@ -275,8 +276,7 @@ class MytableView(QTableView):
         if model_name and model_config and model_type:
             if model_config.get("config_path"):
                 config_dir = os.path.dirname(model_consts.CONFIG_PATH)
-                config_path = os.path.join(config_dir, model_name + ".yaml").replace("\\", "/")
-                print(config_path)
+                config_path = os.path.join(config_dir, model_config["config_path"] + ".yaml").replace("\\", "/")
             else:
                 config_path = model_consts.CONFIG_PATH
                 QMessageBox.warning(self, "警告", "未找到模型配置文件，已使用默认配置文件!")
