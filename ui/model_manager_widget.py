@@ -23,7 +23,7 @@ class ModelInfoList(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("模型列表")
+        self.setWindowTitle("模型管理")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumSize(QSize(530, 200))
@@ -273,10 +273,12 @@ class MytableView(QTableView):
             self.logger.error("model_name is exist")
             return True
         if model_name and model_config and model_type:
-            config_path = model_consts.CONFIG_PATH
             if model_config.get("config_path"):
-                config_path = model_consts.CONFIG_PATH.replace("config", model_config["config_path"])
+                config_dir = os.path.dirname(model_consts.CONFIG_PATH)
+                config_path = os.path.join(config_dir, model_name + ".yaml").replace("\\", "/")
+                print(config_path)
             else:
+                config_path = model_consts.CONFIG_PATH
                 QMessageBox.warning(self, "警告", "未找到模型配置文件，已使用默认配置文件!")
             code, code_str = self.model_management.register_new_model_info_to_db(model_name = model_name,
                                                                                  config_path = config_path,
@@ -409,7 +411,7 @@ class SetModelConfig(QDialog):
             self.input_dim_right = "1"
             self.config["output_dim"] = "1"
         model_name_box = self.create_model_name_box()
-        self.model_input_dim_box = self.create_inpot_dim_box()
+        self.model_input_dim_box = self.create_input_dim_box()
         self.model_output_dim_box = self.create_output_dim_box()
         self.model_config_box = self.create_model_config_box()
         model_description_box = self.create_model_description_box()
@@ -461,26 +463,26 @@ class SetModelConfig(QDialog):
         model_name_box.setLayout(model_name_layout)
         return model_name_box
     
-    def create_inpot_dim_box(self):
-        inpot_dim_box = QGroupBox()
-        inpot_dim_label = QLabel("输入维度:")
-        inpot_dim_edit_left = QLineEdit()
+    def create_input_dim_box(self):
+        input_dim_box = QGroupBox()
+        input_dim_label = QLabel("输入维度:")
+        input_dim_edit_left = QLineEdit()
         label = QLabel("x")
         input_dim_edit_right = QLineEdit()
 
-        inpot_dim_edit_left.setText(str(self.input_dim_left))
+        input_dim_edit_left.setText(str(self.input_dim_left))
         input_dim_edit_right.setText(str(self.input_dim_right))
 
-        inpot_dim_edit_left.editingFinished.connect(self.on_inpot_dim_edit_left_finished)
-        input_dim_edit_right.editingFinished.connect(self.on_inpot_dim_edit_right_finished)
+        input_dim_edit_left.editingFinished.connect(self.on_input_dim_edit_left_finished)
+        input_dim_edit_right.editingFinished.connect(self.on_input_dim_edit_right_finished)
 
-        inpot_dim_layout = QHBoxLayout()
-        inpot_dim_layout.addWidget(inpot_dim_label)
-        inpot_dim_layout.addWidget(inpot_dim_edit_left)
-        inpot_dim_layout.addWidget(label)
-        inpot_dim_layout.addWidget(input_dim_edit_right)
-        inpot_dim_box.setLayout(inpot_dim_layout)
-        return inpot_dim_box
+        input_dim_layout = QHBoxLayout()
+        input_dim_layout.addWidget(input_dim_label)
+        input_dim_layout.addWidget(input_dim_edit_left)
+        input_dim_layout.addWidget(label)
+        input_dim_layout.addWidget(input_dim_edit_right)
+        input_dim_box.setLayout(input_dim_layout)
+        return input_dim_box
 
     def create_output_dim_box(self):
         output_dim_box = QGroupBox()
@@ -517,7 +519,7 @@ class SetModelConfig(QDialog):
     
     def create_model_description_box(self):
         model_description_box = QGroupBox()
-        model_description_label = QLabel("模型描述:")
+        model_description_label = QLabel("模型备注:")
         model_description_edit = QLineEdit()
         model_description_edit.setPlaceholderText("No description")
         model_description_edit.editingFinished.connect(self.on_model_description_edit_finished)
@@ -551,10 +553,10 @@ class SetModelConfig(QDialog):
     def on_model_name_edit_finished(self):
         self.config["model_name"] = self.sender().text()
 
-    def on_inpot_dim_edit_left_finished(self):
+    def on_input_dim_edit_left_finished(self):
         self.input_dim_left = self.sender().text()
 
-    def on_inpot_dim_edit_right_finished(self):
+    def on_input_dim_edit_right_finished(self):
         self.input_dim_right = self.sender().text()
 
     def on_output_dim_edit_finished(self):

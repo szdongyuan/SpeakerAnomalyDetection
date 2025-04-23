@@ -1,9 +1,9 @@
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QPainter, QPixmap, QStandardItem, QStandardItemModel, QIcon
+from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
 from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView, QFrame
-from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QWizard, QWizardPage, QComboBox
+from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QComboBox
 
 from base.sound_device_manager import get_device_info, get_default_device, get_api_info, change_default_device
 from consts import ui_style_const
