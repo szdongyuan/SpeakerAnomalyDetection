@@ -4,7 +4,7 @@ import re
 import sys
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
-from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem, QPixmap
+from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton
 from PyQt5.QtWidgets import QApplication, QMenu, QAction, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox
 from time import time
@@ -82,7 +82,6 @@ class AnalysisModelSellect(QDialog):
         self.analysis_list.setDefaultDropAction(Qt.CopyAction)
 
         self.sellect_list.setDragEnabled(True)
-        self.sellect_list.setAcceptDrops(True)
         self.sellect_list.setDragDropMode(QListView.DragDrop)
         self.sellect_list.setDefaultDropAction(Qt.MoveAction)
         self.sellect_list.setDropIndicatorShown(True)
