@@ -3,9 +3,9 @@ import numpy as np
 from scipy import signal
 from scipy.ndimage import maximum_filter
 from scipy.signal import savgol_filter
-
+import librosa
 from base.utils.plot_audio_features import PlotManager
-
+# import time
 
 class AudioThdFrequencyResponseAnalysis(object):
 
@@ -148,6 +148,141 @@ class AudioThdFrequencyResponseAnalysis(object):
         base_freq_list = list(all_base_freqs)
 
         return freq_dict, base_freq_list
+
+    @staticmethod
+    def calculate_fundamental_freq(reference_signal, sr, **kwargs):
+        """
+            Calculate the fundamental frequency of the reference signal. more accurate than the stft method(calculate_spectrum() method).
+
+            Args:
+                - reference_signal : ndarray
+                    The input reference signal.
+                - sr: int
+                    The sample rate of the signals.
+                - kwargs : optional
+                    - method : string,'yin','pyin','stft','cqt','database'. default 'yin'. 
+                        The method to calculate the fundamental frequency.
+                        if use 'database', it means get the stimulus from the database to calculate the fundamental frequency.
+                    - window : string, default 'hann'
+                        The window to use for the stft.
+                    - database_path : if method is 'database', default '../../data_base/audio_data.db'
+                    - f0_min : int, default 50
+                        The minimum frequency to consider for the fundamental frequency.
+                    - f0_max : int, default 10000
+                        The maximum frequency to consider for the fundamental frequency.
+                    - frame_size : int, default 1024, if use stft, it means the window size.
+                    - hop_length : int, default 128
+                    - need_sort : bool, default False
+                        Whether to sort the fundamental frequency by value.
+                    - unique : bool, default False
+                        Whether to remove duplicate fundamental frequencies, preserving the order of first appearance if need_sort is False.
+
+        """
+        frame_size = kwargs.get("frame_size", 1024)
+        hop_length = kwargs.get("hop_length", 128)
+        f0_min = kwargs.get("f0_min", 50)
+        f0_max = kwargs.get("f0_max", 10000)
+
+        if kwargs.get("method", "yin") == "yin":
+            f0 = librosa.yin(reference_signal, sr=sr, fmin=f0_min, fmax=f0_max, hop_length=hop_length)
+        elif kwargs.get("method", "yin") == "pyin":
+            f0, _, _ = librosa.pyin(reference_signal, sr=sr, fmin=f0_min, fmax=f0_max, hop_length=hop_length)
+        elif kwargs.get("method", "yin") == "stft":
+            # librosa 0.9.0+ 返回的是 Zxx - 单个复数数组
+            Zxx = librosa.stft(reference_signal, n_fft=frame_size, hop_length=hop_length, 
+                              win_length=frame_size, window=kwargs.get("window", 'hann'))
+            f_stft = librosa.fft_frequencies(sr=sr, n_fft=frame_size)
+            amp = np.abs(Zxx)
+            max_amp_indices = np.argmax(amp, axis=0)
+            f0 = f_stft[max_amp_indices]
+        elif kwargs.get("method", "yin") == "cqt":
+            pass
+        elif kwargs.get("method", "yin") == "database":
+            pass
+
+        times = librosa.times_like(f0, sr=sr, hop_length=hop_length)
+
+        if kwargs.get("unique", False):
+            _, unique_indices = np.unique(f0, return_index=True)
+            sorted_unique_indices = np.sort(unique_indices) 
+            f0 = f0[sorted_unique_indices]
+            times = times[sorted_unique_indices]
+
+        if kwargs.get("need_sort", False):
+            sort_indices = np.argsort(f0)
+            f0 = f0[sort_indices]
+            times = times[sort_indices]
+
+        return f0, times
+
+    @staticmethod
+    def compute_cqt(y, sr=44100, hop_length=128, n_fft=1024, fmin=None, fmax=None, bins_per_octave=None, n_bins=None):
+        """
+        Compute the Constant-Q Transform (CQT) of an audio signal.
+    
+        Parameters
+        ----------
+        y : np.ndarray
+            Audio time series
+        sr : number > 0
+            Sampling rate of y
+        hop_length : int > 0
+            Number of samples between frames
+        n_fft : int > 0
+            window size, used to determine frequency resolution, 为了可以像stft那样使用
+        fmin : float > 0
+            Minimum frequency
+        fmax : float > 0
+            Maximum frequency. If None, defaults to sr/3
+        bins_per_octave : int > 0 or None
+            Number of bins per octave. If None, calculated based on n_fft.
+        n_bins : int > 0 or None
+            Total number of CQT bins. If None, calculated based on fmin, fmax and bins_per_octave.
+        
+        Returns:
+            - CQT : np.ndarray
+                Constant-Q transform of y
+            - C_mag : np.ndarray
+                Magnitude of Constant-Q transform
+            - freqs : np.ndarray
+                Frequencies corresponding to each bin of CQT
+            - times : np.ndarray
+                Time points corresponding to each frame of CQT
+        """
+    
+        if fmin is None:
+            fmin = librosa.note_to_hz('C1')  # 32.7 Hz
+    
+        if fmax is None:
+            fmax = librosa.note_to_hz('C9')
+    
+        if bins_per_octave is None:
+            ## 表示每个八度内有多少频率点，对应的频率对数增加, 增加n_fft会增加频率分辨率，和预期相符
+            bins_per_octave = int(12 * np.log2(n_fft/1024) + 24)  
+            bins_per_octave = max(12, bins_per_octave)  
+    
+    
+        if n_bins is None:
+            n_octaves =  np.log2(fmax / fmin)    ## 八度，表示频率区间跨越了多少频率翻倍的区间
+            n_bins = int(np.ceil(n_octaves * bins_per_octave))   ## n_bins ≈ bins_per_octave * log2(fmax/fmin)，最终的频域采样点数
+    
+        # fmax parameter is not supported in librosa.cqt
+        C = librosa.cqt(
+            y=y,
+            sr=sr,
+            hop_length=hop_length,
+            fmin=fmin,
+            n_bins=n_bins,
+            bins_per_octave=bins_per_octave
+        )
+    
+        # Convert to magnitude
+        # C_mag = np.abs(C)
+    
+        freqs = librosa.cqt_frequencies(n_bins=n_bins, fmin=fmin, bins_per_octave=bins_per_octave)
+        times = librosa.times_like(C, sr=sr, hop_length=hop_length)
+        # C 是复数
+        return C, freqs, times
 
     @staticmethod
     def get_harmonic(recorded_signal, freq_dict, sr, harmonics, gap_len=10, delay_frames=0):
