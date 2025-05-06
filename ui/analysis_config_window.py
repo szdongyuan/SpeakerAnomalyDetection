@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QSpinBox
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
-from PyQt5.QtWidgets import QSpacerItem, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.log_manager import LogManager
 from base.training_model_management import TrainingModelManagement
@@ -36,15 +36,12 @@ class SplConfigWindow(QDialog):
         limit_layout = self.create_limit()
         btn_layout = self.create_btn()
 
-        v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-
         layout.addWidget(self.smooth_chk_box)
-        layout.addItem(v_spacer_1)
+        layout.addStretch()
         layout.addLayout(limit_layout)
-        layout.addItem(v_spacer_2)
+        layout.addStretch()
         layout.addLayout(btn_layout)
-
+        layout.setSpacing(10)
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qcheckbox_stytle +
                            ui_style_const.qgroupbox_stytle +
@@ -79,11 +76,11 @@ class SplConfigWindow(QDialog):
 
         self.limit_group_box.setLayout(limit_group_layout)
 
-        v_spacer_3 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         limit_layout = QVBoxLayout()
         limit_layout.addWidget(self.limit_checkbox)
-        limit_layout.addItem(v_spacer_3)
+        limit_layout.addStretch()
         limit_layout.addWidget(self.limit_group_box)
+        limit_layout.setSpacing(10)
         return limit_layout
 
     def on_radio_button_toggled(self):
@@ -114,10 +111,8 @@ class SplConfigWindow(QDialog):
             self.line_edit_upper.setDisabled(True)
             self.line_edit_lower.setDisabled(True)
 
-        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
-
         upper_layout = QHBoxLayout()
-        upper_layout.addItem(h_spacer_1)
+        upper_layout.addSpacing(19)
         upper_layout.addWidget(self.label_upper)
         upper_layout.addWidget(self.line_edit_upper)
         upper_layout.addWidget(self.label_lower)
@@ -137,9 +132,8 @@ class SplConfigWindow(QDialog):
         if self.load_config.get("config_dir"):
             config_dir_name = os.path.basename(self.load_config.get("config_dir"))
             self.config_dir_box.setText(config_dir_name)
-        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
-        load_layout.addItem(h_spacer_1)
+        load_layout.addSpacing(10)
         load_layout.addWidget(self.config_dir_box)
         return load_layout
 
@@ -169,9 +163,8 @@ class SplConfigWindow(QDialog):
         default_btn.clicked.connect(self.on_default_btn_clicked)
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(default_btn)
-        btn_layout.addItem(h_spacer_btn1)
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -220,12 +213,10 @@ class FrConfigWindow(QDialog):
         self.smooth_chk_box.stateChanged.connect(self.get_default_config)
         limit_layout = self.create_limit()
         btn_layout = self.create_btn()
-        v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         layout.addWidget(self.smooth_chk_box)
-        layout.addItem(v_spacer_1)
+        layout.addStretch()
         layout.addLayout(limit_layout)
-        layout.addItem(v_spacer_2)
+        layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qcheckbox_stytle +
@@ -238,7 +229,6 @@ class FrConfigWindow(QDialog):
     def create_limit(self):
         self.limit_checkbox = QCheckBox("阈值", self)
         self.limit_checkbox.setChecked(self.load_config.get("limit_checked", False))
-        v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         self.limit_checkbox.stateChanged.connect(self.on_limit_checkbox_changed)
         self.limit_group_box = QGroupBox("选择阈值", self)
         self.limit_group_box.setMinimumSize(180, 180)
@@ -264,7 +254,7 @@ class FrConfigWindow(QDialog):
 
         limit_layout = QVBoxLayout()
         limit_layout.addWidget(self.limit_checkbox)
-        limit_layout.addItem(v_spacer_1)
+        limit_layout.addStretch()
         limit_layout.addWidget(self.limit_group_box)
         return limit_layout
 
@@ -283,10 +273,8 @@ class FrConfigWindow(QDialog):
             self.label_upper.setStyleSheet("color:rgb(162, 162, 162);")
             self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
 
-        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
-
         upper_layout = QHBoxLayout()
-        upper_layout.addItem(h_spacer_1)
+        upper_layout.addSpacing(19)
         upper_layout.addWidget(self.label_upper)
         upper_layout.addWidget(self.line_edit_upper)
         upper_layout.addWidget(self.label_lower)
@@ -308,9 +296,8 @@ class FrConfigWindow(QDialog):
         if self.load_config.get("config_dir"):
             config_dir_name = os.path.basename(self.load_config.get("config_dir"))
             self.config_dir_box.setText(config_dir_name)
-        h_spacer_1 = QSpacerItem(19, 10, QSizePolicy.Minimum, QSizePolicy.Minimum)
         load_layout = QHBoxLayout()
-        load_layout.addItem(h_spacer_1)
+        load_layout.addSpacing(19)
         load_layout.addWidget(self.config_dir_label)
         load_layout.addWidget(self.config_dir_box)
         return load_layout
@@ -357,9 +344,8 @@ class FrConfigWindow(QDialog):
         default_btn.clicked.connect(self.on_default_btn_clicked)
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(default_btn)
-        btn_layout.addItem(h_spacer_btn1)
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -412,14 +398,12 @@ class HdConfigWindow(QDialog):
         self.select_all_check = QCheckBox("全选")
         self.select_all_check.setChecked(self.load_config.get("all_checked", False))
         self.select_all_check.stateChanged.connect(self.on_select_all_changed)
-        v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        harmonic_slider_layout.addItem(v_spacer_1)
+        harmonic_slider_layout.addStretch()
         harmonic_slider_layout.addWidget(self.select_all_check)
         harmonic_group_box.setLayout(harmonic_slider_layout)
         btn_layout = self.create_btn()
-        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         layout.addWidget(harmonic_group_box)
-        layout.addItem(v_spacer_2)
+        layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
@@ -501,9 +485,8 @@ class HdConfigWindow(QDialog):
         default_btn.clicked.connect(self.on_default_btn_clicked)
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(default_btn)
-        btn_layout.addItem(h_spacer_btn1)
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -545,9 +528,8 @@ class AIConfigWindow(QDialog):
         layout = QVBoxLayout()
         model_box = self.create_model_layout()
         btn_layout = self.create_btn()
-        v_spacer_1 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         layout.addWidget(model_box)
-        layout.addItem(v_spacer_1)
+        layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
@@ -609,9 +591,8 @@ class AIConfigWindow(QDialog):
         default_btn.clicked.connect(self.on_default_btn_clicked)
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(default_btn)
-        btn_layout.addItem(h_spacer_btn1)
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -650,10 +631,9 @@ class SpecConfigWindow(QDialog):
         param_layout = self.create_spec_param()
         spec_param_group_box.setLayout(param_layout)
         btn_layout = self.create_btn()
-        v_spacer_1 = QSpacerItem(8, 8, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         layout.addWidget(spec_param_group_box)
-        layout.addItem(v_spacer_1)
+        layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qgroupbox_stytle +
@@ -709,26 +689,20 @@ class SpecConfigWindow(QDialog):
         colormap_layout.addWidget(colormap_label)
         colormap_layout.addWidget(self.colormap_box)
 
-
-        v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_3 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_4 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_5 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_6 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_7 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
-
         param_layout = QVBoxLayout()
-        param_layout.addItem(v_spacer_7)
+        param_layout.addStretch()
         param_layout.addLayout(freq_scale_layout)
-        param_layout.addItem(v_spacer_2)
+        param_layout.addStretch()
         param_layout.addLayout(fft_layout)
-        param_layout.addItem(v_spacer_3)
+        param_layout.addStretch()
         param_layout.addLayout(hop_layout)
-        param_layout.addItem(v_spacer_4)
+        param_layout.addStretch()
         param_layout.addLayout(window_layout)
-        param_layout.addItem(v_spacer_5)
+        param_layout.addStretch()
         param_layout.addLayout(colormap_layout)
-        param_layout.addItem(v_spacer_6)
+        param_layout.addStretch()
+        param_layout.addSpacing(10)
+        param_layout.setSpacing(10)
         return param_layout
 
     def create_btn(self):
@@ -737,9 +711,8 @@ class SpecConfigWindow(QDialog):
         default_btn.clicked.connect(self.on_default_btn_clicked)
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(default_btn)
-        btn_layout.addItem(h_spacer_btn1)
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -758,6 +731,129 @@ class SpecConfigWindow(QDialog):
         save_flag = self.config_manager.save_default_config("Spec", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
+    def on_click_ok_btn(self):
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
+    
+
+class LPConfigWindow(QDialog):
+    def __init__(self, config_manager, model_type):
+        super().__init__()
+        self.config_manager = config_manager
+        self.load_config = self.config_manager.load_config().get(model_type, {})
+        
+        self.init_ui()
+
+    def init_ui(self):
+        self.setMinimumSize(350, 350)
+        layout = QVBoxLayout()
+        lp_config_box = self.create_lp_config_box()
+        btn_layout = self.create_btn_layout()
+        layout.addWidget(lp_config_box)
+        layout.addStretch()
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qlabel_stytle +
+                           ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qspinbox_stytle +
+                           ui_style_const.qgroupbox_stytle)
+    
+    def create_lp_config_box(self):
+        lp_config_box = QGroupBox("松散颗粒参数配置")
+        lp_config_box_layout = QVBoxLayout()
+        trigger_threshold_layout = self.create_trigger_threshold_layout()
+        comfirm_threshold_layout = self.create_confirm_threshold_layout()
+        max_check_duration_layout = self.create_max_check_duration_layout()
+        min_check_duration_layout = self.create_min_check_duration_layout()
+        lp_config_box_layout.addLayout(trigger_threshold_layout)
+        lp_config_box_layout.addStretch()
+        lp_config_box_layout.addLayout(comfirm_threshold_layout)
+        lp_config_box_layout.addStretch()
+        lp_config_box_layout.addLayout(max_check_duration_layout)
+        lp_config_box_layout.addStretch()
+        lp_config_box_layout.addLayout(min_check_duration_layout)
+        lp_config_box_layout.setSpacing(10)
+        lp_config_box_layout.setContentsMargins(10, 20, 10, 20)
+        lp_config_box.setLayout(lp_config_box_layout)
+        
+        return lp_config_box
+
+    def create_trigger_threshold_layout(self):
+        trigger_threshold_label = QLabel("触发阈值:")
+        self.trigger_threshold_spinbox = QSpinBox()
+        self.trigger_threshold_spinbox.setSuffix(" dB")
+        self.trigger_threshold_spinbox.setValue(self.load_config.get("trigger_threshold", 0))
+        self.trigger_threshold_spinbox.setAlignment(Qt.AlignRight)
+        trigger_threshold_layout = QHBoxLayout()
+        trigger_threshold_layout.addWidget(trigger_threshold_label)
+        trigger_threshold_layout.addWidget(self.trigger_threshold_spinbox)
+
+        return trigger_threshold_layout
+    
+    def create_confirm_threshold_layout(self):
+        confirm_threshold_label = QLabel("确认阈值:")
+        self.confirm_threshold_spinbox = QSpinBox()
+        self.confirm_threshold_spinbox.setSuffix(" dB")
+        self.confirm_threshold_spinbox.setValue(self.load_config.get("confirm_threshold", 0))
+        self.confirm_threshold_spinbox.setAlignment(Qt.AlignRight)
+        confirm_threshold_layout = QHBoxLayout()
+        confirm_threshold_layout.addWidget(confirm_threshold_label)
+        confirm_threshold_layout.addWidget(self.confirm_threshold_spinbox)
+
+        return confirm_threshold_layout
+    
+    def create_min_check_duration_layout(self):
+        min_check_duration_label = QLabel("最小检测时长:")
+        self.min_check_duration_spinbox = QSpinBox()
+        self.min_check_duration_spinbox.setSuffix(" ms")
+        self.min_check_duration_spinbox.setValue(self.load_config.get("min_check_duration", 0))
+        self.min_check_duration_spinbox.setAlignment(Qt.AlignRight)
+        min_check_duration_layout = QHBoxLayout()
+        min_check_duration_layout.addWidget(min_check_duration_label)
+        min_check_duration_layout.addWidget(self.min_check_duration_spinbox)
+
+        return min_check_duration_layout
+    
+    def create_max_check_duration_layout(self):
+        max_check_duration_label = QLabel("最大检测时长:")
+        self.max_check_duration_spinbox = QSpinBox()
+        self.max_check_duration_spinbox.setSuffix(" ms")
+        self.max_check_duration_spinbox.setValue(self.load_config.get("max_check_duration", 0))
+        self.max_check_duration_spinbox.setAlignment(Qt.AlignRight)
+        max_check_duration_layout = QHBoxLayout()
+        max_check_duration_layout.addWidget(max_check_duration_label)
+        max_check_duration_layout.addWidget(self.max_check_duration_spinbox)
+
+        return max_check_duration_layout
+    
+    def create_btn_layout(self):
+        btn_layout = QHBoxLayout()
+        default_btn = QPushButton("设为默认")
+        ok_btn = QPushButton(" 确  定 ")
+        default_btn.clicked.connect(self.on_click_default_btn)
+        ok_btn.clicked.connect(self.on_click_ok_btn)
+        btn_layout.addWidget(default_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+
+        return btn_layout
+    
+    def get_default_config(self):
+        default_config = {
+            "trigger_threshold": self.trigger_threshold_spinbox.value(),
+            "confirm_threshold": self.confirm_threshold_spinbox.value(),
+            "min_check_duration": self.min_check_duration_spinbox.value(),
+            "max_check_duration": self.max_check_duration_spinbox.value(),
+        }
+        return default_config
+    
+    def on_click_default_btn(self):
+        config_data = self.get_default_config()
+        save_flag = self.config_manager.save_default_config("LP", config_data)
+        PopupUtils().save_popup(self, success_flag=save_flag)
+
+    
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
         self.accept()
@@ -865,12 +961,14 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
     config_manager = ConfigManager(config_file)
-    window = SplConfigWindow(config_manager)
-    window.show()
+    # window = SplConfigWindow(config_manager)
+    # window.show()
     # window = FrConfigWindow(config_manager)
     # window.show()
     # window = HdConfigWindow(config_manager)
     # window.show()
     # window = AIConfigWindow(config_manager)
     # window.show()
+    window = LPConfigWindow(config_manager, 111)
+    window.show()
     app.exec_()

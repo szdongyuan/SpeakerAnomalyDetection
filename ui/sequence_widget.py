@@ -12,7 +12,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
-from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
 from base.utils.custom_signals import sign
@@ -24,7 +24,7 @@ from base.tcp_service import TcpServer
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
-from ui.signal_analysis_window import Spl, Distortion, AI, Frequency, Spectrogram
+from ui.signal_analysis_window import Spl, Distortion, AI, Frequency, Spectrogram, LooseParticle
 from ui.login_window import get_mac_address
 
 
@@ -319,9 +319,8 @@ class SequenceWindow(QWidget):
         self.line_graph.setLabel('bottom', 'Time(s)')
         self.line_graph.showGrid(x=True, y=True)
 
-        h_spacer_1 = QSpacerItem(70, 30, QSizePolicy.Minimum, QSizePolicy.Minimum)
         layout.addLayout(btn_area)
-        layout.addItem(h_spacer_1)
+        layout.addSpacing(70)
         layout.addWidget(self.line_graph)
         layout.setContentsMargins(90, 20, 90, 30)
 
@@ -876,6 +875,7 @@ class SequenceWindow(QWidget):
             "HD": Distortion,
             "AI": AI,
             "Spec": Spectrogram,
+            "LP": LooseParticle,
         }
         return class_mapping
 
@@ -936,6 +936,9 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, 'calculate_spec'):
                     instance.calculate_spec()
+                    instance.show()
+                elif hasattr(instance, 'calculate_loose_particle'):
+                    instance.calculate_loose_particle()
                     instance.show()
                 instance.setGeometry(width, height, 600, 500)
                 instance.setMinimumSize(QSize(600, 500))

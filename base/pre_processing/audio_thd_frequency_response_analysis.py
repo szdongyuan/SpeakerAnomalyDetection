@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
 from scipy.ndimage import maximum_filter
-from scipy.signal import savgol_filter
+from scipy.signal import savgol_filter, medfilt
 import librosa
 
 from base.utils.plot_audio_features import PlotManager
@@ -379,4 +379,32 @@ class AudioThdFrequencyResponseAnalysis(object):
             return spl_smooth
         else:
             return spl
+
+    @staticmethod    
+    def calculate_loose_particle_spl(recorded_signal, kernel_size):
+        """
+            Calculate the sound pressure level of loose particles.
+
+            This method processes the recorded signal using Fourier Transform and median filtering to compute its sound pressure level.
+
+            Args:
+                -recorded_signal (np.array): The recorded audio signal.
+                -kernel_size (int): The size of the median filter kernel, must be an odd number.
+
+            Returns:
+                -filtered_spl:np.array 
+                    The sound pressure level array after median filtering.
+        """
+        fft_result = np.fft.fft(recorded_signal)
+        window = np.hanning(len(fft_result))
+        window_signal = window * fft_result
+        length = len(window_signal)
+        positive_fft = window_signal[0:int(length/2)]
+        analytic_signal = np.fft.ifft(positive_fft)
+        amplitude = np.abs(analytic_signal)
+        reference_pressure = 20e-6
+        signal_spl = 20 * np.log10(amplitude / reference_pressure)
+        filtered_spl = medfilt(signal_spl, kernel_size)
+
+        return filtered_spl
 
