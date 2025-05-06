@@ -373,13 +373,6 @@ class Spectrogram(QWidget):
         window_func = self.analysis_config.get("window_func", "hann")
         freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
 
-        # if self.current_plot_widget:
-        #     self.plot_container_layout.removeWidget(self.current_plot_widget)
-        #     self.current_plot_widget.deleteLater()
-        #     self.current_plot_widget = None
-        #     if self.current_plot_widget == self.stft_plot_widget:
-        #         self.stft_colorbar = None
-
         if freq_scale_type == "log":
             self.setWindowTitle("频谱分析 (Log Scale)")
             
@@ -405,14 +398,6 @@ class Spectrogram(QWidget):
                 if y_min_hz <= freq <= y_max_hz:
                     label = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
                     major_ticks.append((freq, label))
-
-            # if len(major_ticks) < 2:
-            #     major_ticks = []
-            #     min_label = f"{y_min_hz:.1f} Hz" if y_min_hz < 1000 else f"{y_min_hz/1000:.1f} kHz"
-            #     max_label = f"{y_max_hz:.1f} Hz" if y_max_hz < 1000 else f"{y_max_hz/1000:.1f} kHz"
-            #     major_ticks.append((y_min_hz, min_label))
-            #     major_ticks.append((y_max_hz, max_label))
-            #     major_ticks = sorted(list(set(major_ticks)), key=lambda item: item[0])
 
             custom_y_ticks = [major_ticks, []] if major_ticks else None
 
