@@ -4,6 +4,7 @@ from scipy import signal
 from scipy.ndimage import maximum_filter
 from scipy.signal import savgol_filter
 import librosa
+
 from base.utils.plot_audio_features import PlotManager
 
 class AudioThdFrequencyResponseAnalysis(object):
@@ -194,10 +195,10 @@ class AudioThdFrequencyResponseAnalysis(object):
             amp = np.abs(Zxx)
             max_amp_indices = np.argmax(amp, axis=0)
             f0 = f_stft[max_amp_indices]
-        elif kwargs.get("method", "yin") == "cqt":
-            pass
+        elif kwargs.get("method", "yin") == "cqt": ## 后续添加
+            return None, None
         elif kwargs.get("method", "yin") == "database":
-            pass
+            return None, None
 
         times = librosa.times_like(f0, sr=sr, hop_length=hop_length)
 
