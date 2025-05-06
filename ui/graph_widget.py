@@ -70,9 +70,6 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     plot_widget.setLabel('left', ylabel)
     layout.addWidget(plot_widget)
     
-    # if z.ndim != 2:
-    #     raise ValueError("z must be a 2D array")
-    
     img = pg.ImageItem()
     plot_widget.addItem(img)
     
@@ -139,20 +136,16 @@ class ColorBarItem(pg.GraphicsObject):
         self.height = height
         self.label_side = label_side
         
-        # Create ImageItem for the colorbar
         self.bar = pg.ImageItem()
         self.bar.setImage(np.linspace(0, 1, 256).reshape(256, 1))
         
-        # Set colormap
         self.bar.setLookupTable(self.cmap.getLookupTable(nPts=256))
         
-        # Create axis for the colorbar
         self.axis = pg.AxisItem(orientation='right')
         self.axis.setLabel('Value')
         
-        # Set minimum width for the bar
         self.bar.setFixedWidth(self.width)
-        self.axis.setFixedWidth(50)  # Space for labels
+        self.axis.setFixedWidth(50) 
         
     def paint(self, p, *args):
         pass
