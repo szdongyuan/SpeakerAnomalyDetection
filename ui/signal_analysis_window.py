@@ -17,6 +17,7 @@ from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import predict
+from ui.graph_widget import plot_2d_image
 
 class Distortion(QWidget):
     def __init__(self, title_name):
@@ -153,7 +154,7 @@ class Spl(QWidget):
                 y = [point[1] for point in points]
                 out_range_plot = pg.PlotDataItem(x, y, pen='r')
                 self.spl_plot.addItem(out_range_plot)
-            dashed_pen = pg.mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+            dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
             lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
             self.spl_plot.addItem(lower_limit1)
             upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
@@ -232,7 +233,7 @@ class Frequency(QWidget):
                 y = [point[1] for point in points]
                 out_range_plot = pg.PlotDataItem(x, y, pen='r')
                 self.fr_plot.addItem(out_range_plot)
-            dashed_pen = pg.mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+            dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
             lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
             self.fr_plot.addItem(lower_limit1)
             upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
@@ -337,55 +338,140 @@ class Spectrogram(QWidget):
         self.signal_info = None
         self.deviation_value = None
         self.analysis_config = None
+        self.current_plot_widget = None
+        self.stft_plot_widget = None
+        self.img_item = None
+        self.stft_colorbar = None
         self.init_ui()
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowTitle("频谱分析")
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.plot_widget = pg.PlotWidget(title="Spectrogram")
-        self.plot_widget.setBackground('white')
+        self.main_layout = QVBoxLayout(self)
+
+        self.plot_container = QWidget()
+        self.plot_container_layout = QVBoxLayout(self.plot_container)
+        self.plot_container_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.main_layout.addWidget(self.plot_container)
+
+        self._init_stft_plot_components()
+
+    def _init_stft_plot_components(self):
+        self.stft_plot_widget = pg.PlotWidget()
+        self.stft_plot_widget.setBackground('white')
         self.img_item = pg.ImageItem()
-        self.plot_widget.addItem(self.img_item)
-        layout = QVBoxLayout()
-        layout.addWidget(self.plot_widget)
-        self.setLayout(layout)
+        self.stft_plot_widget.addItem(self.img_item)
 
     def calculate_spec(self):
         recorded_signal = self.signal_info.get("recorded_signal")
         sample_rate = self.signal_info.get("sample_rate")
-        n_fft = self.analysis_config.get("fft_size", 2048)
-        hop_length = self.analysis_config.get("hop_length", 512)
-        color_map = self.analysis_config.get("color_map", "inferno")
+
+        n_fft = self.analysis_config.get("n_fft", 2048)
+        hop_length = self.analysis_config.get("hop_length", 256)
+        color_map = self.analysis_config.get("color_map", "viridis")
         window_func = self.analysis_config.get("window_func", "hann")
-        spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
-        spec_dB = 20 * np.log10(spec + 1e-10)
-        freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
-        times = librosa.times_like(spec_dB, sr=sample_rate, hop_length=hop_length)
-        self.plot_spec(spec_dB, freqs, times, color_map)
+        freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
 
+        # if self.current_plot_widget:
+        #     self.plot_container_layout.removeWidget(self.current_plot_widget)
+        #     self.current_plot_widget.deleteLater()
+        #     self.current_plot_widget = None
+        #     if self.current_plot_widget == self.stft_plot_widget:
+        #         self.stft_colorbar = None
 
-    def plot_spec(self, spec_db, freqs, times, color_map):
-        times_max = times.max()
-        freqs_max = freqs.max()
-        self.img_item.setImage(spec_db.T)
-        self.img_item.setRect(pg.QtCore.QRectF(times[0], freqs[0], times_max - times[0], freqs_max - freqs[0]))
-        self.plot_widget.addItem(self.img_item)
-        self.plot_widget.setLabel('bottom', "Times (s)")
-        self.plot_widget.setLabel('left', "Frequency (Hz)")
+        if freq_scale_type == "log":
+            self.setWindowTitle("频谱分析 (Log Scale)")
+            
+            fmin_cqt = librosa.note_to_hz('C1')
+            CQT_complex, freqs, times = AudioThdFrequencyResponseAnalysis().compute_cqt(
+                y=recorded_signal,
+                sr=sample_rate,
+                hop_length=hop_length,
+                n_fft=n_fft,
+                fmin=fmin_cqt
+            )
 
-        pos = np.linspace(0.0, 1.0, 10)
-        colors = pg.colormap.get(color_map).getLookupTable(nPts=10)
-        cmap = pg.ColorMap(pos, colors)
-        db_min, db_max = spec_db.min(), spec_db.max()
-        if db_min == db_max:
-            db_max = db_min + 1
-        lut = cmap.getLookupTable(nPts=256)
-        self.img_item.setLookupTable(lut)
-        self.img_item.setLevels([db_min, db_max])
-        colorbar = pg.ColorBarItem(values=(db_min, db_max), width=20, colorMap=cmap)
-        colorbar.setImageItem(self.img_item, insert_in=self.plot_widget.getPlotItem())
+            CQT_mag = np.abs(CQT_complex)
+            CQT_db = librosa.amplitude_to_db(CQT_mag, ref=20e-6)
+            Z = CQT_db.T
 
+            target_ticks_hz = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+            major_ticks = []
+            custom_y_ticks = None
+            
+            y_min_hz, y_max_hz = freqs.min(), freqs.max()
+            for freq in target_ticks_hz:
+                if y_min_hz <= freq <= y_max_hz:
+                    label = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
+                    major_ticks.append((freq, label))
+
+            # if len(major_ticks) < 2:
+            #     major_ticks = []
+            #     min_label = f"{y_min_hz:.1f} Hz" if y_min_hz < 1000 else f"{y_min_hz/1000:.1f} kHz"
+            #     max_label = f"{y_max_hz:.1f} Hz" if y_max_hz < 1000 else f"{y_max_hz/1000:.1f} kHz"
+            #     major_ticks.append((y_min_hz, min_label))
+            #     major_ticks.append((y_max_hz, max_label))
+            #     major_ticks = sorted(list(set(major_ticks)), key=lambda item: item[0])
+
+            custom_y_ticks = [major_ticks, []] if major_ticks else None
+
+            cqt_plot_widget = plot_2d_image(
+                x=times, y=freqs, z=Z,
+                title="Spectrogram",
+                xlabel="Time (s)", ylabel="Frequency (Hz)",
+                colormap=color_map,
+                x_range=(times.min(), times.max()),
+                y_range=(freqs.min(), freqs.max()),
+                y_ticks=custom_y_ticks
+            )
+            self.plot_container_layout.addWidget(cqt_plot_widget)
+            self.current_plot_widget = cqt_plot_widget
+
+        else:
+            self.setWindowTitle("频谱分析 (Linear Scale)")
+
+            spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
+            spec_dB = librosa.amplitude_to_db(spec, ref=20e-6)
+            freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+            times = librosa.times_like(spec_dB, sr=sample_rate, hop_length=hop_length)
+
+            if self.stft_plot_widget is None or self.img_item is None:
+                self._init_stft_plot_components()
+
+            self.img_item.setImage(spec_dB.T)
+            
+            times_min, times_max = times.min(), times.max()
+            freqs_min, freqs_max = freqs.min(), freqs.max()
+            width = times_max - times_min
+            height = freqs_max - freqs_min
+
+            self.img_item.setRect(pg.QtCore.QRectF(times_min, freqs_min, width, height))
+
+            self.stft_plot_widget.setTitle("Spectrogram (STFT - Linear Scale)")
+            self.stft_plot_widget.setLabel('bottom', "Time (s)")
+            self.stft_plot_widget.setLabel('left', "Frequency (Hz)")
+            self.stft_plot_widget.setLogMode(x=False, y=False)
+
+            pos = np.linspace(0.0, 1.0, 256)
+
+            colors = pg.colormap.get(color_map).getLookupTable(nPts=256)
+            cmap = pg.ColorMap(pos, colors)
+            db_min, db_max = np.nanmin(spec_dB), np.nanmax(spec_dB)
+            
+            lut = cmap.getLookupTable(nPts=256)
+            self.img_item.setLookupTable(lut)
+            self.img_item.setLevels([db_min, db_max])
+
+            plot_item = self.stft_plot_widget.getPlotItem()
+            if plot_item:
+                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=20, colorMap=cmap)
+                self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
+            else:
+                self.stft_colorbar = None
+
+            self.plot_container_layout.addWidget(self.stft_plot_widget)
+            self.current_plot_widget = self.stft_plot_widget
 
 
 if __name__ == "__main__":

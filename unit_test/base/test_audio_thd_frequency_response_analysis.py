@@ -1,6 +1,13 @@
+import os
+import sys
+
+# 添加项目根目录到Python路径
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 import mock
 import numpy as np
 import pytest
+import unittest
 
 from matplotlib import pyplot as plt
 
@@ -8,9 +15,26 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from unit_test.compare_methods import compare_dicts
 
 
-class TestAudioThdFrequencyResponseAnalysis(object):
+class TestAudioThdFrequencyResponseAnalysis(unittest.TestCase):
 
     test_path = "base.pre_processing.audio_thd_frequency_response_analysis"
+
+    def setUp(self):
+        self.analysis = AudioThdFrequencyResponseAnalysis()
+        
+        self.sr = 44100  
+        self.duration = 1.0
+        self.t = np.linspace(0, self.duration, int(self.sr * self.duration), endpoint=False)
+        
+        self.fundamental_freq = 440  
+        self.reference_signal = np.sin(2 * np.pi * self.fundamental_freq * self.t)
+        
+        self.complex_signal = self.reference_signal.copy()
+        for harmonic in range(2, 5):
+            self.complex_signal += (1.0/harmonic) * np.sin(2 * np.pi * harmonic * self.fundamental_freq * self.t)
+        
+        np.random.seed(42)  
+        self.noisy_signal = self.reference_signal + 0.1 * np.random.normal(0, 1, len(self.reference_signal))
 
     @pytest.mark.parametrize("input_ret, result_ret", [
         # test_case1:
@@ -101,8 +125,7 @@ class TestAudioThdFrequencyResponseAnalysis(object):
         mock_plot_harmonic.return_value = input_ret["plot_harmonic_ret"]
         mock_plot_frequency_response.return_value = input_ret["plot_frequency_response_ret"]
         sr = list(range(len(input_ret["recorded_signal"])))
-        atf = AudioThdFrequencyResponseAnalysis()
-        result = atf.process_calculate(input_ret["reference_signal"],
+        result = self.analysis.process_calculate(input_ret["reference_signal"],
                                        input_ret["recorded_signal"],
                                        sr,
                                        **input_ret["kwargs"])
@@ -126,8 +149,7 @@ class TestAudioThdFrequencyResponseAnalysis(object):
         "base.pre_processing.audio_thd_frequency_response_analysis.AudioThdFrequencyResponseAnalysis.get_harmonic")
     def test_calculate_thd(self, mock_get_harmonic, get_harmonic_ret, reference_signal, recorded_signal, sr):
         mock_get_harmonic.return_value = get_harmonic_ret
-        atf = AudioThdFrequencyResponseAnalysis()
-        plot_x, plot_h, plot_thd = atf.calculate_thd(reference_signal, recorded_signal, sr)
+        plot_x, plot_h, plot_thd = self.analysis.calculate_thd(reference_signal, recorded_signal, sr)
         assert plot_x == [10, 20]
         assert np.array_equal(plot_h, np.array([[1, 0.5], [0.2, 0.8], [0.3, 0.3], [0, 0], [0, 0], [0, 0]]))
         assert plot_thd == [0.3391817326856071, 0.8630747123996122]
@@ -147,8 +169,7 @@ class TestAudioThdFrequencyResponseAnalysis(object):
     def test_get_harmonic(self, mock_fftfreq, mock_fft, input_ret, result_ret):
         mock_fftfreq.return_value = input_ret["fftfreq_ret"]
         mock_fft.return_value = input_ret["fft_ret"]
-        atf = AudioThdFrequencyResponseAnalysis()
-        result = atf.get_harmonic(input_ret["reference_signal"],
+        result = self.analysis.get_harmonic(input_ret["reference_signal"],
                                   input_ret["recorded_signal"],
                                   input_ret["sr"],
                                   **input_ret["kwargs"])
@@ -181,8 +202,7 @@ class TestAudioThdFrequencyResponseAnalysis(object):
         mock_fftfreq.return_value = input_ret["fftfreq_ret"]
         mock_fft.return_value = input_ret["fft_ret"]
         mock_smooth_curve.return_value = input_ret["smooth_curve_ret"]
-        atf = AudioThdFrequencyResponseAnalysis()
-        result = atf.calculate_fr(input_ret["reference_signal"],
+        result = self.analysis.calculate_fr(input_ret["reference_signal"],
                                   input_ret["recorded_signal"],
                                   input_ret["sr"],
                                   **input_ret["kwargs"])
@@ -196,6 +216,78 @@ class TestAudioThdFrequencyResponseAnalysis(object):
     def test_smooth_curve(self, oct_width_ret, result_ret):
         frequencies_ret = np.array([100, 200, 300, 400, 500])
         data_ret = np.array([10, 20, 30, 40, 50])
-        atf = AudioThdFrequencyResponseAnalysis()
-        result = atf.smooth_curve(frequencies_ret, data_ret, oct_width_ret)
+        result = self.analysis.smooth_curve(frequencies_ret, data_ret, oct_width_ret)
         assert np.array_equal(result, result_ret)
+
+    def test_calculate_fundamental_freq_yin(self):
+        """测试使用YIN算法计算基频"""
+        f0, times = AudioThdFrequencyResponseAnalysis.calculate_fundamental_freq(
+            self.reference_signal, self.sr, method="yin"
+        )
+        
+        # 检查返回值的类型和形状
+        self.assertIsInstance(f0, np.ndarray)
+        self.assertIsInstance(times, np.ndarray)
+        self.assertEqual(len(f0), len(times))
+        
+        # 检查计算的基频是否接近预期值
+        # 注意：YIN算法可能会有一些误差，所以使用近似比较
+        # 我们检查平均基频是否在预期值的5%范围内
+        mean_f0 = np.mean(f0)
+        self.assertAlmostEqual(mean_f0, self.fundamental_freq, delta=self.fundamental_freq * 0.05)
+    
+    def test_calculate_fundamental_freq_stft(self):
+        """测试使用STFT方法计算基频"""
+        f0, times = AudioThdFrequencyResponseAnalysis.calculate_fundamental_freq(
+            self.reference_signal, self.sr, method="stft"
+        )
+        
+        # 检查返回值的类型和形状
+        self.assertIsInstance(f0, np.ndarray)
+        self.assertIsInstance(times, np.ndarray)
+        self.assertEqual(len(f0), len(times))
+        
+        # 检查计算的基频是否接近预期值
+        # STFT方法的精度取决于FFT的解析度，因此可能需要更大的容差
+        mean_f0 = np.mean(f0)
+        self.assertAlmostEqual(mean_f0, self.fundamental_freq, delta=self.fundamental_freq * 0.1)
+    
+    def test_with_complex_signal(self):
+        """测试带有谐波的复杂信号"""
+        f0, times = AudioThdFrequencyResponseAnalysis.calculate_fundamental_freq(
+            self.complex_signal, self.sr, method="yin"
+        )
+        
+        # 即使有谐波成分，函数仍应该能够找到基频
+        mean_f0 = np.mean(f0)
+        self.assertAlmostEqual(mean_f0, self.fundamental_freq, delta=self.fundamental_freq * 0.05)
+    
+    def test_with_noisy_signal(self):
+        """测试带有噪声的信号"""
+        f0, times = AudioThdFrequencyResponseAnalysis.calculate_fundamental_freq(
+            self.noisy_signal, self.sr, method="yin", f0_min=400, f0_max=500
+        )
+        
+        # 在有噪声的情况下，使用频率范围限制可以提高准确性
+        mean_f0 = np.mean(f0)
+        self.assertAlmostEqual(mean_f0, self.fundamental_freq, delta=self.fundamental_freq * 0.08)
+    
+    def test_parameter_variations(self):
+        """测试不同参数对结果的影响"""
+        # 测试改变窗口大小
+        f0, _ = AudioThdFrequencyResponseAnalysis.calculate_fundamental_freq(
+            self.reference_signal, self.sr, method="stft", frame_size=2048, hop_length=512
+        )
+        mean_f0 = np.mean(f0)
+        self.assertAlmostEqual(mean_f0, self.fundamental_freq, delta=self.fundamental_freq * 0.1)
+        
+        # 测试使用排序选项
+        f0, times = AudioThdFrequencyResponseAnalysis.calculate_fundamental_freq(
+            self.reference_signal, self.sr, method="yin", need_sort=True
+        )
+        # 验证是否按升序排序
+        self.assertTrue(np.all(np.diff(f0) >= 0))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -662,9 +662,18 @@ class SpecConfigWindow(QDialog):
                            ui_style_const.qcombobox_stytle)
 
     def create_spec_param(self):
-        fft_size_label = QLabel("FFT 大小")
+        freq_scale_label = QLabel("频率轴类型")
+        self.freq_scale_box = QComboBox()
+        self.freq_scale_box.addItems(["linear", "log"])
+        freq_scale_type = self.load_config.get("freq_scale_type", "linear")
+        self.freq_scale_box.setCurrentText(freq_scale_type)
+        freq_scale_layout = QHBoxLayout()
+        freq_scale_layout.addWidget(freq_scale_label)
+        freq_scale_layout.addWidget(self.freq_scale_box)
+
+        fft_size_label = QLabel("FFT 窗长")
         self.fft_size_box = QComboBox()
-        fft_sizes = [str(2**i) for i in range(7, 15)]
+        fft_sizes = [str(2**i) for i in range(7, 14)]
         self.fft_size_box.addItems(fft_sizes)
         fft_size = str(self.load_config.get("n_fft", 2048))
         self.fft_size_box.setCurrentText(fft_size)
@@ -672,17 +681,17 @@ class SpecConfigWindow(QDialog):
         fft_layout.addWidget(fft_size_label)
         fft_layout.addWidget(self.fft_size_box)
 
-        hop_length_label = QLabel("步长")
+        hop_length_label = QLabel("时间步长")
         self.hop_length_box = QComboBox()
-        hop_lengths = [str(2 ** i) for i in range(5, 13)]
+        hop_lengths = [str(2 ** i) for i in range(4, 13)]
         self.hop_length_box.addItems(hop_lengths)
-        hop_length = str(self.load_config.get("hop_length", 512))
+        hop_length = str(self.load_config.get("hop_length", 256))
         self.hop_length_box.setCurrentText(hop_length)
         hop_layout = QHBoxLayout()
         hop_layout.addWidget(hop_length_label)
         hop_layout.addWidget(self.hop_length_box)
 
-        window_func_label = QLabel("窗口函数")
+        window_func_label = QLabel("窗函数")
         self.window_func_box = QComboBox()
         self.window_func_box.addItems(['hann', 'hamming', 'blackman'])
         window_func = self.load_config.get("window_func", "hann")
@@ -691,7 +700,7 @@ class SpecConfigWindow(QDialog):
         window_layout.addWidget(window_func_label)
         window_layout.addWidget(self.window_func_box)
 
-        colormap_label = QLabel("色图")
+        colormap_label = QLabel("配色")
         self.colormap_box = QComboBox()
         self.colormap_box.addItems(["viridis", "plasma", "magma", "inferno"])
         color_map = self.load_config.get("color_map", "viridis")
@@ -700,12 +709,17 @@ class SpecConfigWindow(QDialog):
         colormap_layout.addWidget(colormap_label)
         colormap_layout.addWidget(self.colormap_box)
 
+
         v_spacer_2 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_3 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_4 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_5 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_6 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_7 = QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Expanding)
+
         param_layout = QVBoxLayout()
+        param_layout.addItem(v_spacer_7)
+        param_layout.addLayout(freq_scale_layout)
         param_layout.addItem(v_spacer_2)
         param_layout.addLayout(fft_layout)
         param_layout.addItem(v_spacer_3)
@@ -735,6 +749,7 @@ class SpecConfigWindow(QDialog):
             "hop_length": int(self.hop_length_box.currentText()),
             "window_func": self.window_func_box.currentText(),
             "color_map": self.colormap_box.currentText(),
+            "freq_scale_type": self.freq_scale_box.currentText(),
         }
         return default_config
 
