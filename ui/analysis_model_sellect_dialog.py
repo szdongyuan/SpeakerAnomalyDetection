@@ -6,14 +6,14 @@ import sys
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton
-from PyQt5.QtWidgets import QApplication, QMenu, QAction, QSpacerItem, QSizePolicy, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMenu, QAction, QFileDialog, QMessageBox
 from time import time
 
 from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow
-from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow
+from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow, LPConfigWindow
 
 
 class AnalysisModelSellect(QDialog):
@@ -70,10 +70,7 @@ class AnalysisModelSellect(QDialog):
     def add_analysis_btn_clicked(self):
         if self.analysis_list.currentIndex().row() != -1:
             text = self.analysis_list.currentIndex().data()
-            if not "松散颗粒" in text:
-                self.sellect_list.set_new_analysis_config(text)
-            else:
-                QMessageBox.warning(self, "提示", "暂不支持此功能")
+            self.sellect_list.set_new_analysis_config(text)
         
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
@@ -144,14 +141,12 @@ class AnalysisModelSellect(QDialog):
         top_btn.clicked.connect(self.top_btn_clicked)
         bottom_btn.clicked.connect(self.bottom_btn_clicked)
 
-        space = QSpacerItem(30, 50, QSizePolicy.Minimum, QSizePolicy.Expanding)
-
         layout = QVBoxLayout()
         layout.addWidget(top_btn)
         layout.addWidget(up_btn)
         layout.addWidget(down_btn)
         layout.addWidget(bottom_btn)
-        layout.addItem(space)
+        layout.addStretch()
         layout.setContentsMargins(0, 30, 0, 0)
 
         return layout
@@ -186,10 +181,8 @@ class AnalysisModelSellect(QDialog):
         ok_btn.setMinimumWidth(100)
         clear_btn.setMinimumWidth(100)
 
-        space = QSpacerItem(30, 50, QSizePolicy.Expanding, QSizePolicy.Minimum)
-
         layout = QHBoxLayout()
-        layout.addItem(space)
+        layout.addStretch()
         layout.addWidget(clear_btn)
         layout.addWidget(load_btn)
         layout.addWidget(save_btn)
@@ -415,6 +408,8 @@ class OptionList(QListView):
             model = AIConfigWindow(config_manager, name)
         elif type == "Spec":
             model = SpecConfigWindow(config_manager, name)
+        elif type == "LP":
+            model = LPConfigWindow(config_manager, name)
         return model
 
     def load_config(self, config_file):
@@ -676,10 +671,7 @@ class OptionList(QListView):
 
     def dragenterevent(self, event):
         if event.mimeData().hasText():
-            if "松散颗粒 (LP)" in event.mimeData().text():
-                event.ignore()
-            else:
-                event.acceptProposedAction()
+            event.acceptProposedAction()
         else:
             event.ignore()
 

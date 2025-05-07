@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from scipy.signal import find_peaks
 
 import librosa
 import numpy as np
@@ -9,7 +10,7 @@ from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QVBoxLayout, QWidget, QLabel
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
@@ -34,7 +35,6 @@ class Distortion(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowTitle("谐波分析")
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         # layout have a child's plotwidget, use to display the thd analysis results
         layout = QVBoxLayout()
@@ -97,7 +97,6 @@ class Spl(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowTitle("声压分析")
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.spl_plot = pg.PlotWidget(title='Sound Pressure Level')
         self.spl_plot.setBackground('white')
@@ -178,7 +177,6 @@ class Frequency(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowTitle("频响分析")
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.fr_plot = pg.PlotWidget(title='Frequency Response')
         # self.fr_plot.setFixedSize(400, 320)
@@ -255,7 +253,6 @@ class AI(QWidget):
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setWindowTitle("AI 分析")
         ai_analyse_layout = self.create_ai_analyse_layout()
         self.setLayout(ai_analyse_layout)
 
@@ -458,6 +455,96 @@ class Spectrogram(QWidget):
 
             self.plot_container_layout.addWidget(self.stft_plot_widget)
             self.current_plot_widget = self.stft_plot_widget
+
+class LooseParticle(QWidget):
+    def __init__(self, title_name):
+        super().__init__()
+        self.signal_info = None
+        self.result = None
+        self.analysis_config = None
+        self.lp_graph = pg.PlotWidget()
+        self.lp_graph.setBackground('white')
+        self.lp_num_label = QLabel("LP 数量: %s"% self.result)
+        self.init_ui()
+        self.setWindowTitle(title_name)
+
+    def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        lp_num_layout = QHBoxLayout()
+        lp_num_layout.addStretch()
+        lp_num_layout.addWidget(self.lp_num_label)
+        layout = QVBoxLayout()
+        layout.addLayout(lp_num_layout)
+        layout.addWidget(self.lp_graph)
+        self.setLayout(layout)
+
+    def calculate_loose_particle(self):
+        recorded_signal = self.signal_info.get("recorded_signal")
+        filtered_spl = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(recorded_signal, 67)
+        self.plot_graph(filtered_spl)
+        self.lp_num_label.setText("LP 数量: %s"% self.result)
+    
+    def plot_graph(self, amplitude):
+        signal_duration = np.linspace(0, len(amplitude) / (self.signal_info["sample_rate"] // 2), len(amplitude))
+        self.lp_graph.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
+        self.result = self.detect_peaks(amplitude,
+                                        self.analysis_config.get("trigger_threshold"),
+                                        self.analysis_config.get("confirm_threshold"),
+                                        self.analysis_config.get("min_check_duration"),
+                                        self.analysis_config.get("max_check_duration"),
+                                        self.signal_info["sample_rate"],
+                                        signal_duration)
+        self.lp_graph.setLabel('left', 'Amplitude (dB)')
+        self.lp_graph.setLabel('bottom', 'time (s)')
+        
+    def detect_peaks(self, filtered_db, max_threshold, min_threshold , min_check_duration, max_check_duration, sampling_rate, signal_duration):
+        self.lp_graph.addLine(y=max_threshold, pen=pg.mkPen(color='r', width=1))
+        self.lp_graph.addLine(y=min_threshold, pen=pg.mkPen(color='g', width=1))
+        num = 0
+        peaks, _ = find_peaks(filtered_db, max_threshold)
+        first_iteration = True
+        last_peak = None
+        out_range_points = []
+        current_out_range = []
+        for peak in peaks:
+            if first_iteration:
+                first_iteration = False
+            else:
+                if (peak - last_peak) * 4 * 1000 / sampling_rate < min_check_duration or end_index > peak:
+                    continue
+            start_index = peak
+            last_peak = peak
+            end_index = start_index
+            iterator_index_flag = False
+            while end_index + 1 < len(filtered_db) and filtered_db[end_index] >= min_threshold:
+                if filtered_db[end_index] < max_threshold:
+                    iterator_index_flag = True
+                elif iterator_index_flag and filtered_db[end_index] > max_threshold:
+                    start_index = end_index + 1
+                    last_peak = end_index + 1
+                    current_out_range = []
+                    iterator_index_flag = False
+                current_out_range.append((signal_duration[end_index], filtered_db[end_index]))
+                end_index += 1
+
+            peak_duration = (end_index - start_index + 1) / (sampling_rate // 2)
+            if peak_duration * 1000 >= min_check_duration and peak_duration * 1000 < max_check_duration:
+                if filtered_db[end_index] > min_threshold:
+                    current_out_range = []
+                    continue
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                num += 1
+            current_out_range = []
+        self.plot_loose_particle_waveform(out_range_points)
+        return num
+    
+    def plot_loose_particle_waveform(self, out_range_points):
+        for points in out_range_points:
+            x = [point[0] for point in points]
+            y = [point[1] for point in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen='r')
+            self.lp_graph.addItem(out_range_plot)
 
 
 if __name__ == "__main__":
