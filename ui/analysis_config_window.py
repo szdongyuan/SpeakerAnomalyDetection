@@ -766,6 +766,8 @@ class LPConfigWindow(QDialog):
         comfirm_threshold_layout = self.create_confirm_threshold_layout()
         max_check_duration_layout = self.create_max_check_duration_layout()
         min_check_duration_layout = self.create_min_check_duration_layout()
+        max_stimulus_frequency_layout = self.create_stimulus_max_frequency_layout()
+        loose_particle_layout = self.create_loose_particle_num_layout()
         lp_config_box_layout.addLayout(trigger_threshold_layout)
         lp_config_box_layout.addStretch()
         lp_config_box_layout.addLayout(comfirm_threshold_layout)
@@ -773,6 +775,10 @@ class LPConfigWindow(QDialog):
         lp_config_box_layout.addLayout(max_check_duration_layout)
         lp_config_box_layout.addStretch()
         lp_config_box_layout.addLayout(min_check_duration_layout)
+        lp_config_box_layout.addStretch()
+        lp_config_box_layout.addLayout(max_stimulus_frequency_layout)
+        lp_config_box_layout.addStretch()
+        lp_config_box_layout.addLayout(loose_particle_layout)
         lp_config_box_layout.setSpacing(10)
         lp_config_box_layout.setContentsMargins(10, 20, 10, 20)
         lp_config_box.setLayout(lp_config_box_layout)
@@ -792,14 +798,14 @@ class LPConfigWindow(QDialog):
         return trigger_threshold_layout
     
     def create_confirm_threshold_layout(self):
-        confirm_threshold_label = QLabel("确认阈值:")
-        self.confirm_threshold_spinbox = QSpinBox()
-        self.confirm_threshold_spinbox.setSuffix(" dB")
-        self.confirm_threshold_spinbox.setValue(self.load_config.get("confirm_threshold", 0))
-        self.confirm_threshold_spinbox.setAlignment(Qt.AlignRight)
+        confirm_threshold_label = QLabel("确认区间:")
+        self.hysterests_threshold_spinbox = QSpinBox()
+        self.hysterests_threshold_spinbox.setSuffix(" dB")
+        self.hysterests_threshold_spinbox.setValue(self.load_config.get("hysterests_threshold", 0))
+        self.hysterests_threshold_spinbox.setAlignment(Qt.AlignRight)
         confirm_threshold_layout = QHBoxLayout()
         confirm_threshold_layout.addWidget(confirm_threshold_label)
-        confirm_threshold_layout.addWidget(self.confirm_threshold_spinbox)
+        confirm_threshold_layout.addWidget(self.hysterests_threshold_spinbox)
 
         return confirm_threshold_layout
     
@@ -827,6 +833,31 @@ class LPConfigWindow(QDialog):
 
         return max_check_duration_layout
     
+    def create_loose_particle_num_layout(self):
+        loose_particle_num_label = QLabel("允许松散颗粒数量:")
+        self.loose_particle_num_spinbox = QSpinBox()
+        self.loose_particle_num_spinbox.setValue(self.load_config.get("loose_particle_num", 0))
+        self.loose_particle_num_spinbox.setAlignment(Qt.AlignRight)
+        loose_particle_num_layout = QHBoxLayout()
+        loose_particle_num_layout.addWidget(loose_particle_num_label)
+        loose_particle_num_layout.addWidget(self.loose_particle_num_spinbox)
+
+        return loose_particle_num_layout
+    
+    def create_stimulus_max_frequency_layout(self):
+        stimulus_max_frequency_label = QLabel("信号最大频率:")
+        self.stimulus_max_frequency_spinbox = QSpinBox()
+        self.stimulus_max_frequency_spinbox.setSuffix(" Hz")
+        self.stimulus_max_frequency_spinbox.setRange(10, 24000)
+        self.stimulus_max_frequency_spinbox.setValue(self.load_config.get("cutoff_freq", 0))
+        self.stimulus_max_frequency_spinbox.setAlignment(Qt.AlignRight)
+
+        stimulus_max_frequency_layout = QHBoxLayout()
+        stimulus_max_frequency_layout.addWidget(stimulus_max_frequency_label)
+        stimulus_max_frequency_layout.addWidget(self.stimulus_max_frequency_spinbox)
+
+        return stimulus_max_frequency_layout
+
     def create_btn_layout(self):
         btn_layout = QHBoxLayout()
         default_btn = QPushButton("设为默认")
@@ -842,9 +873,11 @@ class LPConfigWindow(QDialog):
     def get_default_config(self):
         default_config = {
             "trigger_threshold": self.trigger_threshold_spinbox.value(),
-            "confirm_threshold": self.confirm_threshold_spinbox.value(),
+            "hysterests_threshold": self.hysterests_threshold_spinbox.value(),
             "min_check_duration": self.min_check_duration_spinbox.value(),
             "max_check_duration": self.max_check_duration_spinbox.value(),
+            "loose_particle_num": self.loose_particle_num_spinbox.value(),
+            "cutoff_freq": self.stimulus_max_frequency_spinbox.value()
         }
         return default_config
     
