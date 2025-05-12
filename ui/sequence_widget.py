@@ -338,8 +338,8 @@ class SequenceWindow(QWidget):
                 QVBoxLayout: A vertical layout containing the "OK" and "NG" buttons.
         """
         btn_layout = QVBoxLayout()
-        self.ok_btn = QPushButton(" OK ")
-        self.ng_btn = QPushButton(" NG ")
+        self.ok_btn = QPushButton("OK")
+        self.ng_btn = QPushButton("NG")
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/lvseyuan.png"))
         self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
         self.ok_btn.setFixedSize(200, 130)

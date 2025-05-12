@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
 from scipy.ndimage import maximum_filter
-from scipy.signal import savgol_filter, medfilt
+from scipy.signal import savgol_filter, medfilt, bessel, filtfilt
 import librosa
 
 from base.utils.plot_audio_features import PlotManager
@@ -381,7 +381,7 @@ class AudioThdFrequencyResponseAnalysis(object):
             return spl
 
     @staticmethod    
-    def calculate_loose_particle_spl(recorded_signal, kernel_size):
+    def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size):
         """
             Calculate the sound pressure level of loose particles.
 
@@ -394,17 +394,21 @@ class AudioThdFrequencyResponseAnalysis(object):
             Returns:
                 -filtered_spl:np.array 
                     The sound pressure level array after median filtering.
+                -rms_deviation: float
+                    The root mean square deviation of the sound pressure level.
         """
-        fft_result = np.fft.fft(recorded_signal)
-        window = np.hanning(len(fft_result))
-        window_signal = window * fft_result
-        length = len(window_signal)
-        positive_fft = window_signal[0:int(length/2)]
-        analytic_signal = np.fft.ifft(positive_fft)
+        nyquist = 0.5 * sr
+        normal_cutoff = cutoff / nyquist
+        b, a = bessel(4, normal_cutoff, btype='high', analog=False)
+        analytic_signal = filtfilt(b, a, recorded_signal)
         amplitude = np.abs(analytic_signal)
         reference_pressure = 20e-6
         signal_spl = 20 * np.log10(amplitude / reference_pressure)
         filtered_spl = medfilt(signal_spl, kernel_size)
+        sum_squares = float()
+        for i in range(len(filtered_spl)): 
+            sum_squares += filtered_spl[i] ** 2
+        rms_deviation = np.sqrt(sum_squares / len(filtered_spl)) * (np.sqrt(2) / 2)
 
-        return filtered_spl
+        return filtered_spl, rms_deviation
 

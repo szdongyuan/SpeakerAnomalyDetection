@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+
 from scipy.signal import find_peaks
 
 import librosa
@@ -465,6 +466,8 @@ class LooseParticle(QWidget):
         self.lp_graph = pg.PlotWidget()
         self.lp_graph.setBackground('white')
         self.lp_num_label = QLabel("LP 数量: %s"% self.result)
+        self.status_label = QLabel()
+        self.threshould = None
         self.init_ui()
         self.setWindowTitle(title_name)
 
@@ -472,6 +475,7 @@ class LooseParticle(QWidget):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         lp_num_layout = QHBoxLayout()
         lp_num_layout.addStretch()
+        lp_num_layout.addWidget(self.status_label)
         lp_num_layout.addWidget(self.lp_num_label)
         layout = QVBoxLayout()
         layout.addLayout(lp_num_layout)
@@ -480,32 +484,38 @@ class LooseParticle(QWidget):
 
     def calculate_loose_particle(self):
         recorded_signal = self.signal_info.get("recorded_signal")
-        filtered_spl = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(recorded_signal, 67)
-        self.plot_graph(filtered_spl)
-        self.lp_num_label.setText("LP 数量: %s"% self.result)
+        filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(recorded_signal,
+                                                                                                 self.analysis_config.get("cutoff_freq"),
+                                                                                                 self.signal_info.get("sample_rate"),
+                                                                                                 67)
+        self.plot_graph(filtered_spl, deviation)
+        self.lp_num_label.setText("LP 数量: %s" % self.result)
+        if self.result > self.analysis_config.get("loose_particle_num"):
+            self.status_label.setText("状态: 异常")
+        else:
+            self.status_label.setText("状态: 正常")
     
-    def plot_graph(self, amplitude):
-        signal_duration = np.linspace(0, len(amplitude) / (self.signal_info["sample_rate"] // 2), len(amplitude))
-        self.lp_graph.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
+    def plot_graph(self, amplitude, deviation):
+        signal_duration = np.linspace(0, len(amplitude) / (self.signal_info["sample_rate"]), len(amplitude))
         self.result = self.detect_peaks(amplitude,
                                         self.analysis_config.get("trigger_threshold"),
-                                        self.analysis_config.get("confirm_threshold"),
+                                        self.analysis_config.get("hysterests_threshold"),
                                         self.analysis_config.get("min_check_duration"),
                                         self.analysis_config.get("max_check_duration"),
-                                        self.signal_info["sample_rate"],
-                                        signal_duration)
+                                        self.signal_info["sample_rate"])
+        amplitude = amplitude - deviation
+        self.lp_graph.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
+        self.plot_loose_particle_waveform(self.threshould, signal_duration, deviation)
         self.lp_graph.setLabel('left', 'Amplitude (dB)')
         self.lp_graph.setLabel('bottom', 'time (s)')
         
-    def detect_peaks(self, filtered_db, max_threshold, min_threshold , min_check_duration, max_check_duration, sampling_rate, signal_duration):
-        self.lp_graph.addLine(y=max_threshold, pen=pg.mkPen(color='r', width=1))
-        self.lp_graph.addLine(y=min_threshold, pen=pg.mkPen(color='g', width=1))
+    def detect_peaks(self, filtered_db, max_threshold, hysterests_threshold , min_check_duration, max_check_duration, sampling_rate):
         num = 0
         peaks, _ = find_peaks(filtered_db, max_threshold)
         first_iteration = True
         last_peak = None
-        out_range_points = []
         current_out_range = []
+        self.threshould = np.full_like(filtered_db, self.analysis_config.get("trigger_threshold") - float(hysterests_threshold) / 2)
         for peak in peaks:
             if first_iteration:
                 first_iteration = False
@@ -516,35 +526,39 @@ class LooseParticle(QWidget):
             last_peak = peak
             end_index = start_index
             iterator_index_flag = False
-            while end_index + 1 < len(filtered_db) and filtered_db[end_index] >= min_threshold:
+            while end_index + 1 < len(filtered_db) and filtered_db[end_index] >= max_threshold - hysterests_threshold:
                 if filtered_db[end_index] < max_threshold:
                     iterator_index_flag = True
                 elif iterator_index_flag and filtered_db[end_index] > max_threshold:
-                    start_index = end_index + 1
-                    last_peak = end_index + 1
                     current_out_range = []
                     iterator_index_flag = False
-                current_out_range.append((signal_duration[end_index], filtered_db[end_index]))
+                    break
+                current_out_range.append((end_index, filtered_db[end_index]))
                 end_index += 1
 
             peak_duration = (end_index - start_index + 1) / (sampling_rate // 2)
             if peak_duration * 1000 >= min_check_duration and peak_duration * 1000 < max_check_duration:
-                if filtered_db[end_index] > min_threshold:
+                if filtered_db[end_index] > max_threshold - hysterests_threshold:
                     current_out_range = []
                     continue
                 if current_out_range:
-                    out_range_points.append(current_out_range)
+                    self.get_peak_duration(current_out_range, max_threshold, hysterests_threshold)
                 num += 1
             current_out_range = []
-        self.plot_loose_particle_waveform(out_range_points)
         return num
     
-    def plot_loose_particle_waveform(self, out_range_points):
-        for points in out_range_points:
-            x = [point[0] for point in points]
-            y = [point[1] for point in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen='r')
-            self.lp_graph.addItem(out_range_plot)
+    def get_peak_duration(self, signal_duration, max_threshold, hysteresis):
+        for key, value in signal_duration:
+            if value  < max_threshold - float(hysteresis) / 2:
+                self.threshould[key] = max_threshold - hysteresis
+            else:
+                self.threshould[key] = value   
+    
+    def plot_loose_particle_waveform(self, out_range_points, signal_duration, deviation):
+        pen = pg.mkPen(color='orange', width=3)
+        out_range_points = np.array(out_range_points) - deviation
+        out_range_plot = pg.PlotDataItem(signal_duration, out_range_points, pen=pen)
+        self.lp_graph.addItem(out_range_plot)
 
 
 if __name__ == "__main__":
