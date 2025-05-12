@@ -115,11 +115,11 @@ sequence_qlabel_stytle = """
 sequence_qpushbutton_stytle = """
             QPushButton {
                 background-color: #d0ceca;
-                color: white;
+                color: black;
                 font-family: 'SimSun';
                 font-size: 70px;
                 border-radius: 20px;
-                border: 1px solid rgb(128, 128, 128);
+                border: 3px solid rgb(128, 128, 128);
                 padding-left: 0px;
             }
             QPushButton:hover {
