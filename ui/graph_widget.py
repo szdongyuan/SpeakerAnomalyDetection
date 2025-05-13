@@ -97,8 +97,8 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     if z_min == z_max:
         z_max = z_min + 1  # Add a small offset to prevent single color
     
-    pos = np.linspace(0.0, 1.0, 10)
-    colors = pg.colormap.get(colormap).getLookupTable(nPts=10)
+    pos = np.linspace(0.0, 1.0, 256)
+    colors = pg.colormap.get(colormap).getLookupTable(nPts=256)
     cmap = pg.ColorMap(pos, colors)
     
     lut = cmap.getLookupTable(nPts=256)
@@ -138,7 +138,7 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
 
 
 class ColorBarItem(pg.GraphicsObject):
-    def __init__(self, cmap, width=25, height=200, label_side='right'):
+    def __init__(self, cmap, width=20, height=200, label_side='right'):
         pg.GraphicsObject.__init__(self)
         self.cmap = cmap
         self.width = width
