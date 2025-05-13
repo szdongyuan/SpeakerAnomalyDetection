@@ -112,7 +112,7 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     if x_range is not None:
         plot_widget.setXRange(x_range[0], x_range[1])
     else:
-        plot_widget.setXRange(0, x_max, padding=x_padding)
+        plot_widget.setXRange(x_min, x_max, padding=x_padding)
         
     if y_range is not None:
         plot_widget.getViewBox().disableAutoRange(axis=pg.ViewBox.YAxis)
