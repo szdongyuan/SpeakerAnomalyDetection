@@ -373,8 +373,6 @@ class Spectrogram(QWidget):
         freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
 
         if freq_scale_type == "log":
-            self.setWindowTitle("频谱分析 (Log Scale)")
-            
             fmin_cqt = librosa.note_to_hz('C1')
             CQT_complex, freqs, times = AudioThdFrequencyResponseAnalysis().compute_cqt(
                 y=recorded_signal,
@@ -402,19 +400,18 @@ class Spectrogram(QWidget):
 
             cqt_plot_widget = plot_2d_image(
                 x=times, y=freqs, z=Z,
-                title="Spectrogram",
+                title="Spectrogram(Log Scale)",
                 xlabel="Time (s)", ylabel="Frequency (Hz)",
                 colormap=color_map,
                 x_range=(times.min(), times.max()),
                 y_range=(freqs.min(), freqs.max()),
-                y_ticks=custom_y_ticks
+                y_ticks=custom_y_ticks,
+                background_color='white'
             )
             self.plot_container_layout.addWidget(cqt_plot_widget)
             self.current_plot_widget = cqt_plot_widget
 
         else:
-            self.setWindowTitle("频谱分析 (Linear Scale)")
-
             spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
             spec_dB = librosa.amplitude_to_db(spec, ref=20e-6)
             freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
@@ -432,7 +429,7 @@ class Spectrogram(QWidget):
 
             self.img_item.setRect(pg.QtCore.QRectF(times_min, freqs_min, width, height))
 
-            self.stft_plot_widget.setTitle("Spectrogram (STFT - Linear Scale)")
+            self.stft_plot_widget.setTitle("Spectrogram (Linear Scale)")
             self.stft_plot_widget.setLabel('bottom', "Time (s)")
             self.stft_plot_widget.setLabel('left', "Frequency (Hz)")
             self.stft_plot_widget.setLogMode(x=False, y=False)
@@ -447,15 +444,21 @@ class Spectrogram(QWidget):
             self.img_item.setLookupTable(lut)
             self.img_item.setLevels([db_min, db_max])
 
+            view_box = self.stft_plot_widget.getViewBox()
+            if view_box:
+                view_box.setDefaultPadding(0.0)
+
+            self.stft_plot_widget.setXRange(times_min, times_max, padding=0)
+            self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
             plot_item = self.stft_plot_widget.getPlotItem()
             if plot_item:
                 self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=20, colorMap=cmap)
                 self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
             else:
                 self.stft_colorbar = None
-
             self.plot_container_layout.addWidget(self.stft_plot_widget)
             self.current_plot_widget = self.stft_plot_widget
+            
 
 class LooseParticle(QWidget):
     def __init__(self, title_name):
