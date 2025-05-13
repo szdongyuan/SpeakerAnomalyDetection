@@ -452,7 +452,7 @@ class Spectrogram(QWidget):
             self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
             plot_item = self.stft_plot_widget.getPlotItem()
             if plot_item:
-                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=20, colorMap=cmap)
+                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
                 self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
             else:
                 self.stft_colorbar = None
