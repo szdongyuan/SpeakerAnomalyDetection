@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 
 from scipy.signal import find_peaks
@@ -16,9 +17,11 @@ from PyQt5.QtWidgets import QVBoxLayout, QWidget, QLabel
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.training_model_management import TrainingModelManagement
+from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import predict
+from ui import sequence_widget
 from ui.graph_widget import plot_2d_image
 
 class Distortion(QWidget):
@@ -298,6 +301,23 @@ class AI(QWidget):
             model_path, config_path = result
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
+            config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+            with open(config_file_path, 'r') as f:
+                default_config = json.load(f)
+                default_ai_model = default_config["default_ai"]
+            if sequence_widget.SequenceWindow.model == "test" and default_ai_model:
+                analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
+                match_object = re.search(r"评分结果:\s*(\S+)", result_text)
+                if match_object:
+                    match_result = match_object.group(1)
+                    if match_result == "OK":
+                        sign.set_result_file_sign.emit(0, "OK", analyse_model_name)
+                        sign.get_result_file_sign.emit(0)
+                        sign.test_insert_data_into_db_sign.emit("OK")
+                    elif match_result == "NG":
+                        sign.set_result_file_sign.emit(0, "NG", analyse_model_name)
+                        sign.get_result_file_sign.emit(0)
+                        sign.test_insert_data_into_db_sign.emit("NG")
             self.ai_analyse_score_textedit.setPlainText(result_text)
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 

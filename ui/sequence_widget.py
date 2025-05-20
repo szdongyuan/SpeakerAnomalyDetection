@@ -10,8 +10,9 @@ import librosa
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
-from PyQt5.QtGui import QIcon, QPainter, QColor
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
+from PyQt5.QtGui import QIcon, QPainter, QColor, QFont
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox, \
+    QStackedWidget
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
@@ -30,6 +31,7 @@ from ui.login_window import get_mac_address
 
 class SequenceWindow(QWidget):
     tcp_server = None
+    model = None
 
     def __init__(self):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
@@ -88,7 +90,11 @@ class SequenceWindow(QWidget):
         self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         sign.run_test_sign.connect(self.clicked_player_btn, Qt.AutoConnection)
-
+        sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
+        sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
+        sign.test_insert_data_into_db_sign.connect(self.test_insert_data_into_db, Qt.AutoConnection)
+        sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
+        self.update_mode_display(0)
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qlineedit_stytle +
@@ -314,44 +320,340 @@ class SequenceWindow(QWidget):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground('white')
-        btn_area = self.create_waveform_btn_layout()
+        left_area = self.create_left_layout()
         self.line_graph.setLabel('left', 'Amplitude(V)')
         self.line_graph.setLabel('bottom', 'Time(s)')
         self.line_graph.showGrid(x=True, y=True)
 
-        layout.addLayout(btn_area)
-        layout.addSpacing(70)
-        layout.addWidget(self.line_graph)
-        layout.setContentsMargins(90, 20, 90, 30)
-
+        layout.addLayout(left_area, stretch=1)
+        layout.addSpacing(20)
+        layout.addWidget(self.line_graph, stretch=8)
+        layout.setContentsMargins(40, 20, 40, 20)
+        layout.setSpacing(30)
         return layout
 
-    def create_waveform_btn_layout(self):
-        """
-            Create a button layout for waveform.
+    def create_left_layout(self):
+        layout = QVBoxLayout()
 
-            This function generates a vertical layout containing two buttons: one labeled "OK" and the other labeled "NG".
-            Each button is configured with an icon, stylesheet, fixed size, and icon size. The buttons are added to a QVBoxLayout,
-            which is then returned.
+        mode_label = QLabel("模式：")
+        self.model_button = QHBoxLayout()
+        self.model_button.setSpacing(0)
+        self.test_btn = QPushButton("测试")
+        self.test_btn.setFixedSize(100, 35)
+        self.test_btn.setFont(QFont("Arial", 14))
+        self.test_btn.clicked.connect(lambda: self.update_mode_display(0))
+        self.mark_btn = QPushButton("标记")
+        self.mark_btn.setFixedSize(100, 35)
+        self.mark_btn.setFont(QFont("Arial", 14))
+        self.mark_btn.clicked.connect(lambda: self.update_mode_display(1))
+        self.model_button.addWidget(self.test_btn)
+        self.model_button.addWidget(self.mark_btn)
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(mode_label)
+        mode_layout.addLayout(self.model_button)
 
-            Returns:
-                QVBoxLayout: A vertical layout containing the "OK" and "NG" buttons.
-        """
-        btn_layout = QVBoxLayout()
-        self.ok_btn = QPushButton("OK")
-        self.ng_btn = QPushButton("NG")
+        separator_line = QFrame()
+        separator_line.setFrameShape(QFrame.HLine)
+        separator_line.setFrameShadow(QFrame.Sunken)
+        separator_line.setStyleSheet("color: gray;")
+        separator_line.setFixedHeight(2)
+
+        # --- page 1：test ---
+        self.test_page = QWidget()
+        test_layout = QVBoxLayout()
+
+        total_layout = QHBoxLayout()
+        self.total_label = QLabel("总数：")
+        self.total_line_edit = QLineEdit()
+        self.total_line_edit.setFixedHeight(35)
+        self.total_line_edit.setFixedWidth(130)
+        self.total_line_edit.setDisabled(True)
+        self.total_line_edit.setAlignment(Qt.AlignCenter)
+        total_layout.addWidget(self.total_label)
+        total_layout.addWidget(self.total_line_edit)
+
+        ok_layout = QHBoxLayout()
+        self.ok_label = QLabel("OK数：")
+        self.ok_line_edit = QLineEdit()
+        self.ok_line_edit.setFixedHeight(35)
+        self.ok_line_edit.setFixedWidth(130)
+        self.ok_line_edit.setDisabled(True)
+        self.ok_line_edit.setAlignment(Qt.AlignCenter)
+        ok_layout.addWidget(self.ok_label)
+        ok_layout.addWidget(self.ok_line_edit)
+
+        ng_layout = QHBoxLayout()
+        self.ng_label = QLabel("NG数：")
+        self.ng_line_edit = QLineEdit()
+        self.ng_line_edit.setFixedHeight(35)
+        self.ng_line_edit.setFixedWidth(130)
+        self.ng_line_edit.setDisabled(True)
+        self.ng_line_edit.setAlignment(Qt.AlignCenter)
+        ng_layout.addWidget(self.ng_label)
+        ng_layout.addWidget(self.ng_line_edit)
+
+        yield_layout = QHBoxLayout()
+        self.yield_label = QLabel("良率：")
+        self.yield_line_edit = QLineEdit()
+        self.yield_line_edit.setFixedHeight(35)
+        self.yield_line_edit.setFixedWidth(130)
+        self.yield_line_edit.setDisabled(True)
+        self.yield_line_edit.setAlignment(Qt.AlignCenter)
+        yield_layout.addWidget(self.yield_label)
+        yield_layout.addWidget(self.yield_line_edit)
+
+        model_layout = QHBoxLayout()
+        self.model_label = QLabel("当前模型：")
+        self.model_line_edit = QLineEdit()
+        self.model_line_edit.setFixedHeight(35)
+        self.model_line_edit.setFixedWidth(130)
+        self.model_line_edit.setDisabled(True)
+        self.model_line_edit.setAlignment(Qt.AlignCenter)
+        model_layout.addWidget(self.model_label)
+        model_layout.addWidget(self.model_line_edit)
+
+        datatime_layout = QHBoxLayout()
+        self.datatime_label = QLabel("日期：")
+        self.datatime_line_edit = QLineEdit()
+        self.datatime_line_edit.setFixedHeight(35)
+        self.datatime_line_edit.setFixedWidth(130)
+        self.datatime_line_edit.setDisabled(True)
+        self.datatime_line_edit.setAlignment(Qt.AlignCenter)
+        datatime_layout.addWidget(self.datatime_label)
+        datatime_layout.addWidget(self.datatime_line_edit)
+
+        reset_btn_layout = QHBoxLayout()
+        reset_btn_layout.addStretch()
+        self.reset_btn = QPushButton("重置统计")
+        self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_stytle)
+        reset_btn_layout.addWidget(self.reset_btn)
+        reset_btn_layout.addStretch()
+        self.reset_btn.clicked.connect(self.reset_test_reord)
+        test_layout.addLayout(total_layout, stretch=1)
+        test_layout.addLayout(ok_layout, stretch=1)
+        test_layout.addLayout(ng_layout, stretch=1)
+        test_layout.addLayout(yield_layout, stretch=1)
+        test_layout.addLayout(model_layout, stretch=1)
+        test_layout.addLayout(datatime_layout, stretch=1)
+        test_layout.addLayout(reset_btn_layout, stretch=1)
+        self.test_page.setLayout(test_layout)
+
+        # --- page 2：mark ---
+        self.mark_page = QWidget()
+        mark_layout = QVBoxLayout()
+
+        mark_total_layout = QHBoxLayout()
+        self.mark_total_label = QLabel("总数：")
+        self.mark_total_edit = QLineEdit("0")
+        self.mark_total_edit.setFixedHeight(35)
+        self.mark_total_edit.setFixedWidth(130)
+        self.mark_total_edit.setDisabled(True)
+        self.mark_total_edit.setAlignment(Qt.AlignCenter)
+        mark_total_layout.addWidget(self.mark_total_label)
+        mark_total_layout.addWidget(self.mark_total_edit)
+
+        mark_ok_layout = QHBoxLayout()
+        self.mark_ok_label = QLabel("OK数：")
+        self.mark_ok_edit = QLineEdit("0")
+        self.mark_ok_edit.setFixedHeight(35)
+        self.mark_ok_edit.setFixedWidth(130)
+        self.mark_ok_edit.setDisabled(True)
+        self.mark_ok_edit.setAlignment(Qt.AlignCenter)
+        mark_ok_layout.addWidget(self.mark_ok_label)
+        mark_ok_layout.addWidget(self.mark_ok_edit)
+
+        mark_ng_layout = QHBoxLayout()
+        self.mark_ng_label = QLabel("NG数：")
+        self.mark_ng_edit = QLineEdit("0")
+        self.mark_ng_edit.setFixedHeight(35)
+        self.mark_ng_edit.setFixedWidth(130)
+        self.mark_ng_edit.setDisabled(True)
+        self.mark_ng_edit.setAlignment(Qt.AlignCenter)
+        mark_ng_layout.addWidget(self.mark_ng_label)
+        mark_ng_layout.addWidget(self.mark_ng_edit)
+
+        ok_layout = QHBoxLayout()
+        ok_layout.addStretch()
+        self.ok_btn = QPushButton(" OK ")
+        ok_layout.addWidget(self.ok_btn)
+        ok_layout.addStretch()
+
+        ng_layout = QHBoxLayout()
+        ng_layout.addStretch()
+        self.ng_btn = QPushButton(" NG ")
+        ng_layout.addWidget(self.ng_btn)
+        ng_layout.addStretch()
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/lvseyuan.png"))
         self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
-        self.ok_btn.setFixedSize(200, 130)
-        self.ok_btn.setIconSize(QSize(30, 30))
+        self.ok_btn.setFixedSize(180, 80)
+        self.ok_btn.setIconSize(QSize(24, 24))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/hongseyuan.png"))
         self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
-        self.ng_btn.setFixedSize(200, 130)
-        self.ng_btn.setIconSize(QSize(30, 30))
-        btn_layout.addWidget(self.ok_btn)
-        btn_layout.addWidget(self.ng_btn)
+        self.ng_btn.setFixedSize(180, 80)
+        self.ng_btn.setIconSize(QSize(24, 24))
 
-        return btn_layout
+        mark_layout.addLayout(mark_total_layout, stretch=1)
+        mark_layout.addLayout(mark_ok_layout, stretch=1)
+        mark_layout.addLayout(mark_ng_layout, stretch=1)
+        mark_layout.addLayout(ok_layout, stretch=2)
+        mark_layout.addLayout(ng_layout, stretch=2)
+        self.mark_page.setLayout(mark_layout)
+
+        self.stacked_widget = QStackedWidget()
+        self.stacked_widget.addWidget(self.test_page)
+        self.stacked_widget.addWidget(self.mark_page)
+
+        layout.addLayout(mode_layout)
+        layout.addWidget(separator_line)
+        layout.addWidget(self.stacked_widget)
+        layout.addStretch()
+
+        self.init_result_files()
+        return layout
+
+    def init_result_files(self):
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+        test_result_template = (
+            f"total: 0\n"
+            f"ok: 0\n"
+            f"ng: 0\n"
+            f"ok_percent: 0\n"
+            f"current_model: xxx\n"
+            f"datatime: {current_time}\n"
+        )
+        if not os.path.exists(test_result_path):
+            os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
+            with open(test_result_path, 'w') as f:
+                f.write(test_result_template)
+
+        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
+        mark_result_template = {
+            "total": 0,
+            "ok": 0,
+            "ng": 0,
+            "datatime": current_time
+        }
+        if not os.path.exists(mark_result_path):
+            os.makedirs(os.path.dirname(mark_result_path), exist_ok=True)
+            with open(mark_result_path, 'w') as f:
+                json.dump(mark_result_template, f, indent=4)
+        else:
+            self.set_result_file(1, "init", None)
+
+
+    def get_result_file(self, index):
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        if index == 0:
+            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+            with open(test_result_path, 'r') as f:
+                lines = f.readlines()
+                total = lines[0].split(':')[1].strip()
+                ok = lines[1].split(':')[1].strip()
+                ng = lines[2].split(':')[1].strip()
+                ok_percent = lines[3].split(':')[1].strip()
+                current_model = lines[4].split(':')[1].strip()
+                datatime = lines[5].split(':')[1].strip()
+                self.total_line_edit.setText(total)
+                self.ok_line_edit.setText(ok)
+                self.ng_line_edit.setText(ng)
+                self.yield_line_edit.setText(ok_percent)
+                self.model_line_edit.setText(current_model)
+                self.model_line_edit.setCursorPosition(0)
+                self.datatime_line_edit.setText(datatime)
+        if index == 1:
+            mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
+            with open(mark_result_path, 'r') as f:
+                data = json.load(f)
+                self.mark_total_edit.setText(str(data["total"]))
+                self.mark_ok_edit.setText(str(data["ok"]))
+                self.mark_ng_edit.setText(str(data["ng"]))
+
+    def set_result_file(self, index, params, analyse_model_name):
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        if index == 0:
+            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+            with open(test_result_path, 'r') as f:
+                lines = f.readlines()
+                total = int(lines[0].split(':')[1].strip())
+                ok = int(lines[1].split(':')[1].strip())
+                ng = int(lines[2].split(':')[1].strip())
+
+                if params == "OK":
+                    total +=1
+                    ok +=1
+                elif params == "NG":
+                    total += 1
+                    ng += 1
+                lines[0] = f"total: {total}\n"
+                lines[1] = f"ok: {ok}\n"
+                lines[2] = f"ng: {ng}\n"
+                ok_percent = round(ok / total * 100, 2) if total > 0 else 0
+                lines[3] = f"ok_percent: {ok_percent}%\n"
+                if analyse_model_name:
+                    lines[4] = f"current_model: {analyse_model_name}\n"
+            with open(test_result_path, 'w') as f:
+                f.writelines(lines)
+        if index == 1:
+            mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
+            with open(mark_result_path, 'r') as f:
+                data = json.load(f)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            if params == "init":
+                if data["datatime"] != current_date:
+                    data["total"] = 0
+                    data["ok"] = 0
+                    data["ng"] = 0
+                    data["datatime"] = current_date
+            elif params == "OK":
+                data["total"] += 1
+                data["ok"] += 1
+            elif params == "NG":
+                data["total"] += 1
+                data["ng"] += 1
+            with open(mark_result_path, 'w') as f:
+                json.dump(data, f, indent=4)
+
+    def update_mode_display(self, index):
+        if index == 0:
+            self.stacked_widget.setCurrentIndex(0)
+            self.get_result_file(0)
+            SequenceWindow.model = "test"
+            config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+            with open(config_file_path, 'r') as f:
+                default_config = json.load(f)
+                default_ai_model = default_config["default_ai"]
+                if default_ai_model:
+                    analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
+                    self.model_line_edit.setText(analyse_model_name)
+                    self.model_line_edit.setCursorPosition(0)
+                    self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+                    self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+                    self.test_btn.setEnabled(False)
+                    self.mark_btn.setEnabled(True)
+                else:
+                    self.update_mode_display(1)
+        else:
+            self.stacked_widget.setCurrentIndex(1)
+            self.get_result_file(1)
+            SequenceWindow.model = "mark"
+            self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+            self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+            self.mark_btn.setEnabled(False)
+            self.test_btn.setEnabled(True)
+
+    def reset_test_reord(self):
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+        with open(test_result_path, 'r') as f:
+            lines = f.readlines()
+            lines[0] = f"total: 0\n"
+            lines[1] = f"ok: 0\n"
+            lines[2] = f"ng: 0\n"
+            lines[3] = f"ok_percent: 0\n"
+        with open(test_result_path, 'w') as f:
+            f.writelines(lines)
+        self.get_result_file(0)
 
     def lineedit_lose_focus(self, lineedit):
         lineedit.clearFocus()
@@ -616,6 +918,7 @@ class SequenceWindow(QWidget):
         current_recorded_count = self.save_recorded_num_to_json("ok_ng")
         self.lineedit_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
+        self.mark_result()
         self.player_status_flag = False
         self.update_player_icon()
         self.signal_info.clear()
@@ -800,6 +1103,43 @@ class SequenceWindow(QWidget):
             self.default_logger.info("Recorded signal successfully insert.")
         else:
             self.default_logger.error("Failed insert recorded signal.")
+
+    def mark_result(self):
+        button = self.sender()
+        if button == self.ok_btn:
+            self.set_result_file(1, "OK", None)
+            self.get_result_file(1)
+        elif button == self.ng_btn:
+            self.set_result_file(1, "NG", None)
+            self.get_result_file(1)
+
+    def test_insert_data_into_db(self, params):
+        if params == "OK":
+            self.recorded_signal_info["labels"] = "OK"
+        elif params == "NG":
+            self.recorded_signal_info["labels"] = 'NG'
+        current_recorded_count = self.save_recorded_num_to_json("ok_ng")
+        self.lineedit_count.setText(str(current_recorded_count))
+        move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
+        file_path = self.recorded_signal_info["file_path"]
+        if move_recorded_path:
+            file_path = move_recorded_path
+        self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
+        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
+        if save_code == error_code.OK:
+            self.default_logger.info("Recorded signal successfully insert.")
+        else:
+            self.default_logger.error("Failed insert recorded signal.")
+        self.player_status_flag = False
+        self.update_player_icon()
+        self.signal_info.clear()
+        self.lineedit_s_or_n.clear()
+        # self.line_graph.clear()
+        self.replayer_btn.setDisabled(True)
+        self.data_btn.setEnabled(False)
+        self.default_ai_result = None
+        self.default_ai = None
+        self.clicked_scanner()
 
     def move_wav_to_dir(self, label):
         dir_paths = [model_consts.STORED_RECORDED_OK_PATH, model_consts.STORED_RECORDED_NG_PATH]
