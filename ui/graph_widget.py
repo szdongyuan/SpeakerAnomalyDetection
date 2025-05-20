@@ -26,7 +26,8 @@ class QmyFigureCanvas(QWidget):
         self.setLayout(layout)
 
 def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='viridis', 
-                 x_range=None, y_range=None, z_range=None, y_ticks=None):
+                 x_range=None, y_range=None, z_range=None, y_ticks=None, background_color=None,
+                 x_padding=0, y_padding=0):
     """
     Plot a 2D image with a colorbar in PyQt.
     
@@ -54,6 +55,8 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
         (min, max) range for colormap. If None, uses data range.
     y_ticks : list or None
         Custom ticks for the y-axis in the format expected by AxisItem.setTicks.
+    background_color : str or None
+        Background color for the plot widget. If None, uses default.
         
     Returns:
     --------
@@ -66,6 +69,8 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     
 
     plot_widget = pg.PlotWidget(title=title)
+    if background_color is not None:
+        plot_widget.setBackground(background_color)
     plot_widget.setLabel('bottom', xlabel)
     plot_widget.setLabel('left', ylabel)
     layout.addWidget(plot_widget)
@@ -73,6 +78,10 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     img = pg.ImageItem()
     plot_widget.addItem(img)
     
+    view_box = plot_widget.getViewBox()
+    if view_box:
+        view_box.setDefaultPadding(0.0)
+        
     img.setImage(z)
     
     x_min, x_max = x.min(), x.max()
@@ -88,8 +97,8 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     if z_min == z_max:
         z_max = z_min + 1  # Add a small offset to prevent single color
     
-    pos = np.linspace(0.0, 1.0, 10)
-    colors = pg.colormap.get(colormap).getLookupTable(nPts=10)
+    pos = np.linspace(0.0, 1.0, 256)
+    colors = pg.colormap.get(colormap).getLookupTable(nPts=256)
     cmap = pg.ColorMap(pos, colors)
     
     lut = cmap.getLookupTable(nPts=256)
@@ -103,13 +112,13 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     if x_range is not None:
         plot_widget.setXRange(x_range[0], x_range[1])
     else:
-        plot_widget.setXRange(x_min, x_max)
+        plot_widget.setXRange(x_min, x_max, padding=x_padding)
         
     if y_range is not None:
         plot_widget.getViewBox().disableAutoRange(axis=pg.ViewBox.YAxis)
-        plot_widget.getViewBox().setYRange(y_range[0], y_range[1], padding=0)
+        plot_widget.getViewBox().setYRange(y_range[0], y_range[1], padding=y_padding)
     else:
-        plot_widget.getViewBox().setYRange(y_min, y_max, padding=0)
+        plot_widget.getViewBox().setYRange(y_min, y_max, padding=y_padding)
 
     if y_ticks is not None:
         left_axis = plot_widget.getAxis('left')
@@ -129,7 +138,7 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
 
 
 class ColorBarItem(pg.GraphicsObject):
-    def __init__(self, cmap, width=25, height=200, label_side='right'):
+    def __init__(self, cmap, width=20, height=200, label_side='right'):
         pg.GraphicsObject.__init__(self)
         self.cmap = cmap
         self.width = width
