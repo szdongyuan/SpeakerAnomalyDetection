@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
@@ -10,6 +11,7 @@ from PyQt5.QtWidgets import QApplication, QMenu, QAction, QFileDialog, QMessageB
 from time import time
 
 from base.log_manager import LogManager
+from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow
@@ -226,7 +228,24 @@ class AnalysisModelSellect(QDialog):
     def ok_btn_clicked(self):
         self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
         self.save_analyse_config_to_json(self.sellect_list.config)
+        sign.update_mode_display_sign.emit(0)
+        self.update_test_file_current_model()
         self.close()
+
+    def update_test_file_current_model(self):
+        config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        with open(config_file_path, 'r') as f:
+            default_config = json.load(f)
+            default_ai_model = default_config["default_ai"]
+            if default_ai_model:
+                analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
+                current_time = datetime.now().strftime("%Y-%m-%d")
+                test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+                with open(test_result_path, 'r') as r:
+                    lines = r.readlines()
+                    lines[4] = f"current_model: {analyse_model_name}\n"
+                with open(test_result_path, 'w') as w:
+                    w.writelines(lines)
 
     def save_analyse_config_to_json(self, config_data):
         analyse_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
