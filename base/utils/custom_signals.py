@@ -3,7 +3,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 class MySignals(QObject):
     """
-    custom signals
+    custom signals, only responsible for signal define
     """
     run_test_sign = pyqtSignal()
 

@@ -31,7 +31,7 @@ from ui.login_window import get_mac_address
 
 class SequenceWindow(QWidget):
     tcp_server = None
-    model = None
+    mode = None
 
     def __init__(self):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
@@ -618,7 +618,7 @@ class SequenceWindow(QWidget):
         if index == 0:
             self.stacked_widget.setCurrentIndex(0)
             self.get_result_file(0)
-            SequenceWindow.model = "test"
+            SequenceWindow.mode = "test"
             config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
             with open(config_file_path, 'r') as f:
                 default_config = json.load(f)
@@ -636,7 +636,7 @@ class SequenceWindow(QWidget):
         else:
             self.stacked_widget.setCurrentIndex(1)
             self.get_result_file(1)
-            SequenceWindow.model = "mark"
+            SequenceWindow.mode = "mark"
             self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
             self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
             self.mark_btn.setEnabled(False)
@@ -950,7 +950,7 @@ class SequenceWindow(QWidget):
         load_code, result = self.load_stimulus_from_json()
         if load_code == error_code.OK and result:
             info = result.get("stimulus_info")
-            path = result.get("stimulus_signal_path")
+            path = DEFAULT_DIR + result.get("stimulus_signal_path")
             stimulus, _ = load_audio_simple(path, info["sample_rate"])
             return info, stimulus
         else:

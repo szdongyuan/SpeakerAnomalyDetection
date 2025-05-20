@@ -305,7 +305,7 @@ class AI(QWidget):
             with open(config_file_path, 'r') as f:
                 default_config = json.load(f)
                 default_ai_model = default_config["default_ai"]
-            if sequence_widget.SequenceWindow.model == "test" and default_ai_model:
+            if sequence_widget.SequenceWindow.mode == "test" and default_ai_model:
                 analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
                 match_object = re.search(r"评分结果:\s*(\S+)", result_text)
                 if match_object:
