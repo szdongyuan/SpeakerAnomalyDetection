@@ -7,9 +7,9 @@ import pyqtgraph
 import sounddevice as sd
 from PyQt5.QtCore import Qt
 from scipy.io import wavfile
-from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
-from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListView, QPushButton
+from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit
 from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout, QAbstractSpinBox
 
 
@@ -22,6 +22,7 @@ from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from base.stimulus_signal_management import StimulusSignalManagement
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.load_stimulus_dialog import LoadStimulusDialog
 
 
 class StimulusWindow(QDialog):
@@ -125,15 +126,15 @@ class StimulusWindow(QDialog):
         self.plot_stimulus.setBackground('white')
         self.plot_stimulus.resize(400, 170)
         layout.addWidget(self.plot_stimulus)
-        layout.addStretch(20)
+        layout.addStretch()
         layout.addLayout(custom_stimulus_layout)
         layout.addWidget(stimulus_type_group_box)
         layout.addWidget(self.frequency_group_box)
         layout.addWidget(time_group_box)
         layout.addWidget(self.step_group_box)
-        layout.addStretch(20)
+        layout.addStretch()
         layout.addLayout(output_layout)
-        layout.addStretch(20)
+        layout.addStretch()
         layout.addLayout(function_btn_layout)
         layout.setContentsMargins(25, 10, 25, 20)
 
@@ -600,8 +601,10 @@ class StimulusWindow(QDialog):
             of the current object. Finally, it updates the user interface and emits a signal indicating that the
             stimulus configuration has changed.
         """
-        dlg = LoadStimulusConfig()
-        loaded_stimulus = dlg.on_exec()
+        dlg = LoadStimulusDialog()
+        loaded_stimulus = dlg.exec()
+        if loaded_stimulus is None:
+            return
         for stimulus_item in loaded_stimulus:
             self.stimulus_info[stimulus_item] = loaded_stimulus[stimulus_item]
         self.update_stimulus_ui_value(self.stimulus_info)
@@ -614,6 +617,12 @@ class StimulusWindow(QDialog):
             to save the stimulus information from `self.stimulus_info` to the database. Based on the save result,
             it logs the corresponding message.
         """
+        config_name_dialog = SetConfigName()
+        config_name = config_name_dialog.exec()
+        if config_name != None:
+            self.stimulus_info["config_name"] = config_name
+        else:
+            return
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Successfully saving stimulus info to database.")
@@ -834,157 +843,73 @@ class StimulusWindow(QDialog):
             return True
         changed_flag = changed_flag or False
         return changed_flag
+    
 
+class SetConfigName(QDialog):
 
-class LoadStimulusConfig(QDialog):
+    def __init__(self, parent=None):
+        super(SetConfigName, self).__init__(parent)
 
-    def __init__(self, ):
-        """
-            Initialization function to set up the initial state of the class.
-
-            This function performs the following operations:
-            1. Calls the initialization method of the parent class.
-            2. Initializes an empty dictionary `selected_config` to store the selected configuration.
-            3. Loads the stimulus configuration from the database and stores it in `loaded_stimulus`.
-            4. Calls the `init_ui` method to initialize the user interface.
-        """
-        super().__init__()
-        self.selected_config = {}
-        self.loaded_stimulus = self.load_stimulus_config_from_db()
+        self.config_name = None
+        self.clicked_ok_close = False
 
         self.init_ui()
 
     def init_ui(self):
-        """
-            Initializes the user interface, sets the window title, window flags, and creates the stimulus signal
-        selection interface.
+        self.setWindowTitle("设置配置名称")
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
 
-            This function performs the following operations:
-            1. Sets the window title to "Select Stimulus Signal" and disables the close and help buttons.
-            2. Creates a QListView to display the list of stimulus signals and uses QStandardItemModel to manage
-        the list items.
-            3. Iterates through the loaded stimulus signals in self.loaded_stimulus, adds their names to the list,
-        and marks the default option.
-            4. Sets the selected item in the list view and connects the click event to the on_select_item method.
-            5. Creates OK and Cancel buttons and connects their click events to the respective methods.
-            6. Adds the list view and button layout to the main layout and sets the styles.
-        """
-        self.setWindowTitle("选择激励信号")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        congfig_name_layout = self.config_name_layout()
+        btn_layout = self.btn_layout()
+        
+        layout = QVBoxLayout()
+        layout.addLayout(congfig_name_layout)
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
 
-        # Create a list view and model to display the stimulus signals
-        list_view = QListView()
-        item_model = QStandardItemModel()
-        default_index = None
-        # Iterate through the loaded stimulus signals, add them to the model, and mark the default option
-        for stimulus in self.loaded_stimulus:
-            item_model.appendRow(QStandardItem(stimulus["name"]))
-            if stimulus.get('is_default') == 1:
-                default_index = item_model.index(item_model.rowCount() - 1, 0)
-        list_view.setModel(item_model)
-        list_view.setSelectionRectVisible(True)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle)
 
-        # Set the default selected item and trigger the selection event
-        if default_index is not None:
-            list_view.setCurrentIndex(default_index)
-            self.on_select_item(default_index)
-        else:
-            if item_model.rowCount() > 0:
-                list_view.setCurrentIndex(item_model.index(0, 0))
-                self.on_select_item(item_model.index(0, 0))
-        list_view.clicked.connect(self.on_select_item)
+    def config_name_layout(self):
+        name_label = QLabel("配置名称:")
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("请输入配置名称")
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(name_label)
+        name_layout.addWidget(name_edit)
 
-        # Create OK and Cancel buttons and add them to a horizontal layout
-        btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("确认")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
+        return name_layout
+    
+    def btn_layout(self):
+        ok_btn = QPushButton("确定")
         cancel_btn = QPushButton("取消")
+        ok_btn.clicked.connect(self.on_click_ok_btn)
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
-
-        layout = QVBoxLayout()
-        layout.addWidget(list_view)
-        layout.addLayout(btn_layout)
-
-        self.setLayout(layout)
-        list_view.setStyleSheet("font-size: 20px;")
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle)
-
-    def on_select_item(self, index):
-        """
-            Handles the event when an item is selected, saving the selected configuration to the `selected_config` attribute.
-
-            Parameters:
-            - index: QModelIndex object, representing the index of the item selected by the user.
-        """
-        self.selected_config = self.loaded_stimulus[index.row()]
-
+        return btn_layout
+    
     def on_click_ok_btn(self):
+        self.config_name = self.findChild(QLineEdit).text()
+        if not self.config_name:
+            QMessageBox.warning(self, "警告", "请输入配置名称")
+            return
+        self.clicked_ok_close = True
         self.close()
 
     def on_click_cancel_btn(self):
-        """
-            Handles the cancel button click event.
-
-            This function is triggered when the user clicks the cancel button. It clears the currently selected
-        configuration and closes the current window.
-        """
-        self.selected_config = {}
+        self.clicked_ok_close = False
         self.close()
 
-    def on_exec(self):
-        # Executes the configuration selection operation and returns the selected configuration.
-        self.exec()
-        return self.selected_config
-
-    @staticmethod
-    def load_stimulus_config_from_db():
-        """
-            Loads stimulus configuration data from the database and converts it into a specific data structure.
-
-            This function calls the `query_all_stimulus_info` method of the `StimulusSignalManagement` class
-            to retrieve all stimulus signal information from the database. If the query is successful, it
-            transforms each stimulus signal into a dictionary and appends it to the `stimulus_list` for return.
-
-            Returns:
-                list: A list containing all stimulus configuration information. Each stimulus configuration is a dictionary
-                    with the following key-value pairs:
-                        - 'name': The name of the stimulus signal, formatted as "stimulus_{stimulus_method}_{index}".
-                        - 'stimulus_method': The method of the stimulus signal.
-                        - 'stimulus_type': The type of the stimulus signal.
-                        - 'start_freq': The starting frequency of the stimulus signal.
-                        - 'stop_freq': The ending frequency of the stimulus signal.
-                        - 'total_time': The total duration of the stimulus signal.
-                        - 'repeat_times': The number of repetitions of the stimulus signal.
-                        - 'sample_rate': The sampling rate of the stimulus signal.
-                        - 'num_steps': The number of steps in the stimulus signal.
-                        - 'is_default': Indicates whether it is the default stimulus signal.
-        """
-        stimulus_list = []
-        # Query the database to retrieve all stimulus signal information
-        query_code, query_data = StimulusSignalManagement().query_all_stimulus_info()
-        # If the query is successful, process the query results
-        if query_code == error_code.OK:
-            for idx, info in enumerate(query_data):
-                query_data_idx = query_data[idx]
-                # Convert each stimulus signal information into a dictionary
-                stimulus = {
-                    'name': f"stimulus_{query_data_idx[1]}_{idx + 1}",
-                    'stimulus_method': query_data_idx[1],
-                    'stimulus_type': query_data_idx[2],
-                    'start_freq': query_data_idx[4],
-                    'stop_freq': query_data_idx[5],
-                    'total_time': query_data_idx[7],
-                    'repeat_times': query_data_idx[3],
-                    'sample_rate': query_data_idx[6],
-                    'num_steps': query_data_idx[8],
-                    'is_default': query_data_idx[9]
-                }
-                # Append the converted stimulus signal information to the list
-                stimulus_list.append(stimulus)
-        return stimulus_list
+    def exec(self):
+        super().exec()
+        if self.clicked_ok_close:
+            return self.config_name
+        else:
+            return None
 
 
 if __name__ == "__main__":
