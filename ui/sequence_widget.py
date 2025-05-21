@@ -1272,7 +1272,7 @@ class SequenceWindow(QWidget):
                     instance.calculate_thd()
                     instance.show()
                 elif hasattr(instance, 'calculate_ai_scores'):
-                    instance.calculate_ai_scores()
+                    instance.calculate_ai_scores(SequenceWindow.mode)
                     instance.show()
                 elif hasattr(instance, 'calculate_spec'):
                     instance.calculate_spec()

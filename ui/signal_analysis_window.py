@@ -21,7 +21,6 @@ from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from main import predict
-from ui import sequence_widget
 from ui.graph_widget import plot_2d_image
 
 class Distortion(QWidget):
@@ -292,7 +291,7 @@ class AI(QWidget):
             first_match = matches[0]
             first_match.mergeCharFormat(format)
 
-    def calculate_ai_scores(self):
+    def calculate_ai_scores(self, mode):
         model_name = self.analysis_config["analyse_model_name"]
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
@@ -305,7 +304,7 @@ class AI(QWidget):
             with open(config_file_path, 'r') as f:
                 default_config = json.load(f)
                 default_ai_model = default_config["default_ai"]
-            if sequence_widget.SequenceWindow.mode == "test" and default_ai_model:
+            if mode == "test" and default_ai_model:
                 analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
                 match_object = re.search(r"评分结果:\s*(\S+)", result_text)
                 if match_object:
