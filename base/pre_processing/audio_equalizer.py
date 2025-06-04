@@ -248,3 +248,4 @@ class AudioEqualizer:
         equalized_signal = AudioEqualizer._remove_window_effect(equalized_signal, window)
         
         return equalized_signal
+    
