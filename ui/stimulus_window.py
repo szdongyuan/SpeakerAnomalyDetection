@@ -601,7 +601,7 @@ class StimulusWindow(QDialog):
             of the current object. Finally, it updates the user interface and emits a signal indicating that the
             stimulus configuration has changed.
         """
-        dlg = LoadStimulusDialog()
+        dlg = LoadStimulusDialog(self.default_logger)
         loaded_stimulus = dlg.exec()
         if loaded_stimulus is None:
             return
@@ -617,10 +617,10 @@ class StimulusWindow(QDialog):
             to save the stimulus information from `self.stimulus_info` to the database. Based on the save result,
             it logs the corresponding message.
         """
-        config_name_dialog = SetConfigName()
-        config_name = config_name_dialog.exec()
-        if config_name != None:
-            self.stimulus_info["config_name"] = config_name
+        stimulus_name_dialog = SetConfigName()
+        stimulus_name = stimulus_name_dialog.exec()
+        if stimulus_name != None:
+            self.stimulus_info["stimulus_name"] = stimulus_name
         else:
             return
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
@@ -633,7 +633,10 @@ class StimulusWindow(QDialog):
         elif save_code == error_code.INVALID_SAVE:
             self.default_logger.error("Failed to save stimulus info to database.")
             QMessageBox.warning(self, "保存配置", "保存刺激信号信息到数据库失败.")
-            
+        elif save_code == error_code.INVALID_NAME:
+            self.default_logger.error("Invalid stimulus name.")
+            QMessageBox.warning(self, "保存配置", "配置名称已存在.")
+
     def load_wav_btn_clicked(self):
         """
             Handles the button click event for loading a WAV file.
@@ -850,7 +853,7 @@ class SetConfigName(QDialog):
     def __init__(self, parent=None):
         super(SetConfigName, self).__init__(parent)
 
-        self.config_name = None
+        self.stimulus_name = None
         self.clicked_ok_close = False
 
         self.init_ui()
@@ -893,8 +896,8 @@ class SetConfigName(QDialog):
         return btn_layout
     
     def on_click_ok_btn(self):
-        self.config_name = self.findChild(QLineEdit).text()
-        if not self.config_name:
+        self.stimulus_name = self.findChild(QLineEdit).text()
+        if not self.stimulus_name:
             QMessageBox.warning(self, "警告", "请输入配置名称")
             return
         self.clicked_ok_close = True
@@ -907,7 +910,7 @@ class SetConfigName(QDialog):
     def exec(self):
         super().exec()
         if self.clicked_ok_close:
-            return self.config_name
+            return self.stimulus_name
         else:
             return None
 

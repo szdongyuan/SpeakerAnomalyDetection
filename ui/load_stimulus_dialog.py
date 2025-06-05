@@ -12,10 +12,10 @@ from consts.running_consts import DEFAULT_DIR
 
 class LoadStimulusDialog(QDialog):
 
-    def __init__(self, ):
+    def __init__(self, logger: LogManager):
         super().__init__()
-
-        self.stimulus_config_view = StimulusConfigView(LogManager())
+        self.logger = logger
+        self.stimulus_config_view = StimulusConfigView(self.logger)
         self.is_clicked_ok = False
 
         self.init_ui()
@@ -132,11 +132,10 @@ class StimulusConfigView(QTableView):
 
     def del_config(self):
         if self.select_stimulus_row is not None:
-            config_name = self.loaded_stimulus[self.select_stimulus_row].get("config_name")
-            code = StimulusSignalManagement().delete_stimulus_info_from_db(config_name)
+            stimulus_name = self.loaded_stimulus[self.select_stimulus_row].get("stimulus_name")
+            code = StimulusSignalManagement().delete_stimulus_info_from_db(stimulus_name)
             if code == error_code.OK:
-                self.logger.info("delete stimulus config %s success" % config_name)
-                print("delete stimulus config %s success" % config_name)
+                self.logger.info("delete stimulus config %s success" % stimulus_name)
             self.loaded_stimulus.pop(self.select_stimulus_row)
             self.model().removeRow(self.select_stimulus_row)
 
@@ -151,9 +150,9 @@ class StimulusConfigView(QTableView):
     def on_data_changed(self, index: QStandardItem, is_edit_item):
         if index.data() != "":
             if is_edit_item:
-                old_name = self.loaded_stimulus[index.row()].get("config_name")
+                stimulus_id = self.loaded_stimulus[index.row()].get("stimulus_id")
                 new_name = index.data()
-                update_info = {"old_name": old_name, "new_name": new_name}
+                update_info = {"stimulus_id": stimulus_id, "new_name": new_name}
                 code, msg = StimulusSignalManagement().update_stimulus_info_to_db(update_info)
                 if code == error_code.OK:
                     self.logger.info(msg)
@@ -164,7 +163,7 @@ class StimulusConfigView(QTableView):
                 return
         else:
             is_edit_item = False
-            self.model().setData(index, self.loaded_stimulus[index.row()].get("config_name"))
+            self.model().setData(index, self.loaded_stimulus[index.row()].get("stimulus_name"))
             return
 
     def insert_stimulus_config_to_table(self, stimulus_info: dict, model: QStandardItemModel):
@@ -175,7 +174,7 @@ class StimulusConfigView(QTableView):
 
     def set_table_row_data(self, stimulus: dict):
         config_list = list()
-        config_name = QStandardItem(stimulus.get("config_name"))
+        stimulus_name = QStandardItem(stimulus.get("stimulus_name"))
         config_method = self.set_stimulus_method(stimulus.get("stimulus_method"))
         config_type = self.set_stimulus_type(stimulus.get("stimulus_type"))
         config_repeat_times = QStandardItem(str(stimulus.get("repeat_times")))
@@ -184,7 +183,7 @@ class StimulusConfigView(QTableView):
         config_sample_rate = QStandardItem(str(stimulus.get("sample_rate")))
         config_total_time = QStandardItem(str(stimulus.get("total_time")))
         config_num_steps = QStandardItem(str(stimulus.get("num_steps")))
-        config_list.append(config_name)
+        config_list.append(stimulus_name)
         config_list.append(config_method)
         config_list.append(config_type)
         config_list.append(config_repeat_times)
@@ -226,7 +225,7 @@ class StimulusConfigView(QTableView):
                         - 'repeat_times': The number of repetitions of the stimulus signal.
                         - 'sample_rate': The sampling rate of the stimulus signal.
                         - 'num_steps': The number of steps in the stimulus signal.
-                        - 'config_name': The name of the configuration for the stimulus signal.
+                        - 'stimulus_name': The name of the configuration for the stimulus signal.
                         - 'is_default': Indicates whether it is the default stimulus signal.
         """
         stimulus_list = []
@@ -238,6 +237,7 @@ class StimulusConfigView(QTableView):
                 query_data_idx = query_data[idx]
                 # Convert each stimulus signal information into a dictionary
                 stimulus = {
+                    'stimulus_id': query_data_idx[0],
                     'stimulus_method': query_data_idx[1],
                     'stimulus_type': query_data_idx[2],
                     'start_freq': query_data_idx[4],
@@ -246,8 +246,8 @@ class StimulusConfigView(QTableView):
                     'repeat_times': query_data_idx[3],
                     'sample_rate': query_data_idx[6],
                     'num_steps': query_data_idx[8],
-                    'config_name': query_data_idx[9],
-                    'is_default': query_data_idx[10]
+                    'is_default': query_data_idx[9],
+                    'stimulus_name': query_data_idx[10]
                 }
                 # Append the converted stimulus signal information to the list
                 stimulus_list.append(stimulus)
@@ -256,7 +256,7 @@ class StimulusConfigView(QTableView):
     def get_selected_stimulus_config(self):
         if self.select_stimulus_row is None:
             return None
-        self.loaded_stimulus[self.select_stimulus_row].pop("config_name")
+        self.loaded_stimulus[self.select_stimulus_row].pop("stimulus_name")
         return self.loaded_stimulus[self.select_stimulus_row]
     
     def get_select_stimulus_row(self):
