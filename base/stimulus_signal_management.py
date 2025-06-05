@@ -59,15 +59,18 @@ class StimulusSignalManagement(object):
 
     @staticmethod
     def save_stimulus_info_to_db(stimulus_info: dict):
-        insert_stimulus_config = tuple(stimulus_info[key] for key in model_consts.INERT_STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
-        stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
+                stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
                 result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
                                                       model_consts.STIMULUS_CONFIG_COLUMNS, ['stimulus_id'])
+                name_result = database.query_matching_data([[stimulus_config[-1]]], "stimulus_signal_table",['stimulus_name'], ['stimulus_id'])
+                if name_result: 
+                    return error_code.INVALID_NAME, "This stimulus signals name info already exists."
                 if not result:
                     is_default = database.set_default("stimulus_signal_table")
-                    insert_stimulus_config += (is_default,)
+                    stimulus_info["is_default"] = is_default
+                    insert_stimulus_config = tuple(stimulus_info[key] for key in model_consts.INERT_STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
                     insert_stimulus_config = database.get_data_id([insert_stimulus_config], 0)
                     insert_code, msg = database.insert_data_into_db("stimulus_signal_table",
                                                                     model_consts.DB_STIMULUS_COLUMNS, insert_stimulus_config)
@@ -82,8 +85,8 @@ class StimulusSignalManagement(object):
             return error_code.INVALID_SAVE, err_msg
         
     @staticmethod
-    def delete_stimulus_info_from_db(config_name: str):
-        delete_condition = {"config_name": config_name}
+    def delete_stimulus_info_from_db(stimulus_name: str):
+        delete_condition = {"stimulus_name": stimulus_name}
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
                 delete_code, msg = database.delete_with_condition("stimulus_signal_table", delete_condition)
@@ -96,11 +99,11 @@ class StimulusSignalManagement(object):
     def update_stimulus_info_to_db(stimulus_info: dict):
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
-                result = database.query_matching_data([(stimulus_info.get("old_name"),)], "stimulus_signal_table", ["config_name"],
+                result = database.query_matching_data([(stimulus_info.get("stimulus_id"),)], "stimulus_signal_table", ["stimulus_id"],
                                                       ['stimulus_id'])
                 if result:
-                    update_data = {"config_name": stimulus_info["new_name"]}
-                    condition_field = {"config_name": stimulus_info["old_name"]}
+                    update_data = {"stimulus_name": stimulus_info["new_name"]}
+                    condition_field = {"stimulus_id": stimulus_info["stimulus_id"]}
                     database.update_table_data("stimulus_signal_table", update_data, condition_field)
                     return error_code.OK, "The stimulus info has been updated."
                 else:

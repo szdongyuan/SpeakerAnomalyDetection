@@ -54,8 +54,8 @@ class DataSave(object):
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0), 
                 total_time INTEGER NOT NULL CHECK (total_time > 0),
                 num_steps INTEGER DEFAULT NULL CHECK (num_steps >= 0),
-                config_name TEXT NOT NULL UNIQUE,
-                is_default INTEGER NOT NULL CHECK (is_default IN (0, 1))
+                is_default INTEGER NOT NULL CHECK (is_default IN (0, 1)),
+                stimulus_name TEXT
             );
            '''
             create_training_model_table_sql = '''
