@@ -154,6 +154,7 @@ class StimulusConfigView(QTableView):
                 new_name = index.data()
                 update_info = {"stimulus_id": stimulus_id, "new_name": new_name}
                 code, msg = StimulusSignalManagement().update_stimulus_info_to_db(update_info)
+                self.loaded_stimulus[index.row()]["stimulus_name"] = new_name
                 if code == error_code.OK:
                     self.logger.info(msg)
                 else:
