@@ -12,7 +12,7 @@ class SoundcardCalibrationManager(object):
     def __init__(self):
         self.amplitudes = []
         self.voltages = []
-        self.logger = LogManager("soundcard_core")
+        self.logger = LogManager.set_log_handler("soundcard_core")
 
     def add_data(self, amplitude, voltage):
         """
