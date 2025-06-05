@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def on_ai_window_init():
-        dlg = AiWindow(LogManager.set_log_handler("AI"))
+        dlg = AiWindow(LogManager.set_log_handler("core"))
         dlg.exec()
 
     def on_access_lvl_changed(self):

@@ -13,7 +13,7 @@ from consts import error_code
 class SoundcardAudioProcessor(object):
 
     def __init__(self):
-        self.logger = LogManager("soundcard_core")
+        self.logger = LogManager.set_log_handler("soundcard_core")
 
     def sd_play_rec(self, record_dict, stimulus_dict, recording_path):
         data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
