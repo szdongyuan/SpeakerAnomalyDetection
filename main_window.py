@@ -6,7 +6,9 @@ from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusB
      QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
 
 from base.log_manager import LogManager
+from base.db_manager import DataSave
 from consts import ui_style_const
+from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
 from ui.calibration_window import CalibrationWindow
@@ -87,7 +89,8 @@ class MainWindow(QMainWindow):
         icon_label.setPixmap(title_icon)
         icon_label.setFixedSize(25, 25)
         icon_label.setScaledContents(True)
-        title_label = QLabel("谛听异音检测 -0.12 beta")
+        current_version = self.get_current_version()
+        title_label = QLabel(f"谛听异音检测 -{current_version} beta")
         h_spacer = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
@@ -98,8 +101,14 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(ui_style_const.qlabel_stytle + 
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qmainwindow_stytle)
+        self.get_current_version()
 
         return(title_layout)
+    
+    def get_current_version(self):
+        with DataSave(DATABASE_PATH) as db:
+            current_version = db.query_matching_data([("current_version",)],"system_info_table",["name"],["value"])
+            return current_version[0][0]
     
     def set_title_btn(self):
         # create three button, include minimize, switch size and close
@@ -251,7 +260,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def on_ai_window_init():
-        dlg = AiWindow(LogManager.set_log_handler("AI"))
+        dlg = AiWindow(LogManager.set_log_handler("core"))
         dlg.exec()
 
     def on_access_lvl_changed(self):
