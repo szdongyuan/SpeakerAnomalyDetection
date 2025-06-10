@@ -208,7 +208,7 @@ class AiWindow(QDialog):
                                     config_path=result,
                                     mode=mode)
             process.current_thread = t
-            t.signalForText.connect(lambda text, process_edit = process: self.on_update_text(text, process_edit))
+            t.signalForText.connect(lambda text, process_edit=process: self.on_update_text(text, process_edit))
             sys.stdout = t
             print(action_str)
             t.start()
@@ -611,7 +611,7 @@ class TrainEvaluateThread(QThread):
 
 
 class AiBrainModelStructure(QDialog):
-    def __init__(self, parent=None, model_structure = None, model_name: str = None):
+    def __init__(self, parent=None, model_structure=None, model_name: str=None):
         super().__init__(parent)
         self.model_structure = model_structure
 
@@ -645,7 +645,7 @@ class AiBrainModelStructure(QDialog):
 
 
 class Process_Widget(QDialog):
-    def __init__(self, thread: TrainEvaluateThread = None):
+    def __init__(self, thread: TrainEvaluateThread=None):
         super().__init__()
 
         self.model_structure_texteditor = QTextEdit()
