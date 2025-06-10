@@ -23,7 +23,7 @@ class AiWindow(QDialog):
 
     def __init__(self, logger=default_log):
         """
-            Initialization function, responsible for setting up training and testing directories, 
+            Initialization function, responsible for setting up training and testing directories,
             loading the model path, initializing the UI, and setting up the thread.
         """
         super().__init__()
@@ -412,7 +412,7 @@ class BaseModel(QWidget):
         return base_btn_layout
     
     def on_model_structure_btn_clicked(self):
-        model_structure = AiBrainModelStructure(model_structure=self.summary_text, 
+        model_structure = AiBrainModelStructure(model_structure=self.summary_text,
                                                 model_name=self.base_model_combobox.currentText())
         model_structure.exec()
     
