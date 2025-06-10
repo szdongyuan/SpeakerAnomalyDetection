@@ -105,7 +105,8 @@ class MainWindow(QMainWindow):
 
         return(title_layout)
     
-    def get_current_version(self):
+    @staticmethod
+    def get_current_version():
         with DataSave(DATABASE_PATH) as db:
             current_version = db.query_matching_data([("current_version",)],"system_info_table",["name"],["value"])
             return current_version[0][0]
@@ -260,7 +261,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def on_ai_window_init():
-        dlg = AiWindow(LogManager.set_log_handler("core"))
+        dlg = AiWindow(LogManager.set_log_handler("train"))
         dlg.exec()
 
     def on_access_lvl_changed(self):
