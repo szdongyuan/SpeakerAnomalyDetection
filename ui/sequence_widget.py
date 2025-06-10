@@ -541,7 +541,8 @@ class SequenceWindow(QWidget):
         else:
             self.set_result_file(1, "init", None)
 
-    def ensure_test_result_file(self):
+    @staticmethod
+    def ensure_test_result_file():
         config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
         with open(config_file_path, 'r') as f:
             default_config = json.load(f)
