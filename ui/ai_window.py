@@ -16,12 +16,12 @@ from main import evaluate, init_model_from_config, train
 from ui.model_manager_widget import ModelInfoList
 
 
-default_log = LogManager.set_log_handler("core")
+default_log = LogManager.set_log_handler("train")
 
 
 class AiWindow(QDialog):
 
-    def __init__(self, logger = default_log):
+    def __init__(self, logger=default_log):
         """
             Initialization function, responsible for setting up training and testing directories, 
             loading the model path, initializing the UI, and setting up the thread.
