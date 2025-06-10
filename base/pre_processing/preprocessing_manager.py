@@ -1,7 +1,9 @@
 import numpy as np
 
+from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 from base.pre_processing.data_alignment import DataAlignment
+from base.pre_processing.emphasis import Emphasis
 
 
 class PreprocessingManager(object):
@@ -26,6 +28,8 @@ class PreprocessingManager(object):
             "data_normalize": AudioFeatureExtraction.data_normalize,
             "spectral_flatness": AudioFeatureExtraction.spectral_flatness,
             "data_padding": DataAlignment.data_padding,
+            "apply_equalizer": AudioEqualizer.apply_equalizer,
+            "random_fluctuation": Emphasis.random_fluctuation,
             "sequence_process": cls.sequence_process,
             "stack_process": cls.stack_process,
         }
