@@ -541,10 +541,33 @@ class SequenceWindow(QWidget):
         else:
             self.set_result_file(1, "init", None)
 
+    def ensure_test_result_file(self):
+        config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        with open(config_file_path, 'r') as f:
+            default_config = json.load(f)
+            default_ai_model = default_config["default_ai"]
+            if default_ai_model:
+                analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
+            else:
+                analyse_model_name = "null"
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+        if not os.path.exists(test_result_path):
+            os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
+            with open(test_result_path, 'w') as f:
+                f.write(
+                    f"total: 0\n"
+                    f"ok: 0\n"
+                    f"ng: 0\n"
+                    f"ok_percent: 0\n"
+                    f"current_model: {analyse_model_name}\n"
+                    f"datatime: {current_time}\n"
+                )
 
     def get_result_file(self, index):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
+            self.ensure_test_result_file()
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
             with open(test_result_path, 'r') as f:
                 lines = f.readlines()
@@ -572,6 +595,7 @@ class SequenceWindow(QWidget):
     def set_result_file(self, index, params, analyse_model_name):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
+            self.ensure_test_result_file()
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
             with open(test_result_path, 'r') as f:
                 lines = f.readlines()
