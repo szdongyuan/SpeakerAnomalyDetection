@@ -24,7 +24,7 @@ def train(pre_labeled_dir,
           save_model_path=None,
           predict_dir=None,
           **kwargs):
-    logger = LogManager("train")
+    logger = LogManager.set_log_handler("train")
 
     time_0 = time.time()
 
@@ -34,7 +34,6 @@ def train(pre_labeled_dir,
     ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
-        logger.shut_down()
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
                            "result": ret})
@@ -56,7 +55,6 @@ def train(pre_labeled_dir,
     model.fit(x_train, y_train)
     ret_msg = "finish training. time spent [%s] s" % (time.time() - time_0)
     logger.info(ret_msg)
-    logger.shut_down()
     if predict_dir:
         evaluate_kwargs = {"config_path": save_config_path,
                            "verbose": 2}
@@ -78,12 +76,11 @@ def evaluate(predict_dir,
              load_model_path=None,
              model=None,
              **kwargs):
-    logger = LogManager("evaluate")
+    logger = LogManager.set_log_handler("evaluate")
 
     ret_code, ret = get_pre_labeled_audios(predict_dir)
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
-        logger.shut_down()
         return json.dumps({"ret_code": ret_code,
                            "ret_msg": ret,
                            "result": ret})
@@ -101,7 +98,6 @@ def evaluate(predict_dir,
         model.load_model(load_model_path)
     if not model:
         logger.error("missing model")
-        logger.shut_down()
         return json.dumps({"ret_code": error_code.MISSING_MODEL,
                            "ret_msg": "missing model",
                            "result": "missing model"})
@@ -139,8 +135,6 @@ def evaluate(predict_dir,
     ret_str = json.dumps({"ret_code": error_code.OK,
                           "ret_msg": "finish evaluating",
                           "result": [acc_info, cm_info]})
-
-    logger.shut_down()
     return ret_str
 
 

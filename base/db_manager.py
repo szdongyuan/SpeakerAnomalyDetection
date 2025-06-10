@@ -14,7 +14,7 @@ class DataSave(object):
         self.db_name = db_name
         self.connection = None
         self.cursor = None
-        self.logger = LogManager("db_core")
+        self.logger = LogManager.set_log_handler("db_core")
 
     def connect(self):
         try:
@@ -380,12 +380,10 @@ class DataSave(object):
     def close(self):
         try:
             self.connection.close()
-            self.logger.shut_down()
             return error_code.OK, "Database connection closed."
         except Exception as e:
             err_msg = "Error closing the connection. %s" % (str(e)[:40])
             self.logger.error(err_msg)
-            self.logger.shut_down()
             return error_code.INVALID_CLOSED, err_msg
 
     def __enter__(self):
