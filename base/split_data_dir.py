@@ -70,7 +70,7 @@ def restore_split(train_ok_path=model_consts.TRAIN_OK_PATH,
 
 def copy_from_restored_audio(source_dir_list,
                              dest_dir=model_consts.TRAIN_PATH,
-                             over_write=True):
+                             over_write=True, ratio=0.4):
     """
         Copy audio files from the source directories to the destination directory.
 
@@ -95,11 +95,13 @@ def copy_from_restored_audio(source_dir_list,
     for source_dir in source_dir_list:
         source_dir = model_consts.STORED_SAMPLE_PATH + "/" + source_dir
         for audio_file in os.listdir(source_dir + "/OK"):
-            shutil.copy(source_dir + "/OK/" + audio_file, dest_dir + "/OK")
-            n_file += 1
+            if np.random.random() < ratio:
+                shutil.copy(source_dir + "/OK/" + audio_file, dest_dir + "/OK")
+                n_file += 1
         for audio_file in os.listdir(source_dir + "/NG"):
-            shutil.copy(source_dir + "/NG/" + audio_file, dest_dir + "/NG")
-            n_file += 1
+            if np.random.random() < ratio:
+                shutil.copy(source_dir + "/NG/" + audio_file, dest_dir + "/NG")
+                n_file += 1
     print("finish copy from restored audio. [%s] files" % n_file)
     return error_code.OK
 
