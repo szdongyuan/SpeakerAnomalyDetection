@@ -16,14 +16,14 @@ from main import evaluate, init_model_from_config, train
 from ui.model_manager_widget import ModelInfoList
 
 
-default_log = LogManager.set_log_handler("core")
+default_log = LogManager.set_log_handler("train")
 
 
 class AiWindow(QDialog):
 
-    def __init__(self, logger = default_log):
+    def __init__(self, logger=default_log):
         """
-            Initialization function, responsible for setting up training and testing directories, 
+            Initialization function, responsible for setting up training and testing directories,
             loading the model path, initializing the UI, and setting up the thread.
         """
         super().__init__()
@@ -208,7 +208,7 @@ class AiWindow(QDialog):
                                     config_path=result,
                                     mode=mode)
             process.current_thread = t
-            t.signalForText.connect(lambda text, process_edit = process: self.on_update_text(text, process_edit))
+            t.signalForText.connect(lambda text, process_edit=process: self.on_update_text(text, process_edit))
             sys.stdout = t
             print(action_str)
             t.start()
@@ -412,7 +412,7 @@ class BaseModel(QWidget):
         return base_btn_layout
     
     def on_model_structure_btn_clicked(self):
-        model_structure = AiBrainModelStructure(model_structure=self.summary_text, 
+        model_structure = AiBrainModelStructure(model_structure=self.summary_text,
                                                 model_name=self.base_model_combobox.currentText())
         model_structure.exec()
     
@@ -611,7 +611,7 @@ class TrainEvaluateThread(QThread):
 
 
 class AiBrainModelStructure(QDialog):
-    def __init__(self, parent=None, model_structure = None, model_name: str = None):
+    def __init__(self, parent=None, model_structure=None, model_name: str=None):
         super().__init__(parent)
         self.model_structure = model_structure
 
@@ -645,7 +645,7 @@ class AiBrainModelStructure(QDialog):
 
 
 class Process_Widget(QDialog):
-    def __init__(self, thread: TrainEvaluateThread = None):
+    def __init__(self, thread: TrainEvaluateThread=None):
         super().__init__()
 
         self.model_structure_texteditor = QTextEdit()
