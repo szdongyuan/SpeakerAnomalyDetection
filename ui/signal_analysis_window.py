@@ -322,10 +322,9 @@ class AI(QWidget):
 
     def model_predict(self, model_path, model_name, **kwargs):
         ret_str = predict_from_audio(signals=[np.array(self.signal_info.get("recorded_signal"), dtype=np.float32)],
-                                     file_len=1,
+                                     file_names=["modelpredict.wav"],
                                      fs=[self.signal_info.get("sample_rate")],
                                      load_model_path=model_path,
-                                     file_names=["modelpredict.wav"],
                                      **kwargs)
         ret_dict = json.loads(ret_str)
         predict_result = ret_dict["result"]
