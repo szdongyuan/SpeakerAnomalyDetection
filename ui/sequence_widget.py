@@ -1104,6 +1104,18 @@ class SequenceWindow(QWidget):
             if last_date == current_time:
                 return True, last_count
         return False, None
+    
+    def add_recorded_signal_info_to_db(self):
+        move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
+        file_path = self.recorded_signal_info["file_path"]
+        if move_recorded_path:
+            file_path = move_recorded_path
+        self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
+        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
+        if save_code == error_code.OK:
+            self.default_logger.info("Recorded signal successfully insert.")
+        else:
+            self.default_logger.error("Failed insert recorded signal.")
 
     def insert_data_into_db(self):
         """
@@ -1117,17 +1129,8 @@ class SequenceWindow(QWidget):
         if button == self.ok_btn or self.default_ai_result:
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.ng_btn:
-            self.recorded_signal_info["labels"] = 'NG'
-        move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
-        file_path = self.recorded_signal_info["file_path"]
-        if move_recorded_path:
-            file_path = move_recorded_path
-        self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
-        if save_code == error_code.OK:
-            self.default_logger.info("Recorded signal successfully insert.")
-        else:
-            self.default_logger.error("Failed insert recorded signal.")
+            self.recorded_signal_info["labels"] = "NG"
+        self.add_recorded_signal_info_to_db()
 
     def mark_result(self):
         button = self.sender()
@@ -1142,19 +1145,10 @@ class SequenceWindow(QWidget):
         if params == "OK":
             self.recorded_signal_info["labels"] = "OK"
         elif params == "NG":
-            self.recorded_signal_info["labels"] = 'NG'
+            self.recorded_signal_info["labels"] = "NG"
         current_recorded_count = self.save_recorded_num_to_json("ok_ng")
         self.lineedit_count.setText(str(current_recorded_count))
-        move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
-        file_path = self.recorded_signal_info["file_path"]
-        if move_recorded_path:
-            file_path = move_recorded_path
-        self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
-        if save_code == error_code.OK:
-            self.default_logger.info("Recorded signal successfully insert.")
-        else:
-            self.default_logger.error("Failed insert recorded signal.")
+        self.add_recorded_signal_info_to_db()
         self.player_status_flag = False
         self.update_player_icon()
         self.signal_info.clear()
@@ -1172,7 +1166,7 @@ class SequenceWindow(QWidget):
             if not os.path.exists(path):
                 os.makedirs(path)
         file_name = os.path.basename(self.recorded_path)
-        target_path = ''
+        target_path = ""
         if file_name:
             if label == 'OK':
                 target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
@@ -1214,8 +1208,7 @@ class SequenceWindow(QWidget):
             self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
             self.signal_info = {"stimulus_signal": self.stimulus_signal,
                                 "recorded_signal": recorded_signal,
-                                "sample_rate": sample_rate,
-                                "recorded_path": self.recorded_path}
+                                "sample_rate": sample_rate}
             self.recorded_signal_info["sample_rate"] = sample_rate
 
         self.data_btn.setEnabled(True)
@@ -1366,7 +1359,7 @@ class SequenceWindow(QWidget):
             The deviation value is read from a file as it may vary based on environmental conditions and needs to be
         dynamically adjusted.
 
-            Return: 
+            Return:
                 The microphone calibration deviation value. Returns 0.0 if reading the file fails.
         """
         file_path = DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
