@@ -138,24 +138,28 @@ def evaluate(predict_dir,
     return ret_str
 
 
-def predict(predict_dir=None,
+def predict(predict_dir,
             load_model_path=None,
             model=None,
             **kwargs):
-    if predict_dir:
-        ret_code, ret = get_audio_files_and_labels(predict_dir)
-        if ret_code != error_code.OK:
-            return json.dumps({"ret_code": ret_code,
-                            "ret_msg": ret,
-                            "result": [[ret]]})
-        signals, file_names, fs, _ = ret
-        file_len = len(file_names)
-    else:
-        signals = kwargs.get("signals")
-        file_len = kwargs.get("file_len")
-        fs = kwargs.get("fs")
-        file_names = ["%s.wav" % i for i in range(file_len)]
+    ret_code, ret = get_audio_files_and_labels(predict_dir)
+    if ret_code != error_code.OK:
+        return json.dumps({"ret_code": ret_code,
+                           "ret_msg": ret,
+                           "result": [[ret]]})
+    signals, file_names, fs, _ = ret
+    
+    ret_str = predict_from_audio(signals, file_names, fs,load_model_path=None, model=None, **kwargs)
 
+    return ret_str
+
+def predict_from_audio(signals,
+                       file_names,
+                       fs,
+                       load_model_path=None,
+                       model=None,
+                       **kwargs):
+    file_len = len(file_names)
     config_path = kwargs.get("config_path", model_consts.DEFAULT_DIR + model_consts.CONFIG_PATH)
     preprocess_config = load_config(config_path=config_path, module_name="preprocess")
     x_test = preprocess_raw_signals(signals, fs, preprocess_config)

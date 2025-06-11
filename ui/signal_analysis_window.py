@@ -20,7 +20,7 @@ from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from main import predict
+from main import predict_from_audio
 from ui.graph_widget import plot_2d_image
 
 class Distortion(QWidget):
@@ -321,11 +321,12 @@ class AI(QWidget):
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
-        ret_str = predict(load_model_path=model_path,
-                          signals=[np.array(self.signal_info.get("recorded_signal"), dtype=np.float32)],
-                          file_len=1,
-                          fs=[self.signal_info.get("sample_rate")],
-                          **kwargs)
+        ret_str = predict_from_audio(signals=[np.array(self.signal_info.get("recorded_signal"), dtype=np.float32)],
+                                     file_len=1,
+                                     fs=[self.signal_info.get("sample_rate")],
+                                     load_model_path=model_path,
+                                     file_names=["modelpredict.wav"],
+                                     **kwargs)
         ret_dict = json.loads(ret_str)
         predict_result = ret_dict["result"]
         predict_label = predict_result[0][1]
