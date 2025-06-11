@@ -321,7 +321,11 @@ class AI(QWidget):
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
-        ret_str = predict(self.signal_info["recorded_path"], load_model_path=model_path, **kwargs)
+        ret_str = predict(load_model_path=model_path,
+                          signals=[np.array(self.signal_info.get("recorded_signal"), dtype=np.float32)],
+                          file_len=1,
+                          fs=[self.signal_info.get("sample_rate")],
+                          **kwargs)
         ret_dict = json.loads(ret_str)
         predict_result = ret_dict["result"]
         predict_label = predict_result[0][1]
@@ -333,7 +337,6 @@ class AI(QWidget):
             f"\xa0\xa0评分模型: {model_name}\n"
             f"\xa0\xa0OK Score: {ok_scores:.2f}%\n"
             f"\xa0\xa0NG Score: {ng_scores:.2f}%"
-           
         )
         return result_text
 
