@@ -64,7 +64,7 @@ class StimulusSignalManagement(object):
                 stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
                 result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
                                                       model_consts.STIMULUS_CONFIG_COLUMNS, ['stimulus_id'])
-                name_result = database.query_matching_data([[stimulus_config[-1]]], "stimulus_signal_table",['stimulus_name'], ['stimulus_id'])
+                name_result = database.query_matching_data([[stimulus_info.get("stimulus_name")]], "stimulus_signal_table",['stimulus_name'], ['stimulus_id'])
                 if name_result: 
                     return error_code.INVALID_NAME, "This stimulus signals name info already exists."
                 if not result:
