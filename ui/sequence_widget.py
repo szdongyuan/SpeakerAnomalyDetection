@@ -25,6 +25,7 @@ from base.tcp_service import TcpServer
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
+from data_struct.data_deal_struct import DataDealStruct
 from ui.signal_analysis_window import Spl, Distortion, AI, Frequency, Spectrogram, LooseParticle
 from ui.login_window import get_mac_address
 
@@ -35,11 +36,12 @@ class SequenceWindow(QWidget):
     def __init__(self):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
+        self.data_struct = DataDealStruct()
         self.collect_or_analyse_layout = QHBoxLayout()
         self.recorded_path = None  # Initialize the recorded path variable
         self.refresh_stimulus_flag = None  # Initialize the flag to indicate if stimulus needs refreshing
         # Retrieve stimulus information and signal from configuration
-        self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
+        self.data_struct.stimulus_info, self.data_struct.stimulus_data = self.get_stimulus_from_config()
         self.deviation_value = self.get_mic_deviation_value()  # Get the deviation value from the microphone
         self.analysis_config = self.get_sequence_config_from_json()
         self.signal_info = {}  # Initialize an empty dictionary to store signal information
@@ -897,31 +899,6 @@ class SequenceWindow(QWidget):
         error_msg.setStandardButtons(QMessageBox.Ok)
         error_msg.exec_()
 
-    # def get_model_info(self, selected_model):
-    #     """
-    #         Retrieves model path and configuration path information based on the selected model.
-
-    #         This function queries the model management system to obtain the storage path of the model and its configuration.
-    #         If the query is successful, it returns the model path and configuration path. If the query fails, it logs
-    #
-    #         an error message and returns an error code and a failure message.
-
-    #         Parameters:
-    #         selected_model (str): The name of the model to query.
-
-    #         Returns:
-    #         tuple: A tuple containing the error code and the query result or a failure message.
-    #             If the query is successful, the query result is a tuple containing the model path and configuration path.
-    #             If the query fails, it returns an error code and a failure message.
-    #     """
-    #     query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
-    #     if query_code == error_code.OK:
-    #         model_path, config_path = query_result[0]
-    #         return error_code.OK, (model_path, config_path)
-    #     else:
-    #         self.default_logger.error(f"Failed to get the model {selected_model} information.")
-    #         return error_code.INVALID_QUERY, "Failed to get the model information."
-
     def clicked_ok_or_ng(self):
         """
             Handles the logic when the OK or NG button is clicked.
@@ -1111,7 +1088,7 @@ class SequenceWindow(QWidget):
         if move_recorded_path:
             file_path = move_recorded_path
         self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.stimulus_info)
+        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.data_struct.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully insert.")
         else:
@@ -1195,19 +1172,15 @@ class SequenceWindow(QWidget):
         self.update_player_icon()
         self.analysis_config = self.get_sequence_config_from_json()
         QApplication.processEvents()
-        # self.analyse_layout.signal_analyse_dialog.distortion_wnd.refresh_stimulus_flag = self.refresh_stimulus_flag
-        if self.refresh_stimulus_flag:
-            self.stimulus_info, self.stimulus_signal = self.get_stimulus_from_config()
-            self.refresh_stimulus_flag = False
-        sample_rate = self.stimulus_info["sample_rate"]
+        sample_rate = self.data_struct.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
         self.recorded_path, self.recorded_signal_info = self.get_recorded_info()
         sap = SoundcardAudioProcessor()
-        record_code, recorded_signal = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
+        record_code, self.data_struct.store_wave_data = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
         if record_code == error_code.OK:
-            self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
-            self.signal_info = {"stimulus_signal": self.stimulus_signal,
-                                "recorded_signal": recorded_signal,
+            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+            self.signal_info = {"stimulus_signal": self.data_struct.stimulus_data,
+                                "recorded_signal": self.data_struct.store_wave_data,
                                 "sample_rate": sample_rate}
             self.recorded_signal_info["sample_rate"] = sample_rate
 
@@ -1417,13 +1390,13 @@ class SequenceWindow(QWidget):
         """
         # Define the prolongation time to calculate the extended frame count
         prolong = 3
-        stimulus_dict = {"data": self.stimulus_signal,
-                         "amplitude": self.stimulus_info["amplitude"],
+        stimulus_dict = {"data": self.data_struct.stimulus_data,
+                         "amplitude": self.data_struct.stimulus_info["amplitude"],
                          "sr": sample_rate
                          }
         recorded_dict = {"channels": 1,
                          "sr": sample_rate,
-                         "num_frames": len(self.stimulus_signal) + int(prolong * sample_rate),
+                         "num_frames": len(self.data_struct.stimulus_data) + int(prolong * sample_rate),
                          "prolong_frames": int(prolong * sample_rate)
                          }
         return stimulus_dict, recorded_dict
