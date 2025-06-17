@@ -97,7 +97,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         return plot_x, plot_h, plot_thd
 
     @staticmethod
-    def calculate_spectrum(reference_signal, sr, gap_len=10, hop_length = 3, window = 'boxcar'):
+    def calculate_spectrum(reference_signal, sr, gap_len=10, hop_length = 16, window = 'boxcar'):
         """
             Calculate the spectrum of the reference signal, returning the base frequency
             and its maximum amplitude for each time window.

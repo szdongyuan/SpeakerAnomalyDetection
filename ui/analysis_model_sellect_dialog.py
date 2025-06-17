@@ -14,6 +14,7 @@ from base.log_manager import LogManager
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from data_struct.data_deal_struct import DataDealStruct
 from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow
 from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow, LPConfigWindow
 
@@ -73,6 +74,7 @@ class AnalysisModelSellect(QDialog):
         if self.analysis_list.currentIndex().row() != -1:
             text = self.analysis_list.currentIndex().data()
             self.sellect_list.set_new_analysis_config(text)
+            self.sellect_list.data_struct.add_stft_or_fft_count(text)
         
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
@@ -116,7 +118,7 @@ class AnalysisModelSellect(QDialog):
         layout = QVBoxLayout()
         layout.addWidget(analysis_label)
         layout.addWidget(self.analysis_list)
-        
+
         return layout
     
     def move_item_btn_layout(self):
@@ -176,6 +178,7 @@ class AnalysisModelSellect(QDialog):
         save_btn.clicked.connect(self.save_btn_clicked)
         ok_btn = QPushButton("确定")
         ok_btn.clicked.connect(self.ok_btn_clicked)
+        ok_btn.setDefault(True)
         clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self.clear_btn_clicked)
         load_btn.setMinimumWidth(100)
@@ -196,6 +199,7 @@ class AnalysisModelSellect(QDialog):
     def clear_btn_clicked(self):
         self.sellect_list.config = {"display_sequence":[],
                                     "default_ai":None}
+        self.sellect_list.data_struct.clear_fft_and_stft_flag()
         self.sellect_list.model().clear()
         self.sellect_list.prev_sellect_ai = None
         self.sellect_list.all_ai_item = []
@@ -263,6 +267,7 @@ class OptionList(QListView):
 
     def __init__(self, logger):
         super().__init__()
+        self.data_struct = DataDealStruct()
         self.sellect_analysis_model = QStandardItemModel()
         self.setModel(self.sellect_analysis_model)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -448,6 +453,7 @@ class OptionList(QListView):
         self.all_ai_item = []
         
     def load_model_config(self, config_path):
+        self.data_struct.clear_fft_and_stft_flag()
         if os.path.exists(config_path):
             self.clear_option_list()
             self.config = self.load_config(config_path)
@@ -457,6 +463,7 @@ class OptionList(QListView):
                     self.store_ai_item(self.all_ai_item, key)
         model_item_list = self.config.get("display_sequence", "")
         for item_name in model_item_list:
+            self.data_struct.add_stft_or_fft_count(self.config[item_name]["type"])
             if item_name == self.config.get("default_ai", ""):
                 self.config["default_ai"] = item_name
                 item_name = item_name.replace("\xa0", "")
@@ -480,6 +487,7 @@ class OptionList(QListView):
             self.prev_sellect_ai = None
         else:
             self.config["display_sequence"].remove(index.data())
+            self.data_struct.minus_stft_or_fft_count(self.config[index.data()]["type"])
             self.delete_item_config(index.data())
         model = self.model() 
         model.removeRow(index.row())
@@ -674,7 +682,7 @@ class OptionList(QListView):
             else:
                 if row_number > self.start_row_number:
                     self.updata_model_list(self.config, new_item, self.start_row_number, row_number, True)
-                else:
+                elif row_number < self.start_row_number:
                     self.updata_model_list(self.config, new_item, self.start_row_number, row_number, 0)
             # Update the starting item name and index number, and end the drag-and-drop state
             self.start_item_name = new_item.text()
@@ -704,6 +712,7 @@ class OptionList(QListView):
         if event.mimeData().hasText():
             text = event.mimeData().text().lstrip()
             self.set_new_analysis_config(text)
+            self.data_struct.add_stft_or_fft_count(text)
             event.accept()
         else:
             event.ignore()
