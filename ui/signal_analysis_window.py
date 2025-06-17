@@ -20,13 +20,14 @@ from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from data_struct.data_deal_struct import DataDealStruct
 from main import predict_from_audio
 from ui.graph_widget import plot_2d_image
 
 class Distortion(QWidget):
     def __init__(self, title_name):
         super().__init__()
-        self.signal_info = None
+        self.data_struct = DataDealStruct()
         self.refresh_stimulus_flag = None
         self.selected_label = None
         self.freq_dict = None
@@ -55,9 +56,9 @@ class Distortion(QWidget):
         self.selected_harmonics = [i - 1 for i in self.selected_harmonics]
         if self.selected_harmonics:
             kwargs = {"harmonics": self.selected_harmonics}
-            stimulus_signal = self.signal_info["stimulus_signal"]
-            recorded_signal = self.signal_info["recorded_signal"]
-            sample_rate = self.signal_info["sample_rate"]
+            stimulus_signal = self.data_struct.stimulus_data
+            recorded_signal = self.data_struct.store_wave_data
+            sample_rate = self.data_struct.stimulus_info["sample_rate"]
             atfra = AudioThdFrequencyResponseAnalysis()
             if self.refresh_stimulus_flag or (self.freq_dict is None or self.base_freq_list is None):
                 self.freq_dict, self.base_freq_list = atfra.calculate_spectrum(stimulus_signal, sample_rate)
@@ -92,7 +93,7 @@ class Distortion(QWidget):
 class Spl(QWidget):
     def __init__(self, title_name):
         super().__init__()
-        self.signal_info = None
+        self.data_struct = DataDealStruct()
         self.deviation_value = None
         self.analysis_config = None
         self.result = {}
@@ -109,8 +110,8 @@ class Spl(QWidget):
 
     def calculate_spl(self):
         # calculate Sound Pressure Level according to recorded_signal
-        recorded_signal = self.signal_info["recorded_signal"]
-        sample_rate = self.signal_info["sample_rate"]
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.stimulus_info["sample_rate"]
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_signal, reference_pressure,
@@ -170,7 +171,7 @@ class Frequency(QWidget):
 
     def __init__(self, title_name):
         super().__init__()
-        self.signal_info = None
+        self.data_struct = DataDealStruct()
         self.smooth_flag = False
         self.temp_frequency_list = None
         self.deviation_value = None
@@ -189,9 +190,9 @@ class Frequency(QWidget):
         self.setLayout(layout)
 
     def calculate_fr(self):
-        stimulus_signal = self.signal_info["stimulus_signal"]
-        recorded_signal = self.signal_info["recorded_signal"]
-        sr = self.signal_info["sample_rate"]
+        stimulus_signal = self.data_struct.stimulus_data
+        recorded_signal = self.data_struct.store_wave_data
+        sr = self.data_struct.stimulus_info["sample_rate"]
         fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(stimulus_signal, recorded_signal, sr,
                                                                               is_smooth=self.analysis_config["smooth_checked"])
         limit_checked = self.analysis_config.get("limit_checked")
@@ -247,7 +248,7 @@ class Frequency(QWidget):
 class AI(QWidget):
     def __init__(self, title_name):
         super().__init__()
-        self.signal_info = None
+        self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
         self.default_logger = LogManager.set_log_handler("core")
@@ -321,9 +322,9 @@ class AI(QWidget):
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
-        ret_str = predict_from_audio(signals=[np.array(self.signal_info.get("recorded_signal"), dtype=np.float32)],
+        ret_str = predict_from_audio(signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
                                      file_names=["modelpredict.wav"],
-                                     fs=[self.signal_info.get("sample_rate")],
+                                     fs=[self.data_struct.stimulus_info["sample_rate"]],
                                      load_model_path=model_path,
                                      **kwargs)
         ret_dict = json.loads(ret_str)
@@ -356,7 +357,7 @@ class AI(QWidget):
 class Spectrogram(QWidget):
     def __init__(self, title_name):
         super().__init__()
-        self.signal_info = None
+        self.data_struct = DataDealStruct()
         self.deviation_value = None
         self.analysis_config = None
         self.current_plot_widget = None
@@ -385,8 +386,8 @@ class Spectrogram(QWidget):
         self.stft_plot_widget.addItem(self.img_item)
 
     def calculate_spec(self):
-        recorded_signal = self.signal_info.get("recorded_signal")
-        sample_rate = self.signal_info.get("sample_rate")
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.stimulus_info["sample_rate"]
 
         n_fft = self.analysis_config.get("n_fft", 2048)
         hop_length = self.analysis_config.get("hop_length", 256)
@@ -480,12 +481,12 @@ class Spectrogram(QWidget):
                 self.stft_colorbar = None
             self.plot_container_layout.addWidget(self.stft_plot_widget)
             self.current_plot_widget = self.stft_plot_widget
-            
+
 
 class LooseParticle(QWidget):
     def __init__(self, title_name):
         super().__init__()
-        self.signal_info = None
+        self.data_struct = DataDealStruct()
         self.result = None
         self.analysis_config = None
         self.lp_graph = pg.PlotWidget()
@@ -508,10 +509,10 @@ class LooseParticle(QWidget):
         self.setLayout(layout)
 
     def calculate_loose_particle(self):
-        recorded_signal = self.signal_info.get("recorded_signal")
+        recorded_signal = self.data_struct.store_wave_data
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(recorded_signal,
                                                                                                  self.analysis_config.get("cutoff_freq"),
-                                                                                                 self.signal_info.get("sample_rate"),
+                                                                                                 self.data_struct.stimulus_info["sample_rate"],
                                                                                                  67)
         self.plot_graph(filtered_spl, deviation)
         self.lp_num_label.setText("LP 数量: %s" % self.result)
@@ -519,21 +520,21 @@ class LooseParticle(QWidget):
             self.status_label.setText("状态: 异常")
         else:
             self.status_label.setText("状态: 正常")
-    
+
     def plot_graph(self, amplitude, deviation):
-        signal_duration = np.linspace(0, len(amplitude) / (self.signal_info["sample_rate"]), len(amplitude))
+        signal_duration = np.linspace(0, len(amplitude) / (self.data_struct.stimulus_info["sample_rate"]), len(amplitude))
         self.result = self.detect_peaks(amplitude,
                                         self.analysis_config.get("trigger_threshold"),
                                         self.analysis_config.get("hysterests_threshold"),
                                         self.analysis_config.get("min_check_duration"),
                                         self.analysis_config.get("max_check_duration"),
-                                        self.signal_info["sample_rate"])
+                                        self.data_struct.stimulus_info["sample_rate"])
         amplitude = amplitude - deviation
         self.lp_graph.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
         self.plot_loose_particle_waveform(self.threshould, signal_duration, deviation)
         self.lp_graph.setLabel('left', 'Amplitude (dB)')
         self.lp_graph.setLabel('bottom', 'time (s)')
-        
+
     def detect_peaks(self, filtered_db, max_threshold, hysterests_threshold , min_check_duration, max_check_duration, sampling_rate):
         num = 0
         peaks, _ = find_peaks(filtered_db, max_threshold)
@@ -571,14 +572,14 @@ class LooseParticle(QWidget):
                 num += 1
             current_out_range = []
         return num
-    
+
     def get_peak_duration(self, signal_duration, max_threshold, hysteresis):
         for key, value in signal_duration:
             if value  < max_threshold - float(hysteresis) / 2:
                 self.threshould[key] = max_threshold - hysteresis
             else:
-                self.threshould[key] = value   
-    
+                self.threshould[key] = value
+
     def plot_loose_particle_waveform(self, out_range_points, signal_duration, deviation):
         pen = pg.mkPen(color='orange', width=3)
         out_range_points = np.array(out_range_points) - deviation

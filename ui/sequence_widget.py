@@ -44,6 +44,7 @@ class SequenceWindow(QWidget):
         self.data_struct.stimulus_info, self.data_struct.stimulus_data = self.get_stimulus_from_config()
         self.deviation_value = self.get_mic_deviation_value()  # Get the deviation value from the microphone
         self.analysis_config = self.get_sequence_config_from_json()
+        self.init_fft_and_stft_flag()
         self.signal_info = {}  # Initialize an empty dictionary to store signal information
         self.analysis_window = []
         self.default_ai = None
@@ -512,6 +513,11 @@ class SequenceWindow(QWidget):
 
         self.init_result_files()
         return layout
+    
+    def init_fft_and_stft_flag(self):
+        model_item_list = self.analysis_config.get("display_sequence", "")
+        for item_name in model_item_list:
+            self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"]) 
 
     def init_result_files(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -1165,6 +1171,7 @@ class SequenceWindow(QWidget):
             8. Enables the data button and the replay button.
             9. If auto-analysis is configured, executes the analysis.
         """
+        self.data_struct.clear_data()
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
@@ -1179,10 +1186,15 @@ class SequenceWindow(QWidget):
         record_code, self.data_struct.store_wave_data = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
         if record_code == error_code.OK:
             self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
-            self.signal_info = {"stimulus_signal": self.data_struct.stimulus_data,
-                                "recorded_signal": self.data_struct.store_wave_data,
-                                "sample_rate": sample_rate}
-            self.recorded_signal_info["sample_rate"] = sample_rate
+
+        if self.data_struct.stft_flag != 0:
+            self.data_struct.stft_result = librosa.stft(self.data_struct.store_wave_data,
+                                                        n_fft=1024,
+                                                        hop_length=16,
+                                                        win_length=1024,
+                                                        window="hann")
+        if self.data_struct.fft_flag != 0:
+            self.data_struct.fft_result = np.abs(np.fft.fft(self.data_struct.store_wave_data)[:self.data_struct.stimulus_info.get("sample_rate") // 2])
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
@@ -1229,7 +1241,6 @@ class SequenceWindow(QWidget):
                 class_instance = cls_map(key)
                 if self.analysis_config["default_ai"] == key:
                     self.default_ai = class_instance
-                class_instance.signal_info = self.signal_info
                 class_instance.deviation_value = self.deviation_value
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
