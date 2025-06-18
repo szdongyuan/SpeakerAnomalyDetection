@@ -386,6 +386,7 @@ class OptionList(QListView):
             self.is_select_ai = True
             new_name = "\u2605" + self.valid_char(index.data())
             self.set_model_data(index, new_name)
+            self.itemmove("bottom")
 
     def store_ai_item(self, ai_list: list, name):
         if not name or name in ai_list:
