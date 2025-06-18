@@ -10,11 +10,11 @@ from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, 
 from PyQt5.QtWidgets import QApplication, QMenu, QAction, QFileDialog, QMessageBox
 from time import time
 
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.log_manager import LogManager
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from data_struct.data_deal_struct import DataDealStruct
 from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow
 from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow, LPConfigWindow
 

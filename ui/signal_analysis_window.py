@@ -14,13 +14,13 @@ from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
 from PyQt5.QtWidgets import QVBoxLayout, QWidget, QLabel
 
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from data_struct.data_deal_struct import DataDealStruct
 from main import predict_from_audio
 from ui.graph_widget import plot_2d_image
 

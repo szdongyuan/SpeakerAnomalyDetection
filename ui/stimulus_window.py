@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushBu
 from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout, QAbstractSpinBox
 
 
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple, save_audio_simple
 from base.log_manager import LogManager
@@ -22,7 +23,6 @@ from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from base.stimulus_signal_management import StimulusSignalManagement
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from data_struct.data_deal_struct import DataDealStruct
 from ui.load_stimulus_dialog import LoadStimulusDialog
 
 
