@@ -95,7 +95,7 @@ class SequenceWindow(QWidget):
         sign.run_test_sign.connect(self.clicked_player_btn, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
-        sign.test_insert_data_into_db_sign.connect(self.test_insert_data_into_db, Qt.AutoConnection)
+        sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         self.update_mode_display(0)
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
@@ -1124,11 +1124,13 @@ class SequenceWindow(QWidget):
             self.set_result_file(1, "NG", None)
             self.get_result_file(1)
 
-    def test_insert_data_into_db(self, params):
-        if params == "OK":
+    def update_recorded_label_in_test_mode(self, label: str):
+        if label == "OK":
             self.recorded_signal_info["labels"] = "OK"
-        elif params == "NG":
+        elif label == "NG":
             self.recorded_signal_info["labels"] = "NG"
+
+    def test_insert_data_into_db(self):
         current_recorded_count = self.save_recorded_num_to_json("ok_ng")
         self.lineedit_count.setText(str(current_recorded_count))
         self.add_recorded_signal_info_to_db()
@@ -1264,6 +1266,9 @@ class SequenceWindow(QWidget):
                 if isinstance(key_config, dict):
                     self.instance_analysis_class(key, key_config["type"], key_config)
             for instance in self.analysis_window:
+                if self.mode == "test":
+                    if instance is self.default_ai:
+                        continue
                 if hasattr(instance, 'calculate_spl'):
                     instance.calculate_spl()
                     instance.show()
@@ -1286,6 +1291,11 @@ class SequenceWindow(QWidget):
                 instance.setMinimumSize(QSize(600, 500))
                 width += 20
                 height += 20
+            if self.mode == "test":
+                    self.default_ai.calculate_ai_scores(self.mode)
+                    self.default_ai.show()
+                    self.default_ai.setGeometry(width, height, 600, 500)
+                    self.test_insert_data_into_db()
             if self.default_ai:
                 if self.default_ai.result == "OK":
                     for instance in self.analysis_window:
