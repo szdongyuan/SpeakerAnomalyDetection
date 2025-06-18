@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushB
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.utils.custom_signals import sign
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -25,7 +26,6 @@ from base.tcp_service import TcpServer
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
-from data_struct.data_deal_struct import DataDealStruct
 from ui.signal_analysis_window import Spl, Distortion, AI, Frequency, Spectrogram, LooseParticle
 from ui.login_window import get_mac_address
 
