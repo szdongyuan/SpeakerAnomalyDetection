@@ -302,32 +302,32 @@ class OptionList(QListView):
         new_item = QStandardItem(text)
 
         if index == "top":
-            self.updata_at_itemmove(0, new_item, 
+            self.update_at_itemmove(0, new_item, 
                                     self.index_num + 1, 
                                     self.config["display_sequence"], self.index_num, 0)
             self.index_num = 0
         elif index == "bottom":
-            self.updata_at_itemmove(self.model().rowCount(), new_item, 
+            self.update_at_itemmove(self.model().rowCount(), new_item, 
                                     self.index_num, 
                                     self.config["display_sequence"], self.index_num, self.model().rowCount() - 1)
             self.index_num = self.model().rowCount() - 1     
         elif index == "up" and self.index_num != 0:
-            self.updata_at_itemmove(self.index_num - 1, new_item, 
+            self.update_at_itemmove(self.index_num - 1, new_item, 
                                     self.index_num + 1, 
                                     self.config["display_sequence"], self.index_num, self.index_num - 1)
             self.index_num -= 1
         elif index == "down" and self.index_num != self.model().rowCount() - 1:
-            self.updata_at_itemmove(self.index_num + 2, new_item, 
+            self.update_at_itemmove(self.index_num + 2, new_item, 
                                     self.index_num, 
                                     self.config["display_sequence"], self.index_num, self.index_num + 1)
             self.index_num += 1
         self.setCurrentIndex(self.model().index(self.index_num, 0))
 
-    def updata_at_itemmove(self, insert_index, new_item, pop_index, list: list, old_item_num, new_item_num):
+    def update_at_itemmove(self, insert_index, new_item, pop_index, list: list, old_item_num, new_item_num):
         self.model().insertRow(insert_index, new_item)
         self.model().removeRow(pop_index)
         self.swap_list_index(list,old_item_num, new_item_num)
-        self.updata_sellect_ai(old_item_num, new_item_num, False)
+        self.update_sellect_ai(old_item_num, new_item_num, False)
 
     def show_context_menu(self, pos):
         index = self.indexAt(pos)
@@ -386,7 +386,6 @@ class OptionList(QListView):
             self.is_select_ai = True
             new_name = "\u2605" + self.valid_char(index.data())
             self.set_model_data(index, new_name)
-            self.itemmove("bottom")
 
     def store_ai_item(self, ai_list: list, name):
         if not name or name in ai_list:
@@ -492,7 +491,7 @@ class OptionList(QListView):
             self.delete_item_config(index.data())
         model = self.model() 
         model.removeRow(index.row())
-        self.updata_sellect_ai(index.row() + 1, index.row(), False)
+        self.update_sellect_ai(index.row() + 1, index.row(), False)
 
     def delete_item_config(self, name):
         if not name:
@@ -501,11 +500,11 @@ class OptionList(QListView):
             del self.config[name]
 
     def rename_item(self, index):
-        self.is_updata_config = True
+        self.is_update_config = True
         self.is_select_ai = "\u2605" in self.model().data(index)
         self.edit(index)
 
-    def updata_model_list(self, config: dict, new_item: QStandardItem, old_index, new_index, step_index: bool):
+    def update_model_list(self, config: dict, new_item: QStandardItem, old_index, new_index, step_index: bool):
         if not new_item:
             return
         self.model().insertRow(new_index, new_item)
@@ -519,9 +518,9 @@ class OptionList(QListView):
             self.setCurrentIndex(self.model().index(new_index, 0))
             self.swap_list_index(config["display_sequence"], old_index, new_index)
             self.start_row_number = new_index
-        self.updata_sellect_ai(old_index, new_index, True)
+        self.update_sellect_ai(old_index, new_index, True)
 
-    def updata_sellect_ai(self, old_index, new_index, step_index: bool):
+    def update_sellect_ai(self, old_index, new_index, step_index: bool):
         if old_index == new_index or old_index == -1 or new_index == -1 or not self.prev_sellect_ai: 
             return
         
@@ -545,60 +544,68 @@ class OptionList(QListView):
         self.is_edit_item = False
         self.model().setData(index, name)
 
-    def chack_item_name_have_space(self, name):
+    def check_item_name_have_space(self, name):
         if not name:
             return None
         if name.find("\xa0") == 0:
             return True
         else:
             return False
+        
+    def update_default_ai(self, name):
+        if not name:
+            return
+        if self.check_item_name_have_space(name) is True:
+            self.config["default_ai"] = name
+        elif self.check_item_name_have_space(name) is False:
+            self.config["default_ai"] = "\xa0" + name
 
-    def updata_config_file(self, old_name, new_name):
+    def update_config_file(self, old_name, new_name):
         if not old_name or not new_name:
             return
         if old_name in self.config:
             value = self.config.pop(old_name)
-            if self.chack_item_name_have_space(new_name) is True:
+            if self.check_item_name_have_space(new_name) is True:
                 self.config[new_name] = value
-            elif self.chack_item_name_have_space(new_name) is False:
+            elif self.check_item_name_have_space(new_name) is False:
                 self.config["\xa0" + new_name] = value
 
-    def updata_display_sequence_list(self, list, old_name, new_name):
+    def update_display_sequence_list(self, list, old_name, new_name):
         if not old_name or not new_name or old_name == new_name:
             return
         try:
             index = list.index(old_name)
         except ValueError:
             return
-        if self.chack_item_name_have_space(new_name) is True:
+        if self.check_item_name_have_space(new_name) is True:
             list[index] = new_name
-        elif self.chack_item_name_have_space(new_name) is False:
+        elif self.check_item_name_have_space(new_name) is False:
             list[index] = "\xa0" + new_name
 
     def rename_item_space_equal(self, name, index):
         if not name or not index:
             return
-        if self.chack_item_name_have_space(name) is True:
+        if self.check_item_name_have_space(name) is True:
             self.set_model_data(index, name)
             return name
-        elif self.chack_item_name_have_space(name) is False:
+        elif self.check_item_name_have_space(name) is False:
             self.set_model_data(index, "\xa0" + name)
             return "\xa0" + name
 
-    def updata_config_data(self, old_name, new_name, list):
+    def update_config_data(self, old_name, new_name, list):
         if not new_name in list:
-            self.updata_config_file(old_name, new_name)
-            self.updata_display_sequence_list(list, old_name, new_name)
-        self.updata_ai_list(new_name, old_name)
+            self.update_config_file(old_name, new_name)
+            self.update_display_sequence_list(list, old_name, new_name)
+        self.update_ai_list(new_name, old_name)
         
-    def updata_ai_list(self, new_name, old_name):
+    def update_ai_list(self, new_name, old_name):
         if not old_name in self.all_ai_item or old_name == new_name:
             return
         if not new_name in self.all_ai_item:
             index = self.all_ai_item.index(old_name)
-            if self.chack_item_name_have_space(new_name) is True:
+            if self.check_item_name_have_space(new_name) is True:
                 self.all_ai_item[index] = new_name
-            elif self.chack_item_name_have_space(new_name) is False:
+            elif self.check_item_name_have_space(new_name) is False:
                 self.all_ai_item[index] = "\xa0" + new_name
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
@@ -622,20 +629,19 @@ class OptionList(QListView):
                 if "\u2605" in new_name:
                     self.config["default_ai"] = new_name.replace("\u2605","\xa0")
                     if self.config["default_ai"] != self.old_name:
-                        self.updata_config_data(self.old_name.replace("\u2605","\xa0"), self.config["default_ai"], self.config["display_sequence"])
+                        self.update_config_data(self.old_name.replace("\u2605","\xa0"), self.config["default_ai"], self.config["display_sequence"])
                     self.old_name = new_name
                     self.set_model_data(index, new_name)
                 else:
-                    self.updata_config_data(self.old_name.replace("\u2605","\xa0"), new_name, self.config["display_sequence"])
-                    self.config["default_ai"] = new_name.replace("\u2605","\xa0")
+                    self.update_config_data(self.old_name.replace("\u2605","\xa0"), new_name, self.config["display_sequence"])
                     self.old_name = new_name
-                    self.config["default_ai"] = new_name
+                    self.update_default_ai(new_name)
                     self.set_model_data(index, "\u2605" + new_name)
                 self.is_select_ai = False
             else:
-                if self.is_updata_config:
-                    self.updata_config_data(self.old_name, new_name, self.config["display_sequence"])
-                    self.is_updata_config = False
+                if self.is_update_config:
+                    self.update_config_data(self.old_name, new_name, self.config["display_sequence"])
+                    self.is_update_config = False
                 self.old_name = "\xa0" + new_name
                 self.rename_item_space_equal(new_name, index)
         else:
@@ -679,12 +685,12 @@ class OptionList(QListView):
         if self.darpflag:       
             new_item = QStandardItem(self.start_index.data())
             if row_number == -1:
-                self.updata_model_list(self.config, new_item, self.start_row_number, self.model().rowCount(), True)
+                self.update_model_list(self.config, new_item, self.start_row_number, self.model().rowCount(), True)
             else:
                 if row_number > self.start_row_number:
-                    self.updata_model_list(self.config, new_item, self.start_row_number, row_number, True)
+                    self.update_model_list(self.config, new_item, self.start_row_number, row_number, True)
                 elif row_number < self.start_row_number:
-                    self.updata_model_list(self.config, new_item, self.start_row_number, row_number, 0)
+                    self.update_model_list(self.config, new_item, self.start_row_number, row_number, 0)
             # Update the starting item name and index number, and end the drag-and-drop state
             self.start_item_name = new_item.text()
             self.index_num = self.start_row_number
