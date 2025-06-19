@@ -41,7 +41,7 @@ class AnalysisModelSellect(QDialog):
         analysis_list_layout = self.create_analysis_list_layout()
         sellect_list_layout = self.create_sellect_list_layout()
         btn_layout = self.create_btn_layout()
-        move_btn_layout = self.move_item_btn_layout()  
+        move_btn_layout = self.move_item_btn_layout()
 
         add_analysis_btn = QPushButton()
         add_analysis_btn.setToolTip("添加分析")
@@ -289,7 +289,7 @@ class OptionList(QListView):
         self.load_model_config(DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json")
 
         self.mousePressEvent = self.mousepressevent
-        self.mouseReleaseEvent = self.mousereleaseevent 
+        self.mouseReleaseEvent = self.mousereleaseevent
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
         self.dropEvent = self.dropevent
@@ -297,28 +297,28 @@ class OptionList(QListView):
     def itemmove(self, index):
         if self.index_num is None or not index:
             return
-        item_index = self.model().index(self.index_num, 0) 
+        item_index = self.model().index(self.index_num, 0)
         text = self.model().itemFromIndex(item_index).text()
         new_item = QStandardItem(text)
 
         if index == "top":
             self.update_at_itemmove(0, new_item, 
-                                    self.index_num + 1, 
+                                    self.index_num + 1,
                                     self.config["display_sequence"], self.index_num, 0)
             self.index_num = 0
         elif index == "bottom":
-            self.update_at_itemmove(self.model().rowCount(), new_item, 
+            self.update_at_itemmove(self.model().rowCount(), new_item,
                                     self.index_num, 
                                     self.config["display_sequence"], self.index_num, self.model().rowCount() - 1)
-            self.index_num = self.model().rowCount() - 1     
+            self.index_num = self.model().rowCount() - 1
         elif index == "up" and self.index_num != 0:
             self.update_at_itemmove(self.index_num - 1, new_item, 
                                     self.index_num + 1, 
                                     self.config["display_sequence"], self.index_num, self.index_num - 1)
             self.index_num -= 1
         elif index == "down" and self.index_num != self.model().rowCount() - 1:
-            self.update_at_itemmove(self.index_num + 2, new_item, 
-                                    self.index_num, 
+            self.update_at_itemmove(self.index_num + 2, new_item,
+                                    self.index_num,
                                     self.config["display_sequence"], self.index_num, self.index_num + 1)
             self.index_num += 1
         self.setCurrentIndex(self.model().index(self.index_num, 0))
@@ -489,9 +489,14 @@ class OptionList(QListView):
             self.config["display_sequence"].remove(index.data())
             self.data_struct.minus_stft_or_fft_count(self.config[index.data()]["type"])
             self.delete_item_config(index.data())
+            self.update_default_ai_index_at_delete_item(index)
         model = self.model() 
         model.removeRow(index.row())
-        self.update_sellect_ai(index.row() + 1, index.row(), False)
+
+    def update_default_ai_index_at_delete_item(self, index):
+        if index.row() < self.prev_sellect_ai.row():
+            self.prev_sellect_ai = self.model().index(self.prev_sellect_ai.row() - 1, 0)
+        
 
     def delete_item_config(self, name):
         if not name:
@@ -521,7 +526,7 @@ class OptionList(QListView):
         self.update_sellect_ai(old_index, new_index, True)
 
     def update_sellect_ai(self, old_index, new_index, step_index: bool):
-        if old_index == new_index or old_index == -1 or new_index == -1 or not self.prev_sellect_ai: 
+        if old_index == new_index or old_index == -1 or new_index == -1 or not self.prev_sellect_ai:
             return
         
         sellect_ai_row = self.prev_sellect_ai.row()
@@ -532,12 +537,12 @@ class OptionList(QListView):
             sellect_ai_row = sellect_ai_row - 1
             self.prev_sellect_ai = self.model().index(sellect_ai_row, 0)
         elif sellect_ai_row == old_index:
-            if step_index:  
-                if new_index > old_index:
+            if step_index:
+                if new_index > sellect_ai_row:
                     self.prev_sellect_ai = self.model().index(new_index - 1, 0)
-                elif new_index < old_index:
+                elif new_index < sellect_ai_row:
                     self.prev_sellect_ai = self.model().index(new_index, 0)
-            else:  
+            else:
                 self.prev_sellect_ai = self.model().index(new_index, 0)
 
     def set_model_data(self, index:QModelIndex, name):
@@ -620,7 +625,7 @@ class OptionList(QListView):
             return
         new_name = self.model().data(index)
         really_new_name = new_name.replace(" ", "")
-        if new_name != self.old_name and really_new_name:                   
+        if new_name != self.old_name and really_new_name:
             if new_name in self.config["display_sequence"]:
                 QMessageBox.warning(self, "警告", "模型名称重复，请重新输入！")
                 self.set_model_data(index, self.old_name)
@@ -682,7 +687,7 @@ class OptionList(QListView):
         row_number = index.row()
         if row_number == -1:
             self.index_num = None
-        if self.darpflag:       
+        if self.darpflag:
             new_item = QStandardItem(self.start_index.data())
             if row_number == -1:
                 self.update_model_list(self.config, new_item, self.start_row_number, self.model().rowCount(), True)
@@ -725,7 +730,7 @@ class OptionList(QListView):
             event.ignore()
 
     def set_new_analysis_config(self, item_text):
-        count = 1                    
+        count = 1
         item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
         item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
         while  item_exist or item_star_exist:
