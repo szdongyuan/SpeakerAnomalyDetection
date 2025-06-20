@@ -19,6 +19,7 @@ class DataSave(object):
     def connect(self):
         try:
             self.connection = sqlite3.connect(self.db_name)
+            self.connection.execute("PRAGMA foreign_keys = ON;")
             self.cursor = self.connection.cursor()
             return error_code.OK, "Successfully connect to database."
         except Exception as e:
