@@ -22,17 +22,20 @@ class RecordingManager(object):
                 return error_code.INVALID_TYPE_DATA, "invalid recorded signal data."
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
-            if not filename.endswith('.wav'):
+            if not filename.endswith(".wav"):
                 filename = os.path.splitext(filename)[0]
-                filename += '.wav'
-                audio_info["file_path"] = dir_path + '/' + filename
+                filename += ".wav"
+                audio_info["file_path"] = dir_path + "/" + filename
             if filename in os.listdir(dir_path):
                 return error_code.INVALID_PATH, "The file already exists."
-            wavfile.write(audio_info["file_path"], audio_info["sample_rate"],
-                          audio_info["recorded_signal"].astype(np.int16))
+            wavfile.write(
+                audio_info["file_path"], audio_info["sample_rate"], audio_info["recorded_signal"].astype(np.int16)
+            )
             self.save_signal_info_to_db(audio_info, stimulus_parameter)
-            return (error_code.OK,
-                    f"Recorded signal {filename} has been saved and its stimulus and recording information to database.")
+            return (
+                error_code.OK,
+                f"Recorded signal {filename} has been saved and its stimulus and recording information to database.",
+            )
         except Exception as e:
             err_msg = "Failed to save the recorded signal file. %s" % (str(e)[:40])
             return error_code.INVALID_SAVE, err_msg
@@ -42,13 +45,16 @@ class RecordingManager(object):
             with DataSave(self.db_path) as database:
                 stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
-                database.insert_data_into_db('audio_data_table',
-                                             model_consts.DB_AUDIO_COLUMNS, [audio_data])
                 if flag:
-                    database.insert_data_into_db('stimulus_signal_table',
-                                                 model_consts.DB_STIMULUS_COLUMNS, stimulus_data)
+                    name = stimulus_data[0][1] + "-" + stimulus_data[0][2] + "-" + stimulus_data[0][0].split("-")[0]
+                    stimulus_data[0] += (name,)
+                    database.insert_data_into_db(
+                        "stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS, stimulus_data
+                    )
+                    database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
                     return error_code.OK, "Successfully saved the recording and stimulus signals to the database."
                 else:
+                    database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
                     return error_code.OK, "Successfully saved the recording signals to the database."
         except Exception as e:
             err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e)[:40])
@@ -58,14 +64,19 @@ class RecordingManager(object):
     def get_stimulus_info_to_db(stimulus_parameter: dict, database):
         flag = False
         stimulus_data = tuple(
-            stimulus_parameter[key] for key in model_consts.STIMULUS_COLUMNS if key in stimulus_parameter)
-        is_default = database.set_default("stimulus_signal_table")
-        stimulus_data += (is_default,)
-        result = database.query_matching_data([stimulus_data], "stimulus_signal_table",
-                                              model_consts.STIMULUS_COLUMNS, model_consts.DB_STIMULUS_COLUMNS)
+            stimulus_parameter[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_parameter
+        )
+        result = database.query_matching_data(
+            [stimulus_data],
+            "stimulus_signal_table",
+            model_consts.STIMULUS_CONFIG_COLUMNS,
+            model_consts.DB_STIMULUS_COLUMNS,
+        )
         if result:
             stimulus_data = result
         else:
+            is_default = database.set_default("stimulus_signal_table")
+            stimulus_data += (is_default,)
             flag = True
             stimulus_data = database.get_data_id([stimulus_data], 0)
         return stimulus_data, flag
@@ -74,8 +85,9 @@ class RecordingManager(object):
     def get_audio_info_to_db(audio_info: dict, stimulus_data, database):
         audio_data = tuple(audio_info[key] for key in model_consts.AUDIO_COLUMNS if key in audio_info)
         audio_data = audio_data + (stimulus_data[0][0],)
-        result = database.query_matching_data([audio_data], "audio_data_table", model_consts.AUDIO_COLUMNS,
-                                              ['audio_data_id'])
+        result = database.query_matching_data(
+            [audio_data], "audio_data_table", model_consts.AUDIO_COLUMNS, ["audio_data_id"]
+        )
         if result:
             audio_data_id = result[0][0]
         else:
@@ -88,9 +100,9 @@ class RecordingManager(object):
             if not os.path.exists(file_path):
                 return error_code.INVALID_PATH, "The old path is invalid."
             dir_path = os.path.dirname(file_path)
-            new_path = dir_path + '/' + new_name
-            if not new_path.endswith('.wav'):
-                new_path += '.wav'
+            new_path = dir_path + "/" + new_name
+            if not new_path.endswith(".wav"):
+                new_path += ".wav"
             if os.path.exists(new_path):
                 return error_code.INVALID_PATH, "The new file path already exists."
             os.rename(file_path, new_path)
@@ -111,7 +123,7 @@ class RecordingManager(object):
             if filename in os.listdir(new_dir_path):
                 return error_code.INVALID_MOVE, "The file with the same name already exists."
             shutil.move(file_path, new_dir_path)
-            new_file_path = new_dir_path + '/' + filename
+            new_file_path = new_dir_path + "/" + filename
             update_data = {
                 "new_data": {"file_path": new_file_path},
                 "old_data": {"file_path": file_path},
@@ -141,8 +153,9 @@ class RecordingManager(object):
             if os.path.exists(file_path):
                 query_clause_data = {"file_path": file_path}
                 with DataSave(self.db_path) as database:
-                    query_code, query_result = database.query("audio_data_table", model_consts.SELECT_COLUMNS,
-                                                              query_clause_data, FK_related=True)
+                    query_code, query_result = database.query(
+                        "audio_data_table", model_consts.SELECT_COLUMNS, query_clause_data, FK_related=True
+                    )
                     return query_code, query_result
             return error_code.INVALID_PATH, "The query file does not exist."
         except Exception as e:
