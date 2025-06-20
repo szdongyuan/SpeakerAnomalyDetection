@@ -33,7 +33,7 @@ DB_STIMULUS_COLUMNS = ['stimulus_id', 'stimulus_method', 'stimulus_type', 'repea
 DB_MODEL_COLUMNS = ['model_id', 'model_name', 'model_path', 'config_path', 'input_dim', 'output_dim', 'accuracy', 'update_date', 'model_description']
 DB_USERS_COLUMNS = ['user_id', 'user_name', 'password', 'access_level', 'user_created_time', 'user_updated_time']
 AUDIO_COLUMNS = [col for col in DB_AUDIO_COLUMNS if col != "audio_data_id"]
-STIMULUS_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col != "stimulus_id"]
+STIMULUS_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id", "stimulus_name"]]
 STIMULUS_CONFIG_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id", "stimulus_name", "is_default"]]
 INERT_STIMULUS_CONFIG_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id"]]
 MODEL_COLUMNS = [col for col in DB_MODEL_COLUMNS if col not in ["model_id", "update_date", "model_description"]]

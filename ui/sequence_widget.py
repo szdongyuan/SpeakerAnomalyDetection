@@ -1172,6 +1172,7 @@ class SequenceWindow(QWidget):
             7. If recording is successful, plots the recorded signal on the line graph and saves the signal information.
             8. Enables the data button and the replay button.
             9. If auto-analysis is configured, executes the analysis.
+            10. if fft and stft flag not null, initialize the FFT and STFT results.
         """
         self.data_struct.clear_data()
         if self.player_status_flag:
@@ -1188,6 +1189,7 @@ class SequenceWindow(QWidget):
         record_code, self.data_struct.store_wave_data = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
         if record_code == error_code.OK:
             self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+            self.recorded_signal_info["sample_rate"] = sample_rate
 
         if self.data_struct.stft_flag != 0:
             self.data_struct.stft_result = librosa.stft(self.data_struct.store_wave_data,

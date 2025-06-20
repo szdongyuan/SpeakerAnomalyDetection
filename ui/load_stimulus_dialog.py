@@ -133,7 +133,10 @@ class StimulusConfigView(QTableView):
     def del_config(self):
         if self.select_stimulus_row is not None:
             stimulus_name = self.loaded_stimulus[self.select_stimulus_row].get("stimulus_name")
-            code = StimulusSignalManagement().delete_stimulus_info_from_db(stimulus_name)
+            code, msg = StimulusSignalManagement().delete_stimulus_info_from_db(stimulus_name)
+            if "FOREIGN KEY" in msg:
+                QMessageBox.warning(self, "提示", "请先删除该刺激信号下的所有数据")
+                return
             if code == error_code.OK:
                 self.logger.info("delete stimulus config %s success" % stimulus_name)
             self.loaded_stimulus.pop(self.select_stimulus_row)
@@ -258,6 +261,8 @@ class StimulusConfigView(QTableView):
         if self.select_stimulus_row is None:
             return None
         self.loaded_stimulus[self.select_stimulus_row].pop("stimulus_name")
+        self.loaded_stimulus[self.select_stimulus_row].pop("is_default")
+        self.loaded_stimulus[self.select_stimulus_row].pop("stimulus_id")
         return self.loaded_stimulus[self.select_stimulus_row]
     
     def get_select_stimulus_row(self):
