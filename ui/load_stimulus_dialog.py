@@ -135,7 +135,7 @@ class StimulusConfigView(QTableView):
             stimulus_name = self.loaded_stimulus[self.select_stimulus_row].get("stimulus_name")
             code, msg = StimulusSignalManagement().delete_stimulus_info_from_db(stimulus_name)
             if "FOREIGN KEY" in msg:
-                QMessageBox.warning(self, "提示", "请先删除该刺激信号下的所有数据")
+                QMessageBox.warning(self, "提示", "请先删除该激励信号下的所有数据")
                 return
             if code == error_code.OK:
                 self.logger.info("delete stimulus config %s success" % stimulus_name)
