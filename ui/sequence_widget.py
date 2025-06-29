@@ -22,11 +22,13 @@ from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
-from base.tcp_service import TcpServer
+from base.soundcard_calibration_manager import get_mic_deviation_value
+from base.stimulus_signal_management import StimulusSignalManagement
+from base.tcp_service import TcpServer, check_tcp_msg_format
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
-from ui.signal_analysis_window import Spl, Distortion, AI, Frequency, Spectrogram, LooseParticle
+from ui.signal_analysis_window import get_class_mapping
 from ui.login_window import get_mac_address
 
 
@@ -42,7 +44,7 @@ class SequenceWindow(QWidget):
         self.refresh_stimulus_flag = None  # Initialize the flag to indicate if stimulus needs refreshing
         # Retrieve stimulus information and signal from configuration
         self.data_struct.stimulus_info, self.data_struct.stimulus_data = self.get_stimulus_from_config()
-        self.deviation_value = self.get_mic_deviation_value()  # Get the deviation value from the microphone
+        self.deviation_value = get_mic_deviation_value()  # Get the deviation value from the microphone
         self.analysis_config = self.get_sequence_config_from_json()
         self.init_fft_and_stft_flag()
         self.signal_info = {}  # Initialize an empty dictionary to store signal information
@@ -785,7 +787,8 @@ class SequenceWindow(QWidget):
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
 
-    def generate_request_id(self, request_type,timestamp):
+    @staticmethod
+    def generate_request_id(request_type, timestamp):
         """
         Args:
             request_type: int
@@ -807,7 +810,7 @@ class SequenceWindow(QWidget):
                   "Timestamp": "2025-04-09T16:30:00"
               }
         """
-        ok, data = self.check_format(info)
+        ok, data = check_tcp_msg_format(info)
         if not ok:
             return data
         request_type = int(data.get("RequestType"))
@@ -822,22 +825,6 @@ class SequenceWindow(QWidget):
         if request_type == RequestTypeEnum.RUN_TEST.value:
             sign.run_test_sign.emit()
         return "ok"
-
-    def check_format(self, info):
-        try:
-            data = json.loads(info)
-        except json.JSONDecodeError as e:
-            return False, "error, json format error"
-        req_type = int(data.get("RequestType"))
-        is_sync = data.get("IsSync")
-        timestamp = data.get("Timestamp")
-        if req_type not in [rte.value for rte in RequestTypeEnum]:
-            return False, "error, RequestType error"
-        if not isinstance(is_sync, bool):
-            return False, "error, IsSync type error"
-        if not timestamp or not isinstance(timestamp, str):
-            return False, "error, Timestamp type error "
-        return True, data
 
     def scan_barcode(self, device):
         barcode = self.barcode_scanner.read_raw_data(device)
@@ -955,7 +942,7 @@ class SequenceWindow(QWidget):
                 tuple: A tuple containing the stimulus information dictionary and the audio signal.
                     Returns (None, None) if the loading fails or the configuration is invalid.
         """
-        load_code, result = self.load_stimulus_from_json()
+        load_code, result = StimulusSignalManagement().load_stimulus_from_json()
         if load_code == error_code.OK and result:
             info = result.get("stimulus_info")
             path = DEFAULT_DIR + result.get("stimulus_signal_path")
@@ -963,28 +950,6 @@ class SequenceWindow(QWidget):
             return info, stimulus
         else:
             return None, None
-
-    @staticmethod
-    def load_stimulus_from_json():
-        """
-            Load stimulus configuration from a JSON file.
-
-            This method attempts to load stimulus configuration from a predefined JSON file path and parse the
-        configuration into a dictionary.
-            If the JSON file does not exist, it returns an appropriate error code and message.
-
-            Returns:
-                tuple: A tuple containing the error code and configuration data or error message.
-                    If the operation is successful, the error code is error_code.OK, and the configuration data is the
-                 parsed dictionary.
-                    If the operation fails, the error code is error_code.INVALID_DATA_LOADING, and the error message is a string.
-        """
-        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
-        if not os.path.exists(json_file_path):
-            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        with open(json_file_path, 'r') as json_file:
-            data = json.load(json_file)
-            return error_code.OK, data
 
     def save_recorded_num_to_json(self, start_position=None):
         """
@@ -1205,27 +1170,6 @@ class SequenceWindow(QWidget):
         if self.analysis_config["auto_analysis"]:
             self.run()
 
-    @staticmethod
-    def get_class_mapping():
-        """
-            Retrieves the class mapping dictionary.
-
-            This method returns a dictionary where the keys are string identifiers and the values are the corresponding classes. 
-            This mapping is typically used to dynamically retrieve the appropriate class based on an identifier.
-
-            Returns:
-                dict: A dictionary containing the class mapping, in the format {"identifier": class}.
-        """
-        class_mapping = {
-            "SPL": Spl,
-            "FR": Frequency,
-            "HD": Distortion,
-            "AI": AI,
-            "Spec": Spectrogram,
-            "LP": LooseParticle,
-        }
-        return class_mapping
-
     def instance_analysis_class(self, key, type, params):
         """
             Instantiates and configures an analysis class based on the given type and parameters, 
@@ -1238,7 +1182,7 @@ class SequenceWindow(QWidget):
             Returns:
                 None: This function does not return a value but adds the instantiated class object to the self.analysis_window list.
         """
-        class_mapping = self.get_class_mapping()
+        class_mapping = get_class_mapping()
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
@@ -1345,27 +1289,6 @@ class SequenceWindow(QWidget):
         except Exception as e:
             err_msg = "Failed to load analysis sequence data from json.%s" % (str(e)[:50])
             return error_code.INVALID_DATA_LOADING, err_msg
-
-    @staticmethod
-    def get_mic_deviation_value():
-        """
-            Reads the microphone calibration deviation value from a specified file.
-
-            This method is static because it does not depend on the instance state of the class and can operate independently.
-            The deviation value is read from a file as it may vary based on environmental conditions and needs to be
-        dynamically adjusted.
-
-            Return:
-                The microphone calibration deviation value. Returns 0.0 if reading the file fails.
-        """
-        file_path = DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
-        try:
-            with open(file_path, 'r') as f:
-                lines = f.readlines()
-                deviation_value = lines[1].strip()
-                return float(deviation_value)
-        except Exception as e:
-            return 0.0
 
     def get_recorded_info(self):
         """

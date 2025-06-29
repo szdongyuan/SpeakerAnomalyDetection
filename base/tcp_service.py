@@ -1,8 +1,10 @@
+import json
 import socket
 import threading
 import time
 
 from base.log_manager import LogManager
+from consts.action_code import RequestTypeEnum
 from consts.running_consts import tcp_service_recv_bytes
 
 
@@ -64,3 +66,20 @@ class TcpServer:
             except Exception as e:
                 self.default_logger.error(f"tcp service except: {e}")
                 time.sleep(1)
+
+
+def check_tcp_msg_format(info):
+    try:
+        data = json.loads(info)
+    except json.JSONDecodeError as e:
+        return False, "error, json format error"
+    req_type = int(data.get("RequestType"))
+    is_sync = data.get("IsSync")
+    timestamp = data.get("Timestamp")
+    if req_type not in [rte.value for rte in RequestTypeEnum]:
+        return False, "error, RequestType error"
+    if not isinstance(is_sync, bool):
+        return False, "error, IsSync type error"
+    if not timestamp or not isinstance(timestamp, str):
+        return False, "error, Timestamp type error "
+    return True, data

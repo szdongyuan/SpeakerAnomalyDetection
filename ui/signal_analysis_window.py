@@ -24,6 +24,28 @@ from consts.running_consts import DEFAULT_DIR
 from main import predict_from_audio
 from ui.graph_widget import plot_2d_image
 
+
+def get_class_mapping():
+    """
+        Retrieves the class mapping dictionary.
+
+        This method returns a dictionary where the keys are string identifiers and the values are the corresponding classes.
+        This mapping is typically used to dynamically retrieve the appropriate class based on an identifier.
+
+        Returns:
+            dict: A dictionary containing the class mapping, in the format {"identifier": class}.
+    """
+    class_mapping = {
+        "SPL": Spl,
+        "FR": Frequency,
+        "HD": Distortion,
+        "AI": AI,
+        "Spec": Spectrogram,
+        "LP": LooseParticle,
+    }
+    return class_mapping
+
+
 class Distortion(QWidget):
     def __init__(self, title_name):
         super().__init__()

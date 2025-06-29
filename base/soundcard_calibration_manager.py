@@ -4,7 +4,28 @@ import os
 import numpy as np
 
 from base.log_manager import LogManager
-from consts import error_code, model_consts
+from consts import error_code, model_consts, running_consts
+
+
+def get_mic_deviation_value():
+    """
+        Reads the microphone calibration deviation value from a specified file.
+
+        This method is static because it does not depend on the instance state of the class and can operate independently.
+        The deviation value is read from a file as it may vary based on environmental conditions and needs to be
+    dynamically adjusted.
+
+        Return:
+            The microphone calibration deviation value. Returns 0.0 if reading the file fails.
+    """
+    file_path = running_consts.DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
+    try:
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+            deviation_value = lines[1].strip()
+            return float(deviation_value)
+    except Exception as e:
+        return 0.0
 
 
 class SoundcardCalibrationManager(object):
