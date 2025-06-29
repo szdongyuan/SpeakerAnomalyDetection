@@ -15,4 +15,5 @@ class MySignals(QObject):
 
     update_mode_display_sign = pyqtSignal(int)
 
+
 sign = MySignals()
