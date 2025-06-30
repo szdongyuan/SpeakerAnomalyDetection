@@ -38,7 +38,7 @@ class DataSave(object):
                 product_model TEXT NOT NULL,
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0),
                 record_date DATETIME NOT NULL,
-                labels TEXT CHECK (labels IN ('OK', 'NG')),
+                labels TEXT,
                 barcode TEXT,
                 stimulus_id TEXT,
                 FOREIGN KEY (stimulus_id) REFERENCES stimulus_signal_table (stimulus_id) ON DELETE NO ACTION ON UPDATE NO ACTION
@@ -82,10 +82,17 @@ class DataSave(object):
                 user_updated_time TEXT DEFAULT (DATETIME('now', '+8 hours'))
             )
             '''
+            create_system_info_table_sql = '''
+            CREATE TABLE IF NOT EXISTS system_info_table(
+                name TEXT PRIMARY KEY,
+                value TEXT
+            )
+            '''
             self.cursor.execute(create_audio_data_table_sql)
             self.cursor.execute(create_stimulus_signal_table_sql)
             self.cursor.execute(create_training_model_table_sql)
             self.cursor.execute(create_users_table_sql)
+            self.cursor.execute(create_system_info_table_sql)
             create_insert_trigger_sql = '''
             CREATE TRIGGER IF NOT EXISTS ensure_one_admin_user
             BEFORE INSERT ON users_table
