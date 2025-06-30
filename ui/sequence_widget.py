@@ -11,9 +11,8 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox, \
-    QStackedWidget
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
+from PyQt5.QtWidgets import QVBoxLayout, QWidget, QStackedWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -42,6 +41,7 @@ class SequenceWindow(QWidget):
         self.collect_or_analyse_layout = QHBoxLayout()
         self.recorded_path = None  # Initialize the recorded path variable
         self.refresh_stimulus_flag = None  # Initialize the flag to indicate if stimulus needs refreshing
+        self.add_or_update_wave_flag = True
         # Retrieve stimulus information and signal from configuration
         self.data_struct.stimulus_info, self.data_struct.stimulus_data = self.get_stimulus_from_config()
         self.deviation_value = get_mic_deviation_value()  # Get the deviation value from the microphone
@@ -68,17 +68,18 @@ class SequenceWindow(QWidget):
         self.tcp_port = None
         self.get_tcp_config()
         self.mode = None
+        self.current_recorded_count = None
         # Set up the default logger for logging messages
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
 
     def init_ui(self):
         """
-            Initializes the user interface of the SequenceWindow.
+        Initializes the user interface of the SequenceWindow.
 
-            This method sets up the window icon, minimum height, and creates the main layout 
-            by adding toolbar and waveform layouts. It also connects button click events to 
-            their respective handlers and applies style sheets to the widgets.
+        This method sets up the window icon, minimum height, and creates the main layout
+        by adding toolbar and waveform layouts. It also connects button click events to
+        their respective handlers and applies style sheets to the widgets.
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumHeight(700)
@@ -94,36 +95,38 @@ class SequenceWindow(QWidget):
 
         self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        sign.run_test_sign.connect(self.clicked_player_btn, Qt.AutoConnection)
+        sign.run_test_sign.connect(self.paly_last_stimulus_wave, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         self.update_mode_display(0)
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qframe_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qcheckbox_stytle)
+        self.setStyleSheet(
+            ui_style_const.qcombobox_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qlineedit_stytle
+            + ui_style_const.qframe_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qcheckbox_stytle
+        )
 
     def create_layout(self):
         """
-            Create the toolbar layout.
+        Create the toolbar layout.
 
-            This method initializes and configures the toolbar layout for the application.
-            It sets up button styles, adds labels and input fields, and sets layout parameters.
-            The layout is used at the top of the interface to provide easy access to key functionalities.
+        This method initializes and configures the toolbar layout for the application.
+        It sets up button styles, adds labels and input fields, and sets layout parameters.
+        The layout is used at the top of the interface to provide easy access to key functionalities.
 
-            Returns:
-                QHBoxLayout: The configured toolbar layout object.
+        Returns:
+            QHBoxLayout: The configured toolbar layout object.
         """
         self.player_btn.setFixedSize(100, 40)
         self.player_btn.setToolTip("播放")
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
-        self.player_btn.clicked.connect(self.clicked_player_btn)
+        self.player_btn.clicked.connect(self.start_this_play)
 
         self.replayer_btn.setFixedSize(100, 40)
         self.replayer_btn.setToolTip("重播")
@@ -131,7 +134,7 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
-        self.replayer_btn.clicked.connect(self.clicked_player_btn)
+        self.replayer_btn.clicked.connect(self.paly_last_stimulus_wave)
 
         self.data_btn.setFixedSize(100, 40)
         self.data_btn.setToolTip("分析")
@@ -145,7 +148,7 @@ class SequenceWindow(QWidget):
         type_label = QLabel(" 型 号： ")
         data = self.load_last_recorded_info()
         if data:
-            product_model = data.get("product_model", 'S004-1')
+            product_model = data.get("product_model", "S004-1")
         else:
             product_model = "S004-1"
         type_label.setFixedHeight(40)
@@ -157,10 +160,10 @@ class SequenceWindow(QWidget):
 
         result, _ = self.load_recorded_num_from_json()
         if result is None:
-            current_recorded_count = 1
+            self.current_recorded_count = 1
         else:
-            current_recorded_count = result
-        self.lineedit_count = QLineEdit(str(current_recorded_count))
+            self.current_recorded_count = result
+        self.lineedit_count = QLineEdit(str(self.current_recorded_count))
         self.lineedit_count.setFixedHeight(35)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_lose_focus(self.lineedit_count))
@@ -264,7 +267,7 @@ class SequenceWindow(QWidget):
 
     def validate_ip(self):
         ip = self.ip_edit.text()
-        pattern = r'^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$'
+        pattern = r"^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$"
         if not re.match(pattern, ip):
             self.ip_format = False
             QMessageBox.warning(self, "无效 IP", "每个段的值必须在 0 到 255 之间。")
@@ -318,16 +321,16 @@ class SequenceWindow(QWidget):
             It first creates a horizontal layout object and a plot widget, then sets the background color and creates
         the button layout.
             Finally, it adds these components to the layout and sets the layout margins.
-             
+
             Returns:
                 QHBoxLayout: The configured wavefrom layout object.
         """
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
-        self.line_graph.setBackground('white')
+        self.line_graph.setBackground("white")
         left_area = self.create_left_layout()
-        self.line_graph.setLabel('left', 'Amplitude(V)')
-        self.line_graph.setLabel('bottom', 'Time(s)')
+        self.line_graph.setLabel("left", "Amplitude(V)")
+        self.line_graph.setLabel("bottom", "Time(s)")
         self.line_graph.showGrid(x=True, y=True)
 
         layout.addLayout(left_area, stretch=1)
@@ -477,6 +480,16 @@ class SequenceWindow(QWidget):
         mark_ng_layout.addWidget(self.mark_ng_label)
         mark_ng_layout.addWidget(self.mark_ng_edit)
 
+        not_label_layout = QHBoxLayout()
+        not_label = QLabel("无标签：")
+        self.not_label_lineedit = QLineEdit("0")
+        self.not_label_lineedit.setFixedHeight(35)
+        self.not_label_lineedit.setFixedWidth(130)
+        self.not_label_lineedit.setAlignment(Qt.AlignCenter)
+        self.not_label_lineedit.setDisabled(True)
+        not_label_layout.addWidget(not_label)
+        not_label_layout.addWidget(self.not_label_lineedit)
+
         ok_layout = QHBoxLayout()
         ok_layout.addStretch()
         self.ok_btn = QPushButton(" OK ")
@@ -500,6 +513,7 @@ class SequenceWindow(QWidget):
         mark_layout.addLayout(mark_total_layout, stretch=1)
         mark_layout.addLayout(mark_ok_layout, stretch=1)
         mark_layout.addLayout(mark_ng_layout, stretch=1)
+        mark_layout.addLayout(not_label_layout, stretch=1)
         mark_layout.addLayout(ok_layout, stretch=2)
         mark_layout.addLayout(ng_layout, stretch=2)
         self.mark_page.setLayout(mark_layout)
@@ -515,38 +529,28 @@ class SequenceWindow(QWidget):
 
         self.init_result_files()
         return layout
-    
+
     def init_fft_and_stft_flag(self):
         model_item_list = self.analysis_config.get("display_sequence", "")
         for item_name in model_item_list:
-            self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"]) 
+            self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"])
 
     def init_result_files(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
         test_result_template = (
-            f"total: 0\n"
-            f"ok: 0\n"
-            f"ng: 0\n"
-            f"ok_percent: 0\n"
-            f"current_model: xxx\n"
-            f"datatime: {current_time}\n"
+            f"total: 0\n" f"ok: 0\n" f"ng: 0\n" f"ok_percent: 0\n" f"current_model: xxx\n" f"datatime: {current_time}\n"
         )
         if not os.path.exists(test_result_path):
             os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
-            with open(test_result_path, 'w') as f:
+            with open(test_result_path, "w") as f:
                 f.write(test_result_template)
 
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        mark_result_template = {
-            "total": 0,
-            "ok": 0,
-            "ng": 0,
-            "datatime": current_time
-        }
+        mark_result_template = {"total": 0, "ok": 0, "ng": 0, "not_labels": 0, "datatime": current_time}
         if not os.path.exists(mark_result_path):
             os.makedirs(os.path.dirname(mark_result_path), exist_ok=True)
-            with open(mark_result_path, 'w') as f:
+            with open(mark_result_path, "w") as f:
                 json.dump(mark_result_template, f, indent=4)
         else:
             self.set_result_file(1, "init", None)
@@ -554,7 +558,7 @@ class SequenceWindow(QWidget):
     @staticmethod
     def ensure_test_result_file():
         config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        with open(config_file_path, 'r') as f:
+        with open(config_file_path, "r") as f:
             default_config = json.load(f)
             default_ai_model = default_config["default_ai"]
             if default_ai_model:
@@ -565,7 +569,7 @@ class SequenceWindow(QWidget):
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
         if not os.path.exists(test_result_path):
             os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
-            with open(test_result_path, 'w') as f:
+            with open(test_result_path, "w") as f:
                 f.write(
                     f"total: 0\n"
                     f"ok: 0\n"
@@ -580,14 +584,14 @@ class SequenceWindow(QWidget):
         if index == 0:
             self.ensure_test_result_file()
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            with open(test_result_path, 'r') as f:
+            with open(test_result_path, "r") as f:
                 lines = f.readlines()
-                total = lines[0].split(':')[1].strip()
-                ok = lines[1].split(':')[1].strip()
-                ng = lines[2].split(':')[1].strip()
-                ok_percent = lines[3].split(':')[1].strip()
-                current_model = lines[4].split(':')[1].strip()
-                datatime = lines[5].split(':')[1].strip()
+                total = lines[0].split(":")[1].strip()
+                ok = lines[1].split(":")[1].strip()
+                ng = lines[2].split(":")[1].strip()
+                ok_percent = lines[3].split(":")[1].strip()
+                current_model = lines[4].split(":")[1].strip()
+                datatime = lines[5].split(":")[1].strip()
                 self.total_line_edit.setText(total)
                 self.ok_line_edit.setText(ok)
                 self.ng_line_edit.setText(ng)
@@ -597,26 +601,27 @@ class SequenceWindow(QWidget):
                 self.datatime_line_edit.setText(datatime)
         if index == 1:
             mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-            with open(mark_result_path, 'r') as f:
+            with open(mark_result_path, "r") as f:
                 data = json.load(f)
                 self.mark_total_edit.setText(str(data["total"]))
                 self.mark_ok_edit.setText(str(data["ok"]))
                 self.mark_ng_edit.setText(str(data["ng"]))
+                self.not_label_lineedit.setText(str(data["not_labels"]))
 
     def set_result_file(self, index, params, analyse_model_name):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
             self.ensure_test_result_file()
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            with open(test_result_path, 'r') as f:
+            with open(test_result_path, "r") as f:
                 lines = f.readlines()
-                total = int(lines[0].split(':')[1].strip())
-                ok = int(lines[1].split(':')[1].strip())
-                ng = int(lines[2].split(':')[1].strip())
+                total = int(lines[0].split(":")[1].strip())
+                ok = int(lines[1].split(":")[1].strip())
+                ng = int(lines[2].split(":")[1].strip())
 
                 if params == "OK":
-                    total +=1
-                    ok +=1
+                    total += 1
+                    ok += 1
                 elif params == "NG":
                     total += 1
                     ng += 1
@@ -627,11 +632,11 @@ class SequenceWindow(QWidget):
                 lines[3] = f"ok_percent: {ok_percent}%\n"
                 if analyse_model_name:
                     lines[4] = f"current_model: {analyse_model_name}\n"
-            with open(test_result_path, 'w') as f:
+            with open(test_result_path, "w") as f:
                 f.writelines(lines)
         if index == 1:
             mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-            with open(mark_result_path, 'r') as f:
+            with open(mark_result_path, "r") as f:
                 data = json.load(f)
             current_date = datetime.now().strftime("%Y-%m-%d")
             if params == "init":
@@ -639,14 +644,18 @@ class SequenceWindow(QWidget):
                     data["total"] = 0
                     data["ok"] = 0
                     data["ng"] = 0
+                    data["not_labels"] = 0
                     data["datatime"] = current_date
             elif params == "OK":
-                data["total"] += 1
+                total = int(self.mark_total_edit.text())
+                data["total"] = total + 1
                 data["ok"] += 1
             elif params == "NG":
-                data["total"] += 1
+                total = int(self.mark_total_edit.text())
+                data["total"] = total + 1
                 data["ng"] += 1
-            with open(mark_result_path, 'w') as f:
+            data["not_labels"] = int(self.not_label_lineedit.text())
+            with open(mark_result_path, "w") as f:
                 json.dump(data, f, indent=4)
 
     def update_mode_display(self, index):
@@ -655,7 +664,7 @@ class SequenceWindow(QWidget):
             self.get_result_file(0)
             self.mode = "test"
             config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-            with open(config_file_path, 'r') as f:
+            with open(config_file_path, "r") as f:
                 default_config = json.load(f)
                 default_ai_model = default_config["default_ai"]
                 if default_ai_model:
@@ -680,13 +689,13 @@ class SequenceWindow(QWidget):
     def reset_test_reord(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        with open(test_result_path, 'r') as f:
+        with open(test_result_path, "r") as f:
             lines = f.readlines()
             lines[0] = f"total: 0\n"
             lines[1] = f"ok: 0\n"
             lines[2] = f"ng: 0\n"
             lines[3] = f"ok_percent: 0\n"
-        with open(test_result_path, 'w') as f:
+        with open(test_result_path, "w") as f:
             f.writelines(lines)
         self.get_result_file(0)
 
@@ -714,9 +723,9 @@ class SequenceWindow(QWidget):
         # Define a regular expression to match numbers
         reg = None
         if is_s_or_n:
-            reg = r'^[0-9]*$'
+            reg = r"^[0-9]*$"
         else:
-            reg = r'^[0-9a-zA-Z]*$'
+            reg = r"^[0-9a-zA-Z]*$"
         # Check if the user input matches the regular expression
         if not re.match(reg, s_or_n_count):
             # If the input is not a number, restore the previously recorded number
@@ -739,8 +748,7 @@ class SequenceWindow(QWidget):
         device = self.get_match_hid_device()
         if device:
             if self.scanner_barcode_thread is None or not self.scanner_barcode_thread.is_alive():
-                self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode,
-                                                               args=(device,))
+                self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode, args=(device,))
                 self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
                 self.scanner_barcode_thread.start()
 
@@ -751,7 +759,7 @@ class SequenceWindow(QWidget):
         if port:
             self.tcp_port = port
         try:
-            with open(file_path, 'w') as f:
+            with open(file_path, "w") as f:
                 f.write(f"ip = {self.tcp_ip}\n")
                 f.write(f"port = {self.tcp_port}\n")
             self.default_logger.info(f"write_tcp_config_success: {file_path}")
@@ -760,10 +768,10 @@ class SequenceWindow(QWidget):
 
     def get_tcp_config(self):
         file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             config_data = f.readlines()
-            ip = config_data[0].split('=')[1].strip()
-            port_text = config_data[1].split('=')[1].strip()
+            ip = config_data[0].split("=")[1].strip()
+            port_text = config_data[1].split("=")[1].strip()
             port = int(port_text)
             self.tcp_ip = ip
             self.tcp_port = port
@@ -774,7 +782,7 @@ class SequenceWindow(QWidget):
             self.port_edit.setEnabled(True)
             self.barcode_scanner_box.setEnabled(False)
             self.get_tcp_config()
-            if hasattr(self, 'tcp_server') and SequenceWindow.tcp_server:
+            if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
             SequenceWindow.tcp_server = TcpServer(host=self.tcp_ip, port=self.tcp_port, callback=self.deal_package)
@@ -783,7 +791,7 @@ class SequenceWindow(QWidget):
             self.ip_edit.setEnabled(False)
             self.port_edit.setEnabled(False)
             self.barcode_scanner_box.setEnabled(True)
-            if hasattr(self, 'tcp_server') and SequenceWindow.tcp_server:
+            if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
 
@@ -838,7 +846,7 @@ class SequenceWindow(QWidget):
         if barcode:
             self.lineedit_s_or_n.setText(barcode)
             try:
-                self.clicked_player_btn()
+                self.start_this_play()
             except Exception as e:
                 self.scanner_popup()
                 self.default_logger.error(f"An error message occurred in the analysis window. {e}")
@@ -878,7 +886,7 @@ class SequenceWindow(QWidget):
         if not os.path.exists(file_path):
             return None
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 lines = f.readlines()
                 vendor_id = lines[1].strip()
                 product_id = lines[3].strip()
@@ -897,28 +905,28 @@ class SequenceWindow(QWidget):
 
     def clicked_ok_or_ng(self):
         """
-            Handles the logic when the OK or NG button is clicked.
+        Handles the logic when the OK or NG button is clicked.
 
-            This method performs several actions in response to a user clicking the OK or NG button:
-            1. Saves the current recorded count to a text file.
-            2. Updates the displayed recorded count in the UI.
-            3. Inserts the recorded data into the database with a label based on which button was clicked (OK/NG).
-            4. Resets the player status flag and updates the player icon accordingly.
-            5. Clears the signal information and waveform graph.
-            6. Disables the replay and data buttons to prevent further actions until the next recording.
+        This method performs several actions in response to a user clicking the OK or NG button:
+        1. Saves the current recorded count to a text file.
+        2. Updates the displayed recorded count in the UI.
+        3. Inserts the recorded data into the database with a label based on which button was clicked (OK/NG).
+        4. Resets the player status flag and updates the player icon accordingly.
+        5. Clears the signal information and waveform graph.
+        6. Disables the replay and data buttons to prevent further actions until the next recording.
 
-            Parameters:
-                self: The instance of the class containing this method.
+        Parameters:
+            self: The instance of the class containing this method.
         """
         if not self.player_status_flag:
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
         current_recorded_count = self.save_recorded_num_to_json("ok_ng")
-        self.lineedit_count.setText(str(current_recorded_count))
+        # self.lineedit_count.setText(str(current_recorded_count))
         self.insert_data_into_db()
         self.mark_result()
         self.player_status_flag = False
-        self.update_player_icon()
+        # self.update_player_icon()
         self.signal_info.clear()
         # self.analyse_layout.signal_info = self.signal_info
         # self.analyse_layout.close()
@@ -956,13 +964,13 @@ class SequenceWindow(QWidget):
 
     def save_recorded_num_to_json(self, start_position=None):
         """
-            Save the recorded number to a text file.
+        Save the recorded number to a text file.
 
-            This function writes the current recorded number and the current date to a specified text file.
-            If the file exists and the date matches, it updates the recorded number.
-            If the file does not exist or the date does not match, it creates a new file and writes the initial recorded number.
+        This function writes the current recorded number and the current date to a specified text file.
+        If the file exists and the date matches, it updates the recorded number.
+        If the file does not exist or the date does not match, it creates a new file and writes the initial recorded number.
         """
-        dir_path = DEFAULT_DIR + 'ui/ui_config/'
+        dir_path = DEFAULT_DIR + "ui/ui_config/"
         file_path = dir_path + "recorded_number.json"
         current_time = datetime.now().strftime("%Y-%m-%d")
         check_flag, count = self.check_datetime(current_time)
@@ -981,28 +989,28 @@ class SequenceWindow(QWidget):
             "current_recorded_count": current_recorded_count,
             "scanner_barcode": self.lineedit_s_or_n.text(),
             "scanner_barcode_check": self.barcode_scanner_box.isChecked(),
-            "datetime": current_time
+            "datetime": current_time,
         }
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
         return current_recorded_count
 
     def load_last_recorded_info(self):
         """
-            Load the recorded number from a text file.
+        Load the recorded number from a text file.
 
-            This method reads a recorded number and the last recorded date from a specified text file.
-            If the file exists and the last recorded date matches the current date, it returns the recorded number;
-            otherwise, it returns None.
+        This method reads a recorded number and the last recorded date from a specified text file.
+        If the file exists and the last recorded date matches the current date, it returns the recorded number;
+        otherwise, it returns None.
 
-            Returns:
-                int or None: The recorded number if the file exists and the date matches; otherwise, None.
+        Returns:
+            int or None: The recorded number if the file exists and the date matches; otherwise, None.
         """
         file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.json"
         if not os.path.exists(file_path):
             return None
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 data = json.load(f)
                 return data
         except Exception as e:
@@ -1011,14 +1019,14 @@ class SequenceWindow(QWidget):
 
     def load_recorded_num_from_json(self):
         """
-            Load the recorded number from a text file.
+        Load the recorded number from a text file.
 
-            This method reads a recorded number and the last recorded date from a specified text file.
-            If the file exists and the last recorded date matches the current date, it returns the recorded number;
-            otherwise, it returns None.
+        This method reads a recorded number and the last recorded date from a specified text file.
+        If the file exists and the last recorded date matches the current date, it returns the recorded number;
+        otherwise, it returns None.
 
-            Returns:
-                int or None: The recorded number if the file exists and the date matches; otherwise, None.
+        Returns:
+            int or None: The recorded number if the file exists and the date matches; otherwise, None.
         """
         result = self.load_last_recorded_info()
         if result:
@@ -1034,19 +1042,19 @@ class SequenceWindow(QWidget):
 
     def check_datetime(self, current_time):
         """
-            Check the date and count information in the given file.
+        Check the date and count information in the given file.
 
-            This method first checks if the file exists. If it does, it opens the file and reads its content.
-            It extracts the last count and date, then compares the date with the current time.
-            If the date in the file matches the current time, it returns True and the last count value.
-            If the dates do not match or the file is empty, it returns False and None.
+        This method first checks if the file exists. If it does, it opens the file and reads its content.
+        It extracts the last count and date, then compares the date with the current time.
+        If the date in the file matches the current time, it returns True and the last count value.
+        If the dates do not match or the file is empty, it returns False and None.
 
-            Args:
-                param file_path: The path to the file storing the date and count information.
-                param current_time: The current time, used to compare with the time in the file.
-            Return:
-                A tuple, where the first element is a boolean indicating whether the dates match;
-                the second element is the last count value if the dates match, otherwise None.
+        Args:
+            param file_path: The path to the file storing the date and count information.
+            param current_time: The current time, used to compare with the time in the file.
+        Return:
+            A tuple, where the first element is a boolean indicating whether the dates match;
+            the second element is the last count value if the dates match, otherwise None.
         """
         result = self.load_last_recorded_info()
         if result:
@@ -1055,15 +1063,16 @@ class SequenceWindow(QWidget):
             if last_date == current_time:
                 return True, last_count
         return False, None
-    
+
     def add_recorded_signal_info_to_db(self):
         move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
         file_path = self.recorded_signal_info["file_path"]
         if move_recorded_path:
             file_path = move_recorded_path
         self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info,
-                                                                   self.data_struct.stimulus_info)
+        save_code, msg = RecordingManager().save_signal_info_to_db(
+            self.recorded_signal_info, self.data_struct.stimulus_info
+        )
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully insert.")
         else:
@@ -1071,11 +1080,11 @@ class SequenceWindow(QWidget):
 
     def insert_data_into_db(self):
         """
-            Inserts recorded signal data into the database based on user input.
+        Inserts recorded signal data into the database based on user input.
 
-            This method determines which button (OK or NG) triggered the function call and sets the corresponding label
-            in the recorded signal information. It then attempts to save this information to the database using the
-            `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
+        This method determines which button (OK or NG) triggered the function call and sets the corresponding label
+        in the recorded signal information. It then attempts to save this information to the database using the
+        `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
         """
         button = self.sender()
         if button == self.ok_btn or self.default_ai_result:
@@ -1104,7 +1113,7 @@ class SequenceWindow(QWidget):
         self.lineedit_count.setText(str(current_recorded_count))
         self.add_recorded_signal_info_to_db()
         self.player_status_flag = False
-        self.update_player_icon()
+        # self.update_player_icon()
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
         # self.line_graph.clear()
@@ -1126,56 +1135,68 @@ class SequenceWindow(QWidget):
         file_name = os.path.basename(self.recorded_path)
         target_path = ""
         if file_name:
-            if label == 'OK':
+            if label == "OK":
                 target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
-            elif label == 'NG':
+            elif label == "NG":
                 target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
             shutil.move(self.recorded_path, target_path)
         return target_path
 
-    def clicked_player_btn(self, label="not_labeled"):
+    def start_this_play(self):
+        self.paly_last_stimulus_wave()
+        self.current_recorded_count += 1
+        self.lineedit_count.setText(str(self.current_recorded_count))
+        # if self.add_or_update_wave_flag:
+        #     self.current_recorded_count += 1
+        #     self.lineedit_count.setText(str(self.current_recorded_count))
+        #     total = int(self.mark_total_edit.text()) + 1
+        #     self.mark_total_edit.setText(str(total))
+
+    def paly_last_stimulus_wave(self, label="not_labeled"):
         """
-            Handles the play button click event. This function performs the following operations:
-            1. Clears the line graph based on the player status flag.
-            2. Updates the play button state and icon.
-            3. Retrieves the analysis configuration from the JSON file.
-            4. If the stimulus signal needs to be refreshed, fetches the stimulus signal information from the configuration.
-            5. Obtains the sample rate and generates dictionaries for the stimulus and recorded signals.
-            6. Uses the soundcard audio processor to play the stimulus signal and record the response signal.
-            7. If recording is successful, plots the recorded signal on the line graph and saves the signal information.
-            8. Enables the data button and the replay button.
-            9. If auto-analysis is configured, executes the analysis.
-            10. if fft and stft flag not null, initialize the FFT and STFT results.
+        Handles the play button click event. This function performs the following operations:
+        1. Clears the line graph based on the player status flag.
+        2. Updates the play button state and icon.
+        3. Retrieves the analysis configuration from the JSON file.
+        4. If the stimulus signal needs to be refreshed, fetches the stimulus signal information from the configuration.
+        5. Obtains the sample rate and generates dictionaries for the stimulus and recorded signals.
+        6. Uses the soundcard audio processor to play the stimulus signal and record the response signal.
+        7. If recording is successful, plots the recorded signal on the line graph and saves the signal information.
+        8. Enables the data button and the replay button.
+        9. If auto-analysis is configured, executes the analysis.
+        10. if fft and stft flag not null, initialize the FFT and STFT results.
         """
         self.data_struct.clear_data()
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
-        self.player_btn.setDisabled(True)
-        self.update_player_icon()
+        self.update_palyer_btn_is_playing()
         self.analysis_config = self.get_sequence_config_from_json()
         QApplication.processEvents()
         sample_rate = self.data_struct.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
         self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
         sap = SoundcardAudioProcessor()
-        record_code, self.data_struct.store_wave_data = sap.sd_play_rec(recorded_dict,
-                                                                        stimulus_dict,
-                                                                        self.recorded_path)
+        record_code, self.data_struct.store_wave_data = sap.sd_play_rec(
+            recorded_dict, stimulus_dict, self.recorded_path
+        )
         if record_code == error_code.OK:
             self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
             self.recorded_signal_info["sample_rate"] = sample_rate
-            save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info,
-                                                                       self.data_struct.stimulus_info)
+            save_code, msg = RecordingManager().save_signal_info_to_db(
+                self.recorded_signal_info, self.data_struct.stimulus_info
+            )
+
+        self.update_player_btn_is_paused()
 
         if self.data_struct.stft_flag != 0:
-            self.data_struct.stft_result = librosa.stft(self.data_struct.store_wave_data,
-                                                        n_fft=1024,
-                                                        hop_length=16,
-                                                        win_length=1024,
-                                                        window="hann")
+            self.data_struct.stft_result = librosa.stft(
+                self.data_struct.store_wave_data, n_fft=1024, hop_length=16, win_length=1024, window="hann"
+            )
         if self.data_struct.fft_flag != 0:
-            self.data_struct.fft_result = np.abs(np.fft.fft(self.data_struct.store_wave_data)[:self.data_struct.stimulus_info.get("sample_rate") // 2])
+            self.data_struct.fft_result = np.abs(
+                np.fft.fft(self.data_struct.store_wave_data)[: self.data_struct.stimulus_info.get("sample_rate") // 2]
+            )
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
@@ -1184,15 +1205,15 @@ class SequenceWindow(QWidget):
 
     def instance_analysis_class(self, key, type, params):
         """
-            Instantiates and configures an analysis class based on the given type and parameters, 
-            and adds it to the analysis window list.
+        Instantiates and configures an analysis class based on the given type and parameters,
+        and adds it to the analysis window list.
 
-            Args:
-                type (str): The type identifier of the analysis class, used to retrieve the corresponding class from the class mapping.
-                params (dict): Configuration parameters for the analysis class, which will be passed to the instantiated class object.
+        Args:
+            type (str): The type identifier of the analysis class, used to retrieve the corresponding class from the class mapping.
+            params (dict): Configuration parameters for the analysis class, which will be passed to the instantiated class object.
 
-            Returns:
-                None: This function does not return a value but adds the instantiated class object to the self.analysis_window list.
+        Returns:
+            None: This function does not return a value but adds the instantiated class object to the self.analysis_window list.
         """
         class_mapping = get_class_mapping()
         if type in class_mapping.keys():
@@ -1207,12 +1228,12 @@ class SequenceWindow(QWidget):
 
     def run(self):
         """
-            Executes the analysis tasks and displays the analysis windows.
+        Executes the analysis tasks and displays the analysis windows.
 
-            This method initializes the analysis windows based on the configuration and creates corresponding
-            analysis instances according to the analysis types specified in the configuration. It then performs
-            the respective calculations for each instance and displays the windows. The window positions are
-            adjusted based on the screen size to ensure they do not overlap.
+        This method initializes the analysis windows based on the configuration and creates corresponding
+        analysis instances according to the analysis types specified in the configuration. It then performs
+        the respective calculations for each instance and displays the windows. The window positions are
+        adjusted based on the screen size to ensure they do not overlap.
         """
         self.analysis_window = []
         width = int((self.screen().size().width() - 400) / 2)
@@ -1227,22 +1248,22 @@ class SequenceWindow(QWidget):
                 if self.mode == "test":
                     if instance is self.default_ai:
                         continue
-                if hasattr(instance, 'calculate_spl'):
+                if hasattr(instance, "calculate_spl"):
                     instance.calculate_spl()
                     instance.show()
-                elif hasattr(instance, 'calculate_fr'):
+                elif hasattr(instance, "calculate_fr"):
                     instance.calculate_fr()
                     instance.show()
-                elif hasattr(instance, 'calculate_thd'):
+                elif hasattr(instance, "calculate_thd"):
                     instance.calculate_thd()
                     instance.show()
-                elif hasattr(instance, 'calculate_ai_scores'):
+                elif hasattr(instance, "calculate_ai_scores"):
                     instance.calculate_ai_scores(self.mode)
                     instance.show()
-                elif hasattr(instance, 'calculate_spec'):
+                elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
                     instance.show()
-                elif hasattr(instance, 'calculate_loose_particle'):
+                elif hasattr(instance, "calculate_loose_particle"):
                     instance.calculate_loose_particle()
                     instance.show()
                 instance.setGeometry(width, height, 600, 500)
@@ -1250,10 +1271,10 @@ class SequenceWindow(QWidget):
                 width += 20
                 height += 20
             if self.mode == "test":
-                    self.default_ai.calculate_ai_scores(self.mode)
-                    self.default_ai.show()
-                    self.default_ai.setGeometry(width, height, 600, 500)
-                    self.test_insert_data_into_db()
+                self.default_ai.calculate_ai_scores(self.mode)
+                self.default_ai.show()
+                self.default_ai.setGeometry(width, height, 600, 500)
+                self.test_insert_data_into_db()
             if self.default_ai:
                 if self.default_ai.result == "OK":
                     for instance in self.analysis_window:
@@ -1263,13 +1284,13 @@ class SequenceWindow(QWidget):
 
     def get_sequence_config_from_json(self):
         """
-            Retrieves the sequence configuration from a JSON file.
+        Retrieves the sequence configuration from a JSON file.
 
-            This method attempts to load the sequence configuration from a JSON file by calling the `load_sequence_from_json()` method.
-            If the loading is successful and the result is valid, it returns the configuration; otherwise, it returns an empty dictionary.
+        This method attempts to load the sequence configuration from a JSON file by calling the `load_sequence_from_json()` method.
+        If the loading is successful and the result is valid, it returns the configuration; otherwise, it returns an empty dictionary.
 
-            Returns:
-                dict: The sequence configuration if loading is successful and the result is valid; otherwise, an empty dictionary.
+        Returns:
+            dict: The sequence configuration if loading is successful and the result is valid; otherwise, an empty dictionary.
         """
         load_code, result = self.load_sequence_from_json()
         if load_code == error_code.OK and result:
@@ -1279,23 +1300,23 @@ class SequenceWindow(QWidget):
 
     def load_sequence_from_json(self):
         """
-            Loads analysis sequence configuration data from a specified JSON file.
+        Loads analysis sequence configuration data from a specified JSON file.
 
-            This function first checks if the JSON file exists. If not, it returns an error code and message.
-            If the file exists, it attempts to read and parse the JSON file content, storing it in the class's
-            `analysis_config` attribute. If any exception occurs during reading or parsing, it catches the
-            exception and returns the corresponding error code and message.
+        This function first checks if the JSON file exists. If not, it returns an error code and message.
+        If the file exists, it attempts to read and parse the JSON file content, storing it in the class's
+        `analysis_config` attribute. If any exception occurs during reading or parsing, it catches the
+        exception and returns the corresponding error code and message.
 
-            Returns:
-                tuple: A tuple containing two elements:
-                    - The first element is an error code indicating the result status of the operation.
-                    - The second element is either an error message or the parsed JSON data.
+        Returns:
+            tuple: A tuple containing two elements:
+                - The first element is an error code indicating the result status of the operation.
+                - The second element is either an error message or the parsed JSON data.
         """
         json_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
         try:
-            with open(json_file_path, 'r') as json_file:
+            with open(json_file_path, "r") as json_file:
                 self.analysis_config = json.load(json_file)
                 return error_code.OK, self.analysis_config
         except Exception as e:
@@ -1325,53 +1346,59 @@ class SequenceWindow(QWidget):
             recorded_name = recorded_name + "_BC" + barcode
         else:
             barcode = None
-        recorded_name = recorded_name + '.wav'
+        recorded_name = recorded_name + ".wav"
         store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
         if not os.path.exists(store_record_dir):
             os.makedirs(store_record_dir)
         recorded_path = store_record_dir + "/" + recorded_name
-        recorded_signal_info = {"file_path": recorded_path, "product_model": product_model,
-                                "record_date": recording_time, "barcode": barcode, "labels": label
-                                }
+        recorded_signal_info = {
+            "file_path": recorded_path,
+            "product_model": product_model,
+            "record_date": recording_time,
+            "barcode": barcode,
+            "labels": label,
+        }
 
         return recorded_path, recorded_signal_info
 
     def get_stimulus_recorded_dict(self, sample_rate):
         """
-            Generate dictionaries containing stimulus signal data and recording parameters.
+        Generate dictionaries containing stimulus signal data and recording parameters.
 
-            This function creates two dictionaries: one for the stimulus signal data and its related information,
-            and another for the recording parameters. These dictionaries are used for subsequent signal processing and analysis.
+        This function creates two dictionaries: one for the stimulus signal data and its related information,
+        and another for the recording parameters. These dictionaries are used for subsequent signal processing and analysis.
 
-            Args:
-            - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
+        Args:
+        - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
 
-            Returns:
-            - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
-            - recorded_dict (dict): Dictionary containing the recording parameters.
+        Returns:
+        - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
+        - recorded_dict (dict): Dictionary containing the recording parameters.
         """
         # Define the prolongation time to calculate the extended frame count
         prolong = 3
-        stimulus_dict = {"data": self.data_struct.stimulus_data,
-                         "amplitude": self.data_struct.stimulus_info["amplitude"],
-                         "sr": sample_rate
-                         }
-        recorded_dict = {"channels": 1,
-                         "sr": sample_rate,
-                         "num_frames": len(self.data_struct.stimulus_data) + int(prolong * sample_rate),
-                         "prolong_frames": int(prolong * sample_rate)
-                         }
+        stimulus_dict = {
+            "data": self.data_struct.stimulus_data,
+            "amplitude": self.data_struct.stimulus_info["amplitude"],
+            "sr": sample_rate,
+        }
+        recorded_dict = {
+            "channels": 1,
+            "sr": sample_rate,
+            "num_frames": len(self.data_struct.stimulus_data) + int(prolong * sample_rate),
+            "prolong_frames": int(prolong * sample_rate),
+        }
         return stimulus_dict, recorded_dict
 
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):
         """
-            Plot a line graph of the recorded signal.
+        Plot a line graph of the recorded signal.
 
-            Parameters:
-            recorded_signal (list or numpy.array): The recorded signal data to be plotted.
-            line_graph (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
-            sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
+        Parameters:
+        recorded_signal (list or numpy.array): The recorded signal data to be plotted.
+        line_graph (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
+        sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
         """
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
@@ -1380,12 +1407,12 @@ class SequenceWindow(QWidget):
 
     def update_player_icon(self):
         """
-            Update the player button's icon and size based on the player status flag.
+        Update the player button's icon and size based on the player status flag.
 
-            If self.player_status_flag is True, it indicates that the player is in a paused state,
-            and the button icon is set to a pause icon. If self.player_status_flag is False,
-            it indicates that the player is in a playing state, and the button icon is set to a play icon,
-            and the button is enabled.
+        If self.player_status_flag is True, it indicates that the player is in a paused state,
+        and the button icon is set to a pause icon. If self.player_status_flag is False,
+        it indicates that the player is in a playing state, and the button icon is set to a play icon,
+        and the button is enabled.
         """
         if self.player_status_flag:
             self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
@@ -1394,6 +1421,16 @@ class SequenceWindow(QWidget):
             self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
             self.player_btn.setIconSize(QSize(35, 35))
             self.player_btn.setDisabled(False)
+
+    def update_palyer_btn_is_playing(self):
+        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
+        self.player_btn.setIconSize(QSize(35, 35))
+        self.player_btn.setDisabled(True)
+
+    def update_player_btn_is_paused(self):
+        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
+        self.player_btn.setIconSize(QSize(35, 35))
+        self.player_btn.setDisabled(False)
 
     def paintEvent(self, event):
         # Set the window Background-color
@@ -1417,10 +1454,20 @@ if __name__ == "__main__":
     # stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp', 'stimulus_type': 'log',
     #  'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1, 'num_steps': 1, 'amplitude_type': 'RMS',
     #  'amplitude': 0.7, 'sample_rate': 44100}
-    stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp',
-                     'stimulus_type': 'mirror_log', 'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0,
-                     'repeat_times': 1,
-                     'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
+    stimulus_info = {
+        "name": "stimulus_chirps_1",
+        "use_custom_stimulus": True,
+        "stimulus_method": "chirp",
+        "stimulus_type": "mirror_log",
+        "start_freq": 80,
+        "stop_freq": 1000,
+        "total_time": 3.0,
+        "repeat_times": 1,
+        "num_steps": 1,
+        "amplitude_type": "RMS",
+        "amplitude": 0.1,
+        "sample_rate": 44100,
+    }
 
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus.wav", sr=44100)
     # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus111.wav", sr=44100)
