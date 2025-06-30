@@ -295,8 +295,8 @@ class AddAccountWindow(QDialog):
                                                       ["user_id"])
                 if not result:
                     insert_code, msg = database.insert_data_into_db("users_table",
-                                                                      model_consts.USERS_COLUMNS,
-                                                                      [(username, password, access_lvl)])
+                                                                    model_consts.USERS_COLUMNS,
+                                                                    [(username, password, access_lvl)])
 
                     if insert_code == error_code.OK:
                         self.logger.info(f"Successful to create user {username}.")

@@ -5,7 +5,7 @@ import uuid
 from scipy.io import wavfile
 
 from base.db_manager import DataSave
-from consts import error_code, model_consts
+from consts import error_code, model_consts, running_consts
 
 
 class RecordingManager(object):
@@ -45,17 +45,16 @@ class RecordingManager(object):
             with DataSave(self.db_path) as database:
                 stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
+                ret_msg = "Successfully saved the recording signals to the database."
                 if flag:
                     name = stimulus_data[0][1] + "-" + stimulus_data[0][2] + "-" + stimulus_data[0][0].split("-")[0]
                     stimulus_data[0] += (name,)
                     database.insert_data_into_db(
                         "stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS, stimulus_data
                     )
-                    database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
-                    return error_code.OK, "Successfully saved the recording and stimulus signals to the database."
-                else:
-                    database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
-                    return error_code.OK, "Successfully saved the recording signals to the database."
+                    ret_msg = "Successfully saved the recording and stimulus signals to the database."
+                database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
+                return error_code.OK, ret_msg
         except Exception as e:
             err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e)[:40])
             return error_code.INVALID_SAVE, err_msg
@@ -83,6 +82,7 @@ class RecordingManager(object):
 
     @staticmethod
     def get_audio_info_to_db(audio_info: dict, stimulus_data, database):
+        audio_info["file_path"] = audio_info["file_path"].replace(running_consts.DEFAULT_DIR, "")
         audio_data = tuple(audio_info[key] for key in model_consts.AUDIO_COLUMNS if key in audio_info)
         audio_data = audio_data + (stimulus_data[0][0],)
         result = database.query_matching_data(

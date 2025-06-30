@@ -804,7 +804,8 @@ class SequenceWindow(QWidget):
                   "RequestType": "0-9999",
                   "RequestContent": {
                     "User": "Alice",
-                    "Action": "ScanBarcode"
+                    "Action": "ScanBarcode",
+                    "label": "NG"
                   },
                   "IsSync": false,
                   "Timestamp": "2025-04-09T16:30:00"
@@ -814,16 +815,18 @@ class SequenceWindow(QWidget):
         if not ok:
             return data
         request_type = int(data.get("RequestType"))
+        request_content = data.get("RequestContent", {})
         is_sync = data.get("IsSync")
         timestamp = data.get("Timestamp")
-        request_id = self.generate_request_id(request_type,timestamp)
+        request_id = self.generate_request_id(request_type, timestamp)
         if request_id == SequenceWindow.tcp_server.request_id:
             return "pass"
         else:
             SequenceWindow.tcp_server.request_id = request_id
         # allocating task
         if request_type == RequestTypeEnum.RUN_TEST.value:
-            sign.run_test_sign.emit()
+            label = request_content.get("Label", "not_labeled")
+            sign.run_test_sign.emit(label)
         return "ok"
 
     def scan_barcode(self, device):
@@ -1059,7 +1062,8 @@ class SequenceWindow(QWidget):
         if move_recorded_path:
             file_path = move_recorded_path
         self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.data_struct.stimulus_info)
+        save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info,
+                                                                   self.data_struct.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully insert.")
         else:
@@ -1111,7 +1115,11 @@ class SequenceWindow(QWidget):
         self.clicked_scanner()
 
     def move_wav_to_dir(self, label):
-        dir_paths = [model_consts.STORED_RECORDED_OK_PATH, model_consts.STORED_RECORDED_NG_PATH]
+        dir_paths = [
+            model_consts.STORED_RECORDED_UNLABELED_PATH,
+            model_consts.STORED_RECORDED_OK_PATH,
+            model_consts.STORED_RECORDED_NG_PATH,
+        ]
         for path in dir_paths:
             if not os.path.exists(path):
                 os.makedirs(path)
@@ -1125,7 +1133,7 @@ class SequenceWindow(QWidget):
             shutil.move(self.recorded_path, target_path)
         return target_path
 
-    def clicked_player_btn(self):
+    def clicked_player_btn(self, label="not_labeled"):
         """
             Handles the play button click event. This function performs the following operations:
             1. Clears the line graph based on the player status flag.
@@ -1149,12 +1157,16 @@ class SequenceWindow(QWidget):
         QApplication.processEvents()
         sample_rate = self.data_struct.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
-        self.recorded_path, self.recorded_signal_info = self.get_recorded_info()
+        self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
         sap = SoundcardAudioProcessor()
-        record_code, self.data_struct.store_wave_data = sap.sd_play_rec(recorded_dict, stimulus_dict, self.recorded_path)
+        record_code, self.data_struct.store_wave_data = sap.sd_play_rec(recorded_dict,
+                                                                        stimulus_dict,
+                                                                        self.recorded_path)
         if record_code == error_code.OK:
             self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
             self.recorded_signal_info["sample_rate"] = sample_rate
+            save_code, msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info,
+                                                                       self.data_struct.stimulus_info)
 
         if self.data_struct.stft_flag != 0:
             self.data_struct.stft_result = librosa.stft(self.data_struct.store_wave_data,
@@ -1290,7 +1302,7 @@ class SequenceWindow(QWidget):
             err_msg = "Failed to load analysis sequence data from json.%s" % (str(e)[:50])
             return error_code.INVALID_DATA_LOADING, err_msg
 
-    def get_recorded_info(self):
+    def get_recorded_info(self, label):
         """
             Generate recorded information.
 
@@ -1314,10 +1326,14 @@ class SequenceWindow(QWidget):
         else:
             barcode = None
         recorded_name = recorded_name + '.wav'
-        recorded_path = model_consts.STORED_RECORDED_PATH + "/" + recorded_name
+        store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
+        if not os.path.exists(store_record_dir):
+            os.makedirs(store_record_dir)
+        recorded_path = store_record_dir + "/" + recorded_name
         recorded_signal_info = {"file_path": recorded_path, "product_model": product_model,
-                                "record_date": recording_time, "barcode": barcode
+                                "record_date": recording_time, "barcode": barcode, "labels": label
                                 }
+
         return recorded_path, recorded_signal_info
 
     def get_stimulus_recorded_dict(self, sample_rate):
