@@ -716,7 +716,6 @@ class SequenceWindow(QWidget):
             Parameters:
             lineedit (QLineEdit): The QLineEdit object containing the user's count input.
         """
-        print("validate_count")
         # lineedit.clearFocus()
         s_or_n_count = lineedit.text()
         # Load the previously recorded number from a text file
