@@ -95,7 +95,7 @@ class SequenceWindow(QWidget):
 
         self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        sign.run_test_sign.connect(self.paly_last_stimulus_wave, Qt.AutoConnection)
+        sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
@@ -716,6 +716,7 @@ class SequenceWindow(QWidget):
             Parameters:
             lineedit (QLineEdit): The QLineEdit object containing the user's count input.
         """
+        print("validate_count")
         # lineedit.clearFocus()
         s_or_n_count = lineedit.text()
         # Load the previously recorded number from a text file
@@ -738,6 +739,9 @@ class SequenceWindow(QWidget):
             if is_s_or_n:
                 self.lineedit_s_or_n.setText("")
             self.save_recorded_num_to_json()
+        if re.match(reg, s_or_n_count):
+            if is_s_or_n:
+                self.current_recorded_count = int(s_or_n_count)
         if s_or_n_count == "":
             if is_s_or_n:
                 lineedit.setText(str(result_count))
