@@ -1,5 +1,6 @@
 class DataDealStruct(object):
     _instance = None
+
     @classmethod
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
