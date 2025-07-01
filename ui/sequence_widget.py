@@ -18,6 +18,7 @@ from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.utils.custom_signals import sign
 from base.load_audio import load_audio_simple
+from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
@@ -126,8 +127,7 @@ class SequenceWindow(QWidget):
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
-        self.player_btn.clicked.connect(self.start_this_play)
-
+        self.player_btn.clicked.connect(lambda: self.start_this_play())
         self.replayer_btn.setFixedSize(100, 40)
         self.replayer_btn.setToolTip("重播")
         self.replayer_btn.setDisabled(True)
@@ -146,9 +146,9 @@ class SequenceWindow(QWidget):
         self.data_btn.clicked.connect(self.run)
 
         type_label = QLabel(" 型 号： ")
-        data = self.load_last_recorded_info()
-        if data:
-            product_model = data.get("product_model", "S004-1")
+        last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
+        if last_recorded_info:
+            product_model = last_recorded_info.get("product_model", "S004-1")
         else:
             product_model = "S004-1"
         type_label.setFixedHeight(40)
@@ -158,7 +158,7 @@ class SequenceWindow(QWidget):
         label_count = QLabel(" 计 数： ")
         label_count.setFixedHeight(40)
 
-        result, _ = self.load_recorded_num_from_json()
+        result, _ = self.load_recorded_num_from_json(self.default_logger)
         if result is None:
             self.current_recorded_count = 1
         else:
@@ -702,7 +702,7 @@ class SequenceWindow(QWidget):
     def lineedit_lose_focus(self, lineedit):
         lineedit.clearFocus()
         if lineedit.text() == "":
-            result_count, _ = self.load_recorded_num_from_json()
+            result_count, _ = self.load_recorded_num_from_json(self.default_logger)
             lineedit.setText(str(result_count))
 
     def validate_count(self, lineedit, is_s_or_n: bool):
@@ -719,7 +719,7 @@ class SequenceWindow(QWidget):
         # lineedit.clearFocus()
         s_or_n_count = lineedit.text()
         # Load the previously recorded number from a text file
-        result_count, result_scanner_barcode = self.load_recorded_num_from_json()
+        result_count, result_scanner_barcode = self.load_recorded_num_from_json(self.default_logger)
         # Define a regular expression to match numbers
         reg = None
         if is_s_or_n:
@@ -798,17 +798,6 @@ class SequenceWindow(QWidget):
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
 
-    @staticmethod
-    def generate_request_id(request_type, timestamp):
-        """
-        Args:
-            request_type: int
-            timestamp: str
-        Returns:
-           "102@2025-04-11T10:06:47"
-        """
-        return f"{request_type}@{timestamp}"
-
     def deal_package(self, info):
         """
         info: {
@@ -829,7 +818,7 @@ class SequenceWindow(QWidget):
         request_content = data.get("RequestContent", {})
         is_sync = data.get("IsSync")
         timestamp = data.get("Timestamp")
-        request_id = self.generate_request_id(request_type, timestamp)
+        request_id = f"{request_type}@{timestamp}"
         if request_id == SequenceWindow.tcp_server.request_id:
             return "pass"
         else:
@@ -976,7 +965,7 @@ class SequenceWindow(QWidget):
         dir_path = DEFAULT_DIR + "ui/ui_config/"
         file_path = dir_path + "recorded_number.json"
         current_time = datetime.now().strftime("%Y-%m-%d")
-        check_flag, count = self.check_datetime(current_time)
+        check_flag, count = self.check_datetime(current_time, self.default_logger)
         if check_flag:
             current_recorded_count = int(count) + 1
         else:
@@ -998,7 +987,8 @@ class SequenceWindow(QWidget):
             json.dump(data, f, indent=4)
         return current_recorded_count
 
-    def load_last_recorded_info(self):
+    @staticmethod
+    def load_recorded_num_from_json(logger):
         """
         Load the recorded number from a text file.
 
@@ -1009,29 +999,7 @@ class SequenceWindow(QWidget):
         Returns:
             int or None: The recorded number if the file exists and the date matches; otherwise, None.
         """
-        file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.json"
-        if not os.path.exists(file_path):
-            return None
-        try:
-            with open(file_path, "r") as f:
-                data = json.load(f)
-                return data
-        except Exception as e:
-            self.default_logger.error(f"Failed to read the info of recorded number: {e}")
-            return None
-
-    def load_recorded_num_from_json(self):
-        """
-        Load the recorded number from a text file.
-
-        This method reads a recorded number and the last recorded date from a specified text file.
-        If the file exists and the last recorded date matches the current date, it returns the recorded number;
-        otherwise, it returns None.
-
-        Returns:
-            int or None: The recorded number if the file exists and the date matches; otherwise, None.
-        """
-        result = self.load_last_recorded_info()
+        result = LoadUiConfig().load_last_recorded_info(logger)
         if result:
             last_datetime = result.get("datetime")
             recorded_count = result.get("current_recorded_count")
@@ -1043,7 +1011,8 @@ class SequenceWindow(QWidget):
         else:
             return None, None
 
-    def check_datetime(self, current_time):
+    @staticmethod
+    def check_datetime(current_time, logger):
         """
         Check the date and count information in the given file.
 
@@ -1059,7 +1028,7 @@ class SequenceWindow(QWidget):
             A tuple, where the first element is a boolean indicating whether the dates match;
             the second element is the last count value if the dates match, otherwise None.
         """
-        result = self.load_last_recorded_info()
+        result = LoadUiConfig().load_last_recorded_info(logger)
         if result:
             last_count = result.get("current_recorded_count")
             last_date = result.get("datetime")
@@ -1145,8 +1114,8 @@ class SequenceWindow(QWidget):
             shutil.move(self.recorded_path, target_path)
         return target_path
 
-    def start_this_play(self):
-        self.paly_last_stimulus_wave()
+    def start_this_play(self, label="not_labeled"):
+        self.paly_last_stimulus_wave(label)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
         # if self.add_or_update_wave_flag:
@@ -1278,14 +1247,15 @@ class SequenceWindow(QWidget):
                 self.default_ai.show()
                 self.default_ai.setGeometry(width, height, 600, 500)
                 self.test_insert_data_into_db()
-            if self.default_ai:
+            elif self.default_ai:
                 if self.default_ai.result == "OK":
                     for instance in self.analysis_window:
                         instance.close()
                     self.default_ai_result = True
                     self.clicked_ok_or_ng()
 
-    def get_sequence_config_from_json(self):
+    @staticmethod
+    def get_sequence_config_from_json():
         """
         Retrieves the sequence configuration from a JSON file.
 
@@ -1295,36 +1265,11 @@ class SequenceWindow(QWidget):
         Returns:
             dict: The sequence configuration if loading is successful and the result is valid; otherwise, an empty dictionary.
         """
-        load_code, result = self.load_sequence_from_json()
+        load_code, result = LoadUiConfig().load_sequence_config_from_json()
         if load_code == error_code.OK and result:
             return result
         else:
             return {}
-
-    def load_sequence_from_json(self):
-        """
-        Loads analysis sequence configuration data from a specified JSON file.
-
-        This function first checks if the JSON file exists. If not, it returns an error code and message.
-        If the file exists, it attempts to read and parse the JSON file content, storing it in the class's
-        `analysis_config` attribute. If any exception occurs during reading or parsing, it catches the
-        exception and returns the corresponding error code and message.
-
-        Returns:
-            tuple: A tuple containing two elements:
-                - The first element is an error code indicating the result status of the operation.
-                - The second element is either an error message or the parsed JSON data.
-        """
-        json_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        if not os.path.exists(json_file_path):
-            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        try:
-            with open(json_file_path, "r") as json_file:
-                self.analysis_config = json.load(json_file)
-                return error_code.OK, self.analysis_config
-        except Exception as e:
-            err_msg = "Failed to load analysis sequence data from json.%s" % (str(e)[:50])
-            return error_code.INVALID_DATA_LOADING, err_msg
 
     def get_recorded_info(self, label):
         """
