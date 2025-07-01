@@ -36,14 +36,13 @@ class ModelInfoList(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qtableview_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qtableview_stytle)
 
     def create_model_info_list_layout(self):
         layout = QVBoxLayout()
         layout.addWidget(self.model_info_list)
         return layout
-    
+
     def create_btn_layout(self):
         ok_btn = QPushButton("确定")
         set_new_model_btn = QPushButton("新建模型")
@@ -63,7 +62,7 @@ class ModelInfoList(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
-        
+
 
 class MytableView(QTableView):
     def __init__(self, logger: LogManager):
@@ -77,7 +76,7 @@ class MytableView(QTableView):
         self.sellect_model_row = None
 
         self.model().dataChanged.connect(self.is_edit_model_item)
-        
+
         self.init_ui()
 
     def init_ui(self):
@@ -109,7 +108,7 @@ class MytableView(QTableView):
             self.on_data_changed(index, self.is_edit_item)
         else:
             return
-        
+
     def create_model_stytle(self):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -134,7 +133,11 @@ class MytableView(QTableView):
                 if index.column() == 0:
                     old_name = self.model_info[index.row()][index.column()]
                     model_name = new_model_info
-                    model_data = {"old_name": old_name, "model_name": model_name, "model_path": self.model_info[index.row()][-1]}
+                    model_data = {
+                        "old_name": old_name,
+                        "model_name": model_name,
+                        "model_path": self.model_info[index.row()][-1],
+                    }
                     model_path = DEFAULT_DIR + self.model_info[index.row()][-1]
                     if model_name is not None:
                         try:
@@ -150,7 +153,11 @@ class MytableView(QTableView):
                     old_name = self.model_info[index.row()][0]
                     old_description = self.model_info[index.row()][index.column()]
                     model_description = new_model_info
-                    model_data = {"old_name": old_name, "old_description" : old_description, "model_description": model_description}
+                    model_data = {
+                        "old_name": old_name,
+                        "old_description": old_description,
+                        "model_description": model_description,
+                    }
                 code, error = self.model_management.update_model_info_to_db(model_data)
                 if code == error_code.OK:
                     self.logger.info(error)
@@ -189,7 +196,7 @@ class MytableView(QTableView):
         selection_model = self.selectionModel()
         if selection_model.hasSelection():
             selection_model.clearSelection()
-        
+
     def add_model_info_to_model(self, model_info):
         for idx, model_info in enumerate(model_info):
             model_info_items = []
@@ -222,23 +229,23 @@ class MytableView(QTableView):
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("文件存在")
         msg_box.setText("目标文件已存在，是否覆盖？")
-        
+
         msg_box.addButton("是", QMessageBox.YesRole)
         no_btn = msg_box.addButton("否", QMessageBox.NoRole)
         msg_box.exec_()
-        
+
         if msg_box.clickedButton() == no_btn:
             self.logger.warning("user cancel override the file")
             return False
         else:
             return True
-        
+
     def copy_file(self, source_path: str, model_name: str, model_type: str):
         if source_path and model_name and model_type:
             if not os.path.isfile(source_path):
                 self.logger.error("source file is empty")
                 return error_code.INVALID_PATH
-            target_dir = DEFAULT_DIR+ "models/"
+            target_dir = DEFAULT_DIR + "models/"
             os.makedirs(target_dir, exist_ok=True)
             target_path = os.path.join(target_dir, model_name + "." + model_type)
             if os.path.exists(target_path):
@@ -267,7 +274,7 @@ class MytableView(QTableView):
             return error_code.COPY_FILE_ERROR
 
     def register_model_info_to_db(self, model_name: str, model_config: dict, model_type: str):
-        result= False
+        result = False
         if self.model_info:
             result = any(model_name in row for row in self.model_info)
         if result:
@@ -280,12 +287,14 @@ class MytableView(QTableView):
             else:
                 config_path = model_consts.CONFIG_PATH
                 QMessageBox.warning(self, "警告", "未找到模型配置文件，已使用默认配置文件!")
-            code, code_str = self.model_management.register_new_model_info_to_db(model_name = model_name,
-                                                                                 config_path = config_path,
-                                                                                 input_dim = model_config.get("input_dim"), 
-                                                                                 output_dim = model_config.get("output_dim"),
-                                                                                 model_description = model_config.get("model_description", "No description"),
-                                                                                 model_type = model_type)
+            code, code_str = self.model_management.register_new_model_info_to_db(
+                model_name=model_name,
+                config_path=config_path,
+                input_dim=model_config.get("input_dim"),
+                output_dim=model_config.get("output_dim"),
+                model_description=model_config.get("model_description", "No description"),
+                model_type=model_type,
+            )
             if code == error_code.INVALID_INSERT:
                 self.logger.error(code_str)
                 return False
@@ -296,32 +305,36 @@ class MytableView(QTableView):
         else:
             self.logger.error("model_name or model_config or model_type is empty")
             return False
-        
-    def get_model_config(self, model_name: str, action_type:str = None):
+
+    def get_model_config(self, model_name: str, action_type: str = None):
         dim_dict = {}
         if action_type == "new":
             dim_dict["input_left"] = self.model_info[self.sellect_model_row][1].split(" x ")[0]
             dim_dict["input_right"] = self.model_info[self.sellect_model_row][1].split(" x ")[1]
             dim_dict["output_dim"] = self.model_info[self.sellect_model_row][2]
             dim_dict["config_path"] = self.model_info[self.sellect_model_row][-2]
-            model_obj_data = SetModelConfig(model_info = self.model_info, model_name = model_name, dim = dim_dict)
+            model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name, dim=dim_dict)
             model_obj_data.model_input_dim_box.setEnabled(False)
             model_obj_data.model_output_dim_box.setEnabled(False)
             model_obj_data.model_config_box.setEnabled(False)
         else:
-            model_obj_data = SetModelConfig(model_info = self.model_info, model_name = model_name)
+            model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name)
         model_config = model_obj_data.exec()
         return model_config
-    
-    def updata_model_info(self, model_path: str, model_name: str = None, model_type: str = "keras", action_type: str = None):
+
+    def update_model_info(
+        self, model_path: str, model_name: str = None, model_type: str = "keras", action_type: str = None
+    ):
         if not model_path:
             return
-        model_config = self.get_model_config(model_name = model_name, action_type = action_type)
+        model_config = self.get_model_config(model_name=model_name, action_type=action_type)
         is_success_register = False
         if model_config:
-            code= self.copy_file(model_path, model_config["model_name"], model_type)
+            code = self.copy_file(model_path, model_config["model_name"], model_type)
             if code == error_code.OK:
-                is_success_register = self.register_model_info_to_db(model_config["model_name"], model_config, model_type)
+                is_success_register = self.register_model_info_to_db(
+                    model_config["model_name"], model_config, model_type
+                )
                 if is_success_register:
                     self.logger.info("set new model info success")
                     self.model().clear()
@@ -345,25 +358,23 @@ class MytableView(QTableView):
             model_path = DEFAULT_DIR + self.model_info[item.row()][-1]
             if os.path.isfile(model_path):
                 model_type = model_path.split(".")[-1]
-                self.updata_model_info(model_path = model_path, model_type = model_type, action_type="new")
+                self.update_model_info(model_path=model_path, model_type=model_type, action_type="new")
                 self.sellect_model_row = None
 
     def register_model_info(self):
         home_directory = os.path.expanduser("~")
-        model_path = QFileDialog.getOpenFileName(self, 
-                                                 "选择模型文件",
-                                                 home_directory, 
-                                                 "KERAS Files (*.keras);;"
-                                                 "All Files (*)")[0]
+        model_path = QFileDialog.getOpenFileName(
+            self, "选择模型文件", home_directory, "KERAS Files (*.keras);;" "All Files (*)"
+        )[0]
         if os.path.isfile(model_path):
             model_name = os.path.basename(model_path)
             model_name = model_name.split(".")[0]
             model_type = model_path.split(".")[-1]
         else:
             return
-        self.updata_model_info(model_path, model_name, model_type)
+        self.update_model_info(model_path, model_name, model_type)
         self.sellect_model_row = None
-        
+
     def del_model_info(self):
         if self.sellect_model_row is None:
             QMessageBox.warning(self, "警告", "请选择模型")
@@ -385,8 +396,11 @@ class MytableView(QTableView):
 
 class SetModelConfig(QDialog):
     def __init__(self, model_info: list, model_name: str = None, dim: dict = None):
-        super().__init__() 
-        self.config = {"model_name": model_name, "output_dim": None,}
+        super().__init__()
+        self.config = {
+            "model_name": model_name,
+            "output_dim": None,
+        }
         self.model_name = model_name
         self.dim = dim
         self.input_dim_left: str = None
@@ -427,15 +441,17 @@ class SetModelConfig(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + 
-                           ui_style_const.qlineedit_stytle + 
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle + 
-                           ui_style_const.qcombobox_stytle)
-        
-    def check_model_name(self, model_name:str):
+        self.setStyleSheet(
+            ui_style_const.qpushbutton_stytle
+            + ui_style_const.qlineedit_stytle
+            + ui_style_const.qgroupbox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qcombobox_stytle
+        )
+
+    def check_model_name(self, model_name: str):
         input_str = model_name
-        reg = r'^[A-Za-z0-9_]*$'
+        reg = r"^[A-Za-z0-9_]*$"
         if not match(reg, input_str):
             QMessageBox.warning(self, "警告", "模型名称只能由大小写字母、数字和下划线组成!")
             return False
@@ -462,7 +478,7 @@ class SetModelConfig(QDialog):
 
         model_name_box.setLayout(model_name_layout)
         return model_name_box
-    
+
     def create_input_dim_box(self):
         input_dim_box = QGroupBox()
         input_dim_label = QLabel("输入维度:")
@@ -497,7 +513,7 @@ class SetModelConfig(QDialog):
         output_dim_layout.addWidget(output_dim_edit)
         output_dim_box.setLayout(output_dim_layout)
         return output_dim_box
-    
+
     def create_model_config_box(self):
         model_config_box = QGroupBox()
         model_config_label = QLabel("模型配置:")
@@ -510,13 +526,13 @@ class SetModelConfig(QDialog):
             model_config_combobox.addItem(yaml_file)
         model_config_combobox.setCurrentText(self.config["config_path"])
         layout = QHBoxLayout()
-        layout.addWidget(model_config_label)   
+        layout.addWidget(model_config_label)
         layout.addStretch()
         layout.addWidget(model_config_combobox)
         model_config_box.setLayout(layout)
 
         return model_config_box
-    
+
     def create_model_description_box(self):
         model_description_box = QGroupBox()
         model_description_label = QLabel("模型备注:")
@@ -529,7 +545,7 @@ class SetModelConfig(QDialog):
         model_description_layout.addWidget(model_description_edit)
         model_description_box.setLayout(model_description_layout)
         return model_description_box
-    
+
     def create_btn_layout(self):
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("确定")
@@ -537,18 +553,18 @@ class SetModelConfig(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
-    
+
     def get_yaml_files(self):
         directory = DEFAULT_DIR + "/configs/ai_model_config"
         yaml_files = []
         for filename in os.listdir(directory):
-            if filename.endswith('.yml'):
-                yaml_file = os.path.basename(filename).split('.yml')[0]
+            if filename.endswith(".yml"):
+                yaml_file = os.path.basename(filename).split(".yml")[0]
                 yaml_files.append(yaml_file)
         return yaml_files
-    
+
     def on_combobox_clicked(self):
-        self.config["config_path"]= self.sender().currentText()
+        self.config["config_path"] = self.sender().currentText()
 
     def on_model_name_edit_finished(self):
         self.config["model_name"] = self.sender().text()
@@ -566,14 +582,19 @@ class SetModelConfig(QDialog):
         self.config["model_description"] = self.sender().text()
 
     def on_close(self):
-        if self.config.get("model_name", None) and self.input_dim_left and \
-            self.input_dim_right and self.config.get("output_dim", None) and self.config.get("config_path", None):
+        if (
+            self.config.get("model_name", None)
+            and self.input_dim_left
+            and self.input_dim_right
+            and self.config.get("output_dim", None)
+            and self.config.get("config_path", None)
+        ):
             self.clicked_ok_close = True
             self.close()
         else:
             QMessageBox.warning(self, "警告", "请配置信息！")
             return
-    
+
     def exec(self):
         super().exec()
         if self.clicked_ok_close:
@@ -581,7 +602,7 @@ class SetModelConfig(QDialog):
             return self.config
         else:
             return {}
-        
+
     def closeEvent(self, close_event):
         if self.clicked_ok_close:
             if not self.check_model_name(self.config["model_name"]):
@@ -591,6 +612,7 @@ class SetModelConfig(QDialog):
                 close_event.accept()
         else:
             close_event.accept()
+
 
 class CustomStandardItemModel(QStandardItemModel):
     def __init__(self, rows, columns, editable_column: list, parent=None):
@@ -604,16 +626,16 @@ class CustomStandardItemModel(QStandardItemModel):
             else:
                 return Qt.ItemIsEnabled | Qt.ItemIsSelectable
         return super().flags(index)
-    
+
     def setData(self, index, value, role=Qt.EditRole):
         if index.column() == 0:
-            if not match(r'^[A-Za-z0-9_]*$', str(value)):
+            if not match(r"^[A-Za-z0-9_]*$", str(value)):
                 QMessageBox.warning(self.parent(), "警告", "模型名称只能由大小写字母、数字和下划线组成!")
                 return False
         return super().setData(index, value, role)
-    
-    
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = ModelInfoList(LogManager.set_log_handler("core"))
     # window = SetModelConfig()

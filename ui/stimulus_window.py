@@ -77,7 +77,9 @@ class StimulusWindow(QDialog):
 
         stimulus_info = self.get_stimulus_info_from_json()
         self.update_stimulus_ui_value(stimulus_info)
-        self.old_stimulus_signal_length = self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate")
+        self.old_stimulus_signal_length = self.data_struct.stimulus_info.get(
+            "total_time"
+        ) * self.data_struct.stimulus_info.get("sample_rate")
 
     def init_ui(self):
         # set window titlebar stytle
@@ -88,7 +90,7 @@ class StimulusWindow(QDialog):
         self.setFixedSize(540, 700)
 
         self.plot_stimulus = pyqtgraph.PlotWidget()
-        self.plot_stimulus.setBackground('white')
+        self.plot_stimulus.setBackground("white")
         self.plot_stimulus.resize(400, 170)
 
         # create layout to strore custom button layout
@@ -142,38 +144,50 @@ class StimulusWindow(QDialog):
 
         # Set custom_chk_box in different states, can use the function list
         self.box_checked_enable_dict = {
-            "chirp": [load_config_btn, save_config_btn, stimulus_type_group_box,
-                      self.frequency_group_box, time_group_box],
-            "noise": [load_config_btn, save_config_btn, stimulus_type_group_box,
-                      time_group_box],
-            "step": [load_config_btn, save_config_btn, stimulus_type_group_box,
-                      self.frequency_group_box, time_group_box, self.step_group_box],
+            "chirp": [
+                load_config_btn,
+                save_config_btn,
+                stimulus_type_group_box,
+                self.frequency_group_box,
+                time_group_box,
+            ],
+            "noise": [load_config_btn, save_config_btn, stimulus_type_group_box, time_group_box],
+            "step": [
+                load_config_btn,
+                save_config_btn,
+                stimulus_type_group_box,
+                self.frequency_group_box,
+                time_group_box,
+                self.step_group_box,
+            ],
         }
         self.box_checked_disable_list = [load_wav_btn]
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qspinbox_stytle +
-                           ui_style_const.qdoublespinbox_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qcheckbox_stytle +
-                           ui_style_const.qgroupbox_stytle)
+        self.setStyleSheet(
+            ui_style_const.qcombobox_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qspinbox_stytle
+            + ui_style_const.qdoublespinbox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qcheckbox_stytle
+            + ui_style_const.qgroupbox_stytle
+        )
 
     def create_stimulus_type_group_box(self):
         """
-            Create a QGroupBox for stimulus signal type selection.
+        Create a QGroupBox for stimulus signal type selection.
 
-            This method constructs a group box containing combo boxes for selecting different stimulus signal types.
-            It configures layout components, establishes signal-slot connections for handling selection changes,
-            and initializes default values from the stimulus dictionary.
+        This method constructs a group box containing combo boxes for selecting different stimulus signal types.
+        It configures layout components, establishes signal-slot connections for handling selection changes,
+        and initializes default values from the stimulus dictionary.
 
-            Returns:
-                QGroupBox: Configured group box containing stimulus type selection components.
+        Returns:
+            QGroupBox: Configured group box containing stimulus type selection components.
         """
         stimulus_type_group_box = QGroupBox("激励信号类型")
-        self.stimulus_type_combo_box.currentTextChanged.connect(self.updata_stimulus_info_from_stimulus_type_combo_box)
+        self.stimulus_type_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_stimulus_type_combo_box)
         self.stimulus_method_combo_box.currentTextChanged.connect(self.set_stimulus_type_connection)
         self.stimulus_method_combo_box.addItems(["啁啾", "步进", "噪音"])
         stimulus_type_layout = QHBoxLayout()
@@ -186,31 +200,35 @@ class StimulusWindow(QDialog):
 
     def create_frequency_group_box(self):
         """
-            Create a frequency range configuration group box
-            
-            Constructs a QGroupBox containing start/stop frequency spinboxes for user input.
-            Features:
-            - Two QDoubleSpinBox with Hz suffix
-            - Value range: 10-24000 Hz
-            - Default values: 80 Hz (start), 2000 Hz (stop)
-            - Auto-triggers stimulus_changed signal on edit completion
-            
-            Returns:
-                QGroupBox: Configured group box with frequency range widgets
+        Create a frequency range configuration group box
+
+        Constructs a QGroupBox containing start/stop frequency spinboxes for user input.
+        Features:
+        - Two QDoubleSpinBox with Hz suffix
+        - Value range: 10-24000 Hz
+        - Default values: 80 Hz (start), 2000 Hz (stop)
+        - Auto-triggers stimulus_changed signal on edit completion
+
+        Returns:
+            QGroupBox: Configured group box with frequency range widgets
         """
         frequency_group_box = QGroupBox("频率范围 (10 - 24000Hz)")
         start_freq_label = QLabel("起始频率：")
         self.start_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
-        self.start_freq_box.valueChanged.connect(lambda:self.updata_stimulus_info_from_object(self.start_freq_box, "start_freq"))
+        self.start_freq_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_object(self.start_freq_box, "start_freq")
+        )
         self.start_freq_box.setMinimumWidth(100)
         stop_freq_label = QLabel("截止频率：")
         self.stop_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
         self.stop_freq_box.setMinimumWidth(100)
-        self.stop_freq_box.valueChanged.connect(lambda:self.updata_stimulus_info_from_object(self.stop_freq_box, "stop_freq"))
+        self.stop_freq_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_object(self.stop_freq_box, "stop_freq")
+        )
         frequency_layout = QHBoxLayout()
         frequency_layout.addWidget(start_freq_label)
         frequency_layout.addWidget(self.start_freq_box)
@@ -222,13 +240,13 @@ class StimulusWindow(QDialog):
         return frequency_group_box
 
     def create_time_group_box(self):
-        """ 
-            Create time parameters configuration group box
-            Constructs a QGroupBox containing signal duration and repetition controls for configuring
-            stimulus timing parameters. All value changes will trigger the stimulus_changed signal.
+        """
+        Create time parameters configuration group box
+        Constructs a QGroupBox containing signal duration and repetition controls for configuring
+        stimulus timing parameters. All value changes will trigger the stimulus_changed signal.
 
-            Returns:
-                QGroupBox: Container widget with horizontal layout of time configuration controls
+        Returns:
+            QGroupBox: Container widget with horizontal layout of time configuration controls
         """
         time_group_box = QGroupBox()
         total_time_label = QLabel("信号时长：")
@@ -238,8 +256,12 @@ class StimulusWindow(QDialog):
         self.total_time_box.setRange(0.5, 60)  # Set range 0.5-60 seconds
         self.total_time_box.setSingleStep(0.5)
         self.total_time_box.setMinimumWidth(100)
-        self.total_time_box.valueChanged.connect(lambda:self.updata_stimulus_info_from_object(self.total_time_box, "total_time"))
-        self.repeat_box.valueChanged.connect(lambda:self.updata_stimulus_info_from_object(self.repeat_box, "repeat_times"))
+        self.total_time_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_object(self.total_time_box, "total_time")
+        )
+        self.repeat_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_object(self.repeat_box, "repeat_times")
+        )
         repeat_label = QLabel("信号重复：")
         self.repeat_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.repeat_box.setRange(1, 10)
@@ -257,19 +279,19 @@ class StimulusWindow(QDialog):
 
     def create_step_group_box(self):
         """
-            Create and configure the step setting group box
-            Return:
-                QGroupBox: A group box that contains a step number setting control with the following components:
-                - QLabel Displays "Step quantity"
-                - QSpinBox used to set the step value (range 1-100)
-            Signal connection:
-                The editingFinished signal of step_box is connected to the stimulus_changed method
+        Create and configure the step setting group box
+        Return:
+            QGroupBox: A group box that contains a step number setting control with the following components:
+            - QLabel Displays "Step quantity"
+            - QSpinBox used to set the step value (range 1-100)
+        Signal connection:
+            The editingFinished signal of step_box is connected to the stimulus_changed method
         """
         step_group_box = QGroupBox()
         step_label = QLabel("步进数量")
         self.step_box.setFixedSize(100, 30)
         self.step_box.setRange(1, 100)
-        self.step_box.valueChanged.connect(lambda:self.updata_stimulus_info_from_object(self.step_box, "num_steps"))
+        self.step_box.valueChanged.connect(lambda: self.update_stimulus_info_from_object(self.step_box, "num_steps"))
         step_layout = QHBoxLayout()
         step_layout.addWidget(step_label)
         step_layout.addWidget(self.step_box)
@@ -289,15 +311,17 @@ class StimulusWindow(QDialog):
                 QGroupBox: Returns a configured QGroupBox containing the controls for setting the output voltage.
         """
         voltage_group_box = QGroupBox("输出电压")
-        self.voltage_combo_box.currentTextChanged.connect(self.updata_stimulus_info_from_voltage_combo_box)
+        self.voltage_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_voltage_combo_box)
         self.voltage_combo_box.addItems(["RMS", "Peak"])
         self.voltage_spin_box.setSuffix(" V")
         # self.voltage_spin_box.setValue(self.load_voltage_from_txt())
         max_input_voltage = self.get_max_input_voltage()
         self.voltage_spin_box.setSingleStep(0.1)
         self.voltage_spin_box.setRange(0.1, max_input_voltage)
-        self.voltage_spin_box.valueChanged.connect(lambda:self.updata_stimulus_info_from_object(self.voltage_spin_box, "voltage"))
-        self.voltage_spin_box.valueChanged.connect(self.updata_amplitude)
+        self.voltage_spin_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_object(self.voltage_spin_box, "voltage")
+        )
+        self.voltage_spin_box.valueChanged.connect(self.update_amplitude)
 
         voltage_layout = QHBoxLayout()
         voltage_layout.addWidget(self.voltage_combo_box)
@@ -309,18 +333,18 @@ class StimulusWindow(QDialog):
 
     def create_sample_rate_group_box(self):
         """
-            Creates a QGroupBox containing a sample rate selection combo box.
+        Creates a QGroupBox containing a sample rate selection combo box.
 
-            This function generates a QGroupBox that includes a combo box for selecting the sample rate.
-            The combo box options are 44100 and 48000. When the user changes the sample rate, 
-            it triggers the `stimulus_changed` signal.
+        This function generates a QGroupBox that includes a combo box for selecting the sample rate.
+        The combo box options are 44100 and 48000. When the user changes the sample rate,
+        it triggers the `stimulus_changed` signal.
 
-            Returns:
-                QGroupBox: A QGroupBox object containing the sample rate selection combo box.
+        Returns:
+            QGroupBox: A QGroupBox object containing the sample rate selection combo box.
         """
         sample_rate_group_box = QGroupBox("采样率")
-        self.sample_rate_combo_box.currentTextChanged.connect(self.updata_stimulus_info_from_sample_rate_combo_box)
-        self.sample_rate_combo_box.addItems(["44100", "48000"])    
+        self.sample_rate_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_sample_rate_combo_box)
+        self.sample_rate_combo_box.addItems(["44100", "48000"])
         sample_rate_layout = QHBoxLayout()
         sample_rate_layout.addWidget(self.sample_rate_combo_box)
         sample_rate_layout.setContentsMargins(10, 10, 10, 10)
@@ -329,13 +353,13 @@ class StimulusWindow(QDialog):
 
     def create_function_btn_layout(self):
         """
-            Creates and returns a horizontal layout containing functional buttons.
+        Creates and returns a horizontal layout containing functional buttons.
 
-            The layout includes three buttons: Play, Confirm, and Cancel. A horizontal spacer is used
-            to ensure the buttons are properly distributed within the layout.
+        The layout includes three buttons: Play, Confirm, and Cancel. A horizontal spacer is used
+        to ensure the buttons are properly distributed within the layout.
 
-            Returns:
-                QHBoxLayout: A horizontal layout object containing the functional buttons.
+        Returns:
+            QHBoxLayout: A horizontal layout object containing the functional buttons.
         """
         function_btn_layout = QHBoxLayout()
         default_config_btn = QPushButton(" 默认配置 ")
@@ -357,15 +381,18 @@ class StimulusWindow(QDialog):
         function_btn_layout.addWidget(ok_btn)
         function_btn_layout.setSpacing(20)
         return function_btn_layout
-    
-    def updata_stimulus_info_from_stimulus_type_combo_box(self):
+
+    def update_stimulus_info_from_stimulus_type_combo_box(self):
         stimulus_type = self.stimulus_type_combo_box.currentText()
-        self.data_struct.stimulus_info['stimulus_type'] = self.STIMULUS_DICT_2.get(stimulus_type)
-        if self.data_struct.stimulus_info.get("use_custom_stimulus", False) and 0 != self.stimulus_type_combo_box.count():
+        self.data_struct.stimulus_info["stimulus_type"] = self.STIMULUS_DICT_2.get(stimulus_type)
+        if (
+            self.data_struct.stimulus_info.get("use_custom_stimulus", False)
+            and 0 != self.stimulus_type_combo_box.count()
+        ):
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
 
-    def updata_stimulus_info_from_object(self, object: QAbstractSpinBox, data_type: str):
+    def update_stimulus_info_from_object(self, object: QAbstractSpinBox, data_type: str):
         if data_type == "voltage" or data_type == "total_time":
             self.data_struct.stimulus_info[data_type] = float(object.value())
         else:
@@ -374,14 +401,14 @@ class StimulusWindow(QDialog):
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
 
-    def updata_stimulus_info_from_voltage_combo_box(self):
+    def update_stimulus_info_from_voltage_combo_box(self):
         self.data_struct.stimulus_info["voltage_type"] = self.voltage_combo_box.currentText()
 
-    def updata_amplitude(self):
+    def update_amplitude(self):
         self.data_struct.stimulus_info["amplitude"] = self.get_predict_amplitude(self.voltage_spin_box.value())
 
-    def updata_stimulus_info_from_sample_rate_combo_box(self):
-        self.data_struct.stimulus_info['sample_rate'] = int(self.sample_rate_combo_box.currentText())
+    def update_stimulus_info_from_sample_rate_combo_box(self):
+        self.data_struct.stimulus_info["sample_rate"] = int(self.sample_rate_combo_box.currentText())
         if self.data_struct.stimulus_info.get("use_custom_stimulus", False):
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
@@ -412,7 +439,9 @@ class StimulusWindow(QDialog):
             self.create_signal_from_stimulus_info()
         else:
             self.load_wav_path = self.load_stimulus_signal_path
-            self.data_struct.stimulus_data, _ = load_audio_simple(self.load_wav_path, self.data_struct.stimulus_info["sample_rate"])
+            self.data_struct.stimulus_data, _ = load_audio_simple(
+                self.load_wav_path, self.data_struct.stimulus_info["sample_rate"]
+            )
         self.graph_stimulus()
 
     def set_stimulus_type_connection(self):
@@ -426,7 +455,7 @@ class StimulusWindow(QDialog):
         """
         # Get the currently selected stimulus method
         stimulus_method = self.stimulus_method_combo_box.currentText()
-        self.data_struct.stimulus_info['stimulus_method'] = self.STIMULUS_DICT[stimulus_method]["name"]
+        self.data_struct.stimulus_info["stimulus_method"] = self.STIMULUS_DICT[stimulus_method]["name"]
         self.stimulus_type_combo_box.clear()
         # Fetch the corresponding sublist from the dictionary and add it to the stimulus type combo box
         stimulus_item = self.STIMULUS_DICT.get(stimulus_method, {})
@@ -450,29 +479,30 @@ class StimulusWindow(QDialog):
 
     def get_predict_amplitude(self, target_voltage):
         """
-            Retrieves the predicted amplitude based on the target voltage.
+        Retrieves the predicted amplitude based on the target voltage.
 
-            This method uses the `SoundcardCalibrationManager` to calibrate the amplitude
-            for the given target voltage. It reads calibration coefficients from a JSON file
-            and returns the predicted amplitude if the calibration is successful. Otherwise, it returns 0.0.
+        This method uses the `SoundcardCalibrationManager` to calibrate the amplitude
+        for the given target voltage. It reads calibration coefficients from a JSON file
+        and returns the predicted amplitude if the calibration is successful. Otherwise, it returns 0.0.
 
-            Parameters:
-            target_voltage (float): The target voltage used for calibration.
+        Parameters:
+        target_voltage (float): The target voltage used for calibration.
 
-            Returns:
-            float: The predicted amplitude if calibration is successful; otherwise, 0.0.
+        Returns:
+        float: The predicted amplitude if calibration is successful; otherwise, 0.0.
         """
-        code, result_amplitude = SoundcardCalibrationManager().calibrate_amplitude(target_voltage,
-                                                                                   json_file_name="calibration_coefficients.json")
+        code, result_amplitude = SoundcardCalibrationManager().calibrate_amplitude(
+            target_voltage, json_file_name="calibration_coefficients.json"
+        )
         if code == error_code.OK:
             predict_amplitude, max_voltage = result_amplitude
             return predict_amplitude
         else:
             return 0.0
-        
+
     def get_max_input_voltage(self):
         """
-            Retrieves the maximum input voltage from the calibration coefficients.
+        Retrieves the maximum input voltage from the calibration coefficients.
         """
         code, data = SoundcardCalibrationManager().load_data_from_json("calibration_coefficients.json")
         if code == error_code.OK:
@@ -481,24 +511,23 @@ class StimulusWindow(QDialog):
             self.is_close_window = True
             return 0.0
 
-
     def create_signal_from_stimulus_info(self):
         """
-            Generates a signal based on the stimulus information.
+        Generates a signal based on the stimulus information.
 
-            This method selects the appropriate signal generation function based on the `stimulus_method` field 
-            in `stimulus_info` and calls the function to generate the signal. The generated signal is 
-            stored in `stimulus_signal`.
+        This method selects the appropriate signal generation function based on the `stimulus_method` field
+        in `stimulus_info` and calls the function to generate the signal. The generated signal is
+        stored in `stimulus_signal`.
 
-            Parameters:
-                No explicit parameters, but relies on the following fields in the `stimulus_info` dictionary:
-                    - stimulus_method: A string specifying the signal generation method, with possible values "chirp",
-                 "step", or "noise".
-                    - Other fields: Depending on the `stimulus_method`, additional parameters may be required, which
-                are passed to the respective signal generation function.
+        Parameters:
+            No explicit parameters, but relies on the following fields in the `stimulus_info` dictionary:
+                - stimulus_method: A string specifying the signal generation method, with possible values "chirp",
+             "step", or "noise".
+                - Other fields: Depending on the `stimulus_method`, additional parameters may be required, which
+            are passed to the respective signal generation function.
 
-            Returns:
-                No explicit return value, but updates the `stimulus_signal` attribute with the generated signal.
+        Returns:
+            No explicit return value, but updates the `stimulus_signal` attribute with the generated signal.
         """
         create_function_dict = {
             "chirp": StimulusSignal().generate_chirps,
@@ -510,23 +539,27 @@ class StimulusWindow(QDialog):
 
     def save_stimulus_to_json(self):
         """
-            Saves the stimulus signal and its related information to a JSON file.
+        Saves the stimulus signal and its related information to a JSON file.
 
-            This function performs the following steps:
-             -Constructs the path for the JSON file.
-             -Generates the name of the stimulus signal based on the stimulus information.
-             -Saves the stimulus signal as a WAV file.
-             -Saves the stimulus information and WAV file path to the JSON file.
+        This function performs the following steps:
+         -Constructs the path for the JSON file.
+         -Generates the name of the stimulus signal based on the stimulus information.
+         -Saves the stimulus signal as a WAV file.
+         -Saves the stimulus information and WAV file path to the JSON file.
 
-            Parameters:
-            self: The class instance containing stimulus information (stimulus_info) and stimulus signal (stimulus_signal).
+        Parameters:
+        self: The class instance containing stimulus information (stimulus_info) and stimulus signal (stimulus_signal).
         """
         # Construct the path for the JSON file
         # Generate the name of the stimulus signal based on the stimulus information
         stimulus_name = "_".join(str(value) for value in self.data_struct.stimulus_info.values())
         # Construct the path for the WAV file and save the stimulus signal as a WAV file
         stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
-        wavfile.write(stimulus_signal_path, self.data_struct.stimulus_info["sample_rate"], self.data_struct.stimulus_data.astype("float32"))
+        wavfile.write(
+            stimulus_signal_path,
+            self.data_struct.stimulus_info["sample_rate"],
+            self.data_struct.stimulus_data.astype("float32"),
+        )
         stimulus_signal_path = FileOps.get_relative_path(stimulus_signal_path, DEFAULT_DIR)
         if self.load_stimulus_signal_path:
             self.load_stimulus_signal_path = FileOps.get_relative_path(self.load_stimulus_signal_path, DEFAULT_DIR)
@@ -534,7 +567,7 @@ class StimulusWindow(QDialog):
         data = {
             "stimulus_info": self.data_struct.stimulus_info,
             "stimulus_signal_path": stimulus_signal_path,
-            "load_stimulus_signal_path": self.load_stimulus_signal_path
+            "load_stimulus_signal_path": self.load_stimulus_signal_path,
         }
         # Write the dictionary data to the JSON file and log the operation
         self.save_json_file(data)
@@ -577,31 +610,34 @@ class StimulusWindow(QDialog):
 
     def graph_stimulus(self):
         """
-            Plot the stimulus signal waveform.
+        Plot the stimulus signal waveform.
 
-            This function clears the current plot area, generates a time axis based on the sample rate and signal data,
-            and then plots the stimulus signal waveform in the plot area. The graph displays the amplitude of the signal
-            over time, with labeled axes indicating the units.
+        This function clears the current plot area, generates a time axis based on the sample rate and signal data,
+        and then plots the stimulus signal waveform in the plot area. The graph displays the amplitude of the signal
+        over time, with labeled axes indicating the units.
 
-            Parameters:
-                self: The instance of the class, containing stimulus signal information and the plot area.
+        Parameters:
+            self: The instance of the class, containing stimulus signal information and the plot area.
         """
         self.plot_stimulus.clear()
         sample_rate = self.data_struct.stimulus_info["sample_rate"]
         if self.data_struct.stimulus_data is not None:
-            signal_duration = np.linspace(0, len(self.data_struct.stimulus_data) - 1, len(self.data_struct.stimulus_data)) / sample_rate
-            self.plot_stimulus.plot(signal_duration, self.data_struct.stimulus_data, pen='b')
-            self.plot_stimulus.setLabel('left', 'Amplitude')
-            self.plot_stimulus.setLabel('bottom', 'Time (s)')
+            signal_duration = (
+                np.linspace(0, len(self.data_struct.stimulus_data) - 1, len(self.data_struct.stimulus_data))
+                / sample_rate
+            )
+            self.plot_stimulus.plot(signal_duration, self.data_struct.stimulus_data, pen="b")
+            self.plot_stimulus.setLabel("left", "Amplitude")
+            self.plot_stimulus.setLabel("bottom", "Time (s)")
 
     def load_config_btn_clicked(self):
         """
-            Handles the event when the load configuration button is clicked.
+        Handles the event when the load configuration button is clicked.
 
-            This function is triggered when the user clicks the load configuration button. It opens a dialog
-            to load stimulus configuration and updates the loaded configuration into the `stimulus_info` dictionary
-            of the current object. Finally, it updates the user interface and emits a signal indicating that the
-            stimulus configuration has changed.
+        This function is triggered when the user clicks the load configuration button. It opens a dialog
+        to load stimulus configuration and updates the loaded configuration into the `stimulus_info` dictionary
+        of the current object. Finally, it updates the user interface and emits a signal indicating that the
+        stimulus configuration has changed.
         """
         dlg = LoadStimulusDialog(self.default_logger)
         loaded_stimulus = dlg.exec()
@@ -613,11 +649,11 @@ class StimulusWindow(QDialog):
 
     def save_config_btn_clicked(self):
         """
-            Handles the click event of the save configuration button.
+        Handles the click event of the save configuration button.
 
-            This function calls the `save_stimulus_info_to_db` method of the `StimulusSignalManagement` class
-            to save the stimulus information from `stimulus_info` to the database. Based on the save result,
-            it logs the corresponding message.
+        This function calls the `save_stimulus_info_to_db` method of the `StimulusSignalManagement` class
+        to save the stimulus information from `stimulus_info` to the database. Based on the save result,
+        it logs the corresponding message.
         """
         stimulus_name_dialog = SetConfigName()
         stimulus_name = stimulus_name_dialog.exec()
@@ -641,21 +677,22 @@ class StimulusWindow(QDialog):
 
     def load_wav_btn_clicked(self):
         """
-            Handles the button click event for loading a WAV file.
+        Handles the button click event for loading a WAV file.
 
-            This function opens a file dialog to select a WAV file, loads the audio data upon selection, 
-            and stores the audio signal and its time information in the class attributes. 
-            It then calls the plotting function to display the audio waveform.
+        This function opens a file dialog to select a WAV file, loads the audio data upon selection,
+        and stores the audio signal and its time information in the class attributes.
+        It then calls the plotting function to display the audio waveform.
         """
         load_stimulus_signal_path = self.load_stimulus_signal_path
         load_wav_path = self.load_wav_path
         self.load_stimulus_signal_path = self.load_wav_path
-        self.load_wav_path, _ = QFileDialog.getOpenFileName(self,
-                                                            "打开音频",
-                                                            DEFAULT_DIR + "audio_data/stimulus",
-                                                            "WAV Files (*.wav)")
+        self.load_wav_path, _ = QFileDialog.getOpenFileName(
+            self, "打开音频", DEFAULT_DIR + "audio_data/stimulus", "WAV Files (*.wav)"
+        )
         if self.load_wav_path:
-            self.data_struct.stimulus_data, _ = load_audio_simple(self.load_wav_path, self.data_struct.stimulus_info["sample_rate"])
+            self.data_struct.stimulus_data, _ = load_audio_simple(
+                self.load_wav_path, self.data_struct.stimulus_info["sample_rate"]
+            )
             self.graph_stimulus()
         else:
             self.load_stimulus_signal_path = load_stimulus_signal_path
@@ -707,10 +744,10 @@ class StimulusWindow(QDialog):
             json_file_path = DEFAULT_DIR + "ui/ui_config/default_stimulus.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        with open(json_file_path, 'r') as json_file:
+        with open(json_file_path, "r") as json_file:
             data = json.load(json_file)
             return error_code.OK, data
-        
+
     def default_config_btn_clicked(self):
         self.data_struct.stimulus_info.clear()
         self.data_struct.stimulus_info = self.get_stimulus_info_from_json(True)
@@ -718,32 +755,33 @@ class StimulusWindow(QDialog):
 
     def save_wav_btn_clicked(self):
         """
-            Handles the save audio button click event.
+        Handles the save audio button click event.
 
-            This function is triggered when the user clicks the save audio button. It opens a file save dialog,
-            allowing the user to choose the save path and file name. If a valid file name is selected, the current
-            stimulus signal is saved as a WAV audio file.
+        This function is triggered when the user clicks the save audio button. It opens a file save dialog,
+        allowing the user to choose the save path and file name. If a valid file name is selected, the current
+        stimulus signal is saved as a WAV audio file.
         """
-        file_name, _ = QFileDialog.getSaveFileName(self,
-                                                   "保存音频",
-                                                   DEFAULT_DIR + "audio_data/stimulus",
-                                                   "WAV Files (*.wav)")
+        file_name, _ = QFileDialog.getSaveFileName(
+            self, "保存音频", DEFAULT_DIR + "audio_data/stimulus", "WAV Files (*.wav)"
+        )
         if file_name:
             sr = self.data_struct.stimulus_info.get("sample_rate", 44100)
             save_audio_simple(file_name, self.data_struct.stimulus_data, sr)
 
     def play_btn_clicked(self):
         """
-            Handles the play button click event to play the stimulus signal.
+        Handles the play button click event to play the stimulus signal.
 
-            This function retrieves the stimulus signal and related parameters from instance attributes,
-            and uses an instance of the SoundcardAudioProcessor class to call the sd_play method
-            for playing the signal. If the playback fails, an error log is recorded.
+        This function retrieves the stimulus signal and related parameters from instance attributes,
+        and uses an instance of the SoundcardAudioProcessor class to call the sd_play method
+        for playing the signal. If the playback fails, an error log is recorded.
         """
         # Construct the stimulus parameter dictionary, including signal data, amplitude, and sample rate
-        stimulus_param = {"data": self.data_struct.stimulus_data,
-                          "amplitude": self.data_struct.stimulus_info["amplitude"],
-                          "sr": self.data_struct.stimulus_info["sample_rate"]}
+        stimulus_param = {
+            "data": self.data_struct.stimulus_data,
+            "amplitude": self.data_struct.stimulus_info["amplitude"],
+            "sr": self.data_struct.stimulus_info["sample_rate"],
+        }
         # Create an instance of SoundcardAudioProcessor and play the stimulus signal
         sap = SoundcardAudioProcessor()
         play_code, msg = sap.sd_play(stimulus_param)
@@ -765,11 +803,15 @@ class StimulusWindow(QDialog):
                 return
             data = self.load_stimulus_wav()
             data["stimulus_signal_path"] = FileOps.get_relative_path(data["stimulus_signal_path"], DEFAULT_DIR)
-            data["load_stimulus_signal_path"] = FileOps.get_relative_path(data["load_stimulus_signal_path"], DEFAULT_DIR)
+            data["load_stimulus_signal_path"] = FileOps.get_relative_path(
+                data["load_stimulus_signal_path"], DEFAULT_DIR
+            )
             self.save_json_file(data)
         else:
             self.save_stimulus_to_json()
-            stimulus_signal_length = self.data_struct.stimulus_info.get("sample_rate") * self.data_struct.stimulus_info.get("total_time")
+            stimulus_signal_length = self.data_struct.stimulus_info.get(
+                "sample_rate"
+            ) * self.data_struct.stimulus_info.get("total_time")
             if self.start_custom_check_status == False:
                 self.set_ai_popup()
             elif self.old_stimulus_signal_length != stimulus_signal_length:
@@ -783,7 +825,7 @@ class StimulusWindow(QDialog):
             data = {
                 "stimulus_info": self.data_struct.stimulus_info,
                 "stimulus_signal_path": self.load_wav_path,
-                "load_stimulus_signal_path": self.load_stimulus_signal_path
+                "load_stimulus_signal_path": self.load_stimulus_signal_path,
             }
         return data
 
@@ -818,15 +860,15 @@ class StimulusWindow(QDialog):
 
     def on_exec(self):
         """
-            Executes the operation and returns whether the stimulus information needs to be refreshed.
+        Executes the operation and returns whether the stimulus information needs to be refreshed.
 
-            This method first calls the `exec()` method to perform the operation, then determines
-            whether the stimulus information needs to be refreshed based on the value of the
-            `refresh_stimulus_info` attribute.
+        This method first calls the `exec()` method to perform the operation, then determines
+        whether the stimulus information needs to be refreshed based on the value of the
+        `refresh_stimulus_info` attribute.
 
-            Returns:
-                bool: Returns True if `refresh_stimulus_info` is True, indicating that the stimulus
-                    information needs to be refreshed; otherwise, returns False.
+        Returns:
+            bool: Returns True if `refresh_stimulus_info` is True, indicating that the stimulus
+                information needs to be refreshed; otherwise, returns False.
         """
         self.exec()
         if self.refresh_stimulus_info:
@@ -852,7 +894,7 @@ class StimulusWindow(QDialog):
             return True
         changed_flag = changed_flag or False
         return changed_flag
-    
+
 
 class SetConfigName(QDialog):
 
@@ -870,15 +912,15 @@ class SetConfigName(QDialog):
 
         congfig_name_layout = self.config_name_layout()
         btn_layout = self.btn_layout()
-        
+
         layout = QVBoxLayout()
         layout.addLayout(congfig_name_layout)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(
+            ui_style_const.qpushbutton_stytle + ui_style_const.qlineedit_stytle + ui_style_const.qlabel_stytle
+        )
 
     def config_name_layout(self):
         name_label = QLabel("配置名称:")
@@ -889,7 +931,7 @@ class SetConfigName(QDialog):
         name_layout.addWidget(name_edit)
 
         return name_layout
-    
+
     def btn_layout(self):
         ok_btn = QPushButton("确定")
         cancel_btn = QPushButton("取消")
@@ -900,7 +942,7 @@ class SetConfigName(QDialog):
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
         return btn_layout
-    
+
     def on_click_ok_btn(self):
         self.stimulus_name = self.findChild(QLineEdit).text()
         if not self.stimulus_name:
