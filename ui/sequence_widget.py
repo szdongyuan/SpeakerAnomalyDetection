@@ -134,7 +134,7 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
-        self.replayer_btn.clicked.connect(self.paly_last_stimulus_wave)
+        self.replayer_btn.clicked.connect(lambda: self.paly_last_stimulus_wave())
 
         self.data_btn.setFixedSize(100, 40)
         self.data_btn.setToolTip("分析")
@@ -153,6 +153,7 @@ class SequenceWindow(QWidget):
             product_model = "S004-1"
         type_label.setFixedHeight(40)
         self.lineedit_type = QLineEdit(product_model)
+        self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
         self.lineedit_type.setFixedHeight(35)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         label_count = QLabel(" 计 数： ")
@@ -166,7 +167,7 @@ class SequenceWindow(QWidget):
         self.lineedit_count = QLineEdit(str(self.current_recorded_count))
         self.lineedit_count.setFixedHeight(35)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
-        self.lineedit_count.editingFinished.connect(lambda: self.lineedit_lose_focus(self.lineedit_count))
+        self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
         self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
 
         self.barcode_scanner_box = QCheckBox("S/N:  ", self)
@@ -699,11 +700,20 @@ class SequenceWindow(QWidget):
             f.writelines(lines)
         self.get_result_file(0)
 
-    def lineedit_lose_focus(self, lineedit):
+    def lineedit_count_lose_focus(self, lineedit):
+        self.current_recorded_count = int(lineedit.text())
+        self.save_recorded_data_to_json()
         lineedit.clearFocus()
         if lineedit.text() == "":
             result_count, _ = self.load_recorded_num_from_json(self.default_logger)
             lineedit.setText(str(result_count))
+
+    def lineedit_type_lose_focus(self, lineedit):
+        self.save_recorded_data_to_json()
+        lineedit.clearFocus()
+        if lineedit.text() == "":
+            last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
+            lineedit.setText(str(last_recorded_info.get("product_model", "S004-1")))
 
     def validate_count(self, lineedit, is_s_or_n: bool):
         """
@@ -737,10 +747,7 @@ class SequenceWindow(QWidget):
             # If the input is a number, Open the file and write the current recorded count and date
             if is_s_or_n:
                 self.lineedit_s_or_n.setText("")
-            self.save_recorded_num_to_json()
-        if re.match(reg, s_or_n_count):
-            if is_s_or_n:
-                self.current_recorded_count = int(s_or_n_count)
+            # self.save_recorded_data_to_json()
         if s_or_n_count == "":
             if is_s_or_n:
                 lineedit.setText(str(result_count))
@@ -913,8 +920,6 @@ class SequenceWindow(QWidget):
         if not self.player_status_flag:
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
-        current_recorded_count = self.save_recorded_num_to_json("ok_ng")
-        # self.lineedit_count.setText(str(current_recorded_count))
 
         self.update_audio_label_info()
         new_file_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
@@ -922,11 +927,7 @@ class SequenceWindow(QWidget):
 
         self.mark_result()
         self.player_status_flag = False
-        # self.update_player_icon()
         self.signal_info.clear()
-        # self.analyse_layout.signal_info = self.signal_info
-        # self.analyse_layout.close()
-        # self.clear_plg()
         self.lineedit_s_or_n.clear()
         self.line_graph.clear()
         self.replayer_btn.setDisabled(True)
@@ -958,7 +959,7 @@ class SequenceWindow(QWidget):
         else:
             return None, None
 
-    def save_recorded_num_to_json(self, start_position=None):
+    def save_recorded_data_to_json(self, start_position=None):
         """
         Save the recorded number to a text file.
 
@@ -969,27 +970,15 @@ class SequenceWindow(QWidget):
         dir_path = DEFAULT_DIR + "ui/ui_config/"
         file_path = dir_path + "recorded_number.json"
         current_time = datetime.now().strftime("%Y-%m-%d")
-        check_flag, count = self.check_datetime(current_time, self.default_logger)
-        if check_flag:
-            current_recorded_count = int(count) + 1
-        else:
-            current_recorded_count = 2
-        if self.lineedit_count.text() == "":
-            self.lineedit_count.setText(str(count))
-        if count != int(self.lineedit_count.text()):
-            current_recorded_count = int(self.lineedit_count.text())
-            if start_position == "ok_ng":
-                current_recorded_count = current_recorded_count + 1
         data = {
             "product_model": self.lineedit_type.text(),
-            "current_recorded_count": current_recorded_count,
+            "current_recorded_count": int(self.lineedit_count.text()),
             "scanner_barcode": self.lineedit_s_or_n.text(),
             "scanner_barcode_check": self.barcode_scanner_box.isChecked(),
             "datetime": current_time,
         }
         with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
-        return current_recorded_count
 
     @staticmethod
     def load_recorded_num_from_json(logger):
@@ -1086,14 +1075,10 @@ class SequenceWindow(QWidget):
             self.recorded_signal_info["labels"] = "NG"
 
     def test_insert_data_into_db(self):
-        current_recorded_count = self.save_recorded_num_to_json("ok_ng")
-        self.lineedit_count.setText(str(current_recorded_count))
         self.add_recorded_signal_info_to_db()
         self.player_status_flag = False
-        # self.update_player_icon()
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
-        # self.line_graph.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
         self.default_ai_result = None
@@ -1123,6 +1108,8 @@ class SequenceWindow(QWidget):
         self.paly_last_stimulus_wave(label)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
+        self.save_recorded_data_to_json()
+
         # if self.add_or_update_wave_flag:
         #     self.current_recorded_count += 1
         #     self.lineedit_count.setText(str(self.current_recorded_count))
@@ -1355,7 +1342,7 @@ class SequenceWindow(QWidget):
         """
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
-        line_graph.plot(signal_duration, recorded_signal)
+        line_graph.plot(signal_duration, recorded_signal, pen="k")
         QApplication.processEvents()
 
     def update_player_icon(self):
@@ -1397,36 +1384,3 @@ class SequenceWindow(QWidget):
 
 class ScannerEmitter(QObject):
     signal_emitter = pyqtSignal(str)
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    # stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp',
-    #                  'stimulus_type': 'log', 'start_freq': 1000, 'stop_freq': 80, 'total_time': 3.0, 'repeat_times': 1,
-    #                  'num_steps': 1, 'amplitude_type': 'RMS', 'amplitude': 0.1, 'sample_rate': 44100}
-    # stimulus_info = {'name': 'stimulus_chirps_1', 'use_custom_stimulus': True, 'stimulus_method': 'chirp', 'stimulus_type': 'log',
-    #  'start_freq': 80, 'stop_freq': 1000, 'total_time': 3.0, 'repeat_times': 1, 'num_steps': 1, 'amplitude_type': 'RMS',
-    #  'amplitude': 0.7, 'sample_rate': 44100}
-    stimulus_info = {
-        "name": "stimulus_chirps_1",
-        "use_custom_stimulus": True,
-        "stimulus_method": "chirp",
-        "stimulus_type": "mirror_log",
-        "start_freq": 80,
-        "stop_freq": 1000,
-        "total_time": 3.0,
-        "repeat_times": 1,
-        "num_steps": 1,
-        "amplitude_type": "RMS",
-        "amplitude": 0.1,
-        "sample_rate": 44100,
-    }
-
-    # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus.wav", sr=44100)
-    # stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus111.wav", sr=44100)
-    stimulus_signal, sr = librosa.load("../audio_data/stimulus/stimulus_mirror.wav", sr=44100)
-    window = SequenceWindow()
-    window.stimulus_info = stimulus_info
-    window.stimulus_signal = stimulus_signal
-    window.show()
-    app.exec()
