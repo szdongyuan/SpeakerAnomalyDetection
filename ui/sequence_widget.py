@@ -915,7 +915,11 @@ class SequenceWindow(QWidget):
             return
         current_recorded_count = self.save_recorded_num_to_json("ok_ng")
         # self.lineedit_count.setText(str(current_recorded_count))
-        self.insert_data_into_db()
+
+        self.update_audio_label_info()
+        new_file_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
+        self.update_recorded_signal_info_to_db(new_file_path)
+
         self.mark_result()
         self.player_status_flag = False
         # self.update_player_icon()
@@ -1050,20 +1054,21 @@ class SequenceWindow(QWidget):
         else:
             self.default_logger.error("Failed insert recorded signal.")
 
-    def insert_data_into_db(self):
-        """
-        Inserts recorded signal data into the database based on user input.
+    def update_recorded_signal_info_to_db(self, new_file_path):
+        old_file_path = self.recorded_signal_info["file_path"]
+        self.recorded_signal_info["file_path"] = new_file_path.replace(DEFAULT_DIR, "")
+        save_code, msg = RecordingManager().update_audio_label(self.recorded_signal_info, old_file_path)
+        if save_code == error_code.OK:
+            self.default_logger.info("Recorded signal successfully updated.")
+        else:
+            self.default_logger.error("Failed to update recorded signal.")
 
-        This method determines which button (OK or NG) triggered the function call and sets the corresponding label
-        in the recorded signal information. It then attempts to save this information to the database using the
-        `RecordingManager` class. Depending on the success of the operation, it logs either a success or failure message.
-        """
+    def update_audio_label_info(self):
         button = self.sender()
         if button == self.ok_btn or self.default_ai_result:
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.ng_btn:
             self.recorded_signal_info["labels"] = "NG"
-        self.add_recorded_signal_info_to_db()
 
     def mark_result(self):
         button = self.sender()

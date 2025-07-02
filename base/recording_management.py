@@ -95,6 +95,20 @@ class RecordingManager(object):
         audio_data = (audio_data_id,) + audio_data
         return audio_data
 
+    def update_audio_label(self, recorded_signal_info, old_file_path):
+        try:
+            update_data = {
+                "file_path": recorded_signal_info["file_path"],
+                "labels": recorded_signal_info["labels"]
+            }
+            condition_field = {"file_path": old_file_path}
+            with DataSave(self.db_path) as database:
+                database.update_table_data("audio_data_table", update_data, condition_field)
+            return error_code.OK, "Database information updated."
+        except Exception as e:
+            err_msg = "The update operation failed. %s" % (str(e)[:40])
+            return error_code.INVALID_RENAME, err_msg
+
     def rename_audio(self, file_path, new_name):
         try:
             if not os.path.exists(file_path):
