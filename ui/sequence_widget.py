@@ -481,16 +481,6 @@ class SequenceWindow(QWidget):
         mark_ng_layout.addWidget(self.mark_ng_label)
         mark_ng_layout.addWidget(self.mark_ng_edit)
 
-        not_label_layout = QHBoxLayout()
-        not_label = QLabel("无标签：")
-        self.not_label_lineedit = QLineEdit("0")
-        self.not_label_lineedit.setFixedHeight(35)
-        self.not_label_lineedit.setFixedWidth(130)
-        self.not_label_lineedit.setAlignment(Qt.AlignCenter)
-        self.not_label_lineedit.setDisabled(True)
-        not_label_layout.addWidget(not_label)
-        not_label_layout.addWidget(self.not_label_lineedit)
-
         ok_layout = QHBoxLayout()
         ok_layout.addStretch()
         self.ok_btn = QPushButton(" OK ")
@@ -514,7 +504,6 @@ class SequenceWindow(QWidget):
         mark_layout.addLayout(mark_total_layout, stretch=1)
         mark_layout.addLayout(mark_ok_layout, stretch=1)
         mark_layout.addLayout(mark_ng_layout, stretch=1)
-        mark_layout.addLayout(not_label_layout, stretch=1)
         mark_layout.addLayout(ok_layout, stretch=2)
         mark_layout.addLayout(ng_layout, stretch=2)
         self.mark_page.setLayout(mark_layout)
@@ -607,7 +596,6 @@ class SequenceWindow(QWidget):
                 self.mark_total_edit.setText(str(data["total"]))
                 self.mark_ok_edit.setText(str(data["ok"]))
                 self.mark_ng_edit.setText(str(data["ng"]))
-                self.not_label_lineedit.setText(str(data["not_labels"]))
 
     def set_result_file(self, index, params, analyse_model_name):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -655,7 +643,6 @@ class SequenceWindow(QWidget):
                 total = int(self.mark_total_edit.text())
                 data["total"] = total + 1
                 data["ng"] += 1
-            data["not_labels"] = int(self.not_label_lineedit.text())
             with open(mark_result_path, "w") as f:
                 json.dump(data, f, indent=4)
 
