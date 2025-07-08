@@ -167,7 +167,7 @@ class SoundcardAudioProcessor(object):
         return delay_samples, corr_func_shifted, max_shift
 
     @staticmethod
-    def calculate_alignment(stimulus_signal, recorded_signal, plot=True):
+    def calculate_alignment(stimulus_signal, recorded_signal):
         """
         使用GCC-PHAT对齐两个信号。
 
