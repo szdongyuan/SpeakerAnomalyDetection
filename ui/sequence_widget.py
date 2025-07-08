@@ -134,7 +134,7 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
-        self.replayer_btn.clicked.connect(lambda: self.paly_last_stimulus_wave())
+        self.replayer_btn.clicked.connect(lambda: self.play_last_stimulus_wave())
 
         self.data_btn.setFixedSize(100, 40)
         self.data_btn.setToolTip("分析")
@@ -1092,7 +1092,7 @@ class SequenceWindow(QWidget):
         return target_path
 
     def start_this_play(self, label="not_labeled"):
-        self.paly_last_stimulus_wave(label)
+        self.play_last_stimulus_wave(label)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
         self.save_recorded_data_to_json()
@@ -1103,7 +1103,7 @@ class SequenceWindow(QWidget):
         #     total = int(self.mark_total_edit.text()) + 1
         #     self.mark_total_edit.setText(str(total))
 
-    def paly_last_stimulus_wave(self, label="not_labeled"):
+    def play_last_stimulus_wave(self, label="not_labeled"):
         """
         Handles the play button click event. This function performs the following operations:
         1. Clears the line graph based on the player status flag.
@@ -1121,7 +1121,7 @@ class SequenceWindow(QWidget):
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
-        self.update_palyer_btn_is_playing()
+        self.update_player_btn_is_playing()
         self.analysis_config = self.get_sequence_config_from_json()
         QApplication.processEvents()
         sample_rate = self.data_struct.stimulus_info["sample_rate"]
@@ -1349,7 +1349,7 @@ class SequenceWindow(QWidget):
             self.player_btn.setIconSize(QSize(35, 35))
             self.player_btn.setDisabled(False)
 
-    def update_palyer_btn_is_playing(self):
+    def update_player_btn_is_playing(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.setDisabled(True)

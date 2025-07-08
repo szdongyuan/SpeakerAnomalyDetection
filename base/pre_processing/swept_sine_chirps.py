@@ -39,33 +39,65 @@ class StimulusSignal(object):
         return y_total, sample_rate
 
     @staticmethod
-    def generate_chirps(start_freq=80, stop_freq=2000,
-                        total_time=2.0, sample_rate=48000, repeat_times=1,
-                        stimulus_type="log",
-                        **kwargs):
-        pi = np.pi
+    def generate_chirps(
+            start_freq=80,
+            stop_freq=2000,
+            total_time=4.0,
+            repeat_times=1,
+            sample_rate=44100,
+            stimulus_type="log",
+            **kwargs):
+        """
+        :param start_freq: 扫频的最低频率
+        :param stop_freq: 扫频的最高频率
+        :param total_time: 单边扫频（下扫或上扫）的持续时间
+        :param repeat_times: 整个V形信号的重复次数
+        :param sample_rate: 采样率
+        :param stimulus_type: 扫频类型, 支持 "log", "linear", "mirror_log", "mirror_linear"
+        :return: 生成的信号数组 和 采样率
+        """
+        y_all = []
         t_single = total_time / repeat_times
-        x_t = np.array(list(range(int(sample_rate * t_single)))) / sample_rate
-        if stimulus_type == "log" and start_freq != stop_freq:
-            ln = np.log(stop_freq / start_freq)
-            y_t = np.sin(2 * pi * start_freq * t_single / ln * (np.exp(ln * x_t / t_single) - 1))
-        elif stimulus_type == "linear" or stimulus_type == "log":
-            delta_f = stop_freq - start_freq
-            y_t = np.sin(2 * pi * (0.5 * delta_f / t_single * x_t ** 2 + start_freq * x_t))
-        elif stimulus_type == "mirror_log":
-            y_part, _ = StimulusSignal().generate_chirps(start_freq=start_freq, stop_freq=stop_freq,
-                                                         total_time=t_single / 2, sample_rate=sample_rate,
-                                                         stimulus_type="log")
-            y_t = np.array(list(y_part)[::-1] + list(-1 * y_part))
-        elif stimulus_type == "mirror_linear":
-            y_part, _ = StimulusSignal().generate_chirps(start_freq=start_freq, stop_freq=stop_freq,
-                                                         total_time=t_single / 2, sample_rate=sample_rate,
-                                                         stimulus_type="linear")
-            y_t = np.array(list(y_part)[::-1] + list(-1 * y_part))
+        t_half = t_single / 2
+        current_phase = 0.0
+        for _ in range(repeat_times):
+            if stimulus_type == "linear":
+                y_part, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_single,
+                                                                  sample_rate, current_phase)
+                y_all.append(y_part)
+            elif stimulus_type == "log" and start_freq != stop_freq:
+                y_part, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_single,
+                                                                  sample_rate, current_phase)
+                y_all.append(y_part)
+            elif stimulus_type == "mirror_log":
+                y_down, phase_end = StimulusSignal.make_sweep("log", stop_freq, start_freq, t_half,
+                                                              sample_rate, current_phase)
+                y_up, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_half,
+                                                                sample_rate, phase_end)
+                y_all.append(np.concatenate([y_down, y_up]))
+            elif stimulus_type == "mirror_linear":
+                y_down, phase_end = StimulusSignal.make_sweep("linear", stop_freq, start_freq, t_half,
+                                                              sample_rate, current_phase)
+                y_up, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_half,
+                                                                sample_rate, phase_end)
+                y_all.append(np.concatenate([y_down, y_up]))
+            else:
+                raise Exception("Invalid chirp type")
+        return np.concatenate(y_all), sample_rate
+
+    @staticmethod
+    def make_sweep(stimulus_type, freq1, freq2, duration, sr, phase_offset=0.0):
+        t = np.arange(int(duration * sr)) / sr
+        if stimulus_type == "linear":
+            k = (freq2 - freq1) / duration
+            phase = 2 * np.pi * (0.5 * k * t ** 2 + freq1 * t)
+        elif stimulus_type == "log":
+            ln_ratio = np.log(freq2 / freq1)
+            phase = 2 * np.pi * freq1 * duration / ln_ratio * (np.exp(ln_ratio * t / duration) - 1)
         else:
             raise Exception("Invalid chirp type")
-        y_total = np.array(list(y_t) * repeat_times)
-        return y_total, sample_rate
+        y = phase + phase_offset
+        return np.sin(y), y[-1]
 
     @staticmethod
     def generate_noise(total_time=2.0, sample_rate=44100, repeat_times=1,
