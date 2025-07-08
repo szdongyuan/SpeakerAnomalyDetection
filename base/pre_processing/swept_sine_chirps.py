@@ -50,7 +50,7 @@ class StimulusSignal(object):
                 y_part, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_single,
                                                                   sample_rate, current_phase)
                 y_all.append(y_part)
-            elif stimulus_type == "linear" or start_freq == stop_freq:
+            elif stimulus_type == "linear" or stimulus_type == "log":
                 y_part, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_single,
                                                                   sample_rate, current_phase)
                 y_all.append(y_part)
