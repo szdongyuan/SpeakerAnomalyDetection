@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 import sounddevice as sd
-from scipy import signal
 from scipy.io import wavfile
 
 from base.log_manager import LogManager
@@ -23,7 +22,7 @@ class SoundcardAudioProcessor(object):
         sr = stimulus_dict.get("sr")
         rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
         align_frames = self.calculate_alignment(prolong_data, rec_data)
-        aligned_data = rec_data[align_frames: align_frames + len(data)]
+        aligned_data = rec_data[align_frames + prepare_frames: align_frames + prepare_frames + len(data)]
         wavfile.write(recording_path, sr, aligned_data.astype("float32"))
         return error_code.OK, aligned_data
 
@@ -154,19 +153,31 @@ class SoundcardAudioProcessor(object):
             os.makedirs(directory)
 
     @staticmethod
-    def calculate_alignment(stimulus_signal, recorded_signal):
+    def gcc_phat(recorded_signal, stimulus_signal):
+        """计算GCC-PHAT互相关函数并返回延迟。"""
+        n = len(recorded_signal) + len(stimulus_signal)
+        SIG = np.fft.rfft(recorded_signal, n=n)
+        REF = np.fft.rfft(stimulus_signal, n=n)
+        R = SIG * np.conj(REF)
+        R_normal = R / (np.abs(R) + 1e-10)
+        corr_func = np.fft.irfft(R_normal)
+        max_shift = n // 2
+        corr_func_shifted = np.fft.fftshift(corr_func)
+        delay_samples = np.argmax(np.abs(corr_func_shifted)) - max_shift
+        return delay_samples, corr_func_shifted, max_shift
+
+    @staticmethod
+    def calculate_alignment(stimulus_signal, recorded_signal, plot=True):
         """
-            Args:
-                stimulus_signal: np.ndarray
-                    The stimulus audio signal.
-                recorded_signal: np.ndarray
-                    The recorded audio signal.
-            Returns:
-                align_frames: int
-                    The index of the alignment frames.
+        使用GCC-PHAT对齐两个信号。
+
+        Args:
+            stimulus_signal (np.ndarray): 激励信号。
+            recorded_signal (np.ndarray): 录音信号。
+        Returns:
+            int: 计算出的对齐帧数（延迟）。
         """
-        corr = signal.correlate(recorded_signal, stimulus_signal)
-        align_frames = np.argmax(np.abs(corr)) - len(stimulus_signal) + 1
+        align_frames, corr_func, max_shift = SoundcardAudioProcessor.gcc_phat(recorded_signal, stimulus_signal)
         return align_frames
 
     def start_process(self, process):
