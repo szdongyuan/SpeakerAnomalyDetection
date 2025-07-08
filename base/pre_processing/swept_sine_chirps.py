@@ -39,25 +39,19 @@ class StimulusSignal(object):
         return y_total, sample_rate
 
     @staticmethod
-    def generate_chirps(
-            start_freq=80,
-            stop_freq=2000,
-            total_time=4.0,
-            repeat_times=1,
-            sample_rate=44100,
-            stimulus_type="log",
-            **kwargs):
+    def generate_chirps(start_freq=80, stop_freq=2000, total_time=4.0, repeat_times=1, sample_rate=44100,
+                        stimulus_type="log", **kwargs):
         y_all = []
         t_single = total_time / repeat_times
         t_half = t_single / 2
         current_phase = 0.0
         for _ in range(repeat_times):
-            if stimulus_type == "linear":
-                y_part, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_single,
+            if stimulus_type == "log" and start_freq != stop_freq:
+                y_part, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_single,
                                                                   sample_rate, current_phase)
                 y_all.append(y_part)
-            elif stimulus_type == "log" and start_freq != stop_freq:
-                y_part, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_single,
+            elif stimulus_type == "linear" or start_freq == stop_freq:
+                y_part, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_single,
                                                                   sample_rate, current_phase)
                 y_all.append(y_part)
             elif stimulus_type == "mirror_log":
@@ -102,7 +96,7 @@ class StimulusSignal(object):
         elif stimulus_type == 'pink_noise':
             white_noise = np.random.normal(0, 1, num_samples)
             fft = np.fft.rfft(white_noise)
-            freqs = np.fft.rfftfreq(num_samples, d=1/sample_rate)
+            freqs = np.fft.rfftfreq(num_samples, d=1 / sample_rate)
             freqs[0] = 1
             fft /= np.sqrt(freqs)
             y_t = np.fft.irfft(fft, n=num_samples)
