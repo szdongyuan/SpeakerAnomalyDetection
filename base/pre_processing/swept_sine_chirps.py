@@ -47,15 +47,6 @@ class StimulusSignal(object):
             sample_rate=44100,
             stimulus_type="log",
             **kwargs):
-        """
-        :param start_freq: 扫频的最低频率
-        :param stop_freq: 扫频的最高频率
-        :param total_time: 单边扫频（下扫或上扫）的持续时间
-        :param repeat_times: 整个V形信号的重复次数
-        :param sample_rate: 采样率
-        :param stimulus_type: 扫频类型, 支持 "log", "linear", "mirror_log", "mirror_linear"
-        :return: 生成的信号数组 和 采样率
-        """
         y_all = []
         t_single = total_time / repeat_times
         t_half = t_single / 2
