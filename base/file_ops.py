@@ -43,3 +43,16 @@ class FileOps(object):
         relative_path = relative_path.replace("\\", "/")
         relative_path = relative_path.replace("../", "")
         return relative_path
+
+    @staticmethod
+    def ensure_directory_exists(save_path: str):
+        """
+            Ensure that the directory where the save path resides exists.
+            Args:
+                save_path: str
+                    The save path of audio signals.
+            Returns:
+        """
+        directory = os.path.dirname(save_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
