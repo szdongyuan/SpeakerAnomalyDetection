@@ -3,8 +3,6 @@ import os
 import re
 import sys
 
-from scipy.signal import find_peaks
-
 import librosa
 import numpy as np
 import pyqtgraph as pg
@@ -13,6 +11,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout
 from PyQt5.QtWidgets import QVBoxLayout, QWidget, QLabel
+from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.log_manager import LogManager
