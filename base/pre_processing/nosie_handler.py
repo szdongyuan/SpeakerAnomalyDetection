@@ -1,9 +1,9 @@
 from pathlib import Path
+
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
-import soundfile as sf
 
 
 class NoiseHandler:
@@ -49,11 +49,6 @@ class NoiseHandler:
         print(f"File: {file_path}")
         print(f"Sample Rate: {sr} Hz")
         print(f"Duration: {duration:.2f} seconds")
-
-    @staticmethod
-    def save_audio(file_path, audio, sr):
-        """save modified audio"""
-        sf.write(file_path, audio, sr)
 
     def sample_random_noise(self, wave_data_list, num_samples=10, sample_length=64340):
         """
@@ -118,5 +113,5 @@ class NoiseHandler:
                 min_length = min(len(target_audio), len(noise_sample))
                 combined_audio = target_audio[:min_length] + noise_sample[:min_length]
                 output_path = output_folder / f"{base_name}_combined_{i}_{noise_file}"
-                self.save_audio(output_path, combined_audio, target_sr)
+                # self.save_audio(output_path, combined_audio, target_sr)
 
