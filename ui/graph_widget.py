@@ -1,7 +1,6 @@
 import sys
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtWidgets import QWidget
 from pyqtgraph.Qt import QtCore
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
@@ -24,6 +23,7 @@ class QmyFigureCanvas(QWidget):
         layout.addWidget(label_graph)
 
         self.setLayout(layout)
+
 
 def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='viridis', 
                  x_range=None, y_range=None, z_range=None, y_ticks=None, background_color=None,
@@ -66,7 +66,6 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
     widget = QWidget()
     layout = QHBoxLayout()
     widget.setLayout(layout)
-    
 
     plot_widget = pg.PlotWidget(title=title)
     if background_color is not None:
@@ -131,7 +130,7 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
                     pos = y_min + (idx + 0.5) * (y_max - y_min) / len(y)
                     mapped_major.append((pos, label))
             left_axis.setTicks([mapped_major, minor])
-        except Exception:
+        except Exception as e:
             left_axis.setTicks(y_ticks)
 
     return widget
@@ -161,6 +160,7 @@ class ColorBarItem(pg.GraphicsObject):
     
     def boundingRect(self):
         return QtCore.QRectF(0, 0, self.width + 50, self.height)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
