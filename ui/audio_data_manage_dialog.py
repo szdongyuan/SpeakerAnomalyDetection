@@ -150,17 +150,20 @@ class audioDataManageDialog(QDialog):
 
         if package_name:
             output_dir = os.path.join(model_consts.STORED_PACKAGE_PATH, package_name)
-            packaging_path = FileOps.copy_with_selected_wave(file_path_list, output_dir)
+            packaging_path = FileOps.copy_with_selected_wav(file_path_list, output_dir)
         elif ok:
-            packaging_path = FileOps.copy_with_selected_wave(file_path_list)
+            packaging_path = FileOps.copy_with_selected_wav(file_path_list)
         else:
             self.packaging_progress.close()
             self.packaging_progress = None
             return
 
         self.packaging_progress.show()
-        FileOps.packaging_with_dir(packaging_path, progress_callback=self.update_packaging_progress)
-        FileOps.delete_directory(packaging_path)
+        FileOps.archive_with_dir(packaging_path, progress_callback=self.update_packaging_progress)
+        code, msg = FileOps.delete_directory(packaging_path)
+        if code == error_code.OK:
+            self.logger.info("success delete packaging path")
+
         self.audio_data_view.set_all_checkboxes_checked(False)
         self.packaging_progress.close()
         self.packaging_progress = None
