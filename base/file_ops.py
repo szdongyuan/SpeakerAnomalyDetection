@@ -60,7 +60,7 @@ class FileOps(object):
             os.makedirs(directory)
 
     @staticmethod
-    def copy_with_selected_wave(audio_data_path_list: list, output_dir: str = None):
+    def copy_with_selected_wav(audio_data_path_list: list, output_dir: str = None):
         """
         Copy selected audio files to the specified output directory.
 
@@ -114,7 +114,7 @@ class FileOps(object):
         return output_dir
 
     @staticmethod
-    def packaging_with_dir(target_dir_path, output_name=None, progress_callback=None):
+    def archive_with_dir(target_dir_path, output_name=None, progress_callback=None):
         """
         This method compresses the contents of the specified directory into an archive
         file using the given output name and format.
@@ -172,6 +172,6 @@ class FileOps(object):
                 shutil.rmtree(dir_path)
                 return error_code.OK, f"Directory '{dir_path}' has been successfully deleted."
             else:
-                return error_code.INVALID_PATH, f"Directory does not exist: '{dir_path}'"
+                return error_code.OK, f"Directory does not exist: '{dir_path}'"
         except Exception as e:
             return error_code.INVALID_DELETE, f"Failed to delete directory: {str(e)[:40]}"
