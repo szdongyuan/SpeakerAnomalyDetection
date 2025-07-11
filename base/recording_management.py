@@ -97,10 +97,7 @@ class RecordingManager(object):
 
     def update_audio_label(self, recorded_signal_info, old_file_path):
         try:
-            update_data = {
-                "file_path": recorded_signal_info["file_path"],
-                "labels": recorded_signal_info["labels"]
-            }
+            update_data = {"file_path": recorded_signal_info["file_path"], "labels": recorded_signal_info["labels"]}
             condition_field = {"file_path": old_file_path}
             with DataSave(self.db_path) as database:
                 database.update_table_data("audio_data_table", update_data, condition_field)
@@ -174,4 +171,42 @@ class RecordingManager(object):
             return error_code.INVALID_PATH, "The query file does not exist."
         except Exception as e:
             err_msg = "The query operation failed. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg
+
+    def get_record_audio_data(self):
+        try:
+            with DataSave(self.db_path) as database:
+                query_code, query_result = database.query("audio_data_table", model_consts.DB_AUDIO_COLUMNS)
+                if query_code == error_code.OK and query_result:
+                    return error_code.OK, query_result
+                else:
+                    return error_code.INVALID_QUERY, "Failed to query audio data."
+        except Exception as e:
+            err_msg = "The query operation failed. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg
+
+    def delete_audio_at_id_list(self, id_list: list):
+        if not id_list:
+            return error_code.INVALID_DELETE, "Field list is empty, cannot perform delete operation."
+        try:
+            with DataSave(self.db_path) as database:
+                database.delete_by_fields("audio_data_table", "audio_data_id", id_list)
+            return error_code.OK, "The file is deleted successfully."
+        except Exception as e:
+            err_msg = "Failed to delete the file. Error: {}".format(e)
+            return error_code.INVALID_DELETE, err_msg
+
+    def query_stimulus_name_and_id(self):
+        try:
+            with DataSave(self.db_path) as database:
+                code, result = database.query("stimulus_signal_table", ["stimulus_id", "stimulus_name"])
+                if code == error_code.OK:
+                    queru_result = dict()
+                    for i in result:
+                        queru_result[i[0]] = i[1]
+                    return error_code.OK, queru_result
+                else:
+                    return error_code.INVALID_QUERY, "Failed to query the stimulus name."
+        except Exception as e:
+            err_msg = "Failed to query the stimulus name. Error:  %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
