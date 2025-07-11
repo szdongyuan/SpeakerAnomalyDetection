@@ -2,8 +2,8 @@ import sys
 
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
-from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, \
-     QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
+from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
@@ -11,6 +11,7 @@ from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
+from ui.audio_data_manage_dialog import audioDataManageDialog
 from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow, get_default_device
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
@@ -35,7 +36,7 @@ class MainWindow(QMainWindow):
         self.last_pos = QPoint()
         self.wid = None
         self.heigh = None
-        self.window_x = None 
+        self.window_x = None
         self.window_y = None
 
         # reset mouse event
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         self.function_action_stimulus = QAction("激励信号", self)
         self.function_action_test_sequence = QAction("分析队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
+        self.function_audio_manager = QAction("音频数据管理", self)
         self.function_action_exit = QAction("退出", self)
         self.hardware_action_selection = QAction("硬件选择", self)
         self.hardware_action_calibration = QAction("校准", self)
@@ -78,9 +80,9 @@ class MainWindow(QMainWindow):
         self.on_login_window_init()
 
     def set_title(self):
-        # hide the window title bar and reset the window title bar 
+        # hide the window title bar and reset the window title bar
         self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))  
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         title_layout = QHBoxLayout()
         title_btn_layout = self.set_title_btn()
         icon_label = QLabel()
@@ -98,19 +100,19 @@ class MainWindow(QMainWindow):
         title_layout.addLayout(title_btn_layout)
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
-        self.setStyleSheet(ui_style_const.qlabel_stytle + 
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qmainwindow_stytle)
+        self.setStyleSheet(
+            ui_style_const.qlabel_stytle + ui_style_const.qpushbutton_stytle + ui_style_const.qmainwindow_stytle
+        )
         self.get_current_version()
 
-        return(title_layout)
-    
+        return title_layout
+
     @staticmethod
     def get_current_version():
         with DataSave(DATABASE_PATH) as db:
-            current_version = db.query_matching_data([("current_version",)],"system_info_table",["name"],["value"])
+            current_version = db.query_matching_data([("current_version",)], "system_info_table", ["name"], ["value"])
             return current_version[0][0]
-    
+
     def set_title_btn(self):
         # create three button, include minimize, switch size and close
         self.min_btn = QPushButton()
@@ -138,7 +140,7 @@ class MainWindow(QMainWindow):
         title_btn_layout.setSpacing(20)
 
         return title_btn_layout
-    
+
     def show_window_size(self):
         # change the window size, and update the mouse tracking
         if self.max_flag:
@@ -197,7 +199,10 @@ class MainWindow(QMainWindow):
         function_menu.addAction(self.function_action_ai_training)
         self.function_action_ai_training.triggered.disconnect()
         self.function_action_ai_training.triggered.connect(self.on_ai_window_init)
-        function_menu.addSeparator() 
+        function_menu.addAction(self.function_audio_manager)
+        self.function_audio_manager.triggered.disconnect()
+        self.function_audio_manager.triggered.connect(self.on_audio_manager_init)
+        function_menu.addSeparator()
 
         function_menu.addAction(self.function_action_exit)
         self.function_action_exit.triggered.disconnect()
@@ -241,7 +246,9 @@ class MainWindow(QMainWindow):
         self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
         self.user_label.setStyleSheet(ui_style_const.qlabel_stytle)
-        self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
+        self.user_label.setText(
+            "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
+        )
         self.device_label = QLabel()
         self.device_label.setStyleSheet(ui_style_const.qlabel_stytle)
         device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
@@ -257,7 +264,14 @@ class MainWindow(QMainWindow):
         # update the status bar data
         device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
         self.device_label.setText(device_txt)
-        self.user_label.setText("当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl))
+        self.user_label.setText(
+            "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
+        )
+
+    @staticmethod
+    def on_audio_manager_init():
+        dlg = audioDataManageDialog(LogManager.set_log_handler("core"))
+        dlg.exec()
 
     @staticmethod
     def on_ai_window_init():
@@ -266,9 +280,11 @@ class MainWindow(QMainWindow):
 
     def on_access_lvl_changed(self):
         # Set the executable function according to the user level
-        widget_dict = {"Operator": self.widget_list_operator,
-                       "Engineer": self.widget_list_engineer,
-                       "Admin": self.widget_list_admin}
+        widget_dict = {
+            "Operator": self.widget_list_operator,
+            "Engineer": self.widget_list_engineer,
+            "Admin": self.widget_list_admin,
+        }
         for widget in self.widget_list_admin:
             widget.setDisabled(True)
         for widget in widget_dict.get(self.access_lvl, []):
@@ -314,7 +330,7 @@ class MainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event):
-        if hasattr(SequenceWindow, 'tcp_server') and SequenceWindow.tcp_server:
+        if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None
         event.accept()
@@ -336,28 +352,29 @@ class MainWindow(QMainWindow):
             self.resize_direction = None
             event.accept()
 
-    def geometry_window(self, window_x, window_y, pos: QPoint, is_update_width: bool, is_update_height: bool, resize_direction: str):
-        if resize_direction == 'right':
-                self.setGeometry(window_x, window_y, self.wid + pos.x(), self.heigh)
-        elif resize_direction == 'left' and is_update_width:
+    def geometry_window(
+        self, window_x, window_y, pos: QPoint, is_update_width: bool, is_update_height: bool, resize_direction: str
+    ):
+        if resize_direction == "right":
+            self.setGeometry(window_x, window_y, self.wid + pos.x(), self.heigh)
+        elif resize_direction == "left" and is_update_width:
             self.setGeometry(window_x + pos.x(), window_y, self.wid - pos.x(), self.heigh)
-        elif resize_direction == 'bottom':
+        elif resize_direction == "bottom":
             self.setGeometry(window_x, window_y, self.wid, self.heigh + pos.y())
-        elif resize_direction == 'top' and is_update_height:
+        elif resize_direction == "top" and is_update_height:
             self.setGeometry(window_x, window_y + pos.y(), self.wid, self.heigh - pos.y())
-        elif resize_direction == 'right_top' and is_update_height:
+        elif resize_direction == "right_top" and is_update_height:
             self.setGeometry(window_x, window_y + pos.y(), self.wid + pos.x(), self.heigh - pos.y())
-        elif resize_direction == 'right_bottom':
+        elif resize_direction == "right_bottom":
             self.setGeometry(window_x, window_y, self.wid + pos.x(), self.heigh + pos.y())
-        elif resize_direction == 'left_top':
+        elif resize_direction == "left_top":
             if is_update_width and is_update_height:
-                self.setGeometry(window_x + pos.x(), window_y + pos.y(),
-                                    self.wid - pos.x(), self.heigh - pos.y())
+                self.setGeometry(window_x + pos.x(), window_y + pos.y(), self.wid - pos.x(), self.heigh - pos.y())
             elif is_update_width and not is_update_height:
                 self.setGeometry(window_x + pos.x(), window_y, self.wid - pos.x(), self.heigh)
             elif not is_update_width and is_update_height:
                 self.setGeometry(window_x, window_y + pos.y(), self.wid, self.heigh - pos.y())
-        elif resize_direction == 'left_bottom' and is_update_width:
+        elif resize_direction == "left_bottom" and is_update_width:
             self.setGeometry(window_x + pos.x(), window_y, self.wid - pos.x(), self.heigh + pos.y())
 
     def updata_cursor_base_direction(self, left: str, top: str, right: str, bottom: str):
@@ -374,16 +391,16 @@ class MainWindow(QMainWindow):
             self.resize_direction = "left_bottom"
             self.setCursor(Qt.SizeBDiagCursor)
         elif right:
-            self.resize_direction = 'right'
+            self.resize_direction = "right"
             self.setCursor(Qt.SizeHorCursor)
         elif bottom:
-            self.resize_direction = 'bottom'
+            self.resize_direction = "bottom"
             self.setCursor(Qt.SizeVerCursor)
         elif left:
-            self.resize_direction = 'left'
+            self.resize_direction = "left"
             self.setCursor(Qt.SizeHorCursor)
         elif top:
-            self.resize_direction = 'top'
+            self.resize_direction = "top"
             self.setCursor(Qt.SizeVerCursor)
         else:
             self.resize_direction = None
@@ -406,7 +423,9 @@ class MainWindow(QMainWindow):
             pos = event.globalPos() - self.last_pos
             is_update_width = width - pos.x() > 1030
             is_update_height = height - pos.y() > 760
-            self.geometry_window(self.window_x, self.window_y, pos, is_update_width, is_update_height,self.resize_direction)
+            self.geometry_window(
+                self.window_x, self.window_y, pos, is_update_width, is_update_height, self.resize_direction
+            )
         else:
             # Determine whether you can drag the window size, If so, record the drag direction and set the cursor stutle
             self.updata_cursor_base_direction(left, top, right, bottom)
@@ -422,11 +441,11 @@ class MainWindow(QMainWindow):
         painter.drawRect(1, 1, width - 2, 31)
         painter.setBrush(QColor(208, 206, 202, 124))
         painter.drawRect(1, 31, width - 2, 41)
-        painter.drawRect(1, height - 24, width -2, 23)
+        painter.drawRect(1, height - 24, width - 2, 23)
         painter.end()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
