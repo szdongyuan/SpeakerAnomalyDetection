@@ -73,7 +73,7 @@ class MytableView(QTableView):
         self.setModel(self.list_model)
         self.model_info = list()
         self.is_edit_item = True
-        self.sellect_model_row = None
+        self.select_model_row = None
 
         self.model().dataChanged.connect(self.is_edit_model_item)
 
@@ -85,21 +85,21 @@ class MytableView(QTableView):
         self.setSelectionBehavior(QTableView.SelectItems)
         self.setSelectionMode(QTableView.ExtendedSelection)
 
-        self.horizontalHeader().sectionClicked.connect(self.clear_sellect_model_row)
+        self.horizontalHeader().sectionClicked.connect(self.clear_select_model_row)
         self.verticalHeader().sectionClicked.connect(self.on_column_clicked)
         self.clicked.connect(self.on_item_clicked)
         # Set up a slot function for multi - selection.
-        self.selectionModel().selectionChanged.connect(self.clear_sellect_model_row)
+        self.selectionModel().selectionChanged.connect(self.clear_select_model_row)
         self.setStyleSheet(ui_style_const.qlabel_stytle)
 
-    def clear_sellect_model_row(self):
-        self.sellect_model_row = None
+    def clear_select_model_row(self):
+        self.select_model_row = None
 
     def on_column_clicked(self, column):
-        self.sellect_model_row = column
+        self.select_model_row = column
 
     def on_item_clicked(self, index):
-        self.sellect_model_row = index.row()
+        self.select_model_row = index.row()
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
         if Qt.EditRole in roles:
@@ -174,14 +174,14 @@ class MytableView(QTableView):
             return
 
     def del_model_in_model_info(self):
-        if self.sellect_model_row is None:
+        if self.select_model_row is None:
             return
-        model_name = self.model_info[self.sellect_model_row][0]
+        model_name = self.model_info[self.select_model_row][0]
         code = self.model_management.delete_model_info_from_db(model_name)[0]
         if code == error_code.OK:
             self.logger.info("delete model info from db.")
-        self.model_info.pop(self.sellect_model_row)
-        self.list_model.removeRow(self.sellect_model_row)
+        self.model_info.pop(self.select_model_row)
+        self.list_model.removeRow(self.select_model_row)
 
     def load_model_info_from_db(self):
         self.model().setHorizontalHeaderLabels(["模型名称", "输入维度", "输出维度", "精度", "模型备注"])
@@ -309,10 +309,10 @@ class MytableView(QTableView):
     def get_model_config(self, model_name: str, action_type: str = None):
         dim_dict = {}
         if action_type == "new":
-            dim_dict["input_left"] = self.model_info[self.sellect_model_row][1].split(" x ")[0]
-            dim_dict["input_right"] = self.model_info[self.sellect_model_row][1].split(" x ")[1]
-            dim_dict["output_dim"] = self.model_info[self.sellect_model_row][2]
-            dim_dict["config_path"] = self.model_info[self.sellect_model_row][-2]
+            dim_dict["input_left"] = self.model_info[self.select_model_row][1].split(" x ")[0]
+            dim_dict["input_right"] = self.model_info[self.select_model_row][1].split(" x ")[1]
+            dim_dict["output_dim"] = self.model_info[self.select_model_row][2]
+            dim_dict["config_path"] = self.model_info[self.select_model_row][-2]
             model_obj_data = SetModelConfig(model_info=self.model_info, model_name=model_name, dim=dim_dict)
             model_obj_data.model_input_dim_box.setEnabled(False)
             model_obj_data.model_output_dim_box.setEnabled(False)
@@ -350,16 +350,16 @@ class MytableView(QTableView):
             return
 
     def set_new_model_info(self):
-        if self.sellect_model_row is None:
+        if self.select_model_row is None:
             QMessageBox.warning(self, "警告", "请选择模型")
             return
-        item = self.model().item(self.sellect_model_row, 0)
+        item = self.model().item(self.select_model_row, 0)
         if item:
             model_path = DEFAULT_DIR + self.model_info[item.row()][-1]
             if os.path.isfile(model_path):
                 model_type = model_path.split(".")[-1]
                 self.update_model_info(model_path=model_path, model_type=model_type, action_type="new")
-                self.sellect_model_row = None
+                self.select_model_row = None
 
     def register_model_info(self):
         home_directory = os.path.expanduser("~")
@@ -373,14 +373,14 @@ class MytableView(QTableView):
         else:
             return
         self.update_model_info(model_path, model_name, model_type)
-        self.sellect_model_row = None
+        self.select_model_row = None
 
     def del_model_info(self):
-        if self.sellect_model_row is None:
+        if self.select_model_row is None:
             QMessageBox.warning(self, "警告", "请选择模型")
             return
         path_index = len(self.model_info[0]) - 1
-        model_path = DEFAULT_DIR + self.model_info[self.sellect_model_row][path_index]
+        model_path = DEFAULT_DIR + self.model_info[self.select_model_row][path_index]
         if os.path.isfile(model_path):
             try:
                 os.remove(model_path)
@@ -390,7 +390,7 @@ class MytableView(QTableView):
                 self.logger.error(e)
         if not os.path.exists(model_path):
             self.del_model_in_model_info()
-            self.sellect_model_row = None
+            self.select_model_row = None
             self.logger.info("delete model info success")
 
 
