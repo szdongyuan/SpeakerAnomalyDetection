@@ -45,34 +45,38 @@ class StimulusSignal(object):
         t_single = total_time / repeat_times
         t_half = t_single / 2
         current_phase = 0.0
-        for _ in range(repeat_times):
+        for i in range(repeat_times):
+            add_point = True if i > 0 else False
             if stimulus_type == "log" and start_freq != stop_freq:
                 y_part, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_single,
-                                                                  sample_rate, current_phase)
+                                                                  sample_rate, current_phase, add_point=add_point)
                 y_all.append(y_part)
             elif stimulus_type == "linear" or stimulus_type == "log":
                 y_part, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_single,
-                                                                  sample_rate, current_phase)
+                                                                  sample_rate, current_phase, add_point=add_point)
                 y_all.append(y_part)
             elif stimulus_type == "mirror_log":
                 y_down, phase_end = StimulusSignal.make_sweep("log", stop_freq, start_freq, t_half,
-                                                              sample_rate, current_phase)
+                                                              sample_rate, current_phase, add_point=add_point)
                 y_up, current_phase = StimulusSignal.make_sweep("log", start_freq, stop_freq, t_half,
-                                                                sample_rate, phase_end)
+                                                                sample_rate, phase_end, add_point=True)
                 y_all.append(np.concatenate([y_down, y_up]))
             elif stimulus_type == "mirror_linear":
                 y_down, phase_end = StimulusSignal.make_sweep("linear", stop_freq, start_freq, t_half,
-                                                              sample_rate, current_phase)
+                                                              sample_rate, current_phase, add_point=add_point)
                 y_up, current_phase = StimulusSignal.make_sweep("linear", start_freq, stop_freq, t_half,
-                                                                sample_rate, phase_end)
+                                                                sample_rate, phase_end, add_point=True)
                 y_all.append(np.concatenate([y_down, y_up]))
             else:
                 raise Exception("Invalid chirp type")
         return np.concatenate(y_all), sample_rate
 
     @staticmethod
-    def make_sweep(stimulus_type, freq1, freq2, duration, sr, phase_offset=0.0):
-        t = np.arange(int(duration * sr)) / sr
+    def make_sweep(stimulus_type, freq1, freq2, duration, sr, phase_offset=0.0, add_point=False):
+        num_samples = int(duration * sr)
+        if add_point:
+            num_samples += 1
+        t = np.linspace(0, duration, num_samples, endpoint=True)
         if stimulus_type == "linear":
             k = (freq2 - freq1) / duration
             phase = 2 * np.pi * (0.5 * k * t ** 2 + freq1 * t)
@@ -82,7 +86,10 @@ class StimulusSignal(object):
         else:
             raise Exception("Invalid chirp type")
         y = phase + phase_offset
-        return np.sin(y), y[-1]
+        signal = np.sin(y)
+        if add_point:
+            signal = signal[1:]
+        return signal, y[-1]
 
     @staticmethod
     def generate_noise(total_time=2.0, sample_rate=44100, repeat_times=1,
