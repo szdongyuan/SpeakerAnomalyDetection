@@ -86,3 +86,4 @@ class LoaderThread(QObject):
             self.finished.emit()
         except Exception as e:
             self.error.emit(f"{str(e)}")
+
