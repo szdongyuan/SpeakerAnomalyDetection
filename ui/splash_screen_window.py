@@ -3,7 +3,7 @@ import importlib
 
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
 from PyQt5.QtWidgets import QWidget, QProgressBar, QLabel
-from consts.running_consts import DEFAULT_DIR
+from consts.running_consts import DEFAULT_DIR, MODULES_LOAD
 from PyQt5.QtGui import QPixmap
 
 
@@ -55,21 +55,7 @@ class LoaderThread(QObject):
 
     def __init__(self):
         super().__init__()
-        self.modules_to_load = [
-            ("加载格式", "consts.ui_style_const"),
-            ("加载常量", "consts.model_consts"),
-            ("加载路径", "consts.running_consts"),
-            ("加载日志模块", "base.log_manager"),
-            ("加载数据库模块", "base.db_manager"),
-            ("加载 AI 模型训练窗口", "ui.ai_window"),
-            ("加载 校准窗口", "ui.calibration_window"),
-            ("加载 硬件选择窗口", "ui.hardware_window"),
-            ("加载 分析流程窗口", "ui.sequence_widget"),
-            ("加载 激励信号窗口", "ui.stimulus_window"),
-            ("加载 模型选择窗口", "ui.analysis_model_sellect_dialog"),
-            ("加载 登录窗口", "ui.login_window"),
-            ("加载完成", None)
-        ]
+        self.modules_to_load = MODULES_LOAD
 
     def run(self):
         try:
