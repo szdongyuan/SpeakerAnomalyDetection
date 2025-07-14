@@ -19,7 +19,7 @@ from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWi
 from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow, LPConfigWindow
 
 
-class AnalysisModelSellect(QDialog):
+class AnalysisModelSelect(QDialog):
 
     def __init__(self):
         super().__init__()
@@ -27,9 +27,9 @@ class AnalysisModelSellect(QDialog):
         self.analysis_list = QListView()
         self.analysis_list.setSelectionMode(QListView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
-        self.sellect_list = OptionList(self.default_logger)
+        self.select_list = OptionList(self.default_logger)
         self.analysis_list.setEditTriggers(QListView.NoEditTriggers)
-        self.sellect_list.setEditTriggers(QListView.NoEditTriggers)
+        self.select_list.setEditTriggers(QListView.NoEditTriggers)
 
         self.drag_drop_function()
         self.init_ui()
@@ -39,7 +39,7 @@ class AnalysisModelSellect(QDialog):
         self.setWindowTitle("分析队列")
 
         analysis_list_layout = self.create_analysis_list_layout()
-        sellect_list_layout = self.create_sellect_list_layout()
+        select_list_layout = self.create_select_list_layout()
         btn_layout = self.create_btn_layout()
         move_btn_layout = self.move_item_btn_layout()
 
@@ -54,53 +54,54 @@ class AnalysisModelSellect(QDialog):
         analysis_layout = QHBoxLayout()
         analysis_layout.addLayout(analysis_list_layout)
         analysis_layout.addWidget(add_analysis_btn)
-        analysis_layout.addLayout(sellect_list_layout)
+        analysis_layout.addLayout(select_list_layout)
         analysis_layout.addLayout(move_btn_layout)
 
         layout = QVBoxLayout()
         layout.addLayout(analysis_layout)
         layout.addLayout(btn_layout)
-        
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlabel_stytle + 
-                           ui_style_const.qcheckbox_stytle +
-                           ui_style_const.qlistview_stytle)
-        
+        self.setStyleSheet(
+            ui_style_const.qcombobox_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qcheckbox_stytle
+            + ui_style_const.qlistview_stytle
+        )
+
     def add_analysis_btn_clicked(self):
         if self.analysis_list.currentIndex().row() != -1:
             text = self.analysis_list.currentIndex().data()
-            self.sellect_list.set_new_analysis_config(text)
-            self.sellect_list.data_struct.add_stft_or_fft_count(text)
-        
+            self.select_list.set_new_analysis_config(text)
+            self.select_list.data_struct.add_stft_or_fft_count(text)
+
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
         self.analysis_list.setAcceptDrops(False)
         self.analysis_list.setDragDropMode(QListView.DragOnly)
         self.analysis_list.setDefaultDropAction(Qt.CopyAction)
 
-        self.sellect_list.setDragEnabled(True)
-        self.sellect_list.setDragDropMode(QListView.DragDrop)
-        self.sellect_list.setDefaultDropAction(Qt.MoveAction)
-        self.sellect_list.setDropIndicatorShown(True)
-        self.sellect_list.setDragDropOverwriteMode(False)
-        self.sellect_list.setMovement(QListView.Snap)
-        self.sellect_list.setFlow(QListView.TopToBottom)
+        self.select_list.setDragEnabled(True)
+        self.select_list.setDragDropMode(QListView.DragDrop)
+        self.select_list.setDefaultDropAction(Qt.MoveAction)
+        self.select_list.setDropIndicatorShown(True)
+        self.select_list.setDragDropOverwriteMode(False)
+        self.select_list.setMovement(QListView.Snap)
+        self.select_list.setFlow(QListView.TopToBottom)
 
     def up_btn_clicked(self):
-        self.sellect_list.itemmove("up")
+        self.select_list.itemmove("up")
 
     def down_btn_clicked(self):
-        self.sellect_list.itemmove("down")
-    
+        self.select_list.itemmove("down")
+
     def top_btn_clicked(self):
-        self.sellect_list.itemmove("top")
+        self.select_list.itemmove("top")
 
     def bottom_btn_clicked(self):
-        self.sellect_list.itemmove("bottom")
+        self.select_list.itemmove("bottom")
 
     def create_analysis_list_layout(self):
         analysis_label = QLabel("可选分析")
@@ -120,7 +121,7 @@ class AnalysisModelSellect(QDialog):
         layout.addWidget(self.analysis_list)
 
         return layout
-    
+
     def move_item_btn_layout(self):
         up_btn = QPushButton()
         down_btn = QPushButton()
@@ -154,23 +155,23 @@ class AnalysisModelSellect(QDialog):
         layout.setContentsMargins(0, 30, 0, 0)
 
         return layout
-    
-    def create_sellect_list_layout(self):
-        sellect_analysis_label = QLabel("分析")
+
+    def create_select_list_layout(self):
+        select_analysis_label = QLabel("分析")
         self.auto_analysis_box = QCheckBox("自动分析")
-        self.auto_analysis_box.setChecked(self.sellect_list.config.get("auto_analysis", True))
+        self.auto_analysis_box.setChecked(self.select_list.config.get("auto_analysis", True))
         self.auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
 
         analysis_title_layout = QHBoxLayout()
-        analysis_title_layout.addWidget(sellect_analysis_label)
+        analysis_title_layout.addWidget(select_analysis_label)
         analysis_title_layout.addWidget(self.auto_analysis_box)
 
         layout = QVBoxLayout()
         layout.addLayout(analysis_title_layout)
-        layout.addWidget(self.sellect_list)
+        layout.addWidget(self.select_list)
 
         return layout
-    
+
     def create_btn_layout(self):
         load_btn = QPushButton("导入")
         load_btn.clicked.connect(self.load_btn_clicked)
@@ -195,84 +196,87 @@ class AnalysisModelSellect(QDialog):
         layout.setSpacing(20)
 
         return layout
-    
+
     def clear_btn_clicked(self):
-        self.sellect_list.config = {"display_sequence":[],
-                                    "default_ai":None}
-        self.sellect_list.data_struct.clear_fft_and_stft_flag()
-        self.sellect_list.model().clear()
-        self.sellect_list.prev_sellect_ai = None
-        self.sellect_list.all_ai_item = []
+        self.select_list.config = {"display_sequence": [], "default_ai": None}
+        self.select_list.data_struct.clear_fft_and_stft_flag()
+        self.select_list.model().clear()
+        self.select_list.prev_select_ai = None
+        self.select_list.all_ai_item = []
 
     def load_btn_clicked(self):
-        file_path, _ = QFileDialog.getOpenFileName(self,
-                                                   "导入配置文件",
-                                                   DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
-                                                   filter="JSON Files (*.json);;All Files (*)")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入配置文件",
+            DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
+            filter="JSON Files (*.json);;All Files (*)",
+        )
         if file_path:
             try:
-                self.sellect_list.load_model_config(file_path)
+                self.select_list.load_model_config(file_path)
             except Exception as e:
                 self.default_logger.error(f"Unable to parse JSON data in {file_path}. {e}")
 
     def save_btn_clicked(self):
-        file_path, _ = QFileDialog.getSaveFileName(self,
-                                                   "保存配置文件",
-                                                   DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
-                                                   filter="JSON Files (*.json);;All Files (*)")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存配置文件",
+            DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
+            filter="JSON Files (*.json);;All Files (*)",
+        )
         if file_path:
-            self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
+            self.select_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
             try:
-                with open(file_path, 'w', encoding='utf-8') as file:
-                    json.dump(self.sellect_list.config, file, indent=4)
+                with open(file_path, "w", encoding="utf-8") as file:
+                    json.dump(self.select_list.config, file, indent=4)
                 self.default_logger.info(f"The config file has been saved to {file_path}")
             except Exception as e:
                 self.default_logger.error(f"The config file saved failed. {e}")
 
     def ok_btn_clicked(self):
-        self.sellect_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
-        self.save_analyse_config_to_json(self.sellect_list.config)
+        self.select_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
+        self.save_analyse_config_to_json(self.select_list.config)
         sign.update_mode_display_sign.emit(0)
         self.update_test_file_current_model()
         self.close()
 
     def update_test_file_current_model(self):
         config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        with open(config_file_path, 'r') as f:
+        with open(config_file_path, "r") as f:
             default_config = json.load(f)
             default_ai_model = default_config["default_ai"]
             if default_ai_model:
                 analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
                 current_time = datetime.now().strftime("%Y-%m-%d")
                 test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-                with open(test_result_path, 'r') as r:
+                with open(test_result_path, "r") as r:
                     lines = r.readlines()
                     lines[4] = f"current_model: {analyse_model_name}\n"
-                with open(test_result_path, 'w') as w:
+                with open(test_result_path, "w") as w:
                     w.writelines(lines)
 
     def save_analyse_config_to_json(self, config_data):
         analyse_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
         try:
-            with open(analyse_config_file, 'w', encoding='utf-8') as f:
+            with open(analyse_config_file, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=4)
                 self.default_logger.info(f"The config info for analysis has been saved to {analyse_config_file}.")
                 return True
         except Exception as e:
             self.default_logger.error(f"The config info for analysis save failed. {e}")
             return False
-        
+
 
 class OptionList(QListView):
 
     def __init__(self, logger):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.sellect_analysis_model = QStandardItemModel()
-        self.setModel(self.sellect_analysis_model)
+        self.select_analysis_model = QStandardItemModel()
+        self.setModel(self.select_analysis_model)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
-        self.sellect_analysis_model.dataChanged.connect(self.is_edit_model_item)
+        self.select_analysis_model.dataChanged.connect(self.is_edit_model_item)
 
         self.default_logger = logger
         self.row_num = None
@@ -280,12 +284,11 @@ class OptionList(QListView):
         self.start_row_number = None
         self.old_name = None
         self.press_time = None
-        self.prev_sellect_ai = None
+        self.prev_select_ai = None
         self.is_edit_item = True
         self.index_num = None
         self.all_ai_item = []
-        self.config = {"display_sequence":[],
-                       "default_ai":None}
+        self.config = {"display_sequence": [], "default_ai": None}
         self.load_model_config(DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json")
 
         self.mousePressEvent = self.mousepressevent
@@ -302,32 +305,45 @@ class OptionList(QListView):
         new_item = QStandardItem(text)
 
         if index == "top":
-            self.update_at_itemmove(0, new_item, 
-                                    self.index_num + 1,
-                                    self.config["display_sequence"], self.index_num, 0)
+            self.update_at_itemmove(0, new_item, self.index_num + 1, self.config["display_sequence"], self.index_num, 0)
             self.index_num = 0
         elif index == "bottom":
-            self.update_at_itemmove(self.model().rowCount(), new_item,
-                                    self.index_num, 
-                                    self.config["display_sequence"], self.index_num, self.model().rowCount() - 1)
+            self.update_at_itemmove(
+                self.model().rowCount(),
+                new_item,
+                self.index_num,
+                self.config["display_sequence"],
+                self.index_num,
+                self.model().rowCount() - 1,
+            )
             self.index_num = self.model().rowCount() - 1
         elif index == "up" and self.index_num != 0:
-            self.update_at_itemmove(self.index_num - 1, new_item, 
-                                    self.index_num + 1, 
-                                    self.config["display_sequence"], self.index_num, self.index_num - 1)
+            self.update_at_itemmove(
+                self.index_num - 1,
+                new_item,
+                self.index_num + 1,
+                self.config["display_sequence"],
+                self.index_num,
+                self.index_num - 1,
+            )
             self.index_num -= 1
         elif index == "down" and self.index_num != self.model().rowCount() - 1:
-            self.update_at_itemmove(self.index_num + 2, new_item,
-                                    self.index_num,
-                                    self.config["display_sequence"], self.index_num, self.index_num + 1)
+            self.update_at_itemmove(
+                self.index_num + 2,
+                new_item,
+                self.index_num,
+                self.config["display_sequence"],
+                self.index_num,
+                self.index_num + 1,
+            )
             self.index_num += 1
         self.setCurrentIndex(self.model().index(self.index_num, 0))
 
     def update_at_itemmove(self, insert_index, new_item, pop_index, list: list, old_item_num, new_item_num):
         self.model().insertRow(insert_index, new_item)
         self.model().removeRow(pop_index)
-        self.swap_list_index(list,old_item_num, new_item_num)
-        self.update_sellect_ai(old_item_num, new_item_num, False)
+        self.swap_list_index(list, old_item_num, new_item_num)
+        self.update_select_ai(old_item_num, new_item_num, False)
 
     def show_context_menu(self, pos):
         index = self.indexAt(pos)
@@ -340,33 +356,33 @@ class OptionList(QListView):
             delete_action.triggered.connect(lambda: self.delete_item(index))
             rename_action = QAction("重命名", self)
             rename_action.triggered.connect(lambda: self.rename_item(index))
-            self.sellect_ai_action = QAction("设为评判模型", self)
-            self.sellect_ai_action.triggered.connect(lambda: self.sellect_ai(index))
+            self.select_ai_action = QAction("设为评判模型", self)
+            self.select_ai_action.triggered.connect(lambda: self.select_ai(index))
 
             self.old_name = index.data()
-            self.rename_sellect_ai_action(index)
-                
+            self.rename_select_ai_action(index)
+
             menu.addAction(open_action)
-            menu.addAction(self.sellect_ai_action)
+            menu.addAction(self.select_ai_action)
             menu.addAction(delete_action)
             menu.addAction(rename_action)
             menu.exec_(self.mapToGlobal(pos))
 
-    def rename_sellect_ai_action(self, index: QModelIndex):
+    def rename_select_ai_action(self, index: QModelIndex):
         if self.check_item_isai(index.data()) or "\u2605" in index.data():
-            self.sellect_ai_action.setEnabled(True)
+            self.select_ai_action.setEnabled(True)
             if "\u2605" in index.data():
-                self.sellect_ai_action.setText("取消设定")
+                self.select_ai_action.setText("取消设定")
             else:
-                self.sellect_ai_action.setText("设为评判模型")
+                self.select_ai_action.setText("设为评判模型")
         else:
-            self.sellect_ai_action.setEnabled(False)
+            self.select_ai_action.setEnabled(False)
 
     def valid_char(self, text):
         valid_chars = text.replace("\xa0", "")
         return valid_chars
 
-    def sellect_ai(self, index):
+    def select_ai(self, index):
         is_ai = self.check_item_isai(index.data()) or "\u2605" in index.data()
         if is_ai is False:
             return
@@ -374,15 +390,15 @@ class OptionList(QListView):
             new_name = index.data().replace("\u2605", "\xa0")
             self.set_model_data(index, new_name)
             self.config["default_ai"] = None
-            self.prev_sellect_ai = None
+            self.prev_select_ai = None
         else:
-            if self.prev_sellect_ai is None:
-                self.prev_sellect_ai = index
+            if self.prev_select_ai is None:
+                self.prev_select_ai = index
             else:
-                prev_new_name = self.prev_sellect_ai.data().replace("\u2605", "\xa0")
-                self.set_model_data(self.prev_sellect_ai, prev_new_name)
-                self.prev_sellect_ai = index
-            self.config["default_ai"] =index.data()
+                prev_new_name = self.prev_select_ai.data().replace("\u2605", "\xa0")
+                self.set_model_data(self.prev_select_ai, prev_new_name)
+                self.prev_select_ai = index
+            self.config["default_ai"] = index.data()
             self.is_select_ai = True
             new_name = "\u2605" + self.valid_char(index.data())
             self.set_model_data(index, new_name)
@@ -438,20 +454,19 @@ class OptionList(QListView):
 
     def load_config(self, config_file):
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 default_config = json.load(f)
             return default_config
         except Exception as e:
             self.default_logger.error(f"Failed to load the default config file. {e}")
             return {}
-        
+
     def clear_option_list(self):
-        self.config = {"display_sequence":[],
-                       "default_ai":None}
+        self.config = {"display_sequence": [], "default_ai": None}
         self.model().clear()
-        self.prev_sellect_ai = None
+        self.prev_select_ai = None
         self.all_ai_item = []
-        
+
     def load_model_config(self, config_path):
         self.data_struct.clear_fft_and_stft_flag()
         if os.path.exists(config_path):
@@ -469,7 +484,7 @@ class OptionList(QListView):
                 item_name = item_name.replace("\xa0", "")
                 self.model().appendRow(QStandardItem("\u2605" + item_name))
                 last_row = self.model().rowCount() - 1
-                self.prev_sellect_ai = self.model().index(last_row, 0)
+                self.prev_select_ai = self.model().index(last_row, 0)
             else:
                 self.model().appendRow(QStandardItem(item_name))
 
@@ -484,19 +499,18 @@ class OptionList(QListView):
             self.config["display_sequence"].remove(self.config["default_ai"])
             self.delete_item_config(self.config["default_ai"])
             self.config["default_ai"] = None
-            self.prev_sellect_ai = None
+            self.prev_select_ai = None
         else:
             self.config["display_sequence"].remove(index.data())
             self.data_struct.minus_stft_or_fft_count(self.config[index.data()]["type"])
             self.delete_item_config(index.data())
             self.update_default_ai_index_at_delete_item(index)
-        model = self.model() 
+        model = self.model()
         model.removeRow(index.row())
 
     def update_default_ai_index_at_delete_item(self, index):
-        if index.row() < self.prev_sellect_ai.row():
-            self.prev_sellect_ai = self.model().index(self.prev_sellect_ai.row() - 1, 0)
-        
+        if index.row() < self.prev_select_ai.row():
+            self.prev_select_ai = self.model().index(self.prev_select_ai.row() - 1, 0)
 
     def delete_item_config(self, name):
         if not name:
@@ -523,29 +537,29 @@ class OptionList(QListView):
             self.setCurrentIndex(self.model().index(new_index, 0))
             self.swap_list_index(config["display_sequence"], old_index, new_index)
             self.start_row_number = new_index
-        self.update_sellect_ai(old_index, new_index, True)
+        self.update_select_ai(old_index, new_index, True)
 
-    def update_sellect_ai(self, old_index, new_index, step_index: bool):
-        if old_index == new_index or old_index == -1 or new_index == -1 or not self.prev_sellect_ai:
+    def update_select_ai(self, old_index, new_index, step_index: bool):
+        if old_index == new_index or old_index == -1 or new_index == -1 or not self.prev_select_ai:
             return
-        
-        sellect_ai_row = self.prev_sellect_ai.row()
-        if sellect_ai_row < old_index and sellect_ai_row >= new_index:
-            sellect_ai_row = sellect_ai_row + 1
-            self.prev_sellect_ai = self.model().index(sellect_ai_row, 0)
-        elif sellect_ai_row > old_index and sellect_ai_row <= new_index:
-            sellect_ai_row = sellect_ai_row - 1
-            self.prev_sellect_ai = self.model().index(sellect_ai_row, 0)
-        elif sellect_ai_row == old_index:
-            if step_index:
-                if new_index > sellect_ai_row:
-                    self.prev_sellect_ai = self.model().index(new_index - 1, 0)
-                elif new_index < sellect_ai_row:
-                    self.prev_sellect_ai = self.model().index(new_index, 0)
-            else:
-                self.prev_sellect_ai = self.model().index(new_index, 0)
 
-    def set_model_data(self, index:QModelIndex, name):
+        select_ai_row = self.prev_select_ai.row()
+        if select_ai_row < old_index and select_ai_row >= new_index:
+            select_ai_row = select_ai_row + 1
+            self.prev_select_ai = self.model().index(select_ai_row, 0)
+        elif select_ai_row > old_index and select_ai_row <= new_index:
+            select_ai_row = select_ai_row - 1
+            self.prev_select_ai = self.model().index(select_ai_row, 0)
+        elif select_ai_row == old_index:
+            if step_index:
+                if new_index > select_ai_row:
+                    self.prev_select_ai = self.model().index(new_index - 1, 0)
+                elif new_index < select_ai_row:
+                    self.prev_select_ai = self.model().index(new_index, 0)
+            else:
+                self.prev_select_ai = self.model().index(new_index, 0)
+
+    def set_model_data(self, index: QModelIndex, name):
         self.is_edit_item = False
         self.model().setData(index, name)
 
@@ -556,7 +570,7 @@ class OptionList(QListView):
             return True
         else:
             return False
-        
+
     def update_default_ai(self, name):
         if not name:
             return
@@ -602,7 +616,7 @@ class OptionList(QListView):
             self.update_config_file(old_name, new_name)
             self.update_display_sequence_list(list, old_name, new_name)
         self.update_ai_list(new_name, old_name)
-        
+
     def update_ai_list(self, new_name, old_name):
         if not old_name in self.all_ai_item or old_name == new_name:
             return
@@ -632,13 +646,19 @@ class OptionList(QListView):
                 return
             if self.is_select_ai:
                 if "\u2605" in new_name:
-                    self.config["default_ai"] = new_name.replace("\u2605","\xa0")
+                    self.config["default_ai"] = new_name.replace("\u2605", "\xa0")
                     if self.config["default_ai"] != self.old_name:
-                        self.update_config_data(self.old_name.replace("\u2605","\xa0"), self.config["default_ai"], self.config["display_sequence"])
+                        self.update_config_data(
+                            self.old_name.replace("\u2605", "\xa0"),
+                            self.config["default_ai"],
+                            self.config["display_sequence"],
+                        )
                     self.old_name = new_name
                     self.set_model_data(index, new_name)
                 else:
-                    self.update_config_data(self.old_name.replace("\u2605","\xa0"), new_name, self.config["display_sequence"])
+                    self.update_config_data(
+                        self.old_name.replace("\u2605", "\xa0"), new_name, self.config["display_sequence"]
+                    )
                     self.old_name = new_name
                     self.update_default_ai(new_name)
                     self.set_model_data(index, "\u2605" + new_name)
@@ -651,10 +671,10 @@ class OptionList(QListView):
                 self.rename_item_space_equal(new_name, index)
         else:
             if new_name == self.old_name:
-                return 
+                return
             self.set_model_data(index, self.old_name)
 
-    def swap_list_index(self, list:list, old_index, new_index):
+    def swap_list_index(self, list: list, old_index, new_index):
         if old_index == new_index or not list:
             return
         old_name = list[old_index]
@@ -733,8 +753,8 @@ class OptionList(QListView):
         count = 1
         item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
         item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
-        while  item_exist or item_star_exist:
-            count += 1 
+        while item_exist or item_star_exist:
+            count += 1
             item_exist = self.model().findItems("\xa0" + item_text + f"{count}")
             item_star_exist = self.model().findItems("\u2605" + item_text + f"{count}")
         list_item = QStandardItem("\xa0" + item_text + f"{count}")
@@ -748,27 +768,27 @@ class OptionList(QListView):
     def get_item_default_config(self, item_text, list_item_text):
         if not item_text or not list_item_text:
             return
-        type = ''.join(re.findall(r'[A-Za-z]', item_text))
+        type = "".join(re.findall(r"[A-Za-z]", item_text))
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         data = self.load_config(default_config_file)
         self.config[list_item_text] = data[type]
         self.config[list_item_text]["type"] = type
 
+
 class AnalysisModel(QStandardItemModel):
 
     def mimeTypes(self):
-        return ['text/plain']
+        return ["text/plain"]
 
     def mimeData(self, indexes):
         mime_data = super().mimeData(indexes)
         texts = [index.data(Qt.DisplayRole) for index in indexes if index.isValid()]
-        mime_data.setText('\n'.join(texts))
+        mime_data.setText("\n".join(texts))
         return mime_data
-    
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = AnalysisModelSellect()
+    window = AnalysisModelSelect()
     window.show()
     sys.exit(app.exec_())
-         

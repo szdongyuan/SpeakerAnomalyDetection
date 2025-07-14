@@ -17,7 +17,7 @@ from ui.hardware_window import HardwareWindow, get_default_device
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
-from ui.analysis_model_sellect_dialog import AnalysisModelSellect
+from ui.analysis_model_select_dialog import AnalysisModelSelect
 
 
 class MainWindow(QMainWindow):
@@ -194,7 +194,7 @@ class MainWindow(QMainWindow):
         self.function_action_stimulus.triggered.connect(self.on_stimulus_window_init)
         function_menu.addAction(self.function_action_test_sequence)
         self.function_action_test_sequence.triggered.disconnect()
-        self.function_action_test_sequence.triggered.connect(self.analysis_model_sellect)
+        self.function_action_test_sequence.triggered.connect(self.analysis_model_select)
         function_menu.addSeparator()
         function_menu.addAction(self.function_action_ai_training)
         self.function_action_ai_training.triggered.disconnect()
@@ -236,10 +236,10 @@ class MainWindow(QMainWindow):
         self.refresh_stimulus_flag = dlg.on_exec()
         self.sequence_window.refresh_stimulus_flag = self.refresh_stimulus_flag
 
-    def analysis_model_sellect(self):
+    def analysis_model_select(self):
         # Test items for configuring speakers
-        analysis_model_sellect_dialog = AnalysisModelSellect()
-        analysis_model_sellect_dialog.exec()
+        analysis_model_select_dialog = AnalysisModelSelect()
+        analysis_model_select_dialog.exec()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size

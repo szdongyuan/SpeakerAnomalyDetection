@@ -12,7 +12,7 @@ GB = 1 << 30
 # log consts
 LOG_DIR = DEFAULT_DIR + "log/"
 
-DEFAULT_LOG_FORMATTER = '[%(asctime)s][%(name)s] - [%(levelname)s] - [%(message)s] [%(filename)s:%(lineno)d]'
+DEFAULT_LOG_FORMATTER = "[%(asctime)s][%(name)s] - [%(levelname)s] - [%(message)s] [%(filename)s:%(lineno)d]"
 
 DEFAULT_LOG = {
     "log_name": LOG_DIR + "main.log",
@@ -53,17 +53,18 @@ LOG_MAPPING = {
 
 tcp_service_recv_bytes = 1024
 
-MODULES_LOAD = [("加载格式", "consts.ui_style_const"),
-                ("加载常量", "consts.model_consts"),
-                ("加载路径", "consts.running_consts"),
-                ("加载日志模块", "base.log_manager"),
-                ("加载数据库模块", "base.db_manager"),
-                ("加载 AI 模型训练窗口", "ui.ai_window"),
-                ("加载 校准窗口", "ui.calibration_window"),
-                ("加载 硬件选择窗口", "ui.hardware_window"),
-                ("加载 分析流程窗口", "ui.sequence_widget"),
-                ("加载 激励信号窗口", "ui.stimulus_window"),
-                ("加载 模型选择窗口", "ui.analysis_model_sellect_dialog"),
-                ("加载 登录窗口", "ui.login_window"),
-                ("加载完成", None)
-                ]
+MODULES_LOAD = [
+    ("加载格式", "consts.ui_style_const"),
+    ("加载常量", "consts.model_consts"),
+    ("加载路径", "consts.running_consts"),
+    ("加载日志模块", "base.log_manager"),
+    ("加载数据库模块", "base.db_manager"),
+    ("加载 AI 模型训练窗口", "ui.ai_window"),
+    ("加载 校准窗口", "ui.calibration_window"),
+    ("加载 硬件选择窗口", "ui.hardware_window"),
+    ("加载 分析流程窗口", "ui.sequence_widget"),
+    ("加载 激励信号窗口", "ui.stimulus_window"),
+    ("加载 模型选择窗口", "ui.analysis_model_select_dialog"),
+    ("加载 登录窗口", "ui.login_window"),
+    ("加载完成", None),
+]
