@@ -2,7 +2,7 @@ import sys
 
 from PyQt5.QtCore import QThread
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from ui.splash_screen_window11 import Splash, LoaderThread
+from ui.splash_screen_window import Splash, LoaderThread
 
 
 class MainWindowLauncher(object):
