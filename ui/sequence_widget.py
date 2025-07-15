@@ -2,7 +2,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import threading
 from datetime import datetime
 
@@ -25,6 +24,7 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import get_mic_deviation_value
 from base.stimulus_signal_management import StimulusSignalManagement
 from base.tcp_service import TcpServer, check_tcp_msg_format
+from base.temp_tcp_client import TempTcpClient
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -65,6 +65,7 @@ class SequenceWindow(QWidget):
         self.recorded_signal_info = {}
         self.ip_format = True
         self.port_format = True
+        self.clicked_player_flag = False  # by clicking to play, not specifically by clicking the play button to play
         self.tcp_ip = None
         self.tcp_port = None
         self.get_tcp_config()
@@ -127,7 +128,7 @@ class SequenceWindow(QWidget):
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
-        self.player_btn.clicked.connect(lambda: self.start_this_play())
+        self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
         self.replayer_btn.setFixedSize(100, 40)
         self.replayer_btn.setToolTip("重播")
         self.replayer_btn.setDisabled(True)
@@ -1091,17 +1092,28 @@ class SequenceWindow(QWidget):
             shutil.move(self.recorded_path, target_path)
         return target_path
 
+    def on_clicked_player_btn(self, label="not_labeled"):
+        self.clicked_player_flag = True
+        self.start_this_play(label)
+
     def start_this_play(self, label="not_labeled"):
+        if self.clicked_player_flag is False:
+            if SequenceWindow.tcp_server.client_address is None:
+                QMessageBox.warning(self, "提示", "TCP链接异常")
+                return
+
         self.play_last_stimulus_wave(label)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
         self.save_recorded_data_to_json()
 
-        # if self.add_or_update_wave_flag:
-        #     self.current_recorded_count += 1
-        #     self.lineedit_count.setText(str(self.current_recorded_count))
-        #     total = int(self.mark_total_edit.text()) + 1
-        #     self.mark_total_edit.setText(str(total))
+        if self.clicked_player_flag is True:
+            self.clicked_player_flag = False
+        elif self.clicked_player_flag is False:
+            if self.scanner_tcp.isChecked():
+                TempTcpClient(
+                    SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
+                )
 
     def play_last_stimulus_wave(self, label="not_labeled"):
         """
@@ -1187,8 +1199,8 @@ class SequenceWindow(QWidget):
         adjusted based on the screen size to ensure they do not overlap.
         """
         self.analysis_window = []
-        width = int((self.screen().size().width() - 400) / 2)
-        height = int((self.screen().size().height() - 400) / 2)
+        width = int((self.screen().size().width() - 400) // 3)
+        height = int((self.screen().size().height() - 400) // 3)
         if self.analysis_config:
             item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:

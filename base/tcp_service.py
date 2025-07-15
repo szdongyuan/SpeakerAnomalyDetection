@@ -15,8 +15,9 @@ class TcpServer:
         self.callback = callback
         self.server_socket = None
         self.server_thread = None
-        self.stop_flag = False   # False 服务停止标记, True 开启
+        self.stop_flag = False  # False 服务停止标记, True 开启
         self.request_id = None
+        self.client_address = None
         self.default_logger = LogManager.set_log_handler("core")
 
     def start(self):
@@ -41,8 +42,8 @@ class TcpServer:
                 self.server_socket.bind((self.host, self.port))
                 self.server_socket.listen(5)
                 print("Tcp_service is waiting for a connection...")
-                client_socket, client_address = self.server_socket.accept()
-                self.default_logger.info(f"client_address from {client_address} build")
+                client_socket, self.client_address = self.server_socket.accept()
+                self.default_logger.info(f"client_address from {self.client_address} build")
 
                 while True:
                     if not self.stop_flag:
@@ -55,7 +56,7 @@ class TcpServer:
                         info = recved.decode()
 
                         res = self.callback(info)
-                        client_socket.send(f'{res}'.encode())
+                        client_socket.send(f"{res}".encode())
 
                     except OSError as e:
                         self.default_logger.error(f"server_socket accept error: {e}")
