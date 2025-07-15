@@ -509,6 +509,8 @@ class OptionList(QListView):
         model.removeRow(index.row())
 
     def update_default_ai_index_at_delete_item(self, index):
+        if self.prev_select_ai is None:
+            return
         if index.row() < self.prev_select_ai.row():
             self.prev_select_ai = self.model().index(self.prev_select_ai.row() - 1, 0)
 
