@@ -1199,8 +1199,8 @@ class SequenceWindow(QWidget):
         adjusted based on the screen size to ensure they do not overlap.
         """
         self.analysis_window = []
-        width = int((self.screen().size().width() - 400) // 3)
-        height = int((self.screen().size().height() - 400) // 3)
+        width = int((self.screen().size().width() - 400) / 3)
+        height = int((self.screen().size().height() - 400) / 3)
         if self.analysis_config:
             item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
