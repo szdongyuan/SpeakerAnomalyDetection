@@ -33,8 +33,8 @@ class MainWindowLauncher(object):
         try:
             self.splash.close()
             from main_window import MainWindow
-            window = MainWindow()
-            window.show()
+            self.window = MainWindow()
+            self.window.show()
         except Exception as e:
             msg = f"主界面启动失败：{str(e)}"
             QMessageBox.critical(None, "错误", msg)
