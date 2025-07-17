@@ -7,7 +7,7 @@ import pyqtgraph
 import sounddevice as sd
 from PyQt5.QtCore import Qt
 from scipy.io import wavfile
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit
 from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout, QAbstractSpinBox
@@ -627,9 +627,17 @@ class StimulusWindow(QDialog):
                 / sample_rate
             )
             self.plot_stimulus.plot(signal_duration, self.data_struct.stimulus_data, pen="b")
-            self.plot_stimulus.setLabel("left", "Amplitude")
-            self.plot_stimulus.setLabel("bottom", "Time (s)")
-
+            self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
+            self.plot_stimulus.setLabel("bottom", "Time (s)",  **{"font-size": "20px"})
+            font = QFont()
+            font.setPixelSize(20)
+            b_axis = self.plot_stimulus.getAxis("bottom")
+            l_axis = self.plot_stimulus.getAxis("left")
+            b_axis.setTickFont(font)
+            l_axis.setTickFont(font)
+            b_axis.setTextPen("black")
+            l_axis.setTextPen("black")
+            
     def load_config_btn_clicked(self):
         """
         Handles the event when the load configuration button is clicked.
