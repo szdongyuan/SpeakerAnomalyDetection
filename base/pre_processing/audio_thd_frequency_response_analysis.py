@@ -7,6 +7,7 @@ import librosa
 
 from base.utils.plot_audio_features import PlotManager
 
+
 class AudioThdFrequencyResponseAnalysis(object):
 
     def process_calculate(self, reference_signal: np.ndarray, recorded_signal, sr, **kwargs):

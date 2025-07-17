@@ -21,7 +21,7 @@ class LoadStimulusDialog(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("加载刺激信号")
+        self.setWindowTitle("加载激励信号")
         self.setWindowIcon(QIcon(""))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
@@ -61,7 +61,7 @@ class LoadStimulusDialog(QDialog):
     
     def ok_btn_clicked(self):
         if self.stimulus_config_view.get_select_stimulus_row() is None:
-            QMessageBox.warning(self, "提示", "请选择要加载的刺激信号配置")
+            QMessageBox.warning(self, "提示", "请选择要加载的激励信号配置")
             return
         self.is_clicked_ok = True
         self.close()

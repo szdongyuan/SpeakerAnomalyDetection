@@ -9,6 +9,7 @@ from PyQt5.QtGui import QPixmap
 
 class Splash(QWidget):
     splashClose = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setupUi()
@@ -60,16 +61,16 @@ class LoaderThread(QObject):
     def run(self):
         try:
             total = len(self.modules_to_load)
+            percent = 0
             for idx, (desc, module_path) in enumerate(self.modules_to_load):
+                self.progress.emit(desc, percent)
                 if module_path:
                     try:
                         importlib.import_module(module_path)
                     except Exception as mod_err:
                         raise ImportError(f"模块{module_path}加载失败：{mod_err}")
                 percent = int((idx + 1) / total * 100)
-                self.progress.emit(desc, percent)
-                time.sleep(0.1)
+                time.sleep(0.01)
             self.finished.emit()
         except Exception as e:
             self.error.emit(f"{str(e)}")
-
