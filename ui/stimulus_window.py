@@ -672,13 +672,13 @@ class StimulusWindow(QDialog):
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.data_struct.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Successfully saving stimulus info to database.")
-            QMessageBox.information(self, "保存配置", "刺激信号保存成功.")
+            QMessageBox.information(self, "保存配置", "激励信号保存成功.")
         elif save_code == error_code.INVALID_INSERT:
             self.default_logger.error("This stimulus signals info already exists.")
-            QMessageBox.warning(self, "保存配置", "刺激信号已存在.")
+            QMessageBox.warning(self, "保存配置", "激励信号已存在.")
         elif save_code == error_code.INVALID_SAVE:
             self.default_logger.error("Failed to save stimulus info to database.")
-            QMessageBox.warning(self, "保存配置", "保存刺激信号信息到数据库失败.")
+            QMessageBox.warning(self, "保存配置", "保存激励信号信息到数据库失败.")
         elif save_code == error_code.INVALID_NAME:
             self.default_logger.error("Invalid stimulus name.")
             QMessageBox.warning(self, "保存配置", "配置名称已存在.")

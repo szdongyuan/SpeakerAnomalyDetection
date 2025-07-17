@@ -1324,7 +1324,7 @@ class SequenceWindow(QWidget):
         - recorded_dict (dict): Dictionary containing the recording parameters.
         """
         # Define the prolongation time to calculate the extended frame count
-        prolong = 3
+        prolong = 0.5
         stimulus_dict = {
             "data": self.data_struct.stimulus_data,
             "amplitude": self.data_struct.stimulus_info["amplitude"],

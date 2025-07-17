@@ -18,8 +18,8 @@ class SoundcardAudioProcessor(object):
         prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
         sr = stimulus_dict.get("sr")
         rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
-        align_frames = self.calculate_alignment(prolong_data, rec_data)
-        aligned_data = rec_data[align_frames + prepare_frames: align_frames + prepare_frames + len(data)]
+        align_frames = self.calculate_alignment(data, rec_data)
+        aligned_data = rec_data[align_frames: align_frames + len(data)]
         wavfile.write(recording_path, sr, aligned_data.astype("float32"))
         return error_code.OK, aligned_data
 
@@ -51,18 +51,25 @@ class SoundcardAudioProcessor(object):
         return error_code.OK, recorded_data
 
     @staticmethod
-    def gcc_phat(recorded_signal, stimulus_signal):
+    def gcc_phat(stimulus_signal, recorded_signal):
         """计算GCC-PHAT互相关函数并返回延迟。"""
         n = len(recorded_signal) + len(stimulus_signal)
+        n_11 = len(stimulus_signal) // 11
         SIG = np.fft.rfft(recorded_signal, n=n)
         REF = np.fft.rfft(stimulus_signal, n=n)
         R = SIG * np.conj(REF)
-        R_normal = R / (np.abs(R) + 1e-10)
-        corr_func = np.fft.irfft(R_normal)
         max_shift = n // 2
-        corr_func_shifted = np.fft.fftshift(corr_func)
-        delay_samples = np.argmax(np.abs(corr_func_shifted)) - max_shift
-        return delay_samples, corr_func_shifted, max_shift
+        corr_func_r = np.fft.irfft(R)
+        corr_func_shifted_r = np.fft.fftshift(corr_func_r)
+        new_delay_samples_r = 0
+        tmp_max = 0
+        for i in range(n // 3, n - len(stimulus_signal) // 12, len(stimulus_signal) // 12):
+            max_min_diff = max(corr_func_shifted_r[i: i + n_11]) - min(corr_func_shifted_r[i: i + n_11])
+            if max_min_diff >= tmp_max:
+                tmp_max = max_min_diff
+                new_delay_samples_r = i + np.argmax(np.abs(corr_func_shifted_r[i: i + n_11]))
+        new_delay_samples_r -= max_shift
+        return new_delay_samples_r, corr_func_shifted_r, max_shift
 
     @staticmethod
     def calculate_alignment(stimulus_signal, recorded_signal):
@@ -75,5 +82,5 @@ class SoundcardAudioProcessor(object):
         Returns:
             int: 计算出的对齐帧数（延迟）。
         """
-        align_frames, corr_func, max_shift = SoundcardAudioProcessor.gcc_phat(recorded_signal, stimulus_signal)
+        align_frames, corr_func, max_shift = SoundcardAudioProcessor.gcc_phat(stimulus_signal, recorded_signal)
         return align_frames

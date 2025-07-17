@@ -605,7 +605,7 @@ class audioDataView(QTableView):
 
     def set_header(self):
         self.model().setHorizontalHeaderLabels(
-            ["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "刺激信号"]
+            ["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"]
         )
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.resizeColumnsToContents()
