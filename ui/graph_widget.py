@@ -133,7 +133,7 @@ def plot_2d_image(x, y, z, title="2D Plot", xlabel="X", ylabel="Y", colormap='vi
         except Exception as e:
             left_axis.setTicks(y_ticks)
 
-    return widget
+    return widget, colorbar
 
 
 class ColorBarItem(pg.GraphicsObject):
