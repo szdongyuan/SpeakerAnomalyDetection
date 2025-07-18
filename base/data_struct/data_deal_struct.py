@@ -13,17 +13,18 @@ class DataDealStruct(object):
             self.stft_result = None
 
             self.store_wave_data = None
+            self.split_repeat_data = None
             self.stimulus_data = None
             self.stimulus_info = None
 
             self.stft_flag = 0
             self.fft_flag = 0
-            # self.ai_flag = 0
 
             self._initialized = True
 
     def clear_data(self):
         self.store_wave_data = None
+        self.split_repeat_data = None
         # self.stimulus_data = None
         self.fft_result = None
         self.stft_result = None
