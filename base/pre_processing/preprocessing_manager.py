@@ -1,7 +1,4 @@
-import math
-
 import numpy as np
-from scipy.io import wavfile
 
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction

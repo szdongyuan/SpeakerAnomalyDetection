@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 
@@ -6,31 +7,32 @@ class SplitRepeatSignal(object):
     @staticmethod
     def split_repeat_signal(audio_data, sr, **kwargs):
         """
-        Divide the repetitive audio into multiple segments evenly,
-        with all segments having the same length.
-        """
+        Split the audio into `repeat_times` segments of equal length.
+        If the length is not divisible, the last segment is taken directly
+        from the end of the original audio to match the segment length.
 
+        Returns:
+            A 2D ndarray of shape (repeat_times, segment_length)
+        """
         repeat_times = kwargs.get("repeat_times", 1)
+
         if not repeat_times or repeat_times <= 0:
-            return np.array([], dtype=np.float32)
+            return np.empty([[]], dtype=np.float32)
 
         if repeat_times == 1:
-            return np.array(audio_data, dtype=np.float32)
+            return np.array([audio_data], dtype=np.float32)
 
-        segments = np.array_split(audio_data, repeat_times)
-        if not segments or len(segments[0]) == 0:
-            return np.array([], dtype=np.float32)
+        total_len = len(audio_data)
+        seg_len = math.ceil(total_len / repeat_times)
 
-        max_len = max(len(seg) for seg in segments)
-        padded_segments = []
-        for seg in segments:
-            seg_len = len(seg)
-            if seg_len < max_len:
-                pad_len = max_len - seg_len
-                padding = seg[:pad_len]
-                padded_seg = np.concatenate([seg, padding])
-            else:
-                padded_seg = seg
-            padded_segments.append(padded_seg)
+        if seg_len == 0:
+            return np.array([[]], dtype=np.float32)
 
-        return np.array(padded_segments, dtype=np.float32)
+        segments = []
+        for i in range(repeat_times - 1):
+            start = i * seg_len
+            end = start + seg_len
+            segment = audio_data[start:end]
+            segments.append(segment)
+        segments.append(audio_data[-seg_len:])
+        return np.array(segments, dtype=np.float32)
