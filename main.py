@@ -14,7 +14,6 @@ from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
 from machine_learning import MODEL_MAPPING
 
-
 DEFAULT_DATA_PATH = "audio_data/train"
 DEFAULT_TEST_DATA = "audio_data/test"
 DEFAULT_MODEL_PATH = "models/"
@@ -148,10 +147,11 @@ def predict(predict_dir,
                            "ret_msg": ret,
                            "result": [[ret]]})
     signals, file_names, fs, _ = ret
-    
-    ret_str = predict_from_audio(signals, file_names, fs,load_model_path=None, model=None, **kwargs)
+
+    ret_str = predict_from_audio(signals, file_names, fs, load_model_path=None, model=None, **kwargs)
 
     return ret_str
+
 
 def predict_from_audio(signals,
                        file_names,
@@ -214,15 +214,42 @@ def preprocess_raw_signals(raw_signals, fs, preprocess_config):
         - preprocess_config:
             Loaded data preprocessing configuration.
 
-        Returns:
+        Returns: ndarray
             An array containing preprocessed audio signal data.
     """
+    params = preprocess_config.get('preprocess_param', {}) if preprocess_config else {}
+    processor_list = params.get('processor_list', [])
+    if not processor_list:
+        return np.array(raw_signals)
+
     processed_data = []
     pm = PreprocessingManager()
-    for i in range(len(raw_signals)):
-        processed_data.append(pm.process(raw_signals[i], fs[i], **preprocess_config))
-    return np.array(processed_data)
+    split_config = None
+    feature_config = None
+    split_handler = None
 
+    for step in processor_list:
+        method = step.get('preprocess_method')
+        if method == 'split_repeat_signal':
+            split_config = step
+            split_handler = pm.get_processor(method)
+        else:
+            feature_config = step
+
+    for i, signal in enumerate(raw_signals):
+        current_data = signal
+
+        if split_config and split_handler:
+            split_param = split_config.get("preprocess_param", {})
+            current_data = split_handler(signal, fs[i], **split_param)
+
+        if feature_config:
+            current_data = pm.process(current_data, fs[i], **feature_config)
+        else:
+            current_data = np.stack(current_data, axis=-1)
+        processed_data.append(current_data)
+    result = np.array(processed_data)
+    return result
 
 # parser = argparse.ArgumentParser(description='speaker anomaly detection')
 # subparsers = parser.add_subparsers(help="sub-command help")

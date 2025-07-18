@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import QVBoxLayout, QWidget, QStackedWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.utils.custom_signals import sign
 from base.load_audio import load_audio_simple
 from base.load_config import LoadUiConfig
@@ -1169,6 +1170,11 @@ class SequenceWindow(QWidget):
             self.data_struct.fft_result = np.abs(
                 np.fft.fft(self.data_struct.store_wave_data)[: self.data_struct.stimulus_info.get("sample_rate") // 2]
             )
+        repeat_times = self.data_struct.stimulus_info.get("repeat_times")
+        if repeat_times > 1:
+            kwargs = {"repeat_times": repeat_times}
+            self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(self.data_struct.store_wave_data,
+                                                                                         sample_rate, **kwargs)
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
