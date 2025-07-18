@@ -214,42 +214,14 @@ def preprocess_raw_signals(raw_signals, fs, preprocess_config):
         - preprocess_config:
             Loaded data preprocessing configuration.
 
-        Returns: ndarray
+        Returns:
             An array containing preprocessed audio signal data.
     """
-    params = preprocess_config.get('preprocess_param', {}) if preprocess_config else {}
-    processor_list = params.get('processor_list', [])
-    if not processor_list:
-        return np.array(raw_signals)
-
     processed_data = []
     pm = PreprocessingManager()
-    split_config = None
-    feature_config = None
-    split_handler = None
-
-    for step in processor_list:
-        method = step.get('preprocess_method')
-        if method == 'split_repeat_signal':
-            split_config = step
-            split_handler = pm.get_processor(method)
-        else:
-            feature_config = step
-
-    for i, signal in enumerate(raw_signals):
-        current_data = signal
-
-        if split_config and split_handler:
-            split_param = split_config.get("preprocess_param", {})
-            current_data = split_handler(signal, fs[i], **split_param)
-
-        if feature_config:
-            current_data = pm.process(current_data, fs[i], **feature_config)
-        else:
-            current_data = np.stack(current_data, axis=-1)
-        processed_data.append(current_data)
-    result = np.array(processed_data)
-    return result
+    for i in range(len(raw_signals)):
+        processed_data.append(pm.process(raw_signals[i], fs[i], **preprocess_config))
+    return np.array(processed_data)
 
 # parser = argparse.ArgumentParser(description='speaker anomaly detection')
 # subparsers = parser.add_subparsers(help="sub-command help")
