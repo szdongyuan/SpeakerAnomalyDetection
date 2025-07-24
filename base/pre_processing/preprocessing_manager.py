@@ -4,6 +4,7 @@ from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 from base.pre_processing.data_alignment import DataAlignment
 from base.pre_processing.emphasis import Emphasis
+from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 
 
 class PreprocessingManager(object):
@@ -19,6 +20,27 @@ class PreprocessingManager(object):
 
             Returns:
                 The corresponding function to the given method name.
+
+            Categories:：
+                1. Feature Extraction:
+                    - "spectrogram"         : Extracts spectrogram features.
+                    - "mfcc"                : Extracts MFCC (Mel-frequency cepstral coefficients).
+                    - "mel_spec"            : Extracts Mel-spectrogram features.
+                    - "zero_crossing_rate"  : Computes the zero crossing rate.
+                    - "spectral_flatness"   : Measures the spectral flatness.
+
+                2. Preprocessing:
+                    - "data_normalize"      : Normalizes the audio data.
+                    - "data_padding"        : Pads audio data to uniform length.
+                    - "split_repeat_signal" : Splits and pads the audio signal.
+
+                3. Augmentation:
+                    - "apply_equalizer"     : Applies equalizer to modify frequency response.
+                    - "random_fluctuation"  : Applies random fluctuations for augmentation.
+
+                4. Pipeline / Structuring:
+                    - "sequence_process"    : Sequentially applies multiple processing steps.
+                    - "stack_process"       : Stacks data for multiple processing steps.
         """
         process_mapping = {
             "spectrogram": AudioFeatureExtraction.spectrogram,
@@ -30,6 +52,7 @@ class PreprocessingManager(object):
             "data_padding": DataAlignment.data_padding,
             "apply_equalizer": AudioEqualizer.apply_equalizer,
             "random_fluctuation": Emphasis.random_fluctuation,
+            "split_repeat_signal": SplitRepeatSignal.split_repeat_signal,
             "sequence_process": cls.sequence_process,
             "stack_process": cls.stack_process,
         }
@@ -59,7 +82,16 @@ class PreprocessingManager(object):
         process_handler = self.get_processor(process_method)
         if not process_handler:
             return signal
-        return process_handler(signal, sr, **process_kwargs)
+
+        if signal.ndim == 1:
+            return process_handler(signal, sr, **process_kwargs)
+
+        process_segments = []
+        for segment in signal:
+            process_segment = process_handler(segment, sr, **process_kwargs)
+            process_segments.append(process_segment)
+        return np.stack(process_segments, axis=-1)
+
 
     @staticmethod
     def sequence_process(signal, sr, **kwargs):

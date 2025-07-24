@@ -14,7 +14,6 @@ from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
 from machine_learning import MODEL_MAPPING
 
-
 DEFAULT_DATA_PATH = "audio_data/train"
 DEFAULT_TEST_DATA = "audio_data/test"
 DEFAULT_MODEL_PATH = "models/"
@@ -148,10 +147,11 @@ def predict(predict_dir,
                            "ret_msg": ret,
                            "result": [[ret]]})
     signals, file_names, fs, _ = ret
-    
-    ret_str = predict_from_audio(signals, file_names, fs,load_model_path=None, model=None, **kwargs)
+
+    ret_str = predict_from_audio(signals, file_names, fs, load_model_path=None, model=None, **kwargs)
 
     return ret_str
+
 
 def predict_from_audio(signals,
                        file_names,
@@ -222,7 +222,6 @@ def preprocess_raw_signals(raw_signals, fs, preprocess_config):
     for i in range(len(raw_signals)):
         processed_data.append(pm.process(raw_signals[i], fs[i], **preprocess_config))
     return np.array(processed_data)
-
 
 # parser = argparse.ArgumentParser(description='speaker anomaly detection')
 # subparsers = parser.add_subparsers(help="sub-command help")
