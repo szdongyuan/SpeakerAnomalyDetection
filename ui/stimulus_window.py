@@ -6,12 +6,11 @@ import numpy as np
 import pyqtgraph
 import sounddevice as sd
 from PyQt5.QtCore import Qt
-from scipy.io import wavfile
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit
 from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout, QAbstractSpinBox
-
+from scipy.io import wavfile
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
@@ -43,12 +42,11 @@ class StimulusWindow(QDialog):
         "粉噪音": "pink_noise",
     }
 
-    def __init__(self):
+    def __init__(self, stimulus_info=None):
         """Initialize stimulus window with default configurations"""
         super().__init__()
         # initialize stimulus signal type， and create variable to store stimulus signal data
         self.data_struct = DataDealStruct()
-        # self.stimulus_info = {"name": "stimulus_chirps_1", "use_custom_stimulus": False}
         self.speaker = None
         self.load_wav_path = ""
         self.start_custom_check_status = self.data_struct.stimulus_info.get("use_custom_stimulus", False)
@@ -75,11 +73,17 @@ class StimulusWindow(QDialog):
         self.step_group_box = self.create_step_group_box()
         self.init_ui()
 
-        stimulus_info = self.get_stimulus_info_from_json()
-        self.update_stimulus_ui_value(stimulus_info)
-        self.old_stimulus_signal_length = self.data_struct.stimulus_info.get(
-            "total_time"
-        ) * self.data_struct.stimulus_info.get("sample_rate")
+        self.data_struct.stimulus_info.clear()
+        if stimulus_info:
+            self.data_struct.stimulus_info = stimulus_info
+        else:
+            self.data_struct.stimulus_info = self.get_stimulus_info_from_json()
+        self.update_stimulus_ui_value(self.data_struct.stimulus_info)
+        self.create_signal_from_stimulus_info()
+        self.graph_stimulus()
+
+        original_total_time = self.data_struct.stimulus_info.get("total_time")
+        self.original_stimulus_signal_length = self.data_struct.stimulus_info.get("sample_rate") * original_total_time
 
     def init_ui(self):
         # set window titlebar stytle
@@ -151,7 +155,12 @@ class StimulusWindow(QDialog):
                 self.frequency_group_box,
                 time_group_box,
             ],
-            "noise": [load_config_btn, save_config_btn, stimulus_type_group_box, time_group_box],
+            "noise": [
+                load_config_btn,
+                save_config_btn,
+                stimulus_type_group_box,
+                time_group_box
+            ],
             "step": [
                 load_config_btn,
                 save_config_btn,
@@ -175,6 +184,46 @@ class StimulusWindow(QDialog):
             + ui_style_const.qgroupbox_stytle
         )
 
+    def switch_connection_on(self):
+        self.stimulus_type_combo_box.currentTextChanged.connect(
+            self.update_stimulus_info_from_stimulus_type_combo_box
+        )
+        self.stimulus_method_combo_box.currentTextChanged.connect(
+            self.set_stimulus_type_connection
+        )
+        self.start_freq_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.start_freq_box, "start_freq")
+        )
+        self.stop_freq_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.stop_freq_box, "stop_freq")
+        )
+        self.total_time_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.total_time_box, "total_time")
+        )
+        self.repeat_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.repeat_box, "repeat_times")
+        )
+        self.step_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.step_box, "num_steps")
+        )
+        self.voltage_spin_box.valueChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.voltage_spin_box, "voltage")
+        )
+        self.sample_rate_combo_box.currentTextChanged.connect(
+            lambda: self.update_stimulus_info_from_controller(self.sample_rate_combo_box, "sample_rate")
+        )
+
+    def switch_connection_off(self):
+        self.stimulus_type_combo_box.disconnect()
+        self.stimulus_method_combo_box.disconnect()
+        self.start_freq_box.disconnect()
+        self.stop_freq_box.disconnect()
+        self.total_time_box.disconnect()
+        self.repeat_box.disconnect()
+        self.step_box.disconnect()
+        self.voltage_spin_box.disconnect()
+        self.sample_rate_combo_box.disconnect()
+
     def create_stimulus_type_group_box(self):
         """
         Create a QGroupBox for stimulus signal type selection.
@@ -187,8 +236,9 @@ class StimulusWindow(QDialog):
             QGroupBox: Configured group box containing stimulus type selection components.
         """
         stimulus_type_group_box = QGroupBox("激励信号类型")
-        self.stimulus_type_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_stimulus_type_combo_box)
-        self.stimulus_method_combo_box.currentTextChanged.connect(self.set_stimulus_type_connection)
+        self.stimulus_method_combo_box.currentTextChanged.connect(
+            self.set_stimulus_type_connection
+        )
         self.stimulus_method_combo_box.addItems(["啁啾", "步进", "噪音"])
         stimulus_type_layout = QHBoxLayout()
         stimulus_type_layout.addWidget(self.stimulus_method_combo_box)
@@ -217,18 +267,12 @@ class StimulusWindow(QDialog):
         self.start_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
-        self.start_freq_box.valueChanged.connect(
-            lambda: self.update_stimulus_info_from_object(self.start_freq_box, "start_freq")
-        )
         self.start_freq_box.setMinimumWidth(100)
         stop_freq_label = QLabel("截止频率：")
         self.stop_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
         self.stop_freq_box.setMinimumWidth(100)
-        self.stop_freq_box.valueChanged.connect(
-            lambda: self.update_stimulus_info_from_object(self.stop_freq_box, "stop_freq")
-        )
         frequency_layout = QHBoxLayout()
         frequency_layout.addWidget(start_freq_label)
         frequency_layout.addWidget(self.start_freq_box)
@@ -256,12 +300,6 @@ class StimulusWindow(QDialog):
         self.total_time_box.setRange(0.5, 60)  # Set range 0.5-60 seconds
         self.total_time_box.setSingleStep(0.5)
         self.total_time_box.setMinimumWidth(100)
-        self.total_time_box.valueChanged.connect(
-            lambda: self.update_stimulus_info_from_object(self.total_time_box, "total_time")
-        )
-        self.repeat_box.valueChanged.connect(
-            lambda: self.update_stimulus_info_from_object(self.repeat_box, "repeat_times")
-        )
         repeat_label = QLabel("信号重复：")
         self.repeat_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.repeat_box.setRange(1, 10)
@@ -291,7 +329,6 @@ class StimulusWindow(QDialog):
         step_label = QLabel("步进数量")
         self.step_box.setFixedSize(100, 30)
         self.step_box.setRange(1, 100)
-        self.step_box.valueChanged.connect(lambda: self.update_stimulus_info_from_object(self.step_box, "num_steps"))
         step_layout = QHBoxLayout()
         step_layout.addWidget(step_label)
         step_layout.addWidget(self.step_box)
@@ -318,10 +355,6 @@ class StimulusWindow(QDialog):
         max_input_voltage = self.get_max_input_voltage()
         self.voltage_spin_box.setSingleStep(0.1)
         self.voltage_spin_box.setRange(0.1, max_input_voltage)
-        self.voltage_spin_box.valueChanged.connect(
-            lambda: self.update_stimulus_info_from_object(self.voltage_spin_box, "voltage")
-        )
-        self.voltage_spin_box.valueChanged.connect(self.update_amplitude)
 
         voltage_layout = QHBoxLayout()
         voltage_layout.addWidget(self.voltage_combo_box)
@@ -343,7 +376,6 @@ class StimulusWindow(QDialog):
             QGroupBox: A QGroupBox object containing the sample rate selection combo box.
         """
         sample_rate_group_box = QGroupBox("采样率")
-        self.sample_rate_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_sample_rate_combo_box)
         self.sample_rate_combo_box.addItems(["44100", "48000"])
         sample_rate_layout = QHBoxLayout()
         sample_rate_layout.addWidget(self.sample_rate_combo_box)
@@ -392,11 +424,13 @@ class StimulusWindow(QDialog):
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
 
-    def update_stimulus_info_from_object(self, object: QAbstractSpinBox, data_type: str):
-        if data_type == "voltage" or data_type == "total_time":
-            self.data_struct.stimulus_info[data_type] = float(object.value())
+    def update_stimulus_info_from_controller(self, controller, data_type: str):
+        if data_type == "sample_rate":
+            self.data_struct.stimulus_info[data_type] = int(controller.currentText())
+        elif data_type == "voltage" or data_type == "total_time":
+            self.data_struct.stimulus_info[data_type] = float(controller.value())
         else:
-            self.data_struct.stimulus_info[data_type] = int(object.value())
+            self.data_struct.stimulus_info[data_type] = int(controller.value())
         if self.data_struct.stimulus_info.get("use_custom_stimulus", False):
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
@@ -407,11 +441,15 @@ class StimulusWindow(QDialog):
     def update_amplitude(self):
         self.data_struct.stimulus_info["amplitude"] = self.get_predict_amplitude(self.voltage_spin_box.value())
 
-    def update_stimulus_info_from_sample_rate_combo_box(self):
-        self.data_struct.stimulus_info["sample_rate"] = int(self.sample_rate_combo_box.currentText())
-        if self.data_struct.stimulus_info.get("use_custom_stimulus", False):
-            self.create_signal_from_stimulus_info()
-            self.graph_stimulus()
+    def switch_group_box_availability(self, enable_status=True):
+        stimulus_method = self.STIMULUS_DICT[self.stimulus_method_combo_box.currentText()]["name"]
+        for widget in self.box_checked_enable_dict["step"]:
+            widget.setDisabled(True)
+            widget.setStyleSheet("color: rgb(162, 162, 162);")
+        if enable_status:
+            for widget in self.box_checked_enable_dict[stimulus_method]:
+                widget.setEnabled(True)
+                widget.setStyleSheet("color: rgb(0, 0, 0);")
 
     def change_custom_chk_box(self, custom_box_checked):
         """
@@ -421,13 +459,7 @@ class StimulusWindow(QDialog):
             custom_box_checked (bool): The checked state of the custom checkbox. If True, the checkbox is checked;
         if False, it is unchecked.
         """
-        list_name = self.STIMULUS_DICT[self.stimulus_method_combo_box.currentText()]["name"]
-        for widget in self.box_checked_enable_dict[list_name]:
-            widget.setEnabled(custom_box_checked)
-            if custom_box_checked:
-                widget.setStyleSheet("color: rgb(0, 0, 0);")
-            else:
-                widget.setStyleSheet("color: rgb(162, 162, 162);")
+        self.switch_group_box_availability(True)
         for widget in self.box_checked_disable_list:
             widget.setDisabled(custom_box_checked)
             if custom_box_checked:
@@ -477,7 +509,8 @@ class StimulusWindow(QDialog):
             self.step_group_box.setStyleSheet("color: rgb(0, 0, 0);")
             self.frequency_group_box.setStyleSheet("color: rgb(0, 0, 0);")
 
-    def get_predict_amplitude(self, target_voltage):
+    @staticmethod
+    def get_predict_amplitude(target_voltage):
         """
         Retrieves the predicted amplitude based on the target voltage.
 
@@ -587,6 +620,7 @@ class StimulusWindow(QDialog):
             Specifically, it updates the stimulus method, stimulus type, start frequency, stop frequency, total time,
         repeat times, number of steps, voltage type, voltage value, and sample rate.
         """
+        self.switch_connection_off()
         for k, v in self.STIMULUS_DICT.items():
             if v["name"] == stimulus_info.get("stimulus_method"):
                 self.stimulus_method_combo_box.setCurrentText(k)
@@ -603,10 +637,11 @@ class StimulusWindow(QDialog):
         self.voltage_combo_box.setCurrentText(stimulus_info.get("voltage_type", "RMS"))
         self.voltage_spin_box.setValue(float(stimulus_info.get("voltage", "2.0")))
         self.sample_rate_combo_box.setCurrentText(str(stimulus_info.get("sample_rate", "44100")))
-        if stimulus_info.get("use_custom_stimulus") == True:
+        if stimulus_info.get("use_custom_stimulus"):
             self.custom_chk_box.setChecked(stimulus_info.get("use_custom_stimulus", "False"))
-        elif False == stimulus_info.get("use_custom_stimulus"):
+        else:
             self.change_custom_chk_box(False)
+        self.switch_connection_on()
 
     def graph_stimulus(self):
         """
@@ -654,6 +689,9 @@ class StimulusWindow(QDialog):
         for stimulus_item in loaded_stimulus:
             self.data_struct.stimulus_info[stimulus_item] = loaded_stimulus[stimulus_item]
         self.update_stimulus_ui_value(self.data_struct.stimulus_info)
+        self.switch_group_box_availability(True)
+        self.create_signal_from_stimulus_info()
+        self.graph_stimulus()
 
     def save_config_btn_clicked(self):
         """
@@ -717,8 +755,8 @@ class StimulusWindow(QDialog):
             If the loading fails or the configuration is invalid, it returns None.
 
             Returns:
-                tuple: A tuple containing the stimulus information dictionary and the audio signal.
-                    Returns (None, None) if the loading fails or the configuration is invalid.
+                tuple: A dictionary containing the stimulus information.
+                    Returns empty dictionary if the loading fails or the configuration is invalid.
         """
         load_code, result = self.load_stimulus_info_from_json(default_config_flag)
         if load_code == error_code.OK and result:
@@ -760,6 +798,9 @@ class StimulusWindow(QDialog):
         self.data_struct.stimulus_info.clear()
         self.data_struct.stimulus_info = self.get_stimulus_info_from_json(True)
         self.update_stimulus_ui_value(self.data_struct.stimulus_info)
+        self.switch_group_box_availability(True)
+        self.create_signal_from_stimulus_info()
+        self.graph_stimulus()
 
     def save_wav_btn_clicked(self):
         """
@@ -800,7 +841,7 @@ class StimulusWindow(QDialog):
     def ok_btn_clicked(self):
         self.refresh_stimulus_info = True
         if not self.custom_chk_box.isChecked():
-            if self.start_custom_check_status == True:
+            if self.start_custom_check_status:
                 self.set_ai_popup()
             # elif self.load_wav_path != self.load_stimulus_signal_path:
             elif not os.path.samefile(self.load_wav_path, self.load_stimulus_signal_path):
@@ -820,9 +861,9 @@ class StimulusWindow(QDialog):
             stimulus_signal_length = self.data_struct.stimulus_info.get(
                 "sample_rate"
             ) * self.data_struct.stimulus_info.get("total_time")
-            if self.start_custom_check_status == False:
+            if not self.start_custom_check_status:
                 self.set_ai_popup()
-            elif self.old_stimulus_signal_length != stimulus_signal_length:
+            elif self.original_stimulus_signal_length != stimulus_signal_length:
                 self.set_ai_popup()
         # self.save_voltage_to_txt()
         self.close()
@@ -930,7 +971,8 @@ class SetConfigName(QDialog):
             ui_style_const.qpushbutton_stytle + ui_style_const.qlineedit_stytle + ui_style_const.qlabel_stytle
         )
 
-    def config_name_layout(self):
+    @staticmethod
+    def config_name_layout():
         name_label = QLabel("配置名称:")
         name_edit = QLineEdit()
         name_edit.setPlaceholderText("请输入配置名称")
