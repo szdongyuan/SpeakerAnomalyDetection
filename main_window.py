@@ -7,13 +7,14 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, 
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
+from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
 from ui.audio_data_manage_dialog import audioDataManageDialog
 from ui.calibration_window import CalibrationWindow
-from ui.hardware_window import HardwareWindow, get_default_device
+from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
@@ -28,8 +29,8 @@ class MainWindow(QMainWindow):
         self.user_name = None
         self.access_lvl = None
         self.refresh_stimulus_flag = None
-        self.mic = get_default_device("mic")
-        self.speaker = get_default_device("speaker")
+        self.mic = SoundDeviceManager().get_default_device("mic")
+        self.speaker = SoundDeviceManager().get_default_device("speaker")
 
         # set mouse drog date
         self.resize_direction = None

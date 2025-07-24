@@ -5,7 +5,7 @@ from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
 from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView, QFrame
 from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QComboBox
 
-from base.sound_device_manager import get_device_info, get_default_device, get_api_info, change_default_device
+from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 
@@ -14,8 +14,10 @@ class HardwareWindow(QDialog):
 
     def __init__(self):
         super().__init__()
-        self.speaker = get_default_device("speaker")
-        self.mic = get_default_device("mic")
+        sdm = SoundDeviceManager()
+        sdm.refresh_available_device()
+        self.speaker = sdm.get_default_device("speaker")
+        self.mic = sdm.get_default_device("mic")
 
         self.init_ui()
 
@@ -50,7 +52,9 @@ class HardwareWindow(QDialog):
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
         self.speaker_label = QLabel("设  备：   %s" % self.speaker["name"])
-        self.speaker_channel_label = QLabel("驱  动：   %s" % get_api_info(self.speaker["hostapi"])["name"])
+        self.speaker_channel_label = QLabel(
+            "驱  动：   %s" % SoundDeviceManager().get_api_info(self.speaker["hostapi"])["name"]
+        )
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
 
@@ -74,7 +78,9 @@ class HardwareWindow(QDialog):
     def create_mic_box(self):
         mic_label_layout = QVBoxLayout()
         self.mic_label = QLabel("设  备：   %s" % self.mic["name"])
-        self.mic_channel_label = QLabel("驱  动：   %s" % get_api_info(self.mic["hostapi"])["name"])
+        self.mic_channel_label = QLabel(
+            "驱  动：   %s" % SoundDeviceManager().get_api_info(self.mic["hostapi"])["name"]
+        )
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
 
@@ -98,7 +104,9 @@ class HardwareWindow(QDialog):
         if selected_speaker:
             self.speaker = selected_speaker
             self.speaker_label.setText("设  备：   %s" % self.speaker["name"])
-            self.speaker_channel_label.setText("驱  动： %s" % get_api_info(self.speaker["hostapi"])["name"])
+            self.speaker_channel_label.setText(
+                "驱  动： %s" % SoundDeviceManager().get_api_info(self.speaker["hostapi"])["name"]
+            )
 
     def select_mic_btn_clicked(self):
         dlg = DeviceListWindow("mic")
@@ -106,29 +114,17 @@ class HardwareWindow(QDialog):
         if selected_mic:
             self.mic = selected_mic
             self.mic_label.setText("设  备：   %s" % self.mic["name"])
-            self.mic_channel_label.setText("驱  动： %s" % get_api_info(self.mic["hostapi"])["name"])
-
-    # @staticmethod
-    # def calibrate_speaker_btn_clicked():
-    #     dlg = CalibrationWizard()
-    #     dlg.on_exec()
-    #     dlg2 = CalibrationWindow()
-    #     dlg2.exec()
+            self.mic_channel_label.setText(
+                "驱  动： %s" % SoundDeviceManager().get_api_info(self.mic["hostapi"])["name"]
+            )
 
     def ok_btn_clicked(self):
-        change_default_device(self.mic["index"], self.speaker["index"])
+        SoundDeviceManager().change_default_device(self.mic["index"], self.speaker["index"])
         self.close()
 
     def on_exec(self):
         self.exec()
         return self.speaker, self.mic
-
-    # def paintEvent(self, event):
-    #     painter = QPainter(self)
-    #     painter.setBrush(QColor(174, 171, 162, 123))
-    #     painter.setPen(Qt.NoPen)
-    #     painter.drawRect(self.rect())
-    #     super().paintEvent(event)
 
 
 class DeviceListWindow(QDialog):
@@ -143,7 +139,7 @@ class DeviceListWindow(QDialog):
             self.device_title = " —— 麦克风"
 
         self.selected_device = None
-        self.api_info = get_device_info()
+        self.api_info = SoundDeviceManager().get_device_info()
 
         self.api_combo_box = QComboBox()
         self.list_view = QListView()
@@ -225,13 +221,6 @@ class DeviceListWindow(QDialog):
     def on_exec(self):
         self.exec()
         return self.selected_device
-
-    # def paintEvent(self, event):
-    #     painter = QPainter(self)
-    #     painter.setBrush(QColor(174, 171, 162, 123))
-    #     painter.setPen(Qt.NoPen)
-    #     painter.drawRect(self.rect())
-    #     super().paintEvent(event)
 
 
 if __name__ == "__main__":
