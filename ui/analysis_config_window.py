@@ -5,14 +5,17 @@ from functools import partial
 
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QSpinBox
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QSpinBox, \
+    QGridLayout, QDoubleSpinBox
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from base.log_manager import LogManager
+from base.sound_device_manager import get_default_device
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.stimulus_window import StimulusWindow
 
 
 class SplConfigWindow(QDialog):
@@ -653,7 +656,7 @@ class SpecConfigWindow(QDialog):
 
         fft_size_label = QLabel("FFT 窗长")
         self.fft_size_box = QComboBox()
-        fft_sizes = [str(2**i) for i in range(7, 14)]
+        fft_sizes = [str(2 ** i) for i in range(7, 14)]
         self.fft_size_box.addItems(fft_sizes)
         fft_size = str(self.load_config.get("n_fft", 2048))
         self.fft_size_box.setCurrentText(fft_size)
@@ -735,14 +738,222 @@ class SpecConfigWindow(QDialog):
         config_data = self.get_default_config()
         self.accept()
         return config_data
-    
+
+
+class PlayRecd(QDialog):
+    def __init__(self, config_manager, model_type, stimulus_data):
+        super().__init__()
+        self.stimulus_data = stimulus_data
+        self.final_stimulus_data = None
+        self.clicked_ok_flag = False
+        self.clicked_stimulus_btn_flag = False
+        self.mic = get_default_device("mic")
+        self.speaker = get_default_device("speaker")
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setMinimumSize(350, 350)
+        self.resize(350, 350)
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+
+        in_group_box = self.create_in_group()
+        out_group_box = self.create_out_group()
+        btn_layout = self.create_btn()
+
+        layout.addWidget(in_group_box)
+        layout.addStretch()
+        layout.addWidget(out_group_box)
+        layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qcombobox_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qspinbox_stytle +
+                           ui_style_const.qpushbutton_stytle)
+
+    def create_in_group(self):
+        in_group_box = QGroupBox("输入")
+        grid_layout = QGridLayout()
+        grid_layout.setHorizontalSpacing(20)
+        grid_layout.setVerticalSpacing(15)
+        label_time = QLabel("音频时长:")
+
+        self.time_input = QLineEdit()
+        total_time = self.stimulus_data["stimulus_info"]["total_time"]
+        self.time_input.setText(f"{total_time:.1f} 秒")
+        self.time_input.setReadOnly(True)
+
+        label_input_device = QLabel("输入设备:")
+        self.input_device_display = QLineEdit()
+        self.input_device_display.setReadOnly(True)
+        if self.mic is None:
+            QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
+        self.input_device_display.setPlaceholderText(f"{self.mic.get("name")}")
+
+        grid_layout.addWidget(label_time, 0, 0)
+        grid_layout.addWidget(self.time_input, 0, 1)
+
+        grid_layout.addWidget(label_input_device, 1, 0)
+        grid_layout.addWidget(self.input_device_display, 1, 1)
+
+        in_group_box.setLayout(grid_layout)
+        return in_group_box
+
+    def create_out_group(self):
+        out_group_box = QGroupBox("输出")
+        grid_layout = QGridLayout()
+        grid_layout.setHorizontalSpacing(20)
+        grid_layout.setVerticalSpacing(15)
+
+        label_output_device = QLabel("输出设备:")
+        self.output_device_display = QLineEdit()
+        self.output_device_display.setReadOnly(True)
+        if self.speaker is None:
+            QMessageBox.warning(self, "设置警告", "请先连接输出设备!")
+        self.output_device_display.setPlaceholderText(f"{self.speaker.get("name")}")
+        self.config_button = QPushButton("激励信号配置")
+        self.config_button.clicked.connect(self.open_stimulus_window)
+
+        grid_layout.addWidget(label_output_device, 0, 0)
+
+        grid_layout.addWidget(self.output_device_display, 0, 1)
+        grid_layout.addWidget(self.config_button, 1, 1)
+        out_group_box.setLayout(grid_layout)
+        return out_group_box
+
+    def create_btn(self):
+        btn_layout = QHBoxLayout()
+        cancel_btn = QPushButton(" 取  消 ")
+        cancel_btn.clicked.connect(self.on_click_cancel_btn)
+        ok_btn = QPushButton(" 确  认 ")
+        ok_btn.clicked.connect(self.on_click_ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        return btn_layout
+
+    def on_click_ok_btn(self):
+        if self.clicked_stimulus_btn_flag:
+            self.clicked_ok_flag = True
+            self.accept()
+            return self.final_stimulus_data
+        else:
+            QMessageBox.warning(self, "设置警告", "请先点击“激励信号配置”按钮完成配置!")
+
+    def on_click_cancel_btn(self):
+        self.clicked_ok_flag = False
+        self.close()
+
+    def open_stimulus_window(self):
+        self.clicked_stimulus_btn_flag = True
+        self.stimulus_window = StimulusWindow(stimulus_data=self.stimulus_data)
+        self.refresh_stimulus_flag = self.stimulus_window.on_exec()
+        if self.refresh_stimulus_flag:
+            self.final_stimulus_data = self.stimulus_window.final_stimulus_data
+            total_time = self.final_stimulus_data["stimulus_info"]["total_time"]
+            self.time_input.setText(f"{total_time} 秒")
+        else:
+            self.final_stimulus_data = self.stimulus_data
+
+
+class RecdOnly(QDialog):
+    def __init__(self, config_manager, model_type):
+        super().__init__()
+        self.clicked_ok_flag = False
+        self.mic = get_default_device("mic")
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setMinimumSize(350, 350)
+        self.resize(350, 350)
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+
+        in_group_box = self.create_in_group()
+        btn_layout = self.create_btn()
+        layout.addWidget(in_group_box)
+        layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
+                           ui_style_const.qcombobox_stytle +
+                           ui_style_const.qlineedit_stytle +
+                           ui_style_const.qlabel_stytle +
+                           ui_style_const.qdoublespinbox_stytle +
+                           ui_style_const.qpushbutton_stytle)
+
+    def create_in_group(self):
+        in_group_box = QGroupBox("输入")
+        grid_layout = QGridLayout()
+        grid_layout.setHorizontalSpacing(20)
+        grid_layout.setVerticalSpacing(15)
+        label_time = QLabel("音频时长:")
+
+        self.time_input = QDoubleSpinBox()
+        self.time_input.setRange(0.5, 600)
+        self.time_input.setDecimals(1)
+        self.time_input.setValue(5)
+        self.time_input.setSingleStep(0.5)
+        self.time_input.setSuffix(" 秒")
+
+        label_input_device = QLabel("输入设备:")
+        self.input_device_display = QLineEdit()
+        self.input_device_display.setReadOnly(True)
+        if self.mic is None:
+            QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
+        else:
+            self.input_device_display.setPlaceholderText(f"{self.mic.get("name")}")
+
+        grid_layout.addWidget(label_time, 0, 0)
+        grid_layout.addWidget(self.time_input, 0, 1)
+
+        grid_layout.addWidget(label_input_device, 1, 0)
+        grid_layout.addWidget(self.input_device_display, 1, 1)
+
+        in_group_box.setLayout(grid_layout)
+        return in_group_box
+
+    def create_btn(self):
+        btn_layout = QHBoxLayout()
+        cancel_btn = QPushButton(" 取  消 ")
+        cancel_btn.clicked.connect(self.on_click_cancel_btn)
+        ok_btn = QPushButton(" 确  认 ")
+        ok_btn.clicked.connect(self.on_click_ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        return btn_layout
+
+    def on_click_cancel_btn(self):
+        self.clicked_ok_flag = False
+        self.close()
+
+    def on_click_ok_btn(self):
+        config_data = {
+            "total_time": self.time_input.value(),
+        }
+        self.clicked_ok_flag = True
+        self.accept()
+        return config_data
+
 
 class LPConfigWindow(QDialog):
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        
+
         self.init_ui()
 
     def init_ui(self):
@@ -758,7 +969,7 @@ class LPConfigWindow(QDialog):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qspinbox_stytle +
                            ui_style_const.qgroupbox_stytle)
-    
+
     def create_lp_config_box(self):
         lp_config_box = QGroupBox("松散颗粒参数配置")
         lp_config_box_layout = QVBoxLayout()
@@ -782,7 +993,7 @@ class LPConfigWindow(QDialog):
         lp_config_box_layout.setSpacing(10)
         lp_config_box_layout.setContentsMargins(10, 20, 10, 20)
         lp_config_box.setLayout(lp_config_box_layout)
-        
+
         return lp_config_box
 
     def create_trigger_threshold_layout(self):
@@ -796,7 +1007,7 @@ class LPConfigWindow(QDialog):
         trigger_threshold_layout.addWidget(self.trigger_threshold_spinbox)
 
         return trigger_threshold_layout
-    
+
     def create_confirm_threshold_layout(self):
         confirm_threshold_label = QLabel("确认区间:")
         self.hysterests_threshold_spinbox = QSpinBox()
@@ -808,7 +1019,7 @@ class LPConfigWindow(QDialog):
         confirm_threshold_layout.addWidget(self.hysterests_threshold_spinbox)
 
         return confirm_threshold_layout
-    
+
     def create_min_check_duration_layout(self):
         min_check_duration_label = QLabel("最小检测时长:")
         self.min_check_duration_spinbox = QSpinBox()
@@ -820,7 +1031,7 @@ class LPConfigWindow(QDialog):
         min_check_duration_layout.addWidget(self.min_check_duration_spinbox)
 
         return min_check_duration_layout
-    
+
     def create_max_check_duration_layout(self):
         max_check_duration_label = QLabel("最大检测时长:")
         self.max_check_duration_spinbox = QSpinBox()
@@ -832,7 +1043,7 @@ class LPConfigWindow(QDialog):
         max_check_duration_layout.addWidget(self.max_check_duration_spinbox)
 
         return max_check_duration_layout
-    
+
     def create_loose_particle_num_layout(self):
         loose_particle_num_label = QLabel("允许松散颗粒数量:")
         self.loose_particle_num_spinbox = QSpinBox()
@@ -843,7 +1054,7 @@ class LPConfigWindow(QDialog):
         loose_particle_num_layout.addWidget(self.loose_particle_num_spinbox)
 
         return loose_particle_num_layout
-    
+
     def create_stimulus_max_frequency_layout(self):
         stimulus_max_frequency_label = QLabel("信号最大频率:")
         self.stimulus_max_frequency_spinbox = QSpinBox()
@@ -869,7 +1080,7 @@ class LPConfigWindow(QDialog):
         btn_layout.addWidget(ok_btn)
 
         return btn_layout
-    
+
     def get_default_config(self):
         default_config = {
             "trigger_threshold": self.trigger_threshold_spinbox.value(),
@@ -880,13 +1091,13 @@ class LPConfigWindow(QDialog):
             "cutoff_freq": self.stimulus_max_frequency_spinbox.value()
         }
         return default_config
-    
+
     def on_click_default_btn(self):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("LP", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
-    
+
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
         self.accept()
@@ -1002,6 +1213,49 @@ if __name__ == "__main__":
     # window.show()
     # window = AIConfigWindow(config_manager)
     # window.show()
-    window = LPConfigWindow(config_manager, 111)
+    # window = LPConfigWindow(config_manager, 111)
+
+    # stimulus_data = {
+    #     "stimulus_info": {
+    #         "name": "stimulus_chirps_1",
+    #         "use_custom_stimulus": 'true',
+    #         "voltage_type": "RMS",
+    #         "sample_rate": 44100,
+    #         "stimulus_method": "chirp",
+    #         "stimulus_type": "mirror_log",
+    #         "repeat_times": 1,
+    #         "start_freq": 80,
+    #         "stop_freq": 2000,
+    #         "total_time": 4.0,
+    #         "num_steps": 3,
+    #         "voltage": 1.0,
+    #         "amplitude": 0.4783
+    #     },
+    #     "stimulus_signal_path": "audio_data/stimulus/stimulus_chirps_1_True_RMS_44100_chirp_mirror_log_1_80_2000_4.0_3_1.0_0.4783.wav",
+    #     "load_stimulus_signal_path": 'null'
+    # }
+
+    stimulus_data = {
+        "stimulus_info": {
+            "name": "stimulus_chirps_1",
+            "use_custom_stimulus": True,
+            "voltage_type": "RMS",
+            "sample_rate": 44100,
+            "stimulus_method": "chirp",
+            "stimulus_type": "mirror_log",
+            "repeat_times": 1,
+            "start_freq": 80,
+            "stop_freq": 2000,
+            "total_time": 5.5,
+            "num_steps": 3,
+            "voltage": 1.0,
+            "amplitude": 0.3374
+        },
+        "stimulus_signal_path": "audio_data/stimulus/stimulus_chirps_1_True_RMS_44100_chirp_mirror_log_1_80_2000_5.5_3_1.0_0.3374.wav",
+        "load_stimulus_signal_path": 'Null'
+    }
+
+    window = PlayRecd(config_manager, 111, stimulus_data)
+    # window = RecdOnly(config_manager, 111)
     window.show()
     app.exec_()
