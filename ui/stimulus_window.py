@@ -1016,13 +1016,3 @@ class SetConfigName(QDialog):
             return self.stimulus_name
         else:
             return None
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = StimulusWindow()
-    window.speaker = sd.default.device[1]
-    # window = LoadStimulusConfig()
-    window.show()
-    result = window.on_exec()
-    print("final result:", result)

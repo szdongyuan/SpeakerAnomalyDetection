@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDi
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.log_manager import LogManager
 from base.sound_device_manager import get_default_device
 from base.training_model_management import TrainingModelManagement
@@ -853,6 +854,8 @@ class PlayRecd(QDialog):
 
     def open_stimulus_window(self):
         self.clicked_stimulus_btn_flag = True
+        self.data_struct = DataDealStruct()
+        self.data_struct.stimulus_info = stimulus_data.get('stimulus_info')
         self.stimulus_window = StimulusWindow(stimulus_data=self.stimulus_data)
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
@@ -1213,49 +1216,6 @@ if __name__ == "__main__":
     # window.show()
     # window = AIConfigWindow(config_manager)
     # window.show()
-    # window = LPConfigWindow(config_manager, 111)
-
-    # stimulus_data = {
-    #     "stimulus_info": {
-    #         "name": "stimulus_chirps_1",
-    #         "use_custom_stimulus": 'true',
-    #         "voltage_type": "RMS",
-    #         "sample_rate": 44100,
-    #         "stimulus_method": "chirp",
-    #         "stimulus_type": "mirror_log",
-    #         "repeat_times": 1,
-    #         "start_freq": 80,
-    #         "stop_freq": 2000,
-    #         "total_time": 4.0,
-    #         "num_steps": 3,
-    #         "voltage": 1.0,
-    #         "amplitude": 0.4783
-    #     },
-    #     "stimulus_signal_path": "audio_data/stimulus/stimulus_chirps_1_True_RMS_44100_chirp_mirror_log_1_80_2000_4.0_3_1.0_0.4783.wav",
-    #     "load_stimulus_signal_path": 'null'
-    # }
-
-    stimulus_data = {
-        "stimulus_info": {
-            "name": "stimulus_chirps_1",
-            "use_custom_stimulus": True,
-            "voltage_type": "RMS",
-            "sample_rate": 44100,
-            "stimulus_method": "chirp",
-            "stimulus_type": "mirror_log",
-            "repeat_times": 1,
-            "start_freq": 80,
-            "stop_freq": 2000,
-            "total_time": 5.5,
-            "num_steps": 3,
-            "voltage": 1.0,
-            "amplitude": 0.3374
-        },
-        "stimulus_signal_path": "audio_data/stimulus/stimulus_chirps_1_True_RMS_44100_chirp_mirror_log_1_80_2000_5.5_3_1.0_0.3374.wav",
-        "load_stimulus_signal_path": 'Null'
-    }
-
-    window = PlayRecd(config_manager, 111, stimulus_data)
-    # window = RecdOnly(config_manager, 111)
+    window = LPConfigWindow(config_manager, 111)
     window.show()
     app.exec_()
