@@ -4,6 +4,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
 from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView, QFrame
 from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QComboBox
+import sounddevice as sd
 
 from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
@@ -15,9 +16,8 @@ class HardwareWindow(QDialog):
     def __init__(self):
         super().__init__()
         sdm = SoundDeviceManager()
-        sdm.refresh_available_device()
-        self.speaker = sdm.get_default_device("speaker")
-        self.mic = sdm.get_default_device("mic")
+        _, self.speaker = sdm.get_default_device("speaker")
+        _, self.mic = sdm.get_default_device("mic")
 
         self.init_ui()
 
@@ -51,10 +51,14 @@ class HardwareWindow(QDialog):
 
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
-        self.speaker_label = QLabel("设  备：   %s" % self.speaker["name"])
-        self.speaker_channel_label = QLabel(
-            "驱  动：   %s" % SoundDeviceManager().get_api_info(self.speaker["hostapi"])["name"]
-        )
+        if not self.speaker:
+            self.speaker_label = QLabel("设  备：   无可用输出设备")
+            self.speaker_channel_label = QLabel("驱  动：   无可用输出设备")
+        else:
+            self.speaker_label = QLabel("设  备：   %s" % self.speaker["name"])
+            self.speaker_channel_label = QLabel(
+                "驱  动：   %s" % SoundDeviceManager().get_api_info(self.speaker["hostapi"])["name"]
+            )
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
 
@@ -77,10 +81,14 @@ class HardwareWindow(QDialog):
 
     def create_mic_box(self):
         mic_label_layout = QVBoxLayout()
-        self.mic_label = QLabel("设  备：   %s" % self.mic["name"])
-        self.mic_channel_label = QLabel(
-            "驱  动：   %s" % SoundDeviceManager().get_api_info(self.mic["hostapi"])["name"]
-        )
+        if not self.mic:
+            self.mic_label = QLabel("设  备：   无可用输出设备")
+            self.mic_channel_label = QLabel("驱  动：   无可用输出设备")
+        else:
+            self.mic_label = QLabel("设  备：   %s" % self.mic["name"])
+            self.mic_channel_label = QLabel(
+                "驱  动：   %s" % SoundDeviceManager().get_api_info(self.mic["hostapi"])["name"]
+            )
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
 
@@ -119,7 +127,9 @@ class HardwareWindow(QDialog):
             )
 
     def ok_btn_clicked(self):
-        SoundDeviceManager().change_default_device(self.mic["index"], self.speaker["index"])
+        mic_idx = self.mic["index"] if self.mic else -1
+        speaker_idx = self.speaker["index"] if self.speaker else -1
+        SoundDeviceManager().change_default_device(mic_idx, speaker_idx)
         self.close()
 
     def on_exec(self):
@@ -175,8 +185,8 @@ class DeviceListWindow(QDialog):
         ok_btn.clicked.connect(self.on_click_ok_btn)
         cancel_btn = QPushButton(" 取  消 ")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
-        btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(ok_btn)
         btn_layout.setSpacing(105)
         btn_layout.setContentsMargins(30, 0, 30, 0)
 

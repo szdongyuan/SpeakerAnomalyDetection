@@ -29,8 +29,8 @@ class MainWindow(QMainWindow):
         self.user_name = None
         self.access_lvl = None
         self.refresh_stimulus_flag = None
-        self.mic = SoundDeviceManager().get_default_device("mic")
-        self.speaker = SoundDeviceManager().get_default_device("speaker")
+        _, self.mic = SoundDeviceManager().get_default_device("mic")
+        _, self.speaker = SoundDeviceManager().get_default_device("speaker")
 
         # set mouse drog date
         self.resize_direction = None
@@ -247,13 +247,9 @@ class MainWindow(QMainWindow):
         self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
         self.user_label.setStyleSheet(ui_style_const.qlabel_stytle)
-        self.user_label.setText(
-            "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
-        )
         self.device_label = QLabel()
         self.device_label.setStyleSheet(ui_style_const.qlabel_stytle)
-        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
-        self.device_label.setText(device_txt)
+        self.update_statusbar()
 
         statusbar = QStatusBar()
         statusbar.setSizeGripEnabled(False)
@@ -263,7 +259,9 @@ class MainWindow(QMainWindow):
 
     def update_statusbar(self):
         # update the status bar data
-        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=self.mic["name"], speaker=self.speaker["name"])
+        mic_name = self.mic["name"] if self.mic else "无可用输入设备"
+        speaker_name = self.speaker["name"] if self.speaker else "无可用输出设备"
+        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=mic_name, speaker=speaker_name)
         self.device_label.setText(device_txt)
         self.user_label.setText(
             "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)

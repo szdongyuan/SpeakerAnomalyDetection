@@ -5,7 +5,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit
 from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication
 
-from base.sound_device_manager import get_default_device
+from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.stimulus_window import StimulusWindow
@@ -16,7 +16,7 @@ class BaseConfigWindow(QDialog):
         super().__init__()
         self.clicked_ok_flag = False
         self.final_data = None
-        self.mic = get_default_device("mic")
+        _, self.mic = SoundDeviceManager().get_default_device("mic")
         self.setup_ui()
 
     def setup_ui(self):
@@ -63,7 +63,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.stimulus_data = stimulus_data
         self.clicked_stimulus_btn_flag = False
         self.final_stimulus_data = None
-        self.speaker = get_default_device("speaker")
+        _, self.speaker = SoundDeviceManager().get_default_device("speaker")
         self.init_ui()
 
     def init_ui(self):
