@@ -653,7 +653,7 @@ class SpecConfigWindow(QDialog):
 
         fft_size_label = QLabel("FFT 窗长")
         self.fft_size_box = QComboBox()
-        fft_sizes = [str(2**i) for i in range(7, 14)]
+        fft_sizes = [str(2 ** i) for i in range(7, 14)]
         self.fft_size_box.addItems(fft_sizes)
         fft_size = str(self.load_config.get("n_fft", 2048))
         self.fft_size_box.setCurrentText(fft_size)
@@ -735,14 +735,14 @@ class SpecConfigWindow(QDialog):
         config_data = self.get_default_config()
         self.accept()
         return config_data
-    
+
 
 class LPConfigWindow(QDialog):
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        
+
         self.init_ui()
 
     def init_ui(self):
@@ -758,7 +758,7 @@ class LPConfigWindow(QDialog):
                            ui_style_const.qpushbutton_stytle +
                            ui_style_const.qspinbox_stytle +
                            ui_style_const.qgroupbox_stytle)
-    
+
     def create_lp_config_box(self):
         lp_config_box = QGroupBox("松散颗粒参数配置")
         lp_config_box_layout = QVBoxLayout()
@@ -782,7 +782,7 @@ class LPConfigWindow(QDialog):
         lp_config_box_layout.setSpacing(10)
         lp_config_box_layout.setContentsMargins(10, 20, 10, 20)
         lp_config_box.setLayout(lp_config_box_layout)
-        
+
         return lp_config_box
 
     def create_trigger_threshold_layout(self):
@@ -796,7 +796,7 @@ class LPConfigWindow(QDialog):
         trigger_threshold_layout.addWidget(self.trigger_threshold_spinbox)
 
         return trigger_threshold_layout
-    
+
     def create_confirm_threshold_layout(self):
         confirm_threshold_label = QLabel("确认区间:")
         self.hysterests_threshold_spinbox = QSpinBox()
@@ -808,7 +808,7 @@ class LPConfigWindow(QDialog):
         confirm_threshold_layout.addWidget(self.hysterests_threshold_spinbox)
 
         return confirm_threshold_layout
-    
+
     def create_min_check_duration_layout(self):
         min_check_duration_label = QLabel("最小检测时长:")
         self.min_check_duration_spinbox = QSpinBox()
@@ -820,7 +820,7 @@ class LPConfigWindow(QDialog):
         min_check_duration_layout.addWidget(self.min_check_duration_spinbox)
 
         return min_check_duration_layout
-    
+
     def create_max_check_duration_layout(self):
         max_check_duration_label = QLabel("最大检测时长:")
         self.max_check_duration_spinbox = QSpinBox()
@@ -832,7 +832,7 @@ class LPConfigWindow(QDialog):
         max_check_duration_layout.addWidget(self.max_check_duration_spinbox)
 
         return max_check_duration_layout
-    
+
     def create_loose_particle_num_layout(self):
         loose_particle_num_label = QLabel("允许松散颗粒数量:")
         self.loose_particle_num_spinbox = QSpinBox()
@@ -843,7 +843,7 @@ class LPConfigWindow(QDialog):
         loose_particle_num_layout.addWidget(self.loose_particle_num_spinbox)
 
         return loose_particle_num_layout
-    
+
     def create_stimulus_max_frequency_layout(self):
         stimulus_max_frequency_label = QLabel("信号最大频率:")
         self.stimulus_max_frequency_spinbox = QSpinBox()
@@ -869,7 +869,7 @@ class LPConfigWindow(QDialog):
         btn_layout.addWidget(ok_btn)
 
         return btn_layout
-    
+
     def get_default_config(self):
         default_config = {
             "trigger_threshold": self.trigger_threshold_spinbox.value(),
@@ -880,13 +880,13 @@ class LPConfigWindow(QDialog):
             "cutoff_freq": self.stimulus_max_frequency_spinbox.value()
         }
         return default_config
-    
+
     def on_click_default_btn(self):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("LP", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
-    
+
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
         self.accept()

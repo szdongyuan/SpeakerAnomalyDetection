@@ -42,7 +42,7 @@ class StimulusWindow(QDialog):
         "粉噪音": "pink_noise",
     }
 
-    def __init__(self, stimulus_info=None):
+    def __init__(self, stimulus_data=None):
         """Initialize stimulus window with default configurations"""
         super().__init__()
         # initialize stimulus signal type， and create variable to store stimulus signal data
@@ -56,6 +56,7 @@ class StimulusWindow(QDialog):
         self.default_logger = LogManager.set_log_handler("core")
         self.box_checked_enable_dict = {}
         self.box_checked_disable_list = []
+        self.final_save_data = None
 
         # create variable to set stimulus signal data
         self.stimulus_method_combo_box = QComboBox()
@@ -74,8 +75,11 @@ class StimulusWindow(QDialog):
         self.init_ui()
 
         self.data_struct.stimulus_info.clear()
-        if stimulus_info:
-            self.data_struct.stimulus_info = stimulus_info
+        if stimulus_data:
+            self.data_struct.stimulus_info = stimulus_data.get("stimulus_info")
+            self.load_wav_path = stimulus_data.get("stimulus_signal_path")
+            if stimulus_data.get("load_stimulus_signal_path"):
+                self.load_stimulus_signal_path = DEFAULT_DIR + stimulus_data.get("load_stimulus_signal_path")
         else:
             self.data_struct.stimulus_info = self.get_stimulus_info_from_json()
         self.update_stimulus_ui_value(self.data_struct.stimulus_info)
@@ -604,6 +608,7 @@ class StimulusWindow(QDialog):
         }
         # Write the dictionary data to the JSON file and log the operation
         self.save_json_file(data)
+        return data
 
     def save_json_file(self, data):
         json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
@@ -857,7 +862,7 @@ class StimulusWindow(QDialog):
             )
             self.save_json_file(data)
         else:
-            self.save_stimulus_to_json()
+            data = self.save_stimulus_to_json()
             stimulus_signal_length = self.data_struct.stimulus_info.get(
                 "sample_rate"
             ) * self.data_struct.stimulus_info.get("total_time")
@@ -865,7 +870,7 @@ class StimulusWindow(QDialog):
                 self.set_ai_popup()
             elif self.original_stimulus_signal_length != stimulus_signal_length:
                 self.set_ai_popup()
-        # self.save_voltage_to_txt()
+        self.final_save_data = data
         self.close()
 
     def load_stimulus_wav(self):
@@ -1011,13 +1016,3 @@ class SetConfigName(QDialog):
             return self.stimulus_name
         else:
             return None
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = StimulusWindow()
-    window.speaker = sd.default.device[1]
-    # window = LoadStimulusConfig()
-    window.show()
-    result = window.on_exec()
-    print("final result:", result)
