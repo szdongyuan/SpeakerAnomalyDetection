@@ -2,8 +2,8 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit, \
-    QMessageBox, QDoubleSpinBox, QApplication
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit
+from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication
 
 from base.sound_device_manager import get_default_device
 from consts import ui_style_const
