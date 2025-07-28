@@ -1,15 +1,13 @@
 import json
 import os.path
-import sys
 
 import numpy as np
 import pyqtgraph
-import sounddevice as sd
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit
-from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout, QAbstractSpinBox
+from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout
 from scipy.io import wavfile
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -463,7 +461,7 @@ class StimulusWindow(QDialog):
             custom_box_checked (bool): The checked state of the custom checkbox. If True, the checkbox is checked;
         if False, it is unchecked.
         """
-        self.switch_group_box_availability(True)
+        self.switch_group_box_availability(custom_box_checked)
         for widget in self.box_checked_disable_list:
             widget.setDisabled(custom_box_checked)
             if custom_box_checked:
