@@ -840,7 +840,6 @@ class OptionList(QListView):
     def dropevent(self, event):
         if event.mimeData().hasText():
             text = event.mimeData().text().lstrip()
-            print(self.drop_is_accept)
             if self.drop_is_accept is False:
                 if text in ["播放与录制", "录制音频"]:
                     QMessageBox.warning(self, "警告", "已选择测试模式")
