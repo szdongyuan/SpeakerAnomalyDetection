@@ -16,9 +16,9 @@ from ui.audio_data_manage_dialog import audioDataManageDialog
 from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
+from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence_widget import SequenceWindow
 from ui.stimulus_window import StimulusWindow
-from ui.analysis_model_select_dialog import AnalysisModelSelect
 
 
 class MainWindow(QMainWindow):
@@ -46,8 +46,8 @@ class MainWindow(QMainWindow):
         self.mouseMoveEvent = self.mousemoveevent
 
         # set the menubar action
-        self.function_action_stimulus = QAction("激励信号", self)
-        self.function_action_test_sequence = QAction("分析队列", self)
+        # self.function_action_stimulus = QAction("激励信号", self)
+        self.function_action_test_sequence = QAction("测试队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_audio_manager = QAction("音频数据管理", self)
         self.function_action_exit = QAction("退出", self)
@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         # set the operator and engineer and admin power
         self.widget_list_operator = [self.user_action_change_pwd]
         self.widget_list_engineer = self.widget_list_operator + [
-            self.function_action_stimulus,
+            # self.function_action_stimulus,
             self.function_action_test_sequence,
             self.function_action_ai_training,
             self.hardware_action_selection,
@@ -190,9 +190,9 @@ class MainWindow(QMainWindow):
         user_menu = menu_bar.addMenu("用户")
         help_menu = menu_bar.addMenu("帮助")
 
-        function_menu.addAction(self.function_action_stimulus)
-        self.function_action_stimulus.triggered.disconnect()
-        self.function_action_stimulus.triggered.connect(self.on_stimulus_window_init)
+        # function_menu.addAction(self.function_action_stimulus)
+        # self.function_action_stimulus.triggered.disconnect()
+        # self.function_action_stimulus.triggered.connect(self.on_stimulus_window_init)
         function_menu.addAction(self.function_action_test_sequence)
         self.function_action_test_sequence.triggered.disconnect()
         self.function_action_test_sequence.triggered.connect(self.analysis_model_select)

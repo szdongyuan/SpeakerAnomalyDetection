@@ -1,13 +1,13 @@
 import json
 import os.path
+from copy import deepcopy
 
 import numpy as np
 import pyqtgraph
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox
-from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit
-from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QVBoxLayout
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox, QSizePolicy
+from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit, QSpinBox, QVBoxLayout
 from scipy.io import wavfile
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -74,7 +74,7 @@ class StimulusWindow(QDialog):
 
         self.data_struct.stimulus_info.clear()
         if stimulus_data:
-            self.data_struct.stimulus_info = stimulus_data.get("stimulus_info")
+            self.data_struct.stimulus_info = deepcopy(stimulus_data.get("stimulus_info"))
             self.load_wav_path = stimulus_data.get("stimulus_signal_path")
             if stimulus_data.get("load_stimulus_signal_path"):
                 self.load_stimulus_signal_path = DEFAULT_DIR + stimulus_data.get("load_stimulus_signal_path")
@@ -157,12 +157,7 @@ class StimulusWindow(QDialog):
                 self.frequency_group_box,
                 time_group_box,
             ],
-            "noise": [
-                load_config_btn,
-                save_config_btn,
-                stimulus_type_group_box,
-                time_group_box
-            ],
+            "noise": [load_config_btn, save_config_btn, stimulus_type_group_box, time_group_box],
             "step": [
                 load_config_btn,
                 save_config_btn,
@@ -187,12 +182,8 @@ class StimulusWindow(QDialog):
         )
 
     def switch_connection_on(self):
-        self.stimulus_type_combo_box.currentTextChanged.connect(
-            self.update_stimulus_info_from_stimulus_type_combo_box
-        )
-        self.stimulus_method_combo_box.currentTextChanged.connect(
-            self.set_stimulus_type_connection
-        )
+        self.stimulus_type_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_stimulus_type_combo_box)
+        self.stimulus_method_combo_box.currentTextChanged.connect(self.set_stimulus_type_connection)
         self.start_freq_box.valueChanged.connect(
             lambda: self.update_stimulus_info_from_controller(self.start_freq_box, "start_freq")
         )
@@ -238,9 +229,7 @@ class StimulusWindow(QDialog):
             QGroupBox: Configured group box containing stimulus type selection components.
         """
         stimulus_type_group_box = QGroupBox("激励信号类型")
-        self.stimulus_method_combo_box.currentTextChanged.connect(
-            self.set_stimulus_type_connection
-        )
+        self.stimulus_method_combo_box.currentTextChanged.connect(self.set_stimulus_type_connection)
         self.stimulus_method_combo_box.addItems(["啁啾", "步进", "噪音"])
         stimulus_type_layout = QHBoxLayout()
         stimulus_type_layout.addWidget(self.stimulus_method_combo_box)
@@ -600,7 +589,7 @@ class StimulusWindow(QDialog):
             self.load_stimulus_signal_path = FileOps.get_relative_path(self.load_stimulus_signal_path, DEFAULT_DIR)
         # Create a dictionary containing the stimulus information and WAV file path
         data = {
-            "stimulus_info": self.data_struct.stimulus_info,
+            "stimulus_info": deepcopy(self.data_struct.stimulus_info),
             "stimulus_signal_path": stimulus_signal_path,
             "load_stimulus_signal_path": self.load_stimulus_signal_path,
         }
@@ -666,7 +655,7 @@ class StimulusWindow(QDialog):
             )
             self.plot_stimulus.plot(signal_duration, self.data_struct.stimulus_data, pen="b")
             self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
-            self.plot_stimulus.setLabel("bottom", "Time (s)",  **{"font-size": "20px"})
+            self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "20px"})
             font = QFont()
             font.setPixelSize(20)
             b_axis = self.plot_stimulus.getAxis("bottom")
@@ -675,7 +664,7 @@ class StimulusWindow(QDialog):
             l_axis.setTickFont(font)
             b_axis.setTextPen("black")
             l_axis.setTextPen("black")
-            
+
     def load_config_btn_clicked(self):
         """
         Handles the event when the load configuration button is clicked.

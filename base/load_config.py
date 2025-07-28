@@ -4,24 +4,25 @@ import yaml
 
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
+from base.log_manager import LogManager
 
 
 def load_config(config_path, module_name=None):
     """
-        Load configuration from a YAML file. Optionally, retrieve specific module configuration.
+    Load configuration from a YAML file. Optionally, retrieve specific module configuration.
 
-        Args:
-        - module_name : string
-            The name of the module whose configuration you want to retrieve.
-            If None, the entire configuration is loaded.
-        Returns:
-        - result : dictionary
-            The configuration dictionary that stores specific module configurations
-            or entire configurations.
+    Args:
+    - module_name : string
+        The name of the module whose configuration you want to retrieve.
+        If None, the entire configuration is loaded.
+    Returns:
+    - result : dictionary
+        The configuration dictionary that stores specific module configurations
+        or entire configurations.
     """
 
     result = {}
-    with open(config_path, encoding='utf-8') as f:
+    with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f.read())
         if module_name:
             for module_config in config:
@@ -37,28 +38,63 @@ class LoadUiConfig(object):
     @staticmethod
     def load_sequence_config_from_json():
         """
-        Loads analysis sequence configuration data from a specified JSON file.
+        Loads analysis sequence configuration data using the **new list-based format**.
 
-        This function first checks if the JSON file exists. If not, it returns an error code and message.
-        If the file exists, it attempts to read and parse the JSON file content, storing it in the class's
-        `analysis_config` attribute. If any exception occurs during reading or parsing, it catches the
-        exception and returns the corresponding error code and message.
-
-        Returns:
-            tuple: A tuple containing two elements:
-                - The first element is an error code indicating the result status of the operation.
-                - The second element is either an error message or the parsed JSON data.
+        The new JSON layout is a list, whose first element is a dict with a single
+        sequence key (e.g. "seq1").  Each sequence contains an "acq" section and an
+        "analysis_list" section that keeps the previous flat configuration.  This
+        function extracts and returns that inner ``analysis_list`` so that the rest
+        of the code can keep working with the same dict structure as before.
         """
-        json_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
+        json_file_path = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
         try:
-            with open(json_file_path, "r") as json_file:
+            with open(json_file_path, "r", encoding="utf-8") as json_file:
                 analysis_config = json.load(json_file)
                 return error_code.OK, analysis_config
         except Exception as e:
             err_msg = "Failed to load analysis sequence data from json.%s" % (str(e)[:50])
             return error_code.INVALID_DATA_LOADING, err_msg
+
+    @staticmethod
+    def load_data_from_json(json_file_path):
+        """
+        Loads data from a specified JSON file and returns it with an error code.
+
+        This method attempts to load JSON data from the provided file path. It first checks
+        if the file exists, and if not, returns an error code with a descriptive message.
+
+        Args:
+            json_file_path (str): The path to the JSON file to be loaded.
+
+        Returns:
+            tuple: A tuple containing:
+                - error_code (int): error_code.OK on success,
+                  error_code.INVALID_DATA_LOADING on failure
+                - data (dict/list) or error_message (str): Parsed JSON data on success,
+                  error description on failure
+        """
+        if not os.path.exists(json_file_path):
+            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
+        try:
+            with open(json_file_path, "r", encoding="utf-8") as json_file:
+                analysis_config = json.load(json_file)
+            return error_code.OK, analysis_config
+        except Exception as e:
+            err_msg = f"Failed to load analysis sequence data from json. {str(e)[:50]}"
+            return error_code.INVALID_DATA_LOADING, err_msg
+
+    @staticmethod
+    def save_sequence_config_to_json(config_data, json_file_path):
+        """Save ``config_data`` (the inner analysis_list dict) back to json file using the new format."""
+        os.makedirs(os.path.dirname(json_file_path), exist_ok=True)
+        try:
+            with open(json_file_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=6, ensure_ascii=False)
+            return True
+        except Exception as e:
+            return False
 
     @staticmethod
     def load_last_recorded_info(logger):
@@ -82,3 +118,61 @@ class LoadUiConfig(object):
         except Exception as e:
             logger.error(f"Failed to read the info of recorded number: {e}")
             return None
+
+
+class ConfigManager(object):
+    """负责读写分析窗口各项配置的通用管理器，迁移自 ui.analysis_config_window"""
+
+    def __init__(self, config_file):
+        self.config_file = config_file
+        self.default_logger = LogManager.set_log_handler("core")
+        self.config = {}
+
+    def save_config(self, type, config_data):
+        if type in self.config:
+            self.config[type].update(config_data)
+        else:
+            self.config[type] = config_data
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=4)
+                self.default_logger.info(f"The config info for {type} analysis has been saved to {self.config_file}.")
+                return True
+        except Exception as e:
+            self.default_logger.error(f"The config info for {type} analysis save failed. {e}")
+            return False
+
+    def save_default_config(self, type, config_data):
+        default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
+        default_config = {}
+        try:
+            with open(default_config_file, "r", encoding="utf-8") as f:
+                default_config = json.load(f)
+                if type in default_config:
+                    default_config[type].update(config_data)
+                else:
+                    default_config[type] = config_data
+            with open(default_config_file, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, indent=4)
+                self.default_logger.info(
+                    f"The config info for {type} analysis has been saved to {default_config_file}."
+                )
+                return True
+        except Exception as e:
+            self.default_logger.error(f"Failed to load the default config file. {e}")
+            return False
+
+    def load_config(self):
+        try:
+            if self.config:
+                return self.config
+            with open(self.config_file, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if isinstance(raw_data, list):
+                self.config = LoadUiConfig._extract_analysis_list(raw_data)
+            else:
+                self.config = raw_data
+            return self.config
+        except Exception as e:
+            self.default_logger.error(f"Failed to load the default or temp config file. {e}")
+            return {}

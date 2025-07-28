@@ -47,7 +47,9 @@ class SequenceWindow(QWidget):
         # Retrieve stimulus information and signal from configuration
         self.data_struct.stimulus_info, self.data_struct.stimulus_data = self.get_stimulus_from_config()
         self.deviation_value = get_mic_deviation_value()  # Get the deviation value from the microphone
-        self.analysis_config = self.get_sequence_config_from_json()
+        self.sequence_config = list()
+        self.analysis_config = dict()
+        self.update_sequence_and_analysis_config()
         self.init_fft_and_stft_flag()
         self.signal_info = {}  # Initialize an empty dictionary to store signal information
         self.analysis_window = []
@@ -101,6 +103,7 @@ class SequenceWindow(QWidget):
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
+        sign.update_mode_display_sign.connect(self.update_sequence_and_analysis_config, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         self.update_mode_display(0)
@@ -112,6 +115,14 @@ class SequenceWindow(QWidget):
             + ui_style_const.qlabel_stytle
             + ui_style_const.qcheckbox_stytle
         )
+
+    def update_sequence_and_analysis_config(self):
+        self.sequence_config = self.get_sequence_config_from_json()
+        if self.sequence_config:
+            seq = self.sequence_config[0]["seq1"]
+            self.analysis_config = seq.get("analysis_list", {})
+        else:
+            self.analysis_config = dict()
 
     def create_layout(self):
         """
@@ -556,16 +567,12 @@ class SequenceWindow(QWidget):
         else:
             self.set_result_file(1, "init", None)
 
-    @staticmethod
-    def ensure_test_result_file():
-        config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        with open(config_file_path, "r") as f:
-            default_config = json.load(f)
-            default_ai_model = default_config["default_ai"]
-            if default_ai_model:
-                analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
-            else:
-                analyse_model_name = "null"
+    def ensure_test_result_file(self):
+        default_ai_model = self.analysis_config.get("default_ai")
+        if default_ai_model:
+            analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
+        else:
+            analyse_model_name = "null"
         current_time = datetime.now().strftime("%Y-%m-%d")
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
         if not os.path.exists(test_result_path):
@@ -662,20 +669,17 @@ class SequenceWindow(QWidget):
             self.stacked_widget.setCurrentIndex(0)
             self.get_result_file(0)
             self.mode = "test"
-            config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-            with open(config_file_path, "r") as f:
-                default_config = json.load(f)
-                default_ai_model = default_config["default_ai"]
-                if default_ai_model:
-                    analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
-                    self.model_line_edit.setText(analyse_model_name)
-                    self.model_line_edit.setCursorPosition(0)
-                    self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-                    self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-                    self.test_btn.setEnabled(False)
-                    self.mark_btn.setEnabled(True)
-                else:
-                    self.update_mode_display(1)
+            default_ai_model = self.analysis_config.get("default_ai")
+            if default_ai_model:
+                analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
+                self.model_line_edit.setText(analyse_model_name)
+                self.model_line_edit.setCursorPosition(0)
+                self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+                self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+                self.test_btn.setEnabled(False)
+                self.mark_btn.setEnabled(True)
+            else:
+                self.update_mode_display(1)
         else:
             self.stacked_widget.setCurrentIndex(1)
             self.get_result_file(1)
@@ -1144,7 +1148,7 @@ class SequenceWindow(QWidget):
             self.line_graph.clear()
         self.player_status_flag = True
         self.update_player_btn_is_playing()
-        self.analysis_config = self.get_sequence_config_from_json()
+        self.update_sequence_and_analysis_config()
         QApplication.processEvents()
         sample_rate = self.data_struct.stimulus_info["sample_rate"]
         stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
@@ -1173,8 +1177,9 @@ class SequenceWindow(QWidget):
         repeat_times = self.data_struct.stimulus_info.get("repeat_times")
         if repeat_times > 1:
             kwargs = {"repeat_times": repeat_times}
-            self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(self.data_struct.store_wave_data,
-                                                                                         sample_rate, **kwargs)
+            self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
+                self.data_struct.store_wave_data, sample_rate, **kwargs
+            )
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
@@ -1236,7 +1241,7 @@ class SequenceWindow(QWidget):
                     instance.calculate_thd()
                     instance.show()
                 elif hasattr(instance, "calculate_ai_scores"):
-                    instance.calculate_ai_scores(self.mode)
+                    instance.calculate_ai_scores(self.mode, self.analysis_config)
                     instance.show()
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
@@ -1249,7 +1254,7 @@ class SequenceWindow(QWidget):
                 width += 20
                 height += 20
             if self.mode == "test":
-                self.default_ai.calculate_ai_scores(self.mode)
+                self.default_ai.calculate_ai_scores(self.mode, self.analysis_config)
                 self.default_ai.show()
                 self.default_ai.setGeometry(width, height, 600, 500)
                 self.test_insert_data_into_db()
