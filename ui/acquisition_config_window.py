@@ -28,13 +28,13 @@ class BaseConfigWindow(QDialog):
         self.main_layout = QVBoxLayout(self)
 
         self.setStyleSheet(
-            ui_style_const.qgroupbox_stytle +
-            ui_style_const.qlineedit_stytle +
-            ui_style_const.qcombobox_stytle +
-            ui_style_const.qlabel_stytle +
-            ui_style_const.qspinbox_stytle +
-            ui_style_const.qdoublespinbox_stytle +
-            ui_style_const.qpushbutton_stytle
+            ui_style_const.qgroupbox_stytle
+            + ui_style_const.qlineedit_stytle
+            + ui_style_const.qcombobox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qspinbox_stytle
+            + ui_style_const.qdoublespinbox_stytle
+            + ui_style_const.qpushbutton_stytle
         )
 
     def create_cancel_ok_buttons(self):
@@ -54,6 +54,10 @@ class BaseConfigWindow(QDialog):
 
     def on_click_cancel_btn(self):
         self.close()
+
+    def exec(self):
+        super().exec()
+        return self.final_data
 
 
 class PlayRecordConfigWindow(BaseConfigWindow):

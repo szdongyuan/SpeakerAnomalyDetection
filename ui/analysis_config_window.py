@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDi
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
-from base.log_manager import LogManager
+from base.load_config import ConfigManager
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -43,12 +43,14 @@ class SplConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         layout.setSpacing(10)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcheckbox_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qradiobutton_stytle +
-                           ui_style_const.qpushbutton_stytle)
+        self.setStyleSheet(
+            ui_style_const.qcheckbox_stytle
+            + ui_style_const.qgroupbox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qlineedit_stytle
+            + ui_style_const.qradiobutton_stytle
+            + ui_style_const.qpushbutton_stytle
+        )
 
     def create_limit(self):
         self.limit_checkbox = QCheckBox("阈值", self)
@@ -148,10 +150,9 @@ class SplConfigWindow(QDialog):
             self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def config_dir_btn_clicked(self):
-        self.file_path, _ = QFileDialog.getOpenFileName(self,
-                                                        "选择配置文件路径",
-                                                        DEFAULT_DIR + "ui/ui_config",
-                                                        filter="All Files (*);;")
+        self.file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="All Files (*);;"
+        )
         if self.file_path:
             self.config_dir = self.file_path
             config_dir_name = os.path.basename(self.file_path)
@@ -176,19 +177,21 @@ class SplConfigWindow(QDialog):
             "import_config": self.radio_button_2.isChecked(),
             "upper_limit": self.line_edit_upper.text(),
             "lower_limit": self.line_edit_lower.text(),
-            "config_dir": self.file_path
+            "config_dir": self.file_path,
         }
         return default_config
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        if check_upper_lower_limit(config_data, self): return
+        if check_upper_lower_limit(config_data, self):
+            return
         save_flag = self.config_manager.save_default_config("SPL", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
-        if check_upper_lower_limit(config_data, self): return
+        if check_upper_lower_limit(config_data, self):
+            return
         self.accept()
         return config_data
 
@@ -219,12 +222,14 @@ class FrConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcheckbox_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qradiobutton_stytle)
+        self.setStyleSheet(
+            ui_style_const.qcheckbox_stytle
+            + ui_style_const.qlineedit_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qgroupbox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qradiobutton_stytle
+        )
 
     def create_limit(self):
         self.limit_checkbox = QCheckBox("阈值", self)
@@ -320,10 +325,9 @@ class FrConfigWindow(QDialog):
             self.config_dir_label.setStyleSheet("color: rgb(0, 0, 0);")
 
     def config_dir_btn_clicked(self):
-        self.file_path, _ = QFileDialog.getOpenFileName(self,
-                                                        "选择配置文件路径",
-                                                        DEFAULT_DIR + "ui/ui_config",
-                                                        filter="All Files (*);;")
+        self.file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="All Files (*);;"
+        )
         if self.file_path:
             self.config_dir = self.file_path
             config_dir_name = os.path.basename(self.file_path)
@@ -357,19 +361,21 @@ class FrConfigWindow(QDialog):
             "import_config": self.radio_button_2.isChecked(),
             "upper_limit": self.line_edit_upper.text(),
             "lower_limit": self.line_edit_lower.text(),
-            "config_dir": self.file_path
+            "config_dir": self.file_path,
         }
         return default_config
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        if check_upper_lower_limit(config_data, self): return
+        if check_upper_lower_limit(config_data, self):
+            return
         save_flag = self.config_manager.save_default_config("FR", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
-        if check_upper_lower_limit(config_data, self): return
+        if check_upper_lower_limit(config_data, self):
+            return
         self.accept()
         return config_data
 
@@ -406,10 +412,12 @@ class HdConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qcheckbox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(
+            ui_style_const.qgroupbox_stytle
+            + ui_style_const.qcheckbox_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qlabel_stytle
+        )
 
     def create_harmonic_slider_layout(self):
         harmonic_slider_layout = QVBoxLayout()
@@ -461,7 +469,7 @@ class HdConfigWindow(QDialog):
 
     def on_label_click(self, label, event):
         checked_box = "\u2713"
-        cleaned_label = ''.join(filter(str.isdigit, label.text()))
+        cleaned_label = "".join(filter(str.isdigit, label.text()))
         label_value = int(cleaned_label)
         if label_value in self.selected_labels:
             self.selected_labels.remove(label_value)
@@ -532,10 +540,12 @@ class AIConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qcombobox_stytle)
+        self.setStyleSheet(
+            ui_style_const.qgroupbox_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qcombobox_stytle
+        )
 
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:
@@ -566,7 +576,7 @@ class AIConfigWindow(QDialog):
         if query_code == error_code.OK:
             for idx, name in enumerate(query_result):
                 query_result_idx = query_result[idx]
-                input_dim = int(query_result_idx[1].split(' ')[0])
+                input_dim = int(query_result_idx[1].split(" ")[0])
                 code, stimulus_len = self.get_stimulus_len_from_json()
                 if code != error_code.OK:
                     model_list.append(query_result_idx[0])
@@ -580,7 +590,7 @@ class AIConfigWindow(QDialog):
         json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        with open(json_file_path, 'r') as json_file:
+        with open(json_file_path, "r") as json_file:
             data = json.load(json_file)
             stimulus_len = data["stimulus_info"]["total_time"] * data["stimulus_info"]["sample_rate"]
             return error_code.OK, stimulus_len
@@ -597,9 +607,7 @@ class AIConfigWindow(QDialog):
         return btn_layout
 
     def get_default_config(self):
-        default_config = {
-            "analyse_model_name": self.analyse_model_combo_box.currentText()
-        }
+        default_config = {"analyse_model_name": self.analyse_model_combo_box.currentText()}
         return default_config
 
     def on_default_btn_clicked(self):
@@ -636,10 +644,12 @@ class SpecConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qcombobox_stytle)
+        self.setStyleSheet(
+            ui_style_const.qgroupbox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qcombobox_stytle
+        )
 
     def create_spec_param(self):
         freq_scale_label = QLabel("频率轴类型")
@@ -653,7 +663,7 @@ class SpecConfigWindow(QDialog):
 
         fft_size_label = QLabel("FFT 窗长")
         self.fft_size_box = QComboBox()
-        fft_sizes = [str(2 ** i) for i in range(7, 14)]
+        fft_sizes = [str(2**i) for i in range(7, 14)]
         self.fft_size_box.addItems(fft_sizes)
         fft_size = str(self.load_config.get("n_fft", 2048))
         self.fft_size_box.setCurrentText(fft_size)
@@ -663,7 +673,7 @@ class SpecConfigWindow(QDialog):
 
         hop_length_label = QLabel("时间步长")
         self.hop_length_box = QComboBox()
-        hop_lengths = [str(2 ** i) for i in range(4, 13)]
+        hop_lengths = [str(2**i) for i in range(4, 13)]
         self.hop_length_box.addItems(hop_lengths)
         hop_length = str(self.load_config.get("hop_length", 256))
         self.hop_length_box.setCurrentText(hop_length)
@@ -673,7 +683,7 @@ class SpecConfigWindow(QDialog):
 
         window_func_label = QLabel("窗函数")
         self.window_func_box = QComboBox()
-        self.window_func_box.addItems(['hann', 'hamming', 'blackman'])
+        self.window_func_box.addItems(["hann", "hamming", "blackman"])
         window_func = self.load_config.get("window_func", "hann")
         self.window_func_box.setCurrentText(window_func)
         window_layout = QHBoxLayout()
@@ -754,10 +764,12 @@ class LPConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qlabel_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qspinbox_stytle +
-                           ui_style_const.qgroupbox_stytle)
+        self.setStyleSheet(
+            ui_style_const.qlabel_stytle
+            + ui_style_const.qpushbutton_stytle
+            + ui_style_const.qspinbox_stytle
+            + ui_style_const.qgroupbox_stytle
+        )
 
     def create_lp_config_box(self):
         lp_config_box = QGroupBox("松散颗粒参数配置")
@@ -877,7 +889,7 @@ class LPConfigWindow(QDialog):
             "min_check_duration": self.min_check_duration_spinbox.value(),
             "max_check_duration": self.max_check_duration_spinbox.value(),
             "loose_particle_num": self.loose_particle_num_spinbox.value(),
-            "cutoff_freq": self.stimulus_max_frequency_spinbox.value()
+            "cutoff_freq": self.stimulus_max_frequency_spinbox.value(),
         }
         return default_config
 
@@ -885,7 +897,6 @@ class LPConfigWindow(QDialog):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("LP", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
-
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
@@ -924,58 +935,9 @@ class PopupUtils(object):
         save_msg.exec_()
 
 
-class ConfigManager(object):
-    def __init__(self, config_file):
-        self.config_file = config_file
-        self.default_logger = LogManager.set_log_handler("core")
-        self.config = {}
-
-    def save_config(self, type, config_data):
-        if type in self.config:
-            self.config[type].update(config_data)
-        else:
-            self.config[type] = config_data
-        try:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=4)
-                self.default_logger.info(f"The config info for {type} analysis has been saved to {self.config_file}.")
-                return True
-        except Exception as e:
-            self.default_logger.error(f"The config info for {type} analysis save failed. {e}")
-            return False
-
-    def save_default_config(self, type, config_data):
-        default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
-        default_config = {}
-        try:
-            with open(default_config_file, 'r') as f:
-                default_config = json.load(f)
-                if type in default_config:
-                    default_config[type].update(config_data)
-                else:
-                    default_config[type] = config_data
-            with open(default_config_file, 'w', encoding='utf-8') as f:
-                json.dump(default_config, f, indent=4)
-                self.default_logger.info(f"The config info for {type} analysis has been saved to {default_config_file}.")
-                return True
-        except Exception as e:
-            self.default_logger.error(f"Failed to load the default config file. {e}")
-            return False
-
-    def load_config(self):
-        try:
-            if self.config:
-                return self.config
-            with open(self.config_file, 'r') as f:
-                self.config = json.load(f)
-            return self.config
-        except Exception as e:
-            self.default_logger.error(f"Failed to load the default or temp config file. {e}")
-            return {}
-
-
 def check_upper_lower_limit(config_data: dict, parent):
-    if config_data["limit_checked"] is False: return False
+    if config_data["limit_checked"] is False:
+        return False
     is_upper_limit_effect = len(config_data["upper_limit"]) > 0
     is_lower_limit_effect = len(config_data["lower_limit"]) > 0
     is_limit_effect = is_lower_limit_effect and is_upper_limit_effect
