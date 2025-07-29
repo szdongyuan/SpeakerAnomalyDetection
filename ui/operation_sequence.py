@@ -449,16 +449,16 @@ class OptionList(QListView):
         if "\u2605" in name:
             name = name.replace("\u2605", "\xa0")
         model = QDialog(self)
-        if name == self.config[0].mode:
-            if name == self.config[0].mode:
-                if "播放与录制" in self.config[0].mode:
+        if name == self.config[0].name:
+            if name == self.config[0].name:
+                if "播放与录制" in self.config[0].name:
                     model = PlayRecordConfigWindow(self.config[0].detail)
                     detail = model.exec()
-                elif "录制音频" in self.config[0].mode:
+                elif "录制音频" in self.config[0].name:
                     model = RecordConfigWindow(self.config[0].detail)
                     detail = model.exec()
                 self.config[0].detail = detail
-        if name in self.config[0].display_sequence:
+        elif name in self.config[0].display_sequence:
             prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
             model_type = None
             config_manager = None
@@ -507,6 +507,7 @@ class OptionList(QListView):
             for i in config_info:
                 key, value = next(iter(i.items()))
                 sequence_config = SequenceData(key)
+                sequence_config.name = value.get("acq", {}).get("name", None)
                 sequence_config.mode = value.get("acq", {}).get("mode", None)
                 self.sound_item_type = sequence_config.mode.lstrip()
                 sequence_config.detail = value.get("acq", {}).get("detail", {})
@@ -539,7 +540,7 @@ class OptionList(QListView):
             return
         for config in self.config:
             if config.mode:
-                self.model().appendRow(QStandardItem(config.mode))
+                self.model().appendRow(QStandardItem(config.name))
             else:
                 continue
             for key, value in self.config[0].analysis_list.items():
@@ -875,15 +876,17 @@ class OptionList(QListView):
         else:
             seq_name = "seq1"
         seq_item = SequenceData(seq_name)
-        seq_item.mode = "\xa0" + item_text
+        seq_item.name = "\xa0" + item_text
         if item_text == "播放与录制":
             flag, config = self.load_stimulus_config()
             if flag:
+                seq_item.mode = "PLAY_AND_RECORD"
                 seq_item.detail = config
             else:
                 QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
                 return
         elif item_text == "录制音频":
+            seq_item.mode = "RECORD_ONLY"
             seq_item.detail = {"total_time": 5.0, "sample_rate": 44100}
         self.config.append(seq_item)
 

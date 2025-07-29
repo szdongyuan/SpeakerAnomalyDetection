@@ -1,6 +1,7 @@
 class SequenceData:
     def __init__(self, seq_name):
         self._seq_name = seq_name
+        self._name = None
         self._mode = None
         self._detail = {}
         self._display_sequence = []
@@ -8,7 +9,7 @@ class SequenceData:
         self._default_ai = None
         self._auto_analysis = False
 
-        self._acq = {"mode": self._mode, "detail": self._detail}
+        self._acq = {"name": self._name, "mode": self._mode, "detail": self._detail}
         self._analysis_list = {
             "display_sequence": self._display_sequence,
             "default_ai": self._default_ai,
@@ -29,6 +30,15 @@ class SequenceData:
     @seq_name.setter
     def seq_name(self, value):
         self._seq_name = value
+
+    @property
+    def name(self):
+        return self._name
+    
+    @name.setter
+    def name(self, value):
+        self._name = value
+        self._acq["name"] = value
 
     @property
     def mode(self):
