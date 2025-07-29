@@ -28,7 +28,7 @@ class Splash(QWidget):
 
         self.label = QLabel(self)
         self.label.setGeometry(QRect(20, 0, 591, 411))
-        img_path = DEFAULT_DIR + "ui/ui_pic/logo_pic/ting_splash.ico"
+        img_path = DEFAULT_DIR + "ui/ui_pic/splash_screen/splash_screen.png"
         pixmap = QPixmap(img_path)
         self.label.setPixmap(pixmap)
         self.label.setScaledContents(True)

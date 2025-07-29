@@ -153,10 +153,6 @@ class OutputCalibration(QWidget):
             It also connects the QTimer's timeout signal to the update_countdown method and calls methods
             to initialize the user interface and retrieve calibration parameters.
         """
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/DT_ico.ico"))
-        self.setWindowTitle("校准")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setMinimumSize(305, 373)
         self.setMaximumSize(520, 500)
 
@@ -530,13 +526,13 @@ class OutputCalibration(QWidget):
             super().keyPressEvent(event)
 
 
-
 class InputCalibration(QWidget):
     def __init__(self):
         super().__init__()
         self.default_logger = LogManager.set_log_handler("core")     # Configures and retrieves the logger
         self.stop_timer = False      # Initializes the stop timer flag to False
         self.init_ui()
+
     def init_ui(self):
         """
             Initializes the user interface.
@@ -544,9 +540,6 @@ class InputCalibration(QWidget):
             This method sets up the window title, window properties, and size constraints. 
             It also initializes the UI layout and applies custom stylesheets to various widgets.
         """
-        self.setWindowTitle("输入校准")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setMinimumSize(305, 373)
         self.setMaximumSize(520, 500)
         self.standard_spl_flag = True
@@ -556,10 +549,18 @@ class InputCalibration(QWidget):
         recorded_box = self.create_recorded_box()
         deviation_spl_box = self.create_deviation_spl_box()
 
+        v_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        v_spacer_3 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
+
         layout = QVBoxLayout()
         layout.addWidget(standard_spl_box)
+        layout.addItem(v_spacer_1)
         layout.addWidget(recorded_box)
+        layout.addItem(v_spacer_2)
         layout.addWidget(deviation_spl_box)
+        layout.addItem(v_spacer_3)
+        layout.setContentsMargins(12, 20, 12, 25)
 
         self.setLayout(layout)
         self.setStyleSheet(ui_style_const.qcombobox_stytle +
