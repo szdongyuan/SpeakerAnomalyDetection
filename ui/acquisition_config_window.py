@@ -3,7 +3,8 @@ import sys
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit
-from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication
+from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication, QComboBox
+
 
 from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
@@ -14,7 +15,6 @@ from ui.stimulus_window import StimulusWindow
 class BaseConfigWindow(QDialog):
     def __init__(self):
         super().__init__()
-        self.clicked_ok_flag = False
         self.final_data = None
         _, self.mic = SoundDeviceManager().get_default_device("mic")
         self.setup_ui()
@@ -28,13 +28,13 @@ class BaseConfigWindow(QDialog):
         self.main_layout = QVBoxLayout(self)
 
         self.setStyleSheet(
-            ui_style_const.qgroupbox_stytle +
-            ui_style_const.qlineedit_stytle +
-            ui_style_const.qcombobox_stytle +
-            ui_style_const.qlabel_stytle +
-            ui_style_const.qspinbox_stytle +
-            ui_style_const.qdoublespinbox_stytle +
-            ui_style_const.qpushbutton_stytle
+            ui_style_const.qgroupbox_stytle
+            + ui_style_const.qlineedit_stytle
+            + ui_style_const.qcombobox_stytle
+            + ui_style_const.qlabel_stytle
+            + ui_style_const.qspinbox_stytle
+            + ui_style_const.qdoublespinbox_stytle
+            + ui_style_const.qpushbutton_stytle
         )
 
     def create_cancel_ok_buttons(self):
@@ -53,8 +53,11 @@ class BaseConfigWindow(QDialog):
         pass
 
     def on_click_cancel_btn(self):
-        self.clicked_ok_flag = False
         self.close()
+
+    def exec(self):
+        super().exec()
+        return self.final_data
 
 
 class PlayRecordConfigWindow(BaseConfigWindow):
@@ -93,7 +96,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.input_device_display.setReadOnly(True)
         if self.mic is None:
             QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
-        self.input_device_display.setPlaceholderText(f"{self.mic.get("name")}")
+        self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -115,7 +118,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.output_device_display.setReadOnly(True)
         if self.speaker is None:
             QMessageBox.warning(self, "设置警告", "请先连接输出设备!")
-        self.output_device_display.setPlaceholderText(f"{self.speaker.get("name")}")
+        self.output_device_display.setPlaceholderText(f"{self.speaker.get('name')}")
         self.config_button = QPushButton("激励信号配置")
         self.config_button.clicked.connect(self.open_stimulus_window)
 
@@ -128,10 +131,8 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
     def on_click_ok_btn(self):
         if self.clicked_stimulus_btn_flag:
-            self.clicked_ok_flag = True
-            self.accept()
             self.final_data = self.final_stimulus_data
-            print(self.final_data)
+            self.accept()
         else:
             QMessageBox.warning(self, "设置警告", "请先点击“激励信号配置”按钮完成配置!")
 
@@ -141,15 +142,17 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
             self.final_stimulus_data = self.stimulus_window.final_save_data
-            total_time = self.final_stimulus_data["stimulus_info"]["total_time"]
+            self.stimulus_data = self.final_stimulus_data
+            total_time = self.stimulus_data["stimulus_info"]["total_time"]
             self.time_input.setText(f"{total_time} 秒")
         else:
             self.final_stimulus_data = self.stimulus_data
 
 
 class RecordConfigWindow(BaseConfigWindow):
-    def __init__(self):
+    def __init__(self, input_data):
         super().__init__()
+        self.input_data = input_data
         self.init_ui()
 
     def init_ui(self):
@@ -169,9 +172,14 @@ class RecordConfigWindow(BaseConfigWindow):
         self.time_input = QDoubleSpinBox()
         self.time_input.setRange(0.5, 600)
         self.time_input.setDecimals(1)
-        self.time_input.setValue(5)
+        self.time_input.setValue(self.input_data.get("total_time"))
         self.time_input.setSingleStep(0.5)
         self.time_input.setSuffix(" 秒")
+
+        label_samplerate = QLabel("采样率:")
+        self.samplerate_combo = QComboBox()
+        self.samplerate_combo.addItems(["44100", "48000"])
+        self.samplerate_combo.setCurrentText(str(self.input_data.get("sample_rate")))
 
         label_input_device = QLabel("输入设备:")
         self.input_device_display = QLineEdit()
@@ -179,13 +187,16 @@ class RecordConfigWindow(BaseConfigWindow):
         if self.mic is None:
             QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
         else:
-            self.input_device_display.setPlaceholderText(f"{self.mic.get("name")}")
+            self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
 
-        grid_layout.addWidget(label_input_device, 1, 0)
-        grid_layout.addWidget(self.input_device_display, 1, 1)
+        grid_layout.addWidget(label_samplerate, 1, 0)
+        grid_layout.addWidget(self.samplerate_combo, 1, 1)
+
+        grid_layout.addWidget(label_input_device, 2, 0)
+        grid_layout.addWidget(self.input_device_display, 2, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -193,8 +204,8 @@ class RecordConfigWindow(BaseConfigWindow):
     def on_click_ok_btn(self):
         self.final_data = {
             "total_time": self.time_input.value(),
+            "sample_rate": int(self.samplerate_combo.currentText()),
         }
-        self.clicked_ok_flag = True
         self.accept()
 
 

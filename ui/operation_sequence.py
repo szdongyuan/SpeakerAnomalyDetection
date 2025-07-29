@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import sys
@@ -6,17 +5,20 @@ from datetime import datetime
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton
+from PyQt5.QtWidgets import QDialog, QLabel, QListView, QVBoxLayout, QCheckBox, QHBoxLayout, QPushButton, QTreeView
 from PyQt5.QtWidgets import QApplication, QMenu, QAction, QFileDialog, QMessageBox
 from time import time
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.data_struct.sequence_data import SequenceData
+from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.analysis_config_window import SplConfigWindow, ConfigManager, FrConfigWindow
-from ui.analysis_config_window import HdConfigWindow, AIConfigWindow, SpecConfigWindow, LPConfigWindow
+from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
+from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow
+from ui.analysis_config_window import LPConfigWindow
 
 
 class AnalysisModelSelect(QDialog):
@@ -24,19 +26,19 @@ class AnalysisModelSelect(QDialog):
     def __init__(self):
         super().__init__()
 
-        self.analysis_list = QListView()
-        self.analysis_list.setSelectionMode(QListView.SingleSelection)
+        self.analysis_list = QTreeView()
+        self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
         self.select_list = OptionList(self.default_logger)
-        self.analysis_list.setEditTriggers(QListView.NoEditTriggers)
-        self.select_list.setEditTriggers(QListView.NoEditTriggers)
+        self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
+        self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
 
         self.drag_drop_function()
         self.init_ui()
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setWindowTitle("分析队列")
+        self.setWindowTitle("测试队列")
 
         analysis_list_layout = self.create_analysis_list_layout()
         select_list_layout = self.create_select_list_layout()
@@ -69,18 +71,23 @@ class AnalysisModelSelect(QDialog):
             + ui_style_const.qlabel_stytle
             + ui_style_const.qcheckbox_stytle
             + ui_style_const.qlistview_stytle
+            + ui_style_const.qtreeview_stytle
         )
 
     def add_analysis_btn_clicked(self):
         if self.analysis_list.currentIndex().row() != -1:
-            text = self.analysis_list.currentIndex().data()
+            index = self.analysis_list.currentIndex()
+            if not index.parent().isValid():
+                QMessageBox.information(self, "提示", "请选择要添加的子项")
+                return
+            text = index.data()
             self.select_list.set_new_analysis_config(text)
             self.select_list.data_struct.add_stft_or_fft_count(text)
 
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
         self.analysis_list.setAcceptDrops(False)
-        self.analysis_list.setDragDropMode(QListView.DragOnly)
+        self.analysis_list.setDragDropMode(QTreeView.DragOnly)
         self.analysis_list.setDefaultDropAction(Qt.CopyAction)
 
         self.select_list.setDragEnabled(True)
@@ -104,15 +111,33 @@ class AnalysisModelSelect(QDialog):
         self.select_list.itemmove("bottom")
 
     def create_analysis_list_layout(self):
-        analysis_label = QLabel("可选分析")
+        analysis_label = QLabel("测试项目")
 
         self.analysis_model = AnalysisModel()
-        items = ["声压级 (SPL) ", "频响 (FR) ", "谐波失真 (HD) ", "松散颗粒 (LP) ", "AI 分析 ", "频谱分析 (Spec) "]
-        for item in items:
+        sound_item = QStandardItem("音频设置")
+        sound_items = ["播放与录制", "录制音频"]
+        for item in sound_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
-            self.analysis_model.appendRow(list_item)
+            sound_item.appendRow(list_item)
+        self.analysis_model.appendRow(sound_item)
+
+        analysis_item_item = QStandardItem("音频分析")
+        analysis_items = [
+            "声压级 (SPL) ",
+            "频响 (FR) ",
+            "谐波失真 (HD) ",
+            "松散颗粒 (LP) ",
+            "AI 分析 ",
+            "频谱分析 (Spec) ",
+        ]
+        for item in analysis_items:
+            list_item = QStandardItem(item.lstrip())
+            list_item.setData(item, Qt.DisplayRole)
+            analysis_item_item.appendRow(list_item)
+        self.analysis_model.appendRow(analysis_item_item)
         self.analysis_list.setModel(self.analysis_model)
+        self.analysis_list.header().hide()
         index = self.analysis_model.index(0, 0)
         self.analysis_list.setCurrentIndex(index)
 
@@ -157,9 +182,10 @@ class AnalysisModelSelect(QDialog):
         return layout
 
     def create_select_list_layout(self):
-        select_analysis_label = QLabel("分析")
+        select_analysis_label = QLabel("测试序列")
         self.auto_analysis_box = QCheckBox("自动分析")
-        self.auto_analysis_box.setChecked(self.select_list.config.get("auto_analysis", True))
+        if self.select_list.config:
+            self.auto_analysis_box.setChecked(self.select_list.config[0].auto_analysis)
         self.auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
 
         analysis_title_layout = QHBoxLayout()
@@ -181,7 +207,7 @@ class AnalysisModelSelect(QDialog):
         ok_btn.clicked.connect(self.ok_btn_clicked)
         ok_btn.setDefault(True)
         clear_btn = QPushButton("清空")
-        clear_btn.clicked.connect(self.clear_btn_clicked)
+        clear_btn.clicked.connect(self.select_list.clear_option_list)
         load_btn.setMinimumWidth(100)
         save_btn.setMinimumWidth(100)
         ok_btn.setMinimumWidth(100)
@@ -197,13 +223,6 @@ class AnalysisModelSelect(QDialog):
 
         return layout
 
-    def clear_btn_clicked(self):
-        self.select_list.config = {"display_sequence": [], "default_ai": None}
-        self.select_list.data_struct.clear_fft_and_stft_flag()
-        self.select_list.model().clear()
-        self.select_list.prev_select_ai = None
-        self.select_list.all_ai_item = []
-
     def load_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -217,6 +236,12 @@ class AnalysisModelSelect(QDialog):
             except Exception as e:
                 self.default_logger.error(f"Unable to parse JSON data in {file_path}. {e}")
 
+    def format_config_data(self, config_data):
+        for item in config_data:
+            item.auto_analysis = self.auto_analysis_box.isChecked()
+        save_config = [x.config_info for x in config_data]
+        return save_config
+
     def save_btn_clicked(self):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -225,46 +250,39 @@ class AnalysisModelSelect(QDialog):
             filter="JSON Files (*.json);;All Files (*)",
         )
         if file_path:
-            self.select_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
-            try:
-                with open(file_path, "w", encoding="utf-8") as file:
-                    json.dump(self.select_list.config, file, indent=4)
-                self.default_logger.info(f"The config file has been saved to {file_path}")
-            except Exception as e:
-                self.default_logger.error(f"The config file saved failed. {e}")
+            save_config = self.format_config_data(self.select_list.config)
+            if not LoadUiConfig.save_sequence_config_to_json(save_config, file_path):
+                QMessageBox.warning(self, "警告", "保存配置文件失败")
+                self.close()
+                return
 
     def ok_btn_clicked(self):
-        self.select_list.config["auto_analysis"] = self.auto_analysis_box.isChecked()
-        self.save_analyse_config_to_json(self.select_list.config)
-        sign.update_mode_display_sign.emit(0)
+        save_config = self.format_config_data(self.select_list.config)
+        json_file_path = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+        if not LoadUiConfig.save_sequence_config_to_json(save_config, json_file_path):
+            QMessageBox.warning(self, "警告", "保存配置文件失败")
+            self.close()
+            return
         self.update_test_file_current_model()
+        sign.update_mode_display_sign.emit(0)
         self.close()
 
     def update_test_file_current_model(self):
-        config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        with open(config_file_path, "r") as f:
-            default_config = json.load(f)
-            default_ai_model = default_config["default_ai"]
-            if default_ai_model:
-                analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
-                current_time = datetime.now().strftime("%Y-%m-%d")
-                test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-                with open(test_result_path, "r") as r:
-                    lines = r.readlines()
-                    lines[4] = f"current_model: {analyse_model_name}\n"
-                with open(test_result_path, "w") as w:
-                    w.writelines(lines)
-
-    def save_analyse_config_to_json(self, config_data):
-        analyse_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        try:
-            with open(analyse_config_file, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=4)
-                self.default_logger.info(f"The config info for analysis has been saved to {analyse_config_file}.")
-                return True
-        except Exception as e:
-            self.default_logger.error(f"The config info for analysis save failed. {e}")
-            return False
+        if self.select_list.config:
+            default_ai_model = self.select_list.config[0].default_ai
+        else:
+            default_ai_model = None
+        if default_ai_model:
+            analyse_model_name = (
+                self.select_list.config[0].analysis_list.get(default_ai_model, None).get("analyse_model_name", None)
+            )
+            current_time = datetime.now().strftime("%Y-%m-%d")
+            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+            with open(test_result_path, "r") as r:
+                lines = r.readlines()
+                lines[4] = f"current_model: {analyse_model_name}\n"
+            with open(test_result_path, "w") as w:
+                w.writelines(lines)
 
 
 class OptionList(QListView):
@@ -281,6 +299,7 @@ class OptionList(QListView):
         self.default_logger = logger
         self.row_num = None
         self.darpflag = None
+        self.sound_item_type = None
         self.start_row_number = None
         self.old_name = None
         self.press_time = None
@@ -288,8 +307,9 @@ class OptionList(QListView):
         self.is_edit_item = True
         self.index_num = None
         self.all_ai_item = []
-        self.config = {"display_sequence": [], "default_ai": None}
-        self.load_model_config(DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json")
+        self.config = list()
+        self.drop_is_accept = True
+        self.load_model_config(DEFAULT_DIR + "ui/ui_config/sequence_config.json")
 
         self.mousePressEvent = self.mousepressevent
         self.mouseReleaseEvent = self.mousereleaseevent
@@ -305,34 +325,36 @@ class OptionList(QListView):
         new_item = QStandardItem(text)
 
         if index == "top":
-            self.update_at_itemmove(0, new_item, self.index_num + 1, self.config["display_sequence"], self.index_num, 0)
-            self.index_num = 0
-        elif index == "bottom":
+            if self.index_num == 0:
+                return
+            self.update_at_itemmove(1, new_item, self.index_num + 1, self.config[0].display_sequence, self.index_num, 0)
+            self.index_num = 1
+        elif index == "bottom" and self.index_num != 0:
             self.update_at_itemmove(
                 self.model().rowCount(),
                 new_item,
                 self.index_num,
-                self.config["display_sequence"],
+                self.config[0].display_sequence,
                 self.index_num,
                 self.model().rowCount() - 1,
             )
             self.index_num = self.model().rowCount() - 1
-        elif index == "up" and self.index_num != 0:
+        elif index == "up" and self.index_num != 1 and self.index_num != 0:
             self.update_at_itemmove(
                 self.index_num - 1,
                 new_item,
                 self.index_num + 1,
-                self.config["display_sequence"],
+                self.config[0].display_sequence,
                 self.index_num,
                 self.index_num - 1,
             )
             self.index_num -= 1
-        elif index == "down" and self.index_num != self.model().rowCount() - 1:
+        elif index == "down" and self.index_num != self.model().rowCount() - 1 and self.index_num != 0:
             self.update_at_itemmove(
                 self.index_num + 2,
                 new_item,
                 self.index_num,
-                self.config["display_sequence"],
+                self.config[0].display_sequence,
                 self.index_num,
                 self.index_num + 1,
             )
@@ -361,12 +383,19 @@ class OptionList(QListView):
 
             self.old_name = index.data()
             self.rename_select_ai_action(index)
+            self.disabled_rename_action(index, rename_action)
 
             menu.addAction(open_action)
             menu.addAction(self.select_ai_action)
             menu.addAction(delete_action)
             menu.addAction(rename_action)
             menu.exec_(self.mapToGlobal(pos))
+
+    def disabled_rename_action(self, index, action):
+        if index.row() == 0:
+            action.setEnabled(False)
+        else:
+            action.setEnabled(True)
 
     def rename_select_ai_action(self, index: QModelIndex):
         if self.check_item_isai(index.data()) or "\u2605" in index.data():
@@ -389,7 +418,7 @@ class OptionList(QListView):
         if "\u2605" in index.data():
             new_name = index.data().replace("\u2605", "\xa0")
             self.set_model_data(index, new_name)
-            self.config["default_ai"] = None
+            self.config[0].default_ai = None
             self.prev_select_ai = None
         else:
             if self.prev_select_ai is None:
@@ -398,7 +427,7 @@ class OptionList(QListView):
                 prev_new_name = self.prev_select_ai.data().replace("\u2605", "\xa0")
                 self.set_model_data(self.prev_select_ai, prev_new_name)
                 self.prev_select_ai = index
-            self.config["default_ai"] = index.data()
+            self.config[0].default_ai = index.data()
             self.is_select_ai = True
             new_name = "\u2605" + self.valid_char(index.data())
             self.set_model_data(index, new_name)
@@ -419,23 +448,40 @@ class OptionList(QListView):
     def show_dialog(self, name):
         if "\u2605" in name:
             name = name.replace("\u2605", "\xa0")
-        if not name in self.config["display_sequence"]:
-            return
-        prev_config_file = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-        model_type = None
-        config_manager = None
-        if name in self.config:
-            config_manager = ConfigManager(prev_config_file)
         model = QDialog(self)
-        type = self.config.get(name)["type"]
-        if self.config.get(name):
-            config_manager.config = self.config
-            model_type = name
-        model = self.create_config_dialog(model, config_manager, model_type, type)
-        model.setWindowTitle(name)
-        if model.exec_() == QDialog.Accepted:
-            config_data = model.on_click_ok_btn()
-            self.add_config(name, config_data)
+        if name == self.config[0].mode:
+            if name == self.config[0].mode:
+                if "播放与录制" in self.config[0].mode:
+                    model = PlayRecordConfigWindow(self.config[0].detail)
+                    detail = model.exec()
+                elif "录制音频" in self.config[0].mode:
+                    model = RecordConfigWindow(self.config[0].detail)
+                    detail = model.exec()
+                self.config[0].detail = detail
+        if name in self.config[0].display_sequence:
+            prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+            model_type = None
+            config_manager = None
+            if name in self.config[0].analysis_list:
+                config_manager = ConfigManager(prev_config_file)
+            type = self.config[0].analysis_list.get(name)["type"]
+            if self.config[0].analysis_list.get(name):
+                config_manager.config = self.config[0].analysis_list
+                model_type = name
+            model = self.create_config_dialog(model, config_manager, model_type, type)
+            model.setWindowTitle(name)
+            if model.exec_() == QDialog.Accepted:
+                config_data = model.on_click_ok_btn()
+                self.add_config(name, config_data)
+
+    def load_stimulus_config(self):
+        default_config_file = DEFAULT_DIR + "ui/ui_config/default_stimulus.json"
+        code, data = LoadUiConfig.load_data_from_json(default_config_file)
+        if code == 0:
+            return True, data
+        else:
+            self.default_logger.error(f"load default stimulus config error {data}")
+            return False, {}
 
     def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type):
         if type == "SPL":
@@ -452,57 +498,84 @@ class OptionList(QListView):
             model = LPConfigWindow(config_manager, name)
         return model
 
-    def load_config(self, config_file):
-        try:
-            with open(config_file, "r") as f:
-                default_config = json.load(f)
-            return default_config
-        except Exception as e:
-            self.default_logger.error(f"Failed to load the default config file. {e}")
-            return {}
+    def init_config_info(self, config_file):
+        code, config_info = LoadUiConfig.load_data_from_json(config_file)
+        if code != 0:
+            self.default_logger.error(f"Failed to load the default config file. {config_info}")
+            return
+        if config_info:
+            for i in config_info:
+                key, value = next(iter(i.items()))
+                sequence_config = SequenceData(key)
+                sequence_config.mode = value.get("acq", {}).get("mode", None)
+                self.sound_item_type = sequence_config.mode.lstrip()
+                sequence_config.detail = value.get("acq", {}).get("detail", {})
+
+                i_analysis_list = value.get("analysis_list", {})
+                sequence_config.default_ai = i_analysis_list.pop("default_ai", None)
+                sequence_config.display_sequence = i_analysis_list.pop("display_sequence", [])
+                sequence_config.auto_analysis = i_analysis_list.pop("auto_analysis", False)
+
+                sequence_config.analysis_list.update(i_analysis_list)
+                self.config.append(sequence_config)
+
+                # sequence_config.auto_analysis = False
 
     def clear_option_list(self):
-        self.config = {"display_sequence": [], "default_ai": None}
+        self.config = list()
+        self.data_struct.clear_fft_and_stft_flag()
         self.model().clear()
         self.prev_select_ai = None
         self.all_ai_item = []
+        self.sound_item_type = None
+        self.drop_is_accept = True
 
     def load_model_config(self, config_path):
-        self.data_struct.clear_fft_and_stft_flag()
         if os.path.exists(config_path):
             self.clear_option_list()
-            self.config = self.load_config(config_path)
-        for key, value in self.config.items():
-            if key != "auto_analysis" and key != "default_ai" and key != "display_sequence":
-                if "AI" == value.get("type"):
-                    self.store_ai_item(self.all_ai_item, key)
-        model_item_list = self.config.get("display_sequence", "")
-        for item_name in model_item_list:
-            self.data_struct.add_stft_or_fft_count(self.config[item_name]["type"])
-            if item_name == self.config.get("default_ai", ""):
-                self.config["default_ai"] = item_name
-                item_name = item_name.replace("\xa0", "")
-                self.model().appendRow(QStandardItem("\u2605" + item_name))
-                last_row = self.model().rowCount() - 1
-                self.prev_select_ai = self.model().index(last_row, 0)
+            self.init_config_info(config_path)
+        else:
+            QMessageBox.warning(self, "警告", "配置文件不存在!")
+            return
+        for config in self.config:
+            if config.mode:
+                self.model().appendRow(QStandardItem(config.mode))
             else:
-                self.model().appendRow(QStandardItem(item_name))
+                continue
+            for key, value in self.config[0].analysis_list.items():
+                if key != "auto_analysis" and key != "default_ai" and key != "display_sequence":
+                    if "AI" == value.get("type"):
+                        self.store_ai_item(self.all_ai_item, key)
+            model_item_list = self.config[0].display_sequence
+            for item_name in model_item_list:
+                self.data_struct.add_stft_or_fft_count(self.config[0].analysis_list[item_name]["type"])
+                if item_name == self.config[0].default_ai:
+                    self.config[0].default_ai = item_name
+                    item_name = item_name.replace("\xa0", "")
+                    self.model().appendRow(QStandardItem("\u2605" + item_name))
+                    last_row = self.model().rowCount() - 1
+                    self.prev_select_ai = self.model().index(last_row, 0)
+                else:
+                    self.model().appendRow(QStandardItem(item_name))
 
     def add_config(self, class_name, config_data):
-        if class_name in self.config:
-            self.config[class_name].update(config_data)
+        if class_name in self.config[0].analysis_list:
+            self.config[0].analysis_list[class_name].update(config_data)
         else:
-            self.config[class_name] = config_data
+            self.config[0].analysis_list[class_name] = config_data
 
     def delete_item(self, index):
+        if index.data().lstrip() == self.sound_item_type:
+            self.clear_option_list()
+            return
         if "\u2605" in index.data():
-            self.config["display_sequence"].remove(self.config["default_ai"])
-            self.delete_item_config(self.config["default_ai"])
-            self.config["default_ai"] = None
+            self.config[0].display_sequence.remove(self.config[0].default_ai)
+            self.delete_item_config(self.config[0].default_ai)
+            self.config[0].default_ai = None
             self.prev_select_ai = None
         else:
-            self.config["display_sequence"].remove(index.data())
-            self.data_struct.minus_stft_or_fft_count(self.config[index.data()]["type"])
+            self.config[0].display_sequence.remove(index.data())
+            self.data_struct.minus_stft_or_fft_count(self.config[0].analysis_list[index.data()]["type"])
             self.delete_item_config(index.data())
             self.update_default_ai_index_at_delete_item(index)
         model = self.model()
@@ -517,8 +590,8 @@ class OptionList(QListView):
     def delete_item_config(self, name):
         if not name:
             return
-        if name in self.config:
-            del self.config[name]
+        if name in self.config[0].analysis_list:
+            del self.config[0].analysis_list[name]
 
     def rename_item(self, index):
         self.is_update_config = True
@@ -526,19 +599,25 @@ class OptionList(QListView):
         self.edit(index)
 
     def update_model_list(self, config: dict, new_item: QStandardItem, old_index, new_index, step_index: bool):
-        if not new_item:
+        if not new_item or old_index == 0:
+            self.setCurrentIndex(self.model().index(0, 0))
             return
-        self.model().insertRow(new_index, new_item)
-        if step_index:
-            self.model().removeRow(old_index)
-            self.setCurrentIndex(self.model().index(new_index - 1, 0))
-            self.swap_list_index(config["display_sequence"], old_index, new_index - 1)
-            self.start_row_number = new_index - 1
         else:
-            self.model().removeRow(old_index + 1)
-            self.setCurrentIndex(self.model().index(new_index, 0))
-            self.swap_list_index(config["display_sequence"], old_index, new_index)
-            self.start_row_number = new_index
+            if new_index == 0:
+                self.model().insertRow(1, new_item)
+                self.start_row_number = 1
+            else:
+                self.model().insertRow(new_index, new_item)
+            if step_index:
+                self.model().removeRow(old_index)
+                self.swap_list_index(config["display_sequence"], old_index, new_index - 1)
+                self.start_row_number = new_index - 1
+            else:
+                self.model().removeRow(old_index + 1)
+                self.swap_list_index(config["display_sequence"], old_index, new_index)
+                if new_index != 0:
+                    self.start_row_number = new_index
+        self.setCurrentIndex(self.model().index(self.start_row_number, 0))
         self.update_select_ai(old_index, new_index, True)
 
     def update_select_ai(self, old_index, new_index, step_index: bool):
@@ -577,19 +656,19 @@ class OptionList(QListView):
         if not name:
             return
         if self.check_item_name_have_space(name) is True:
-            self.config["default_ai"] = name
+            self.config[0].default_ai = name
         elif self.check_item_name_have_space(name) is False:
-            self.config["default_ai"] = "\xa0" + name
+            self.config[0].default_ai = "\xa0" + name
 
     def update_config_file(self, old_name, new_name):
         if not old_name or not new_name:
             return
-        if old_name in self.config:
-            value = self.config.pop(old_name)
+        if old_name in self.config[0].analysis_list:
+            value = self.config[0].analysis_list.pop(old_name)
             if self.check_item_name_have_space(new_name) is True:
-                self.config[new_name] = value
+                self.config[0].analysis_list[new_name] = value
             elif self.check_item_name_have_space(new_name) is False:
-                self.config["\xa0" + new_name] = value
+                self.config[0].analysis_list["\xa0" + new_name] = value
 
     def update_display_sequence_list(self, list, old_name, new_name):
         if not old_name or not new_name or old_name == new_name:
@@ -642,24 +721,23 @@ class OptionList(QListView):
         new_name = self.model().data(index)
         really_new_name = new_name.replace(" ", "")
         if new_name != self.old_name and really_new_name:
-            if new_name in self.config["display_sequence"]:
+            if new_name in self.config[0].display_sequence:
                 QMessageBox.warning(self, "警告", "模型名称重复，请重新输入！")
                 self.set_model_data(index, self.old_name)
                 return
             if self.is_select_ai:
                 if "\u2605" in new_name:
-                    self.config["default_ai"] = new_name.replace("\u2605", "\xa0")
-                    if self.config["default_ai"] != self.old_name:
+                    self.config[0].default_ai = new_name.replace("\u2605", "\xa0")
+                    if self.config[0].default_ai != self.old_name:
                         self.update_config_data(
                             self.old_name.replace("\u2605", "\xa0"),
-                            self.config["default_ai"],
-                            self.config["display_sequence"],
+                            self.config[0].default_ai,
+                            self.config[0].display_sequence,
                         )
                     self.old_name = new_name
                     self.set_model_data(index, new_name)
-                else:
                     self.update_config_data(
-                        self.old_name.replace("\u2605", "\xa0"), new_name, self.config["display_sequence"]
+                        self.old_name.replace("\u2605", "\xa0"), new_name, self.config[0].display_sequence
                     )
                     self.old_name = new_name
                     self.update_default_ai(new_name)
@@ -667,7 +745,7 @@ class OptionList(QListView):
                 self.is_select_ai = False
             else:
                 if self.is_update_config:
-                    self.update_config_data(self.old_name, new_name, self.config["display_sequence"])
+                    self.update_config_data(self.old_name, new_name, self.config[0].display_sequence)
                     self.is_update_config = False
                 self.old_name = "\xa0" + new_name
                 self.rename_item_space_equal(new_name, index)
@@ -679,6 +757,8 @@ class OptionList(QListView):
     def swap_list_index(self, list: list, old_index, new_index):
         if old_index == new_index or not list:
             return
+        old_index -= 1
+        new_index -= 1
         old_name = list[old_index]
         list.pop(old_index)
         list.insert(new_index, old_name)
@@ -712,12 +792,18 @@ class OptionList(QListView):
         if self.darpflag:
             new_item = QStandardItem(self.start_index.data())
             if row_number == -1:
-                self.update_model_list(self.config, new_item, self.start_row_number, self.model().rowCount(), True)
+                self.update_model_list(
+                    self.config[0].analysis_list, new_item, self.start_row_number, self.model().rowCount(), True
+                )
             else:
                 if row_number > self.start_row_number:
-                    self.update_model_list(self.config, new_item, self.start_row_number, row_number, True)
+                    self.update_model_list(
+                        self.config[0].analysis_list, new_item, self.start_row_number, row_number, True
+                    )
                 elif row_number < self.start_row_number:
-                    self.update_model_list(self.config, new_item, self.start_row_number, row_number, 0)
+                    self.update_model_list(
+                        self.config[0].analysis_list, new_item, self.start_row_number, row_number, False
+                    )
             # Update the starting item name and index number, and end the drag-and-drop state
             self.start_item_name = new_item.text()
             self.index_num = self.start_row_number
@@ -732,24 +818,76 @@ class OptionList(QListView):
 
     def dragenterevent(self, event):
         if event.mimeData().hasText():
-            event.acceptProposedAction()
+            text = event.mimeData().text()
+            if text in ["播放与录制", "录制音频"]:
+                if self.sound_item_type:
+                    self.drop_is_accept = False
+            elif self.sound_item_type == "录制音频":
+                if text in ["频响 (FR) ", "谐波失真 (HD) "]:
+                    self.drop_is_accept = False
+            elif not self.sound_item_type:
+                self.drop_is_accept = False
+            event.accept()
         else:
             event.ignore()
 
     def dragmoveevent(self, event):
         if event.mimeData().hasText():
-            event.acceptProposedAction()
+            event.accept()
         else:
             event.ignore()
 
     def dropevent(self, event):
         if event.mimeData().hasText():
             text = event.mimeData().text().lstrip()
-            self.set_new_analysis_config(text)
-            self.data_struct.add_stft_or_fft_count(text)
+            if self.drop_is_accept is False:
+                if text in ["播放与录制", "录制音频"]:
+                    QMessageBox.warning(self, "警告", "已选择测试模式")
+                elif not self.config:
+                    QMessageBox.warning(self, "警告", "请选择测试模式")
+                elif text in ["频响 (FR) ", "谐波失真 (HD) "]:
+                    QMessageBox.warning(self, "警告", "当前模式不支持此功能")
+                self.drop_is_accept = True
+                return
+            elif text in ["播放与录制", "录制音频"]:
+                self.set_sound_item(text)
+                self.sound_item_type = text
+            else:
+                self.set_new_analysis_config(text)
+                self.data_struct.add_stft_or_fft_count(text)
             event.accept()
         else:
             event.ignore()
+
+    def set_sound_item(self, item_text):
+        list_item = QStandardItem("\xa0" + item_text)
+        if self.config:
+            seq_name_list = list()
+            for key, value in self.config.items():
+                seq_name_list.append(key)
+            count = len(seq_name_list)
+
+            while True:
+                seq_name = "seq" + str(count)
+                if seq_name not in seq_name_list:
+                    break
+                count += 1
+        else:
+            seq_name = "seq1"
+        seq_item = SequenceData(seq_name)
+        seq_item.mode = "\xa0" + item_text
+        if item_text == "播放与录制":
+            flag, config = self.load_stimulus_config()
+            if flag:
+                seq_item.detail = config
+            else:
+                QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
+                return
+        elif item_text == "录制音频":
+            seq_item.detail = {"total_time": 5.0, "sample_rate": 44100}
+        self.config.append(seq_item)
+
+        self.model().insertRow(0, list_item)
 
     def set_new_analysis_config(self, item_text):
         count = 1
@@ -764,7 +902,7 @@ class OptionList(QListView):
         list_item_text = list_item.text()
         if "AI" in item_text:
             self.store_ai_item(self.all_ai_item, list_item_text)
-        self.config["display_sequence"].append(list_item_text)
+        self.config[0].display_sequence.append(list_item_text)
         self.get_item_default_config(item_text, list_item_text)
 
     def get_item_default_config(self, item_text, list_item_text):
@@ -772,9 +910,12 @@ class OptionList(QListView):
             return
         type = "".join(re.findall(r"[A-Za-z]", item_text))
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
-        data = self.load_config(default_config_file)
-        self.config[list_item_text] = data[type]
-        self.config[list_item_text]["type"] = type
+        code, data = LoadUiConfig.load_data_from_json(default_config_file)
+        if code != 0:
+            self.default_logger.error(f"Failed to load the default config file. {data}")
+            return
+        self.config[0].analysis_list[list_item_text] = data[type]
+        self.config[0].analysis_list[list_item_text]["type"] = type
 
 
 class AnalysisModel(QStandardItemModel):
@@ -787,6 +928,17 @@ class AnalysisModel(QStandardItemModel):
         texts = [index.data(Qt.DisplayRole) for index in indexes if index.isValid()]
         mime_data.setText("\n".join(texts))
         return mime_data
+
+    def flags(self, index):
+        default_flags = super().flags(index)
+
+        if not index.isValid():
+            return default_flags
+
+        if not index.parent().isValid():
+            return default_flags & ~Qt.ItemIsDragEnabled
+
+        return default_flags | Qt.ItemIsDragEnabled
 
 
 if __name__ == "__main__":

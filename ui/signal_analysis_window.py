@@ -353,7 +353,7 @@ class AI(QWidget):
             first_match = matches[0]
             first_match.mergeCharFormat(format)
 
-    def calculate_ai_scores(self, mode):
+    def calculate_ai_scores(self, mode, analysis_config):
         model_name = self.analysis_config["analyse_model_name"]
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
@@ -362,12 +362,9 @@ class AI(QWidget):
             model_path, config_path = result
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
-            config_file_path = DEFAULT_DIR + "ui/ui_config/analysis_temp_config.json"
-            with open(config_file_path, "r") as f:
-                default_config = json.load(f)
-                default_ai_model = default_config["default_ai"]
+            default_ai_model = analysis_config["default_ai"]
             if mode == "test" and default_ai_model:
-                analyse_model_name = default_config.get(default_ai_model, None).get("analyse_model_name", None)
+                analyse_model_name = analysis_config.get(default_ai_model, None).get("analyse_model_name", None)
                 match_object = re.search(r"评分结果:\s*(\S+)", result_text)
                 if match_object:
                     match_result = match_object.group(1)
