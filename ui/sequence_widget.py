@@ -1133,7 +1133,10 @@ class SequenceWindow(QWidget):
                 )
     
     def judge_play_and_record(self,label = "not_labeled"):
-        if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+        if not self.sequence_config[0]["seq1"]["acq"]["mode"]:
+            QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-分析队列中配置")
+            return
+        elif self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
             if not self.mic or not self.speaker:
                 QMessageBox.warning(self, "提示", "未找到麦克风或扬声器，请在硬件中设置")
                 return
