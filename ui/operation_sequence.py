@@ -537,7 +537,6 @@ class OptionList(QListView):
             self.clear_option_list()
             self.init_config_info(config_path)
         else:
-            QMessageBox.warning(self, "警告", "配置文件不存在!")
             return
         for config in self.config:
             if config.mode:
