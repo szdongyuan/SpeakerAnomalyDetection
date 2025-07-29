@@ -46,6 +46,7 @@ class AnalysisModelSelect(QDialog):
         move_btn_layout = self.move_item_btn_layout()
 
         add_analysis_btn = QPushButton()
+        add_analysis_btn.setDisabled(True)
         add_analysis_btn.setToolTip("添加分析")
         add_analysis_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         add_analysis_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sellect_analysis_model/jiantou.svg"))
