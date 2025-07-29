@@ -157,7 +157,12 @@ class StimulusWindow(QDialog):
                 self.frequency_group_box,
                 time_group_box,
             ],
-            "noise": [load_config_btn, save_config_btn, stimulus_type_group_box, time_group_box],
+            "noise": [
+                load_config_btn,
+                save_config_btn,
+                stimulus_type_group_box,
+                time_group_box
+            ],
             "step": [
                 load_config_btn,
                 save_config_btn,
@@ -182,8 +187,12 @@ class StimulusWindow(QDialog):
         )
 
     def switch_connection_on(self):
-        self.stimulus_type_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_stimulus_type_combo_box)
-        self.stimulus_method_combo_box.currentTextChanged.connect(self.set_stimulus_type_connection)
+        self.stimulus_type_combo_box.currentTextChanged.connect(
+            self.update_stimulus_info_from_stimulus_type_combo_box
+        )
+        self.stimulus_method_combo_box.currentTextChanged.connect(
+            self.set_stimulus_type_connection
+        )
         self.start_freq_box.valueChanged.connect(
             lambda: self.update_stimulus_info_from_controller(self.start_freq_box, "start_freq")
         )
