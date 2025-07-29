@@ -510,7 +510,7 @@ class OptionList(QListView):
                 sequence_config = SequenceData(key)
                 sequence_config.name = value.get("acq", {}).get("name", None)
                 sequence_config.mode = value.get("acq", {}).get("mode", None)
-                self.sound_item_type = sequence_config.mode.lstrip()
+                self.sound_item_type = sequence_config.name.lstrip()
                 sequence_config.detail = value.get("acq", {}).get("detail", {})
 
                 i_analysis_list = value.get("analysis_list", {})
