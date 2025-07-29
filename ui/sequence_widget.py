@@ -8,6 +8,8 @@ from datetime import datetime
 import librosa
 import numpy as np
 import pyqtgraph as pg
+import uuid
+from scipy.io import wavfile
 from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
 from PyQt5.QtGui import QIcon, QPainter, QColor, QFont
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
@@ -26,6 +28,7 @@ from base.soundcard_calibration_manager import get_mic_deviation_value
 from base.stimulus_signal_management import StimulusSignalManagement
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
+from base.db_manager import DataSave
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -147,7 +150,7 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
-        self.replayer_btn.clicked.connect(lambda: self.play_last_stimulus_wave())
+        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record())
 
         self.data_btn.setFixedSize(100, 40)
         self.data_btn.setToolTip("分析")
@@ -1116,7 +1119,7 @@ class SequenceWindow(QWidget):
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
 
-        self.play_last_stimulus_wave(label)
+        self.judge_play_and_record(label)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
         self.save_recorded_data_to_json()
@@ -1128,6 +1131,113 @@ class SequenceWindow(QWidget):
                 TempTcpClient(
                     SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
                 )
+    
+    def judge_play_and_record(self,label = "not_labeled"):
+        if "播放" in self.sequence_config[0]["seq1"]["acq"]["mode"]:
+            if not self.mic or not self.speaker:
+                QMessageBox.warning(self, "提示", "未找到麦克风或扬声器，请在硬件中设置")
+                return
+            else:
+                self.play_last_stimulus_wave(label)
+        else:
+            if not self.mic:
+                QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
+                return
+            else:
+                self.record_without_play(label)
+
+    def record_without_play(self, label="not_labeled"):
+        """
+        Implements the complete workflow for the record-only mode.
+        It records audio based on the `total_time` and `sample_rate` specified in
+        `sequence_config['acq']['detail']`, then saves the result to a .wav file
+        and the database (with `stimulus_id` set to 0). All subsequent operations,
+        such as FFT/STFT, automatic analysis, and button state updates, are the
+        same as in the play-and-record mode.
+        """
+
+        self.data_struct.clear_data()
+        if self.player_status_flag:
+            self.line_graph.clear()
+        self.player_status_flag = True
+        self.update_player_btn_is_playing()
+        self.update_sequence_and_analysis_config()
+        QApplication.processEvents()
+
+        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        total_time = float(acq_detail.get("total_time", 5.0))
+        sample_rate = int(acq_detail.get("sample_rate", 44100))
+
+        num_frames = int(total_time * sample_rate)
+
+        recorded_dict = {
+            "num_frames": num_frames,
+            "sample_rate": sample_rate,
+            "channels": 1,
+            "blocking": True,
+            "prolong_frames": 0,
+        }
+
+        self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
+
+        sap = SoundcardAudioProcessor()
+        record_code, recorded_signal = sap.sd_rec(recorded_dict)
+
+        if record_code == error_code.OK:
+            try:
+                wavfile.write(self.recorded_path, sample_rate, recorded_signal.astype("float32"))
+            except Exception as e:
+                if hasattr(self, "default_logger"):
+                    self.default_logger.error(f"Save wav failed: {e}")
+
+            self.data_struct.store_wave_data = recorded_signal
+            self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
+
+            self.recorded_signal_info["sample_rate"] = sample_rate
+
+            try:
+                audio_data_id = str(uuid.uuid1())
+                file_path_rel = self.recorded_path.replace(DEFAULT_DIR, "")
+                # Ensure that the same relative path is used when updating the database subsequently
+                self.recorded_signal_info["file_path"] = file_path_rel
+
+                product_model = self.recorded_signal_info.get("product_model")
+                record_date = self.recorded_signal_info.get("record_date")
+                barcode = self.recorded_signal_info.get("barcode")
+                audio_data = (
+                    audio_data_id,
+                    file_path_rel,
+                    product_model,
+                    sample_rate,
+                    record_date,
+                    label,
+                    barcode,
+                    None, # todo: 
+                )
+                with DataSave(model_consts.DATABASE_PATH) as db:
+                    db.insert_data_into_db(
+                        "audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data]
+                    )
+            except Exception as e:
+                if hasattr(self, "default_logger"):
+                    self.default_logger.error(f"Insert record (rec only) to DB failed: {e}")
+
+        self.update_player_btn_is_paused()
+
+        if self.data_struct.stft_flag != 0:
+            self.data_struct.stft_result = librosa.stft(
+                recorded_signal, n_fft=1024, hop_length=16, win_length=1024, window="hann"
+            )
+        if self.data_struct.fft_flag != 0:
+            self.data_struct.fft_result = np.abs(
+                np.fft.fft(recorded_signal)[: sample_rate // 2]
+            )
+
+        self.data_btn.setEnabled(True)
+        self.replayer_btn.setEnabled(True)
+
+        if self.sequence_config[0]["seq1"]["analysis_list"]["auto_analysis"]:
+            self.run()
 
     def play_last_stimulus_wave(self, label="not_labeled"):
         """

@@ -96,7 +96,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.input_device_display.setReadOnly(True)
         if self.mic is None:
             QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
-        self.input_device_display.setPlaceholderText(f"{self.mic.get("name")}")
+        self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -118,7 +118,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.output_device_display.setReadOnly(True)
         if self.speaker is None:
             QMessageBox.warning(self, "设置警告", "请先连接输出设备!")
-        self.output_device_display.setPlaceholderText(f"{self.speaker.get("name")}")
+        self.output_device_display.setPlaceholderText(f"{self.speaker.get('name')}")
         self.config_button = QPushButton("激励信号配置")
         self.config_button.clicked.connect(self.open_stimulus_window)
 
@@ -187,7 +187,7 @@ class RecordConfigWindow(BaseConfigWindow):
         if self.mic is None:
             QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
         else:
-            self.input_device_display.setPlaceholderText(f"{self.mic.get("name")}")
+            self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
