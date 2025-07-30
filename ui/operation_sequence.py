@@ -451,14 +451,13 @@ class OptionList(QListView):
             name = name.replace("\u2605", "\xa0")
         model = QDialog(self)
         if name == self.config[0].name:
-            if name == self.config[0].name:
-                if "播放与录制" in self.config[0].name:
-                    model = PlayRecordConfigWindow(self.config[0].detail)
-                    detail = model.exec()
-                elif "录制音频" in self.config[0].name:
-                    model = RecordConfigWindow(self.config[0].detail)
-                    detail = model.exec()
-                self.config[0].detail = detail
+            if "播放与录制" in self.config[0].name:
+                model = PlayRecordConfigWindow(self.config[0].detail)
+            elif "录制音频" in self.config[0].name:
+                model = RecordConfigWindow(self.config[0].detail)
+            result = model.exec()
+            if result is not None:
+                self.config[0].detail = result
         elif name in self.config[0].display_sequence:
             prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
             model_type = None
@@ -737,6 +736,7 @@ class OptionList(QListView):
                         )
                     self.old_name = new_name
                     self.set_model_data(index, new_name)
+                else:
                     self.update_config_data(
                         self.old_name.replace("\u2605", "\xa0"), new_name, self.config[0].display_sequence
                     )
