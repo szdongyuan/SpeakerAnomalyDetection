@@ -10,14 +10,14 @@ os.environ["SD_ENABLE_ASIO"] = "1"
 
 class SoundDeviceManager(object):
 
-    def get_default_device(self, device, refresh=False):
+    def get_default_device(self, device, refresh=True):
         if refresh:
             self.refresh_available_device()
         try:
             if device == "mic":
-                return error_code.OK, sd.query_devices(sd.default.device[0])
+                return error_code.OK, sd.query_devices(sd.default._default_device[0])
             elif device == "speaker":
-                return error_code.OK, sd.query_devices(sd.default.device[1])
+                return error_code.OK, sd.query_devices(sd.default._default_device[1])
         except Exception as e:
             return error_code.MISSING_HARDWARE_DEVICE, None
 
