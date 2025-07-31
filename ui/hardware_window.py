@@ -8,7 +8,6 @@ from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 
-
 class HardwareWindow(QDialog):
 
     def __init__(self):
@@ -98,7 +97,7 @@ class HardwareWindow(QDialog):
             self.speaker = selected_speaker
             self.speaker_label.setText("设  备：   %s" % self.speaker["name"])
             self.speaker_channel_label.setText(
-                "驱  动： %s" % SoundDeviceManager().get_api_info(self.speaker["hostapi"])["name"]
+                "驱  动：   %s" % SoundDeviceManager().get_api_info(self.speaker["hostapi"])["name"]
             )
 
     def select_mic_btn_clicked(self):
@@ -108,13 +107,40 @@ class HardwareWindow(QDialog):
             self.mic = selected_mic
             self.mic_label.setText("设  备：   %s" % self.mic["name"])
             self.mic_channel_label.setText(
-                "驱  动： %s" % SoundDeviceManager().get_api_info(self.mic["hostapi"])["name"]
+                "驱  动：   %s" % SoundDeviceManager().get_api_info(self.mic["hostapi"])["name"]
             )
 
     def refresh_device_display(self):
         sdm = SoundDeviceManager()
-        _, self.speaker = sdm.get_default_device("speaker")
-        _, self.mic = sdm.get_default_device("mic")
+
+        last_speaker = self.speaker
+        last_mic = self.mic
+        sdm.refresh_available_device()
+        _, default_speaker = sdm.get_default_device("speaker", refresh=False)
+        _, default_mic = sdm.get_default_device("mic", refresh=False)
+        all_devices = sdm.get_device_info()
+        speaker_list = []
+        mic_list = []
+        ## Because there are unusable devices in all_device (no API), get the devices with API
+        for api in all_devices:
+            speaker_list.extend(all_devices[api]["output"])
+            mic_list.extend(all_devices[api]["input"])
+
+        if not speaker_list:
+            self.speaker = None
+        else:
+            if last_speaker and any(d['name'] == last_speaker['name'] for d in speaker_list):
+                self.speaker = last_speaker
+            else:
+                self.speaker = default_speaker
+
+        if not mic_list:
+            self.mic = None
+        else:
+            if last_mic and any(d['name'] == last_mic['name'] for d in mic_list):
+                self.mic = last_mic
+            else:
+                self.mic = default_mic
 
         if not self.speaker:
             self.speaker_label.setText("设  备：   无可用输出设备")
