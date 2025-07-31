@@ -19,19 +19,18 @@ from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.utils.custom_signals import sign
-from base.load_audio import load_audio_simple
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import get_mic_deviation_value
-from base.stimulus_signal_management import StimulusSignalManagement
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
 from base.db_manager import DataSave
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
+from ui.operation_sequence import AnalysisModelSelect
 from ui.signal_analysis_window import get_class_mapping
 from ui.login_window import get_mac_address
 
@@ -48,10 +47,10 @@ class SequenceWindow(QWidget):
         self.refresh_stimulus_flag = None  # Initialize the flag to indicate if stimulus needs refreshing
         self.add_or_update_wave_flag = True
         # Retrieve stimulus information and signal from configuration
-        self.data_struct.stimulus_info, self.data_struct.stimulus_data = self.get_stimulus_from_config()
         self.deviation_value = get_mic_deviation_value()  # Get the deviation value from the microphone
         self.sequence_config = list()
         self.analysis_config = dict()
+        self.init_data_struct_stimulus_config()
         self.update_sequence_and_analysis_config()
         self.init_fft_and_stft_flag()
         self.signal_info = {}  # Initialize an empty dictionary to store signal information
@@ -126,6 +125,14 @@ class SequenceWindow(QWidget):
             self.analysis_config = seq.get("analysis_list", {})
         else:
             self.analysis_config = dict()
+
+    def init_data_struct_stimulus_config(self):
+        self.sequence_config = self.get_sequence_config_from_json()
+        if not self.sequence_config:
+            return
+        acq_config = self.sequence_config[0]["seq1"]["acq"]
+        if acq_config["mode"] == "PLAY_AND_RECORD":
+            AnalysisModelSelect.set_data_struct_stimulus_signal(self.data_struct, acq_config["detail"])
 
     def create_layout(self):
         """
@@ -940,29 +947,6 @@ class SequenceWindow(QWidget):
         self.default_ai_result = None
         self.default_ai = None
         self.clicked_scanner()
-
-    def get_stimulus_from_config(self):
-        """
-            Retrieves stimulus information and signal from the configuration.
-
-            This function attempts to load stimulus information from a JSON configuration file and then loads the audio
-        signal based on the configuration.
-            If the loading is successful and the configuration is valid, it parses and returns the stimulus information
-        and the audio signal.
-            If the loading fails or the configuration is invalid, it returns None.
-
-            Returns:
-                tuple: A tuple containing the stimulus information dictionary and the audio signal.
-                    Returns (None, None) if the loading fails or the configuration is invalid.
-        """
-        load_code, result = StimulusSignalManagement().load_stimulus_from_json()
-        if load_code == error_code.OK and result:
-            info = result.get("stimulus_info")
-            path = DEFAULT_DIR + result.get("stimulus_signal_path")
-            stimulus, _ = load_audio_simple(path, info["sample_rate"])
-            return info, stimulus
-        else:
-            return None, None
 
     def save_recorded_data_to_json(self, start_position=None):
         """
