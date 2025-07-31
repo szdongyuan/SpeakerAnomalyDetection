@@ -324,6 +324,7 @@ class OptionList(QListView):
         self.all_ai_item = []
         self.config = list()
         self.drop_is_accept = True
+        self.signal_len = 0
         self.load_model_config(DEFAULT_DIR + "ui/ui_config/sequence_config.json")
 
         self.mousePressEvent = self.mousepressevent
@@ -472,6 +473,12 @@ class OptionList(QListView):
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
+                if "播放与录制" in name:
+                    self.signal_len = int(
+                        result['stimulus_info']['total_time'] * result['stimulus_info']['sample_rate'])
+                elif "录制音频" in name:
+                    self.signal_len = int(result['total_time'] * result['sample_rate'])
+
         elif name in self.config[0].display_sequence:
             prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
             model_type = None
@@ -482,7 +489,7 @@ class OptionList(QListView):
             if self.config[0].analysis_list.get(name):
                 config_manager.config = self.config[0].analysis_list
                 model_type = name
-            model = self.create_config_dialog(model, config_manager, model_type, type)
+            model = self.create_config_dialog(model, config_manager, model_type, type, self.signal_len)
             model.setWindowTitle(name)
             if model.exec_() == QDialog.Accepted:
                 config_data = model.on_click_ok_btn()
@@ -497,7 +504,7 @@ class OptionList(QListView):
             self.default_logger.error(f"load default stimulus config error {data}")
             return False, {}
 
-    def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type):
+    def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type, signal_len):
         if type == "SPL":
             model = SplConfigWindow(config_manager, name)
         elif type == "FR":
@@ -505,7 +512,7 @@ class OptionList(QListView):
         elif type == "HD":
             model = HdConfigWindow(config_manager, name)
         elif type == "AI":
-            model = AIConfigWindow(config_manager, name)
+            model = AIConfigWindow(config_manager, name, signal_len)
         elif type == "Spec":
             model = SpecConfigWindow(config_manager, name)
         elif type == "LP":
@@ -901,7 +908,7 @@ class OptionList(QListView):
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
-            seq_item.detail = {"total_time": 5.0, "sample_rate": 44100}
+            seq_item.detail = {"total_time": 4.0, "sample_rate": 44100}
         self.config.append(seq_item)
 
         self.model().insertRow(0, list_item)
