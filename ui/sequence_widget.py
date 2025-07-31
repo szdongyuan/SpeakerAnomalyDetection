@@ -110,12 +110,12 @@ class SequenceWindow(QWidget):
         sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         self.update_mode_display(0)
         self.setStyleSheet(
-            ui_style_const.qcombobox_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qlineedit_stytle
-            + ui_style_const.qframe_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qcheckbox_stytle
+            ui_style_const.qcombobox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qframe_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcheckbox_style
         )
 
     def update_sequence_and_analysis_config(self):
@@ -147,14 +147,14 @@ class SequenceWindow(QWidget):
         """
         self.player_btn.setFixedSize(100, 40)
         self.player_btn.setToolTip("播放")
-        self.player_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
+        self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
         self.replayer_btn.setFixedSize(100, 40)
         self.replayer_btn.setToolTip("重播")
         self.replayer_btn.setDisabled(True)
-        self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
+        self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
         self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record())
@@ -162,7 +162,7 @@ class SequenceWindow(QWidget):
         self.data_btn.setFixedSize(100, 40)
         self.data_btn.setToolTip("分析")
         self.data_btn.setEnabled(False)
-        self.data_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
+        self.data_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
         self.data_btn.setIconSize(QSize(35, 35))
 
@@ -466,7 +466,7 @@ class SequenceWindow(QWidget):
         reset_btn_layout = QHBoxLayout()
         reset_btn_layout.addStretch()
         self.reset_btn = QPushButton("重置统计")
-        self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_stytle)
+        self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
         reset_btn_layout.addWidget(self.reset_btn)
         reset_btn_layout.addStretch()
         self.reset_btn.clicked.connect(self.reset_test_reord)
@@ -525,11 +525,11 @@ class SequenceWindow(QWidget):
         ng_layout.addWidget(self.ng_btn)
         ng_layout.addStretch()
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
+        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
         self.ok_btn.setFixedSize(180, 80)
         self.ok_btn.setIconSize(QSize(24, 24))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_stytle)
+        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
         self.ng_btn.setFixedSize(180, 80)
         self.ng_btn.setIconSize(QSize(24, 24))
 

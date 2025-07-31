@@ -82,7 +82,7 @@ class StimulusWindow(QDialog):
         self.original_stimulus_signal_length = self.stimulus_info.get("sample_rate") * original_total_time
 
     def init_ui(self):
-        # set window titlebar stytle
+        # set window titlebar style
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("激励信号")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -171,13 +171,13 @@ class StimulusWindow(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(
-            ui_style_const.qcombobox_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qspinbox_stytle
-            + ui_style_const.qdoublespinbox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qcheckbox_stytle
-            + ui_style_const.qgroupbox_stytle
+            ui_style_const.qcombobox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qspinbox_style
+            + ui_style_const.qdoublespinbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcheckbox_style
+            + ui_style_const.qgroupbox_style
         )
 
     def switch_connection_on(self):
@@ -954,7 +954,7 @@ class SetConfigName(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(
-            ui_style_const.qpushbutton_stytle + ui_style_const.qlineedit_stytle + ui_style_const.qlabel_stytle
+            ui_style_const.qpushbutton_style + ui_style_const.qlineedit_style + ui_style_const.qlabel_style
         )
 
     @staticmethod

@@ -29,9 +29,9 @@ class LoadStimulusDialog(QDialog):
         self.resize(957, 300)
         self.setup_main_layout()
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qtableview_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style +
+                           ui_style_const.qtableview_style +
+                           ui_style_const.qlabel_style)
 
     def setup_main_layout(self):
         main_layout = QVBoxLayout()
@@ -114,10 +114,10 @@ class StimulusConfigView(QTableView):
         self.clicked.connect(self.on_item_clicked)
         # Set up a slot function for multi - selection.
         self.selectionModel().selectionChanged.connect(self.clear_select_stumulus_row)
-        self.create_model_stytle()
-        self.setStyleSheet(ui_style_const.qlabel_stytle)
+        self.create_model_style()
+        self.setStyleSheet(ui_style_const.qlabel_style)
 
-    def create_model_stytle(self):
+    def create_model_style(self):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
 

@@ -99,10 +99,10 @@ class LoginWindow(QDialog):
         self.setLayout(layout)
         self.login_button.setDefault(True)
 
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qcombobox_style +
+                           ui_style_const.qpushbutton_style +
+                           ui_style_const.qlineedit_style +
+                           ui_style_const.qlabel_style)
 
     def access_add_account(self):
         if self.access_selection.currentText() != "管理员":
@@ -264,10 +264,10 @@ class AddAccountWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qcombobox_style +
+                           ui_style_const.qpushbutton_style +
+                           ui_style_const.qlineedit_style +
+                           ui_style_const.qlabel_style)
 
     def add_user_click(self):
         username = self.username_input.text()
@@ -368,10 +368,10 @@ class ChangePwdWindow(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + 
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style + 
+                           ui_style_const.qlineedit_style +
+                           ui_style_const.qlabel_style +
+                           ui_style_const.qlabel_style)
 
     def change_pwd_click(self):
         if not self.password_input.text():

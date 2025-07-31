@@ -1,4 +1,4 @@
-qpushbutton_stytle = """
+qpushbutton_style = """
             QPushButton {
                 border-left: 1px solid rgb(128, 128, 128);
                 border-top: 1px solid rgb(128, 128, 128);
@@ -20,7 +20,7 @@ qpushbutton_stytle = """
                 border-color: #3333ff;
             }
         """
-qlineedit_stytle = """
+qlineedit_style = """
             QLineEdit {
                 border: 1px solid rgb(122, 122, 122);
                 font-family: 'SimSun';
@@ -33,7 +33,7 @@ qlineedit_stytle = """
                 color: #808080;
             }
         """
-qcombobox_stytle = """
+qcombobox_style = """
             QComboBox {
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
@@ -43,7 +43,7 @@ qcombobox_stytle = """
                 padding: 3px;
             }
         """
-qgroupbox_stytle = """
+qgroupbox_style = """
             QGroupBox {
                 background: transparent;
                 font-size: 20px;
@@ -56,7 +56,7 @@ qgroupbox_stytle = """
                 margin-top: 0px;
             }
         """
-qspinbox_stytle = """
+qspinbox_style = """
             QSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
@@ -72,7 +72,7 @@ qspinbox_stytle = """
                 width: 20px;
             }
         """
-qdoublespinbox_stytle = """
+qdoublespinbox_style = """
             QDoubleSpinBox {
                 background-color: rgb(225, 225, 225);
                 border: 1px solid rgb(173, 173, 173);
@@ -89,13 +89,13 @@ qdoublespinbox_stytle = """
             }
         """
 
-qdialog_stytle = """
+qdialog_style = """
             QDialog {
                 border-radius: 20px;
             }
 """
 
-qlabel_stytle = """
+qlabel_style = """
             QLabel {
                 font-family: 'SimSun';
                 font-size: 20px;
@@ -103,7 +103,7 @@ qlabel_stytle = """
             }
 """
 
-sequence_qlabel_stytle = """
+sequence_qlabel_style = """
             QLabel {
                 background-color: #4472c4;
                 color: white;
@@ -112,7 +112,7 @@ sequence_qlabel_stytle = """
             }
 """
 
-sequence_qpushbutton_stytle = """
+sequence_qpushbutton_style = """
             QPushButton {
                 background-color: #d0ceca;
                 color: black;
@@ -132,7 +132,7 @@ sequence_qpushbutton_stytle = """
             
 """
 
-main_window_menubar_stytle = """
+main_window_menubar_style = """
             QMenuBar {
                 background-color:transparent;
                 font-family: 'SimSun';
@@ -153,18 +153,18 @@ main_window_menubar_stytle = """
             }
 """
 
-qframe_stytle = """
+qframe_style = """
             QFrame {
                 color: rgb(173, 173, 173);
             }
 """
-hardware_qframe_stytle = """
+hardware_qframe_style = """
             QFrame {
                 color: rgb(204, 204, 204);
             }
 """
 
-toolbar_button_stytle = """
+toolbar_button_style = """
             QPushButton {
                 border: None;
                 background-color: transparent;
@@ -176,41 +176,41 @@ toolbar_button_stytle = """
             }
 """
 
-qcheckbox_stytle = """
+qcheckbox_style = """
             QCheckBox {
                 font-family: 'SimSun';
                 font-size: 20px;
             }
 """
 
-qlistview_stytle = """
+qlistview_style = """
             QListView {
                 font-family: 'SimSun';
                 font-size: 20px;
             }
 """
 
-qmainwindow_stytle = """
+qmainwindow_style = """
             QMainWindow  {
                 background-color: #f0f0f0;
                 border: 1px solid rgb(0, 0, 0);
             }
 """
 
-qradiobutton_stytle = """
+qradiobutton_style = """
             QRadioButton {
                 font-family: 'SimSun';
                 font-size: 20px;
             }
 """
 
-qtabwidget_stytle = """
+qtabwidget_style = """
             QTabWidget {
                 font-family: 'SimSun';
                 font-size: 20px;
             }
 """
-qtextedit_stytle = """                    
+qtextedit_style = """                    
             QTextEdit{
                 background-color: white;
                 font-family: 'SimSun';
@@ -221,7 +221,7 @@ qtextedit_stytle = """
             }
 """
 
-qtableview_stytle = """
+qtableview_style = """
             QTableView {
                 font-family: 'SimSun';
                 font-size: 20px;
@@ -239,7 +239,7 @@ qtableview_stytle = """
             }
 """
 
-qtreeview_stytle = """
+qtreeview_style = """
             QTreeView {
                 font-family: 'SimSun';
                 font-size: 20px;

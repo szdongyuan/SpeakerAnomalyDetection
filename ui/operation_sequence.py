@@ -49,7 +49,7 @@ class AnalysisModelSelect(QDialog):
         add_analysis_btn = QPushButton()
         add_analysis_btn.setDisabled(True)
         add_analysis_btn.setToolTip("添加分析")
-        add_analysis_btn.setStyleSheet(ui_style_const.toolbar_button_stytle)
+        add_analysis_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         add_analysis_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/right_arrow.svg"))
         add_analysis_btn.setFixedSize(50, 50)
         add_analysis_btn.setIconSize(QSize(50, 50))
@@ -68,12 +68,12 @@ class AnalysisModelSelect(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(
-            ui_style_const.qcombobox_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qcheckbox_stytle
-            + ui_style_const.qlistview_stytle
-            + ui_style_const.qtreeview_stytle
+            ui_style_const.qcombobox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcheckbox_style
+            + ui_style_const.qlistview_style
+            + ui_style_const.qtreeview_style
         )
 
     def add_analysis_btn_clicked(self):
@@ -386,7 +386,7 @@ class OptionList(QListView):
         index = self.indexAt(pos)
         if index.isValid():
             menu = QMenu(self)
-            menu.setStyleSheet(ui_style_const.main_window_menubar_stytle)
+            menu.setStyleSheet(ui_style_const.main_window_menubar_style)
             open_action = QAction("打开", self)
             open_action.triggered.connect(lambda: self.show_dialog(index.data()))
             delete_action = QAction("删除", self)

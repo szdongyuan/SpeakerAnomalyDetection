@@ -57,11 +57,11 @@ class AiWindow(QDialog):
         btn_function_layout.addWidget(evaluate_group_box)
 
         self.setLayout(btn_function_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qcombobox_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style +
+                           ui_style_const.qlineedit_style +
+                           ui_style_const.qlabel_style +
+                           ui_style_const.qgroupbox_style +
+                           ui_style_const.qcombobox_style)
         
     def create_train_group_box(self):
         train_group_box = QGroupBox("训练")
