@@ -146,13 +146,22 @@ class audioDataManageDialog(QDialog):
         self.packaging_progress.setWindowModality(Qt.WindowModal)
         self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
         self.packaging_progress.close()
-        package_name, ok = QInputDialog.getText(self, "输入打包名称", "请输入打包的名称：")
 
-        if package_name:
-            output_dir = os.path.join(model_consts.STORED_PACKAGE_PATH, package_name)
-            packaging_path = FileOps.copy_with_selected_wav(file_path_list, output_dir)
-        elif ok:
-            packaging_path = FileOps.copy_with_selected_wav(file_path_list)
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("输入打包名称")
+        dialog.setLabelText("请输入打包的名称：")
+        dialog.setOkButtonText("确认")
+        dialog.setCancelButtonText("取消")
+
+        ok = dialog.exec_()
+        package_name = dialog.textValue()
+
+        if ok:
+            if package_name:
+                output_dir = os.path.join(model_consts.STORED_PACKAGE_PATH, package_name)
+                packaging_path = FileOps.copy_with_selected_wav(file_path_list, output_dir)
+            else:
+                packaging_path = FileOps.copy_with_selected_wav(file_path_list)
         else:
             self.packaging_progress.close()
             self.packaging_progress = None
@@ -634,7 +643,7 @@ class audioDataView(QTableView):
             self.audio_data_model.setItem(row, 3, QStandardItem(item[5]))
             self.audio_data_model.setItem(row, 4, QStandardItem(str(item[3])))
             self.audio_data_model.setItem(row, 5, QStandardItem(item[4]))
-            self.audio_data_model.setItem(row, 6, QStandardItem(stimulus_name[item[7]]))
+            self.audio_data_model.setItem(row, 6, QStandardItem(stimulus_name.get(item[7], "无激励信号")))
         self.resizeColumnsToContents()
         self.resizeRowsToContents()
         self.is_send_signal = True
