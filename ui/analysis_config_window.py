@@ -44,12 +44,12 @@ class SplConfigWindow(QDialog):
         layout.setSpacing(10)
         self.setLayout(layout)
         self.setStyleSheet(
-            ui_style_const.qcheckbox_stytle
-            + ui_style_const.qgroupbox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qlineedit_stytle
-            + ui_style_const.qradiobutton_stytle
-            + ui_style_const.qpushbutton_stytle
+            ui_style_const.qcheckbox_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qradiobutton_style
+            + ui_style_const.qpushbutton_style
         )
 
     def create_limit(self):
@@ -223,12 +223,12 @@ class FrConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(
-            ui_style_const.qcheckbox_stytle
-            + ui_style_const.qlineedit_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qgroupbox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qradiobutton_stytle
+            ui_style_const.qcheckbox_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qradiobutton_style
         )
 
     def create_limit(self):
@@ -413,10 +413,10 @@ class HdConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(
-            ui_style_const.qgroupbox_stytle
-            + ui_style_const.qcheckbox_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qlabel_stytle
+            ui_style_const.qgroupbox_style
+            + ui_style_const.qcheckbox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qlabel_style
         )
 
     def create_harmonic_slider_layout(self):
@@ -541,10 +541,10 @@ class AIConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(
-            ui_style_const.qgroupbox_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qcombobox_stytle
+            ui_style_const.qgroupbox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcombobox_style
         )
 
     def cheack_model_list(self):
@@ -645,10 +645,10 @@ class SpecConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(
-            ui_style_const.qgroupbox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qcombobox_stytle
+            ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qcombobox_style
         )
 
     def create_spec_param(self):
@@ -765,10 +765,10 @@ class LPConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.setStyleSheet(
-            ui_style_const.qlabel_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qspinbox_stytle
-            + ui_style_const.qgroupbox_stytle
+            ui_style_const.qlabel_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qspinbox_style
+            + ui_style_const.qgroupbox_style
         )
 
     def create_lp_config_box(self):

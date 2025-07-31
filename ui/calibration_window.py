@@ -51,8 +51,8 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout.addWidget(self.tabwidget)
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + 
-                           ui_style_const.qtabwidget_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style + 
+                           ui_style_const.qtabwidget_style)
 
     def create_btn_box(self):
         """
@@ -173,12 +173,12 @@ class OutputCalibration(QWidget):
         layout.addItem(v_spacer_3)
         layout.setContentsMargins(12, 20, 12, 25)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qspinbox_stytle +
-                           ui_style_const.qdoublespinbox_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qcombobox_style +
+                           ui_style_const.qpushbutton_style +
+                           ui_style_const.qspinbox_style +
+                           ui_style_const.qdoublespinbox_style +
+                           ui_style_const.qgroupbox_style +
+                           ui_style_const.qlabel_style)
 
     def create_calibration_param_box(self):
         """
@@ -564,14 +564,14 @@ class InputCalibration(QWidget):
         layout.setContentsMargins(12, 20, 12, 25)
 
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcombobox_stytle +
-                           ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qspinbox_stytle +
-                           ui_style_const.qdoublespinbox_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qlineedit_stytle +
-                           ui_style_const.qradiobutton_stytle
+        self.setStyleSheet(ui_style_const.qcombobox_style +
+                           ui_style_const.qpushbutton_style +
+                           ui_style_const.qspinbox_style +
+                           ui_style_const.qdoublespinbox_style +
+                           ui_style_const.qgroupbox_style +
+                           ui_style_const.qlabel_style +
+                           ui_style_const.qlineedit_style +
+                           ui_style_const.qradiobutton_style
                            )
 
     def create_deviation_spl_box(self):

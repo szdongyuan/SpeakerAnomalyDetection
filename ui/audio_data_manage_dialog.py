@@ -64,13 +64,13 @@ class audioDataManageDialog(QDialog):
         self.set_select_wave_num_text(0)
 
         self.setStyleSheet(
-            ui_style_const.qcheckbox_stytle
-            + ui_style_const.qgroupbox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qcombobox_stytle
-            + ui_style_const.qtableview_stytle
-            + ui_style_const.qlineedit_stytle
+            ui_style_const.qcheckbox_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qcombobox_style
+            + ui_style_const.qtableview_style
+            + ui_style_const.qlineedit_style
         )
 
     def create_select_layout(self):
@@ -334,11 +334,11 @@ class FilterAudioDialog(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(
-            ui_style_const.qcheckbox_stytle
-            + ui_style_const.qcombobox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qpushbutton_stytle
-            + ui_style_const.qgroupbox_stytle
+            ui_style_const.qcheckbox_style
+            + ui_style_const.qcombobox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qgroupbox_style
         )
 
     def set_date_filter_groupbox(self):

@@ -36,7 +36,7 @@ class ModelInfoList(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle + ui_style_const.qtableview_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style + ui_style_const.qtableview_style)
 
     def create_model_info_list_layout(self):
         layout = QVBoxLayout()
@@ -90,7 +90,7 @@ class MytableView(QTableView):
         self.clicked.connect(self.on_item_clicked)
         # Set up a slot function for multi - selection.
         self.selectionModel().selectionChanged.connect(self.clear_select_model_row)
-        self.setStyleSheet(ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qlabel_style)
 
     def clear_select_model_row(self):
         self.select_model_row = None
@@ -109,7 +109,7 @@ class MytableView(QTableView):
         else:
             return
 
-    def create_model_stytle(self):
+    def create_model_style(self):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
@@ -190,7 +190,7 @@ class MytableView(QTableView):
             self.add_model_info_to_model(model_info=query_result)
             query_result = list(map(list, query_result))
             self.model_info = query_result
-        self.create_model_stytle()
+        self.create_model_style()
 
     def clear_selected_cells(self):
         selection_model = self.selectionModel()
@@ -442,11 +442,11 @@ class SetModelConfig(QDialog):
         self.setLayout(layout)
 
         self.setStyleSheet(
-            ui_style_const.qpushbutton_stytle
-            + ui_style_const.qlineedit_stytle
-            + ui_style_const.qgroupbox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qcombobox_stytle
+            ui_style_const.qpushbutton_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcombobox_style
         )
 
     def check_model_name(self, model_name: str):

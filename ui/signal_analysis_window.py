@@ -328,7 +328,7 @@ class AI(QWidget):
         self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_textedit.setDisabled(True)
 
-        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_stytle)
+        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_style)
         analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
 

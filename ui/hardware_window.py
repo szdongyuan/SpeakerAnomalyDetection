@@ -40,10 +40,10 @@ class HardwareWindow(QDialog):
         layout.addWidget(mic_box)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qgroupbox_stytle +
-                           ui_style_const.qlabel_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style +
+                           ui_style_const.qgroupbox_style +
+                           ui_style_const.qgroupbox_style +
+                           ui_style_const.qlabel_style)
 
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
@@ -224,7 +224,7 @@ class DeviceListWindow(QDialog):
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFixedHeight(20)
-        line.setStyleSheet(ui_style_const.hardware_qframe_stytle)
+        line.setStyleSheet(ui_style_const.hardware_qframe_style)
         layout = QVBoxLayout()
         layout.addLayout(api_layout)
         layout.addWidget(line)
@@ -232,10 +232,10 @@ class DeviceListWindow(QDialog):
         layout.addItem(item_spacer)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_stytle +
-                           ui_style_const.qlabel_stytle +
-                           ui_style_const.qcombobox_stytle +
-                           ui_style_const.qlistview_stytle)
+        self.setStyleSheet(ui_style_const.qpushbutton_style +
+                           ui_style_const.qlabel_style +
+                           ui_style_const.qcombobox_style +
+                           ui_style_const.qlistview_style)
 
     def update_api_device(self):
         item_model = QStandardItemModel()

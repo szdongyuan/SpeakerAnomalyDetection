@@ -29,13 +29,13 @@ class BaseConfigWindow(QDialog):
         self.main_layout = QVBoxLayout(self)
 
         self.setStyleSheet(
-            ui_style_const.qgroupbox_stytle
-            + ui_style_const.qlineedit_stytle
-            + ui_style_const.qcombobox_stytle
-            + ui_style_const.qlabel_stytle
-            + ui_style_const.qspinbox_stytle
-            + ui_style_const.qdoublespinbox_stytle
-            + ui_style_const.qpushbutton_stytle
+            ui_style_const.qgroupbox_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qcombobox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qspinbox_style
+            + ui_style_const.qdoublespinbox_style
+            + ui_style_const.qpushbutton_style
         )
 
     def create_cancel_ok_buttons(self):
@@ -142,7 +142,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
             self.stimulus_config_data = self.stimulus_window.final_save_data
             self.stimulus_signal = self.stimulus_window.stimulus_data
             total_time = self.update_ui_total_time(self.stimulus_config_data["stimulus_info"])
-            self.time_input.setText(f"{total_time} 秒")
+            self.time_input.setText(f"{total_time:.1f} 秒")
 
     def update_ui_total_time(self, stimulus_info):
         if stimulus_info["use_custom_stimulus"]:

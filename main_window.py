@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
         self.setStyleSheet(
-            ui_style_const.qlabel_stytle + ui_style_const.qpushbutton_stytle + ui_style_const.qmainwindow_stytle
+            ui_style_const.qlabel_style + ui_style_const.qpushbutton_style + ui_style_const.qmainwindow_style
         )
         self.get_current_version()
 
@@ -184,7 +184,7 @@ class MainWindow(QMainWindow):
     def init_menu(self):
         # create menu bar, and link the menu bar to action
         menu_bar = QMenuBar()
-        menu_bar.setStyleSheet(ui_style_const.main_window_menubar_stytle)
+        menu_bar.setStyleSheet(ui_style_const.main_window_menubar_style)
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
@@ -246,9 +246,9 @@ class MainWindow(QMainWindow):
         # create status bar, show the user data and device data, and close drag status bar modify window size
         self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
-        self.user_label.setStyleSheet(ui_style_const.qlabel_stytle)
+        self.user_label.setStyleSheet(ui_style_const.qlabel_style)
         self.device_label = QLabel()
-        self.device_label.setStyleSheet(ui_style_const.qlabel_stytle)
+        self.device_label.setStyleSheet(ui_style_const.qlabel_style)
         self.update_statusbar()
 
         statusbar = QStatusBar()
