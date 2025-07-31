@@ -202,6 +202,8 @@ class StimulusWindow(QDialog):
         self.step_box.valueChanged.connect(
             lambda: self.update_stimulus_info_from_controller(self.step_box, "num_steps")
         )
+        self.voltage_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_voltage_combo_box)
+
         self.voltage_spin_box.valueChanged.connect(
             lambda: self.update_stimulus_info_from_controller(self.voltage_spin_box, "voltage")
         )
@@ -418,8 +420,11 @@ class StimulusWindow(QDialog):
     def update_stimulus_info_from_controller(self, controller, data_type: str):
         if data_type == "sample_rate":
             self.stimulus_info[data_type] = int(controller.currentText())
-        elif data_type == "voltage" or data_type == "total_time":
+        elif data_type == "total_time":
             self.stimulus_info[data_type] = float(controller.value())
+        elif data_type == "voltage":
+            self.stimulus_info[data_type] = float(controller.value())
+            self.update_amplitude()
         else:
             self.stimulus_info[data_type] = int(controller.value())
         if self.stimulus_info.get("use_custom_stimulus", False):

@@ -520,8 +520,9 @@ class HdConfigWindow(QDialog):
 
 
 class AIConfigWindow(QDialog):
-    def __init__(self, config_manager, model_type):
+    def __init__(self, config_manager, model_type, signal_len=None):
         super().__init__()
+        self.signal_len = signal_len
         self.config_manager = config_manager
         self.model_list = self.load_model_name_from_db()
         self.load_config = self.config_manager.load_config().get(model_type, {})
@@ -577,23 +578,12 @@ class AIConfigWindow(QDialog):
             for idx, name in enumerate(query_result):
                 query_result_idx = query_result[idx]
                 input_dim = int(query_result_idx[1].split(" ")[0])
-                code, stimulus_len = self.get_stimulus_len_from_json()
-                if code != error_code.OK:
+                if not self.signal_len:
                     model_list.append(query_result_idx[0])
                 else:
-                    if input_dim == stimulus_len:
+                    if input_dim == self.signal_len:
                         model_list.append(query_result_idx[0])
         return model_list
-
-    @staticmethod
-    def get_stimulus_len_from_json():
-        json_file_path = DEFAULT_DIR + "ui/ui_config/stimulus.json"
-        if not os.path.exists(json_file_path):
-            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        with open(json_file_path, "r") as json_file:
-            data = json.load(json_file)
-            stimulus_len = data["stimulus_info"]["total_time"] * data["stimulus_info"]["sample_rate"]
-            return error_code.OK, stimulus_len
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
