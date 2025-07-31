@@ -1,4 +1,5 @@
 import sys
+from copy import deepcopy
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
@@ -61,11 +62,11 @@ class BaseConfigWindow(QDialog):
 
 
 class PlayRecordConfigWindow(BaseConfigWindow):
-    def __init__(self, stimulus_data):
+    def __init__(self, stimulus_config_data):
         super().__init__()
-        self.stimulus_data = stimulus_data
+        self.stimulus_config_data = deepcopy(stimulus_config_data)
         self.clicked_stimulus_btn_flag = False
-        self.final_stimulus_data = None
+        self.stimulus_signal = None
         _, self.speaker = SoundDeviceManager().get_default_device("speaker")
         self.init_ui()
 
@@ -87,7 +88,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         label_time = QLabel("音频时长:")
 
         self.time_input = QLineEdit()
-        total_time = self.stimulus_data["stimulus_info"]["total_time"]
+        total_time = self.stimulus_config_data["stimulus_info"]["total_time"]
         self.time_input.setText(f"{total_time:.1f} 秒")
         self.time_input.setReadOnly(True)
 
@@ -130,23 +131,26 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return out_group_box
 
     def on_click_ok_btn(self):
-        if self.clicked_stimulus_btn_flag:
-            self.final_data = self.final_stimulus_data
-            self.accept()
-        else:
-            QMessageBox.warning(self, "设置警告", "请先点击“激励信号配置”按钮完成配置!")
+        self.final_data = self.stimulus_config_data
+        self.accept()
 
     def open_stimulus_window(self):
         self.clicked_stimulus_btn_flag = True
-        self.stimulus_window = StimulusWindow(stimulus_data=self.stimulus_data)
+        self.stimulus_window = StimulusWindow(stimulus_config_data=self.stimulus_config_data)
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
-            self.final_stimulus_data = self.stimulus_window.final_save_data
-            self.stimulus_data = self.final_stimulus_data
-            total_time = self.stimulus_data["stimulus_info"]["total_time"]
+            self.stimulus_config_data = self.stimulus_window.final_save_data
+            self.stimulus_signal = self.stimulus_window.stimulus_data
+            total_time = self.update_ui_total_time(self.stimulus_config_data["stimulus_info"])
             self.time_input.setText(f"{total_time} 秒")
+
+    def update_ui_total_time(self, stimulus_info):
+        if stimulus_info["use_custom_stimulus"]:
+            return stimulus_info["total_time"]
         else:
-            self.final_stimulus_data = self.stimulus_data
+            total_time = len(self.stimulus_signal) / stimulus_info["sample_rate"]
+            self.stimulus_config_data["stimulus_info"]["total_time"] = total_time
+            return total_time
 
 
 class RecordConfigWindow(BaseConfigWindow):

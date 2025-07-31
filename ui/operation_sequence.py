@@ -11,6 +11,7 @@ from time import time
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
+from base.load_audio import load_audio_simple
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.utils.custom_signals import sign
@@ -264,9 +265,22 @@ class AnalysisModelSelect(QDialog):
             QMessageBox.warning(self, "警告", "保存配置文件失败")
             self.close()
             return
+        if self.select_list.config:
+            if self.select_list.config[0].mode == 'PLAY_AND_RECORD':
+                data_struct = DataDealStruct()
+                detail = self.select_list.config[0].detail
+                self.set_data_struct_stimulus_signal(data_struct, detail)
         self.update_test_file_current_model()
         sign.update_mode_display_sign.emit(0)
         self.close()
+
+    @staticmethod
+    def set_data_struct_stimulus_signal(data_struct, detail):
+        stimulus_info = detail.get('stimulus_info')
+        path = os.path.join(DEFAULT_DIR, detail.get('stimulus_signal_path', ''))
+        stimulus_signal, _ = load_audio_simple(path, stimulus_info["sample_rate"])
+        data_struct.stimulus_info = stimulus_info
+        data_struct.stimulus_data = stimulus_signal
 
     def update_test_file_current_model(self):
         if self.select_list.config:
