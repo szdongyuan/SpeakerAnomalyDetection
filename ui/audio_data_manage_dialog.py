@@ -150,8 +150,8 @@ class audioDataManageDialog(QDialog):
         dialog = QInputDialog(self)
         dialog.setWindowTitle("输入打包名称")
         dialog.setLabelText("请输入打包的名称：")
-        dialog.setOkButtonText("  确  认  ")
-        dialog.setCancelButtonText("  取  消  ")
+        dialog.setOkButtonText(" 确  认 ")
+        dialog.setCancelButtonText(" 取  消 ")
 
         ok = dialog.exec_()
         package_name = dialog.textValue()
