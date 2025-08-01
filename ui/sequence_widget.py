@@ -133,6 +133,8 @@ class SequenceWindow(QWidget):
         acq_config = self.sequence_config[0]["seq1"]["acq"]
         if acq_config["mode"] == "PLAY_AND_RECORD":
             AnalysisModelSelect.set_data_struct_stimulus_signal(self.data_struct, acq_config["detail"])
+        else:
+            self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
 
     def create_layout(self):
         """
