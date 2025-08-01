@@ -150,6 +150,76 @@ class FileOps(object):
         return output_zip
 
     @staticmethod
+    def create_zip_with_files(file_path_list, output_zip_path=None, base_dir=DEFAULT_DIR, categorize=True, progress_callback=None):
+        """
+        Create a zip archive that contains the given files. zip archive will contains OK/NG/not_labeled subfolders originally
+
+        Parameters
+        ----------
+        file_path_list : list[str]
+            Paths of files to be included in the archive. Relative paths will be
+            evaluated against ``base_dir``.
+        output_zip_path : str, optional
+            Full path of the output zip file. When omitted a file named
+            ``export_YYYYMMDD.zip`` is created under
+            ``model_consts.STORED_PACKAGE_PATH``.
+        base_dir : str, optional
+            Base directory for resolving relative paths. Defaults to ``DEFAULT_DIR``.
+        categorize : bool, optional
+            If True, files whose path contains 'NG', 'OK' or 'not_labeled' will be
+            placed into corresponding sub-folders in the archive. Set False to keep
+            all files in the root of the archive.
+        progress_callback : callable, optional
+            A callback that receives two integers (progress, total) so that UI
+            elements such as progress bars can be updated while the archive is
+            being created.
+
+        Returns
+        -------
+        str
+            Absolute path to the created zip file.
+        """
+        if output_zip_path is None:
+            output_zip_path = os.path.join(
+                model_consts.STORED_PACKAGE_PATH, f"export_{time.strftime('%Y%m%d')}.zip"
+            )
+
+        if not output_zip_path.endswith(".zip"):
+            output_zip_path += ".zip"
+
+        os.makedirs(os.path.dirname(output_zip_path), exist_ok=True)
+
+        total_files = len(file_path_list)
+        progressed = 0
+
+        category_rules = {"NG": "NG", "OK": "OK", "not_labeled": "not_labeled"} if categorize else {}
+
+        with ZipFile(output_zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
+            for path in file_path_list:
+                full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+                rel_path = os.path.relpath(full_path, base_dir)
+
+                arcname = os.path.basename(rel_path)
+                for key, folder in category_rules.items():
+                    if key in rel_path:
+                        arcname = os.path.join(folder, os.path.basename(rel_path))
+                        break
+
+                if rel_path.endswith(".db"):
+                    arcname = os.path.basename(rel_path)
+
+                if os.path.exists(full_path):
+                    zip_file.write(full_path, arcname)
+                else:
+                    pass
+
+                progressed += 1
+                if progress_callback:
+                    progress_callback(progressed, total_files)
+
+        return output_zip_path
+
+    @staticmethod
     def delete_directory(dir_path):
         """
         Recursively deletes a directory and all its contents.
