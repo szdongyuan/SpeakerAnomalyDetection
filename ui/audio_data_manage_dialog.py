@@ -1,7 +1,6 @@
 import copy
 import os
 from re import fullmatch
-from zipfile import ZipFile, ZIP_DEFLATED
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
