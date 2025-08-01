@@ -266,10 +266,12 @@ class AnalysisModelSelect(QDialog):
             self.close()
             return
         if self.select_list.config:
+            data_struct = DataDealStruct()
+            detail = self.select_list.config[0].detail
             if self.select_list.config[0].mode == 'PLAY_AND_RECORD':
-                data_struct = DataDealStruct()
-                detail = self.select_list.config[0].detail
                 self.set_data_struct_stimulus_signal(data_struct, detail)
+            else:
+                data_struct.sample_rate = detail["sample_rate"]
         self.update_test_file_current_model()
         sign.update_mode_display_sign.emit(0)
         self.close()
@@ -281,6 +283,7 @@ class AnalysisModelSelect(QDialog):
         stimulus_signal, _ = load_audio_simple(path, stimulus_info["sample_rate"])
         data_struct.stimulus_info = stimulus_info
         data_struct.stimulus_data = stimulus_signal
+        data_struct.sample_rate = stimulus_info["sample_rate"]
 
     def update_test_file_current_model(self):
         if self.select_list.config:

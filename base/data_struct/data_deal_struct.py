@@ -16,6 +16,7 @@ class DataDealStruct(object):
             self.split_repeat_data = None
             self.stimulus_data = None
             self.stimulus_info = None
+            self.sample_rate = None
 
             self.stft_flag = 0
             self.fft_flag = 0
