@@ -1,11 +1,12 @@
 import copy
 import os
 from re import fullmatch
+from zipfile import ZipFile, ZIP_DEFLATED
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QPushButton, QTableView, QProgressDialog
-from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QInputDialog, QLabel
+from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QInputDialog, QLabel, QFileDialog
 
 from base.file_ops import FileOps
 from base.log_manager import LogManager
@@ -139,43 +140,73 @@ class audioDataManageDialog(QDialog):
             self.show_all_wave()
 
     def on_clicked_package_btn(self):
+        if not self.select_wave_data:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("提示")
+            msg_box.setText("您未选择任何音频进行导出，程序将仅导出数据库，是否确定？")
+            confirm_btn = msg_box.addButton(" 确  认 ", QMessageBox.AcceptRole)
+            cancel_btn = msg_box.addButton(" 取  消 ", QMessageBox.RejectRole)
+            msg_box.exec_()
+            if msg_box.clickedButton() != confirm_btn:
+                return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "选择保存位置",
+            os.path.join(model_consts.STORED_PACKAGE_PATH, "audio_data_export.zip"),
+            "压缩文件 (*.zip)"
+        )
+        
+        if not file_path:
+            return
+        
+        if not file_path.endswith('.zip'):
+            file_path += '.zip'
+        
         file_path_list = [i[1] for i in self.select_wave_data.values()]
         file_path_list.append("database/audio_data.db")
         self.packaging_progress = QProgressDialog("正在打包...", None, 0, len(file_path_list), self)
         self.packaging_progress.setWindowTitle("打包进度")
         self.packaging_progress.setWindowModality(Qt.WindowModal)
         self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
-        self.packaging_progress.close()
-
-        dialog = QInputDialog(self)
-        dialog.setWindowTitle("输入打包名称")
-        dialog.setLabelText("请输入打包的名称：")
-        dialog.setOkButtonText(" 确  认 ")
-        dialog.setCancelButtonText(" 取  消 ")
-
-        ok = dialog.exec_()
-        package_name = dialog.textValue()
-
-        if ok:
-            if package_name:
-                output_dir = os.path.join(model_consts.STORED_PACKAGE_PATH, package_name)
-                packaging_path = FileOps.copy_with_selected_wav(file_path_list, output_dir)
-            else:
-                packaging_path = FileOps.copy_with_selected_wav(file_path_list)
-        else:
-            self.packaging_progress.close()
-            self.packaging_progress = None
-            return
-
+        
         self.packaging_progress.show()
-        FileOps.archive_with_dir(packaging_path, progress_callback=self.update_packaging_progress)
-        code, msg = FileOps.delete_directory(packaging_path)
-        if code == error_code.OK:
-            self.logger.info("success delete packaging path")
+        
+        self._create_zip_file(file_path_list, file_path)
 
         self.audio_data_view.set_all_checkboxes_checked(False)
         self.packaging_progress.close()
         self.packaging_progress = None
+
+    def _create_zip_file(self, file_path_list, output_path):
+        total_files = len(file_path_list)
+        progressed = 0
+        
+        with ZipFile(output_path, "w", compression=ZIP_DEFLATED) as zip_file:
+            for relative_file_path in file_path_list:
+                full_file_path = os.path.join(DEFAULT_DIR, relative_file_path)
+                
+                if "database/audio_data.db" in relative_file_path:
+                    arcname = "audio_data.db"
+                else:
+                    filename = os.path.basename(relative_file_path)
+                    if "NG" in relative_file_path:
+                        arcname = os.path.join("NG", filename)
+                    elif "OK" in relative_file_path:
+                        arcname = os.path.join("OK", filename)
+                    elif "not_labeled" in relative_file_path:
+                        arcname = os.path.join("not_labeled", filename)
+                    else:
+                        arcname = filename
+                
+                if os.path.exists(full_file_path):
+                    zip_file.write(full_file_path, arcname)
+                else:
+                    self.logger.warning(f"文件不存在: {full_file_path}")
+                
+                progressed += 1
+                if self.packaging_progress:
+                    self.update_packaging_progress(progressed, total_files)
 
     def on_clicked_delete_btn(self):
         is_delete_item_list = list()
