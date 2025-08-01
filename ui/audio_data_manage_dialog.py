@@ -6,7 +6,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QPushButton, QTableView, QProgressDialog
-from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QInputDialog, QLabel, QFileDialog
+from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QLabel, QFileDialog, QApplication
 
 from base.file_ops import FileOps
 from base.log_manager import LogManager
@@ -172,41 +172,15 @@ class audioDataManageDialog(QDialog):
         
         self.packaging_progress.show()
         
-        self._create_zip_file(file_path_list, file_path)
+        FileOps.create_zip_with_files(
+            file_path_list,
+            file_path,
+            progress_callback=self.update_packaging_progress
+        )
 
         self.audio_data_view.set_all_checkboxes_checked(False)
         self.packaging_progress.close()
         self.packaging_progress = None
-
-    def _create_zip_file(self, file_path_list, output_path):
-        total_files = len(file_path_list)
-        progressed = 0
-        
-        with ZipFile(output_path, "w", compression=ZIP_DEFLATED) as zip_file:
-            for relative_file_path in file_path_list:
-                full_file_path = os.path.join(DEFAULT_DIR, relative_file_path)
-                
-                if "database/audio_data.db" in relative_file_path:
-                    arcname = "audio_data.db"
-                else:
-                    filename = os.path.basename(relative_file_path)
-                    if "NG" in relative_file_path:
-                        arcname = os.path.join("NG", filename)
-                    elif "OK" in relative_file_path:
-                        arcname = os.path.join("OK", filename)
-                    elif "not_labeled" in relative_file_path:
-                        arcname = os.path.join("not_labeled", filename)
-                    else:
-                        arcname = filename
-                
-                if os.path.exists(full_file_path):
-                    zip_file.write(full_file_path, arcname)
-                else:
-                    self.logger.warning(f"文件不存在: {full_file_path}")
-                
-                progressed += 1
-                if self.packaging_progress:
-                    self.update_packaging_progress(progressed, total_files)
 
     def on_clicked_delete_btn(self):
         is_delete_item_list = list()
@@ -321,6 +295,8 @@ class audioDataManageDialog(QDialog):
 
     def update_packaging_progress(self, progress, total):
         self.packaging_progress.setValue(progress)
+        # force update progress bar
+        QApplication.processEvents()
 
 
 class FilterAudioDialog(QDialog):
