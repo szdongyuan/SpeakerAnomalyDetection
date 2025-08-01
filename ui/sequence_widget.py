@@ -1020,17 +1020,7 @@ class SequenceWindow(QWidget):
 
     def add_recorded_signal_info_to_db(self):
         move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
-        file_path = self.recorded_signal_info["file_path"]
-        if move_recorded_path:
-            file_path = move_recorded_path
-        self.recorded_signal_info["file_path"] = file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().save_signal_info_to_db(
-            self.recorded_signal_info, self.data_struct.stimulus_info
-        )
-        if save_code == error_code.OK:
-            self.default_logger.info("Recorded signal successfully insert.")
-        else:
-            self.default_logger.error("Failed insert recorded signal.")
+        self.update_recorded_signal_info_to_db(move_recorded_path)
 
     def update_recorded_signal_info_to_db(self, new_file_path):
         old_file_path = self.recorded_signal_info["file_path"]
@@ -1115,8 +1105,8 @@ class SequenceWindow(QWidget):
                 TempTcpClient(
                     SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
                 )
-    
-    def judge_play_and_record(self,label = "not_labeled"):
+
+    def judge_play_and_record(self, label="not_labeled"):
         if not self.sequence_config:
             QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
             return
@@ -1199,12 +1189,10 @@ class SequenceWindow(QWidget):
                     record_date,
                     label,
                     barcode,
-                    None, # todo: 
+                    None,  # todo:
                 )
                 with DataSave(model_consts.DATABASE_PATH) as db:
-                    db.insert_data_into_db(
-                        "audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data]
-                    )
+                    db.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
             except Exception as e:
                 if hasattr(self, "default_logger"):
                     self.default_logger.error(f"Insert record (rec only) to DB failed: {e}")
@@ -1216,9 +1204,7 @@ class SequenceWindow(QWidget):
                 recorded_signal, n_fft=1024, hop_length=16, win_length=1024, window="hann"
             )
         if self.data_struct.fft_flag != 0:
-            self.data_struct.fft_result = np.abs(
-                np.fft.fft(recorded_signal)[: sample_rate // 2]
-            )
+            self.data_struct.fft_result = np.abs(np.fft.fft(recorded_signal)[: sample_rate // 2])
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
