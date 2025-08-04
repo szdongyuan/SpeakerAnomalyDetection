@@ -343,7 +343,7 @@ class OptionList(QListView):
         text = self.model().itemFromIndex(item_index).text()
         new_item = QStandardItem(text)
         if self.config[0].default_ai == text:
-            new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/pentagon.png"))
+            new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/star.png"))
         else:
             new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
         if index == "top":
@@ -446,7 +446,7 @@ class OptionList(QListView):
                 prev_ai_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
                 self.prev_select_ai = index
             self.config[0].default_ai = index.data()
-            item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/pentagon.png"))
+            item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/star.png"))
 
     def store_ai_item(self, ai_list: list, name):
         if not name or name in ai_list:
@@ -571,7 +571,7 @@ class OptionList(QListView):
                 self.data_struct.add_stft_or_fft_count(self.config[0].analysis_list[item_name]["type"])
                 if item_name == self.config[0].default_ai:
                     list_item = QStandardItem(item_name)
-                    list_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/pentagon.png"))
+                    list_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/star.png"))
                     self.model().appendRow(list_item)
                     last_row = self.model().rowCount() - 1
                     self.prev_select_ai = self.model().index(last_row, 0)
@@ -751,7 +751,7 @@ class OptionList(QListView):
             text = self.start_index.data()
             new_item = QStandardItem(text)
             if text == self.config[0].default_ai:
-                new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/pentagon.png"))
+                new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/star.png"))
             else:
                 new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
             if row_number == -1:
