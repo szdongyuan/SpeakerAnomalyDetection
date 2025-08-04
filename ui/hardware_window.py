@@ -10,10 +10,10 @@ from consts.running_consts import DEFAULT_DIR
 
 class HardwareWindow(QDialog):
 
-    def __init__(self):
+    def __init__(self, current_speaker=None, current_mic=None):
         super().__init__()
-        self.speaker = None
-        self.mic = None
+        self.speaker = current_speaker
+        self.mic = current_mic
 
         self.init_ui()
         self.refresh_device_display()

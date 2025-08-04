@@ -311,8 +311,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_hardware_window_init(self):
-        # select the mic and speaker
-        dlg = HardwareWindow()
+        dlg = HardwareWindow(self.speaker, self.mic)
         self.speaker, self.mic = dlg.on_exec()
         self.update_statusbar()
         self.sequence_window.mic = self.mic
