@@ -153,29 +153,26 @@ class audioDataManageDialog(QDialog):
             self,
             "选择保存位置",
             os.path.join(model_consts.STORED_PACKAGE_PATH, "audio_data_export.zip"),
-            "压缩文件 (*.zip)"
+            "压缩文件 (*.zip)",
         )
-        
+
         if not file_path:
             return
-        
-        if not file_path.endswith('.zip'):
-            file_path += '.zip'
-        
+
+        if not file_path.endswith(".zip"):
+            file_path += ".zip"
+
         file_path_list = [i[1] for i in self.select_wave_data.values()]
         file_path_list.append("database/audio_data.db")
         self.packaging_progress = QProgressDialog("正在打包...", None, 0, len(file_path_list), self)
         self.packaging_progress.setWindowTitle("打包进度")
         self.packaging_progress.setWindowModality(Qt.WindowModal)
         self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
-        
+
         self.packaging_progress.show()
-        
-        FileOps.create_zip_with_files(
-            file_path_list,
-            file_path,
-            progress_callback=self.update_packaging_progress
-        )
+        QApplication.processEvents()
+
+        FileOps.create_zip_with_files(file_path_list, file_path, progress_callback=self.update_packaging_progress)
 
         self.audio_data_view.set_all_checkboxes_checked(False)
         self.packaging_progress.close()
@@ -294,8 +291,6 @@ class audioDataManageDialog(QDialog):
 
     def update_packaging_progress(self, progress, total):
         self.packaging_progress.setValue(progress)
-        # force update progress bar
-        QApplication.processEvents()
 
 
 class FilterAudioDialog(QDialog):
