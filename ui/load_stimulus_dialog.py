@@ -22,7 +22,6 @@ class LoadStimulusDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("加载激励信号")
-        self.setWindowIcon(QIcon(""))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumSize(QSize(530, 200))

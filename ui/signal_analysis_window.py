@@ -14,12 +14,12 @@ from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.log_manager import LogManager
+from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from main import predict_from_audio
 from ui.graph_widget import plot_2d_image
 
 

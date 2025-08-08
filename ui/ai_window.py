@@ -7,12 +7,14 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton
 from PyQt5.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QMessageBox
 
+from base.evaluate_model import evaluate
 from base.file_ops import FileOps
-from base.training_model_management import TrainingModelManagement
 from base.log_manager import LogManager
+from base.model_config import init_model_from_config
+from base.training_model import train
+from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from main import evaluate, init_model_from_config, train
 from ui.model_manager_widget import ModelInfoList
 
 
