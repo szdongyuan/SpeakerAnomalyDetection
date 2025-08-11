@@ -1,20 +1,22 @@
 import copy
 import os
 from re import fullmatch
+import sys
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QPushButton, QTableView, QProgressDialog
-from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QLabel, QFileDialog, QApplication
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QProgressDialog
+from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QFileDialog, QApplication
 
 from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from consts import error_code, ui_style_const, model_consts
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
-class audioDataManageDialog(QDialog):
+class audioDataManageDialog(DataManageDialog):
 
     def __init__(self, logger: LogManager):
         super(audioDataManageDialog, self).__init__()
@@ -31,83 +33,59 @@ class audioDataManageDialog(QDialog):
         self.stimulus_name = dict()
         self.filter_config = dict()
         self.packaging_progress = None
-        self.audio_data_view = audioDataView(self.logger)
 
         self.all_selected_checkbox = QCheckBox("全选")
         self.package_btn = QPushButton(" 打  包 ")
         self.delete_btn = QPushButton(" 删  除 ")
-        self.select_wave_num = QLabel()
 
-        self.audio_data_view.view_checked_changed.connect(self.on_row_checkbox_toggled)
+        self.init_ui_layout(0, 7, [])
+
+        self.set_view_checked_changed(self.on_row_checkbox_toggled)
 
         self.init_ui()
 
     def init_ui(self):
         self.setWindowTitle("音频数据管理")
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
-        self.resize(900, 400)
-        select_layout = self.create_select_layout()
-        operation_layout = self.create_operation_layout()
+        self.set_checkable_of_column([0])
+        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"])
+        self.verticalHeader().setVisible(False)
 
-        layout = QVBoxLayout()
-        layout.addLayout(select_layout)
-        layout.addWidget(self.audio_data_view)
-        layout.addWidget(self.select_wave_num, alignment=Qt.AlignLeft)
-        layout.addSpacing(4)
-        layout.addLayout(operation_layout)
-
-        self.setLayout(layout)
+        self.set_top_layout()
+        self.set_bottom_layout()
 
         self.load_all_audio_data()
         self.load_audio_data_to_view()
         self.set_select_wave_num_text(0)
 
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qtableview_style
-            + ui_style_const.qlineedit_style
-        )
-
-    def create_select_layout(self):
-        select_layout = QHBoxLayout()
+    def set_top_layout(self):
         filter_btn = QPushButton(" 筛  选 ")
 
         self.all_selected_checkbox.clicked.connect(self.on_all_selected_changed)
         filter_btn.clicked.connect(self.on_click_filter_btn)
 
-        select_layout.addSpacing(4)
-        select_layout.addWidget(self.all_selected_checkbox)
-        select_layout.addStretch()
-        select_layout.addWidget(filter_btn)
+        self.top_layout.addSpacing(4)
+        self.top_layout.addWidget(self.all_selected_checkbox)
+        self.top_layout.addStretch()
+        self.top_layout.addWidget(filter_btn)
 
-        return select_layout
-
-    def create_operation_layout(self):
-        operation_layout = QHBoxLayout()
+    def set_bottom_layout(self):
         all_show_btn = QPushButton("全部显示")
 
         all_show_btn.clicked.connect(self.show_all_wave)
         self.package_btn.clicked.connect(self.on_clicked_package_btn)
         self.delete_btn.clicked.connect(self.on_clicked_delete_btn)
 
-        operation_layout.addWidget(all_show_btn)
-        operation_layout.addStretch()
-        operation_layout.addWidget(self.package_btn)
-        operation_layout.addWidget(self.delete_btn)
-
-        return operation_layout
+        self.bottom_layout.addWidget(all_show_btn)
+        self.bottom_layout.addStretch()
+        self.bottom_layout.addWidget(self.package_btn)
+        self.bottom_layout.addWidget(self.delete_btn)
 
     def on_all_selected_changed(self):
         if self.all_select_flag is True:
-            self.audio_data_view.set_all_checkboxes_checked(False)
+            self.set_all_checkboxes_checked([0], False)
             self.all_select_flag = False
         elif self.all_select_flag is False:
-            self.audio_data_view.set_all_checkboxes_checked(True)
+            self.set_all_checkboxes_checked([0], True)
             self.all_select_flag = True
 
     def show_all_wave(self):
@@ -152,7 +130,7 @@ class audioDataManageDialog(QDialog):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "选择保存位置",
-            os.path.join(model_consts.STORED_PACKAGE_PATH, "audio_data_export.zip"),
+            os.path.join(model_consts.STORED_PACKAGE_PATH, "audio_data_export"),
             "压缩文件 (*.zip)",
         )
 
@@ -168,13 +146,12 @@ class audioDataManageDialog(QDialog):
         self.packaging_progress.setWindowTitle("打包进度")
         self.packaging_progress.setWindowModality(Qt.WindowModal)
         self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
-
         self.packaging_progress.show()
         QApplication.processEvents()
 
         FileOps.create_zip_with_files(file_path_list, file_path, progress_callback=self.update_packaging_progress)
 
-        self.audio_data_view.set_all_checkboxes_checked(False)
+        self.set_all_checkboxes_checked([0], False)
         self.packaging_progress.close()
         self.packaging_progress = None
 
@@ -198,7 +175,7 @@ class audioDataManageDialog(QDialog):
         else:
             self.logger.error(result)
             return
-        self.audio_data_view.del_model_row_with_list(is_delete_item_list)
+        self.data_view.del_model_row_with_list(is_delete_item_list)
         self.select_wave_data = dict()
         self.delete_audio_data_with_id(will_delete_in_db_list)
         self.set_select_wave_num_text(0)
@@ -210,7 +187,6 @@ class audioDataManageDialog(QDialog):
             self.filter_audio_data.clear()
             self.product_model_set.clear()
             self.filter_config.clear()
-            # self.setDisabled(True)
         elif len(self.filter_config) == 1:
             if "select_record_date" in self.filter_config:
                 self.record_date_set.remove(self.filter_config["select_record_date"])
@@ -238,10 +214,31 @@ class audioDataManageDialog(QDialog):
     def load_audio_data_to_view(self):
         self.select_wave_data.clear()
         if self.is_filter_flag is True:
-            self.audio_data_view.load_audio_data_to_model(self.filter_audio_data, self.stimulus_name)
+            self.load_audio_data_to_model(self.filter_audio_data, self.stimulus_name)
         elif self.is_filter_flag is False:
-            result = self.audio_data_view.load_audio_data_to_model(self.all_audio_data, self.stimulus_name)
+            result = self.load_audio_data_to_model(self.all_audio_data, self.stimulus_name)
             self.product_model_set, self.record_date_set = result
+
+    def load_audio_data_to_model(self, audio_data, stimulus_name):
+        self.setRowCount(0)
+        if not audio_data:
+            return set(), set()
+
+        self.is_send_signal = False
+        product_model_set = set()
+        record_date_set = set()
+        for row, item in enumerate(audio_data):
+            product_model_set.add(item[2])
+            record_date_set.add(item[4])
+
+            file_name = item[1].split("/")[-1]
+            row_stimulus_name = stimulus_name.get(item[7], "无激励信号")
+            row_data_list = [None, file_name, item[2], item[5], item[3], item[4], row_stimulus_name]
+            self.add_row_data(row_data_list)
+        self.resizeColumnsToContents()
+        self.resizeRowsToContents()
+        self.is_send_signal = True
+        return product_model_set, record_date_set
 
     def filter_audio_data_at_filter_config(self, filter_config: dict):
         result = self.all_audio_data[:]
@@ -257,15 +254,16 @@ class audioDataManageDialog(QDialog):
             totle_num = len(self.filter_audio_data)
         elif self.is_filter_flag is False:
             totle_num = len(self.all_audio_data)
-        text = "已选择 %s 个文件, 共 %s 个文件" % (select_num, totle_num)
-        self.select_wave_num.setText(text)
+        text = "已选择 %s 个文件, 共 %s 个文件"
+        self.set_select_data_num_text(text, (select_num, totle_num))
 
-    def on_row_checkbox_toggled(self, row, is_checked):
+    def on_row_checkbox_toggled(self, item, is_checked):
         if self.is_filter_flag is True:
             audio_data = self.filter_audio_data
         elif self.is_filter_flag is False:
             audio_data = self.all_audio_data
 
+        row = item.row()
         if is_checked is True:
             self.select_wave_data[str(row)] = [audio_data[row][0], audio_data[row][1]]
         elif is_checked is False:
@@ -594,95 +592,7 @@ class FilterAudioDialog(QDialog):
             return self.is_clicked_ok, result
 
 
-class audioDataView(QTableView):
-    view_checked_changed = pyqtSignal(int, bool)
-
-    def __init__(self, logger: LogManager):
-        super(audioDataView, self).__init__()
-
-        self.logger = logger
-        self.audio_data_model = CustomStandardItemModel(0, 7, [])
-
-        self.setModel(self.audio_data_model)
-        self.verticalHeader().setVisible(False)
-        self.model().itemChanged.connect(self.on_item_changed)
-        self.is_send_signal = True
-
-        self.init_ui()
-
-    def init_ui(self):
-        self.set_header()
-
-    def set_header(self):
-        self.model().setHorizontalHeaderLabels(
-            ["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"]
-        )
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.resizeColumnsToContents()
-
-    def load_audio_data_to_model(self, audio_data, stimulus_name):
-
-        if audio_data:
-            self.audio_data_model.setRowCount(len(audio_data))
-        else:
-            self.audio_data_model.setRowCount(0)
-            return set(), set()
-        self.is_send_signal = False
-        product_model_set = set()
-        record_date_set = set()
-        for row, item in enumerate(audio_data):
-            product_model_set.add(item[2])
-            record_date_set.add(item[4])
-
-            checkbox_item = QStandardItem()
-            checkbox_item.setCheckable(True)
-            self.audio_data_model.setItem(row, 0, checkbox_item)
-
-            file_name = item[1].split("/")[-1]
-            self.audio_data_model.setItem(row, 1, QStandardItem(file_name))
-            self.audio_data_model.setItem(row, 2, QStandardItem(item[2]))
-            self.audio_data_model.setItem(row, 3, QStandardItem(item[5]))
-            self.audio_data_model.setItem(row, 4, QStandardItem(str(item[3])))
-            self.audio_data_model.setItem(row, 5, QStandardItem(item[4]))
-            self.audio_data_model.setItem(row, 6, QStandardItem(stimulus_name.get(item[7], "无激励信号")))
-        self.resizeColumnsToContents()
-        self.resizeRowsToContents()
-        self.is_send_signal = True
-        return product_model_set, record_date_set
-
-    def set_all_checkboxes_checked(self, checked=True):
-        model = self.model()
-        for row in range(model.rowCount()):
-            index = model.index(row, 0)
-            if model.data(index, Qt.CheckStateRole) is not None:
-                model.setData(index, Qt.Checked if checked else Qt.Unchecked, Qt.CheckStateRole)
-
-    def on_item_changed(self, item):
-        if self.is_send_signal is False:
-            return
-        if item.column() == 0:
-            checked = item.checkState() == Qt.Checked
-            self.view_checked_changed.emit(item.row(), checked)
-
-    def del_model_row_with_list(self, row_list: list):
-        new__row_list = sorted(row_list, reverse=True)
-        for row in new__row_list:
-            self.model().removeRow(row)
-
-
-class CustomStandardItemModel(QStandardItemModel):
-
-    def __init__(self, rows, columns, editable_column: list, parent=None):
-        super().__init__(rows, columns, parent)
-        self.editable_column = editable_column
-
-    def flags(self, index):
-        if index.isValid():
-            if index.column() in self.editable_column:
-                return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable
-            else:
-                return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
-        return super().flags(index)
-
-    def setData(self, index, value, role=Qt.EditRole):
-        return super().setData(index, value, role)
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    dialog = audioDataManageDialog(LogManager.set_log_handler("core"))
+    dialog.exec()

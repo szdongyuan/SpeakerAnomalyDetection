@@ -181,6 +181,7 @@ qcheckbox_style = """
                 font-family: 'SimSun';
                 font-size: 20px;
             }
+            QCheckBox:focus { outline: none; }
 """
 
 qlistview_style = """
