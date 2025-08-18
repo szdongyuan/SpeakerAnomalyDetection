@@ -12,7 +12,7 @@ from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
-from ui.audio_data_manage_dialog import audioDataManageDialog
+from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
@@ -46,7 +46,6 @@ class MainWindow(QMainWindow):
         self.mouseMoveEvent = self.mousemoveevent
 
         # set the menubar action
-        # self.function_action_stimulus = QAction("激励信号", self)
         self.function_action_test_sequence = QAction("测试队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_audio_manager = QAction("音频数据管理", self)
@@ -59,7 +58,6 @@ class MainWindow(QMainWindow):
         # set the operator and engineer and admin power
         self.widget_list_operator = [self.user_action_change_pwd]
         self.widget_list_engineer = self.widget_list_operator + [
-            # self.function_action_stimulus,
             self.function_action_test_sequence,
             self.function_action_ai_training,
             self.hardware_action_selection,
@@ -190,9 +188,6 @@ class MainWindow(QMainWindow):
         user_menu = menu_bar.addMenu("用户")
         help_menu = menu_bar.addMenu("帮助")
 
-        # function_menu.addAction(self.function_action_stimulus)
-        # self.function_action_stimulus.triggered.disconnect()
-        # self.function_action_stimulus.triggered.connect(self.on_stimulus_window_init)
         function_menu.addAction(self.function_action_test_sequence)
         self.function_action_test_sequence.triggered.disconnect()
         self.function_action_test_sequence.triggered.connect(self.analysis_model_select)
@@ -227,16 +222,6 @@ class MainWindow(QMainWindow):
 
         return menu_bar
 
-    def on_stimulus_window_init(self):
-        # set the speaker test audio
-        dlg = StimulusWindow()
-        if dlg.is_close_window:
-            QMessageBox.warning(self, "警告", "请先设置校准参数")
-            return
-        dlg.speaker = self.speaker
-        self.refresh_stimulus_flag = dlg.on_exec()
-        self.sequence_window.refresh_stimulus_flag = self.refresh_stimulus_flag
-
     def analysis_model_select(self):
         # Test items for configuring speakers
         analysis_model_select_dialog = AnalysisModelSelect()
@@ -269,7 +254,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def on_audio_manager_init():
-        dlg = audioDataManageDialog(LogManager.set_log_handler("core"))
+        dlg = ArchiveAudioDataDialog(LogManager.set_log_handler("core"))
         dlg.exec()
 
     @staticmethod

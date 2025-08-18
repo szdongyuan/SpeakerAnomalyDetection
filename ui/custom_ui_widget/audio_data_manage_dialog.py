@@ -1,24 +1,50 @@
+"""
+========================================================================================================================
+= Description: Audio data display
+= Author: DY Gao Qiang
+= Date: 2025/08/11
+= Version: 0.25.07.01
+= Function Description:
+    1. Audio data display
+        Load all audio record information from the database
+        Display detailed information of the audio file in the table view, including:
+        File name
+        Product model
+        Audio tag (OK/NG)
+        Sampling rate
+        Recording time
+        Type of excitation signal
+    2. Data filtering function
+        Provide multi-dimensional filtering options
+            Filter by product model
+            Filter by recording date
+            Filter by sampling rate (44100Hz, 48000Hz)
+            Filter by label (OK, NG, unmarked)
+        Support combined filtering conditions
+        Provide the "Display All" function to reset the filter conditions
+
+= History:
+    2025/08/11: Set up the project.
+========================================================================================================================
+"""
+
 import copy
-import os
 from re import fullmatch
-import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QProgressDialog
-from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QFileDialog, QApplication
+from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
 
-from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
-from consts import error_code, ui_style_const, model_consts
+from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
 class audioDataManageDialog(DataManageDialog):
 
-    def __init__(self, logger: LogManager):
+    def __init__(self, logger: LogManager, hide_select_not_label = False):
         super(audioDataManageDialog, self).__init__()
 
         self.logger = logger
@@ -33,25 +59,22 @@ class audioDataManageDialog(DataManageDialog):
         self.stimulus_name = dict()
         self.filter_config = dict()
         self.packaging_progress = None
+        self.is_hide_select_not_label = hide_select_not_label
 
         self.all_selected_checkbox = QCheckBox("全选")
-        self.package_btn = QPushButton(" 打  包 ")
-        self.delete_btn = QPushButton(" 删  除 ")
 
         self.init_ui_layout(0, 7, [])
 
         self.set_view_checked_changed(self.on_row_checkbox_toggled)
 
-        self.init_ui()
+        self.init_base_ui()
 
-    def init_ui(self):
-        self.setWindowTitle("音频数据管理")
+    def init_base_ui(self):
         self.set_checkable_of_column([0])
         self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"])
         self.verticalHeader().setVisible(False)
 
         self.set_top_layout()
-        self.set_bottom_layout()
 
         self.load_all_audio_data()
         self.load_audio_data_to_view()
@@ -68,18 +91,6 @@ class audioDataManageDialog(DataManageDialog):
         self.top_layout.addStretch()
         self.top_layout.addWidget(filter_btn)
 
-    def set_bottom_layout(self):
-        all_show_btn = QPushButton("全部显示")
-
-        all_show_btn.clicked.connect(self.show_all_wave)
-        self.package_btn.clicked.connect(self.on_clicked_package_btn)
-        self.delete_btn.clicked.connect(self.on_clicked_delete_btn)
-
-        self.bottom_layout.addWidget(all_show_btn)
-        self.bottom_layout.addStretch()
-        self.bottom_layout.addWidget(self.package_btn)
-        self.bottom_layout.addWidget(self.delete_btn)
-
     def on_all_selected_changed(self):
         if self.all_select_flag is True:
             self.set_all_checkboxes_checked([0], False)
@@ -88,20 +99,10 @@ class audioDataManageDialog(DataManageDialog):
             self.set_all_checkboxes_checked([0], True)
             self.all_select_flag = True
 
-    def show_all_wave(self):
-        if self.is_filter_flag is False or len(self.all_audio_data) == len(self.filter_audio_data):
-            return
-        self.is_filter_flag = False
-        self.filter_audio_data.clear()
-        self.load_audio_data_to_view()
-        self.filter_config = dict()
-        self.all_selected_checkbox.setChecked(False)
-        self.all_select_flag = False
-        self.set_select_wave_num_text(0)
-
     def on_click_filter_btn(self):
         filter_config = copy.deepcopy(self.filter_config)
         dlg = FilterAudioDialog(self.product_model_set, self.record_date_set, filter_config)
+        dlg.hide_select_not_label_check_box(self.is_hide_select_not_label)
         flag, filter_config = dlg.exec()
         if flag == 1:
             self.filter_config = filter_config
@@ -116,70 +117,16 @@ class audioDataManageDialog(DataManageDialog):
         elif flag == 2:
             self.show_all_wave()
 
-    def on_clicked_package_btn(self):
-        if not self.select_wave_data:
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("提示")
-            msg_box.setText("您未选择任何音频进行导出，程序将仅导出数据库，是否确定？")
-            confirm_btn = msg_box.addButton(" 确  认 ", QMessageBox.AcceptRole)
-            cancel_btn = msg_box.addButton(" 取  消 ", QMessageBox.RejectRole)
-            msg_box.exec_()
-            if msg_box.clickedButton() != confirm_btn:
-                return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "选择保存位置",
-            os.path.join(model_consts.STORED_PACKAGE_PATH, "audio_data_export"),
-            "压缩文件 (*.zip)",
-        )
-
-        if not file_path:
+    def show_all_wave(self):
+        if self.is_filter_flag is False or len(self.all_audio_data) == len(self.filter_audio_data):
             return
-
-        if not file_path.endswith(".zip"):
-            file_path += ".zip"
-
-        file_path_list = [i[1] for i in self.select_wave_data.values()]
-        file_path_list.append("database/audio_data.db")
-        self.packaging_progress = QProgressDialog("正在打包...", None, 0, len(file_path_list), self)
-        self.packaging_progress.setWindowTitle("打包进度")
-        self.packaging_progress.setWindowModality(Qt.WindowModal)
-        self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
-        self.packaging_progress.show()
-        QApplication.processEvents()
-
-        FileOps.create_zip_with_files(file_path_list, file_path, progress_callback=self.update_packaging_progress)
-
-        self.set_all_checkboxes_checked([0], False)
-        self.packaging_progress.close()
-        self.packaging_progress = None
-
-    def on_clicked_delete_btn(self):
-        is_delete_item_list = list()
-        will_delete_in_db_list = list()
-        for key, value in self.select_wave_data.items():
-            file_path = DEFAULT_DIR + value[1]
-            if os.path.isfile(file_path):
-                try:
-                    os.remove(file_path)
-                    is_delete_item_list.append(int(key))
-                    will_delete_in_db_list.append(value[0])
-                except Exception as e:
-                    QMessageBox.warning(self, "警告", "%s" % str(e)[:40])
-            else:
-                will_delete_in_db_list.append(value[0])
-        code, result = self.recording_manager.delete_audio_at_id_list(will_delete_in_db_list)
-        if code == error_code.OK:
-            self.logger.info("success delete audio with will_delete_in_db_list")
-        else:
-            self.logger.error(result)
-            return
-        self.data_view.del_model_row_with_list(is_delete_item_list)
-        self.select_wave_data = dict()
-        self.delete_audio_data_with_id(will_delete_in_db_list)
+        self.is_filter_flag = False
+        self.filter_audio_data.clear()
+        self.load_audio_data_to_view()
+        self.filter_config = dict()
+        self.all_selected_checkbox.setChecked(False)
+        self.all_select_flag = False
         self.set_select_wave_num_text(0)
-        self.update_filter_sets_after_deletion()
 
     def update_filter_sets_after_deletion(self):
         if not self.all_audio_data:
@@ -224,7 +171,6 @@ class audioDataManageDialog(DataManageDialog):
         if not audio_data:
             return set(), set()
 
-        self.is_send_signal = False
         product_model_set = set()
         record_date_set = set()
         for row, item in enumerate(audio_data):
@@ -237,7 +183,6 @@ class audioDataManageDialog(DataManageDialog):
             self.add_row_data(row_data_list)
         self.resizeColumnsToContents()
         self.resizeRowsToContents()
-        self.is_send_signal = True
         return product_model_set, record_date_set
 
     def filter_audio_data_at_filter_config(self, filter_config: dict):
@@ -265,7 +210,7 @@ class audioDataManageDialog(DataManageDialog):
 
         row = item.row()
         if is_checked is True:
-            self.select_wave_data[str(row)] = [audio_data[row][0], audio_data[row][1]]
+            self.select_wave_data[str(row)] = audio_data[row]
         elif is_checked is False:
             self.select_wave_data.pop(str(row))
 
@@ -305,6 +250,7 @@ class FilterAudioDialog(QDialog):
         self.filter_config = filter_config
         self.filter_sample_rate_num = 0
         self.filter_label_num = 0
+        self.sample_rate_filter_layout = QHBoxLayout()
 
         self.is_clicked_ok = False
 
@@ -376,42 +322,49 @@ class FilterAudioDialog(QDialog):
             select_44100_check_box.setChecked(True)
             select_48000_check_box.setChecked(True)
 
-        sample_rate_filter_layout = QHBoxLayout()
-        sample_rate_filter_layout.addWidget(select_44100_check_box, 1)
-        sample_rate_filter_layout.addWidget(select_48000_check_box, 1)
-        sample_rate_filter_layout.addSpacing(10)
-        sample_rate_filter_layout.addStretch(1)
-        sample_rate_groupbox.setLayout(sample_rate_filter_layout)
+        self.sample_rate_filter_layout.addWidget(select_44100_check_box, 1)
+        self.sample_rate_filter_layout.addWidget(select_48000_check_box, 1)
+        
+        sample_rate_groupbox.setLayout(self.sample_rate_filter_layout)
 
         return sample_rate_groupbox
 
     def set_label_filter_groupbox(self):
         label_filter_groupbox = QGroupBox("标签")
-        select_ok_check_box = QCheckBox("OK")
-        select_ng_check_box = QCheckBox("NG")
-        select_not_label_check_box = QCheckBox("未标记")
+        self.select_ok_check_box = QCheckBox("OK")
+        self.select_ng_check_box = QCheckBox("NG")
+        self.select_not_label_check_box = QCheckBox("未标记")
 
-        select_ng_check_box.toggled.connect(self.select_ng_check_box_toggled)
-        select_ok_check_box.toggled.connect(self.select_ok_check_box_toggled)
-        select_not_label_check_box.toggled.connect(self.select_not_label_check_box_toggled)
+        self.select_ng_check_box.toggled.connect(self.select_ng_check_box_toggled)
+        self.select_ok_check_box.toggled.connect(self.select_ok_check_box_toggled)
+        self.select_not_label_check_box.toggled.connect(self.select_not_label_check_box_toggled)
 
         if self.filter_config.get("select_labels"):
-            select_ok_check_box.setChecked("OK" in self.filter_config.get("select_labels"))
-            select_ng_check_box.setChecked("NG" in self.filter_config.get("select_labels"))
-            select_not_label_check_box.setChecked("not_labeled" in self.filter_config.get("select_labels"))
+            self.select_ok_check_box.setChecked("OK" in self.filter_config.get("select_labels"))
+            self.select_ng_check_box.setChecked("NG" in self.filter_config.get("select_labels"))
+            self.select_not_label_check_box.setChecked("not_labeled" in self.filter_config.get("select_labels"))
         elif not self.filter_config:
-            select_ok_check_box.setChecked(True)
-            select_ng_check_box.setChecked(True)
-            select_not_label_check_box.setChecked(True)
+            self.select_ok_check_box.setChecked(True)
+            self.select_ng_check_box.setChecked(True)
+            self.select_not_label_check_box.setChecked(True)
 
         label_filter_layout = QHBoxLayout()
-        label_filter_layout.addWidget(select_ok_check_box, 1)
-        label_filter_layout.addWidget(select_ng_check_box, 1)
-        label_filter_layout.addWidget(select_not_label_check_box, 1)
+        label_filter_layout.addWidget(self.select_ok_check_box, 1)
+        label_filter_layout.addWidget(self.select_ng_check_box, 1)
+        label_filter_layout.addWidget(self.select_not_label_check_box, 1)
 
         label_filter_groupbox.setLayout(label_filter_layout)
 
         return label_filter_groupbox
+    
+    def hide_select_not_label_check_box(self, is_hide: bool):
+        if is_hide:
+            self.select_not_label_check_box.hide()
+            self.select_not_label_check_box.setChecked(False)
+        else:
+            self.sample_rate_filter_layout.addSpacing(10)
+            self.sample_rate_filter_layout.addStretch(1)
+            self.select_not_label_check_box.show()
 
     def create_product_model_filter_groupbox(self):
         product_model_filter_groupbox = QGroupBox("产品型号")
@@ -590,9 +543,3 @@ class FilterAudioDialog(QDialog):
         else:
             result = dict()
             return self.is_clicked_ok, result
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    dialog = audioDataManageDialog(LogManager.set_log_handler("core"))
-    dialog.exec()

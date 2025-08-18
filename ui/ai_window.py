@@ -3,20 +3,19 @@ import sys
 
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QTextCursor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog
-from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton
-from PyQt5.QtWidgets import QTextEdit, QVBoxLayout, QWidget, QMessageBox
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QRadioButton, QWidget, QMessageBox
+from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QVBoxLayout, QFrame
 
-from base.evaluate_model import evaluate
+from base.evaluate_model import evaluate, evaluate_with_data
 from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.model_config import init_model_from_config
-from base.training_model import train
+from base.training_model import train_with_dir, train_with_data, save_trained_model
 from base.training_model_management import TrainingModelManagement
-from consts import error_code, ui_style_const
+from consts import error_code, ui_style_const, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.model_manager_widget import ModelInfoList
-
+from ui.ai_select_audio_data import SelectAudioDataView
 
 default_log = LogManager.set_log_handler("train")
 
@@ -25,8 +24,8 @@ class AiWindow(QDialog):
 
     def __init__(self, logger=default_log):
         """
-            Initialization function, responsible for setting up training and testing directories,
-            loading the model path, initializing the UI, and setting up the thread.
+        Initialization function, responsible for setting up training and testing directories,
+        loading the model path, initializing the UI, and setting up the thread.
         """
         super().__init__()
         self.train_dir = self.load_default_train_test_path("train")
@@ -34,14 +33,28 @@ class AiWindow(QDialog):
         self.model_path = self.load_model_path_from_config()
         self.logger = logger
 
+        self.train_audio_data = dict()
+        self.train_model_with_dir: bool = True
+        self.evaluate_audio_data = dict()
+        self.evaluate_model_with_dir: bool = True
+        self.train_select_row_list = list()
+        self.test_select_row_list = list()
+        self.train_select_data_label = QLabel()
+        self.test_select_data_label = QLabel()
+        self.train_select_num = (0, 0)
+        self.test_select_num = (0, 0)
+
+        self.train_select_dir_btn = QPushButton(" 选择路径 ")
+        self.test_select_dir_btn = QPushButton(" 选择路径 ")
+
         self.init_ui()
 
     def init_ui(self):
         """
-            Initialize the user interface.
-            Set the window icon, title, and layout.
-            Create and configure widgets for training and evaluation.
-            Connect signals and slots.
+        Initialize the user interface.
+        Set the window icon, title, and layout.
+        Create and configure widgets for training and evaluation.
+        Connect signals and slots.
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("AI训练窗口")
@@ -59,112 +72,255 @@ class AiWindow(QDialog):
         btn_function_layout.addWidget(evaluate_group_box)
 
         self.setLayout(btn_function_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style +
-                           ui_style_const.qlineedit_style +
-                           ui_style_const.qlabel_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qcombobox_style)
-        
+        self.setStyleSheet(
+            ui_style_const.qpushbutton_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qcombobox_style
+            + ui_style_const.qradiobutton_style
+        )
+
+    def set_label_text(self, label, ok_num, ng_num):
+        text = "当前选择：OK: %s, NG: %s， 总数：%s" % (ok_num, ng_num, ok_num + ng_num)
+        label.setText(text)
+
     def create_train_group_box(self):
+        train_layout = self.set_train_layout()
         train_group_box = QGroupBox("训练")
+        train_group_box.setLayout(train_layout)
+
+        return train_group_box
+
+    def set_train_layout(self):
+        self.select_train_audio_data_btn = QPushButton(" 选择音频 ")
+        self.select_train_audio_data_btn.setDisabled(True)
+        self.select_train_audio_data_btn.setStyleSheet("padding: 5px")
+        self.select_train_audio_data_btn.clicked.connect(lambda: self.select_audio_data_btn_clicked("train"))
+
+        self.set_select_train_path_layout()
+        trian_with_dir_radio_btn_layout = self.set_trian_with_dir_radio_btn_layout()
+        trian_with_data_radio_btn_layout = self.set_trian_with_data_radio_btn_layout()
+
+        train_btn_and_label_layout = self.set_train_btn_and_label_layout()
+
         train_layout = QVBoxLayout()
-        train_dir_label = QLabel("训练数据路径：")
+        train_layout.addLayout(trian_with_dir_radio_btn_layout)
+        train_layout.addWidget(self.train_dir_lineedit)
+        train_layout.addSpacing(15)
+        train_layout.addLayout(trian_with_data_radio_btn_layout)
+        train_layout.addSpacing(10)
+        train_layout.addLayout(train_btn_and_label_layout)
+
+        return train_layout
+
+    def set_trian_with_dir_radio_btn_layout(self):
+        trian_with_dir_radio_btn = QRadioButton("根据路径训练")
+        trian_with_dir_radio_btn.toggled.connect(self.train_with_dir_radio_btn_toggled)
+        trian_with_dir_radio_btn.setChecked(True)
+
+        self.train_select_dir_btn.setStyleSheet("padding: 5px")
+        self.train_select_dir_btn.clicked.connect(self.train_dir_btn_clicked)
+
+        select_train_path_layout = QHBoxLayout()
+
+        select_train_path_layout.addWidget(trian_with_dir_radio_btn)
+        select_train_path_layout.addWidget(self.train_select_dir_btn, alignment=Qt.AlignRight)
+
+        return select_train_path_layout
+
+    def set_trian_with_data_radio_btn_layout(self):
+        trian_with_data_radio_btn = QRadioButton("根据音频训练")
+        trian_with_data_radio_btn.toggled.connect(self.trian_with_data_radio_btn_toggled)
+
+        trian_with_data_radio_btn_layout = QHBoxLayout()
+        trian_with_data_radio_btn_layout.addWidget(trian_with_data_radio_btn)
+        trian_with_data_radio_btn_layout.addWidget(self.select_train_audio_data_btn, alignment=Qt.AlignRight)
+
+        return trian_with_data_radio_btn_layout
+
+    def set_select_train_path_layout(self):
         self.train_dir_lineedit = QLineEdit()
+        self.train_dir_lineedit.setStyleSheet("background-color: transparent; border: none;")
         self.train_dir_lineedit.setPlaceholderText("请选择训练数据路径")
-        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
-        train_dir_icon = QIcon(icon_path)
-        train_dir_action = self.train_dir_lineedit.addAction(train_dir_icon, QLineEdit.TrailingPosition)
-        train_dir_action.setToolTip("添加训练数据")
-        train_dir_action.triggered.connect(self.train_dir_btn_clicked)
         self.train_dir_lineedit.setText(self.train_dir)
+        self.train_dir_lineedit.setReadOnly(True)
+
+    def set_train_btn_and_label_layout(self):
         self.train_btn = QPushButton(" 开始训练 ")
         self.train_btn.setStyleSheet("padding: 5px")
         self.train_btn.clicked.connect(self.train_btn_clicked)
 
-        train_lineedit_layout = QHBoxLayout()
-        train_lineedit_layout.addWidget(train_dir_label)
-        train_lineedit_layout.addSpacing(10)
-        train_lineedit_layout.addWidget(self.train_dir_lineedit)
+        layout = QHBoxLayout()
+        layout.addWidget(self.train_select_data_label)
+        layout.addWidget(self.train_btn, alignment=Qt.AlignRight)
 
-        train_btn_layout = QHBoxLayout()
-        train_btn_layout.addStretch()
-        train_btn_layout.addWidget(self.train_btn)
+        return layout
 
-        train_layout.addLayout(train_lineedit_layout)
-        train_layout.addSpacing(13)
-        train_layout.addLayout(train_btn_layout)
-        train_layout.addSpacing(13)
+    def train_with_dir_radio_btn_toggled(self):
+        if self.sender().isChecked():
+            self.train_model_with_dir = True
+            self.select_train_audio_data_btn.setDisabled(True)
+            self.train_dir_lineedit.setDisabled(False)
+            ok_path = self.train_dir + "/OK"
+            ng_path = self.train_dir + "/NG"
+            ok_num = len([f for f in os.listdir(ok_path) if os.path.isfile(os.path.join(ok_path, f))])
+            ng_num = len([f for f in os.listdir(ng_path) if os.path.isfile(os.path.join(ng_path, f))])
+            self.set_label_text(self.train_select_data_label, ok_num, ng_num)
 
-        train_group_box.setLayout(train_layout)
-        
-        return train_group_box
-    
+    def trian_with_data_radio_btn_toggled(self):
+        if self.sender().isChecked():
+            self.train_model_with_dir = False
+            self.select_train_audio_data_btn.setDisabled(False)
+            self.train_dir_lineedit.setDisabled(True)
+            self.set_label_text(self.train_select_data_label, self.train_select_num[0], self.train_select_num[1])
+
+    def select_audio_data_btn_clicked(self, label):
+        if "train" == label:
+            audio_data_view = SelectAudioDataView(LogManager().set_log_handler("core"), self.train_select_row_list, True)
+            ret = audio_data_view.exec()
+            if ret:
+                self.train_audio_data, self.train_select_num, self.train_select_row_list = ret
+            self.set_label_text(self.train_select_data_label, self.train_select_num[0], self.train_select_num[1])
+
+        elif "evaluate" == label:
+            audio_data_view = SelectAudioDataView(LogManager().set_log_handler("core"), self.test_select_row_list, True)
+            ret = audio_data_view.exec()
+            if ret:
+                self.evaluate_audio_data, self.test_select_num, self.test_select_row_list = ret
+            self.set_label_text(self.test_select_data_label, self.test_select_num[0], self.test_select_num[1])
+
     def create_evaluate_group_box(self):
+        evaluate_layout = self.set_evaluete_layout()
         evaluate_group_box = QGroupBox("评估")
-        evaluate_layout = QVBoxLayout()
-        evaluate_dir_label = QLabel("测试数据路径：")
-        self.evaluate_dir_lineedit = QLineEdit()
-        self.evaluate_dir_lineedit.setPlaceholderText("请选择测试数据路径")
-        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
-        evaluate_dir_icon = QIcon(icon_path)
-        evaluate_dir_action = self.evaluate_dir_lineedit.addAction(evaluate_dir_icon, QLineEdit.TrailingPosition)
-        evaluate_dir_action.setToolTip("添加测试数据")
-        evaluate_dir_action.triggered.connect(self.evaluate_dir_btn_clicked)
-        self.evaluate_dir_lineedit.setText(self.test_dir)
+        evaluate_group_box.setLayout(evaluate_layout)
+
+        return evaluate_group_box
+
+    def set_evaluete_layout(self):
+        self.select_evaluate_audio_data_btn = QPushButton(" 选择音频 ")
+        self.select_evaluate_audio_data_btn.setDisabled(True)
+        self.select_evaluate_audio_data_btn.setStyleSheet("padding: 5px")
+        self.select_evaluate_audio_data_btn.clicked.connect(lambda: self.select_audio_data_btn_clicked("evaluate"))
+
+        self.set_select_evaluete_path_layout()
+        evaluete_with_dir_radio_btn_layout = self.set_evaluete_with_dir_radio_btn_layout()
+        evaluete_with_data_radio_btn_layout = self.set_evaluete_with_data_radio_btn_layout()
+
+        evaluete_btn_and_label_layout = self.set_evaluete_btn_and_label_layout()
+
+        train_layout = QVBoxLayout()
+        train_layout.addLayout(evaluete_with_dir_radio_btn_layout)
+        train_layout.addWidget(self.evaluate_dir_lineedit)
+        train_layout.addSpacing(20)
+        train_layout.addLayout(evaluete_with_data_radio_btn_layout)
+        train_layout.addSpacing(10)
+        train_layout.addLayout(evaluete_btn_and_label_layout)
+
+        return train_layout
+
+    def set_evaluete_btn_and_label_layout(self):
         self.evaluate_btn = QPushButton(" 开始评估 ")
         self.evaluate_btn.setStyleSheet("padding: 5px")
         self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
 
-        evaluate_dir_layout = QHBoxLayout()
-        evaluate_dir_layout.addWidget(evaluate_dir_label)
-        evaluate_dir_layout.addSpacing(10)
-        evaluate_dir_layout.addWidget(self.evaluate_dir_lineedit)
+        layout = QHBoxLayout()
+        layout.addWidget(self.test_select_data_label)
+        layout.addWidget(self.evaluate_btn, alignment=Qt.AlignRight)
 
-        evaluate_btn_layout = QHBoxLayout()
-        evaluate_btn_layout.addStretch()
-        evaluate_btn_layout.addWidget(self.evaluate_btn)
+        return layout
 
-        evaluate_layout.addLayout(evaluate_dir_layout)
-        evaluate_layout.addSpacing(13)
-        evaluate_layout.addLayout(evaluate_btn_layout)
-        evaluate_layout.addSpacing(13)
-        evaluate_group_box.setLayout(evaluate_layout)
-        
-        return evaluate_group_box
+    def set_evaluete_with_dir_radio_btn_layout(self):
+        evaluete_with_dir_radio_btn = QRadioButton("根据路径评估")
+        evaluete_with_dir_radio_btn.toggled.connect(self.evaluete_with_dir_radio_btn_toggled)
+        evaluete_with_dir_radio_btn.setChecked(True)
+
+        self.test_select_dir_btn.setStyleSheet("padding: 5px")
+        self.test_select_dir_btn.clicked.connect(self.evaluate_dir_btn_clicked)
+
+        select_evaluete_path_layout = QHBoxLayout()
+
+        select_evaluete_path_layout.addWidget(evaluete_with_dir_radio_btn)
+        select_evaluete_path_layout.addWidget(self.test_select_dir_btn, alignment=Qt.AlignRight)
+
+        return select_evaluete_path_layout
+
+    def set_evaluete_with_data_radio_btn_layout(self):
+        evaluete_with_data_radio_btn = QRadioButton("根据音频评估")
+        evaluete_with_data_radio_btn.toggled.connect(self.evaluete_with_data_radio_btn_toggled)
+
+        trian_with_data_radio_btn_layout = QHBoxLayout()
+        trian_with_data_radio_btn_layout.addWidget(evaluete_with_data_radio_btn)
+        trian_with_data_radio_btn_layout.addWidget(self.select_evaluate_audio_data_btn, alignment=Qt.AlignRight)
+
+        return trian_with_data_radio_btn_layout
+
+    def evaluete_with_dir_radio_btn_toggled(self):
+        if self.sender().isChecked():
+            self.evaluate_model_with_dir = True
+            self.select_evaluate_audio_data_btn.setDisabled(True)
+            self.evaluate_dir_lineedit.setDisabled(False)
+            self.test_select_dir_btn.setDisabled(False)
+            ok_path = self.test_dir + "/OK"
+            ng_path = self.test_dir + "/NG"
+            ok_num = len([f for f in os.listdir(ok_path) if os.path.isfile(os.path.join(ok_path, f))])
+            ng_num = len([f for f in os.listdir(ng_path) if os.path.isfile(os.path.join(ng_path, f))])
+            self.set_label_text(self.test_select_data_label, ok_num, ng_num)
+
+    def evaluete_with_data_radio_btn_toggled(self):
+        if self.sender().isChecked():
+            self.evaluate_model_with_dir = False
+            self.select_evaluate_audio_data_btn.setDisabled(False)
+            self.evaluate_dir_lineedit.setDisabled(True)
+            self.test_select_dir_btn.setDisabled(True)
+            self.set_label_text(self.test_select_data_label, self.test_select_num[0], self.test_select_num[1])
+
+    def set_select_evaluete_path_layout(self):
+        self.evaluate_dir_lineedit = QLineEdit()
+        self.evaluate_dir_lineedit.setReadOnly(True)
+        self.evaluate_dir_lineedit.setStyleSheet("background-color: transparent; border: none;")
+        self.evaluate_dir_lineedit.setPlaceholderText("请选择测试数据路径")
+        self.evaluate_dir_lineedit.setText(self.test_dir)
 
     def train_dir_btn_clicked(self):
         """
-            This function is triggered when the 'Select Training Data Directory' button is clicked.
-            It opens a file dialog for the user to select a directory for training data.
-            If a directory is selected and confirmed by the user, the path is set as the training directory,
-            saved as the default training path, and displayed in the UI.
+        This function is triggered when the 'Select Training Data Directory' button is clicked.
+        It opens a file dialog for the user to select a directory for training data.
+        If a directory is selected and confirmed by the user, the path is set as the training directory,
+        saved as the default training path, and displayed in the UI.
         """
-        path = QFileDialog.getExistingDirectory(self,
-                                                "选择训练数据目录",
-                                                DEFAULT_DIR + "audio_data")
+        path = QFileDialog.getExistingDirectory(self, "选择训练数据目录", DEFAULT_DIR + "audio_data")
         if path:
             self.train_dir = path
             self.save_default_train_test_path(path, "train")
             self.train_dir_lineedit.setText(path)
+            ok_path = self.train_dir + "/OK"
+            ng_path = self.train_dir + "/NG"
+            ok_num = len([f for f in os.listdir(ok_path) if os.path.isfile(os.path.join(ok_path, f))])
+            ng_num = len([f for f in os.listdir(ng_path) if os.path.isfile(os.path.join(ng_path, f))])
+            self.set_label_text(self.train_select_data_label, ok_num, ng_num)
 
     def evaluate_dir_btn_clicked(self):
         """
-            This function is triggered when the evaluate directory button is clicked.
+        This function is triggered when the evaluate directory button is clicked.
 
-            It opens a dialog for the user to select an evaluation data directory.
-            If a directory is selected, it updates the test directory path,
-            saves this path as the default evaluation path, and displays it in the UI.
+        It opens a dialog for the user to select an evaluation data directory.
+        If a directory is selected, it updates the test directory path,
+        saves this path as the default evaluation path, and displays it in the UI.
 
-            Parameters:
-            - self: The instance of the class containing this method.
+        Parameters:
+        - self: The instance of the class containing this method.
         """
-        path = QFileDialog.getExistingDirectory(self,
-                                                "选择评估数据目录",
-                                                DEFAULT_DIR + "audio_data")
+        path = QFileDialog.getExistingDirectory(self, "选择评估数据目录", DEFAULT_DIR + "audio_data")
         if path:
             self.test_dir = path
             self.save_default_train_test_path(path, "evaluate")
             self.evaluate_dir_lineedit.setText(path)
+            ok_path = self.test_dir + "/OK"
+            ng_path = self.test_dir + "/NG"
+            ok_num = len([f for f in os.listdir(ok_path) if os.path.isfile(os.path.join(ok_path, f))])
+            ng_num = len([f for f in os.listdir(ng_path) if os.path.isfile(os.path.join(ng_path, f))])
+            self.set_label_text(self.test_select_data_label, ok_num, ng_num)
 
     @staticmethod
     def get_model_info(model_path, logger: LogManager):
@@ -185,7 +341,7 @@ class AiWindow(QDialog):
         if text == "\n":
             cursor.insertText("\r")
         elif text.startswith("\n"):
-            content = text.lstrip('\n')
+            content = text.lstrip("\n")
             cursor.movePosition(QTextCursor.StartOfLine)
             cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
             cursor.removeSelectedText()
@@ -195,20 +351,34 @@ class AiWindow(QDialog):
         process_edit.model_structure_texteditor.setTextCursor(cursor)
         process_edit.model_structure_texteditor.ensureCursorVisible()
 
-
     def train_or_evaluate_model(self, mode: str, action_str: str):
         process = Process_Widget()
         code, result = self.get_model_info(self.model_path, self.logger)
+
+        if self.train_model_with_dir:
+            train_data = self.train_dir
+        else:
+            train_data = self.train_audio_data
+
+        if self.evaluate_model_with_dir:
+            test_data = self.test_dir
+        else:
+            test_data = self.evaluate_audio_data
+
         if code != error_code.OK:
             QMessageBox.warning(self, "警告", "模型不存在！")
         else:
             self.train_btn.setEnabled(False)
             self.evaluate_btn.setEnabled(False)
-            t = TrainEvaluateThread(train_dir=self.train_dir,
-                                    test_dir=self.test_dir,
-                                    model_path=self.model_path,
-                                    config_path=result,
-                                    mode=mode)
+            t = TrainEvaluateThread(
+                train_data=train_data,
+                test_data=test_data,
+                model_path=self.model_path,
+                config_path=result,
+                mode=mode,
+                trian_with_dir=self.train_model_with_dir,
+                test_with_dir=self.evaluate_model_with_dir,
+            )
             process.current_thread = t
             t.signalForText.connect(lambda text, process_edit=process: self.on_update_text(text, process_edit))
             sys.stdout = t
@@ -222,9 +392,13 @@ class AiWindow(QDialog):
 
     def train_btn_clicked(self):
         """
-            This function is triggered when the train button is clicked.
-            It starts the model training process using a separate thread to avoid blocking the UI.
+        This function is triggered when the train button is clicked.
+        It starts the model training process using a separate thread to avoid blocking the UI.
         """
+        if self.train_model_with_dir is False:
+            if 0 == self.train_select_num[0] and 0 == self.train_select_num[1]:
+                QMessageBox.warning(self, "提示", "请选择训练数据")
+                return
         self.model_path = self.load_model_path_from_config()
         try:
             self.train_or_evaluate_model("train", "start training model...")
@@ -237,14 +411,18 @@ class AiWindow(QDialog):
 
     def evaluate_btn_clicked(self):
         """
-            This function is triggered when the evaluate button is clicked to start model evaluation.
-            
-            Parameters:
-            - self: The instance of the class containing this method. It should have the following attributes:
-                - train_dir (str): Directory for training data.
-                - test_dir (str): Directory for testing data.
-                - model_path (str): Path to the model file.
+        This function is triggered when the evaluate button is clicked to start model evaluation.
+
+        Parameters:
+        - self: The instance of the class containing this method. It should have the following attributes:
+            - train_dir (str): Directory for training data.
+            - test_dir (str): Directory for testing data.
+            - model_path (str): Path to the model file.
         """
+        if self.evaluate_model_with_dir is False:
+            if 0 == self.test_select_num[0] and 0 == self.test_select_num[1]:
+                QMessageBox.warning(self, "提示", "请选择评估数据")
+                return
         self.model_path = self.load_model_path_from_config()
         try:
             self.train_or_evaluate_model("evaluate", "start evaluating model...")
@@ -264,55 +442,55 @@ class AiWindow(QDialog):
     @staticmethod
     def load_model_path_from_config():
         """
-            Load the model path from a configuration file.
+        Load the model path from a configuration file.
 
-            This function reads the model path stored in a specified file and returns it.
-            It is a static method that can be called without instantiating the class.
+        This function reads the model path stored in a specified file and returns it.
+        It is a static method that can be called without instantiating the class.
 
-            Returns:
-            model_path (str): The model path stored in the configuration file.
+        Returns:
+        model_path (str): The model path stored in the configuration file.
         """
         file_path = DEFAULT_DIR + "ui/ui_config/model_path.txt"
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             model_path = DEFAULT_DIR + f.read()
         return model_path
 
     @staticmethod
     def save_default_train_test_path(path, mode="train"):
         """
-            Save the default train or test data path to the specified configuration file.
+        Save the default train or test data path to the specified configuration file.
 
-            This function saves the data path based on the mode parameter (mode). 
-            The configuration file is saved in the DEFAULT_DIR directory with the filename 'mode_data_path.txt', 
-            where mode can be 'train' or 'test'.
+        This function saves the data path based on the mode parameter (mode).
+        The configuration file is saved in the DEFAULT_DIR directory with the filename 'mode_data_path.txt',
+        where mode can be 'train' or 'test'.
 
-            Parameters:
-            - path (str): The data path to be saved.
-            - mode (str): Mode identifier, can be 'train' for training data path or 'test' for test data path. Default is 'train'.
+        Parameters:
+        - path (str): The data path to be saved.
+        - mode (str): Mode identifier, can be 'train' for training data path or 'test' for test data path. Default is 'train'.
         """
         file_path = DEFAULT_DIR + "ui/ui_config/%s_data_path.txt" % mode
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             f.write(path)
 
     @staticmethod
     def load_default_train_test_path(mode="train"):
         """
-            Load the default train or test data path based on the mode.
+        Load the default train or test data path based on the mode.
 
-            This function reads a predefined path file to obtain the data path, 
-            suitable for loading either training or testing data paths.
+        This function reads a predefined path file to obtain the data path,
+        suitable for loading either training or testing data paths.
 
-            Parameters:
-            mode (str): A flag indicating whether to load the training or testing data path.
-                        Default is "train", which loads the training data path.
+        Parameters:
+        mode (str): A flag indicating whether to load the training or testing data path.
+                    Default is "train", which loads the training data path.
 
-            Returns:
-            str: The data path corresponding to the specified mode. If the path file does not exist, returns an empty string.
+        Returns:
+        str: The data path corresponding to the specified mode. If the path file does not exist, returns an empty string.
         """
         path_file = DEFAULT_DIR + "ui/ui_config/%s_data_path.txt" % mode
         if not os.path.exists(path_file):
             return ""
-        with open(path_file, 'r') as f:
+        with open(path_file, "r") as f:
             path = f.read()
         return path
 
@@ -320,9 +498,9 @@ class AiWindow(QDialog):
 class BaseModel(QWidget):
     def __init__(self, logger):
         """
-            Initialize the class constructor.
-            loads the model name from the database, initializes the model path as an empty string,
-            and finally calls the method to initialize the user interface.
+        Initialize the class constructor.
+        loads the model name from the database, initializes the model path as an empty string,
+        and finally calls the method to initialize the user interface.
         """
         super().__init__()
         self.load_model = None
@@ -358,11 +536,11 @@ class BaseModel(QWidget):
 
     def create_model_box(self):
         """
-            Create the model layout
+        Create the model layout
 
-            This method generates a layout containing model selection and related controls.
-            It includes a combo box for selecting a model, a button for creating a new model,
-            and a text edit area for displaying model information.
+        This method generates a layout containing model selection and related controls.
+        It includes a combo box for selecting a model, a button for creating a new model,
+        and a text edit area for displaying model information.
         """
         base_model_box = QGroupBox("模型")
         base_model_box.setMinimumWidth(350)
@@ -377,8 +555,8 @@ class BaseModel(QWidget):
         base_model_box.setLayout(model_layout)
 
         return base_model_box
-    
-    def create_model_combobox_layout(self): 
+
+    def create_model_combobox_layout(self):
         base_model_label = QLabel("基础模型:")
         self.base_model_combobox = QComboBox(self)
         self.base_model_combobox.setMinimumWidth(350)
@@ -400,24 +578,24 @@ class BaseModel(QWidget):
 
         base_model_combo_layout.setSpacing(20)
         return base_model_combo_layout
-    
+
     def create_btn_layout(self):
         model_manage_btn = QPushButton(" 模型管理 ")
         model_manage_btn.setStyleSheet("padding: 5px")
         model_manage_btn.clicked.connect(self.on_model_manage_btn_clicked)
-        
 
         base_btn_layout = QHBoxLayout()
         base_btn_layout.addStretch()
         base_btn_layout.addWidget(model_manage_btn)
 
         return base_btn_layout
-    
+
     def on_model_structure_btn_clicked(self):
-        model_structure = AiBrainModelStructure(model_structure=self.summary_text,
-                                                model_name=self.base_model_combobox.currentText())
+        model_structure = AiBrainModelStructure(
+            model_structure=self.summary_text, model_name=self.base_model_combobox.currentText()
+        )
         model_structure.exec()
-    
+
     def on_model_manage_btn_clicked(self):
         model_info_list = ModelInfoList(self.logger)
         model_info_list.exec()
@@ -426,10 +604,10 @@ class BaseModel(QWidget):
 
     def combobox_clicked(self):
         """
-            This method is triggered when the combo box is clicked.
+        This method is triggered when the combo box is clicked.
 
-            It updates the displayed model structure summary based on the user's selection in the combo box.
-            If no model is selected or if the model fails to load, it hides or clears the text edit widget accordingly.
+        It updates the displayed model structure summary based on the user's selection in the combo box.
+        If no model is selected or if the model fails to load, it hides or clears the text edit widget accordingly.
         """
         self.summary_text = None
         selected_model = self.base_model_combobox.currentText()
@@ -464,21 +642,21 @@ class BaseModel(QWidget):
     @staticmethod
     def load_default_model_path():
         """
-            Load the default model path from a configuration file.
+        Load the default model path from a configuration file.
 
-            This function reads the model path stored in a specified file and returns it.
-            If the file does not exist, is empty, or an exception occurs during reading, 
-            the function returns an empty string. This ensures that the program does not 
-            raise an error when there is no valid path.
+        This function reads the model path stored in a specified file and returns it.
+        If the file does not exist, is empty, or an exception occurs during reading,
+        the function returns an empty string. This ensures that the program does not
+        raise an error when there is no valid path.
 
-            Returns:
-                str: The default model path or an empty string if the file is missing or empty.
+        Returns:
+            str: The default model path or an empty string if the file is missing or empty.
         """
         file_path = DEFAULT_DIR + "ui/ui_config/model_path.txt"
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             return ""
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 model_path = f.read().strip()
                 return model_path
         except Exception as e:
@@ -487,13 +665,13 @@ class BaseModel(QWidget):
     @staticmethod
     def load_model_name_from_db():
         """
-            Load a list of model names from the database.
+        Load a list of model names from the database.
 
-            This method queries the database for all model names and constructs a list containing these names.
-            If the query is successful, it iterates through the query results and appends each model name to the list.
+        This method queries the database for all model names and constructs a list containing these names.
+        If the query is successful, it iterates through the query results and appends each model name to the list.
 
-            Returns:
-                list: A list of model names.
+        Returns:
+            list: A list of model names.
         """
         model_list = []
         query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
@@ -505,16 +683,16 @@ class BaseModel(QWidget):
 
     def load_model_structure(self, selected_model):
         """
-            Load the structure of the selected model.
+        Load the structure of the selected model.
 
-            This function retrieves the model path from the database based on the selected model name, 
-            initializes the model using the configuration file, and loads the model.
+        This function retrieves the model path from the database based on the selected model name,
+        initializes the model using the configuration file, and loads the model.
 
-            Parameters:
-            selected_model (str): The name of the selected model.
+        Parameters:
+        selected_model (str): The name of the selected model.
 
-            Returns:
-            model: If the model is successfully loaded, returns the model object; otherwise, returns None.
+        Returns:
+        model: If the model is successfully loaded, returns the model object; otherwise, returns None.
         """
         query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
         model = None
@@ -529,17 +707,17 @@ class BaseModel(QWidget):
 
     def save_model_path_to_config(self):
         """
-            Save the model path to the configuration file.
+           Save the model path to the configuration file.
 
-            This method saves the model path (self.model_path) of the current instance to a specific configuration file.
-            It first ensures that the save directory exists, creating it if necessary, and then writes the model path to
-         a text file within that directory.
+           This method saves the model path (self.model_path) of the current instance to a specific configuration file.
+           It first ensures that the save directory exists, creating it if necessary, and then writes the model path to
+        a text file within that directory.
         """
-        dir_path = DEFAULT_DIR + 'ui/ui_config'
+        dir_path = DEFAULT_DIR + "ui/ui_config"
         if not os.path.exists(dir_path):
             os.mkdir(dir_path)
         file_path = dir_path + "/" + "model_path.txt"
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             model_path = FileOps.get_relative_path(self.model_path, DEFAULT_DIR)
             f.write(model_path)
 
@@ -548,72 +726,96 @@ class TrainEvaluateThread(QThread):
     # Define a signal to emit text
     signalForText = pyqtSignal(str)
 
-    def __init__(self, data=None, parent=None,
-                 train_dir=None, test_dir=None, model_path=None, config_path=None, mode="train"):
+    def __init__(
+        self,
+        parent=None,
+        train_data=None,
+        test_data=None,
+        model_path=None,
+        config_path=None,
+        mode="train",
+        trian_with_dir=True,
+        test_with_dir=True,
+    ):
         """
-            Initialize the class instance
+        Initialize the class instance
 
-            Parameters:
-            data: Dataset used for training or testing
-            parent: Parent class for inheritance
-            train_dir: Directory for training data, used to load training data
-            test_dir: Directory for test data, used to load test data
-            model_path: Path to the model, used to save a trained model or load an existing model
-            config_path: Path to the configuration file, used to load the configuration file
-            mode: Mode, default is "train", indicating training mode
+        Parameters:
+        data: Dataset used for training or testing
+        parent: Parent class for inheritance
+        train_dir: Directory or path for training data, used to load training data
+        test_dir: Directory for test data, used to load test data
+        model_path: Path to the model, used to save a trained model or load an existing model
+        config_path: Path to the configuration file, used to load the configuration file
+        mode: Mode, default is "train", indicating training mode
         """
         super().__init__(parent)
-        self.data = data
-        self.train_dir = train_dir
-        self.test_dir = test_dir
+        self.train_data = train_data
+        self.test_dir = test_data
         self.model_path = model_path
         self.kwargs = {"config_path": config_path}
         self.mode = mode
+        self.trian_with_dir = trian_with_dir
+        self.test_with_dir = test_with_dir
 
     def write(self, text):
         """
-            Emit text signal.
+        Emit text signal.
 
-            This method converts the given text to a string and emits it through the `signalForText` signal.
-            This is useful for passing text data to other components or functions connected to this signal.
+        This method converts the given text to a string and emits it through the `signalForText` signal.
+        This is useful for passing text data to other components or functions connected to this signal.
 
-            Parameters:
-            text (any): The text to be sent. Can be any type of data, but should be convertible to a string.
+        Parameters:
+        text (any): The text to be sent. Can be any type of data, but should be convertible to a string.
         """
         self.signalForText.emit(str(text))  # emit the signal
 
     def flush(self):
         """
-            Emit a carriage return signal.
+        Emit a carriage return signal.
 
-            This function sends a carriage return signal to update the text position on the user interface.
-            It is useful for displaying program status in real-time on the interface.
+        This function sends a carriage return signal to update the text position on the user interface.
+        It is useful for displaying program status in real-time on the interface.
         """
         self.signalForText.emit("\r")
 
     def run(self):
         """
-            Run the training or evaluation process based on the mode.
+           Run the training or evaluation process based on the mode.
 
-            This function attempts to execute the corresponding operation based on the instance's mode (self.mode):
-            - If the mode is "train", it initiates the training process.
-            - If the mode is "evaluate", it initiates the evaluation process.
+           This function attempts to execute the corresponding operation based on the instance's mode (self.mode):
+           - If the mode is "train", it initiates the training process.
+           - If the mode is "evaluate", it initiates the evaluation process.
 
-            This function does not accept any parameters and does not return any values. It is primarily used to control
-         the program's execution flow,
-            and it can handle exceptions that may occur during execution to ensure the robustness of the program.
+           This function does not accept any parameters and does not return any values. It is primarily used to control
+        the program's execution flow,
+           and it can handle exceptions that may occur during execution to ensure the robustness of the program.
         """
         try:
+            save_config_path = self.kwargs.get("config_path", model_consts.CONFIG_PATH)
             if self.mode == "train":
-                train(self.train_dir, self.model_path, self.test_dir, **self.kwargs)
+                model = None
+                if self.trian_with_dir:
+                    model, signals = train_with_dir(self.train_data, self.model_path, **self.kwargs)
+                else:
+                    model, signals = train_with_data(self.train_data, self.model_path, **self.kwargs)
+                evaluate_kwargs = {"config_path": save_config_path, "verbose": 2}
+                if self.test_with_dir:
+                    ret_str = evaluate(self.test_dir, model=model, **evaluate_kwargs)
+                else:
+                    ret_str = evaluate_with_data(self.test_dir, model=model, **evaluate_kwargs)
+                save_trained_model(model, signals, self.model_path, save_config_path, ret_str)
             elif self.mode == "evaluate":
-                evaluate(self.test_dir, self.model_path, verbose=7, **self.kwargs)
+                if self.test_with_dir:
+                    ret_str = evaluate(self.test_dir, self.model_path, verbose=7, **self.kwargs)
+                else:
+                    ret_str = evaluate_with_data(self.test_dir, self.model_path, verbose=7, **self.kwargs)
         except Exception as e:
             print(e)
 
 
 class AiBrainModelStructure(QDialog):
-    def __init__(self, parent=None, model_structure=None, model_name: str=None):
+    def __init__(self, parent=None, model_structure=None, model_name: str = None):
         super().__init__(parent)
         self.model_structure = model_structure
 
@@ -637,7 +839,7 @@ class AiBrainModelStructure(QDialog):
         layout = QVBoxLayout()
         layout.addWidget(model_structure_texteditor)
         return layout
-    
+
     def set_text_data(self, text_edit: QTextEdit):
         if self.model_structure is None:
             text_edit.setPlainText("模型结构为空")
@@ -645,9 +847,8 @@ class AiBrainModelStructure(QDialog):
             text_edit.setPlainText(self.model_structure)
 
 
-
 class Process_Widget(QDialog):
-    def __init__(self, thread: TrainEvaluateThread=None):
+    def __init__(self, thread: TrainEvaluateThread = None):
         super().__init__()
 
         self.model_structure_texteditor = QTextEdit()
@@ -670,7 +871,7 @@ class Process_Widget(QDialog):
         layout = QVBoxLayout()
         layout.addWidget(self.model_structure_texteditor)
         return layout
-    
+
     def closeEvent(self, close_event):
         if self.current_thread:
             if self.current_thread.isRunning():
@@ -680,7 +881,7 @@ class Process_Widget(QDialog):
                 close_event.accept()
         else:
             close_event.accept()
-    
+
     def show_widget(self):
         self.setWindowModality(Qt.WindowModal)
         self.show()
@@ -690,7 +891,7 @@ class Process_Widget(QDialog):
         return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = AiWindow()
     window.show()
