@@ -3,7 +3,7 @@ import os
 import time
 
 from base.evaluate_model import evaluate
-from base.load_audio import get_pre_labeled_audios
+from base.load_audio import get_pre_labeled_audios, get_pre_labeled_audios_from_dict
 from base.load_config import load_config
 from base.log_manager import LogManager
 from base.model_config import init_model_from_config, preprocess_raw_signals
@@ -42,6 +42,48 @@ def train(pre_labeled_dir, save_model_path=None, predict_dir=None, **kwargs):
     return json.dumps({"ret_code": error_code.OK, "ret_msg": ret_msg, "result": ret_msg})
 
 
+def train_with_dir(pre_labeled_dir, save_model_path=None, **kwargs):
+    logger = LogManager.set_log_handler("train")
+
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
+    data_load_config = load_config(config_path=config_path, module_name="data_load")
+    ret_code, ret = get_pre_labeled_audios(pre_labeled_dir, **data_load_config)
+
+    if ret_code != error_code.OK:
+        logger.error("failed to load audio samples")
+        return None, None
+    signals, file_names, fs, labels = ret
+    logger.info("finish audio loading")
+
+    train_kwargs = kwargs.copy()
+    train_kwargs.pop("config_path", None)
+    model, _ = train_model(config_path, save_model_path, signals, fs, labels, **train_kwargs)
+
+    return model, signals
+
+
+def train_with_data(pre_labeled_dict, save_model_path, **kwargs):
+    logger = LogManager.set_log_handler("train")
+
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
+    data_load_config = load_config(config_path=config_path, module_name="data_load")
+    ret_code, ret = get_pre_labeled_audios_from_dict(pre_labeled_dict, **data_load_config)
+
+    if ret_code != error_code.OK:
+        logger.error("failed to load audio samples")
+        return None, None
+    signals, file_names, fs, labels = ret
+    logger.info("finish audio loading")
+
+    train_kwargs = kwargs.copy()
+    train_kwargs.pop("config_path", None)
+    model, _ = train_model(config_path, save_model_path, signals, fs, labels, **train_kwargs)
+
+    return model, signals
+
+
 def train_model(config_path, save_model_path, signals, fs, labels, **kwargs):
     logger = LogManager.set_log_handler("train")
 
@@ -64,3 +106,8 @@ def train_model(config_path, save_model_path, signals, fs, labels, **kwargs):
     logger.info(ret_msg)
 
     return model, ret_msg
+
+
+def save_trained_model(model, signals, save_model_path, save_config_path, ret_str, model_description="No description"):
+    signal_length = len(signals[0])
+    model.save_model(signal_length, save_model_path, save_config_path, ret_str, model_description)

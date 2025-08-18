@@ -4,26 +4,23 @@ from scipy.io import wavfile
 import numpy as np
 import librosa
 
-from consts import error_code
+from consts import error_code, running_consts
 
 
-def get_audio_files_and_labels(signal_path,
-                               sr=None,
-                               with_labels=-1,
-                               **kwargs):
+def get_audio_files_and_labels(signal_path, sr=None, with_labels=-1, **kwargs):
     """
-        Function to retrieve audio files and their corresponding labels from a directory.
+    Function to retrieve audio files and their corresponding labels from a directory.
 
-        Args:
-        - signal_dir (str): Directory containing audio files.
-        - sr (int or None): Sampling rate for audio files. If None, uses default sampling rate.
-        - with_labels (int): Label to assign to the audio files. Default is -1.
+    Args:
+    - signal_dir (str): Directory containing audio files.
+    - sr (int or None): Sampling rate for audio files. If None, uses default sampling rate.
+    - with_labels (int): Label to assign to the audio files. Default is -1.
 
-        Returns:
-        - audio_signals (list): List containing audio signals loaded from files.
-        - audio_file_names (list): List containing names of audio files.
-        - fs (list): List containing sampling rates of audio files.
-        - labels (list): List containing labels assigned to audio files.
+    Returns:
+    - audio_signals (list): List containing audio signals loaded from files.
+    - audio_file_names (list): List containing names of audio files.
+    - fs (list): List containing sampling rates of audio files.
+    - labels (list): List containing labels assigned to audio files.
 
     """
     audio_signals = []
@@ -60,18 +57,44 @@ def get_audio_files_and_labels(signal_path,
     return error_code.OK, (audio_signals, audio_file_names, fs, labels)
 
 
+def get_pre_labeled_audios_from_dict(pre_labeled_dict, **kwargs):
+    audio_signals = []
+    audio_file_names = []
+    fs = []
+    labels = []
+    for key, value in pre_labeled_dict.items():
+        path = running_consts.DEFAULT_DIR + key
+        signal_file = os.path.basename(path)
+        if "OK" == value[1]:
+            label = 1
+        else:
+            label = 0
+        try:
+            y, sr = librosa.load(path, sr=value[0])
+            if fs and sr != fs[-1]:
+                pass
+            else:
+                audio_signals.append(y)
+                audio_file_names.append(signal_file)
+                labels.append(label)
+                fs.append(sr)
+        except Exception as e:
+            print("something wrong")
+    return error_code.OK, (audio_signals, np.array(audio_file_names), np.array(fs), np.array(labels))
+
+
 def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
     """
-        Function to retrieve pre-labeled audio files from specified directories.
+    Function to retrieve pre-labeled audio files from specified directories.
 
-        Args:
-        - pre_labeled_dir (str): Directory containing pre-labeled audio files.
+    Args:
+    - pre_labeled_dir (str): Directory containing pre-labeled audio files.
 
-        Returns:
-        - tot_signals (ndarray): NumPy array containing concatenated audio signals.
-        - tot_files (ndarray): NumPy array containing names of audio files.
-        - tot_fs (ndarray): NumPy array containing sampling rates of audio files.
-        - tot_labels (ndarray): NumPy array containing labels assigned to audio files.
+    Returns:
+    - tot_signals (ndarray): NumPy array containing concatenated audio signals.
+    - tot_files (ndarray): NumPy array containing names of audio files.
+    - tot_fs (ndarray): NumPy array containing sampling rates of audio files.
+    - tot_labels (ndarray): NumPy array containing labels assigned to audio files.
     """
     if not os.path.isdir(pre_labeled_dir):
         return error_code.INVALID_PATH, "invalid directory [%s]" % pre_labeled_dir
@@ -80,20 +103,16 @@ def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
     load_kwargs = {}
     if kwargs.get("max_train_size"):
         load_kwargs["max_size"] = kwargs.get("max_train_size") // 2
-    ret_code, ret = get_audio_files_and_labels(signal_dir % "OK",
-                                               with_labels=1,
-                                               **load_kwargs)
+    ret_code, ret = get_audio_files_and_labels(signal_dir % "OK", with_labels=1, **load_kwargs)
     if ret_code != error_code.OK:
         return ret_code, ret
     ok_signals, ok_files, ok_fs, ok_labels = ret
-    ret_code, ret = get_audio_files_and_labels(signal_dir % "NG",
-                                               with_labels=0,
-                                               **load_kwargs)
+    ret_code, ret = get_audio_files_and_labels(signal_dir % "NG", with_labels=0, **load_kwargs)
     if ret_code != error_code.OK:
         return ret_code, ret
     ng_signals, ng_files, ng_fs, ng_labels = ret
 
-    tot_signals = ok_signals+ ng_signals
+    tot_signals = ok_signals + ng_signals
     tot_files = np.array(ok_files + ng_files)
     tot_fs = np.array(ok_fs + ng_fs)
     tot_labels = np.array(ok_labels + ng_labels)
@@ -111,5 +130,5 @@ def load_audio_simple(audio_path, sr=None):
 
 def save_audio_simple(save_path, audio, sr=44100):
     # we assume audio is mono channel
-    audio = audio.astype('float32')
+    audio = audio.astype("float32")
     wavfile.write(save_path, sr, audio)
