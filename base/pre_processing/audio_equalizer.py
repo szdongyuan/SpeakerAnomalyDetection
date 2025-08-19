@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.fft import fft, ifft
 from scipy.signal import windows
 
 from typing import Optional, Callable, Tuple
@@ -119,7 +118,7 @@ class AudioEqualizer:
         trans_width_hz = band_width * transition_width
         trans_func = AudioEqualizer._get_transition_function(transition_type)
 
-        if trans_width_hz == 0:     #无需设置过渡带
+        if trans_width_hz == 0:     #don't need set transition width
             if complement_mode:
                 condition_outside_band = (freqs < start_freq) | (freqs > end_freq)
                 gain_array[condition_outside_band] = linear_gain
@@ -167,29 +166,6 @@ class AudioEqualizer:
         return gain_array
     
     @staticmethod
-    def _apply_gain_to_spectrum(
-        spectrum: np.ndarray,
-        gain_array: np.ndarray
-    ) -> np.ndarray:
-        """
-        Apply gain array to frequency spectrum.
-        
-        Args:
-            spectrum: FFT spectrum
-            gain_array: Gain array for positive frequencies
-            
-        Returns:
-            Modified spectrum
-        """
-        n_samples = len(spectrum)
-        modified_spectrum = spectrum.copy()
-        
-        modified_spectrum[:n_samples//2] *= gain_array
-        modified_spectrum[n_samples//2:] *= gain_array[::-1]
-        
-        return modified_spectrum
-    
-    @staticmethod
     def apply_equalizer(
         audio_signal: np.ndarray,
         sample_rate: float,
@@ -220,6 +196,11 @@ class AudioEqualizer:
         Returns:
             Equalized audio signal
         """
+        if start_freq < 0 or end_freq < 0:
+            raise ValueError("start_freq and end_freq must be positive")
+        if start_freq > end_freq:
+            start_freq, end_freq = end_freq, start_freq
+        
         n_samples = len(audio_signal)
         
         if gain_mode == 'db':
@@ -229,12 +210,12 @@ class AudioEqualizer:
         
         windowed_signal, window = AudioEqualizer._apply_window(audio_signal, window_type)
         
-        spectrum = fft(windowed_signal)
-        freqs = np.fft.fftfreq(n_samples, 1/sample_rate)
-        positive_freqs = freqs[:n_samples//2]
+        # Use rFFT to avoid manual positive/negative frequency mirroring and odd/even length pitfalls
+        spectrum = np.fft.rfft(windowed_signal, n=n_samples)
+        freqs = np.fft.rfftfreq(n_samples, d=1/sample_rate)
         
         gain_array = AudioEqualizer._calculate_gain_array(
-            positive_freqs,
+            freqs,
             start_freq,
             end_freq,
             linear_gain,
@@ -243,8 +224,8 @@ class AudioEqualizer:
             complement_mode_fre
         )
         
-        modified_spectrum = AudioEqualizer._apply_gain_to_spectrum(spectrum, gain_array)
-        equalized_signal = np.real(ifft(modified_spectrum))
+        modified_spectrum = spectrum * gain_array
+        equalized_signal = np.fft.irfft(modified_spectrum, n=n_samples)
         equalized_signal = AudioEqualizer._remove_window_effect(equalized_signal, window)
         
         return equalized_signal
