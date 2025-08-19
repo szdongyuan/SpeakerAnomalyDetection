@@ -16,6 +16,7 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.log_manager import LogManager
 from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from base.pre_processing.audio_peak_detection import peak_detection
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from consts import error_code, ui_style_const
@@ -40,6 +41,7 @@ def get_class_mapping():
         "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
+        "PD": PD,
     }
     return class_mapping
 
@@ -675,6 +677,86 @@ class LooseParticle(AnalysisGraphWidget):
         out_range_points = np.array(out_range_points) - deviation
         out_range_plot = pg.PlotDataItem(signal_duration, out_range_points, pen=pen)
         self.analysis_plot.addItem(out_range_plot)
+
+
+class PD(AnalysisGraphWidget):
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.analysis_config = None
+        self.result = None
+        self.setWindowTitle(title_name)
+
+        # top status bar
+        self.status_label = QLabel()
+        self.PD_num_label = QLabel("PD 数量: -")
+        pd_num_layout = QHBoxLayout()
+        pd_num_layout.addStretch()
+        pd_num_layout.addWidget(self.status_label)
+        pd_num_layout.addWidget(self.PD_num_label)
+        pd_num_layout.setSpacing(20)
+        self.layout().insertLayout(0, pd_num_layout)
+
+        self.setStyleSheet("font-size: 16px;")
+
+    def _update_fonts(self):
+        # only adjust the font size of the upper time series plot
+        self.set_plot_font_size(20)
+
+    def calculate_spec(self):
+        """
+        calculate and plot PD analysis: the upper plot is SPL time series with peak annotation; 
+        """
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        if recorded_signal is None or sample_rate is None:
+            return None
+
+        try:
+            detection_result = peak_detection(
+                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config
+            )
+        except Exception as e:
+            self.status_label.setText(f"状态: 异常({e.__class__.__name__})")
+            self.PD_num_label.setText("PD 数量: -")
+            # clear the image and return
+            self.analysis_plot.clear()
+            return None
+        self.result = detection_result
+
+        # save the grid points (sample point indices) corresponding to the peaks
+        peak_indices = detection_result.get("peaks_index", []) if isinstance(detection_result, dict) else []
+        indices_list = [int(i) for i in peak_indices] if len(peak_indices) > 0 else []
+        analysis_key = self.windowTitle()
+        self.data_struct.pd_peak_grid_points_map[analysis_key] = indices_list
+
+        # SPL time series + peak annotation
+        self.analysis_plot.clear()
+        spl_series = np.asarray(detection_result.get("spl_db_series", []), dtype=float)
+        if spl_series.size == 0:
+            ref_p = 20e-6
+            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
+        time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
+        self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
+
+        peak_times = detection_result.get("peaks_time_sec", [])
+        if peak_times:
+            peak_indices = np.clip((np.array(peak_times) * sample_rate).astype(int), 0, len(spl_series) - 1)
+            peak_values = spl_series[peak_indices]
+            scatter = pg.ScatterPlotItem(x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8)
+            self.analysis_plot.addItem(scatter)
+
+        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("bottom", "Time (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+
+        # update the number and status
+        num_peaks = int(detection_result.get("num_peaks", 0))
+        self.PD_num_label.setText(f"PD 数量: {num_peaks}")
+        self.status_label.setText("状态: 正常" if detection_result.get("passed", False) else "状态: 异常")
+
+        self._update_fonts()
+        return detection_result
 
 
 if __name__ == "__main__":

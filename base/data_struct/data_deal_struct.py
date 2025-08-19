@@ -20,6 +20,9 @@ class DataDealStruct(object):
 
             self.stft_flag = 0
             self.fft_flag = 0
+            
+            # multiple PD instances result mapping: { analysis_key(str): [idx1, idx2, ...] }
+            self.pd_peak_grid_points_map = {} 
 
             self._initialized = True
 
@@ -29,6 +32,7 @@ class DataDealStruct(object):
         # self.stimulus_data = None
         self.fft_result = None
         self.stft_result = None
+
         # self.hd_flag = 0
         # self.fr_flag = 0
         # self.ai_flag = 0
