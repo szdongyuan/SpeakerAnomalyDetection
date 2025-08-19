@@ -38,7 +38,7 @@ qcombobox_style = """
                 border: 1px solid rgb(173, 173, 173);
                 background-color: rgb(225, 225, 225);
                 font-family: 'SimSun';
-                font-size: 20px;
+                font-size: 18px;
                 border-radius: 3px;
                 padding: 3px;
             }

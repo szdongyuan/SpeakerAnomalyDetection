@@ -20,6 +20,7 @@ from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
 from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow
 from ui.analysis_config_window import LPConfigWindow
+from ui.analysis_config_window import PDConfigWindow
 
 
 class AnalysisModelSelect(QDialog):
@@ -130,6 +131,7 @@ class AnalysisModelSelect(QDialog):
             "频响 (FR) ",
             "谐波失真 (HD) ",
             "松散颗粒 (LP) ",
+            "峰值检测 (PD) ",
             "AI 分析 ",
             "频谱分析 (Spec) ",
         ]
@@ -516,6 +518,8 @@ class OptionList(QListView):
             model = SpecConfigWindow(config_manager, name)
         elif type == "LP":
             model = LPConfigWindow(config_manager, name)
+        elif type == "PD":
+            model = PDConfigWindow(config_manager, name)
         return model
 
     def init_config_info(self, config_file):
@@ -879,7 +883,9 @@ class OptionList(QListView):
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
             return
-        self.config[0].analysis_list[list_item_text] = data[type]
+        
+        default_of_type = data.get(type, {})
+        self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type
 
 
