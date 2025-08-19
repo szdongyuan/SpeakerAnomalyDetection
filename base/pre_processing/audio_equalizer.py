@@ -1,8 +1,7 @@
-import numpy as np
-from scipy.signal import windows
-
 from typing import Optional, Callable, Tuple
 
+import numpy as np
+from scipy.signal import windows
 
 class AudioEqualizer:
     """
