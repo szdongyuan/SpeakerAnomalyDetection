@@ -1,7 +1,9 @@
+from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
-from scipy.ndimage import maximum_filter
+from scipy.fftpack import hilbert
+from scipy.ndimage import maximum_filter, uniform_filter1d
 from scipy.signal import savgol_filter, medfilt, bessel, filtfilt
 import librosa
 
@@ -356,30 +358,67 @@ class AudioThdFrequencyResponseAnalysis(object):
         return fr[start_idx:stop_idx], frequency_list[start_idx:stop_idx]
 
     @staticmethod
-    def spl_calculation(recorded_signal, reference_pressure=20e-6, window_size=1201, is_smooth=True):
+    def spl_calculation(recorded_signal,
+                        reference_pressure: float = 20e-6, 
+                        window_size: int = 1201, 
+                        method: str = "rms", 
+                        padding_mode: str = "zero", 
+                        padding_cval: Optional[float] = 0.0,
+                        deviation: Optional[float] = None):
         """
-            Calculate the Sound Pressure Level (SPL) of the recorded signal.
+            Compute SPL (dB) with a sliding window.
 
-            Args:
-                - recorded_signal : ndarray
-                    The input recorded signal
-                - reference_pressure : float
-                    The reference sound pressure, defaulting to 20 μPa (20e-6 Pa),
-                    used as the baseline for SPL calculation.
-                - window_size: int
-                    The sliding window length
-
-            Returns:
-                - spl_smooth : ndarray
-                    The computed SPL (in dB) after smoothing.
+            - method: "rms" | "envelope" | "hilbert" (default "rms")
+            - padding_mode: "reflect" | "nearest" | "mirror" | "wrap" | "constant"
+              Accepts alias "zero" → "constant"
+            - padding_cval: used only when padding_mode == "constant"
         """
-        amplitude_list = maximum_filter(np.abs(recorded_signal), size=window_size)
-        spl = 20 * np.log10(np.array(amplitude_list) / reference_pressure)
-        if is_smooth:
-            spl_smooth = np.convolve(spl, np.ones(1102) / 1102, mode='same')
-            return spl_smooth
+        method = str(method).strip().lower()
+        padding_mode_in = str(padding_mode).strip().lower()
+
+        alias_to_mode = {
+            "zero": "constant",
+            "zeros": "constant",
+            "const": "constant",
+            "constant": "constant",
+        }
+        valid_modes = {"reflect", "nearest", "mirror", "wrap", "constant"}
+        mode = alias_to_mode.get(padding_mode_in, padding_mode_in)
+        if mode not in valid_modes:
+            mode = "constant"
+
+        valid_methods = {"rms", "envelope", "hilbert"}
+        if method not in valid_methods:
+            method = "rms"
+
+        if mode == "constant":
+            cval = 0.0 if padding_cval is None else float(padding_cval)
         else:
-            return spl
+            cval = 0.0
+
+        signal_float = np.asarray(recorded_signal, dtype=float)
+        if method == "envelope":
+            amplitude_list = maximum_filter(np.abs(signal_float), size=window_size, mode=mode, cval=cval)
+        elif method == "hilbert":
+            amplitude_envelope = np.abs(hilbert(signal_float))
+            amplitude_list = uniform_filter1d(
+                amplitude_envelope,
+                size=window_size,
+                axis=0,
+                mode=mode,
+                cval=cval
+            )
+        else: 
+            amplitude_list = np.sqrt(
+                uniform_filter1d(signal_float ** 2, size=window_size, axis=0, mode=mode, cval=cval)
+            )
+
+        # Avoid log of zero or negative due to numerical issues
+        amplitude_list = np.maximum(np.asarray(amplitude_list, dtype=float), 1.0e-10)    
+        spl = 20 * np.log10(amplitude_list / float(reference_pressure))
+        if(deviation is not None):
+            spl = spl + deviation
+        return spl
 
     @staticmethod    
     def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size):

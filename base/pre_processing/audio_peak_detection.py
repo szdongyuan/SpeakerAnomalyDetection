@@ -4,6 +4,7 @@ import numpy as np
 from scipy.signal import find_peaks, peak_prominences, peak_widths
 
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.utils.smooth import smooth as smooth_fn
 
 
@@ -22,59 +23,6 @@ def _parse_ranges(frequency_ranges_str: str) -> List[Tuple[float, float]]:
             continue
     return ranges
 
-
-def _apply_multi_band_equalizer(
-    audio_signal: np.ndarray,
-    sample_rate: int,
-    frequency_ranges: List[Tuple[float, float]],
-    filter_type: str,
-    transition_width: float,
-) -> np.ndarray:
-    """
-    use the equalizer to implement multi-band bandpass/bandstop with "gain=0":
-    - bandpass: add the bandpass components of each band (zero out the band outside)
-    - bandstop: cascade the bandstop components of each band (zero out the band inside)
-    """
-    is_bandpass = (filter_type == "bandpass")
-    if is_bandpass:
-        result_signal = np.zeros_like(audio_signal)
-        for start_freq, end_freq in frequency_ranges:
-            if end_freq <= start_freq:
-                continue
-            component = AudioEqualizer.apply_equalizer(
-                audio_signal=audio_signal,
-                sample_rate=float(sample_rate),
-                start_freq=float(start_freq),
-                end_freq=float(end_freq),
-                gain=0.0,
-                gain_mode="linear",
-                window_type=None,
-                transition_width=transition_width,
-                transition_type="cosine",
-                complement_mode_fre=True,
-            )
-            result_signal += component
-        return result_signal
-    else:
-        result_signal = audio_signal.copy()
-        for start_freq, end_freq in frequency_ranges:
-            if end_freq <= start_freq:
-                continue
-            result_signal = AudioEqualizer.apply_equalizer(
-                audio_signal=result_signal,
-                sample_rate=float(sample_rate),
-                start_freq=float(start_freq),
-                end_freq=float(end_freq),
-                gain=0.0,
-                gain_mode="linear",
-                window_type=None,
-                transition_width=transition_width,
-                transition_type="cosine",
-                complement_mode_fre=False,
-            )
-        return result_signal
-
-
 def _design_and_apply_filter(
     audio_signal: np.ndarray,
     sample_rate: int,
@@ -83,22 +31,51 @@ def _design_and_apply_filter(
     filter_type: str,
     filter_order: int,
 ) -> np.ndarray:
+    """
+    Parse frequency ranges and apply multi-band filtering using the equalizer.
+
+    This function merges the previous range parsing + multi-band application and
+    includes exception handling. On any error, the original signal is returned.
+    """
     if not enabled:
         return audio_signal
 
-    ranges = _parse_ranges(frequency_ranges_str)
-    if not ranges:
+    try:
+        ranges = _parse_ranges(frequency_ranges_str)
+        if not ranges:
+            return audio_signal
+
+        transition_width = 1.0 / max(1, int(filter_order))
+
+        is_bandpass = (str(filter_type) == "bandpass")
+        if is_bandpass:
+            # Sum bandpass components across ranges
+            return AudioEqualizer.apply_multi_band_equalizer(
+                audio_signal=audio_signal,
+                sample_rate=float(sample_rate),
+                frequency_ranges=ranges,
+                gains=1.0,
+                gain_mode="linear",
+                window_type=None,
+                transition_width=transition_width,
+                transition_type="cosine",
+                mode="sum",
+            )
+        else:
+            # Cascade bandstop across ranges (in-band gain=0)
+            return AudioEqualizer.apply_multi_band_equalizer(
+                audio_signal=audio_signal,
+                sample_rate=float(sample_rate),
+                frequency_ranges=ranges,
+                gains=0.0,
+                gain_mode="linear",
+                window_type=None,
+                transition_width=transition_width,
+                transition_type="cosine",
+                mode="cascade",
+            )
+    except Exception:
         return audio_signal
-
-    transition_width = 1.0 / max(1, int(filter_order))
-
-    return _apply_multi_band_equalizer(
-        audio_signal=audio_signal,
-        sample_rate=sample_rate,
-        frequency_ranges=ranges,
-        filter_type=filter_type,
-        transition_width=transition_width,
-    )
 
 
 def _smooth_series(
@@ -156,6 +133,7 @@ def _compute_rms_spl_series(
     window_time_sec: float,
     window_points: int,
     ref_pressure: float = 20e-6,
+    deviation: float = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     if window_unit == "time":
         win = max(1, int(round(window_time_sec * sample_rate)))
@@ -165,16 +143,24 @@ def _compute_rms_spl_series(
     if win <= 1:
         rms_envelope = np.abs(audio_signal)
     else:
-        # sliding RMS
+        # sliding RMS (kept for RMS envelope output consistency)
         pad = win // 2
-        padded = np.pad(audio_signal, (pad, pad), mode="reflect")
+        padded = np.pad(audio_signal, (pad, pad), mode="constant", constant_values=0)
         sq = padded ** 2
         kernel = np.ones(win, dtype=float) / float(win)
         mean_sq = np.convolve(sq, kernel, mode="same")[pad:-pad]
         rms_envelope = np.sqrt(np.maximum(mean_sq, 1e-30))
 
-    spl_db_series = 20.0 * np.log10(np.maximum(rms_envelope, 1e-30) / ref_pressure)
-    return rms_envelope, spl_db_series
+    spl_db_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+        recorded_signal=audio_signal,
+        reference_pressure=ref_pressure,
+        window_size=win,
+        method="rms",
+        padding_mode="constant",
+        padding_cval=0.0,
+        deviation=deviation
+    )
+    return rms_envelope, np.asarray(spl_db_series, dtype=float)
 
 
 def _normalize_rms(rms_envelope: np.ndarray) -> np.ndarray:
@@ -259,6 +245,7 @@ def peak_detection(
     audio_signal: np.ndarray,
     sample_rate: int,
     config: Dict[str, Any],
+    deviation: float = None,
 ) -> Dict[str, Any]:
     """
     peak detection (PD) based on configurable parameters.
@@ -286,6 +273,7 @@ def peak_detection(
         window_time_sec=float(config.get("spl_window_time_sec", 0.050)),
         window_points=int(config.get("spl_window_points", 0)),
         ref_pressure=20e-6,
+        deviation=deviation
     )
 
     # 3) normalization and smoothing (consistent pre-processing for dB and RMS series)

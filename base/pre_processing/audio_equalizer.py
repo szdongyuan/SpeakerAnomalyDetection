@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable, Tuple, List, Union
 
 import numpy as np
 from scipy.signal import windows
@@ -228,4 +228,110 @@ class AudioEqualizer:
         equalized_signal = AudioEqualizer._remove_window_effect(equalized_signal, window)
         
         return equalized_signal
+    
+    @staticmethod
+    def apply_multi_band_equalizer(
+        audio_signal: np.ndarray,
+        sample_rate: float,
+        frequency_ranges: List[Tuple[float, float]],
+        gains: Union[float, List[float]] = 0.0,
+        gain_mode: str = 'linear',
+        window_type: Optional[str] = None,
+        transition_width: float = 0.1,
+        transition_type: str = 'cosine',
+        mode: str = 'cascade',
+    ) -> np.ndarray:
+        """
+        Apply multi-band equalization using existing single-band equalizer.
+        
+        Two composition modes are supported:
+        - 'sum': Extract per-band bandpass components and sum them together. Each
+                 component is scaled by its corresponding gain. This emulates a
+                 multi-band bandpass when gains are all 1.0.
+                 (将通带叠加，一般适合于多通带滤波)
+        - 'cascade': Sequentially apply in-place per-band equalization where the in-band
+                     region is multiplied by its gain and outside remains 1.0. This
+                     emulates a multi-band bandstop when gains are 0.0.
+                 (将阻带级联，一般适合于多阻带滤波)
+        Args:
+            audio_signal: Input time-domain signal.
+            sample_rate: Sample rate in Hz.
+            frequency_ranges: List of (start_freq, end_freq) pairs in Hz.
+            gains: Either a single number applied to all bands or a list of per-band gains.
+            gain_mode: 'linear' or 'db' for interpreting gains.
+            window_type: Optional window function name.
+            transition_width: Transition width as a fraction of band width.
+            transition_type: 'cosine', 'linear', or 'sigmoid'.
+            mode: 'sum' or 'cascade'.
+        
+        Returns:
+            The processed signal.
+        """
+        if not frequency_ranges:
+            return audio_signal
+        
+        # Normalize and validate ranges
+        normalized_ranges: List[Tuple[float, float]] = []
+        for start_freq, end_freq in frequency_ranges:
+            if start_freq < 0 or end_freq < 0:
+                continue
+            if start_freq > end_freq:
+                start_freq, end_freq = end_freq, start_freq
+            if end_freq <= start_freq:
+                continue
+            normalized_ranges.append((float(start_freq), float(end_freq)))
+        
+        if not normalized_ranges:
+            return audio_signal
+        
+        # Prepare gains list
+        if isinstance(gains, list):
+            if len(gains) != len(normalized_ranges):
+                raise ValueError("Length of gains must match length of frequency_ranges")
+            gains_list = gains
+        else:
+            gains_list = [gains] * len(normalized_ranges)
+        
+        def to_linear(value: float) -> float:
+            return AudioEqualizer._db_to_linear(value) if gain_mode == 'db' else float(value)
+        linear_gains: List[float] = [to_linear(g) for g in gains_list]
+        
+        if mode not in ('sum', 'cascade'):
+            raise ValueError("mode must be 'sum' or 'cascade'")
+        
+        if mode == 'sum':
+            accumulated = np.zeros_like(audio_signal)
+            for (start_freq, end_freq), band_gain in zip(normalized_ranges, linear_gains):
+                band_component = AudioEqualizer.apply_equalizer(
+                    audio_signal=audio_signal,
+                    sample_rate=float(sample_rate),
+                    start_freq=float(start_freq),
+                    end_freq=float(end_freq),
+                    gain=0.0,
+                    gain_mode='linear',
+                    window_type=window_type,
+                    transition_width=transition_width,
+                    transition_type=transition_type,
+                    complement_mode_fre=True,
+                )
+                if band_gain != 1.0:
+                    band_component = band_component * band_gain
+                accumulated += band_component
+            return accumulated
+        else:
+            result = audio_signal.copy()
+            for (start_freq, end_freq), band_gain in zip(normalized_ranges, linear_gains):
+                result = AudioEqualizer.apply_equalizer(
+                    audio_signal=result,
+                    sample_rate=float(sample_rate),
+                    start_freq=float(start_freq),
+                    end_freq=float(end_freq),
+                    gain=float(band_gain),
+                    gain_mode='linear',
+                    window_type=window_type,
+                    transition_width=transition_width,
+                    transition_type=transition_type,
+                    complement_mode_fre=False,
+                )
+            return result
     

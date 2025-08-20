@@ -19,6 +19,7 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
+from base.utils.smooth import smooth
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import plot_2d_image
@@ -184,9 +185,10 @@ class Spl(AnalysisGraphWidget):
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal, reference_pressure, is_smooth=self.analysis_config["smooth_checked"]
+            recorded_signal, reference_pressure, deviation=self.deviation_value
         )
-        signal_spl = signal_spl + self.deviation_value
+        if self.analysis_config["smooth_checked"]:
+            signal_spl = smooth(signal_spl, window_size=1102, method="rms")
         limit_checked = self.analysis_config.get("limit_checked")
         self_defined = self.analysis_config.get("self_defined")
         if limit_checked:
@@ -685,6 +687,7 @@ class PD(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
+        self.deviation_value = None
         self.setWindowTitle(title_name)
 
         # top status bar
@@ -714,7 +717,7 @@ class PD(AnalysisGraphWidget):
 
         try:
             detection_result = peak_detection(
-                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config
+                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config, deviation=self.deviation_value
             )
         except Exception as e:
             self.status_label.setText(f"状态: 异常({e.__class__.__name__})")
@@ -736,6 +739,8 @@ class PD(AnalysisGraphWidget):
         if spl_series.size == 0:
             ref_p = 20e-6
             spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
+            if self.deviation_value is not None:
+                spl_series = spl_series + float(self.deviation_value)
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
 
