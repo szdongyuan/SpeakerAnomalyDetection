@@ -1331,6 +1331,9 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
                     instance.show()
+                elif hasattr(instance, "calculate_peak_detection"):
+                    instance.calculate_peak_detection()
+                    instance.show()
                 elif hasattr(instance, "calculate_loose_particle"):
                     instance.calculate_loose_particle()
                     instance.show()
