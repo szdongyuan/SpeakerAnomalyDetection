@@ -42,7 +42,7 @@ def get_class_mapping():
         "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
-        "PD": PD,
+        "PD": PeakDetection,
     }
     return class_mapping
 
@@ -681,7 +681,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.analysis_plot.addItem(out_range_plot)
 
 
-class PD(AnalysisGraphWidget):
+class PeakDetection(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -706,7 +706,7 @@ class PD(AnalysisGraphWidget):
         # only adjust the font size of the upper time series plot
         self.set_plot_font_size(20)
 
-    def calculate_spec(self):
+    def calculate_peak_detection(self):
         """
         calculate and plot PD analysis: the upper plot is SPL time series with peak annotation; 
         """
