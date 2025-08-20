@@ -732,7 +732,6 @@ class PeakDetection(AnalysisGraphWidget):
         indices_list = [int(i) for i in peak_indices] if len(peak_indices) > 0 else []
         analysis_key = self.windowTitle()
         self.data_struct.pd_peak_grid_points_map[analysis_key] = indices_list
-
         # SPL time series + peak annotation
         self.analysis_plot.clear()
         spl_series = np.asarray(detection_result.get("spl_db_series", []), dtype=float)
