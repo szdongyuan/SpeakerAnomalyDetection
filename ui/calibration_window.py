@@ -737,14 +737,18 @@ class InputCalibration(QWidget):
             Average SPL value.
         """
         rec_code, recorded_data = SoundcardAudioProcessor().sd_rec(recorded_dict)
-        step = 100
+        step = len(recorded_data) // 3
         if rec_code == error_code.OK:
-            spl_smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_data)
+            spl_smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(
+                recorded_data,
+                method="rms",
+                window_size=1201
+            )
             spl_smooth_mid = len(spl_smooth) // 2
             spl_smooth_start = spl_smooth_mid - step
             spl_smooth_end = spl_smooth_mid + step
             spl_sample = spl_smooth[spl_smooth_start:spl_smooth_end]
-            self.average_value = np.sum(spl_sample) / (step * 2)
+            self.average_value = np.mean(spl_sample)
             return self.average_value
 
     def update_recorded_time(self):

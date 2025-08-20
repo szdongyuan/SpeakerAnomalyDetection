@@ -901,64 +901,8 @@ class PDConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        # merge the default values from the screenshot (only assign the default values, do not overwrite the existing user configuration)
-        self.load_config = self._merge_with_pd_defaults(self.load_config)
 
         self.init_ui()
-
-    def _merge_with_pd_defaults(self, cfg: dict) -> dict:
-        defaults = {
-            # pre-processing
-            "filter_enabled": False,
-            "filter_ranges": "0,200",   # filter ranges
-            "filter_type": "bandstop",  # filter type: bandstop
-            "filter_order": 4,
-            "smooth_enabled": False,
-            "smooth_unit": "time",
-            "smooth_time_sec": 0.05,
-            "smooth_points": 0,
-            "smooth_algo": 1,  # average
-            # SPL calculation window length
-            "spl_window_unit": "time",
-            "spl_window_time_sec": 0.010,
-            "spl_window_points": 0,
-            # peak parameters
-            "peak_count_enabled": False,
-            "peak_count": 3,
-            "peak_size_enabled": True,
-            "peak_size_unit": "db",
-            "peak_min_value": 70.0,
-            "peak_slope_enabled": False,
-            "peak_slope_unit": "db",
-            "peak_min_slope": 30.0,
-            "nms_enabled": True,
-            "nms_unit": "time",
-            "nms_time_sec": 0.20,
-            "nms_points": 0,
-            # duration
-            "duration_enabled": False,
-            "duration_min": 0.020,
-            "duration_max": 0.060,
-            # advanced
-            "advanced_mode": False,
-            "convex_unit": "time",
-            "convex_audio_ratio": 1.0,
-            "convex_points": 1024,
-            "convex_time_sec": 1.000,
-            "duration_ref_unit": "db",
-            "duration_ref_value": 50.0,
-            # test options
-            "test_peak_op": "≥",
-            "test_peak_value": 5,
-        }
-        merged = dict(defaults)
-        if isinstance(cfg, dict):
-            merged.update({k: cfg.get(k, merged[k]) for k in merged.keys()})
-            # also keep the unknown keys
-            for k, v in cfg.items():
-                if k not in merged:
-                    merged[k] = v
-        return merged
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -975,9 +919,9 @@ class PDConfigWindow(QDialog):
         left_layout.addWidget(self.create_test_group())
         left_layout.addStretch()
 
-        # advanced mode toggle button: only control the visibility of the panel, not the enable/disable
-        self.advanced_visible = bool(self.load_config.get("advanced_mode", False))
-        self.btn_toggle_advanced = QPushButton("高级模式 <<<" if self.advanced_visible else "高级模式 >>>")
+        # advanced mode: always hidden when entering PD config
+        self.advanced_visible = False
+        self.btn_toggle_advanced = QPushButton("高级模式 >>>")
         self.btn_toggle_advanced.clicked.connect(self.on_toggle_advanced_mode)
         left_layout.addWidget(self.btn_toggle_advanced)
 
