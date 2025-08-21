@@ -174,10 +174,10 @@ class RecordConfigWindow(BaseConfigWindow):
         label_time = QLabel("音频时长:")
 
         self.time_input = QDoubleSpinBox()
-        self.time_input.setRange(0.5, 600)
+        self.time_input.setRange(0.1, 600)
         self.time_input.setDecimals(1)
         self.time_input.setValue(self.input_data.get("total_time"))
-        self.time_input.setSingleStep(0.5)
+        self.time_input.setSingleStep(0.1)
         self.time_input.setSuffix(" 秒")
 
         label_samplerate = QLabel("采样率:")

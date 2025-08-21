@@ -2,7 +2,7 @@ import sys
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
 from PyQt5.QtWidgets import QHBoxLayout
 
@@ -160,6 +160,54 @@ class ColorBarItem(pg.GraphicsObject):
     
     def boundingRect(self):
         return QtCore.QRectF(0, 0, self.width + 50, self.height)
+
+
+class DraggablePlotWidget(pg.PlotWidget):
+    sigSelectionCancelled = pyqtSignal()
+
+    def __init__(self, region_item, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.region = region_item
+        self.is_creating_new_region = False
+        self.drag_start_pos = None
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.LeftButton and
+                self.getPlotItem().getViewBox().sceneBoundingRect().contains(event.pos())):
+            items_under_cursor = self.scene().items(event.pos())
+            region_parts = [self.region] + self.region.lines
+            is_on_region = any(item in items_under_cursor for item in region_parts)
+            if is_on_region:
+                self.is_creating_new_region = False
+                super().mousePressEvent(event)
+            else:
+                self.is_creating_new_region = True
+                self.drag_start_pos = self.getPlotItem().getViewBox().mapSceneToView(event.pos())
+                self.region.hide()
+                event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.is_creating_new_region:
+            if not self.region.isVisible():
+                self.region.show()
+            current_pos = self.getPlotItem().getViewBox().mapSceneToView(event.pos())
+            self.region.setRegion(sorted([self.drag_start_pos.x(), current_pos.x()]))
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.is_creating_new_region:
+            self.is_creating_new_region = False
+            start, end = self.region.getRegion()
+            if abs(start - end) < 1e-9:
+                self.region.hide()
+                self.sigSelectionCancelled.emit()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 if __name__ == "__main__":

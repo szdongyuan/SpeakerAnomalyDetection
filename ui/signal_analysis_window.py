@@ -6,17 +6,22 @@ import sys
 import librosa
 import numpy as np
 import pyqtgraph as pg
+from librosa.core import spectrum
+from librosa.feature import spectral
+from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel
+from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QMessageBox
 from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
+from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
@@ -43,6 +48,7 @@ def get_class_mapping():
         "Spec": Spectrogram,
         "LP": LooseParticle,
         "PD": PeakDetection,
+        "PM": PatternMatch,
     }
     return class_mapping
 
@@ -760,6 +766,140 @@ class PeakDetection(AnalysisGraphWidget):
 
         self._update_fonts()
         return self.result
+
+
+
+class PatternMatch(QWidget):
+    def __init__(self, title_name, target_data=None):
+        super().__init__()
+        if target_data:
+            self.target_data = target_data
+        else:
+            self.data_struct = DataDealStruct()
+            self.target_data = self.data_struct.store_wave_data
+        self.pattern_data = None
+        self.analysis_config = None
+        self.sample_rate = self.data_struct.sample_rate
+        self.init_ui()
+        self.setWindowTitle(title_name)
+
+    def init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.main_layout = QVBoxLayout(self)
+        self.result_display = QTextEdit()
+        self.result_display.setReadOnly(True)
+
+        self.main_layout.addWidget(self.result_display)
+        self.setLayout(self.main_layout)
+        self.setStyleSheet(
+            ui_style_const.qlabel_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qtextedit_style
+        )
+
+    def calculate_pattern_match(self):
+        if self.target_data is None or self.analysis_config is None:
+            self.result_display.setText("错误：数据或配置不完整")
+            return
+        self.pattern_data = self.load_pattern_data()
+        if self.pattern_data is None:
+            self.result_display.setText("错误：模版数据不存在")
+            return
+
+        algorithm_name = self.analysis_config.get("algorithm", "dtw")
+        threshold_method = self.analysis_config.get("threshold_strategy")
+
+        threshold = 0.9
+        if threshold_method == "fixed_threshold":
+            threshold = self.analysis_config.get("threshold_value", 0.9)
+
+        similarity_metric = self.analysis_config.get("similarity_metric", "euclidean")
+        apply_filter = self.analysis_config.get("apply_filter", False)
+
+        if apply_filter:
+            filter_range_hz = self.analysis_config.get("filter_range_hz")
+            start_freq, end_freq = filter_range_hz
+            self.target_data = AudioEqualizer.apply_equalizer(self.target_data, self.sample_rate, start_freq=start_freq,
+                                                              end_freq=end_freq)
+            self.pattern_data = AudioEqualizer.apply_equalizer(self.pattern_data, self.sample_rate,
+                                                               start_freq=start_freq, end_freq=end_freq)
+
+        feature_type = self.analysis_config.get("feature_type", "mfcc")
+        target_features, pattern_features = self.feature_extraction_handle(self.target_data, self.pattern_data,
+                                                                           feature_type)
+
+        result_dict = self.algorithm_handle(algorithm_name, target_features, pattern_features,
+                                            distance_measure_method=similarity_metric,
+                                            threshold=threshold
+                                            )
+        if result_dict:
+            is_match = result_dict['is_match']
+            score = result_dict['score']
+            used_threshold = result_dict['threshold']
+
+            if is_match:
+                match_status = "匹配成功"
+            else:
+                match_status = "匹配失败"
+
+            result_text = (
+                f"\xa0\xa0匹配结果: {match_status}\n\n"
+                f"\xa0\xa0相似度评分: {score * 100:.2f}%\n"
+                f"\xa0\xa0判定阈值: {used_threshold * 100:.2f}%"
+            )
+            self.result_display.setPlainText(result_text)
+        else:
+            self.result_display.setText("分析执行时发生错误!")
+
+    @staticmethod
+    def algorithm_handle(algorithm_name, target_data, pattern_data, distance_measure_method=None, threshold=None):
+        if algorithm_name == "dtw":
+            if threshold is None:
+                raise ValueError("A threshold must be provided to determine similarity.")
+
+            target_data = target_data
+            pattern_data = pattern_data
+
+            D, wp = dtw(X=target_data, Y=pattern_data, metric=distance_measure_method, backtrack=True)
+
+            distance = D[-1, -1]
+            similarity = 1 / (1 + distance)
+            is_match = similarity >= threshold
+
+            return {
+                "is_match": is_match,
+                "score": similarity,
+                "threshold": threshold
+            }
+        return None
+
+    def feature_extraction_handle(self, target_data, pattern_data, feature_type):
+        if feature_type != "waveform":
+            feature_params = self.analysis_config["feature_params"]
+            if feature_type == "mfcc":
+                target_data = spectral.mfcc(y=target_data, sr=self.sample_rate, **feature_params)
+                pattern_data = spectral.mfcc(y=pattern_data, sr=self.sample_rate, **feature_params)
+            elif feature_params == "spec":
+                target_data = np.abs(spectrum.stft(y=target_data, **feature_params))
+                pattern_data = np.abs(spectrum.stft(y=pattern_data, **feature_params))
+            elif feature_params == "fft":
+                target_len = len(target_data)
+                pattern_len = len(pattern_data)
+                target_data = np.abs(np.fft.fft(target_data) / target_len)[:target_len // 2]
+                pattern_data = np.abs(np.fft.fft(pattern_data) / pattern_len)[:pattern_len // 2]
+        return target_data, pattern_data
+
+    def load_pattern_data(self):
+        re_path = self.analysis_config.get("pattern_save_path")
+        pattern_data_path = None
+        if re_path:
+            pattern_data_path = os.path.join(DEFAULT_DIR, re_path)
+        if not pattern_data_path or not os.path.exists(pattern_data_path):
+            self.result_display.setText("错误：模版数据不存在")
+            return
+        pattern_data, _ = load_audio_simple(pattern_data_path)
+        return pattern_data
+
 
 
 if __name__ == "__main__":
