@@ -4,7 +4,6 @@ import sys
 from functools import partial
 import librosa
 import numpy as np
-import soundfile as sf
 
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
@@ -16,6 +15,7 @@ from PyQt5.QtWidgets import QDoubleSpinBox
 from PyQt5.QtWidgets import QButtonGroup
 
 from base.file_ops import FileOps
+from base.load_audio import save_audio_simple, load_audio_simple
 from base.load_config import ConfigManager, LoadUiConfig
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
@@ -1855,7 +1855,7 @@ class PatternMatchConfigWindow(QDialog):
             start_sample = int(start_time * self.sample_rate)
             end_sample = int(end_time * self.sample_rate)
             pattern_data = self.audio_data[start_sample:end_sample]
-            sf.write(config["pattern_save_path"], pattern_data, self.sample_rate)
+            save_audio_simple(config["pattern_save_path"], pattern_data, self.sample_rate)
             config["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
             config["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
         except Exception as e:
