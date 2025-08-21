@@ -716,7 +716,7 @@ class PeakDetection(AnalysisGraphWidget):
             return None
 
         try:
-            detection_result = peak_detection(
+            self.result = peak_detection(
                 np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config, deviation=self.deviation_value
             )
         except Exception as e:
@@ -725,16 +725,15 @@ class PeakDetection(AnalysisGraphWidget):
             # clear the image and return
             self.analysis_plot.clear()
             return None
-        self.result = detection_result
 
         # save the grid points (sample point indices) corresponding to the peaks
-        peak_indices = detection_result.get("peaks_index", []) if isinstance(detection_result, dict) else []
+        peak_indices = self.result.get("peaks_index", []) if isinstance(self.result, dict) else []
         indices_list = [int(i) for i in peak_indices] if len(peak_indices) > 0 else []
         analysis_key = self.windowTitle()
         self.data_struct.pd_peak_grid_points_map[analysis_key] = indices_list
         # SPL time series + peak annotation
         self.analysis_plot.clear()
-        spl_series = np.asarray(detection_result.get("spl_db_series", []), dtype=float)
+        spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
             ref_p = 20e-6
             spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
@@ -743,7 +742,7 @@ class PeakDetection(AnalysisGraphWidget):
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
 
-        peak_times = detection_result.get("peaks_time_sec", [])
+        peak_times = self.result.get("peaks_time_sec", [])
         if peak_times:
             peak_indices = np.clip((np.array(peak_times) * sample_rate).astype(int), 0, len(spl_series) - 1)
             peak_values = spl_series[peak_indices]
@@ -755,12 +754,12 @@ class PeakDetection(AnalysisGraphWidget):
         self.analysis_plot.showGrid(x=True, y=True)
 
         # update the number and status
-        num_peaks = int(detection_result.get("num_peaks", 0))
+        num_peaks = int(self.result.get("num_peaks", 0))
         self.PD_num_label.setText(f"PD 数量: {num_peaks}")
-        self.status_label.setText("状态: 正常" if detection_result.get("passed", False) else "状态: 异常")
+        self.status_label.setText("状态: 正常" if self.result.get("passed", False) else "状态: 异常")
 
         self._update_fonts()
-        return detection_result
+        return self.result
 
 
 if __name__ == "__main__":
