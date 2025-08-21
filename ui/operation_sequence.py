@@ -18,7 +18,8 @@ from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
-from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow
+from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow, \
+    PatternMatchConfigWindow
 from ui.analysis_config_window import LPConfigWindow
 from ui.analysis_config_window import PDConfigWindow
 
@@ -132,6 +133,7 @@ class AnalysisModelSelect(QDialog):
             "谐波失真 (HD) ",
             "松散颗粒 (LP) ",
             "峰值检测 (PD) ",
+            "模式匹配(PM)",
             "AI 分析 ",
             "频谱分析 (Spec) ",
         ]
@@ -520,6 +522,8 @@ class OptionList(QListView):
             model = LPConfigWindow(config_manager, name)
         elif type == "PD":
             model = PDConfigWindow(config_manager, name)
+        elif type == "PM":
+            model = PatternMatchConfigWindow(config_manager, name)
         return model
 
     def init_config_info(self, config_file):

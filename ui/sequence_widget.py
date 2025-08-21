@@ -1337,6 +1337,9 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, "calculate_loose_particle"):
                     instance.calculate_loose_particle()
                     instance.show()
+                elif hasattr(instance, "calculate_pattern_match"):
+                    instance.calculate_pattern_match()
+                    instance.show()
                 instance.setGeometry(width, height, 600, 500)
                 instance.setMinimumSize(QSize(600, 500))
                 width += 20
