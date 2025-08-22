@@ -1,18 +1,23 @@
+import os
+from datetime import datetime
+
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.system_intervction.hardware_intervction import get_mac_address
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.recording_management import RecordingManager
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
-from consts import error_code
+from consts import error_code, model_consts
 
 data_struct = DataDealStruct()
+
 
 def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
     """
     Implements the complete workflow for the record-only mode.
     It records audio based on the `sample_rate` specified in`data_struct`, then
     saves the result to a .wav file and the database (with `stimulus_id` set to
-    0). All subsequent operations,such as FFT/STFT, automatic analysis, and 
+    0). All subsequent operations,such as FFT/STFT, automatic analysis, and
     button state updates, are the same as in the play-and-record mode.
     """
 
@@ -26,7 +31,7 @@ def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
 
         recorded_signal_info["sample_rate"] = sample_rate
         RecordingManager().save_signal_info_to_db(recorded_signal_info, None)
-        
+
 
 def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info):
     """
@@ -39,9 +44,7 @@ def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorde
     sample_rate = data_struct.sample_rate
 
     sap = SoundcardAudioProcessor()
-    record_code, data_struct.store_wave_data = sap.sd_play_rec(
-        recorded_dict, stimulus_dict, recorded_path
-    )
+    record_code, data_struct.store_wave_data = sap.sd_play_rec(recorded_dict, stimulus_dict, recorded_path)
     if record_code == error_code.OK:
         recorded_signal_info["sample_rate"] = sample_rate
         RecordingManager().save_signal_info_to_db(recorded_signal_info, data_struct.stimulus_info)
@@ -52,3 +55,40 @@ def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorde
         data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
             data_struct.store_wave_data, sample_rate, **kwargs
         )
+
+
+def get_recorded_info(product_model, product_number, barcode, label):
+    """
+        Generate recorded information.
+
+        This function generates a unique recording file name based on the current date, MAC address, product model,
+    and product number.
+        It also constructs the path for the recording file. Additionally, it creates a dictionary containing the
+    recording file path and product information.
+
+        Returns:
+            tuple: A tuple containing the recording file path and a dictionary with recording information.
+    """
+    recording_time = datetime.now().strftime("%Y-%m-%d")
+    mac_address = get_mac_address()
+    mac_address = mac_address.replace(":", "") if mac_address else None
+    product_number = "{:03}".format(int(product_number))
+    recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number
+    if barcode:
+        recorded_name = recorded_name + "_BC" + barcode
+    else:
+        barcode = None
+    recorded_name = recorded_name + ".wav"
+    store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
+    if not os.path.exists(store_record_dir):
+        os.makedirs(store_record_dir)
+    recorded_path = store_record_dir + "/" + recorded_name
+    recorded_signal_info = {
+        "file_path": recorded_path,
+        "product_model": product_model,
+        "record_date": recording_time,
+        "barcode": barcode,
+        "labels": label,
+    }
+
+    return recorded_path, recorded_signal_info

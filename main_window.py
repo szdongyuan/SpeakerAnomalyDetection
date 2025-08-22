@@ -3,7 +3,7 @@ import sys
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
@@ -18,7 +18,6 @@ from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence_widget import SequenceWindow
-from ui.stimulus_window import StimulusWindow
 
 
 class MainWindow(QMainWindow):
