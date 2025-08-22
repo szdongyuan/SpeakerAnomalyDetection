@@ -1512,7 +1512,6 @@ class PatternMatchConfigWindow(QDialog):
             + ui_style_const.qgroupbox_style
             + ui_style_const.qcombobox_style
             + ui_style_const.qdialog_style
-            + ui_style_const.qframe_style
             + ui_style_const.qradiobutton_style
             + ui_style_const.qtextedit_style
         )
@@ -1531,7 +1530,6 @@ class PatternMatchConfigWindow(QDialog):
         self.select_path_btn.setToolTip("尚未选择模板保存路径")
 
         file_label = QLabel("文件操作:")
-        file_label.setStyleSheet("color: black;")
         layout.addWidget(file_label)
         layout.addWidget(self.file_path_edit)
         layout.addWidget(upload_btn)
@@ -1576,7 +1574,6 @@ class PatternMatchConfigWindow(QDialog):
         layout = QVBoxLayout()
 
         feature_label = QLabel("<b>特征类型</b>")
-        feature_label.setStyleSheet("color: black;")
         layout.addWidget(feature_label)
 
         combo_layout = QHBoxLayout()
@@ -1597,7 +1594,6 @@ class PatternMatchConfigWindow(QDialog):
         layout.addWidget(separator)
 
         filter_label = QLabel("<b>带阻滤波</b>")
-        filter_label.setStyleSheet("color: black;")
         layout.addWidget(filter_label)
         self.filter_checkbox = QCheckBox("启用")
         self.filter_checkbox.toggled.connect(self.on_filter_toggled)
@@ -1610,8 +1606,6 @@ class PatternMatchConfigWindow(QDialog):
         self.high_freq_edit.setValidator(QIntValidator(0, 20000, self))
         low_freq_label = QLabel("最低频率 (Hz):")
         high_freq_label = QLabel("最高频率 (Hz):")
-        low_freq_label.setStyleSheet("color: black;")
-        high_freq_label.setStyleSheet("color: black;")
         filter_range_layout.addRow(low_freq_label, self.low_freq_edit)
         filter_range_layout.addRow(high_freq_label, self.high_freq_edit)
 
@@ -1627,7 +1621,6 @@ class PatternMatchConfigWindow(QDialog):
 
         metric_layout = QHBoxLayout()
         metric_label = QLabel("<b>相似度度量:</b>")
-        metric_label.setStyleSheet("color: black;")
         self.similarity_metric_combo = QComboBox()
         self.similarity_metric_combo.addItem("欧氏距离 (Euclidean)", "euclidean")
         self.similarity_metric_combo.addItem("余弦相似度 (Cosine)", "cosine")
@@ -1641,7 +1634,6 @@ class PatternMatchConfigWindow(QDialog):
         main_layout.addWidget(separator)
 
         return_label = QLabel("<b>匹配点返回策略:</b>")
-        return_label.setStyleSheet("color: black;")
         main_layout.addWidget(return_label)
         fixed_threshold_layout = QHBoxLayout()
         self.fixed_threshold_radio = QRadioButton("固定阈值:")
@@ -1904,21 +1896,6 @@ class PatternMatchConfigWindow(QDialog):
 
 
 class PopupUtils(object):
-    # """
-    #     noicon : 0
-    #     warning : 2
-    #     question : 4
-    #     information : 1
-    #     critical : 3
-    # """
-    # @staticmethod
-    # def popup_massagebox(parent, title, message, icon_type:int):
-    #     msg = QMessageBox(parent)
-    #     msg.setIcon(icon_type)
-    #     msg.setText(message)
-    #     msg.setWindowTitle(title)
-    #     msg.setStandardButtons(QMessageBox.Ok)
-    #     msg.exec_()
 
     @staticmethod
     def save_popup(parent, success_flag=True):
