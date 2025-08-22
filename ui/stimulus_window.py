@@ -8,13 +8,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox, QSizePolicy
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit, QSpinBox, QVBoxLayout
-from scipy.io import wavfile
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
-from base.load_audio import load_audio_simple, save_audio_simple
+from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.pre_processing.swept_sine_chirps import StimulusSignal
+from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from base.stimulus_signal_management import StimulusSignalManagement
@@ -151,12 +151,7 @@ class StimulusWindow(QDialog):
                 self.frequency_group_box,
                 time_group_box,
             ],
-            "noise": [
-                load_config_btn,
-                save_config_btn,
-                stimulus_type_group_box,
-                time_group_box
-            ],
+            "noise": [load_config_btn, save_config_btn, stimulus_type_group_box, time_group_box],
             "step": [
                 load_config_btn,
                 save_config_btn,
@@ -181,12 +176,8 @@ class StimulusWindow(QDialog):
         )
 
     def switch_connection_on(self):
-        self.stimulus_type_combo_box.currentTextChanged.connect(
-            self.update_stimulus_info_from_stimulus_type_combo_box
-        )
-        self.stimulus_method_combo_box.currentTextChanged.connect(
-            self.set_stimulus_type_connection
-        )
+        self.stimulus_type_combo_box.currentTextChanged.connect(self.update_stimulus_info_from_stimulus_type_combo_box)
+        self.stimulus_method_combo_box.currentTextChanged.connect(self.set_stimulus_type_connection)
         self.start_freq_box.valueChanged.connect(
             lambda: self.update_stimulus_info_from_controller(self.start_freq_box, "start_freq")
         )
@@ -410,10 +401,7 @@ class StimulusWindow(QDialog):
     def update_stimulus_info_from_stimulus_type_combo_box(self):
         stimulus_type = self.stimulus_type_combo_box.currentText()
         self.stimulus_info["stimulus_type"] = self.STIMULUS_DICT_2.get(stimulus_type)
-        if (
-                self.stimulus_info.get("use_custom_stimulus", False)
-                and 0 != self.stimulus_type_combo_box.count()
-        ):
+        if self.stimulus_info.get("use_custom_stimulus", False) and 0 != self.stimulus_type_combo_box.count():
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
 
@@ -467,9 +455,7 @@ class StimulusWindow(QDialog):
             self.create_signal_from_stimulus_info()
         else:
             self.load_wav_path = self.load_stimulus_signal_path
-            self.stimulus_data, _ = load_audio_simple(
-                self.load_wav_path, self.stimulus_info["sample_rate"]
-            )
+            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, self.stimulus_info["sample_rate"])
         self.graph_stimulus()
 
     def set_stimulus_type_connection(self):
@@ -579,26 +565,24 @@ class StimulusWindow(QDialog):
         Parameters:
         self: The class instance containing stimulus information (stimulus_info) and stimulus signal (stimulus_signal).
         """
-        # Construct the path for the JSON file
         # Generate the name of the stimulus signal based on the stimulus information
         stimulus_name = "_".join(str(value) for value in self.stimulus_info.values())
-        # Construct the path for the WAV file and save the stimulus signal as a WAV file
         stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
-        wavfile.write(
+        save_audio_simple(
             stimulus_signal_path,
-            self.stimulus_info["sample_rate"],
             self.stimulus_data.astype("float32"),
+            self.stimulus_info["sample_rate"],
         )
         stimulus_signal_path = FileOps.get_relative_path(stimulus_signal_path, DEFAULT_DIR)
         if self.load_stimulus_signal_path:
             self.load_stimulus_signal_path = FileOps.get_relative_path(self.load_stimulus_signal_path, DEFAULT_DIR)
-        # Create a dictionary containing the stimulus information and WAV file path
+
         data = {
             "stimulus_info": self.stimulus_info,
             "stimulus_signal_path": stimulus_signal_path,
             "load_stimulus_signal_path": self.load_stimulus_signal_path,
         }
-        # Write the dictionary data to the JSON file and log the operation
+
         return data
 
     def update_stimulus_ui_value(self, stimulus_info: dict):
@@ -648,9 +632,7 @@ class StimulusWindow(QDialog):
         self.plot_stimulus.clear()
         sample_rate = self.stimulus_info["sample_rate"]
         if self.stimulus_data is not None:
-            signal_duration = (
-                    np.linspace(0, len(self.stimulus_data) - 1, len(self.stimulus_data)) / sample_rate
-            )
+            signal_duration = np.linspace(0, len(self.stimulus_data) - 1, len(self.stimulus_data)) / sample_rate
             self.plot_stimulus.plot(signal_duration, self.stimulus_data, pen="b")
             self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
             self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "20px"})
@@ -849,9 +831,7 @@ class StimulusWindow(QDialog):
             )
         else:
             data = self.save_stimulus_to_json()
-            stimulus_signal_length = self.stimulus_info.get(
-                "sample_rate"
-            ) * self.stimulus_info.get("total_time")
+            stimulus_signal_length = self.stimulus_info.get("sample_rate") * self.stimulus_info.get("total_time")
             if not self.start_custom_check_status:
                 self.set_ai_popup()
             elif self.original_stimulus_signal_length != stimulus_signal_length:

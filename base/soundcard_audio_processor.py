@@ -1,8 +1,8 @@
 import numpy as np
 import sounddevice as sd
-from scipy.io import wavfile
 
 from base.log_manager import LogManager
+from base.save_data import save_audio_simple
 from consts import error_code
 
 
@@ -20,7 +20,7 @@ class SoundcardAudioProcessor(object):
         rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
         align_frames = self.calculate_alignment(data, rec_data)
         aligned_data = rec_data[align_frames: align_frames + len(data)]
-        wavfile.write(recording_path, sr, aligned_data.astype("float32"))
+        save_audio_simple(recording_path, aligned_data, sr)
         return error_code.OK, aligned_data
 
     @staticmethod

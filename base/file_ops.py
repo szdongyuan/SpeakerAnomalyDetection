@@ -245,3 +245,36 @@ class FileOps(object):
                 return error_code.OK, f"Directory does not exist: '{dir_path}'"
         except Exception as e:
             return error_code.INVALID_DELETE, f"Failed to delete directory: {str(e)[:40]}"
+            
+    @staticmethod
+    def move_wav_to_dir(recorded_path, label):
+        """
+        Move the recorded WAV file to the directory corresponding to its label.
+
+        This function moves the recorded audio file to a predefined directory structure based on its label (OK/NG).
+        If the target directories do not exist, they will be created automatically.
+
+        Args:
+            recorded_path (str): The full path of the recorded file
+            label (str): File label, should be either "OK" or "NG"
+
+        Returns:
+            str: The full path of the file after moving, or an empty string if the filename is empty
+        """
+        dir_paths = [
+            model_consts.STORED_RECORDED_UNLABELED_PATH,
+            model_consts.STORED_RECORDED_OK_PATH,
+            model_consts.STORED_RECORDED_NG_PATH,
+        ]
+        for path in dir_paths:
+            if not os.path.exists(path):
+                os.makedirs(path)
+        file_name = os.path.basename(recorded_path)
+        target_path = ""
+        if file_name:
+            if label == "OK":
+                target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
+            elif label == "NG":
+                target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
+            shutil.move(recorded_path, target_path)
+        return target_path
