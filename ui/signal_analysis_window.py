@@ -27,7 +27,7 @@ from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.graph_widget import plot_2d_image
+from ui.graph_widget import plot_2d_image, custom_log_tick_strings
 
 
 def get_class_mapping():
@@ -51,39 +51,6 @@ def get_class_mapping():
         "PM": PatternMatch,
     }
     return class_mapping
-
-
-def custom_log_tick_strings(values, scale, spacing):
-    estrings = ["%0.1g" % x for x in 10 ** np.array(values).astype(float) * np.array(scale)]
-    convdict = {
-        "0": "⁰",
-        "1": "¹",
-        "2": "²",
-        "3": "³",
-        "4": "⁴",
-        "5": "⁵",
-        "6": "⁶",
-        "7": "⁷",
-        "8": "⁸",
-        "9": "⁹",
-    }
-    dstrings = []
-    for i, e in enumerate(estrings):
-        if "e" in e:
-            v, p = e.split("e")
-            sign = "⁻" if p[0] == "-" else ""
-            pot = "".join([convdict[pp] for pp in p[1:].lstrip("0")])
-            if v == "1":
-                v = ""
-                dstrings.append(v + "10" + sign + pot)
-            elif v == "2" or v == "5":
-                v = v + "·"
-                dstrings.append(v + "10" + sign + pot)
-            else:
-                dstrings.append("")
-        else:
-            dstrings.append(e)
-    return dstrings
 
 
 class AnalysisGraphWidget(QWidget):

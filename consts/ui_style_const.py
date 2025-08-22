@@ -158,6 +158,7 @@ qframe_style = """
                 color: rgb(173, 173, 173);
             }
 """
+
 hardware_qframe_style = """
             QFrame {
                 color: rgb(204, 204, 204);

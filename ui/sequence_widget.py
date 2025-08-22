@@ -1,32 +1,28 @@
 import json
 import os
 import re
-import shutil
 import threading
 from datetime import datetime
 
-import librosa
 import numpy as np
 import pyqtgraph as pg
-import uuid
-from scipy.io import wavfile
-from PyQt5.QtCore import QSize, Qt, QObject, pyqtSignal
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QPainter, QColor, QFont
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
 from PyQt5.QtWidgets import QVBoxLayout, QWidget, QStackedWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
-from base.pre_processing.split_repeat_signal import SplitRepeatSignal
+from base.file_ops import FileOps
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
+from base.play_and_record import play_last_stimulus_wave, record_without_play
 from base.recording_management import RecordingManager
-from base.soundcard_audio_processor import SoundcardAudioProcessor
+from base.save_data import save_recorded_data_to_json, ensure_test_result_file
 from base.soundcard_calibration_manager import get_mic_deviation_value
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
-from base.db_manager import DataSave
 from consts import ui_style_const, error_code, model_consts
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -43,17 +39,17 @@ class SequenceWindow(QWidget):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.collect_or_analyse_layout = QHBoxLayout()
-        self.recorded_path = None  # Initialize the recorded path variable
-        self.refresh_stimulus_flag = None  # Initialize the flag to indicate if stimulus needs refreshing
+        self.recorded_path = None
+        self.refresh_stimulus_flag = None
         self.add_or_update_wave_flag = True
-        # Retrieve stimulus information and signal from configuration
-        self.deviation_value = get_mic_deviation_value()  # Get the deviation value from the microphone
+
+        self.deviation_value = get_mic_deviation_value()
         self.sequence_config = list()
         self.analysis_config = dict()
+        self.get_sequence_config_from_json()
         self.init_data_struct_stimulus_config()
-        self.update_sequence_and_analysis_config()
         self.init_fft_and_stft_flag()
-        self.signal_info = {}  # Initialize an empty dictionary to store signal information
+        self.signal_info = {}
         self.analysis_window = []
         self.default_ai = None
         self.default_ai_result = None
@@ -64,19 +60,18 @@ class SequenceWindow(QWidget):
         self.player_status_flag = False
         self.scanner_barcode_thread = None
         self.barcode_scanner = BarcodeScanner()
-        self.scanner_emitter = ScannerEmitter()
         self.vendor_id = None
         self.product_id = None
         self.recorded_signal_info = {}
         self.ip_format = True
         self.port_format = True
-        self.clicked_player_flag = False  # by clicking to play, not specifically by clicking the play button to play
+        self.clicked_player_flag = False
         self.tcp_ip = None
         self.tcp_port = None
-        self.get_tcp_config()
+        self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
         self.mode = None
         self.current_recorded_count = None
-        # Set up the default logger for logging messages
+
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
 
@@ -105,7 +100,7 @@ class SequenceWindow(QWidget):
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
-        sign.update_mode_display_sign.connect(self.update_sequence_and_analysis_config, Qt.AutoConnection)
+        sign.update_mode_display_sign.connect(self.get_sequence_config_from_json, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         self.update_mode_display(0)
@@ -118,16 +113,7 @@ class SequenceWindow(QWidget):
             + ui_style_const.qcheckbox_style
         )
 
-    def update_sequence_and_analysis_config(self):
-        self.sequence_config = self.get_sequence_config_from_json()
-        if self.sequence_config:
-            seq = self.sequence_config[0]["seq1"]
-            self.analysis_config = seq.get("analysis_list", {})
-        else:
-            self.analysis_config = dict()
-
     def init_data_struct_stimulus_config(self):
-        self.sequence_config = self.get_sequence_config_from_json()
         if not self.sequence_config:
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
@@ -148,6 +134,7 @@ class SequenceWindow(QWidget):
             QHBoxLayout: The configured toolbar layout object.
         """
         self.player_btn.setFixedSize(100, 40)
+        self.setFocusPolicy(Qt.NoFocus)
         self.player_btn.setToolTip("播放")
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
@@ -184,7 +171,7 @@ class SequenceWindow(QWidget):
         label_count = QLabel(" 计 数： ")
         label_count.setFixedHeight(40)
 
-        result, _ = self.load_recorded_num_from_json(self.default_logger)
+        result, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
         if result is None:
             self.current_recorded_count = 1
         else:
@@ -324,7 +311,11 @@ class SequenceWindow(QWidget):
     def update_scanner_tcp_state(self):
         if self.ip_format and self.port_format:
             self.scanner_tcp.setEnabled(True)
-            self.write_tcp_config(self.ip_edit.text(), self.port_edit.text())
+            if self.ip_edit.text():
+                self.tcp_ip = self.ip_edit.text()
+            if self.port_edit.text():
+                self.tcp_port = self.port_edit.text()
+            LoadUiConfig.write_tcp_config(self.ip_edit.text(), self.port_edit.text(), self.default_logger)
             return True
         elif self.ip_format is False and self.port_format is True:
             QMessageBox.warning(self, "无效 IP", "ip 不对")
@@ -579,30 +570,10 @@ class SequenceWindow(QWidget):
         else:
             self.set_result_file(1, "init", None)
 
-    def ensure_test_result_file(self):
-        default_ai_model = self.analysis_config.get("default_ai")
-        if default_ai_model:
-            analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
-        else:
-            analyse_model_name = "null"
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        if not os.path.exists(test_result_path):
-            os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
-            with open(test_result_path, "w") as f:
-                f.write(
-                    f"total: 0\n"
-                    f"ok: 0\n"
-                    f"ng: 0\n"
-                    f"ok_percent: 0\n"
-                    f"current_model: {analyse_model_name}\n"
-                    f"datatime: {current_time}\n"
-                )
-
     def get_result_file(self, index):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
-            self.ensure_test_result_file()
+            ensure_test_result_file(self.analysis_config)
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
             with open(test_result_path, "r") as f:
                 lines = f.readlines()
@@ -630,7 +601,7 @@ class SequenceWindow(QWidget):
     def set_result_file(self, index, params, analyse_model_name):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
-            self.ensure_test_result_file()
+            ensure_test_result_file(self.analysis_config)
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
             with open(test_result_path, "r") as f:
                 lines = f.readlines()
@@ -716,14 +687,24 @@ class SequenceWindow(QWidget):
 
     def lineedit_count_lose_focus(self, lineedit):
         self.current_recorded_count = int(lineedit.text())
-        self.save_recorded_data_to_json()
+        save_recorded_data_to_json(
+            self.lineedit_type.text(),
+            self.lineedit_count.text(),
+            self.lineedit_s_or_n.text(),
+            self.barcode_scanner_box.isChecked(),
+        )
         lineedit.clearFocus()
         if lineedit.text() == "":
-            result_count, _ = self.load_recorded_num_from_json(self.default_logger)
+            result_count, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
             lineedit.setText(str(result_count))
 
     def lineedit_type_lose_focus(self, lineedit):
-        self.save_recorded_data_to_json()
+        save_recorded_data_to_json(
+            self.lineedit_type.text(),
+            self.lineedit_count.text(),
+            self.lineedit_s_or_n.text(),
+            self.barcode_scanner_box.isChecked(),
+        )
         lineedit.clearFocus()
         if lineedit.text() == "":
             last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
@@ -740,28 +721,22 @@ class SequenceWindow(QWidget):
             Parameters:
             lineedit (QLineEdit): The QLineEdit object containing the user's count input.
         """
-        # lineedit.clearFocus()
         s_or_n_count = lineedit.text()
-        # Load the previously recorded number from a text file
-        result_count, result_scanner_barcode = self.load_recorded_num_from_json(self.default_logger)
-        # Define a regular expression to match numbers
+        result_count, result_scanner_barcode = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
         reg = None
         if is_s_or_n:
             reg = r"^[0-9]*$"
         else:
             reg = r"^[0-9a-zA-Z]*$"
-        # Check if the user input matches the regular expression
+
         if not re.match(reg, s_or_n_count):
-            # If the input is not a number, restore the previously recorded number
             if is_s_or_n:
                 lineedit.setText(str(result_count))
             else:
                 lineedit.setText(str(result_scanner_barcode))
         elif s_or_n_count != "":
-            # If the input is a number, Open the file and write the current recorded count and date
             if is_s_or_n:
                 self.lineedit_s_or_n.setText("")
-            # self.save_recorded_data_to_json()
         if s_or_n_count == "":
             if is_s_or_n:
                 lineedit.setText(str(result_count))
@@ -773,39 +748,15 @@ class SequenceWindow(QWidget):
         if device:
             if self.scanner_barcode_thread is None or not self.scanner_barcode_thread.is_alive():
                 self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode, args=(device,))
-                self.scanner_emitter.signal_emitter.connect(self.on_barcode_received)
+                sign.signal_emitter.connect(self.on_barcode_received)
                 self.scanner_barcode_thread.start()
-
-    def write_tcp_config(self, ip, port):
-        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
-        if ip:
-            self.tcp_ip = ip
-        if port:
-            self.tcp_port = port
-        try:
-            with open(file_path, "w") as f:
-                f.write(f"ip = {self.tcp_ip}\n")
-                f.write(f"port = {self.tcp_port}\n")
-            self.default_logger.info(f"write_tcp_config_success: {file_path}")
-        except Exception as e:
-            self.default_logger.error(f"write_tcp_config_error: {e}")
-
-    def get_tcp_config(self):
-        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
-        with open(file_path, "r") as f:
-            config_data = f.readlines()
-            ip = config_data[0].split("=")[1].strip()
-            port_text = config_data[1].split("=")[1].strip()
-            port = int(port_text)
-            self.tcp_ip = ip
-            self.tcp_port = port
 
     def is_clicked_tcp(self):
         if self.scanner_tcp.isChecked():
             self.ip_edit.setEnabled(True)
             self.port_edit.setEnabled(True)
             self.barcode_scanner_box.setEnabled(False)
-            self.get_tcp_config()
+            self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
@@ -819,7 +770,8 @@ class SequenceWindow(QWidget):
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
 
-    def deal_package(self, info):
+    @staticmethod
+    def deal_package(info):
         """
         info: {
                   "RequestType": "0-9999",
@@ -853,7 +805,7 @@ class SequenceWindow(QWidget):
     def scan_barcode(self, device):
         barcode = self.barcode_scanner.read_raw_data(device)
         if barcode:
-            self.scanner_emitter.signal_emitter.emit(barcode)
+            sign.signal_emitter.emit(barcode)
 
     def on_barcode_received(self, barcode):
         if barcode:
@@ -863,7 +815,7 @@ class SequenceWindow(QWidget):
             except Exception as e:
                 self.scanner_popup()
                 self.default_logger.error(f"An error message occurred in the analysis window. {e}")
-            self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
+            sign.signal_emitter.disconnect(self.on_barcode_received)
             if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
                 self.scanner_barcode_thread.join()
             self.scanner_barcode_thread = None
@@ -880,7 +832,7 @@ class SequenceWindow(QWidget):
             self.barcode_scanner.stop_scanning()
             self.scanner_barcode_thread = None
             try:
-                self.scanner_emitter.signal_emitter.disconnect(self.on_barcode_received)
+                sign.signal_emitter.disconnect(self.on_barcode_received)
             except Exception as e:
                 self.default_logger.error(e)
 
@@ -893,20 +845,6 @@ class SequenceWindow(QWidget):
             device = self.barcode_scanner.find_scanner(self.vendor_id, self.product_id)
             return device
         return None
-
-    def load_scanner_hid_params(self):
-        file_path = DEFAULT_DIR + "configs/scanner_barcode_config/scanner_hid_config.txt"
-        if not os.path.exists(file_path):
-            return None
-        try:
-            with open(file_path, "r") as f:
-                lines = f.readlines()
-                vendor_id = lines[1].strip()
-                product_id = lines[3].strip()
-                return vendor_id, product_id
-        except Exception as e:
-            self.default_logger.error(f"Failed to read the config params of the scanner hid. {e}")
-            return None
 
     def scanner_popup(self):
         error_msg = QMessageBox(self)
@@ -936,8 +874,7 @@ class SequenceWindow(QWidget):
             return
 
         self.update_audio_label_info()
-        new_file_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
-        self.update_recorded_signal_info_to_db(new_file_path)
+        self.update_recorded_signal_info_to_db()
 
         self.mark_result()
         self.player_status_flag = False
@@ -950,81 +887,8 @@ class SequenceWindow(QWidget):
         self.default_ai = None
         self.clicked_scanner()
 
-    def save_recorded_data_to_json(self, start_position=None):
-        """
-        Save the recorded number to a text file.
-
-        This function writes the current recorded number and the current date to a specified text file.
-        If the file exists and the date matches, it updates the recorded number.
-        If the file does not exist or the date does not match, it creates a new file and writes the initial recorded number.
-        """
-        dir_path = DEFAULT_DIR + "ui/ui_config/"
-        file_path = dir_path + "recorded_number.json"
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        data = {
-            "product_model": self.lineedit_type.text(),
-            "current_recorded_count": int(self.lineedit_count.text()),
-            "scanner_barcode": self.lineedit_s_or_n.text(),
-            "scanner_barcode_check": self.barcode_scanner_box.isChecked(),
-            "datetime": current_time,
-        }
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=4)
-
-    @staticmethod
-    def load_recorded_num_from_json(logger):
-        """
-        Load the recorded number from a text file.
-
-        This method reads a recorded number and the last recorded date from a specified text file.
-        If the file exists and the last recorded date matches the current date, it returns the recorded number;
-        otherwise, it returns None.
-
-        Returns:
-            int or None: The recorded number if the file exists and the date matches; otherwise, None.
-        """
-        result = LoadUiConfig().load_last_recorded_info(logger)
-        if result:
-            last_datetime = result.get("datetime")
-            recorded_count = result.get("current_recorded_count")
-            scanner_barcode = result.get("scanner_barcode")
-            if last_datetime == datetime.now().strftime("%Y-%m-%d"):
-                return recorded_count, scanner_barcode
-            else:
-                return None, None
-        else:
-            return None, None
-
-    @staticmethod
-    def check_datetime(current_time, logger):
-        """
-        Check the date and count information in the given file.
-
-        This method first checks if the file exists. If it does, it opens the file and reads its content.
-        It extracts the last count and date, then compares the date with the current time.
-        If the date in the file matches the current time, it returns True and the last count value.
-        If the dates do not match or the file is empty, it returns False and None.
-
-        Args:
-            param file_path: The path to the file storing the date and count information.
-            param current_time: The current time, used to compare with the time in the file.
-        Return:
-            A tuple, where the first element is a boolean indicating whether the dates match;
-            the second element is the last count value if the dates match, otherwise None.
-        """
-        result = LoadUiConfig().load_last_recorded_info(logger)
-        if result:
-            last_count = result.get("current_recorded_count")
-            last_date = result.get("datetime")
-            if last_date == current_time:
-                return True, last_count
-        return False, None
-
-    def add_recorded_signal_info_to_db(self):
-        move_recorded_path = self.move_wav_to_dir(self.recorded_signal_info["labels"])
-        self.update_recorded_signal_info_to_db(move_recorded_path)
-
-    def update_recorded_signal_info_to_db(self, new_file_path):
+    def update_recorded_signal_info_to_db(self):
+        new_file_path = FileOps.move_wav_to_dir(self.recorded_path, self.recorded_signal_info["labels"])
         old_file_path = self.recorded_signal_info["file_path"]
         self.recorded_signal_info["file_path"] = new_file_path.replace(DEFAULT_DIR, "")
         save_code, msg = RecordingManager().update_audio_label(self.recorded_signal_info, old_file_path)
@@ -1056,7 +920,7 @@ class SequenceWindow(QWidget):
             self.recorded_signal_info["labels"] = "NG"
 
     def test_insert_data_into_db(self):
-        self.add_recorded_signal_info_to_db()
+        self.update_recorded_signal_info_to_db()
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
@@ -1065,25 +929,6 @@ class SequenceWindow(QWidget):
         self.default_ai_result = None
         self.default_ai = None
         self.clicked_scanner()
-
-    def move_wav_to_dir(self, label):
-        dir_paths = [
-            model_consts.STORED_RECORDED_UNLABELED_PATH,
-            model_consts.STORED_RECORDED_OK_PATH,
-            model_consts.STORED_RECORDED_NG_PATH,
-        ]
-        for path in dir_paths:
-            if not os.path.exists(path):
-                os.makedirs(path)
-        file_name = os.path.basename(self.recorded_path)
-        target_path = ""
-        if file_name:
-            if label == "OK":
-                target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
-            elif label == "NG":
-                target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
-            shutil.move(self.recorded_path, target_path)
-        return target_path
 
     def on_clicked_player_btn(self, label="not_labeled"):
         self.clicked_player_flag = True
@@ -1098,7 +943,12 @@ class SequenceWindow(QWidget):
         self.judge_play_and_record(label)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
-        self.save_recorded_data_to_json()
+        save_recorded_data_to_json(
+            self.lineedit_type.text(),
+            self.lineedit_count.text(),
+            self.lineedit_s_or_n.text(),
+            self.barcode_scanner_box.isChecked(),
+        )
 
         if self.clicked_player_flag is True:
             self.clicked_player_flag = False
@@ -1108,168 +958,54 @@ class SequenceWindow(QWidget):
                     SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
                 )
 
-    def judge_play_and_record(self, label="not_labeled"):
+    def checked_work_status_message(self):
         if not self.sequence_config:
             QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
             return
-        elif self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-            if not self.mic or not self.speaker:
-                QMessageBox.warning(self, "提示", "未找到麦克风或扬声器，请在硬件中设置")
-                return
-            else:
-                self.play_last_stimulus_wave(label)
-        else:
-            if not self.mic:
-                QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
-                return
-            else:
-                self.record_without_play(label)
 
-    def record_without_play(self, label="not_labeled"):
-        """
-        Implements the complete workflow for the record-only mode.
-        It records audio based on the `total_time` and `sample_rate` specified in
-        `sequence_config['acq']['detail']`, then saves the result to a .wav file
-        and the database (with `stimulus_id` set to 0). All subsequent operations,
-        such as FFT/STFT, automatic analysis, and button state updates, are the
-        same as in the play-and-record mode.
-        """
+        if not self.mic:
+            QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
+            return
+        if not self.speaker:
+            QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
+            return
 
+    def reset_work_pram(self, label):
         self.data_struct.clear_data()
-        if self.player_status_flag:
-            self.line_graph.clear()
-        self.player_status_flag = True
-        self.update_player_btn_is_playing()
-        self.update_sequence_and_analysis_config()
-        QApplication.processEvents()
-
+        self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
-        sample_rate = int(acq_detail.get("sample_rate", 44100))
+        sample_rate = self.data_struct.sample_rate
+        stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
+            self.data_struct, total_time
+        )
 
-        num_frames = int(total_time * sample_rate)
+        return stimulus_dict, recorded_dict, sample_rate
 
-        recorded_dict = {
-            "num_frames": num_frames,
-            "sample_rate": sample_rate,
-            "channels": 1,
-            "blocking": True,
-            "prolong_frames": 0,
-        }
+    def judge_play_and_record(self, label="not_labeled"):
+        if self.checked_work_status_message():
+            return
 
-        self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
-
-        sap = SoundcardAudioProcessor()
-        record_code, recorded_signal = sap.sd_rec(recorded_dict)
-
-        if record_code == error_code.OK:
-            try:
-                wavfile.write(self.recorded_path, sample_rate, recorded_signal.astype("float32"))
-            except Exception as e:
-                if hasattr(self, "default_logger"):
-                    self.default_logger.error(f"Save wav failed: {e}")
-
-            self.data_struct.store_wave_data = recorded_signal
-            self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
-
-            self.recorded_signal_info["sample_rate"] = sample_rate
-
-            try:
-                audio_data_id = str(uuid.uuid1())
-                file_path_rel = self.recorded_path.replace(DEFAULT_DIR, "")
-                # Ensure that the same relative path is used when updating the database subsequently
-                self.recorded_signal_info["file_path"] = file_path_rel
-
-                product_model = self.recorded_signal_info.get("product_model")
-                record_date = self.recorded_signal_info.get("record_date")
-                barcode = self.recorded_signal_info.get("barcode")
-                audio_data = (
-                    audio_data_id,
-                    file_path_rel,
-                    product_model,
-                    sample_rate,
-                    record_date,
-                    label,
-                    barcode,
-                    None,  # todo:
-                )
-                with DataSave(model_consts.DATABASE_PATH) as db:
-                    db.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
-            except Exception as e:
-                if hasattr(self, "default_logger"):
-                    self.default_logger.error(f"Insert record (rec only) to DB failed: {e}")
-
-        self.update_player_btn_is_paused()
-
-        if self.data_struct.stft_flag != 0:
-            self.data_struct.stft_result = librosa.stft(
-                recorded_signal, n_fft=1024, hop_length=16, win_length=1024, window="hann"
-            )
-        if self.data_struct.fft_flag != 0:
-            self.data_struct.fft_result = np.abs(np.fft.fft(recorded_signal)[: sample_rate // 2])
-
-        self.data_btn.setEnabled(True)
-        self.replayer_btn.setEnabled(True)
-
-        if self.sequence_config[0]["seq1"]["analysis_list"]["auto_analysis"]:
-            self.run()
-
-    def play_last_stimulus_wave(self, label="not_labeled"):
-        """
-        Handles the play button click event. This function performs the following operations:
-        1. Clears the line graph based on the player status flag.
-        2. Updates the play button state and icon.
-        3. Retrieves the analysis configuration from the JSON file.
-        4. If the stimulus signal needs to be refreshed, fetches the stimulus signal information from the configuration.
-        5. Obtains the sample rate and generates dictionaries for the stimulus and recorded signals.
-        6. Uses the soundcard audio processor to play the stimulus signal and record the response signal.
-        7. If recording is successful, plots the recorded signal on the line graph and saves the signal information.
-        8. Enables the data button and the replay button.
-        9. If auto-analysis is configured, executes the analysis.
-        10. if fft and stft flag not null, initialize the FFT and STFT results.
-        """
-        self.data_struct.clear_data()
+        self.update_player_btn_is_playing()
         if self.player_status_flag:
             self.line_graph.clear()
         self.player_status_flag = True
-        self.update_player_btn_is_playing()
-        self.update_sequence_and_analysis_config()
         QApplication.processEvents()
-        sample_rate = self.data_struct.stimulus_info["sample_rate"]
-        stimulus_dict, recorded_dict = self.get_stimulus_recorded_dict(sample_rate)
-        self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
-        sap = SoundcardAudioProcessor()
-        record_code, self.data_struct.store_wave_data = sap.sd_play_rec(
-            recorded_dict, stimulus_dict, self.recorded_path
-        )
-        if record_code == error_code.OK:
-            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
-            self.recorded_signal_info["sample_rate"] = sample_rate
-            save_code, msg = RecordingManager().save_signal_info_to_db(
-                self.recorded_signal_info, self.data_struct.stimulus_info
-            )
 
-        self.update_player_btn_is_paused()
+        stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
 
-        if self.data_struct.stft_flag != 0:
-            self.data_struct.stft_result = librosa.stft(
-                self.data_struct.store_wave_data, n_fft=1024, hop_length=16, win_length=1024, window="hann"
-            )
-        if self.data_struct.fft_flag != 0:
-            self.data_struct.fft_result = np.abs(
-                np.fft.fft(self.data_struct.store_wave_data)[: self.data_struct.stimulus_info.get("sample_rate") // 2]
-            )
-        repeat_times = self.data_struct.stimulus_info.get("repeat_times")
-        if repeat_times > 1:
-            kwargs = {"repeat_times": repeat_times}
-            self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
-                self.data_struct.store_wave_data, sample_rate, **kwargs
-            )
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+            play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
+        else:
+            record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
+        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
+
         if self.analysis_config["auto_analysis"]:
             self.run()
+        self.update_player_btn_is_paused()
 
     def instance_analysis_class(self, key, type, params):
         """
@@ -1356,8 +1092,7 @@ class SequenceWindow(QWidget):
                     self.default_ai_result = True
                     self.clicked_ok_or_ng()
 
-    @staticmethod
-    def get_sequence_config_from_json():
+    def get_sequence_config_from_json(self):
         """
         Retrieves the sequence configuration from a JSON file.
 
@@ -1369,9 +1104,11 @@ class SequenceWindow(QWidget):
         """
         load_code, result = LoadUiConfig().load_sequence_config_from_json()
         if load_code == error_code.OK and result:
-            return result
+            self.sequence_config = result
+            seq = self.sequence_config[0]["seq1"]
+            self.analysis_config = seq.get("analysis_list", {})
         else:
-            return {}
+            self.analysis_config = dict()
 
     def get_recorded_info(self, label):
         """
@@ -1411,35 +1148,6 @@ class SequenceWindow(QWidget):
 
         return recorded_path, recorded_signal_info
 
-    def get_stimulus_recorded_dict(self, sample_rate):
-        """
-        Generate dictionaries containing stimulus signal data and recording parameters.
-
-        This function creates two dictionaries: one for the stimulus signal data and its related information,
-        and another for the recording parameters. These dictionaries are used for subsequent signal processing and analysis.
-
-        Args:
-        - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
-
-        Returns:
-        - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
-        - recorded_dict (dict): Dictionary containing the recording parameters.
-        """
-        # Define the prolongation time to calculate the extended frame count
-        prolong = 0.5
-        stimulus_dict = {
-            "data": self.data_struct.stimulus_data,
-            "amplitude": self.data_struct.stimulus_info["amplitude"],
-            "sr": sample_rate,
-        }
-        recorded_dict = {
-            "channels": 1,
-            "sr": sample_rate,
-            "num_frames": len(self.data_struct.stimulus_data) + int(prolong * sample_rate),
-            "prolong_frames": int(prolong * sample_rate),
-        }
-        return stimulus_dict, recorded_dict
-
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):
         """
@@ -1453,24 +1161,6 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         line_graph.plot(signal_duration, recorded_signal, pen="k")
-        QApplication.processEvents()
-
-    def update_player_icon(self):
-        """
-        Update the player button's icon and size based on the player status flag.
-
-        If self.player_status_flag is True, it indicates that the player is in a paused state,
-        and the button icon is set to a pause icon. If self.player_status_flag is False,
-        it indicates that the player is in a playing state, and the button icon is set to a play icon,
-        and the button is enabled.
-        """
-        if self.player_status_flag:
-            self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
-            self.player_btn.setIconSize(QSize(35, 35))
-        else:
-            self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
-            self.player_btn.setIconSize(QSize(35, 35))
-            self.player_btn.setDisabled(False)
 
     def update_player_btn_is_playing(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
@@ -1483,14 +1173,9 @@ class SequenceWindow(QWidget):
         self.player_btn.setDisabled(False)
 
     def paintEvent(self, event):
-        # Set the window Background-color
         painter = QPainter(self)
         width = self.width()
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(208, 206, 202))
         painter.drawRect(1, 0, width - 2, 41)
         painter.end()
-
-
-class ScannerEmitter(QObject):
-    signal_emitter = pyqtSignal(str)

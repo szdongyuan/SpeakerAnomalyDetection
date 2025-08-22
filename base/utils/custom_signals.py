@@ -5,6 +5,8 @@ class MySignals(QObject):
     """
     custom signals, only responsible for signal define
     """
+    signal_emitter = pyqtSignal(str)
+
     run_test_sign = pyqtSignal(str)
 
     get_result_file_sign = pyqtSignal(int)

@@ -2,9 +2,9 @@ import numpy as np
 import shutil
 import os
 import uuid
-from scipy.io import wavfile
 
 from base.db_manager import DataSave
+from base.save_data import save_audio_simple
 from consts import error_code, model_consts, running_consts
 
 
@@ -28,9 +28,7 @@ class RecordingManager(object):
                 audio_info["file_path"] = dir_path + "/" + filename
             if filename in os.listdir(dir_path):
                 return error_code.INVALID_PATH, "The file already exists."
-            wavfile.write(
-                audio_info["file_path"], audio_info["sample_rate"], audio_info["recorded_signal"].astype(np.int16)
-            )
+            save_audio_simple(audio_info["file_path"], audio_info["recorded_signal"], audio_info["sample_rate"])
             self.save_signal_info_to_db(audio_info, stimulus_parameter)
             return (
                 error_code.OK,
@@ -43,7 +41,11 @@ class RecordingManager(object):
     def save_signal_info_to_db(self, audio_info: dict, stimulus_parameter: dict):
         try:
             with DataSave(self.db_path) as database:
-                stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
+                if stimulus_parameter:
+                    stimulus_data, flag = self.get_stimulus_info_to_db(stimulus_parameter, database)
+                else:
+                    stimulus_data = None
+                    flag = False
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
                 ret_msg = "Successfully saved the recording signals to the database."
                 if flag:
@@ -81,10 +83,13 @@ class RecordingManager(object):
         return stimulus_data, flag
 
     @staticmethod
-    def get_audio_info_to_db(audio_info: dict, stimulus_data, database):
+    def get_audio_info_to_db(audio_info: dict, stimulus_data: list[tuple], database):
         audio_info["file_path"] = audio_info["file_path"].replace(running_consts.DEFAULT_DIR, "")
         audio_data = tuple(audio_info[key] for key in model_consts.AUDIO_COLUMNS if key in audio_info)
-        audio_data = audio_data + (stimulus_data[0][0],)
+        if stimulus_data:
+            audio_data = audio_data + (stimulus_data[0][0],)
+        else:
+            audio_data = audio_data + (None,)
         result = database.query_matching_data(
             [audio_data], "audio_data_table", model_consts.AUDIO_COLUMNS, ["audio_data_id"]
         )

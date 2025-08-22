@@ -276,6 +276,8 @@ class AnalysisModelSelect(QDialog):
                 self.set_data_struct_stimulus_signal(data_struct, detail)
             else:
                 data_struct.sample_rate = detail["sample_rate"]
+                data_struct.stimulus_info = None
+                data_struct.stimulus_data = None
         self.update_test_file_current_model()
         sign.update_mode_display_sign.emit(0)
         self.close()

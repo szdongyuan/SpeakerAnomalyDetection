@@ -1,6 +1,5 @@
 import os
 
-from scipy.io import wavfile
 import numpy as np
 import librosa
 
@@ -126,9 +125,3 @@ def load_audio_simple(audio_path, sr=None):
     y, sr = librosa.load(audio_path, sr=sr)
     t = np.linspace(0, len(y) - 1, len(y)) / sr
     return y, t
-
-
-def save_audio_simple(save_path, audio, sr=44100):
-    # we assume audio is mono channel
-    audio = audio.astype("float32")
-    wavfile.write(save_path, sr, audio)

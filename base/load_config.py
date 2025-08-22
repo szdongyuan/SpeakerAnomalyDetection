@@ -2,6 +2,8 @@ import json
 import os
 import yaml
 
+from datetime import datetime
+
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from base.log_manager import LogManager
@@ -116,8 +118,105 @@ class LoadUiConfig(object):
                 data = json.load(f)
                 return data
         except Exception as e:
-            logger.error(f"Failed to read the info of recorded number: {e}")
+            logger.error(f"Failed to read the info of recorded number: {str(e)[:50]}")
             return None
+
+    @staticmethod
+    def load_recorded_num_from_json(logger):
+        """
+        Load the recorded number from a text file.
+
+        This method reads a recorded number and the last recorded date from a specified text file.
+        If the file exists and the last recorded date matches the current date, it returns the recorded number;
+        otherwise, it returns None.
+
+        Returns:
+            int or None: The recorded number if the file exists and the date matches; otherwise, None.
+        """
+        result = LoadUiConfig().load_last_recorded_info(logger)
+        if result:
+            last_datetime = result.get("datetime")
+            recorded_count = result.get("current_recorded_count")
+            scanner_barcode = result.get("scanner_barcode")
+            if last_datetime == datetime.now().strftime("%Y-%m-%d"):
+                return recorded_count, scanner_barcode
+
+        return None, None
+
+    @staticmethod
+    def load_scanner_hid_params(logger):
+        file_path = DEFAULT_DIR + "configs/scanner_barcode_config/scanner_hid_config.txt"
+        if not os.path.exists(file_path):
+            return None, None
+        try:
+            with open(file_path, "r") as f:
+                lines = f.readlines()
+                vendor_id = lines[1].strip()
+                product_id = lines[3].strip()
+                return vendor_id, product_id
+        except Exception as e:
+            logger.error(f"Failed to read the config params of the scanner hid. {str(e)[:50]}")
+            return None, None
+
+    @staticmethod
+    def get_rec_and_play_dict_base_sequence_dict(data_struct, total_time=None):
+        """
+        Generate dictionaries containing stimulus signal data and recording parameters.
+
+        This function creates two dictionaries: one for the stimulus signal data and its related information,
+        and another for the recording parameters. These dictionaries are used for subsequent signal processing and analysis.
+
+        Args:
+        - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
+        - total_time (int): The total recording time, indicates the duration of the recording.
+
+        Returns:
+        - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
+        - recorded_dict (dict): Dictionary containing the recording parameters.
+        """
+        # Define the prolongation time to calculate the extended frame count
+        prolong = 0.5
+        stimulus_dict = dict()
+        if data_struct.stimulus_data is not None and len(data_struct.stimulus_data) > 0:
+            stimulus_dict = {
+                "data": data_struct.stimulus_data,
+                "amplitude": data_struct.stimulus_info["amplitude"],
+                "sr": data_struct.sample_rate,
+            }
+            num_frames = len(data_struct.stimulus_data) + int(prolong * data_struct.sample_rate)
+            prolong_frames = int(prolong * data_struct.sample_rate)
+        else:
+            num_frames = int(total_time * data_struct.sample_rate)
+            prolong_frames = 0
+        recorded_dict = {
+            "channels": 1,
+            "sr": data_struct.sample_rate,
+            "num_frames": num_frames,
+            "prolong_frames": prolong_frames,
+        }
+        return stimulus_dict, recorded_dict
+
+    @staticmethod
+    def write_tcp_config(ip, port, logger):
+        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
+
+        try:
+            with open(file_path, "w") as f:
+                f.write(f"ip = {ip}\n")
+                f.write(f"port = {port}\n")
+            logger.info(f"write_tcp_config_success: {file_path}")
+        except Exception as e:
+            logger.error(f"write_tcp_config_error: {e}")
+
+    @staticmethod
+    def get_tcp_config():
+        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
+        with open(file_path, "r") as f:
+            config_data = f.readlines()
+            ip = config_data[0].split("=")[1].strip()
+            port_text = config_data[1].split("=")[1].strip()
+            port = int(port_text)
+            return ip, port
 
 
 class ConfigManager(object):

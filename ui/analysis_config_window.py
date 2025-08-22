@@ -15,8 +15,8 @@ from PyQt5.QtWidgets import QDoubleSpinBox
 from PyQt5.QtWidgets import QButtonGroup
 
 from base.file_ops import FileOps
-from base.load_audio import save_audio_simple, load_audio_simple
 from base.load_config import ConfigManager, LoadUiConfig
+from base.save_data import save_audio_simple
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
