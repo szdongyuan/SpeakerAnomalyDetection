@@ -17,7 +17,7 @@ from base.file_ops import FileOps
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
-from base.play_and_record import play_last_stimulus_wave, record_without_play
+from base.play_and_record import play_last_stimulus_wave, record_without_play, get_recorded_info
 from base.recording_management import RecordingManager
 from base.save_data import save_recorded_data_to_json, ensure_test_result_file
 from base.soundcard_calibration_manager import get_mic_deviation_value
@@ -28,7 +28,6 @@ from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.operation_sequence import AnalysisModelSelect
 from ui.signal_analysis_window import get_class_mapping
-from ui.login_window import get_mac_address
 
 
 class SequenceWindow(QWidget):
@@ -972,7 +971,9 @@ class SequenceWindow(QWidget):
 
     def reset_work_pram(self, label):
         self.data_struct.clear_data()
-        self.recorded_path, self.recorded_signal_info = self.get_recorded_info(label)
+        self.recorded_path, self.recorded_signal_info = get_recorded_info(
+            self.lineedit_type.text(), self.lineedit_count.text(), self.lineedit_s_or_n.text(), label
+        )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
         sample_rate = self.data_struct.sample_rate
@@ -1109,44 +1110,6 @@ class SequenceWindow(QWidget):
             self.analysis_config = seq.get("analysis_list", {})
         else:
             self.analysis_config = dict()
-
-    def get_recorded_info(self, label):
-        """
-            Generate recorded information.
-
-            This function generates a unique recording file name based on the current date, MAC address, product model,
-        and product number.
-            It also constructs the path for the recording file. Additionally, it creates a dictionary containing the
-        recording file path and product information.
-
-            Returns:
-                tuple: A tuple containing the recording file path and a dictionary with recording information.
-        """
-        product_model = self.lineedit_type.text()
-        recording_time = datetime.now().strftime("%Y-%m-%d")
-        mac_address = get_mac_address()
-        mac_address = mac_address.replace(":", "") if mac_address else None
-        product_number = "{:03}".format(int(self.lineedit_count.text()))
-        barcode = self.lineedit_s_or_n.text()
-        recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number
-        if barcode:
-            recorded_name = recorded_name + "_BC" + barcode
-        else:
-            barcode = None
-        recorded_name = recorded_name + ".wav"
-        store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
-        if not os.path.exists(store_record_dir):
-            os.makedirs(store_record_dir)
-        recorded_path = store_record_dir + "/" + recorded_name
-        recorded_signal_info = {
-            "file_path": recorded_path,
-            "product_model": product_model,
-            "record_date": recording_time,
-            "barcode": barcode,
-            "labels": label,
-        }
-
-        return recorded_path, recorded_signal_info
 
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):
