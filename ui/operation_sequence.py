@@ -22,6 +22,7 @@ from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigW
     PatternMatchConfigWindow
 from ui.analysis_config_window import LPConfigWindow
 from ui.analysis_config_window import PDConfigWindow
+from ui.analysis_config_window import PipelineSplPdConfigWindow
 
 
 class AnalysisModelSelect(QDialog):
@@ -136,6 +137,7 @@ class AnalysisModelSelect(QDialog):
             "模式匹配(PM)",
             "AI 分析 ",
             "频谱分析 (Spec) ",
+            "事件检测 (ED) ",
         ]
         for item in analysis_items:
             list_item = QStandardItem(item.lstrip())
@@ -524,6 +526,8 @@ class OptionList(QListView):
             model = LPConfigWindow(config_manager, name)
         elif type == "PD":
             model = PDConfigWindow(config_manager, name)
+        elif type == "ED":
+            model = PipelineSplPdConfigWindow(config_manager, name)
         elif type == "PM":
             model = PatternMatchConfigWindow(config_manager, name)
         return model
