@@ -1310,8 +1310,10 @@ class SequenceWindow(QWidget):
             item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
                 key_config = self.analysis_config.get(key)
-                if isinstance(key_config, dict):
-                    self.instance_analysis_class(key, key_config["type"], key_config)
+                if not isinstance(key_config, dict):
+                    continue
+                item_type = key_config.get("type")
+                self.instance_analysis_class(key, item_type, key_config)
             for instance in self.analysis_window:
                 if self.mode == "test":
                     if instance is self.default_ai:
@@ -1339,6 +1341,9 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, "calculate_pattern_match"):
                     instance.calculate_pattern_match()
+                    instance.show()
+                elif hasattr(instance, "calculate_pipeline_pd_pm"):
+                    instance.calculate_pipeline_pd_pm()
                     instance.show()
                 instance.setGeometry(width, height, 600, 500)
                 instance.setMinimumSize(QSize(600, 500))

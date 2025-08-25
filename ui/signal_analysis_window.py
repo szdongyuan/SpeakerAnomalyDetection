@@ -12,7 +12,7 @@ from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QMessageBox
+from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView
 from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -49,6 +49,7 @@ def get_class_mapping():
         "LP": LooseParticle,
         "PD": PeakDetection,
         "PM": PatternMatch,
+        "ED": PipelinePdPm,
     }
     return class_mapping
 
@@ -770,13 +771,10 @@ class PeakDetection(AnalysisGraphWidget):
 
 
 class PatternMatch(QWidget):
-    def __init__(self, title_name, target_data=None):
+    def __init__(self, title_name):
         super().__init__()
-        if target_data:
-            self.target_data = target_data
-        else:
-            self.data_struct = DataDealStruct()
-            self.target_data = self.data_struct.store_wave_data
+        self.data_struct = DataDealStruct()
+        self.target_data = self.data_struct.store_wave_data
         self.pattern_data = None
         self.analysis_config = None
         self.sample_rate = self.data_struct.sample_rate
@@ -797,10 +795,13 @@ class PatternMatch(QWidget):
             + ui_style_const.qtextedit_style
         )
 
-    def calculate_pattern_match(self):
+    def calculate_pattern_match(self, target_data=None, analysis_config=None):
+        if target_data is not None:
+            self.target_data = target_data
+        if analysis_config is not None:
+            self.analysis_config = analysis_config
         if self.target_data is None or self.analysis_config is None:
             self.result_display.setText("错误：数据或配置不完整")
-            return
         self.pattern_data = self.load_pattern_data()
         if self.pattern_data is None:
             self.result_display.setText("错误：模版数据不存在")
@@ -848,8 +849,10 @@ class PatternMatch(QWidget):
                 f"\xa0\xa0判定阈值: {used_threshold * 100:.2f}%"
             )
             self.result_display.setPlainText(result_text)
+            return result_dict
         else:
             self.result_display.setText("分析执行时发生错误!")
+            return None
 
     @staticmethod
     def algorithm_handle(algorithm_name, target_data, pattern_data, distance_measure_method=None, threshold=None):
@@ -901,6 +904,293 @@ class PatternMatch(QWidget):
         return pattern_data
 
 
+
+class PipelinePdPm(QWidget):
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.analysis_config = None  # 期望结构: {"head": {...}, "tail": {...}}
+        self.deviation_value = None
+        self.default_logger = LogManager.set_log_handler("core")
+
+        self._init_ui()
+        self.setWindowTitle(title_name)
+
+    def _calc_left_right_from_array(self, pattern_segment: np.ndarray):
+        """
+        从数组中计算峰值左右格点数
+        """
+        pattern_segment = np.asarray(pattern_segment).astype(float)
+        seg_len = int(pattern_segment.size)
+        if seg_len <= 0:
+            return 0, 0, 0
+        abs_seg = np.abs(pattern_segment)
+        peaks, _ = find_peaks(abs_seg)
+        if isinstance(peaks, (list, np.ndarray)) and len(peaks) > 0:
+            try:
+                peak_idx = int(peaks[int(np.argmax(abs_seg[peaks]))])
+            except Exception:
+                peak_idx = int(np.argmax(abs_seg))
+        else:
+            peak_idx = int(np.argmax(abs_seg))
+        left_point = max(0, min(peak_idx, seg_len - 1))
+        right_point = max(0, seg_len - peak_idx - 1)
+        return seg_len, left_point, right_point
+
+    def _init_ui(self):
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.main_layout = QVBoxLayout(self)
+        # plot area for summary
+        self.plot_widget = pg.PlotWidget(background="white")
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.5)
+        self.plot_widget.setLabel("left", "SPL (dB)")
+        self.plot_widget.setLabel("bottom", "Time (s)")
+
+        self.result_display = QTextEdit()
+        self.result_display.setReadOnly(True)
+        # 匹配结果表格
+        self.table_widget = QTableWidget()
+        self.table_widget.setColumnCount(5)
+        self.table_widget.setHorizontalHeaderLabels(["序号", "时间(s)", "长度(ms)", "相似度", "SPL(dB)"])
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        # 左侧为“提示文本框+图表”纵向堆叠，右侧为表格；整体左右并排，右侧约占 2/5
+        content_layout = QHBoxLayout()
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.addWidget(self.result_display)
+        left_layout.addWidget(self.plot_widget)
+        content_layout.addWidget(left_container)
+        content_layout.addWidget(self.table_widget)
+        content_layout.setStretch(0, 3)
+        content_layout.setStretch(1, 2)
+        self.main_layout.addLayout(content_layout)
+        self.setLayout(self.main_layout)
+        self.setStyleSheet(
+            ui_style_const.qlabel_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qtextedit_style
+        )
+
+        self.result_display.setStyleSheet("font-size:20px;")
+        self._right_view = None
+        self._bars_item = None
+        self._last_spl_series = None
+
+    def _setup_dual_axis_if_needed(self):
+        if self._right_view is not None:
+            return
+        plot_item = self.plot_widget.getPlotItem()
+        plot_item.showAxis('right')
+        right_axis = plot_item.getAxis('right')
+        right_axis.setLabel("相似度")
+        self._right_view = pg.ViewBox()
+        self._right_view.setXLink(plot_item.vb)
+        plot_item.scene().addItem(self._right_view)
+        right_axis.linkToView(self._right_view)
+
+        def _update_views_geometry():
+            self._right_view.setGeometry(plot_item.vb.sceneBoundingRect())
+            self._right_view.linkedViewChanged(plot_item.vb, self._right_view.XAxis)
+
+        plot_item.vb.sigResized.connect(_update_views_geometry)
+        _update_views_geometry()
+
+    def _prepare_pipeline_context(self):
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        if recorded_signal is None or sample_rate is None:
+            return None
+
+        cfg = self.analysis_config or {}
+        head = cfg.get("head", {}) or {}
+        tail = cfg.get("tail", {}) or {}
+        if not head or not tail:
+            return None
+
+        class_mapping = get_class_mapping()
+        pd_cls = class_mapping.get("PD")
+        pm_cls = class_mapping.get("PM")
+        if not pd_cls or not pm_cls:
+            return None
+
+        return recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls
+
+    def _execute_pd(self, pd_cls, head_cfg):
+        pd_instance = pd_cls(f"{self.windowTitle()}-PD")
+        pd_instance.data_struct = self.data_struct
+        pd_instance.deviation_value = self.deviation_value
+        pd_instance.analysis_config = head_cfg.get("config", {})
+        pd_result = pd_instance.calculate_peak_detection()
+
+        peak_indices = []
+        if isinstance(pd_result, dict):
+            peak_indices = [int(i) for i in pd_result.get("peaks_index", [])]
+        return pd_result, peak_indices
+
+    def _compute_segment_window(self, cfg, pm_cfg):
+        auto_equal = bool(cfg.get("auto_equal_length", False))
+        seg_len, left_point, right_point = 0, 0, 0
+        
+        if auto_equal:
+            rel_path = pm_cfg.get("pattern_save_path")
+            pattern_data_path = os.path.join(DEFAULT_DIR, rel_path) if rel_path else None
+            pattern_data, _ = load_audio_simple(pattern_data_path)
+            segment = np.asarray(pattern_data)
+            seg_len, left_point, right_point = self._calc_left_right_from_array(segment)
+        else:
+            left_point = int(cfg.get("left_grid", 0) or 0)
+            right_point = int(cfg.get("right_grid", 0) or 0)
+            seg_len = max(0, int(left_point + right_point))
+        return seg_len, left_point, right_point
+
+    def _execute_pm(self, pm_cls, sample_rate, recorded_signal, peak_indices, seg_len, left_point, right_point, pm_cfg):
+        n = len(recorded_signal)
+        pm_instance = pm_cls(f"{self.windowTitle()}-PM")
+        pm_instance.sample_rate = sample_rate
+
+        results = []
+        for pk in peak_indices:
+            center = int(pk)
+            start = max(0, center - left_point)
+            stop = min(n, start + seg_len)
+            if stop - start <= 0:
+                continue
+            segment = np.asarray(recorded_signal[start:stop])
+            result_dict = pm_instance.calculate_pattern_match(target_data=segment, analysis_config=pm_cfg)
+
+            if result_dict:
+                results.append(
+                    {
+                        "peak_index": center,
+                        "time_sec": center / float(sample_rate),
+                        "is_match": bool(result_dict.get("is_match", False)),
+                        "score": float(result_dict.get("score", 0.0)),
+                        "threshold": float(result_dict.get("threshold", 0.0)),
+                        "segment_len": int(stop - start),
+                        "start_index": int(start),
+                        "stop_index": int(stop),
+                    }
+                )
+        return results
+
+    def _render_plots(self, pd_result, recorded_signal, sample_rate, peak_indices, results):
+        self.plot_widget.clear()
+        plot_item = self.plot_widget.getPlotItem()
+        spl_series = []
+        if isinstance(pd_result, dict):
+            spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
+        if spl_series is None or len(spl_series) == 0:
+            ref_p = 20e-6
+            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
+            if self.deviation_value is not None:
+                spl_series = spl_series + float(self.deviation_value)
+        time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
+        plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
+        self._last_spl_series = np.asarray(spl_series)
+
+        if peak_indices:
+            peak_indices_arr = np.clip(np.asarray(peak_indices, dtype=int), 0, len(spl_series) - 1)
+            peak_times = peak_indices_arr / float(sample_rate)
+            peak_values = np.asarray(spl_series)[peak_indices_arr]
+            scatter = pg.ScatterPlotItem(x=peak_times, y=peak_values, pen=pg.mkPen(None),
+                                         brush=pg.mkBrush(200, 0, 0, 200), size=8)
+            plot_item.addItem(scatter)
+
+        self._setup_dual_axis_if_needed()
+        if self._bars_item is not None:
+            self._right_view.removeItem(self._bars_item)
+            self._bars_item = None
+
+        if results:
+            times = np.array([r.get("time_sec", 0.0) for r in results], dtype=float)
+            scores = np.array([r.get("score", 0.0) for r in results], dtype=float)
+            if times.size > 0:
+                duration = max(time_axis[-1] - time_axis[0], 1e-6)
+                bar_width = max(duration * 0.002, duration / 1000.0)
+                bars = pg.BarGraphItem(x=times, height=scores, width=bar_width,
+                                       brush=pg.mkBrush(100, 149, 237, 180), pen=pg.mkPen(100, 149, 237, 220))
+                self._right_view.addItem(bars)
+                self._bars_item = bars
+                self._right_view.setYRange(0.0, np.max(scores), padding=0.05)
+
+    def _update_table(self, sample_rate, results):
+        # 更新 PM 结果表格
+        if not hasattr(self, "table_widget"):
+            return
+        rows = len(results) if isinstance(results, list) else 0
+        self.table_widget.setRowCount(rows)
+        for idx, r in enumerate(results or []):
+            time_sec = float(r.get("time_sec", 0.0))
+            start_idx = int(r.get("start_index", 0))
+            stop_idx = int(r.get("stop_index", start_idx))
+            seg_len = max(0, stop_idx - start_idx)
+            length_ms = seg_len / float(sample_rate) * 1000.0
+            score = float(r.get("score", 0.0)) * 100.0
+            # 片段内 SPL 取最大值
+            spl_db = float("nan")
+            try:
+                if isinstance(self._last_spl_series, np.ndarray) and seg_len > 0:
+                    seg = self._last_spl_series[start_idx:stop_idx]
+                    if seg.size > 0:
+                        spl_db = float(np.max(seg))
+            except Exception:
+                spl_db = float("nan")
+
+            items = [
+                QTableWidgetItem(str(idx + 1)),
+                QTableWidgetItem(f"{time_sec:.3f}"),
+                QTableWidgetItem(f"{length_ms:.1f}"),
+                QTableWidgetItem(f"{score:.2f}%"),
+                QTableWidgetItem(f"{spl_db:.2f}" if not np.isnan(spl_db) else "-"),
+            ]
+            for col, it in enumerate(items):
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                self.table_widget.setItem(idx, col, it)
+
+    def _summarize_and_notify(self, results):
+        any_match = any(r.get("is_match") for r in results) if results else False
+        total = len(results)
+        matched = sum(1 for r in results if r.get("is_match"))
+        status_text = "OK" if any_match else "NG"
+        color = "#2e7d32" if any_match else "#c62828"
+        summary_line = f"<span style='color:{color};font-weight:bold'>{status_text}</span>  检测到峰值数: {total}，匹配片段数: {matched}"
+        self.result_display.setHtml(summary_line)
+        return {"results": results, "matched": matched, "total": total, "any_match": any_match}
+
+    def calculate_pipeline_pd_pm(self):
+        context = self._prepare_pipeline_context()
+        if context is None:
+            return None
+
+        recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls = context
+
+        pd_result, peak_indices = self._execute_pd(pd_cls, head)
+
+        if not peak_indices:
+            # 无峰值亦为有效结果：无需匹配
+            self._render_plots(pd_result, recorded_signal, sample_rate, peak_indices, [])
+            self._update_table(sample_rate, [])
+            return self._summarize_and_notify([])
+
+        pm_cfg = tail.get("config", {})
+        seg_len, left_point, right_point = self._compute_segment_window(cfg, pm_cfg)
+
+        results = self._execute_pm(
+            pm_cls=pm_cls,
+            sample_rate=sample_rate,
+            recorded_signal=recorded_signal,
+            peak_indices=peak_indices,
+            seg_len=seg_len,
+            left_point=left_point,
+            right_point=right_point,
+            pm_cfg=pm_cfg,
+        )
+
+        self._render_plots(pd_result, recorded_signal, sample_rate, peak_indices, results)
+        self._update_table(sample_rate, results)
+
+        return self._summarize_and_notify(results)
 
 if __name__ == "__main__":
     stimulus, sr = librosa.load("../audio_data/analysis_samples/stimulus.wav", sr=44100)
