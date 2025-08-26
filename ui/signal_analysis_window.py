@@ -791,7 +791,6 @@ class PatternMatch(QWidget):
                                                               end_freq=end_freq)
             self.pattern_data = AudioEqualizer.apply_equalizer(self.pattern_data, self.sample_rate,
                                                                start_freq=start_freq, end_freq=end_freq)
-
         feature_type = self.analysis_config.get("feature_type", "mfcc")
         target_features, pattern_features = self.feature_extraction_handle(self.target_data, self.pattern_data,
                                                                            feature_type)
@@ -876,16 +875,15 @@ class PipelinePdPm(QWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.analysis_config = None  # 期望结构: {"head": {...}, "tail": {...}}
+        self.analysis_config = None  # structure: {"head": {...}, "tail": {...}}
         self.deviation_value = None
         self.default_logger = LogManager.set_log_handler("core")
-
         self._init_ui()
         self.setWindowTitle(title_name)
 
     def _calc_left_right_from_array(self, pattern_segment: np.ndarray):
         """
-        从数组中计算峰值左右格点数
+        calculate the left and right grid points from the array
         """
         pattern_segment = np.asarray(pattern_segment).astype(float)
         seg_len = int(pattern_segment.size)
@@ -915,13 +913,13 @@ class PipelinePdPm(QWidget):
 
         self.result_display = QTextEdit()
         self.result_display.setReadOnly(True)
-        # 匹配结果表格
+        # match result table
         self.table_widget = QTableWidget()
         self.table_widget.setColumnCount(5)
         self.table_widget.setHorizontalHeaderLabels(["序号", "时间(s)", "长度(ms)", "相似度", "SPL(dB)"])
         header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
-        # 左侧为“提示文本框+图表”纵向堆叠，右侧为表格；整体左右并排，右侧约占 2/5
+        #  vertical stacking, right: table; overall left and right side by side, right about 2/5
         content_layout = QHBoxLayout()
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
@@ -964,6 +962,9 @@ class PipelinePdPm(QWidget):
         _update_views_geometry()
 
     def _prepare_pipeline_context(self):
+        """
+        prepare the input data for the pipeline, including the recorded signal, sample rate, and the analysis config
+        """
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
         if recorded_signal is None or sample_rate is None:
@@ -996,6 +997,9 @@ class PipelinePdPm(QWidget):
         return pd_result, peak_indices
 
     def _compute_segment_window(self, cfg, pm_cfg):
+        """
+        for auto length mode, calculate the length, left and right grid points from the peak of the pattern
+        """
         auto_equal = bool(cfg.get("auto_equal_length", False))
         seg_len, left_point, right_point = 0, 0, 0
         
@@ -1082,7 +1086,7 @@ class PipelinePdPm(QWidget):
                 self._right_view.setYRange(0.0, np.max(scores), padding=0.05)
 
     def _update_table(self, sample_rate, results):
-        # 更新 PM 结果表格
+        # update the PM result table
         if not hasattr(self, "table_widget"):
             return
         rows = len(results) if isinstance(results, list) else 0
@@ -1094,7 +1098,7 @@ class PipelinePdPm(QWidget):
             seg_len = max(0, stop_idx - start_idx)
             length_ms = seg_len / float(sample_rate) * 1000.0
             score = float(r.get("score", 0.0)) * 100.0
-            # 片段内 SPL 取最大值
+            # get the maximum SPL in the segment
             spl_db = float("nan")
             try:
                 if isinstance(self._last_spl_series, np.ndarray) and seg_len > 0:
@@ -1115,15 +1119,30 @@ class PipelinePdPm(QWidget):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 self.table_widget.setItem(idx, col, it)
 
-    def _summarize_and_notify(self, results):
-        any_match = any(r.get("is_match") for r in results) if results else False
-        total = len(results)
-        matched = sum(1 for r in results if r.get("is_match"))
-        status_text = "OK" if any_match else "NG"
-        color = "#2e7d32" if any_match else "#c62828"
+    def _summarize_and_notify(self, results, pass_condition=None):
+        # statistics
+        total = len(results) if isinstance(results, list) else 0
+        matched = sum(1 for r in (results or []) if r.get("is_match"))
+
+        # pass condition: n1 <= matched points <= n2; if not provided, return to "if there is a match, pass"
+        passed = False
+        if isinstance(pass_condition, dict) and pass_condition:
+            try:
+                n1 = int(pass_condition.get("n1", 1))
+                n2 = int(pass_condition.get("n2", 1))
+                if n2 < n1:
+                    n2 = n1
+                passed = (matched >= n1) and (matched <= n2)
+            except Exception:
+                passed = matched > 0
+        else:
+            passed = matched > 0
+
+        status_text = "OK" if passed else "NG"
+        color = "#2e7d32" if passed else "#c62828"
         summary_line = f"<span style='color:{color};font-weight:bold'>{status_text}</span>  检测到峰值数: {total}，匹配片段数: {matched}"
         self.result_display.setHtml(summary_line)
-        return {"results": results, "matched": matched, "total": total, "any_match": any_match}
+        return {"results": results, "matched": matched, "total": total, "passed": passed}
 
     def calculate_pipeline_pd_pm(self):
         context = self._prepare_pipeline_context()
@@ -1135,10 +1154,10 @@ class PipelinePdPm(QWidget):
         pd_result, peak_indices = self._execute_pd(pd_cls, head)
 
         if not peak_indices:
-            # 无峰值亦为有效结果：无需匹配
+            # no peak is also a valid result: no matching needed, the peak number and matching number are both 0
             self._render_plots(pd_result, recorded_signal, sample_rate, peak_indices, [])
             self._update_table(sample_rate, [])
-            return self._summarize_and_notify([])
+            return self._summarize_and_notify([], cfg.get("pass_condition", {}))
 
         pm_cfg = tail.get("config", {})
         seg_len, left_point, right_point = self._compute_segment_window(cfg, pm_cfg)
@@ -1157,7 +1176,7 @@ class PipelinePdPm(QWidget):
         self._render_plots(pd_result, recorded_signal, sample_rate, peak_indices, results)
         self._update_table(sample_rate, results)
 
-        return self._summarize_and_notify(results)
+        return self._summarize_and_notify(results, cfg.get("pass_condition", {}))
 
 if __name__ == "__main__":
     stimulus, sr = librosa.load("../audio_data/analysis_samples/stimulus.wav", sr=44100)

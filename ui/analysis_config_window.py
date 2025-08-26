@@ -1896,19 +1896,20 @@ class PatternMatchConfigWindow(QDialog):
 
 class PipelineConfigWindow(QDialog):
     """
-    管道配置窗口（用于继承）。
+    pipeline configuration window (for inheritance)
 
-    - 选择并跳转配置“前项分析”和“后项分析”
-    - 保存时将两个 analysis 的配置合并到管道自身配置下
+    - select and jump to configure "前项分析" and "后项分析"
+    - when saving, merge the configurations of the two analyses into the pipeline itself
+    This class should be used for inheritance
     """
 
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
         self.model_type = model_type
-        # 全量配置字典（analysis_list）
+        # full configuration dictionary (analysis_list)
         self.all_config = self.config_manager.load_config()
-        # 本项已保存的配置（可能为空）
+        # the saved configuration of this item
         self.load_config = self.all_config.get(model_type, {}) if isinstance(self.all_config, dict) else {}
 
         self.init_ui()
@@ -1923,7 +1924,7 @@ class PipelineConfigWindow(QDialog):
 
         root_layout = QVBoxLayout()
 
-        # 两个按钮（由子类设置类型与按钮文案）
+        # two buttons (set by subclass)
         select_group = QGroupBox("管道节点配置")
         col_btns = QVBoxLayout()
         self.btn_head_cfg = QPushButton("配置前项…")
@@ -1943,10 +1944,10 @@ class PipelineConfigWindow(QDialog):
         col_btns.addStretch()
         col_btns.setSpacing(8)
         select_group.setLayout(col_btns)
-        # 记录 group 引用，便于子类改标题
+        # record the group reference,便于子类改标题
         self._group_box = select_group
 
-        # 底部按钮
+        # bottom buttons
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
@@ -1967,22 +1968,22 @@ class PipelineConfigWindow(QDialog):
             + ui_style_const.qcheckbox_style
         )
 
-        # 本地存储（仅管道内部使用）
+        # local storage (only used inside the pipeline)
         self.head_local_type = None
         self.tail_local_type = None
         self.head_local_config = {}
         self.tail_local_config = {}
 
-        # 子窗体标题（可由子类设置或重写获取）
+        # subclass window title (can be set by subclass or overridden)
         self._head_window_title = None
         self._tail_window_title = None
 
-        # 由子类调用 set_types / set_button_texts 后启用
+        # enabled after subclass calls set_types / set_button_texts
         self.btn_head_cfg.clicked.connect(self.on_click_head_cfg)
         self.btn_tail_cfg.clicked.connect(self.on_click_tail_cfg)
 
     def _hydrate_from_saved(self):
-        """如果本项已有保存的 head/tail 配置，则初始化到本地缓存，避免互相覆盖/清空。"""
+        """if the item has saved head/tail configuration, initialize it to the local cache, avoid overlapping/clearing."""
         if isinstance(self.load_config, dict):
             head = self.load_config.get("head", {})
             tail = self.load_config.get("tail", {})
@@ -2130,8 +2131,8 @@ class PipelineConfigWindow(QDialog):
         return config_data
 
 
-class PipelineSplPdConfigWindow(PipelineConfigWindow):
-    """SPL -> PeakDetection 的演示/测试子类。"""
+class PipelinePdPmConfigWindow(PipelineConfigWindow):
+    """PeakDetection -> PatternMatch pipeline configuration window"""
 
     def __init__(self, config_manager, model_type):
         super().__init__(config_manager, model_type)
@@ -2143,7 +2144,7 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         self._init_pass_condition_group()
 
     def _init_pass_condition_group(self):
-        # 通过条件：n1 <= 匹配点数 <= n2
+        # pass condition: n1 ≤ matched points ≤ n2
         root_layout = self.layout()
         if not root_layout:
             return
@@ -2179,7 +2180,7 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         pass_group.setLayout(row)
 
         try:
-            # 插入在长度配置之后
+            # insert after length configuration
             root_layout.insertWidget(2, pass_group)
         except Exception:
             root_layout.addWidget(pass_group)
@@ -2195,23 +2196,6 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         except Exception:
             pass
 
-    def get_default_config(self):
-        cfg = super().get_default_config()
-        # 管道自身配置字段
-        cfg["auto_equal_length"] = bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False
-        if not cfg["auto_equal_length"]:
-            cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
-            cfg["right_grid"] = int(self._right_grid_spin.value()) if hasattr(self, "_right_grid_spin") else 0
-        else:
-            cfg.pop("left_grid", None)
-            cfg.pop("right_grid", None)
-        # 通过条件
-        cfg["pass_condition"] = {
-            "n1": int(self._n1_spin.value()) if hasattr(self, "_n1_spin") else 1,
-            "n2": int(self._n2_spin.value()) if hasattr(self, "_n2_spin") else 1,
-        }
-        return cfg
-
     def _init_length_group(self):
         root_layout = self.layout()
         if not root_layout:
@@ -2219,7 +2203,7 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         length_group = QGroupBox("长度控制")
         vbox = QVBoxLayout()
 
-        # 第一行：左/右格点（包含峰值点）
+        # first row: left/right grid points (include peak point)
         row1 = QHBoxLayout()
         lbl_l = QLabel("左侧格点数")
         lbl_r = QLabel("右侧格点数")
@@ -2235,19 +2219,19 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         row1.addWidget(self._right_grid_spin)
         row1.addStretch()
 
-        # 第二行：自动匹配模板长度
+        # second row: auto match template length
         row2 = QHBoxLayout()
         self._auto_equal_chk = QCheckBox("自动匹配模板长度（对齐模板峰值）")
         row2.addWidget(self._auto_equal_chk)
         row2.addStretch()
 
-        # 勾选自动时禁用手动输入
+        # when auto is checked, disable manual input
         def on_auto_changed(checked):
             self._left_grid_spin.setEnabled(not checked)
             self._right_grid_spin.setEnabled(not checked)
         self._auto_equal_chk.toggled.connect(on_auto_changed)
 
-        # 载入已有配置
+        # load existing configuration
         try:
             if isinstance(self.load_config, dict):
                 auto_flag = bool(self.load_config.get("auto_equal_length", False))
@@ -2267,14 +2251,14 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         length_group.setLayout(vbox)
 
         try:
-            # 插在按钮组后、通过条件前
+            # insert after button group, before pass condition
             root_layout.insertWidget(1, length_group)
         except Exception:
             root_layout.addWidget(length_group)
 
     def get_default_config(self):
         cfg = super().get_default_config()
-        # 管道自身配置
+        # pipeline itself configuration
         cfg["auto_equal_length"] = bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False
         if not cfg["auto_equal_length"]:
             cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
@@ -2282,7 +2266,7 @@ class PipelineSplPdConfigWindow(PipelineConfigWindow):
         else:
             cfg.pop("left_grid", None)
             cfg.pop("right_grid", None)
-        # 通过条件
+        # pass condition
         cfg["pass_condition"] = {
             "n1": int(self._n1_spin.value()) if hasattr(self, "_n1_spin") else 1,
             "n2": int(self._n2_spin.value()) if hasattr(self, "_n2_spin") else 1,
@@ -2345,6 +2329,6 @@ if __name__ == "__main__":
     # window.show()
     # window = AIConfigWindow(config_manager)
     # window.show()
-    window = PipelineSplPdConfigWindow(config_manager, 111)
+    window = PipelinePdPmConfigWindow(config_manager, 111)
     window.show()
     app.exec_()

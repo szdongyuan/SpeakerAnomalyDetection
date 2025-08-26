@@ -22,7 +22,7 @@ from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigW
     PatternMatchConfigWindow
 from ui.analysis_config_window import LPConfigWindow
 from ui.analysis_config_window import PDConfigWindow
-from ui.analysis_config_window import PipelineSplPdConfigWindow
+from ui.analysis_config_window import PipelinePdPmConfigWindow
 
 
 class AnalysisModelSelect(QDialog):
@@ -527,7 +527,7 @@ class OptionList(QListView):
         elif type == "PD":
             model = PDConfigWindow(config_manager, name)
         elif type == "ED":
-            model = PipelineSplPdConfigWindow(config_manager, name)
+            model = PipelinePdPmConfigWindow(config_manager, name)
         elif type == "PM":
             model = PatternMatchConfigWindow(config_manager, name)
         return model
