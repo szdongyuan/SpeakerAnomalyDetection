@@ -342,25 +342,45 @@ class SequenceWindow(QWidget):
                 QHBoxLayout: The configured wavefrom layout object.
         """
         layout = QHBoxLayout()
-        self.line_graph = pg.PlotWidget()
-        self.line_graph.setBackground("white")
+        self.line_graph_top = pg.PlotWidget()
+        self.line_graph_top.setBackground("white")
         left_area = self.create_left_layout()
-        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
-        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
-        self.line_graph.showGrid(x=True, y=True)
+        self.line_graph_top.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
+        self.line_graph_top.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
+        self.line_graph_top.showGrid(x=True, y=True)
 
-        font = QFont()
-        font.setPixelSize(20)
-        b_axis = self.line_graph.getAxis("bottom")
-        l_axis = self.line_graph.getAxis("left")
-        b_axis.setTickFont(font)
-        l_axis.setTickFont(font)
+        self.line_graph_bottom = pg.PlotWidget()
+        self.line_graph_bottom.setBackground("white")
+        left_area = self.create_left_layout()
+        self.line_graph_bottom.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
+        self.line_graph_bottom.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
+        self.line_graph_bottom.showGrid(x=True, y=True)
+
+        font_top = QFont()
+        font_top.setPixelSize(20)
+        b_axis = self.line_graph_top.getAxis("bottom")
+        l_axis = self.line_graph_top.getAxis("left")
+        b_axis.setTickFont(font_top)
+        l_axis.setTickFont(font_top)
         b_axis.setTextPen("black")
         l_axis.setTextPen("black")
 
+        font_bottom = QFont()
+        font_bottom.setPixelSize(20)
+        b_axis = self.line_graph_bottom.getAxis("bottom")
+        l_axis = self.line_graph_bottom.getAxis("left")
+        b_axis.setTickFont(font_bottom)
+        l_axis.setTickFont(font_bottom)
+        b_axis.setTextPen("black")
+        l_axis.setTextPen("black")
+
+        wave_layout = QVBoxLayout()
+        wave_layout.addWidget(self.line_graph_top)
+        wave_layout.addWidget(self.line_graph_bottom)
+
         layout.addLayout(left_area, stretch=1)
         layout.addSpacing(20)
-        layout.addWidget(self.line_graph, stretch=8)
+        layout.addLayout(wave_layout, stretch=8)
         layout.setContentsMargins(40, 20, 40, 20)
         layout.setSpacing(30)
         return layout
@@ -879,7 +899,7 @@ class SequenceWindow(QWidget):
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
-        self.line_graph.clear()
+        self.line_graph_top.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
         self.default_ai_result = None
@@ -965,9 +985,9 @@ class SequenceWindow(QWidget):
         if not self.mic:
             QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return
-        if not self.speaker:
-            QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
-            return
+        # if not self.speaker:
+        #     QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
+        #     return
 
     def reset_work_pram(self, label):
         self.data_struct.clear_data()
@@ -989,17 +1009,18 @@ class SequenceWindow(QWidget):
 
         self.update_player_btn_is_playing()
         if self.player_status_flag:
-            self.line_graph.clear()
+            self.line_graph_top.clear()
         self.player_status_flag = True
         QApplication.processEvents()
 
         stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
 
-        if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-            play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
-        else:
+        # if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+        #     play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
+        # else:
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["RECORD_ONLY"]:
             record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+        self.plot_line_graph(self.data_struct.store_wave_data, sample_rate)
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
@@ -1116,19 +1137,23 @@ class SequenceWindow(QWidget):
         else:
             self.analysis_config = dict()
 
-    @staticmethod
-    def plot_line_graph(recorded_signal, line_graph, sample_rate):
+    def plot_line_graph(self, recorded_signal, sample_rate):
         """
         Plot a line graph of the recorded signal.
 
         Parameters:
         recorded_signal (list or numpy.array): The recorded signal data to be plotted.
-        line_graph (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
+        line_graph_top (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
         sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
         """
-        line_graph.clear()
-        signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
-        line_graph.plot(signal_duration, recorded_signal, pen="k")
+        self.line_graph_top.clear()
+        signal_duration = np.linspace(0, len(recorded_signal[0]) / sample_rate, len(recorded_signal[0]))
+        self.line_graph_top.plot(signal_duration, recorded_signal[0], pen="k")
+
+        print("recorded_signal[1]", recorded_signal[1])
+        self.line_graph_bottom.clear()
+        signal_duration = np.linspace(0, len(recorded_signal[1]) / sample_rate, len(recorded_signal[1]))
+        self.line_graph_bottom.plot(signal_duration, recorded_signal[1], pen="k")
 
     def update_player_btn_is_playing(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))

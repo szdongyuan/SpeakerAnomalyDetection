@@ -9,7 +9,7 @@ from consts.running_consts import DEFAULT_DIR
 
 def save_audio_simple(save_path, audio, sr=44100):
     # we assume audio is mono channel
-    audio = audio.astype("float32")
+    audio = audio.T.astype("float32")
     wavfile.write(save_path, sr, audio)
 
 
