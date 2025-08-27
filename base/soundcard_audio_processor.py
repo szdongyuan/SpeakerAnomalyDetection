@@ -19,7 +19,7 @@ class SoundcardAudioProcessor(object):
         sr = stimulus_dict.get("sr")
         rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
         align_frames = self.calculate_alignment(data, rec_data)
-        aligned_data = rec_data[align_frames: align_frames + len(data)]
+        aligned_data = rec_data[align_frames : align_frames + len(data)]
         save_audio_simple(recording_path, aligned_data, sr)
         return error_code.OK, aligned_data
 
@@ -41,10 +41,12 @@ class SoundcardAudioProcessor(object):
     def sd_rec(recorded_dict):
         num_frames = recorded_dict.get("num_frames", 441000)
         sample_rate = recorded_dict.get("sample_rate", 44100)
-        channels = recorded_dict.get("channels", 1)
+        # channels = recorded_dict.get("channels", 2)
+        channels = 2
         blocking = recorded_dict.get("blocking", True)
         prolong_frames = recorded_dict.get("prolong_frames", 0)
-        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T[0]
+        # recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T[0]
+        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T
         if prolong_frames > 0:
             recorded_data = recorded_data[prolong_frames:]
 
@@ -64,10 +66,10 @@ class SoundcardAudioProcessor(object):
         new_delay_samples_r = 0
         tmp_max = 0
         for i in range(n // 3, n - len(stimulus_signal) // 12, len(stimulus_signal) // 12):
-            max_min_diff = max(corr_func_shifted_r[i: i + n_11]) - min(corr_func_shifted_r[i: i + n_11])
+            max_min_diff = max(corr_func_shifted_r[i : i + n_11]) - min(corr_func_shifted_r[i : i + n_11])
             if max_min_diff >= tmp_max:
                 tmp_max = max_min_diff
-                new_delay_samples_r = i + np.argmax(np.abs(corr_func_shifted_r[i: i + n_11]))
+                new_delay_samples_r = i + np.argmax(np.abs(corr_func_shifted_r[i : i + n_11]))
         new_delay_samples_r -= max_shift
         return new_delay_samples_r, corr_func_shifted_r, max_shift
 
