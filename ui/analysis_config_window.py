@@ -1649,8 +1649,9 @@ class PatternMatchConfigWindow(QDialog):
     def on_click_extract_btn(self):
         dlg = AudioClipExtractionDialog(save_clip=True, dialog_title="选择模板片段")
         _, clip_path, clip_len = dlg.on_exec()
-        self.pattern_list.append({"clip_path": clip_path, "clip_len": clip_len})
-        self.refresh_data_view()
+        if clip_path is not None:
+            self.pattern_list.append({"clip_path": clip_path, "clip_len": clip_len})
+            self.refresh_data_view()
 
     def on_click_add_btn(self):
         file_names, _ = QFileDialog.getOpenFileNames(self, "选择音频文件", DEFAULT_DIR + "audio_data/pattern/", "音频文件 (*.wav)")
