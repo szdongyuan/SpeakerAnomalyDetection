@@ -247,6 +247,8 @@ class DraggablePlotWidget(pg.PlotWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.is_creating_new_region:
             self.is_creating_new_region = False
+            current_pos = self.getPlotItem().getViewBox().mapSceneToView(event.pos())
+            self.region.setRegion(sorted([self.drag_start_pos.x(), current_pos.x()]))
             start, end = self.region.getRegion()
             if abs(start - end) < 1e-9:
                 self.region.hide()

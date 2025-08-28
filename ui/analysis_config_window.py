@@ -7,7 +7,7 @@ import numpy as np
 
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
-from PyQt5.QtGui import QIcon, QDoubleValidator, QIntValidator, QCursor
+from PyQt5.QtGui import QIcon, QDoubleValidator, QIntValidator, QCursor, QStandardItem
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QSpinBox
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
 from PyQt5.QtWidgets import QVBoxLayout, QWidget, QFormLayout, QFrame, QSplitter, QToolTip
@@ -15,11 +15,14 @@ from PyQt5.QtWidgets import QDoubleSpinBox
 from PyQt5.QtWidgets import QButtonGroup
 
 from base.file_ops import FileOps
+from base.load_audio import load_audio_simple
 from base.load_config import ConfigManager, LoadUiConfig
 from base.save_data import save_audio_simple
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.audio_clip_extraction_dialog import AudioClipExtractionDialog
+from ui.custom_ui_widget.custom_table_widget import DataView
 from ui.generic_feature_params_dialog import GenericFeatureParamsDialog
 from ui.graph_widget import DraggablePlotWidget
 
@@ -1461,11 +1464,12 @@ class PatternMatchConfigWindow(QDialog):
         self.config_manager = config_manager
         _, self.feature_registry = self.load_features_param_config()
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.audio_file_path = None
-        self.pattern_save_path = None
-        self.audio_data = None
-        self.sample_rate = None
-        self.selected_region_time = (None, None)
+        self.pattern_list = []
+        # self.audio_file_path = None
+        # self.pattern_save_path = None
+        # self.audio_data = None
+        self.sample_rate = self.load_config["sample_rate"]
+        # self.selected_region_time = (None, None)
         self.config_data = None
 
         self.feature_params = {
@@ -1485,11 +1489,10 @@ class PatternMatchConfigWindow(QDialog):
         self.resize(800, 750)
         self.main_layout = QVBoxLayout(self)
 
-        self.main_layout.addLayout(self.create_upload_layout())
-
         splitter = QSplitter(Qt.Vertical)
-        self.plot_widget = self.create_plot_widget()
-        splitter.addWidget(self.plot_widget)
+
+        pattern_group_box = self.create_pattern_group_box()
+        splitter.addWidget(pattern_group_box)
 
         options_container = QWidget()
         options_layout = self.create_options_layout()
@@ -1516,48 +1519,29 @@ class PatternMatchConfigWindow(QDialog):
             + ui_style_const.qtextedit_style
         )
 
-    def create_upload_layout(self):
-        layout = QHBoxLayout()
-        self.file_path_edit = QLineEdit()
-        self.file_path_edit.setReadOnly(True)
-        self.file_path_edit.setPlaceholderText("请上传源音频文件...")
+    def create_pattern_group_box(self):
+        self.data_view = DataView(len(self.pattern_list), 2, [])
+        self.data_view.set_h_header(["模板文件", "模板时长 (s)"])
+        extract_btn = QPushButton("提取模板")
+        extract_btn.clicked.connect(self.on_click_extract_btn)
+        add_btn = QPushButton("添加模板")
+        add_btn.clicked.connect(self.on_click_add_btn)
+        remove_btn = QPushButton("删除模板")
+        remove_btn.clicked.connect(self.on_click_remove_btn)
+        self.n_chosen_pattern_label = QLabel("已加载模板： 0")
 
-        upload_btn = QPushButton("上传文件")
-        upload_btn.clicked.connect(self.upload_audio_file)
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(extract_btn)
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(remove_btn)
+        btn_layout.addWidget(self.n_chosen_pattern_label)
 
-        self.select_path_btn = QPushButton("保存模板")
-        self.select_path_btn.clicked.connect(self.select_pattern_save_path)
-        self.select_path_btn.setToolTip("尚未选择模板保存路径")
-
-        file_label = QLabel("文件操作:")
-        layout.addWidget(file_label)
-        layout.addWidget(self.file_path_edit)
-        layout.addWidget(upload_btn)
-        layout.addWidget(self.select_path_btn)
-
-        return layout
-
-    def create_plot_widget(self):
-        self.plot_curve = pg.PlotDataItem(pen='k')
-        self.region = pg.LinearRegionItem(values=[0, 0], brush=(50, 150, 250, 50),
-                                          pen={'color': (0, 0, 255), 'width': 2})
-        self.region.setZValue(10)
-        self.region.sigRegionChanged.connect(self.on_region_changed)
-
-        plot_widget = DraggablePlotWidget(region_item=self.region)
-        plot_widget.setBackground("white")
-        plot_widget.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
-        plot_widget.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
-        plot_widget.showGrid(x=True, y=True, alpha=0.5)
-        plot_widget.addItem(self.plot_curve)
-        plot_widget.addItem(self.region)
-        self.region.hide()
-
-        plot_widget.sigSelectionCancelled.connect(self.on_selection_cancelled)
-        plot_widget.viewport().setMouseTracking(True)
-        plot_widget.viewport().installEventFilter(self)
-        plot_widget.setActive(False)
-        return plot_widget
+        layout = QVBoxLayout()
+        layout.addWidget(self.data_view)
+        layout.addLayout(btn_layout)
+        group = QGroupBox("模板选择")
+        group.setLayout(layout)
+        return group
 
     def create_options_layout(self):
         layout = QHBoxLayout()
@@ -1662,6 +1646,25 @@ class PatternMatchConfigWindow(QDialog):
         layout.addWidget(ok_btn)
         return layout
 
+    def on_click_extract_btn(self):
+        dlg = AudioClipExtractionDialog(save_clip=True, dialog_title="选择模板片段")
+        _, clip_path, clip_len = dlg.on_exec()
+        self.pattern_list.append({"clip_path": clip_path, "clip_len": clip_len})
+        self.refresh_data_view()
+
+    def on_click_add_btn(self):
+        file_names, _ = QFileDialog.getOpenFileNames(self, "选择音频文件", DEFAULT_DIR + "audio_data/pattern/", "音频文件 (*.wav)")
+        for file_name in file_names:
+            relative_path = FileOps.get_relative_path(file_name, DEFAULT_DIR)
+            pattern_data, _ = load_audio_simple(file_name, self.sample_rate)
+            self.pattern_list.append({"clip_path": relative_path, "clip_len": len(pattern_data)})
+        self.refresh_data_view()
+
+    def on_click_remove_btn(self):
+        row_idx = self.data_view.currentIndex().row()
+        self.pattern_list.pop(row_idx)
+        self.refresh_data_view()
+
     @staticmethod
     def load_features_param_config():
         default_config_file = os.path.join(DEFAULT_DIR, "ui", "ui_config", "features_param.json")
@@ -1670,38 +1673,6 @@ class PatternMatchConfigWindow(QDialog):
             return True, data
         else:
             return False, {}
-
-    def select_pattern_save_path(self):
-        save_path, _ = QFileDialog.getSaveFileName(self, "保存模板", "", "WAV 文件 (*.wav)")
-        if save_path:
-            self.pattern_save_path = save_path
-            self.select_path_btn.setToolTip(f"模板将保存到:\n{self.pattern_save_path}")
-
-    def upload_audio_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", "", "音频文件 (*.wav)")
-        if file_path:
-            self.audio_file_path = file_path
-            self.file_path_edit.setText(file_path)
-            self.load_and_display_waveform(file_path)
-            self.region.hide()
-            self.selected_region_time = (None, None)
-            self.pattern_save_path = None
-
-    def on_region_changed(self):
-        self.pattern_save_path = None
-        start_time, end_time = self.region.getRegion()
-        duration = abs(end_time - start_time)
-        if self.region.isVisible() and duration > 1e-9:
-            self.selected_region_time = tuple(sorted((start_time, end_time)))
-            tooltip_text = f"时长: {duration:.3f}s"
-            QToolTip.showText(QCursor.pos(), tooltip_text, self.plot_widget.viewport())
-        else:
-            self.selected_region_time = (None, None)
-            QToolTip.hideText()
-
-    def on_selection_cancelled(self):
-        self.selected_region_time = (None, None)
-        QToolTip.hideText()
 
     def on_click_feature_params(self):
         feature_key = self.feature_combo.currentData()
@@ -1732,19 +1703,9 @@ class PatternMatchConfigWindow(QDialog):
     def populate_ui_from_config(self):
         if not self.load_config:
             return
-        rel_audio_path = self.load_config.get("audio_file_path")
-        if rel_audio_path:
-            abs_audio_path = os.path.join(DEFAULT_DIR, rel_audio_path)
-            if os.path.exists(abs_audio_path):
-                self.audio_file_path = abs_audio_path
-                self.file_path_edit.setText(self.audio_file_path)
-                self.load_and_display_waveform(self.audio_file_path)
-            else:
-                self.file_path_edit.setText(f"未找到: {abs_audio_path}")
 
-        self.pattern_save_path = self.load_config.get("pattern_save_path")
-        if self.pattern_save_path:
-            self.select_path_btn.setToolTip(f"模板将保存到:\n{self.pattern_save_path}")
+        self.pattern_list = self.load_config.get("pattern_list", [])
+        self.refresh_data_view()
 
         feature_type = self.load_config.get("feature_type")
         if feature_type:
@@ -1776,42 +1737,26 @@ class PatternMatchConfigWindow(QDialog):
             threshold_value = self.load_config.get("threshold_value", 0.9)
             self.threshold_edit.setText(str(threshold_value))
 
-        region_time = self.load_config.get("pattern_region_time")
-        if self.audio_data is not None and region_time and all(t is not None for t in region_time):
-            try:
-                start_frame, end_frame = region_time
-                start_time = start_frame / self.sample_rate
-                end_time = end_frame / self.sample_rate
-                self.region.show()
-                self.region.setRegion((start_time, end_time))
-            except (ValueError, TypeError, ZeroDivisionError) as e:
-                QMessageBox.critical(self, "错误", f"无法从配置中恢复模板区域: \n{e}")
-
-    def load_and_display_waveform(self, file_path):
-        try:
-            audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
-            self.audio_data, self.sample_rate = audio_data, sample_rate
-            time_array = np.linspace(0, len(audio_data) / sample_rate, num=len(audio_data))
-            self.plot_curve.setData(time_array, audio_data)
-            self.region.setBounds([0, time_array[-1]])
-            self.plot_widget.setActive(True)
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"加载音频文件失败:\n{e}")
-            self.audio_data, self.sample_rate = None, None
-            self.plot_curve.clear()
-            self.plot_widget.setActive(False)
+    def refresh_data_view(self):
+        self.data_view.model().clear()
+        for idx, pattern in enumerate(self.pattern_list):
+            self.data_view.model().setItem(idx, 0, QStandardItem(pattern["clip_path"]))
+            pattern_len = np.round(pattern["clip_len"] / self.sample_rate, 3)
+            self.data_view.model().setItem(idx, 1, QStandardItem(str(pattern_len)))
+        self.n_chosen_pattern_label.setText("已加载模板： %s" % len(self.pattern_list))
 
     def get_config(self):
         feature_key = self.feature_combo.currentData()
-        start_time, end_time = self.selected_region_time
-        start_frame = int(start_time * self.sample_rate) if start_time is not None else 0
-        end_frame = int(end_time * self.sample_rate) if end_time is not None else 0
+        # start_time, end_time = self.selected_region_time
+        # start_frame = int(start_time * self.sample_rate) if start_time is not None else 0
+        # end_frame = int(end_time * self.sample_rate) if end_time is not None else 0
         config = {
-            "audio_file_path": self.audio_file_path,
-            "pattern_save_path": self.pattern_save_path,
+            # "audio_file_path": self.audio_file_path,
+            # "pattern_save_path": self.pattern_save_path,
+            "pattern_list": self.pattern_list,
             "sample_rate": self.sample_rate,
-            "pattern_region_time": (start_frame, end_frame),
-            "pattern_duration_sec": end_frame - start_frame,
+            # "pattern_region_time": (start_frame, end_frame),
+            # "pattern_duration_sec": end_frame - start_frame,
             "feature_type": feature_key,
             "feature_params": self.feature_params.get(feature_key, {}),
             "apply_filter": self.filter_checkbox.isChecked(),
@@ -1833,46 +1778,32 @@ class PatternMatchConfigWindow(QDialog):
         config_data = self.get_config()
         if not self.validate_config(config_data):
             return
-        config_data["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
-        config_data["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
+        # config_data["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
+        # config_data["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
         save_flag = self.config_manager.save_default_config("PM", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config = self.get_config()
         if not self.validate_config(config):
-            return
-        try:
-            start_time, end_time = self.selected_region_time
-            start_sample = int(start_time * self.sample_rate)
-            end_sample = int(end_time * self.sample_rate)
-            pattern_data = self.audio_data[start_sample:end_sample]
-            save_audio_simple(config["pattern_save_path"], pattern_data, self.sample_rate)
-            config["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
-            config["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存模板文件失败:\n{e}")
-            return
+            return None
+        # try:
+        #     start_time, end_time = self.selected_region_time
+        #     start_sample = int(start_time * self.sample_rate)
+        #     end_sample = int(end_time * self.sample_rate)
+        #     pattern_data = self.audio_data[start_sample:end_sample]
+        #     save_audio_simple(config["pattern_save_path"], pattern_data, self.sample_rate)
+        #     config["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
+        #     config["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
+        # except Exception as e:
+        #     QMessageBox.critical(self, "错误", f"保存模板文件失败:\n{e}")
+        #     return
 
         self.config_data = config
         self.accept()
         return self.config_data
 
     def validate_config(self, config):
-        if not config["audio_file_path"]:
-            QMessageBox.warning(self, "提示", "请先上传一个源音频文件。")
-            return False
-
-        if not os.path.exists(config["audio_file_path"]):
-            QMessageBox.warning(self, "提示", "源音频文件不存在或路径已失效，请重新上传。")
-            return False
-
-        if config["pattern_duration_sec"] <= 0:
-            QMessageBox.warning(self, "提示", "选择的模式片段无效，请在波形图上拖动选择一个区域。")
-            return False
-        if not config["pattern_save_path"]:
-            QMessageBox.warning(self, "提示", "请先选择模板的保存路径。")
-            return False
         if config["apply_filter"]:
             low, high = config["filter_range_hz"]
             if low is None or high is None or low >= high:
@@ -2329,6 +2260,6 @@ if __name__ == "__main__":
     # window.show()
     # window = AIConfigWindow(config_manager)
     # window.show()
-    window = PipelinePdPmConfigWindow(config_manager, 111)
+    window = PatternMatchConfigWindow(config_manager, "PM")
     window.show()
     app.exec_()
