@@ -100,7 +100,7 @@ class DataManageDialog(QDialog):
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.resize(900, 350)
 
-        self.data_view = DataView(self.logger, row, column, editable_column)
+        self.data_view = DataView(row, column, editable_column)
 
         layout = QVBoxLayout()
         layout.addLayout(self.top_layout)
@@ -187,10 +187,9 @@ class DataManageDialog(QDialog):
 class DataView(QTableView):
     view_checked_changed = pyqtSignal(QStandardItem, bool)
 
-    def __init__(self, logger: LogManager, row: int, column: int, editable_column: list[int]):
+    def __init__(self, row: int, column: int, editable_column: list[int]):
         super(DataView, self).__init__()
 
-        self.logger = logger
         self.audio_data_model = CustomStandardItemModel(row, column, editable_column)
 
         self.setModel(self.audio_data_model)
