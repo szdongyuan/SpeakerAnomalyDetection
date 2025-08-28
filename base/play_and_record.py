@@ -57,7 +57,7 @@ def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorde
         )
 
 
-def get_recorded_info(product_model, product_number, barcode, label):
+def get_recorded_info(product_model, product_number, label):
     """
         Generate recorded information.
 
@@ -74,10 +74,6 @@ def get_recorded_info(product_model, product_number, barcode, label):
     mac_address = mac_address.replace(":", "") if mac_address else None
     product_number = "{:03}".format(int(product_number))
     recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number
-    if barcode:
-        recorded_name = recorded_name + "_BC" + barcode
-    else:
-        barcode = None
     recorded_name = recorded_name + ".wav"
     store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
     if not os.path.exists(store_record_dir):
@@ -87,7 +83,7 @@ def get_recorded_info(product_model, product_number, barcode, label):
         "file_path": recorded_path,
         "product_model": product_model,
         "record_date": recording_time,
-        "barcode": barcode,
+        "barcode": None,
         "labels": label,
     }
 
