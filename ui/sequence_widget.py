@@ -956,6 +956,7 @@ class SequenceWindow(QWidget):
         self.update_player_btn_is_playing()
         if self.player_status_flag:
             self.line_graph_top.clear()
+            self.line_graph_bottom.clear()
         self.player_status_flag = True
         QApplication.processEvents()
 
