@@ -8,6 +8,7 @@ from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 
+
 class HardwareWindow(QDialog):
 
     def __init__(self, current_speaker=None, current_mic=None):
@@ -40,10 +41,12 @@ class HardwareWindow(QDialog):
         layout.addWidget(mic_box)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qlabel_style)
+        self.setStyleSheet(
+            ui_style_const.qpushbutton_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+        )
 
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
@@ -57,12 +60,11 @@ class HardwareWindow(QDialog):
         select_speaker_btn = QPushButton("选择扬声器")
         select_speaker_btn.clicked.connect(self.select_speaker_btn_clicked)
         h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        # calibrate_speaker_btn = QPushButton("输出校准")
-        # calibrate_speaker_btn.clicked.connect(self.calibrate_speaker_btn_clicked)
         speaker_btn_layout.addWidget(select_speaker_btn)
         speaker_btn_layout.addItem(h_spacer)
-        # speaker_btn_layout.addWidget(calibrate_speaker_btn)
         speaker_box = QGroupBox("扬声器")
+        speaker_box.setDisabled(True)
+        speaker_box.setStyleSheet("color: rgb(162, 162, 162);")
         layout = QVBoxLayout()
         layout.addLayout(speaker_label_layout)
         layout.addLayout(speaker_btn_layout)
@@ -129,7 +131,7 @@ class HardwareWindow(QDialog):
         if not speaker_list:
             self.speaker = None
         else:
-            if last_speaker and any(d['name'] == last_speaker['name'] for d in speaker_list):
+            if last_speaker and any(d["name"] == last_speaker["name"] for d in speaker_list):
                 self.speaker = last_speaker
             else:
                 self.speaker = default_speaker
@@ -137,7 +139,7 @@ class HardwareWindow(QDialog):
         if not mic_list:
             self.mic = None
         else:
-            if last_mic and any(d['name'] == last_mic['name'] for d in mic_list):
+            if last_mic and any(d["name"] == last_mic["name"] for d in mic_list):
                 self.mic = last_mic
             else:
                 self.mic = default_mic
@@ -232,10 +234,12 @@ class DeviceListWindow(QDialog):
         layout.addItem(item_spacer)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style +
-                           ui_style_const.qlabel_style +
-                           ui_style_const.qcombobox_style +
-                           ui_style_const.qlistview_style)
+        self.setStyleSheet(
+            ui_style_const.qpushbutton_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcombobox_style
+            + ui_style_const.qlistview_style
+        )
 
     def update_api_device(self):
         item_model = QStandardItemModel()

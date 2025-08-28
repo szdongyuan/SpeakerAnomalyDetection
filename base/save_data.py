@@ -13,7 +13,7 @@ def save_audio_simple(save_path, audio, sr=44100):
     wavfile.write(save_path, sr, audio)
 
 
-def save_recorded_data_to_json(product_model, current_recorded_count, scanner_barcode, scanner_barcode_check):
+def save_recorded_data_to_json(product_model, current_recorded_count):
     """
     Save the recorded number to a text file.
 
@@ -26,8 +26,6 @@ def save_recorded_data_to_json(product_model, current_recorded_count, scanner_ba
     data = {
         "product_model": product_model,
         "current_recorded_count": int(current_recorded_count),
-        "scanner_barcode": scanner_barcode,
-        "scanner_barcode_check": scanner_barcode_check,
         "datetime": current_time,
     }
     with open(file_path, "w") as f:

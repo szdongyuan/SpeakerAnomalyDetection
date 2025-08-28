@@ -18,10 +18,8 @@ from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
-from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow, \
-    PatternMatchConfigWindow
+from ui.analysis_config_window import SplConfigWindow, SpecConfigWindow, PatternMatchConfigWindow, PDConfigWindow
 from ui.analysis_config_window import LPConfigWindow
-from ui.analysis_config_window import PDConfigWindow
 from ui.analysis_config_window import PipelinePdPmConfigWindow
 
 
@@ -120,22 +118,19 @@ class AnalysisModelSelect(QDialog):
 
         self.analysis_model = AnalysisModel()
         sound_item = QStandardItem("音频设置")
-        sound_items = ["播放与录制", "录制音频"]
-        for item in sound_items:
-            list_item = QStandardItem(item.lstrip())
-            list_item.setData(item, Qt.DisplayRole)
-            sound_item.appendRow(list_item)
+        # sound_items = ["播放与录制", "录制音频"]
+        # for item in sound_items:
+        list_item = QStandardItem("录制音频".lstrip())
+        list_item.setData("录制音频", Qt.DisplayRole)
+        sound_item.appendRow(list_item)
         self.analysis_model.appendRow(sound_item)
 
         analysis_item_item = QStandardItem("音频分析")
         analysis_items = [
             "声压级 (SPL) ",
-            "频响 (FR) ",
-            "谐波失真 (HD) ",
             "松散颗粒 (LP) ",
             "峰值检测 (PD) ",
             "模式匹配(PM)",
-            "AI 分析 ",
             "频谱分析 (Spec) ",
             "事件检测 (ED) ",
         ]
@@ -514,12 +509,6 @@ class OptionList(QListView):
     def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type, signal_len):
         if type == "SPL":
             model = SplConfigWindow(config_manager, name)
-        elif type == "FR":
-            model = FrConfigWindow(config_manager, name)
-        elif type == "HD":
-            model = HdConfigWindow(config_manager, name)
-        elif type == "AI":
-            model = AIConfigWindow(config_manager, name, signal_len)
         elif type == "Spec":
             model = SpecConfigWindow(config_manager, name)
         elif type == "LP":
@@ -893,7 +882,7 @@ class OptionList(QListView):
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
             return
-        
+
         default_of_type = data.get(type, {})
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type

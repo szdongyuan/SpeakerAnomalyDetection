@@ -11,14 +11,13 @@ from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView
 from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
-from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
@@ -42,9 +41,6 @@ def get_class_mapping():
     """
     class_mapping = {
         "SPL": Spl,
-        "FR": Frequency,
-        "HD": Distortion,
-        "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
         "PD": PeakDetection,
@@ -59,7 +55,10 @@ class AnalysisGraphWidget(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.analysis_plot = pg.PlotWidget()
+        self.analysis_plot_top = pg.PlotWidget()
+        self.analysis_plot_bottom = pg.PlotWidget()
+
+        self.plot_list = [self.analysis_plot_top, self.analysis_plot_bottom]
 
         self.set_plot_font_size(20)
         self.init_ui()
@@ -67,80 +66,33 @@ class AnalysisGraphWidget(QWidget):
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
 
-        self.analysis_plot.setBackground("white")
+        self.analysis_plot_top.setBackground("white")
+        self.analysis_plot_bottom.setBackground("white")
 
         layout = QVBoxLayout()
-        layout.addWidget(self.analysis_plot)
+        layout.addWidget(self.analysis_plot_top)
+        layout.addWidget(self.analysis_plot_bottom)
         self.setLayout(layout)
 
     def set_plot_font_size(self, font_size: int):
-        font = QFont()
-        font.setPixelSize(font_size)
-
-        b_axis = self.analysis_plot.getAxis("bottom")
-        l_axis = self.analysis_plot.getAxis("left")
-
-        b_axis.logTickStrings = custom_log_tick_strings
-
-        b_axis.setTickFont(font)
-        l_axis.setTickFont(font)
-        b_axis.setTextPen("black")
-        l_axis.setTextPen("black")
-        b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
-        l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
-
-
-class Distortion(AnalysisGraphWidget):
-    def __init__(self, title_name):
-        super().__init__()
-        self.data_struct = DataDealStruct()
-        self.refresh_stimulus_flag = None
-        self.selected_label = None
-        self.freq_dict = None
-        self.base_freq_list = None
-        self.analysis_config = None
-        self.selected_harmonics = []
-        self.result = {}
-
-        self.setWindowTitle(title_name)
-
-    def calculate_thd(self):
-        freq_value, harmonic, thd = [], [], []
-        self.selected_harmonics = self.analysis_config["selected_labels"]
-        self.selected_harmonics = [i - 1 for i in self.selected_harmonics]
-        if self.selected_harmonics:
-            kwargs = {"harmonics": self.selected_harmonics}
-            stimulus_signal = self.data_struct.stimulus_data
-            recorded_signal = self.data_struct.store_wave_data
-            sample_rate = self.data_struct.sample_rate
-            atfra = AudioThdFrequencyResponseAnalysis()
-            if self.refresh_stimulus_flag or (self.freq_dict is None or self.base_freq_list is None):
-                self.freq_dict, self.base_freq_list = atfra.calculate_spectrum(stimulus_signal, sample_rate)
-                self.refresh_stimulus_flag = False
-            freq_value, harmonic, thd = atfra.calculate_thd(
-                self.freq_dict, self.base_freq_list, recorded_signal, sample_rate, **kwargs
-            )
-        self.plot_graph(freq_value, thd)
-        if isinstance("harmonic", np.ndarray):
-            harmonic = harmonic.tolist()
-        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
-        return self.result
-
-    def plot_graph(self, freq_value, thd):
-        # Draw a graph based on the calculated thd
-        self.analysis_plot.clear()
-        if self.check_valid_data(freq_value) and self.check_valid_data(thd):
-            self.analysis_plot.plot(freq_value, thd, pen="b", name="THD")
-        if self.selected_label is not None:
-            self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
-        self.analysis_plot.setLabel("left", "Distortion(%)")
-        self.analysis_plot.setLabel("bottom", "Frequency")
-        self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
-
-    @staticmethod
-    def check_valid_data(data):
-        return isinstance(data, (list, np.ndarray)) and len(data) > 0
+        for i in self.plot_list:
+            if not hasattr(i, "getPlotItem"):
+                continue
+            try:
+                plot_item = i.getPlotItem()
+                b_axis = plot_item.getAxis("bottom")
+                l_axis = plot_item.getAxis("left")
+                font = QFont()
+                font.setPixelSize(font_size)
+                b_axis.logTickStrings = custom_log_tick_strings
+                b_axis.setTickFont(font)
+                l_axis.setTickFont(font)
+                b_axis.setTextPen("black")
+                l_axis.setTextPen("black")
+                b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
+                l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
+            except Exception as e:
+                print(f"Plot font size set error: {e}")
 
 
 class Spl(AnalysisGraphWidget):
@@ -156,34 +108,45 @@ class Spl(AnalysisGraphWidget):
         # calculate Sound Pressure Level according to recorded_signal
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
-        signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
+        signal_duration = np.linspace(0, len(recorded_signal[0]) / sample_rate, len(recorded_signal[0]))
         reference_pressure = 20e-6
-        signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal, reference_pressure, deviation=self.deviation_value
+        signal_spl_0 = AudioThdFrequencyResponseAnalysis().spl_calculation(
+            recorded_signal[0], reference_pressure, deviation=self.deviation_value
+        )
+        signal_spl_1 = AudioThdFrequencyResponseAnalysis().spl_calculation(
+            recorded_signal[1], reference_pressure, deviation=self.deviation_value
         )
         if self.analysis_config["smooth_checked"]:
-            signal_spl = smooth(signal_spl, window_size=1102, method="rms")
+            signal_spl_0 = smooth(signal_spl_0, window_size=1102, method="rms")
+            signal_spl_1 = smooth(signal_spl_1, window_size=1102, method="rms")
         limit_checked = self.analysis_config.get("limit_checked")
         self_defined = self.analysis_config.get("self_defined")
         if limit_checked:
             if self_defined:
                 upper_limit = self.analysis_config.get("upper_limit")
                 lower_limit = self.analysis_config.get("lower_limit")
-                self.plot_spl(signal_duration, signal_spl, upper_limit=upper_limit, lower_limit=lower_limit)
+                self.plot_spl(
+                    signal_duration, signal_spl_0, self.analysis_plot_top, upper_limit=upper_limit, lower_limit=lower_limit
+                )
+                self.plot_spl(
+                    signal_duration, signal_spl_1, self.analysis_plot_bottom, upper_limit=upper_limit, lower_limit=lower_limit
+                )
             else:
-                self.plot_spl(signal_duration, signal_spl)
+                self.plot_spl(signal_duration, signal_spl_0, self.analysis_plot_top)
+                self.plot_spl(signal_duration, signal_spl_1, self.analysis_plot_bottom)
         else:
-            self.plot_spl(signal_duration, signal_spl)
+            self.plot_spl(signal_duration, signal_spl_0, self.analysis_plot_top)
+            self.plot_spl(signal_duration, signal_spl_1, self.analysis_plot_bottom)
         self.result = {
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": recorded_signal.tolist(),
-            "signal_spl": signal_spl.tolist(),
+            "signal_spl": signal_spl_0.tolist(),
         }
         return self.result
 
-    def plot_spl(self, signal_duration, signal_spl, upper_limit="", lower_limit=""):
-        self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
+    def plot_spl(self, signal_duration, signal_spl, analysis_plot, upper_limit="", lower_limit=""):
+        analysis_plot.clear()
+        analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
         if lower_limit and upper_limit:
             upper_limit = float(upper_limit)
             lower_limit = float(lower_limit)
@@ -203,15 +166,15 @@ class Spl(AnalysisGraphWidget):
                 x = [point[0] for point in points]
                 y = [point[1] for point in points]
                 out_range_plot = pg.PlotDataItem(x, y, pen="r")
-                self.analysis_plot.addItem(out_range_plot)
+                analysis_plot.addItem(out_range_plot)
             dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
             lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(lower_limit1)
+            analysis_plot.addItem(lower_limit1)
             upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(upper_limit1)
-        self.analysis_plot.setLabel("left", "SPL (dB)")
-        self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
+            analysis_plot.addItem(upper_limit1)
+        analysis_plot.setLabel("left", "SPL (dB)")
+        analysis_plot.setLabel("bottom", "Time (s)")
+        analysis_plot.showGrid(x=True, y=True)
 
 
 class Frequency(AnalysisGraphWidget):
@@ -284,114 +247,6 @@ class Frequency(AnalysisGraphWidget):
         self.analysis_plot.showGrid(x=True, y=True)
 
 
-class AI(QWidget):
-    def __init__(self, title_name):
-        super().__init__()
-        self.data_struct = DataDealStruct()
-        self.analysis_config = None
-        self.result = None
-        self.default_logger = LogManager.set_log_handler("core")
-        self.init_ui()
-        self.setWindowTitle(title_name)
-
-    def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        ai_analyse_layout = self.create_ai_analyse_layout()
-        self.setLayout(ai_analyse_layout)
-
-    def create_ai_analyse_layout(self):
-        ai_analyse_layout = QVBoxLayout()
-        analyse_score_layout = QHBoxLayout()
-        self.ai_analyse_score_textedit = QTextEdit()
-        self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
-        self.ai_analyse_score_textedit.setDisabled(True)
-
-        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_style)
-        analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
-        analyse_score_layout.setContentsMargins(20, 0, 20, 0)
-
-        ai_analyse_layout.addLayout(analyse_score_layout)
-
-        return ai_analyse_layout
-
-    def highlight_keywords(self, keyword, text_edit):
-        cursor = text_edit.textCursor()
-        format = QTextCharFormat()
-        format.setForeground(QColor("red"))
-
-        matches = []
-        cursor.movePosition(QTextCursor.Start)
-        while True:
-            cursor = text_edit.document().find(keyword, cursor)
-            if cursor.isNull():
-                break
-            matches.append(cursor)
-
-        if len(matches) == 2:
-            first_match = matches[0]
-            first_match.mergeCharFormat(format)
-
-    def calculate_ai_scores(self, mode, analysis_config):
-        model_name = self.analysis_config["analyse_model_name"]
-        code, result = self.get_model_info(model_name, self.default_logger)
-        if code != error_code.OK or not os.path.exists(result[0]):
-            self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
-        else:
-            model_path, config_path = result
-            kwargs = {"config_path": config_path}
-            result_text = self.model_predict(model_path, model_name, **kwargs)
-            default_ai_model = analysis_config["default_ai"]
-            if mode == "test" and default_ai_model:
-                analyse_model_name = analysis_config.get(default_ai_model, None).get("analyse_model_name", None)
-                match_object = re.search(r"评分结果:\s*(\S+)", result_text)
-                if match_object:
-                    match_result = match_object.group(1)
-                    if match_result == "OK":
-                        sign.set_result_file_sign.emit(0, "OK", analyse_model_name)
-                        sign.get_result_file_sign.emit(0)
-                        sign.test_insert_data_into_db_sign.emit("OK")
-                    elif match_result == "NG":
-                        sign.set_result_file_sign.emit(0, "NG", analyse_model_name)
-                        sign.get_result_file_sign.emit(0)
-                        sign.test_insert_data_into_db_sign.emit("NG")
-            self.ai_analyse_score_textedit.setPlainText(result_text)
-            self.highlight_keywords("ng", self.ai_analyse_score_textedit)
-
-    def model_predict(self, model_path, model_name, **kwargs):
-        ret_str = predict_from_audio(
-            signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
-            file_names=["modelpredict.wav"],
-            fs=[self.data_struct.sample_rate],
-            load_model_path=model_path,
-            **kwargs,
-        )
-        ret_dict = json.loads(ret_str)
-        predict_result = ret_dict["result"]
-        predict_label = predict_result[0][1]
-        ok_scores = float(predict_result[0][2]) * 100
-        ng_scores = 100 - ok_scores
-        self.result = predict_label
-        result_text = (
-            f"评分结果: {predict_label} \n \n"
-            f"\xa0\xa0评分模型: {model_name}\n"
-            f"\xa0\xa0OK Score: {ok_scores:.2f}%\n"
-            f"\xa0\xa0NG Score: {ng_scores:.2f}%"
-        )
-        return result_text
-
-    @staticmethod
-    def get_model_info(selected_model, logger: LogManager):
-        query_code, query_result = TrainingModelManagement().get_model_path_from_db(selected_model)
-        if query_code == error_code.OK:
-            model_path, config_path = query_result[0]
-            really_model_path = DEFAULT_DIR + model_path
-            really_config_path = DEFAULT_DIR + config_path
-            return error_code.OK, (really_model_path, really_config_path)
-        else:
-            logger.error(f"Failed to get the model {selected_model} information.")
-            return error_code.INVALID_QUERY, "Failed to get the model information."
-
-
 class Spectrogram(QWidget):
     def __init__(self, title_name):
         super().__init__()
@@ -399,9 +254,11 @@ class Spectrogram(QWidget):
         self.deviation_value = None
         self.analysis_config = None
         self.current_plot_widget = None
-        self.stft_plot_widget = None
-        self.img_item = None
-        self.stft_colorbar = None
+        self.stft_plot_widget_top = None
+        self.stft_plot_widget_bottom = None
+        self.img_item_top = None
+        self.stft_colorbar_top = None
+        self.stft_colorbar_top = None
         self.init_ui()
         self.setWindowTitle(title_name)
 
@@ -418,10 +275,15 @@ class Spectrogram(QWidget):
         self._init_stft_plot_components()
 
     def _init_stft_plot_components(self):
-        self.stft_plot_widget = pg.PlotWidget()
-        self.stft_plot_widget.setBackground("white")
-        self.img_item = pg.ImageItem()
-        self.stft_plot_widget.addItem(self.img_item)
+        self.stft_plot_widget_top = pg.PlotWidget()
+        self.stft_plot_widget_top.setBackground("white")
+        self.img_item_top = pg.ImageItem()
+        self.stft_plot_widget_top.addItem(self.img_item_top)
+
+        self.stft_plot_widget_bottom = pg.PlotWidget()
+        self.stft_plot_widget_bottom.setBackground("white")
+        self.img_item_bottom = pg.ImageItem()
+        self.stft_plot_widget_bottom.addItem(self.img_item_bottom)
 
     def set_color_font_size(self):
         plot_widgets = self.plot_container.findChildren(pg.PlotWidget)
@@ -440,12 +302,19 @@ class Spectrogram(QWidget):
             current_title = plot_widget.plotItem.titleLabel.text  # 获取当前标题
             plot_widget.setTitle(current_title, size="20px", color="black")
 
-        if self.stft_colorbar:
-            color_bar_axis = self.stft_colorbar.axis
-            color_bar_font = QFont()
-            color_bar_font.setPixelSize(20)  # 设置颜色条字体大小为 14px
-            color_bar_axis.setTickFont(color_bar_font)
-            color_bar_axis.setTextPen("black")
+        if self.stft_colorbar_top:
+            color_bar_axis_top = self.stft_colorbar_top.axis
+            color_bar_font_top = QFont()
+            color_bar_font_top.setPixelSize(20)
+            color_bar_axis_top.setTickFont(color_bar_font_top)
+            color_bar_axis_top.setTextPen("black")
+            # color_bar_axis.setStyle(tickTextOffset=10)
+        if self.stft_colorbar_bottom:
+            color_bar_axis_bottom = self.stft_colorbar_bottom.axis
+            color_bar_font_bottom = QFont()
+            color_bar_font_bottom.setPixelSize(20)
+            color_bar_axis_bottom.setTickFont(color_bar_font_bottom)
+            color_bar_axis_bottom.setTextPen("black")
             # color_bar_axis.setStyle(tickTextOffset=10)
 
     def calculate_spec(self):
@@ -460,89 +329,149 @@ class Spectrogram(QWidget):
 
         if freq_scale_type == "log":
             fmin_cqt = librosa.note_to_hz("C1")
-            CQT_complex, freqs, times = AudioThdFrequencyResponseAnalysis().compute_cqt(
-                y=recorded_signal, sr=sample_rate, hop_length=hop_length, n_fft=n_fft, fmin=fmin_cqt
+            CQT_complex_top, freqs_top, times_top = AudioThdFrequencyResponseAnalysis().compute_cqt(
+                y=recorded_signal[0], sr=sample_rate, hop_length=hop_length, n_fft=n_fft, fmin=fmin_cqt
+            )
+            CQT_complex_bottom, freqs_bottom, times_bottom = AudioThdFrequencyResponseAnalysis().compute_cqt(
+                y=recorded_signal[1], sr=sample_rate, hop_length=hop_length, n_fft=n_fft, fmin=fmin_cqt
             )
 
-            CQT_mag = np.abs(CQT_complex)
-            CQT_db = librosa.amplitude_to_db(CQT_mag, ref=20e-6)
-            Z = CQT_db.T
+            CQT_mag_top = np.abs(CQT_complex_top)
+            CQT_db_top = librosa.amplitude_to_db(CQT_mag_top, ref=20e-6)
+            Z_top = CQT_db_top.T
+            CQT_mag_bottom = np.abs(CQT_complex_top)
+            CQT_db_bottom = librosa.amplitude_to_db(CQT_mag_bottom, ref=20e-6)
+            Z_bottom = CQT_db_bottom.T
 
             target_ticks_hz = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
-            major_ticks = []
-            custom_y_ticks = None
+            major_ticks_top = []
+            custom_y_ticks_top = None
+            major_ticks_bottom = []
+            custom_y_ticks_bottom = None
 
-            y_min_hz, y_max_hz = freqs.min(), freqs.max()
+            y_top_min_hz, y_top_max_hz = freqs_top.min(), freqs_top.max()
             for freq in target_ticks_hz:
-                if y_min_hz <= freq <= y_max_hz:
-                    label = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
-                    major_ticks.append((freq, label))
+                if y_top_min_hz <= freq <= y_top_max_hz:
+                    label_top = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
+                    major_ticks_top.append((freq, label_top))
+            y_bottom_min_hz, y_bottom_max_hz = freqs_bottom.min(), freqs_bottom.max()
+            for freq in target_ticks_hz:
+                if y_bottom_min_hz <= freq <= y_bottom_max_hz:
+                    label_bottom = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
+                    major_ticks_bottom.append((freq, label_bottom))
 
-            custom_y_ticks = [major_ticks, []] if major_ticks else None
+            custom_y_ticks_top = [major_ticks_top, []] if major_ticks_top else None
+            custom_y_ticks_bottom = [major_ticks_bottom, []] if major_ticks_bottom else None
 
-            cqt_plot_widget, self.stft_colorbar = plot_2d_image(
-                x=times,
-                y=freqs,
-                z=Z,
+            cqt_plot_widget_top, self.stft_colorbar_top = plot_2d_image(
+                x=times_top,
+                y=freqs_top,
+                z=Z_top,
                 title="Spectrogram(Log Scale)",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
-                x_range=(times.min(), times.max()),
-                y_range=(freqs.min(), freqs.max()),
-                y_ticks=custom_y_ticks,
+                x_range=(times_top.min(), times_top.max()),
+                y_range=(freqs_top.min(), freqs_top.max()),
+                y_ticks=custom_y_ticks_top,
                 background_color="white",
             )
-            self.plot_container_layout.addWidget(cqt_plot_widget)
-            self.current_plot_widget = cqt_plot_widget
+            cqt_plot_widget_bottom, self.stft_colorbar_bottom = plot_2d_image(
+                x=times_bottom,
+                y=freqs_bottom,
+                z=Z_bottom,
+                title="Spectrogram(Log Scale)",
+                xlabel="Time (s)",
+                ylabel="Frequency (Hz)",
+                colormap=color_map,
+                x_range=(times_bottom.min(), times_bottom.max()),
+                y_range=(freqs_bottom.min(), freqs_bottom.max()),
+                y_ticks=custom_y_ticks_bottom,
+                background_color="white",
+            )
+            self.plot_container_layout.addWidget(cqt_plot_widget_top)
+            self.plot_container_layout.addWidget(cqt_plot_widget_bottom)
+            self.current_plot_widget = cqt_plot_widget_top
 
         else:
-            spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
-            spec_dB = librosa.amplitude_to_db(spec, ref=20e-6)
-            freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
-            times = librosa.times_like(spec_dB, sr=sample_rate, hop_length=hop_length)
+            spec_top = np.abs(librosa.stft(y=recorded_signal[0], n_fft=n_fft, hop_length=hop_length, window=window_func))
+            spec_dB_top = librosa.amplitude_to_db(spec_top, ref=20e-6)
+            times_top = librosa.times_like(spec_dB_top, sr=sample_rate, hop_length=hop_length)
 
-            if self.stft_plot_widget is None or self.img_item is None:
+            spec_bottom = np.abs(librosa.stft(y=recorded_signal[1], n_fft=n_fft, hop_length=hop_length, window=window_func))
+            spec_dB_bottom = librosa.amplitude_to_db(spec_bottom, ref=20e-6)
+            times_bottom = librosa.times_like(spec_dB_bottom, sr=sample_rate, hop_length=hop_length)
+
+            freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+
+            if self.stft_plot_widget_top is None or self.img_item_top is None:
                 self._init_stft_plot_components()
 
-            self.img_item.setImage(spec_dB.T)
+            self.img_item_top.setImage(spec_dB_top.T)
+            self.img_item_bottom.setImage(spec_dB_bottom.T)
 
-            times_min, times_max = times.min(), times.max()
+            times_top_min, times_top_max = times_top.min(), times_top.max()
+            width_top = times_top_max - times_top_min
+            times_bottom_min, times_bottom_max = times_bottom.min(), times_bottom.max()
+            width_bottom = times_bottom_max - times_bottom_min
             freqs_min, freqs_max = freqs.min(), freqs.max()
-            width = times_max - times_min
             height = freqs_max - freqs_min
 
-            self.img_item.setRect(pg.QtCore.QRectF(times_min, freqs_min, width, height))
+            self.img_item_top.setRect(pg.QtCore.QRectF(times_top_min, freqs_min, width_top, height))
+            self.img_item_bottom.setRect(pg.QtCore.QRectF(times_bottom_min, freqs_min, width_bottom, height))
 
-            self.stft_plot_widget.setTitle("Spectrogram (Linear Scale)")
-            self.stft_plot_widget.setLabel("bottom", "Time (s)")
-            self.stft_plot_widget.setLabel("left", "Frequency (Hz)")
-            self.stft_plot_widget.setLogMode(x=False, y=False)
+            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)")
+            self.stft_plot_widget_top.setLabel("bottom", "Time (s)")
+            self.stft_plot_widget_top.setLabel("left", "Frequency (Hz)")
+            self.stft_plot_widget_top.setLogMode(x=False, y=False)
+
+            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)")
+            self.stft_plot_widget_bottom.setLabel("bottom", "Time (s)")
+            self.stft_plot_widget_bottom.setLabel("left", "Frequency (Hz)")
+            self.stft_plot_widget_bottom.setLogMode(x=False, y=False)
 
             pos = np.linspace(0.0, 1.0, 256)
 
             colors = pg.colormap.get(color_map).getLookupTable(nPts=256)
             cmap = pg.ColorMap(pos, colors)
-            db_min, db_max = np.nanmin(spec_dB), np.nanmax(spec_dB)
+            db_top_min, db_top_max = np.nanmin(spec_dB_top), np.nanmax(spec_dB_top)
+            db_bottom_min, db_bottom_max = np.nanmin(spec_dB_bottom), np.nanmax(spec_dB_bottom)
 
             lut = cmap.getLookupTable(nPts=256)
-            self.img_item.setLookupTable(lut)
-            self.img_item.setLevels([db_min, db_max])
+            self.img_item_top.setLookupTable(lut)
+            self.img_item_top.setLevels([db_top_min, db_top_max])
+            self.img_item_bottom.setLevels([db_bottom_min, db_bottom_max])
 
-            view_box = self.stft_plot_widget.getViewBox()
-            if view_box:
-                view_box.setDefaultPadding(0.0)
+            view_box_top = self.stft_plot_widget_top.getViewBox()
+            if view_box_top:
+                view_box_top.setDefaultPadding(0.0)
 
-            self.stft_plot_widget.setXRange(times_min, times_max, padding=0)
-            self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
-            plot_item = self.stft_plot_widget.getPlotItem()
-            if plot_item:
-                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
-                self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
+            view_box_bottom = self.stft_plot_widget_bottom.getViewBox()
+            if view_box_bottom:
+                view_box_bottom.setDefaultPadding(0.0)
+
+            self.stft_plot_widget_top.setXRange(times_top_min, times_top_max, padding=0)
+            self.stft_plot_widget_top.setYRange(freqs_min, freqs_max, padding=0)
+            self.stft_plot_widget_bottom.setXRange(times_bottom_min, times_bottom_max, padding=0)
+            self.stft_plot_widget_bottom.setYRange(freqs_min, freqs_max, padding=0)
+
+            plot_item_top = self.stft_plot_widget_top.getPlotItem()
+            if plot_item_top:
+                self.stft_colorbar_top = pg.ColorBarItem(values=(db_top_min, db_top_max), width=25, colorMap=cmap)
+                self.stft_colorbar_top.setImageItem(self.img_item_top, insert_in=plot_item_top)
             else:
-                self.stft_colorbar = None
-            self.plot_container_layout.addWidget(self.stft_plot_widget)
-            self.current_plot_widget = self.stft_plot_widget
+                self.stft_colorbar_top = None
+
+            plot_item_bottom = self.stft_plot_widget_bottom.getPlotItem()
+            if plot_item_bottom:
+                self.stft_colorbar_bottom = pg.ColorBarItem(values=(db_bottom_min, db_bottom_max), width=25, colorMap=cmap)
+                self.stft_colorbar_bottom.setImageItem(self.img_item_bottom, insert_in=plot_item_bottom)
+            else:
+                self.stft_colorbar_bottom = None
+
+            self.plot_container_layout.addWidget(self.stft_plot_widget_top)
+            self.plot_container_layout.addWidget(self.stft_plot_widget_bottom)
+            self.current_plot_widget = self.stft_plot_widget_top
         self.set_color_font_size()
 
 
@@ -550,6 +479,7 @@ class LooseParticle(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
+        self.analysis_plot_bottom.close()
         self.result = None
         self.analysis_config = None
         self.lp_num_label = QLabel("LP 数量: %s" % self.result)
@@ -569,7 +499,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.layout().insertLayout(0, lp_num_layout)
 
     def calculate_loose_particle(self):
-        recorded_signal = self.data_struct.store_wave_data
+        recorded_signal = self.data_struct.store_wave_data[0]
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
             recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67
         )
@@ -581,9 +511,7 @@ class LooseParticle(AnalysisGraphWidget):
             self.status_label.setText("状态: 正常")
 
     def plot_graph(self, amplitude, deviation):
-        signal_duration = np.linspace(
-            0, len(amplitude) / (self.data_struct.sample_rate), len(amplitude)
-        )
+        signal_duration = np.linspace(0, len(amplitude) / (self.data_struct.sample_rate), len(amplitude))
         self.result = self.detect_peaks(
             amplitude,
             self.analysis_config.get("trigger_threshold"),
@@ -593,11 +521,11 @@ class LooseParticle(AnalysisGraphWidget):
             self.data_struct.sample_rate,
         )
         amplitude = amplitude - deviation
-        self.analysis_plot.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot_top.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
         self.plot_loose_particle_waveform(self.threshould, signal_duration, deviation)
-        self.analysis_plot.setLabel("left", "Amplitude (dB)")
-        self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot_top.setLabel("left", "Amplitude (dB)")
+        self.analysis_plot_top.setLabel("bottom", "Time (s)")
+        self.analysis_plot_top.showGrid(x=True, y=True)
 
     def detect_peaks(
         self, filtered_db, max_threshold, hysterests_threshold, min_check_duration, max_check_duration, sampling_rate
@@ -652,13 +580,14 @@ class LooseParticle(AnalysisGraphWidget):
         pen = pg.mkPen(color="orange", width=3)
         out_range_points = np.array(out_range_points) - deviation
         out_range_plot = pg.PlotDataItem(signal_duration, out_range_points, pen=pen)
-        self.analysis_plot.addItem(out_range_plot)
+        self.analysis_plot_top.addItem(out_range_plot)
 
 
 class PeakDetection(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
+        self.analysis_plot_bottom.close()
         self.analysis_config = None
         self.result = None
         self.deviation_value = None
@@ -682,22 +611,25 @@ class PeakDetection(AnalysisGraphWidget):
 
     def calculate_peak_detection(self):
         """
-        calculate and plot PD analysis: the upper plot is SPL time series with peak annotation; 
+        calculate and plot PD analysis: the upper plot is SPL time series with peak annotation;
         """
-        recorded_signal = self.data_struct.store_wave_data
+        recorded_signal = self.data_struct.store_wave_data[0]
         sample_rate = self.data_struct.sample_rate
         if recorded_signal is None or sample_rate is None:
             return None
 
         try:
             self.result = peak_detection(
-                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config, deviation=self.deviation_value
+                np.asarray(recorded_signal, dtype=np.float64),
+                int(sample_rate),
+                self.analysis_config,
+                deviation=self.deviation_value,
             )
         except Exception as e:
             self.status_label.setText(f"状态: 异常({e.__class__.__name__})")
             self.PD_num_label.setText("PD 数量: -")
             # clear the image and return
-            self.analysis_plot.clear()
+            self.analysis_plot_top.clear()
             return None
 
         # save the grid points (sample point indices) corresponding to the peaks
@@ -706,7 +638,7 @@ class PeakDetection(AnalysisGraphWidget):
         analysis_key = self.windowTitle()
         self.data_struct.pd_peak_grid_points_map[analysis_key] = indices_list
         # SPL time series + peak annotation
-        self.analysis_plot.clear()
+        self.analysis_plot_top.clear()
         spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
             ref_p = 20e-6
@@ -714,27 +646,28 @@ class PeakDetection(AnalysisGraphWidget):
             if self.deviation_value is not None:
                 spl_series = spl_series + float(self.deviation_value)
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
-        self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot_top.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
 
         peak_times = self.result.get("peaks_time_sec", [])
         if peak_times:
             peak_indices = np.clip((np.array(peak_times) * sample_rate).astype(int), 0, len(spl_series) - 1)
             peak_values = spl_series[peak_indices]
-            scatter = pg.ScatterPlotItem(x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8)
-            self.analysis_plot.addItem(scatter)
+            scatter = pg.ScatterPlotItem(
+                x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+            )
+            self.analysis_plot_top.addItem(scatter)
 
-        self.analysis_plot.setLabel("left", "SPL (dB)")
-        self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot_top.setLabel("left", "SPL (dB)")
+        self.analysis_plot_top.setLabel("bottom", "Time (s)")
+        self.analysis_plot_top.showGrid(x=True, y=True)
 
         # update the number and status
         num_peaks = int(self.result.get("num_peaks", 0))
         self.PD_num_label.setText(f"PD 数量: {num_peaks}")
         self.status_label.setText("状态: 正常" if self.result.get("passed", False) else "状态: 异常")
 
-        self._update_fonts()
+        # self._update_fonts()
         return self.result
-
 
 
 class PatternMatch(QWidget):
@@ -756,11 +689,7 @@ class PatternMatch(QWidget):
 
         self.main_layout.addWidget(self.result_display)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qtextedit_style
-        )
+        self.setStyleSheet(ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style)
 
     def calculate_pattern_match(self, target_data=None, analysis_config=None):
         if target_data is not None:
@@ -787,22 +716,26 @@ class PatternMatch(QWidget):
         if apply_filter:
             filter_range_hz = self.analysis_config.get("filter_range_hz")
             start_freq, end_freq = filter_range_hz
-            self.target_data = AudioEqualizer.apply_equalizer(self.target_data, self.sample_rate, start_freq=start_freq,
-                                                              end_freq=end_freq)
-            self.pattern_data = AudioEqualizer.apply_equalizer(self.pattern_data, self.sample_rate,
-                                                               start_freq=start_freq, end_freq=end_freq)
+            self.target_data = AudioEqualizer.apply_equalizer(
+                self.target_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
+            )
+            self.pattern_data = AudioEqualizer.apply_equalizer(
+                self.pattern_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
+            )
         feature_type = self.analysis_config.get("feature_type", "mfcc")
-        target_features, pattern_features = self.feature_extraction_handle(self.target_data, self.pattern_data,
-                                                                           feature_type)
+        target_features, pattern_features = self.feature_extraction_handle(self.target_data, self.pattern_data, feature_type)
 
-        result_dict = self.algorithm_handle(algorithm_name, target_features, pattern_features,
-                                            distance_measure_method=similarity_metric,
-                                            threshold=threshold
-                                            )
+        result_dict = self.algorithm_handle(
+            algorithm_name,
+            target_features,
+            pattern_features,
+            distance_measure_method=similarity_metric,
+            threshold=threshold,
+        )
         if result_dict:
-            is_match = result_dict['is_match']
-            score = result_dict['score']
-            used_threshold = result_dict['threshold']
+            is_match = result_dict["is_match"]
+            score = result_dict["score"]
+            used_threshold = result_dict["threshold"]
 
             if is_match:
                 match_status = "匹配成功"
@@ -835,11 +768,7 @@ class PatternMatch(QWidget):
             similarity = 1 / (1 + distance)
             is_match = similarity >= threshold
 
-            return {
-                "is_match": is_match,
-                "score": similarity,
-                "threshold": threshold
-            }
+            return {"is_match": is_match, "score": similarity, "threshold": threshold}
         return None
 
     def feature_extraction_handle(self, target_data, pattern_data, feature_type):
@@ -848,14 +777,14 @@ class PatternMatch(QWidget):
             if feature_type == "mfcc":
                 target_data = spectral.mfcc(y=target_data, sr=self.sample_rate, **feature_params)
                 pattern_data = spectral.mfcc(y=pattern_data, sr=self.sample_rate, **feature_params)
-            elif feature_params == "spec":
+            elif feature_params == "spec_top":
                 target_data = np.abs(spectrum.stft(y=target_data, **feature_params))
                 pattern_data = np.abs(spectrum.stft(y=pattern_data, **feature_params))
             elif feature_params == "fft":
                 target_len = len(target_data)
                 pattern_len = len(pattern_data)
-                target_data = np.abs(np.fft.fft(target_data) / target_len)[:target_len // 2]
-                pattern_data = np.abs(np.fft.fft(pattern_data) / pattern_len)[:pattern_len // 2]
+                target_data = np.abs(np.fft.fft(target_data) / target_len)[: target_len // 2]
+                pattern_data = np.abs(np.fft.fft(pattern_data) / pattern_len)[: pattern_len // 2]
         return target_data, pattern_data
 
     def load_pattern_data(self):
@@ -868,7 +797,6 @@ class PatternMatch(QWidget):
             return
         pattern_data, _ = load_audio_simple(pattern_data_path)
         return pattern_data
-
 
 
 class PipelinePdPm(QWidget):
@@ -931,11 +859,7 @@ class PipelinePdPm(QWidget):
         content_layout.setStretch(1, 2)
         self.main_layout.addLayout(content_layout)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qtextedit_style
-        )
+        self.setStyleSheet(ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style)
 
         self.result_display.setStyleSheet("font-size:20px;")
         self._right_view = None
@@ -946,8 +870,8 @@ class PipelinePdPm(QWidget):
         if self._right_view is not None:
             return
         plot_item = self.plot_widget.getPlotItem()
-        plot_item.showAxis('right')
-        right_axis = plot_item.getAxis('right')
+        plot_item.showAxis("right")
+        right_axis = plot_item.getAxis("right")
         right_axis.setLabel("相似度")
         self._right_view = pg.ViewBox()
         self._right_view.setXLink(plot_item.vb)
@@ -1002,7 +926,7 @@ class PipelinePdPm(QWidget):
         """
         auto_equal = bool(cfg.get("auto_equal_length", False))
         seg_len, left_point, right_point = 0, 0, 0
-        
+
         if auto_equal:
             rel_path = pm_cfg.get("pattern_save_path")
             pattern_data_path = os.path.join(DEFAULT_DIR, rel_path) if rel_path else None
@@ -1064,8 +988,9 @@ class PipelinePdPm(QWidget):
             peak_indices_arr = np.clip(np.asarray(peak_indices, dtype=int), 0, len(spl_series) - 1)
             peak_times = peak_indices_arr / float(sample_rate)
             peak_values = np.asarray(spl_series)[peak_indices_arr]
-            scatter = pg.ScatterPlotItem(x=peak_times, y=peak_values, pen=pg.mkPen(None),
-                                         brush=pg.mkBrush(200, 0, 0, 200), size=8)
+            scatter = pg.ScatterPlotItem(
+                x=peak_times, y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+            )
             plot_item.addItem(scatter)
 
         self._setup_dual_axis_if_needed()
@@ -1079,8 +1004,13 @@ class PipelinePdPm(QWidget):
             if times.size > 0:
                 duration = max(time_axis[-1] - time_axis[0], 1e-6)
                 bar_width = max(duration * 0.002, duration / 1000.0)
-                bars = pg.BarGraphItem(x=times, height=scores, width=bar_width,
-                                       brush=pg.mkBrush(100, 149, 237, 180), pen=pg.mkPen(100, 149, 237, 220))
+                bars = pg.BarGraphItem(
+                    x=times,
+                    height=scores,
+                    width=bar_width,
+                    brush=pg.mkBrush(100, 149, 237, 180),
+                    pen=pg.mkPen(100, 149, 237, 220),
+                )
                 self._right_view.addItem(bars)
                 self._bars_item = bars
                 self._right_view.setYRange(0.0, np.max(scores), padding=0.05)
@@ -1140,7 +1070,9 @@ class PipelinePdPm(QWidget):
 
         status_text = "OK" if passed else "NG"
         color = "#2e7d32" if passed else "#c62828"
-        summary_line = f"<span style='color:{color};font-weight:bold'>{status_text}</span>  检测到峰值数: {total}，匹配片段数: {matched}"
+        summary_line = (
+            f"<span style='color:{color};font-weight:bold'>{status_text}</span>  检测到峰值数: {total}，匹配片段数: {matched}"
+        )
         self.result_display.setHtml(summary_line)
         return {"results": results, "matched": matched, "total": total, "passed": passed}
 
@@ -1177,14 +1109,3 @@ class PipelinePdPm(QWidget):
         self._update_table(sample_rate, results)
 
         return self._summarize_and_notify(results, cfg.get("pass_condition", {}))
-
-if __name__ == "__main__":
-    stimulus, sr = librosa.load("../audio_data/analysis_samples/stimulus.wav", sr=44100)
-    recorded, _ = librosa.load("../audio_data/analysis_samples/recording.wav", sr=44100)
-    signal_info = {"stimulus_signal": stimulus, "recorded_signal": recorded, "sample_rate": sr}
-    app = QApplication(sys.argv)
-    # window = Spl(signal_info)
-    # window = AnalyseWindow()
-    window = AI()
-    window.show()
-    app.exec_()
