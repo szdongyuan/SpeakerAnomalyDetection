@@ -1530,13 +1530,13 @@ class PatternMatchConfigWindow(QDialog):
         remove_btn.clicked.connect(self.on_click_remove_btn)
         self.n_chosen_pattern_label = QLabel("已加载模板： 0")
 
-        btn_layout = QHBoxLayout()
+        btn_layout = QVBoxLayout()
         btn_layout.addWidget(extract_btn)
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(remove_btn)
         btn_layout.addWidget(self.n_chosen_pattern_label)
 
-        layout = QVBoxLayout()
+        layout = QHBoxLayout()
         layout.addWidget(self.data_view)
         layout.addLayout(btn_layout)
         group = QGroupBox("模板选择")
