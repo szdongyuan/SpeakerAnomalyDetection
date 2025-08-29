@@ -805,6 +805,7 @@ class PipelinePdPm(QWidget):
         self.data_struct = DataDealStruct()
         self.analysis_config = None  # structure: {"head": {...}, "tail": {...}}
         self.deviation_value = None
+        self.is_default_flag = False
         self.default_logger = LogManager.set_log_handler("core")
         self._init_ui()
         self.setWindowTitle(title_name)
@@ -1074,6 +1075,11 @@ class PipelinePdPm(QWidget):
             f"<span style='color:{color};font-weight:bold'>{status_text}</span>  检测到峰值数: {total}，匹配片段数: {matched}"
         )
         self.result_display.setHtml(summary_line)
+
+        if self.is_default_flag:
+            sign.set_result_file_sign.emit(0, status_text)
+            sign.get_result_file_sign.emit(0)
+            sign.test_insert_data_into_db_sign.emit(status_text)
         return {"results": results, "matched": matched, "total": total, "passed": passed}
 
     def calculate_pipeline_pd_pm(self):

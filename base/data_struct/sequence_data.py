@@ -6,13 +6,13 @@ class SequenceData:
         self._detail = {}
         self._display_sequence = []
         self._data = []
-        self._default_ai = None
+        self._default_ed = None
         self._auto_analysis = False
 
         self._acq = {"name": self._name, "mode": self._mode, "detail": self._detail}
         self._analysis_list = {
             "display_sequence": self._display_sequence,
-            "default_ai": self._default_ai,
+            "default_ed": self._default_ed,
             "auto_analysis": self._auto_analysis,
         }
 
@@ -68,13 +68,13 @@ class SequenceData:
         self._analysis_list["display_sequence"] = value
 
     @property
-    def default_ai(self):
-        return self._default_ai
+    def default_ed(self):
+        return self._default_ed
 
-    @default_ai.setter
-    def default_ai(self, value):
-        self._default_ai = value
-        self._analysis_list["default_ai"] = value
+    @default_ed.setter
+    def default_ed(self, value):
+        self._default_ed = value
+        self._analysis_list["default_ed"] = value
 
     @property
     def auto_analysis(self):
@@ -94,7 +94,7 @@ class SequenceData:
     @property
     def analysis_list(self):
         self._analysis_list["display_sequence"] = self._display_sequence
-        self._analysis_list["default_ai"] = self._default_ai
+        self._analysis_list["default_ed"] = self._default_ed
         self._analysis_list["auto_analysis"] = self._auto_analysis
         return self._analysis_list
 
