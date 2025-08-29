@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import threading
 from datetime import datetime
 
 import numpy as np
@@ -50,8 +49,8 @@ class SequenceWindow(QWidget):
         self.init_fft_and_stft_flag()
         self.signal_info = {}
         self.analysis_window = []
-        self.default_ai = None
-        self.default_ai_result = None
+        self.default_ed = None
+        self.default_ed_result = None
         self.sequence_layout = QVBoxLayout()
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
@@ -94,8 +93,6 @@ class SequenceWindow(QWidget):
 
         self.setLayout(self.sequence_layout)
 
-        # self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
-        # self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
@@ -179,7 +176,7 @@ class SequenceWindow(QWidget):
         self.lineedit_count.setFixedHeight(35)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
-        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
+        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count))
 
         self.scanner_tcp = QCheckBox(" TCP ", self)
         self.scanner_tcp.setChecked(False)
@@ -462,70 +459,8 @@ class SequenceWindow(QWidget):
         test_layout.addLayout(reset_btn_layout, stretch=1)
         self.test_page.setLayout(test_layout)
 
-        # --- page 2：mark ---
-        # self.mark_page = QWidget()
-        # mark_layout = QVBoxLayout()
-
-        # mark_total_layout = QHBoxLayout()
-        # self.mark_total_label = QLabel("总数：")
-        # self.mark_total_edit = QLineEdit("0")
-        # self.mark_total_edit.setFixedHeight(35)
-        # self.mark_total_edit.setFixedWidth(130)
-        # self.mark_total_edit.setDisabled(True)
-        # self.mark_total_edit.setAlignment(Qt.AlignCenter)
-        # mark_total_layout.addWidget(self.mark_total_label)
-        # mark_total_layout.addWidget(self.mark_total_edit)
-
-        # mark_ok_layout = QHBoxLayout()
-        # self.mark_ok_label = QLabel("OK数：")
-        # self.mark_ok_edit = QLineEdit("0")
-        # self.mark_ok_edit.setFixedHeight(35)
-        # self.mark_ok_edit.setFixedWidth(130)
-        # self.mark_ok_edit.setDisabled(True)
-        # self.mark_ok_edit.setAlignment(Qt.AlignCenter)
-        # mark_ok_layout.addWidget(self.mark_ok_label)
-        # mark_ok_layout.addWidget(self.mark_ok_edit)
-
-        # mark_ng_layout = QHBoxLayout()
-        # self.mark_ng_label = QLabel("NG数：")
-        # self.mark_ng_edit = QLineEdit("0")
-        # self.mark_ng_edit.setFixedHeight(35)
-        # self.mark_ng_edit.setFixedWidth(130)
-        # self.mark_ng_edit.setDisabled(True)
-        # self.mark_ng_edit.setAlignment(Qt.AlignCenter)
-        # mark_ng_layout.addWidget(self.mark_ng_label)
-        # mark_ng_layout.addWidget(self.mark_ng_edit)
-
-        # ok_layout = QHBoxLayout()
-        # ok_layout.addStretch()
-        # self.ok_btn = QPushButton(" OK ")
-        # ok_layout.addWidget(self.ok_btn)
-        # ok_layout.addStretch()
-
-        # ng_layout = QHBoxLayout()
-        # ng_layout.addStretch()
-        # self.ng_btn = QPushButton(" NG ")
-        # ng_layout.addWidget(self.ng_btn)
-        # ng_layout.addStretch()
-        # self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        # self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        # self.ok_btn.setFixedSize(180, 80)
-        # self.ok_btn.setIconSize(QSize(24, 24))
-        # self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        # self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        # self.ng_btn.setFixedSize(180, 80)
-        # self.ng_btn.setIconSize(QSize(24, 24))
-
-        # mark_layout.addLayout(mark_total_layout, stretch=1)
-        # mark_layout.addLayout(mark_ok_layout, stretch=1)
-        # mark_layout.addLayout(mark_ng_layout, stretch=1)
-        # mark_layout.addLayout(ok_layout, stretch=2)
-        # mark_layout.addLayout(ng_layout, stretch=2)
-        # self.mark_page.setLayout(mark_layout)
-
         self.stacked_widget = QStackedWidget()
         self.stacked_widget.addWidget(self.test_page)
-        # self.stacked_widget.addWidget(self.mark_page)
 
         layout.addLayout(mode_layout)
         layout.addWidget(separator_line)
@@ -558,7 +493,7 @@ class SequenceWindow(QWidget):
             with open(mark_result_path, "w") as f:
                 json.dump(mark_result_template, f, indent=4)
         else:
-            self.set_result_file(1, "init", None)
+            self.set_result_file(1, "init")
 
     def get_result_file(self, index):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -578,15 +513,7 @@ class SequenceWindow(QWidget):
                 self.ng_line_edit.setText(ng)
                 self.yield_line_edit.setText(ok_percent)
                 self.datatime_line_edit.setText(datatime)
-        if index == 1:
-            mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-            with open(mark_result_path, "r") as f:
-                data = json.load(f)
-                self.mark_total_edit.setText(str(data["total"]))
-                self.mark_ok_edit.setText(str(data["ok"]))
-                self.mark_ng_edit.setText(str(data["ng"]))
-
-    def set_result_file(self, index, params, analyse_model_name):
+    def set_result_file(self, index, params):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
             ensure_test_result_file(self.analysis_config)
@@ -608,32 +535,8 @@ class SequenceWindow(QWidget):
                 lines[2] = f"ng: {ng}\n"
                 ok_percent = round(ok / total * 100, 2) if total > 0 else 0
                 lines[3] = f"ok_percent: {ok_percent}%\n"
-                if analyse_model_name:
-                    lines[4] = f"current_model: {analyse_model_name}\n"
             with open(test_result_path, "w") as f:
                 f.writelines(lines)
-        if index == 1:
-            mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-            with open(mark_result_path, "r") as f:
-                data = json.load(f)
-            current_date = datetime.now().strftime("%Y-%m-%d")
-            if params == "init":
-                if data["datatime"] != current_date:
-                    data["total"] = 0
-                    data["ok"] = 0
-                    data["ng"] = 0
-                    data["not_labels"] = 0
-                    data["datatime"] = current_date
-            elif params == "OK":
-                total = int(self.mark_total_edit.text())
-                data["total"] = total + 1
-                data["ok"] += 1
-            elif params == "NG":
-                total = int(self.mark_total_edit.text())
-                data["total"] = total + 1
-                data["ng"] += 1
-            with open(mark_result_path, "w") as f:
-                json.dump(data, f, indent=4)
 
     def update_mode_display(self, index):
         if index == 0:
@@ -661,8 +564,6 @@ class SequenceWindow(QWidget):
         save_recorded_data_to_json(
             self.lineedit_type.text(),
             self.lineedit_count.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
         )
         lineedit.clearFocus()
         if lineedit.text() == "":
@@ -673,8 +574,6 @@ class SequenceWindow(QWidget):
         save_recorded_data_to_json(
             self.lineedit_type.text(),
             self.lineedit_count.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
         )
         lineedit.clearFocus()
         if lineedit.text() == "":
@@ -701,32 +600,17 @@ class SequenceWindow(QWidget):
             reg = r"^[0-9a-zA-Z]*$"
 
         if not re.match(reg, s_or_n_count):
-            if is_s_or_n:
-                lineedit.setText(str(result_count))
-            else:
-                lineedit.setText(str(result_scanner_barcode))
-        elif s_or_n_count != "":
-            if is_s_or_n:
-                self.lineedit_s_or_n.setText("")
+            lineedit.setText(str(result_count))
         if s_or_n_count == "":
             if is_s_or_n:
                 lineedit.setText(str(result_count))
             else:
                 lineedit.setText(str(result_scanner_barcode))
 
-    def scanner_barcode_process(self):
-        device = self.get_match_hid_device()
-        if device:
-            if self.scanner_barcode_thread is None or not self.scanner_barcode_thread.is_alive():
-                self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode, args=(device,))
-                sign.signal_emitter.connect(self.on_barcode_received)
-                self.scanner_barcode_thread.start()
-
     def is_clicked_tcp(self):
         if self.scanner_tcp.isChecked():
             self.ip_edit.setEnabled(True)
             self.port_edit.setEnabled(True)
-            self.barcode_scanner_box.setEnabled(False)
             self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
@@ -736,7 +620,6 @@ class SequenceWindow(QWidget):
         else:
             self.ip_edit.setEnabled(False)
             self.port_edit.setEnabled(False)
-            self.barcode_scanner_box.setEnabled(True)
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
@@ -778,86 +661,6 @@ class SequenceWindow(QWidget):
         if barcode:
             sign.signal_emitter.emit(barcode)
 
-    def on_barcode_received(self, barcode):
-        if barcode:
-            self.lineedit_s_or_n.setText(barcode)
-            try:
-                self.start_this_play()
-            except Exception as e:
-                self.scanner_popup()
-                self.default_logger.error(f"An error message occurred in the analysis window. {e}")
-            sign.signal_emitter.disconnect(self.on_barcode_received)
-            if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
-                self.scanner_barcode_thread.join()
-            self.scanner_barcode_thread = None
-
-    def clicked_scanner(self):
-        if self.barcode_scanner_box.isChecked():
-            self.scanner_tcp.setEnabled(False)
-            self.lineedit_s_or_n.setEnabled(True)
-            self.scanner_barcode_process()
-        else:
-            self.scanner_tcp.setEnabled(True)
-            self.lineedit_s_or_n.clear()
-            self.lineedit_s_or_n.setDisabled(True)
-            self.barcode_scanner.stop_scanning()
-            self.scanner_barcode_thread = None
-            try:
-                sign.signal_emitter.disconnect(self.on_barcode_received)
-            except Exception as e:
-                self.default_logger.error(e)
-
-    def get_match_hid_device(self):
-        hid_params = self.load_scanner_hid_params()
-        if hid_params:
-            vendor_id, product_id = hid_params
-            self.vendor_id = int(vendor_id, 16)
-            self.product_id = int(product_id, 16)
-            device = self.barcode_scanner.find_scanner(self.vendor_id, self.product_id)
-            return device
-        return None
-
-    def scanner_popup(self):
-        error_msg = QMessageBox(self)
-        error_msg.setIcon(QMessageBox.Warning)
-        error_msg.setText("分析报错，详情请查看日志！")
-        error_msg.setWindowTitle("分析报错")
-        error_msg.setStandardButtons(QMessageBox.Ok)
-        error_msg.exec_()
-
-    def clicked_ok_or_ng(self):
-        """
-        Handles the logic when the OK or NG button is clicked.
-
-        This method performs several actions in response to a user clicking the OK or NG button:
-        1. Saves the current recorded count to a text file.
-        2. Updates the displayed recorded count in the UI.
-        3. Inserts the recorded data into the database with a label based on which button was clicked (OK/NG).
-        4. Resets the player status flag and updates the player icon accordingly.
-        5. Clears the signal information and waveform graph.
-        6. Disables the replay and data buttons to prevent further actions until the next recording.
-
-        Parameters:
-            self: The instance of the class containing this method.
-        """
-        if not self.player_status_flag:
-            QMessageBox.warning(self, "警告", "请先录制声音！")
-            return
-
-        self.update_audio_label_info()
-        self.update_recorded_signal_info_to_db()
-
-        # self.mark_result()
-        self.player_status_flag = False
-        self.signal_info.clear()
-        self.lineedit_s_or_n.clear()
-        self.line_graph_top.clear()
-        self.replayer_btn.setDisabled(True)
-        self.data_btn.setEnabled(False)
-        self.default_ai_result = None
-        self.default_ai = None
-        self.clicked_scanner()
-
     def update_recorded_signal_info_to_db(self):
         new_file_path = FileOps.move_wav_to_dir(self.recorded_path, self.recorded_signal_info["labels"])
         old_file_path = self.recorded_signal_info["file_path"]
@@ -867,22 +670,6 @@ class SequenceWindow(QWidget):
             self.default_logger.info("Recorded signal successfully updated.")
         else:
             self.default_logger.error("Failed to update recorded signal.")
-
-    def update_audio_label_info(self):
-        button = self.sender()
-        if button == self.ok_btn or self.default_ai_result:
-            self.recorded_signal_info["labels"] = "OK"
-        elif button == self.ng_btn:
-            self.recorded_signal_info["labels"] = "NG"
-
-    def mark_result(self):
-        button = self.sender()
-        if button == self.ok_btn:
-            self.set_result_file(1, "OK", None)
-            self.get_result_file(1)
-        elif button == self.ng_btn:
-            self.set_result_file(1, "NG", None)
-            self.get_result_file(1)
 
     def update_recorded_label_in_test_mode(self, label: str):
         if label == "OK":
@@ -894,12 +681,10 @@ class SequenceWindow(QWidget):
         self.update_recorded_signal_info_to_db()
         self.player_status_flag = False
         self.signal_info.clear()
-        self.lineedit_s_or_n.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
-        self.default_ai_result = None
-        self.default_ai = None
-        self.clicked_scanner()
+        self.default_ed_result = None
+        self.default_ed = None
 
     def on_clicked_player_btn(self, label="not_labeled"):
         self.clicked_player_flag = True
@@ -933,9 +718,6 @@ class SequenceWindow(QWidget):
         if not self.mic:
             QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return
-        # if not self.speaker:
-        #     QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
-        #     return
 
     def reset_work_pram(self, label):
         self.data_struct.clear_data()
@@ -951,6 +733,11 @@ class SequenceWindow(QWidget):
 
     def judge_play_and_record(self, label="not_labeled"):
         if self.checked_work_status_message():
+            self.update_player_btn_is_paused()
+            return
+        if self.analysis_config["default_ed"] is None:
+            self.update_player_btn_is_paused()
+            QMessageBox.warning(self, "提示", "未设置默认评判项，请在测试队列中添加事件检测默认项！")
             return
 
         self.update_player_btn_is_playing()
@@ -990,8 +777,9 @@ class SequenceWindow(QWidget):
             cls_map = class_mapping.get(type)
             if cls_map:
                 class_instance = cls_map(key)
-                if self.analysis_config["default_ai"] == key:
-                    self.default_ai = class_instance
+                if self.analysis_config["default_ed"] == key:
+                    self.default_ed = class_instance
+                    class_instance.is_default_flag = True
                 class_instance.deviation_value = self.deviation_value
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
@@ -1018,7 +806,7 @@ class SequenceWindow(QWidget):
                 self.instance_analysis_class(key, item_type, key_config)
             for instance in self.analysis_window:
                 if self.mode == "test":
-                    if instance is self.default_ai:
+                    if instance is self.default_ed:
                         continue
                 if hasattr(instance, "calculate_spl"):
                     instance.calculate_spl()
@@ -1042,17 +830,10 @@ class SequenceWindow(QWidget):
                 instance.setMinimumSize(QSize(600, 500))
                 width += 20
                 height += 20
-            # if self.mode == "test":
-            #     self.default_ai.calculate_ai_scores(self.mode, self.analysis_config)
-            #     self.default_ai.show()
-            #     self.default_ai.setGeometry(width, height, 600, 500)
-            #     self.test_insert_data_into_db()
-            # elif self.default_ai:
-            # if self.default_ai.result == "OK":
-            #     for instance in self.analysis_window:
-            #         instance.close()
-            #     self.default_ai_result = True
-            #     self.clicked_ok_or_ng()
+            self.default_ed.calculate_pipeline_pd_pm()
+            self.default_ed.show()
+            self.default_ed.setGeometry(width, height, 600, 500)
+            self.test_insert_data_into_db()
 
     def get_sequence_config_from_json(self):
         """

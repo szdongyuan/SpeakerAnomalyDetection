@@ -11,7 +11,7 @@ class MySignals(QObject):
 
     get_result_file_sign = pyqtSignal(int)
 
-    set_result_file_sign = pyqtSignal(int, str, str)
+    set_result_file_sign = pyqtSignal(int, str)
 
     test_insert_data_into_db_sign = pyqtSignal(str)
 
