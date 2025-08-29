@@ -21,6 +21,8 @@ from ui.analysis_config_window import SplConfigWindow, SpecConfigWindow, Pattern
 from ui.analysis_config_window import LPConfigWindow
 from ui.analysis_config_window import PipelinePdPmConfigWindow
 
+from pprint import pprint
+
 
 class AnalysisModelSelect(QDialog):
 
