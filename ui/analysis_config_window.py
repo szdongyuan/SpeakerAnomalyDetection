@@ -1485,6 +1485,8 @@ class PatternMatchConfigWindow(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("模式匹配参数配置")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumSize(800, 750)
         self.resize(800, 750)
         self.main_layout = QVBoxLayout(self)
@@ -1517,6 +1519,7 @@ class PatternMatchConfigWindow(QDialog):
             + ui_style_const.qdialog_style
             + ui_style_const.qradiobutton_style
             + ui_style_const.qtextedit_style
+            + ui_style_const.qtableview_style
         )
 
     def create_pattern_group_box(self):
@@ -1534,7 +1537,7 @@ class PatternMatchConfigWindow(QDialog):
         btn_layout.addWidget(extract_btn)
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(remove_btn)
-        btn_layout.addWidget(self.n_chosen_pattern_label)
+        btn_layout.addWidget(self.n_chosen_pattern_label, alignment=Qt.AlignBottom)
 
         layout = QHBoxLayout()
         layout.addWidget(self.data_view)
@@ -1637,7 +1640,7 @@ class PatternMatchConfigWindow(QDialog):
 
     def create_btn_layout(self):
         layout = QHBoxLayout()
-        ok_btn = QPushButton("确认")
+        ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         default_btn = QPushButton("设为默认")
         default_btn.clicked.connect(self.on_click_default_btn)
@@ -1739,12 +1742,16 @@ class PatternMatchConfigWindow(QDialog):
             self.threshold_edit.setText(str(threshold_value))
 
     def refresh_data_view(self):
-        self.data_view.model().clear()
+        self.data_view.model().setRowCount(0)
         for idx, pattern in enumerate(self.pattern_list):
             self.data_view.model().setItem(idx, 0, QStandardItem(pattern["clip_path"]))
             pattern_len = np.round(pattern["clip_len"] / self.sample_rate, 3)
             self.data_view.model().setItem(idx, 1, QStandardItem(str(pattern_len)))
         self.n_chosen_pattern_label.setText("已加载模板： %s" % len(self.pattern_list))
+        self.data_view.horizontalHeader().setSectionResizeMode(3)
+        width = self.data_view.columnWidth(0)
+        self.data_view.horizontalHeader().setSectionResizeMode(0)
+        self.data_view.setColumnWidth(0, width + 60)
 
     def get_config(self):
         feature_key = self.feature_combo.currentData()
