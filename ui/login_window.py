@@ -201,6 +201,10 @@ class LoginWindow(QDialog):
         self.exec()
         return (self.access_lvl, self.username_input.text()) if self.pwd_checked else (None, None)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.username_input.setFocus()
+
 
 class AddAccountWindow(QDialog):
 
