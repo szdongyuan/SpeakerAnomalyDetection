@@ -2,6 +2,7 @@ import sys
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
+from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
 from PyQt5.QtWidgets import QHBoxLayout
@@ -216,6 +217,26 @@ class DraggablePlotWidget(pg.PlotWidget):
         self.region = region_item
         self.is_creating_new_region = False
         self.drag_start_pos = None
+
+        self.set_plot_font_size(20)
+
+    def set_plot_font_size(self, font_size: int):
+        font = QFont()
+        font.setPixelSize(font_size)
+
+        b_axis = self.getAxis("bottom")
+        l_axis = self.getAxis("left")
+
+        b_axis.logTickStrings = custom_log_tick_strings
+
+        b_axis.setTickFont(font)
+        l_axis.setTickFont(font)
+        b_axis.setTextPen("black")
+        l_axis.setTextPen("black")
+        b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
+        l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
+
+        self.setContentsMargins(6,6,6,6)
 
     def mousePressEvent(self, event):
         if (event.button() == Qt.LeftButton and
