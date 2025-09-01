@@ -860,7 +860,7 @@ class PipelinePdPm(QWidget):
         content_layout.setStretch(1, 2)
         self.main_layout.addLayout(content_layout)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style + ui_style_const.qtableview_style)
+        self.setStyleSheet(ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style)
 
         self.result_display.setStyleSheet("font-size:20px;")
         self._right_view = None
