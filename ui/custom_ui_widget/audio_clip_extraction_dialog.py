@@ -12,7 +12,6 @@ import pyqtgraph as pg
 
 from base.file_ops import FileOps
 from base.save_data import save_audio_simple
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import DraggablePlotWidget
 
@@ -58,15 +57,6 @@ class AudioClipExtractionDialog(QDialog):
         main_layout.addLayout(self.create_btn_layout())
 
         self.setLayout(main_layout)
-
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qdoublespinbox_style
-        )
 
     def create_open_file_layout(self):
         layout = QHBoxLayout()
@@ -121,7 +111,7 @@ class AudioClipExtractionDialog(QDialog):
 
     def create_btn_layout(self):
         layout = QHBoxLayout()
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = QPushButton("确认")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         layout.addStretch()
         layout.addWidget(ok_btn)
