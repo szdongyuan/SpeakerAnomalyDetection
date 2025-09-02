@@ -389,7 +389,7 @@ class Spectrogram(QWidget):
                 x=times_top,
                 y=freqs_top,
                 z=Z_top,
-                title="Spectrogram(Log Scale)Channel_1",
+                title="Spectrogram(Log Scale)(Channel_1)",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
@@ -402,7 +402,7 @@ class Spectrogram(QWidget):
                 x=times_bottom,
                 y=freqs_bottom,
                 z=Z_bottom,
-                title="Spectrogram(Log Scale)Channel_2",
+                title="Spectrogram(Log Scale)(Channel_2)",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
@@ -442,12 +442,12 @@ class Spectrogram(QWidget):
             self.img_item_top.setRect(pg.QtCore.QRectF(times_top_min, freqs_min, width_top, height))
             self.img_item_bottom.setRect(pg.QtCore.QRectF(times_bottom_min, freqs_min, width_bottom, height))
 
-            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)Channel_1")
+            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)(Channel_1)")
             self.stft_plot_widget_top.setLabel("bottom", "Time (s)")
             self.stft_plot_widget_top.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget_top.setLogMode(x=False, y=False)
 
-            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)Channel_2")
+            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)(Channel_2)")
             self.stft_plot_widget_bottom.setLabel("bottom", "Time (s)")
             self.stft_plot_widget_bottom.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget_bottom.setLogMode(x=False, y=False)
