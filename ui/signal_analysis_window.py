@@ -1,7 +1,4 @@
-import json
 import os
-import re
-import sys
 
 import librosa
 import numpy as np
@@ -21,10 +18,9 @@ from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
-from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
-from consts import error_code, ui_style_const
+from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings
 
@@ -68,6 +64,32 @@ class AnalysisGraphWidget(QWidget):
 
         self.analysis_plot_top.setBackground("white")
         self.analysis_plot_bottom.setBackground("white")
+
+        font_top = QFont()
+        font_top.setPixelSize(20)
+
+        self.text_top = pg.TextItem(
+            text="Channel_1", 
+            color=(0, 0, 0),  # 黑色
+            fill=(255, 255, 255, 150)  # 半透明背景
+        )
+        self.text_top.setFont(font_top)
+        self.text_top.setPos(0, 0)  # 设置左上角位置
+        self.text_top.setParentItem(self.analysis_plot_top.getViewBox())  # 绑定到视图框
+        self.text_top.setZValue(1000)
+
+        font_bottom = QFont()
+        font_bottom.setPixelSize(20)
+
+        self.text_bottom = pg.TextItem(
+            text="Channel_2", 
+            color=(0, 0, 0),  # 黑色
+            fill=(255, 255, 255, 150)  # 半透明背景
+        )
+        self.text_bottom.setFont(font_bottom)
+        self.text_bottom.setPos(0, 0)  # 设置左上角位置
+        self.text_bottom.setParentItem(self.analysis_plot_bottom.getViewBox())  # 绑定到视图框
+        self.text_bottom.setZValue(1000)
 
         layout = QVBoxLayout()
         layout.addWidget(self.analysis_plot_top)
@@ -367,7 +389,7 @@ class Spectrogram(QWidget):
                 x=times_top,
                 y=freqs_top,
                 z=Z_top,
-                title="Spectrogram(Log Scale)",
+                title="Spectrogram(Log Scale)Channel_1",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
@@ -380,7 +402,7 @@ class Spectrogram(QWidget):
                 x=times_bottom,
                 y=freqs_bottom,
                 z=Z_bottom,
-                title="Spectrogram(Log Scale)",
+                title="Spectrogram(Log Scale)Channel_2",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
@@ -420,12 +442,12 @@ class Spectrogram(QWidget):
             self.img_item_top.setRect(pg.QtCore.QRectF(times_top_min, freqs_min, width_top, height))
             self.img_item_bottom.setRect(pg.QtCore.QRectF(times_bottom_min, freqs_min, width_bottom, height))
 
-            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)")
+            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)Channel_1")
             self.stft_plot_widget_top.setLabel("bottom", "Time (s)")
             self.stft_plot_widget_top.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget_top.setLogMode(x=False, y=False)
 
-            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)")
+            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)Channel_2")
             self.stft_plot_widget_bottom.setLabel("bottom", "Time (s)")
             self.stft_plot_widget_bottom.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget_bottom.setLogMode(x=False, y=False)

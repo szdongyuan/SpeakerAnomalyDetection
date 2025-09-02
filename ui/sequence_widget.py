@@ -334,12 +334,38 @@ class SequenceWindow(QWidget):
         self.line_graph_top.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
         self.line_graph_top.showGrid(x=True, y=True)
 
+        font_top = QFont()
+        font_top.setPixelSize(20)
+
+        self.text_top = pg.TextItem(
+            text="Channel_1", 
+            color=(0, 0, 0),  # 黑色
+            fill=(255, 255, 255, 127)  # 半透明背景
+        )
+        self.text_top.setFont(font_top)
+        self.text_top.setPos(0, 0)  # 设置左上角位置
+        self.text_top.setParentItem(self.line_graph_top.getViewBox())  # 绑定到视图框
+        self.text_top.setZValue(1000)
+
         self.line_graph_bottom = pg.PlotWidget()
         self.line_graph_bottom.setBackground("white")
         left_area = self.create_left_layout()
         self.line_graph_bottom.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
         self.line_graph_bottom.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
         self.line_graph_bottom.showGrid(x=True, y=True)
+
+        font_bottom = QFont()
+        font_bottom.setPixelSize(20)
+
+        self.text_bottom = pg.TextItem(
+            text="Channel_2", 
+            color=(0, 0, 0),  # 黑色
+            fill=(255, 255, 255, 127)  # 半透明背景
+        )
+        self.text_bottom.setFont(font_bottom)
+        self.text_bottom.setPos(0, 0)  # 设置左上角位置
+        self.text_bottom.setParentItem(self.line_graph_bottom.getViewBox())  # 绑定到视图框
+        self.text_bottom.setZValue(1000)
 
         font_top = QFont()
         font_top.setPixelSize(20)
@@ -506,7 +532,6 @@ class SequenceWindow(QWidget):
                 ok = lines[1].split(":")[1].strip()
                 ng = lines[2].split(":")[1].strip()
                 ok_percent = lines[3].split(":")[1].strip()
-                current_model = lines[4].split(":")[1].strip()
                 datatime = lines[5].split(":")[1].strip()
                 self.total_line_edit.setText(total)
                 self.ok_line_edit.setText(ok)
@@ -727,9 +752,9 @@ class SequenceWindow(QWidget):
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
         sample_rate = self.data_struct.sample_rate
-        stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(self.data_struct, total_time)
+        _, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(self.data_struct, total_time)
 
-        return stimulus_dict, recorded_dict, sample_rate
+        return recorded_dict, sample_rate
 
     def judge_play_and_record(self, label="not_labeled"):
         if self.checked_work_status_message():
@@ -747,7 +772,7 @@ class SequenceWindow(QWidget):
         self.player_status_flag = True
         QApplication.processEvents()
 
-        stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
+        recorded_dict, sample_rate = self.reset_work_pram(label)
 
         if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["RECORD_ONLY"]:
             record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
