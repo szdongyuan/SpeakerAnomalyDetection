@@ -218,27 +218,19 @@ class DraggablePlotWidget(pg.PlotWidget):
         self.is_creating_new_region = False
         self.drag_start_pos = None
 
-        self.set_plot_font_size(20)
-
-    def set_plot_font_size(self, font_size: int):
-        font = QFont()
-        font.setPixelSize(font_size)
-
-        b_axis = self.getAxis("bottom")
-        l_axis = self.getAxis("left")
-
-        b_axis.logTickStrings = custom_log_tick_strings
-
-        b_axis.setTickFont(font)
-        l_axis.setTickFont(font)
-        b_axis.setTextPen("black")
-        l_axis.setTextPen("black")
-        b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
-        l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
-
-        self.setContentsMargins(6,6,6,6)
+        self.region_len = 0
+        self.drag_mode = "click_drag"
 
     def mousePressEvent(self, event):
+        if self.drag_mode == "click_drag":
+            self._mouse_press_event_click_drag(event)
+        elif self.drag_mode == "click":
+            self._mouse_press_event_click(event)
+            self.is_creating_new_region = False
+        else:
+            super().mousePressEvent(event)
+
+    def _mouse_press_event_click_drag(self, event):
         if (event.button() == Qt.LeftButton and
                 self.getPlotItem().getViewBox().sceneBoundingRect().contains(event.pos())):
             items_under_cursor = self.scene().items(event.pos())
@@ -252,6 +244,18 @@ class DraggablePlotWidget(pg.PlotWidget):
                 self.drag_start_pos = self.getPlotItem().getViewBox().mapSceneToView(event.pos())
                 self.region.hide()
                 event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def _mouse_press_event_click(self, event):
+        if (event.button() == Qt.LeftButton and
+                self.getPlotItem().getViewBox().sceneBoundingRect().contains(event.pos())):
+            self.region.hide()
+            current_pos = self.getPlotItem().getViewBox().mapSceneToView(event.pos())
+            self.region.setRegion((current_pos.x(), current_pos.x() + self.region_len))
+            self.region.show()
+            self.region.sigRegionChanged.emit(current_pos)
+            event.accept()
         else:
             super().mousePressEvent(event)
 
