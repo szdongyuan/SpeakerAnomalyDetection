@@ -109,10 +109,12 @@ class AudioClipExtractionDialog(QDialog):
         self.clip_len_spinbox.setDecimals(3)
         self.clip_len_spinbox.setSingleStep(0.1)
         self.clip_len_spinbox.setValue(0.1)
+        self.clip_len_spinbox.setEnabled(False)
 
+        self.fixed_len_checkbox.stateChanged.connect(self.change_fixed_len_box_state)
+        self.clip_len_spinbox.valueChanged.connect(self.change_clip_value_spinbox)
         if self.clip_len is not None:
             self.fixed_len_checkbox.setChecked(True)
-        self.fixed_len_checkbox.stateChanged.connect(self.change_fixed_len_box_state)
 
         layout = QHBoxLayout()
         layout.addWidget(self.fixed_len_checkbox)
@@ -168,6 +170,16 @@ class AudioClipExtractionDialog(QDialog):
     def change_fixed_len_box_state(self):
         self.region.hide()
         self.selected_region_time = (None, None)
+        if self.fixed_len_checkbox.checkState():
+            self.plot_widget.drag_mode = "click"
+            self.clip_len_spinbox.setEnabled(True)
+            self.change_clip_value_spinbox()
+        else:
+            self.plot_widget.drag_mode = "click_drag"
+            self.clip_len_spinbox.setEnabled(False)
+
+    def change_clip_value_spinbox(self):
+        self.plot_widget.region_len = self.clip_len_spinbox.value()
 
     def on_click_ok_btn(self):
         if self.selected_region_time != (None, None):
