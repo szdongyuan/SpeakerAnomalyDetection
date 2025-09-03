@@ -1,30 +1,27 @@
-import json
 import os
 import sys
 from functools import partial
-import librosa
 import numpy as np
 
-import pyqtgraph as pg
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
-from PyQt5.QtGui import QIcon, QDoubleValidator, QIntValidator, QCursor, QStandardItem
+from PyQt5.QtGui import QIcon, QIntValidator, QStandardItem
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QSpinBox
 from PyQt5.QtWidgets import QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy
-from PyQt5.QtWidgets import QVBoxLayout, QWidget, QFormLayout, QFrame, QSplitter, QToolTip
+from PyQt5.QtWidgets import QVBoxLayout, QWidget, QFormLayout, QFrame, QSplitter
 from PyQt5.QtWidgets import QDoubleSpinBox
 from PyQt5.QtWidgets import QButtonGroup
 
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
-from base.load_config import ConfigManager, LoadUiConfig
-from base.save_data import save_audio_simple
+from base.load_config import ConfigManager
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const
+from consts.feature_params_consts import FEATURE_CONFIG, ALGORITHM_CONFIG
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_clip_extraction_dialog import AudioClipExtractionDialog
 from ui.custom_ui_widget.custom_table_widget import DataView
 from ui.generic_feature_params_dialog import GenericFeatureParamsDialog
-from ui.graph_widget import DraggablePlotWidget
+from ui.signal_analysis_window import PatternMatch
 
 
 class SplConfigWindow(QDialog):
@@ -1462,32 +1459,33 @@ class PatternMatchConfigWindow(QDialog):
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
-        _, self.feature_registry = self.load_features_param_config()
+        self.feature_registry = FEATURE_CONFIG
+        self.algorithm_registry = ALGORITHM_CONFIG
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.pattern_list = []
-        # self.audio_file_path = None
-        # self.pattern_save_path = None
-        # self.audio_data = None
-        self.sample_rate = self.load_config["sample_rate"]
-        # self.selected_region_time = (None, None)
+
+        self.sample_rate = self.load_config.get("sample_rate", 44100)
         self.config_data = None
+        self.config_ch1 = self.load_config.get("channel_1_config", {})
+        self.config_ch2 = self.load_config.get("channel_2_config", {})
+        self.pattern_list = self.config_ch1.get("pattern_list", []).copy()
 
         self.feature_params = {
             key: {p_name: p_def['default'] for p_name, p_def in info['params'].items()}
             for key, info in self.feature_registry.items() if info.get('params')
         }
+        self.algorithm_params = {
+            key: {p_name: p_def['default'] for p_name, p_def in info['params'].items()}
+            for key, info in self.algorithm_registry.items() if info.get('params')
+        }
 
         self.init_ui()
-        self.on_strategy_radio_changed()
-        self.on_filter_toggled()
-        self.on_feature_type_changed()
-        self.populate_ui_from_config()
+        self.initial_populate_ui()
 
     def init_ui(self):
-        self.setWindowTitle("模式匹配参数配置")
+        self.setWindowTitle("双通道模式匹配参数配置")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(800, 750)
+        self.setMinimumSize(800, 350)
         self.resize(800, 750)
         self.main_layout = QVBoxLayout(self)
 
@@ -1499,7 +1497,14 @@ class PatternMatchConfigWindow(QDialog):
         options_container = QWidget()
         options_layout = self.create_options_layout()
         options_container.setLayout(options_layout)
-        splitter.addWidget(options_container)
+
+        channel_management_group = self.create_channel_management_group()
+        main_options_layout = QVBoxLayout()
+        main_options_layout.addWidget(channel_management_group)
+        main_options_layout.addWidget(options_container)
+        main_options_container = QWidget()
+        main_options_container.setLayout(main_options_layout)
+        splitter.addWidget(main_options_container)
 
         splitter.setSizes([450, 300])
         splitter.setCollapsible(0, False)
@@ -1515,12 +1520,29 @@ class PatternMatchConfigWindow(QDialog):
             + ui_style_const.qlabel_style
             + ui_style_const.qlineedit_style
             + ui_style_const.qgroupbox_style
+            + ui_style_const.qdoublespinbox_style
             + ui_style_const.qcombobox_style
             + ui_style_const.qdialog_style
             + ui_style_const.qradiobutton_style
             + ui_style_const.qtextedit_style
             + ui_style_const.qtableview_style
         )
+
+    def create_channel_management_group(self):
+        group = QGroupBox("当前编辑通道")
+        layout = QHBoxLayout()
+        self.radio_ch1 = QRadioButton("通道 1")
+        self.radio_ch2 = QRadioButton("通道 2")
+        self.channel_button_group = QButtonGroup(self)
+        self.channel_button_group.addButton(self.radio_ch1, 1)
+        self.channel_button_group.addButton(self.radio_ch2, 2)
+        self.radio_ch1.setChecked(True)
+        self.channel_button_group.idClicked.connect(self.on_channel_selection_changed)
+        layout.addWidget(self.radio_ch1)
+        layout.addWidget(self.radio_ch2)
+        layout.addStretch()
+        group.setLayout(layout)
+        return group
 
     def create_pattern_group_box(self):
         self.data_view = DataView(len(self.pattern_list), 2, [])
@@ -1580,6 +1602,26 @@ class PatternMatchConfigWindow(QDialog):
         separator.setFrameShadow(QFrame.Sunken)
         layout.addWidget(separator)
 
+        normalization_label = QLabel("<b>归一化方法</b>")
+        layout.addWidget(normalization_label)
+
+        self.normalization_checkbox = QCheckBox("启用归一化")
+        self.normalization_checkbox.setChecked(True)
+        self.normalization_checkbox.toggled.connect(self.on_normalization_toggled)
+        layout.addWidget(self.normalization_checkbox)
+
+        self.normalization_combo = QComboBox()
+        self.normalization_combo.addItem("峰值归一化", "peak")
+        self.normalization_combo.addItem("Z-Score 标准化", "zscore")
+        self.normalization_combo.addItem("最小-最大值缩放", "minmax")
+        self.normalization_combo.addItem("L2 范数归一化", "l2_norm")
+        layout.addWidget(self.normalization_combo)
+
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator2)
+
         filter_label = QLabel("<b>带阻滤波</b>")
         layout.addWidget(filter_label)
         self.filter_checkbox = QCheckBox("启用")
@@ -1605,35 +1647,53 @@ class PatternMatchConfigWindow(QDialog):
     def create_strategy_group(self):
         group = QGroupBox("匹配策略")
         main_layout = QVBoxLayout()
+        form_layout = QFormLayout()
+        form_layout.setRowWrapPolicy(QFormLayout.WrapAllRows)
+        form_layout.setLabelAlignment(Qt.AlignLeft)
+        self.algorithm_combo = QComboBox()
+        for key, info in self.algorithm_registry.items():
+            self.algorithm_combo.addItem(info['display_name'], userData=key)
+        self.algorithm_combo.currentIndexChanged.connect(self.on_algorithm_changed)
+        self.algorithm_params_btn = QPushButton("算法参数")
+        self.algorithm_params_btn.clicked.connect(self.on_click_algorithm_params)
+        algo_layout = QHBoxLayout()
+        algo_layout.addWidget(self.algorithm_combo, 1)
+        algo_layout.addWidget(self.algorithm_params_btn)
+        form_layout.addRow("<b>匹配算法:</b>", algo_layout)
+        main_layout.addLayout(form_layout)
 
-        metric_layout = QHBoxLayout()
-        metric_label = QLabel("<b>相似度度量:</b>")
-        self.similarity_metric_combo = QComboBox()
-        self.similarity_metric_combo.addItem("欧氏距离 (Euclidean)", "euclidean")
-        self.similarity_metric_combo.addItem("余弦相似度 (Cosine)", "cosine")
-        metric_layout.addWidget(metric_label)
-        metric_layout.addWidget(self.similarity_metric_combo)
-        main_layout.addLayout(metric_layout)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        main_layout.addWidget(separator)
-
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(separator2)
+        return_strategy_layout = QVBoxLayout()
         return_label = QLabel("<b>匹配点返回策略:</b>")
-        main_layout.addWidget(return_label)
+        return_strategy_layout.addWidget(return_label)
+
         fixed_threshold_layout = QHBoxLayout()
         self.fixed_threshold_radio = QRadioButton("固定阈值:")
-        self.fixed_threshold_radio.setChecked(True)
-        self.fixed_threshold_radio.toggled.connect(self.on_strategy_radio_changed)
-        self.threshold_edit = QLineEdit("0.9")
-        self.threshold_edit.setValidator(QDoubleValidator(0.0, 100, 5, self))
+        self.threshold_spinbox = QDoubleSpinBox()
+        self.threshold_spinbox.setSuffix(" %")
+        self.threshold_spinbox.setRange(0.00, 100.00)
+        self.threshold_spinbox.setDecimals(2)
+        self.threshold_spinbox.setValue(90.00)
+        self.threshold_spinbox.setSingleStep(1.0)
+
+        self.auto_calc_threshold_btn = QPushButton("自动计算")
+        self.auto_calc_threshold_btn.clicked.connect(self.on_auto_calculate_threshold)
+
         fixed_threshold_layout.addWidget(self.fixed_threshold_radio)
-        fixed_threshold_layout.addWidget(self.threshold_edit)
+        fixed_threshold_layout.addWidget(self.threshold_spinbox)
+        fixed_threshold_layout.addWidget(self.auto_calc_threshold_btn)
+        return_strategy_layout.addLayout(fixed_threshold_layout)
+
         self.adaptive_threshold_radio = QRadioButton("自适应阈值")
         self.adaptive_threshold_radio.toggled.connect(self.on_strategy_radio_changed)
-        main_layout.addLayout(fixed_threshold_layout)
-        main_layout.addWidget(self.adaptive_threshold_radio)
+
+        self.fixed_threshold_radio.setChecked(True)
+        self.fixed_threshold_radio.toggled.connect(self.on_strategy_radio_changed)
+        return_strategy_layout.addWidget(self.adaptive_threshold_radio)
+        main_layout.addLayout(return_strategy_layout)
         main_layout.addStretch()
         group.setLayout(main_layout)
         return group
@@ -1648,6 +1708,14 @@ class PatternMatchConfigWindow(QDialog):
         layout.addStretch()
         layout.addWidget(ok_btn)
         return layout
+
+    def on_metric_toggled(self):
+        is_checked = self.enable_metric_checkbox.isChecked()
+        self.similarity_metric_combo.setEnabled(is_checked)
+
+    def on_normalization_toggled(self):
+        is_checked = self.normalization_checkbox.isChecked()
+        self.normalization_combo.setEnabled(is_checked)
 
     def on_click_extract_btn(self):
         dlg = AudioClipExtractionDialog(save_clip=True, dialog_title="选择模板片段")
@@ -1669,14 +1737,22 @@ class PatternMatchConfigWindow(QDialog):
         self.pattern_list.pop(row_idx)
         self.refresh_data_view()
 
-    @staticmethod
-    def load_features_param_config():
-        default_config_file = os.path.join(DEFAULT_DIR, "ui", "ui_config", "features_param.json")
-        code, data = LoadUiConfig.load_data_from_json(default_config_file)
-        if code == 0:
-            return True, data
-        else:
-            return False, {}
+    def on_algorithm_changed(self):
+        algo_key = self.algorithm_combo.currentData()
+        has_params = algo_key and self.algorithm_registry[algo_key].get('params')
+        self.algorithm_params_btn.setEnabled(bool(has_params))
+
+    def on_click_algorithm_params(self):
+        algo_key = self.algorithm_combo.currentData()
+        if not algo_key or not self.algorithm_registry[algo_key].get('params'):
+            QMessageBox.information(self, "提示", "当前算法没有可配置的参数。")
+            return
+
+        param_definitions = self.algorithm_registry[algo_key]['params']
+        current_values = self.algorithm_params.get(algo_key, {})
+        dialog = GenericFeatureParamsDialog(param_definitions, current_values)
+        if dialog.exec_() == QDialog.Accepted:
+            self.algorithm_params[algo_key] = dialog.get_params()
 
     def on_click_feature_params(self):
         feature_key = self.feature_combo.currentData()
@@ -1697,49 +1773,62 @@ class PatternMatchConfigWindow(QDialog):
 
     def on_strategy_radio_changed(self):
         is_fixed_checked = self.fixed_threshold_radio.isChecked()
-        self.threshold_edit.setEnabled(is_fixed_checked)
+        self.threshold_spinbox.setEnabled(is_fixed_checked)
+        self.auto_calc_threshold_btn.setEnabled(is_fixed_checked)
 
     def on_filter_toggled(self):
         is_checked = self.filter_checkbox.isChecked()
         self.low_freq_edit.setEnabled(is_checked)
         self.high_freq_edit.setEnabled(is_checked)
 
-    def populate_ui_from_config(self):
-        if not self.load_config:
+
+    def populate_ui_from_config(self, config):
+        if not config:
             return
 
-        self.pattern_list = self.load_config.get("pattern_list", [])
-        self.refresh_data_view()
-
-        feature_type = self.load_config.get("feature_type")
+        feature_type = config.get("feature_type")
         if feature_type:
             index = self.feature_combo.findData(feature_type)
             if index >= 0:
                 self.feature_combo.setCurrentIndex(index)
 
-        feature_params = self.load_config.get("feature_params")
+        feature_params = config.get("feature_params")
         if feature_params and feature_type in self.feature_params:
             self.feature_params[feature_type] = feature_params
 
-        if self.load_config.get("apply_filter"):
-            self.filter_checkbox.setChecked(True)
-            filter_range = self.load_config.get("filter_range_hz", [0, 5000])
+        apply_filter = config.get("apply_filter", False)
+        self.filter_checkbox.setChecked(apply_filter)
+        if apply_filter:
+            filter_range = config.get("filter_range_hz", [0, 5000])
             self.low_freq_edit.setText(str(filter_range[0]))
             self.high_freq_edit.setText(str(filter_range[1]))
 
-        metric = self.load_config.get("similarity_metric")
-        if metric:
-            index = self.similarity_metric_combo.findData(metric)
-            if index >= 0:
-                self.similarity_metric_combo.setCurrentIndex(index)
+        apply_norm = config.get("apply_normalization", True)
+        self.normalization_checkbox.setChecked(apply_norm)
+        if apply_norm:
+            norm_type = config.get("normalization_type", "peak")
+            norm_index = self.normalization_combo.findData(norm_type)
+            if norm_index >= 0:
+                self.normalization_combo.setCurrentIndex(norm_index)
 
-        strategy = self.load_config.get("threshold_strategy")
+        algorithm = config.get("algorithm")
+        if algorithm:
+            index = self.algorithm_combo.findData(algorithm)
+            if index >= 0:
+                self.algorithm_combo.setCurrentIndex(index)
+
+        algo_params = config.get("algorithm_params")
+        if algorithm and algo_params:
+            self.algorithm_params[algorithm] = algo_params
+
+        strategy = config.get("threshold_strategy")
         if strategy == "adaptive_threshold":
             self.adaptive_threshold_radio.setChecked(True)
         else:
             self.fixed_threshold_radio.setChecked(True)
-            threshold_value = self.load_config.get("threshold_value", 0.9)
-            self.threshold_edit.setText(str(threshold_value))
+            threshold_value = config.get("threshold_value", 90.0)
+            self.threshold_spinbox.setValue(threshold_value)
+
 
     def refresh_data_view(self):
         self.data_view.model().setRowCount(0)
@@ -1755,64 +1844,132 @@ class PatternMatchConfigWindow(QDialog):
 
     def get_config(self):
         feature_key = self.feature_combo.currentData()
-        # start_time, end_time = self.selected_region_time
-        # start_frame = int(start_time * self.sample_rate) if start_time is not None else 0
-        # end_frame = int(end_time * self.sample_rate) if end_time is not None else 0
+        algo_key = self.algorithm_combo.currentData()
+        strategy = "fixed_threshold"
+        if self.adaptive_threshold_radio.isChecked():
+            strategy = "adaptive_threshold"
         config = {
-            # "audio_file_path": self.audio_file_path,
-            # "pattern_save_path": self.pattern_save_path,
-            "pattern_list": self.pattern_list,
             "sample_rate": self.sample_rate,
-            # "pattern_region_time": (start_frame, end_frame),
-            # "pattern_duration_sec": end_frame - start_frame,
             "feature_type": feature_key,
             "feature_params": self.feature_params.get(feature_key, {}),
+            "apply_normalization": self.normalization_checkbox.isChecked(),
+            "normalization_type": self.normalization_combo.currentData() if self.normalization_checkbox.isChecked() else None,
             "apply_filter": self.filter_checkbox.isChecked(),
             "filter_range_hz": (None, None),
-            "algorithm": "dtw",
-            "similarity_metric": self.similarity_metric_combo.currentData(),
-            "threshold_strategy": "fixed_threshold" if self.fixed_threshold_radio.isChecked() else "adaptive_threshold",
+            "algorithm": algo_key,
+            "algorithm_params": self.algorithm_params.get(algo_key, {}),
+            "threshold_strategy": strategy,
             "threshold_value": None,
         }
-
-        if self.filter_checkbox.isChecked():
+        if config["apply_filter"]:
             config["filter_range_hz"] = (int(self.low_freq_edit.text()), int(self.high_freq_edit.text()))
-
-        if self.fixed_threshold_radio.isChecked():
-            config["threshold_value"] = float(self.threshold_edit.text())
+        if config["threshold_strategy"] == "fixed_threshold":
+            config["threshold_value"] = self.threshold_spinbox.value()
         return config
 
-    def on_click_default_btn(self):
-        config_data = self.get_config()
-        if not self.validate_config(config_data):
+    def on_auto_calculate_threshold(self):
+        if len(self.pattern_list) < 2:
+            QMessageBox.warning(self, "提示", "自动计算阈值至少需要2个OK模板。")
             return
-        # config_data["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
-        # config_data["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
-        save_flag = self.config_manager.save_default_config("PM", config_data)
+
+        reply = QMessageBox.information(self, "提示",
+                                        "即将根据当前加载的模板和选择的特征计算阈值，过程可能需要一些时间，是否继续？",
+                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.No:
+            return
+
+        current_ui_config = self.get_config()
+        current_ui_config["pattern_list"] = self.pattern_list
+        distance_threshold = PatternMatch.calculate_loocv_threshold(current_ui_config, self.sample_rate)
+
+        if distance_threshold is None:
+            QMessageBox.critical(self, "错误", "阈值计算失败，请检查模板文件或控制台输出。")
+            return
+
+        score = 1 / (1 + distance_threshold)
+        score_percent = score * 100.0
+
+        self.threshold_spinbox.setValue(score_percent)
+        QMessageBox.information(self, "完成",
+                                f"计算完成！\n\n建议的阈值为: {score_percent:.2f} %\n\n该值已自动填入输入框。")
+
+    def get_patterns_from_view(self):
+        patterns = []
+        model = self.data_view.model
+        for row in range(model.rowCount()):
+            path_item, len_item = model.item(row, 0), model.item(row, 1)
+            if path_item and len_item:
+                try:
+                    clip_len = int(float(len_item.text()) * self.sample_rate)
+                    patterns.append({"clip_path": path_item.text(), "clip_len": clip_len})
+                except (ValueError, TypeError):
+                    pass
+        return patterns
+
+    def on_click_default_btn(self):
+        current_ui_params = self.get_config()
+        if self.radio_ch1.isChecked():
+            self.config_ch1 = current_ui_params
+            self.config_ch1['pattern_list'] = self.pattern_list
+        else:
+            self.config_ch2 = current_ui_params
+            self.config_ch2['pattern_list'] = self.pattern_list
+
+        if not self.validate_config(self.config_ch1) or not self.validate_config(self.config_ch2):
+            return
+
+        full_config_data = {"channel_1_config": self.config_ch1,
+                            "channel_2_config": self.config_ch2}
+
+        save_flag = self.config_manager.save_default_config("PM", full_config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
-        config = self.get_config()
-        if not self.validate_config(config):
-            return None
-        # try:
-        #     start_time, end_time = self.selected_region_time
-        #     start_sample = int(start_time * self.sample_rate)
-        #     end_sample = int(end_time * self.sample_rate)
-        #     pattern_data = self.audio_data[start_sample:end_sample]
-        #     save_audio_simple(config["pattern_save_path"], pattern_data, self.sample_rate)
-        #     config["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
-        #     config["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
-        # except Exception as e:
-        #     QMessageBox.critical(self, "错误", f"保存模板文件失败:\n{e}")
-        #     return
+        current_ui_params = self.get_config()
+        if self.radio_ch1.isChecked():
+            self.config_ch1 = current_ui_params
+            self.config_ch1['pattern_list'] = self.pattern_list
+        else:
+            self.config_ch2 = current_ui_params
+            self.config_ch2['pattern_list'] = self.pattern_list
 
-        self.config_data = config
+        if not self.validate_config(self.config_ch1) or not self.validate_config(self.config_ch2):
+            return None
+
+        self.config_data = {"channel_1_config": self.config_ch1,
+                            "channel_2_config": self.config_ch2}
         self.accept()
         return self.config_data
 
+    def on_channel_selection_changed(self, toggled_id):
+        previous_id = 3 - toggled_id
+
+        prev_params = self.get_config()
+
+        if previous_id == 1:
+            self.config_ch1 = prev_params
+            self.config_ch1['pattern_list'] = self.pattern_list
+        else:
+            self.config_ch2 = prev_params
+            self.config_ch2['pattern_list'] = self.pattern_list
+
+        config_to_load = self.config_ch1 if toggled_id == 1 else self.config_ch2
+
+        self.populate_ui_from_config(config_to_load)
+        self.pattern_list = config_to_load.get("pattern_list", []).copy()
+        self.refresh_data_view()
+
+    def initial_populate_ui(self):
+        self.populate_ui_from_config(self.config_ch1)
+        self.refresh_data_view()
+        self.on_filter_toggled()
+        self.on_strategy_radio_changed()
+        self.on_normalization_toggled()
+        self.on_feature_type_changed()
+        self.on_algorithm_changed()
+
     def validate_config(self, config):
-        if config["apply_filter"]:
+        if config.get("apply_filter", False):
             low, high = config["filter_range_hz"]
             if low is None or high is None or low >= high:
                 QMessageBox.warning(self, "提示", "输入的频率范围无效，最低频率必须小于最高频率。")

@@ -11,6 +11,9 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView
 from scipy.signal import find_peaks
+from scipy.spatial.distance import cosine, euclidean, cityblock
+from scipy.stats import pearsonr
+from skimage.feature import local_binary_pattern, match_template
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
@@ -697,7 +700,6 @@ class PatternMatch(QWidget):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.target_data = self.data_struct.store_wave_data
-        self.pattern_data = None
         self.analysis_config = None
         self.sample_rate = self.data_struct.sample_rate
         self.init_ui()
@@ -711,7 +713,11 @@ class PatternMatch(QWidget):
 
         self.main_layout.addWidget(self.result_display)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style)
+        self.setStyleSheet(
+            ui_style_const.qlabel_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qtextedit_style
+        )
 
     def calculate_pattern_match(self, target_data=None, analysis_config=None):
         if target_data is not None:
@@ -720,105 +726,331 @@ class PatternMatch(QWidget):
             self.analysis_config = analysis_config
         if self.target_data is None or self.analysis_config is None:
             self.result_display.setText("错误：数据或配置不完整")
-        self.pattern_data = self.load_pattern_data()
-        if self.pattern_data is None:
-            self.result_display.setText("错误：模版数据不存在")
-            return
+            return None
+        if self.target_data.ndim != 2 or self.target_data.shape[0] != 2:
+            self.result_display.setText("错误：目标数据必须是双通道")
+            return None
+        config_ch1 = self.analysis_config.get("channel_1_config")
+        config_ch2 = self.analysis_config.get("channel_2_config")
+        if not config_ch1 or not config_ch2:
+            self.result_display.setText("错误：配置不完整，缺少通道配置")
+            return None
 
-        algorithm_name = self.analysis_config.get("algorithm", "dtw")
-        threshold_method = self.analysis_config.get("threshold_strategy")
+        target_ch1, target_ch2 = self.target_data[0], self.target_data[1]
 
-        threshold = 0.9
-        if threshold_method == "fixed_threshold":
-            threshold = self.analysis_config.get("threshold_value", 0.9)
+        results_ch1 = self.run_matching_for_channel(target_ch1, config_ch1)
+        results_ch2 = self.run_matching_for_channel(target_ch2, config_ch2)
 
-        similarity_metric = self.analysis_config.get("similarity_metric", "euclidean")
-        apply_filter = self.analysis_config.get("apply_filter", False)
+        final_success = results_ch1["success"] and results_ch2["success"]
 
-        if apply_filter:
-            filter_range_hz = self.analysis_config.get("filter_range_hz")
-            start_freq, end_freq = filter_range_hz
-            self.target_data = AudioEqualizer.apply_equalizer(
-                self.target_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
-            )
-            self.pattern_data = AudioEqualizer.apply_equalizer(
-                self.pattern_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
-            )
-        feature_type = self.analysis_config.get("feature_type", "mfcc")
-        target_features, pattern_features = self.feature_extraction_handle(self.target_data, self.pattern_data, feature_type)
+        ch1_score_str = f"{results_ch1['score'] * 100:.2f}" if results_ch1['score'] is not None else "N/A"
+        ch2_score_str = f"{results_ch2['score'] * 100:.2f}" if results_ch2['score'] is not None else "N/A"
+        ch1_status_str = '成功' if results_ch1["success"] else '失败'
+        ch2_status_str = '成功' if results_ch2["success"] else '失败'
 
-        result_dict = self.algorithm_handle(
-            algorithm_name,
-            target_features,
-            pattern_features,
-            distance_measure_method=similarity_metric,
-            threshold=threshold,
-        )
-        if result_dict:
-            is_match = result_dict["is_match"]
-            score = result_dict["score"]
-            used_threshold = result_dict["threshold"]
+        final_text = f"最终匹配结果: {'成功' if final_success else '失败'}\n"
+        final_text += "------------------------------------\n"
+        final_text += f"通道 1 -> 得分: {ch1_score_str}, 状态: {ch1_status_str}\n"
+        final_text += f"通道 2 -> 得分: {ch2_score_str}, 状态: {ch2_status_str}"
 
-            if is_match:
-                match_status = "匹配成功"
+        self.result_display.setPlainText(final_text)
+
+        return {
+            "final_success": final_success,
+            "channel_1": results_ch1,
+            "channel_2": results_ch2,
+        }
+
+    def run_matching_for_channel(self, target_data, channel_config):
+
+        pattern_list = channel_config.get("pattern_list", [])
+
+        if not pattern_list:
+            return {"score": None, "success": False}
+
+        threshold_strategy = channel_config.get("threshold_strategy", "fixed_threshold")
+
+        all_scores = []
+        for pattern_info in pattern_list:
+            pattern_path = os.path.join(DEFAULT_DIR, pattern_info["clip_path"])
+            if not os.path.exists(pattern_path):
+                continue
+
+            pattern_data, _ = load_audio_simple(pattern_path, self.sample_rate)
+            result = self.process_single_channel(target_data, pattern_data, channel_config)
+
+            if result and result['score'] is not None:
+                all_scores.append(result['score'])
+
+        if not all_scores:
+            return {"score": None, "success": False}
+
+        best_score = np.max(all_scores)
+        channel_is_successful = False
+        if threshold_strategy == "fixed_threshold":
+            threshold = channel_config.get("threshold_value", 50.0) / 100.0
+            channel_is_successful = best_score >= threshold
+
+        elif threshold_strategy == "adaptive_threshold":
+            if len(all_scores) < 3:
+                threshold = 0.5
+                channel_is_successful = best_score >= threshold
             else:
-                match_status = "匹配失败"
+                scores_array = np.array(all_scores)
+                best_score_idx = np.argmax(scores_array)
+                background_scores = np.delete(scores_array, best_score_idx)
+                mean_bg = np.mean(background_scores)
+                std_bg = np.std(background_scores)
+                k = 3.0
+                threshold = mean_bg + k * std_bg
+                channel_is_successful = best_score >= threshold
 
-            result_text = (
-                f"\xa0\xa0匹配结果: {match_status}\n\n"
-                f"\xa0\xa0相似度评分: {score * 100:.2f}%\n"
-                f"\xa0\xa0判定阈值: {used_threshold * 100:.2f}%"
-            )
-            self.result_display.setPlainText(result_text)
-            return result_dict
+        return {"score": best_score,
+                "success": channel_is_successful,
+                "threshold": threshold * 100
+                }
+
+
+    def process_single_channel(self, target_data, pattern_data, config):
+        if config.get("apply_filter", False):
+            start_freq, end_freq = config.get("filter_range_hz", [None, None])
+            if start_freq is not None and end_freq is not None:
+                target_data = AudioEqualizer.apply_equalizer(target_data, self.sample_rate, start_freq=start_freq,
+                                                             end_freq=end_freq)
+                pattern_data = AudioEqualizer.apply_equalizer(pattern_data, self.sample_rate, start_freq=start_freq,
+                                                              end_freq=end_freq)
+
+        target_features, pattern_features = self.extract_features(target_data, pattern_data, config)
+        if target_features is None or pattern_features is None:
+            return None
+
+        result = self.execute_match_algorithm(target_features, pattern_features, config)
+        return result
+
+    @staticmethod
+    def execute_match_algorithm(target_features, pattern_features, config):
+        algorithm = config.get("algorithm", "distance")
+        params = config.get("algorithm_params", {})
+        dispatcher = {
+            "distance": PatternMatch.match_distance,
+            "dtw": PatternMatch.match_dtw,
+            "lbp": PatternMatch.match_lbp,
+            "ncc": PatternMatch.match_ncc,
+        }
+        if algorithm not in dispatcher:
+            return None
+
+        score_value = dispatcher[algorithm](target_features, pattern_features, params)
+        return {"score": score_value}
+
+
+    @staticmethod
+    def match_distance(target, pattern, params):
+        metric = params.get("metric", "euclidean")
+        target, pattern = target.flatten(), pattern.flatten()
+        if len(target) != len(pattern):
+            min_len = min(len(target), len(pattern))
+            target, pattern = target[:min_len], pattern[:min_len]
+        metric_map = {"euclidean": euclidean, "cosine": cosine, "manhattan": cityblock}
+        if metric not in metric_map:
+            return None
+
+        distance = metric_map[metric](target, pattern)
+
+        if metric == 'cosine':
+            score = 1 - distance
+            score = (score + 1) / 2
         else:
-            self.result_display.setText("分析执行时发生错误!")
+            score = 1 / (1 + distance)
+        return score
+
+    @staticmethod
+    def match_dtw(target, pattern, params):
+        metric = params.get("metric", "euclidean")
+        normalization = params.get("normalization", "none")
+        global_constraints = params.get("global_constraints", False)
+        band_rad = params.get("band_rad", 0.25)
+        try:
+            D, wp = dtw(X=target, Y=pattern, metric=metric, backtrack=True, global_constraints=global_constraints,
+                        band_rad=band_rad)
+            distance = D[-1, -1]
+            if normalization == 'path_length':
+                if len(wp) > 0:
+                    distance /= len(wp)
+            elif normalization == 'sum_length':
+                total_len = target.shape[1] + pattern.shape[1]
+                if total_len > 0:
+                    distance /= total_len
+
+            score = 1 / (1 + distance)
+            return score
+        except Exception as e:
             return None
 
     @staticmethod
-    def algorithm_handle(algorithm_name, target_data, pattern_data, distance_measure_method=None, threshold=None):
-        if algorithm_name == "dtw":
-            if threshold is None:
-                raise ValueError("A threshold must be provided to determine similarity.")
+    def match_lbp(target_spec, pattern_spec, params):
+        try:
+            target_hist = PatternMatch.extract_lbp_histogram(target_spec, params)
+            pattern_hist = PatternMatch.extract_lbp_histogram(pattern_spec, params)
+        except Exception as e:
+            return None
 
-            target_data = target_data
-            pattern_data = pattern_data
+        metric = params.get("metric", "chi2")
 
-            D, wp = dtw(X=target_data, Y=pattern_data, metric=distance_measure_method, backtrack=True)
+        if metric in ['chi2', 'euclidean']:
+            distance = euclidean(target_hist, pattern_hist) if metric == 'euclidean' else PatternMatch.hist_compare_chi2(
+                target_hist, pattern_hist)
+            score = 1 / (1 + distance)
+        elif metric in ['intersection', 'correlation', 'bhattacharyya']:
+            if metric == 'intersection':
+                score = PatternMatch.hist_compare_intersection(target_hist, pattern_hist)
+            elif metric == 'correlation':
+                score = PatternMatch.hist_compare_correlation(target_hist, pattern_hist)
+                score = (score + 1) / 2
+            else:
+                score = PatternMatch.hist_compare_bhattacharyya(target_hist, pattern_hist)
+        elif metric == 'cosine':
+            distance = cosine(target_hist, pattern_hist)
+            score = 1 - distance
+            score = (score + 1) / 2
+        else:
+            return None
 
-            distance = D[-1, -1]
-            similarity = 1 / (1 + distance)
-            is_match = similarity >= threshold
+        return score
 
-            return {"is_match": is_match, "score": similarity, "threshold": threshold}
-        return None
+    @staticmethod
+    def match_ncc(target, pattern, params):
+        try:
+            if pattern.shape[0] > target.shape[0] or pattern.shape[1] > target.shape[1]:
+                return None
+            result = match_template(target, pattern)
+            score_raw = np.max(result)
+            score = (score_raw + 1) / 2
+            return score
+        except Exception as e:
+            return None
 
-    def feature_extraction_handle(self, target_data, pattern_data, feature_type):
-        if feature_type != "waveform":
-            feature_params = self.analysis_config["feature_params"]
-            if feature_type == "mfcc":
-                target_data = spectral.mfcc(y=target_data, sr=self.sample_rate, **feature_params)
-                pattern_data = spectral.mfcc(y=pattern_data, sr=self.sample_rate, **feature_params)
-            elif feature_params == "spec_top":
-                target_data = np.abs(spectrum.stft(y=target_data, **feature_params))
-                pattern_data = np.abs(spectrum.stft(y=pattern_data, **feature_params))
-            elif feature_params == "fft":
+    @staticmethod
+    def extract_lbp_histogram(features, params):
+        n_points = params.get("n_points", 8)
+        radius = params.get("radius", 1)
+        method = params.get("method", "uniform")
+
+        feature_normal = (features - features.min()) / (features.max() - features.min())
+        lbp_feature = local_binary_pattern(feature_normal, P=n_points, R=radius, method=method)
+        if method == 'uniform':
+            n_bins = n_points + 2
+        elif method == 'nri_uniform':
+            n_bins = n_points * (n_points - 1) + 3
+        else:
+            n_bins = 2 ** n_points
+
+        hist, _ = np.histogram(lbp_feature.ravel(), bins=n_bins, range=(0, n_bins))
+        hist = hist.astype("float32")
+        hist /= (hist.sum() + 1e-6)
+        return hist
+
+    @staticmethod
+    def extract_features(target_data, pattern_data, config):
+        feature_type = config.get("feature_type", "mfcc")
+        sample_rate = config.get("sample_rate")
+        params = config.get("feature_params")
+        convert_to_db = params.pop("power_to_db", False)
+        try:
+            if feature_type == "waveform":
+                return target_data, pattern_data
+            elif feature_type == "mfcc":
+                target_f = spectral.mfcc(y=target_data, sr=sample_rate, **params)
+                pattern_f = spectral.mfcc(y=pattern_data, sr=sample_rate, **params)
+                return target_f, pattern_f
+            elif feature_type == "fft":
                 target_len = len(target_data)
                 pattern_len = len(pattern_data)
-                target_data = np.abs(np.fft.fft(target_data) / target_len)[: target_len // 2]
-                pattern_data = np.abs(np.fft.fft(pattern_data) / pattern_len)[: pattern_len // 2]
-        return target_data, pattern_data
+                target_f = np.abs(np.fft.fft(target_data) / target_len)[:target_len // 2]
+                pattern_f = np.abs(np.fft.fft(pattern_data) / pattern_len)[:pattern_len // 2]
+                return target_f, pattern_f
+            elif feature_type == "spec" or feature_type == "melspec":
+                if feature_type == "spec":
+                    target_f = np.abs(spectrum.stft(y=target_data, **params))
+                    pattern_f = np.abs(spectrum.stft(y=pattern_data, **params))
+                else:
+                    target_f = spectral.melspectrogram(y=target_data, sr=sample_rate, **params)
+                    pattern_f = spectral.melspectrogram(y=pattern_data, sr=sample_rate, **params)
+                if convert_to_db:
+                    target_f = librosa.amplitude_to_db(target_f, ref=np.max)
+                    pattern_f = librosa.amplitude_to_db(pattern_f, ref=np.max)
+                return target_f, pattern_f
+            else:
+                return None, None
+        except Exception as e:
+            return None, None
 
-    def load_pattern_data(self):
-        re_path = self.analysis_config.get("pattern_save_path")
-        pattern_data_path = None
-        if re_path:
-            pattern_data_path = os.path.join(DEFAULT_DIR, re_path)
-        if not pattern_data_path or not os.path.exists(pattern_data_path):
-            self.result_display.setText("错误：模版数据不存在")
-            return
-        pattern_data, _ = load_audio_simple(pattern_data_path)
-        return pattern_data
+    @staticmethod
+    def calculate_loocv_threshold(channel_config, sample_rate):
+        SIMILARITY_SAFETY_FACTOR = 0.95
+
+        pattern_list = channel_config.get("pattern_list", [])
+        if len(pattern_list) < 2:
+            return None
+
+        all_features = []
+        for pattern_info in pattern_list:
+            try:
+                pattern_path = os.path.join(DEFAULT_DIR, pattern_info["clip_path"])
+                pattern_data, _ = load_audio_simple(pattern_path, sample_rate)
+
+                _, features = PatternMatch.extract_features(pattern_data, pattern_data, channel_config)
+                if features is None:
+                    return None
+                all_features.append(features)
+            except Exception as e:
+                return None
+
+        internal_best_scores = []
+        for i, test_features in enumerate(all_features):
+            committee_features = all_features[:i] + all_features[i + 1:]
+
+            scores_to_committee = []
+            for ref_features in committee_features:
+                result = PatternMatch.execute_match_algorithm(test_features, ref_features, channel_config)
+                if result and result.get('score') is not None:
+                    scores_to_committee.append(result['score'])
+
+            if not scores_to_committee:
+                continue
+
+            best_score = np.max(scores_to_committee)
+            internal_best_scores.append(best_score)
+
+        if not internal_best_scores:
+            return None
+
+        min_internal_score = np.min(internal_best_scores)
+        suggested_threshold_score = min_internal_score * SIMILARITY_SAFETY_FACTOR
+
+        return suggested_threshold_score
+
+    @staticmethod
+    def hist_compare_chi2(h1, h2):
+        return np.sum(np.square(h1 - h2) / (h1 + h2 + 1e-10))
+
+    @staticmethod
+    def hist_compare_intersection(h1, h2):
+        h1_norm = h1 / (h1.sum() + 1e-10)
+        h2_norm = h2 / (h2.sum() + 1e-10)
+        return np.sum(np.minimum(h1_norm, h2_norm))
+
+    @staticmethod
+    def hist_compare_correlation(h1, h2):
+        corr, _ = pearsonr(h1, h2)
+        return corr if not np.isnan(corr) else 0
+
+    @staticmethod
+    def hist_compare_bhattacharyya(h1, h2):
+        h1_norm = h1 / (h1.sum() + 1e-10)
+        h2_norm = h2 / (h2.sum() + 1e-10)
+        return np.sum(np.sqrt(h1_norm * h2_norm))
+
 
 
 class PipelinePdPm(QWidget):
