@@ -457,6 +457,12 @@ class Spectrogram(QWidget):
         color_map = self.analysis_config.get("color_map", "viridis")
         window_func = self.analysis_config.get("window_func", "hann")
         freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
+        top_limit = self.analysis_config.get("top_limit", 70)
+        bottom_limit = self.analysis_config.get("bottom_limit", 50)
+        
+        mid_value = (top_limit - bottom_limit) / 2
+        max_value = top_limit + mid_value
+        min_value = bottom_limit - mid_value
 
         if freq_scale_type == "log":
             fmin_cqt = librosa.note_to_hz("C1")
@@ -493,6 +499,7 @@ class Spectrogram(QWidget):
                 y_ticks=custom_y_ticks,
                 background_color="white",
             )
+            self.stft_colorbar.setLevels(min_value, max_value)
             self.plot_container_layout.addWidget(cqt_plot_widget)
             self.current_plot_widget = cqt_plot_widget
 
@@ -505,7 +512,7 @@ class Spectrogram(QWidget):
             if self.stft_plot_widget is None or self.img_item is None:
                 self._init_stft_plot_components()
 
-            self.img_item.setImage(spec_dB.T)
+            self.img_item.setImage(spec_dB.T, autoLevels=False)
 
             times_min, times_max = times.min(), times.max()
             freqs_min, freqs_max = freqs.min(), freqs.max()
@@ -537,7 +544,7 @@ class Spectrogram(QWidget):
             self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
             plot_item = self.stft_plot_widget.getPlotItem()
             if plot_item:
-                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
+                self.stft_colorbar = pg.ColorBarItem(values=(min_value, max_value), width=25, colorMap=cmap)
                 self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
             else:
                 self.stft_colorbar = None
