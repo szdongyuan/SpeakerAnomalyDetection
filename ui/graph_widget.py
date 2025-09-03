@@ -4,6 +4,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
 from PyQt5.QtWidgets import QHBoxLayout
 

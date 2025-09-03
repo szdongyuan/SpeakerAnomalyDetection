@@ -2455,6 +2455,6 @@ if __name__ == "__main__":
     # window.show()
     # window = AIConfigWindow(config_manager)
     # window.show()
-    window =PDTabbedPDConfigWindow(config_manager)
+    window = PatternMatchConfigWindow(config_manager, "PM")
     window.show()
     app.exec_()
