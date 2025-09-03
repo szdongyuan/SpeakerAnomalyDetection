@@ -17,7 +17,7 @@ from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
-from ui.analysis_config_window import SplConfigWindow, SpecConfigWindow, PatternMatchConfigWindow, PDConfigWindow
+from ui.analysis_config_window import SplConfigWindow, SpecConfigWindow, PatternMatchConfigWindow, PDTabbedPDConfigWindow
 from ui.analysis_config_window import LPConfigWindow
 from ui.analysis_config_window import PipelinePdPmConfigWindow
 
@@ -497,7 +497,7 @@ class OptionList(QListView):
         elif type == "LP":
             model = LPConfigWindow(config_manager, name)
         elif type == "PD":
-            model = PDConfigWindow(config_manager, name)
+            model = PDTabbedPDConfigWindow(config_manager, name)
         elif type == "ED":
             model = PipelinePdPmConfigWindow(config_manager, name)
         elif type == "PM":

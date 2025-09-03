@@ -5,6 +5,7 @@ from scipy.signal import find_peaks, peak_prominences, peak_widths
 
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 from base.utils.smooth import smooth as smooth_fn
 
 
@@ -241,6 +242,109 @@ def _prominence_filter(series: np.ndarray, peaks: np.ndarray, enabled: bool, min
     return valid, vals
 
 
+def spectral_flux_peak_detection(audio_signal, sample_rate, threshold, window_s=0.1, n_fft=1024, hop_length=128):
+    """
+    Perform peak detection directly on spectral flux.
+    
+    Args:
+        audio_signal: Audio signal data
+        sample_rate: Audio sample rate
+        threshold: Minimum spectral flux threshold
+        window_s: Time window for minimum distance between peaks (in seconds)
+        n_fft: FFT size for spectral flux calculation
+        hop_length: Hop length for spectral flux calculation
+    
+    Returns:
+        List of peak indices in audio signal
+    """
+    try:
+        # Compute spectral flux
+        flux, flux_times = AudioFeatureExtraction.spectral_flux(
+            audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length
+        )
+        
+        if flux is None or flux.size == 0:
+            return []
+        
+        # Find peaks in spectral flux
+        min_distance_samples = max(1, int(window_s * sample_rate / hop_length))
+        peaks_flux_idx, _ = find_peaks(flux, height=threshold, distance=min_distance_samples)
+        
+        # Convert flux peak indices to audio sample indices
+        if len(peaks_flux_idx) == 0:
+            return []
+            
+        # Map flux time indices back to audio sample indices
+        peak_times = flux_times[peaks_flux_idx]
+        peak_sample_indices = (peak_times * sample_rate).astype(int)
+        
+        # Ensure indices are within bounds
+        peak_sample_indices = np.clip(peak_sample_indices, 0, len(audio_signal) - 1)
+        
+        return peak_sample_indices.tolist()
+        
+    except Exception:
+        # If spectral flux fails, return empty list
+        return []
+
+
+def filter_peaks_by_spectral_flux(peaks_idx, sample_rate, audio_signal, window_s=0.02, threshold=0.0, n_fft=1024, hop_length=128):
+    """
+    Filter peaks based on spectral flux values around each peak.
+    
+    Args:
+        peaks_idx: List/array of peak indices
+        sample_rate: Audio sample rate
+        audio_signal: Audio signal data
+        window_s: Time window around each peak to check (in seconds)
+        threshold: Minimum spectral flux threshold
+        n_fft: FFT size for spectral flux calculation
+        hop_length: Hop length for spectral flux calculation
+    
+    Returns:
+        List of filtered peak indices
+    """
+    if peaks_idx is None or len(peaks_idx) == 0:
+        return []
+    
+    peaks_idx = np.asarray(peaks_idx, dtype=int)
+    if peaks_idx.size == 0:
+        return peaks_idx.tolist()
+    
+    # Compute spectral flux using AudioFeatureExtraction
+    try:
+        flux, flux_times = AudioFeatureExtraction.spectral_flux(
+            audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length
+        )
+    except Exception:
+        # If spectral flux calculation fails, return original peaks
+        return peaks_idx.tolist()
+    
+    if flux is None or flux.size == 0:
+        return peaks_idx.tolist()
+    
+    kept = []
+    t_arr = peaks_idx / float(sample_rate)
+    
+    for t in t_arr:
+        l = t - window_s
+        r = t + window_s
+        mask = (flux_times >= l) & (flux_times <= r)
+        
+        if np.any(mask):
+            v = float(np.max(flux[mask]))
+        else:
+            # Find closest time point if no points in window
+            v = float(flux[np.argmin(np.abs(flux_times - t))])
+        
+        if v >= threshold:
+            kept.append(True)
+        else:
+            kept.append(False)
+    
+    return peaks_idx[np.array(kept, dtype=bool)].tolist()
+
+
 def peak_detection(
     audio_signal: np.ndarray,
     sample_rate: int,
@@ -368,7 +472,42 @@ def peak_detection(
         max_duration_sec=max_duration_sec,
     )
 
-    final_peaks = np.array(peaks_after_duration_filter, dtype=int)
+    peaks_after_spectral_flux_filter = peaks_after_duration_filter
+
+    # 6.5) spectral flux constraint (optional)
+    spectral_flux_enabled = bool(config.get("specflux_enabled", False))
+    spectral_flux_threshold = float(config.get("specflux_min_value", 0.0))
+    spectral_flux_window_s = float(config.get("spectral_flux_window_s", 0.1))
+    spectral_flux_n_fft = int(config.get("spectral_flux_n_fft", 1024))
+    spectral_flux_hop_length = int(config.get("spectral_flux_hop_length", 128))
+    
+    if spectral_flux_enabled and spectral_flux_threshold > 0.0:
+        # Check if this should be used as primary detection method
+        use_spectral_flux_primary = bool(config.get("spectral_flux_primary", False))
+        
+        if use_spectral_flux_primary:
+            # Use spectral flux for primary peak detection, ignoring all previous peaks
+            peaks_after_spectral_flux_filter = spectral_flux_peak_detection(
+                audio_signal=audio_signal,
+                sample_rate=sample_rate,
+                threshold=spectral_flux_threshold,
+                window_s=spectral_flux_window_s,
+                n_fft=spectral_flux_n_fft,
+                hop_length=spectral_flux_hop_length
+            )
+        else:
+            # Use spectral flux as a filter on existing peaks
+            peaks_after_spectral_flux_filter = filter_peaks_by_spectral_flux(
+                peaks_idx=peaks_after_duration_filter,
+                sample_rate=sample_rate,
+                audio_signal=audio_signal,
+                window_s=spectral_flux_window_s,
+                threshold=spectral_flux_threshold,
+                n_fft=spectral_flux_n_fft,
+                hop_length=spectral_flux_hop_length
+            )
+
+    final_peaks = np.array(peaks_after_spectral_flux_filter, dtype=int)
 
     # 7) number limit (peak count)
     if bool(config.get("peak_count_enabled", True)):
