@@ -459,6 +459,7 @@ class Spectrogram(QWidget):
         freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
         top_limit = self.analysis_config.get("top_limit", 70)
         bottom_limit = self.analysis_config.get("bottom_limit", 50)
+        custom_limit_flag = self.analysis_config.get("custom_limit", False)
         
         mid_value = (top_limit - bottom_limit) / 2
         max_value = top_limit + mid_value
@@ -499,7 +500,6 @@ class Spectrogram(QWidget):
                 y_ticks=custom_y_ticks,
                 background_color="white",
             )
-            self.stft_colorbar.setLevels((min_value, max_value))
             self.plot_container_layout.addWidget(cqt_plot_widget)
             self.current_plot_widget = cqt_plot_widget
 
@@ -544,12 +544,16 @@ class Spectrogram(QWidget):
             self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
             plot_item = self.stft_plot_widget.getPlotItem()
             if plot_item:
-                self.stft_colorbar = pg.ColorBarItem(values=(min_value, max_value), width=25, colorMap=cmap)
+                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
                 self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
             else:
                 self.stft_colorbar = None
             self.plot_container_layout.addWidget(self.stft_plot_widget)
             self.current_plot_widget = self.stft_plot_widget
+            
+        if custom_limit_flag:
+            self.stft_colorbar.setLevels((min_value, max_value))
+
         self.set_color_font_size()
 
 

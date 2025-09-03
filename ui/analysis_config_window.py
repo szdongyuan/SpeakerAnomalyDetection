@@ -635,7 +635,7 @@ class SpecConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumSize(350, 350)
-        self.resize(350, 350)
+        self.resize(350, 420)
         layout = QVBoxLayout()
         spec_param_group_box = QGroupBox("频谱图参数配置")
         param_layout = self.create_spec_param()
@@ -652,6 +652,7 @@ class SpecConfigWindow(QDialog):
             + ui_style_const.qpushbutton_style
             + ui_style_const.qcombobox_style
             + ui_style_const.qspinbox_style
+            + ui_style_const.qcheckbox_style
         )
 
     def create_spec_param(self):
@@ -717,6 +718,20 @@ class SpecConfigWindow(QDialog):
         bottom_limit_layout = QHBoxLayout()
         bottom_limit_layout.addWidget(bottom_limit_label)
         bottom_limit_layout.addWidget(self.bottom_limit_spinbox)
+        
+        layout = QVBoxLayout()
+        layout.addLayout(top_limit_layout)
+        layout.addStretch()
+        layout.addLayout(bottom_limit_layout)
+        layout.addStretch()
+
+        self.limit_group_box = QGroupBox()
+        self.limit_group_box.setLayout(layout)
+
+        self.custom_limit_checkbox = QCheckBox("自定义")
+        self.on_custom_limit_checkbox_changed(self.custom_limit_checkbox.isChecked())
+        self.custom_limit_checkbox.stateChanged.connect(self.on_custom_limit_checkbox_changed)
+        self.custom_limit_checkbox.setChecked(self.load_config.get("custom_limit", False))
 
         param_layout = QVBoxLayout()
         param_layout.addStretch()
@@ -730,10 +745,9 @@ class SpecConfigWindow(QDialog):
         param_layout.addStretch()
         param_layout.addLayout(colormap_layout)
         param_layout.addStretch()
-        param_layout.addLayout(top_limit_layout)
+        param_layout.addWidget(self.custom_limit_checkbox)
         param_layout.addStretch()
-        param_layout.addLayout(bottom_limit_layout)
-        param_layout.addStretch()
+        param_layout.addWidget(self.limit_group_box)
         param_layout.addSpacing(10)
         param_layout.setSpacing(10)
         return param_layout
@@ -748,6 +762,14 @@ class SpecConfigWindow(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
+    
+    def on_custom_limit_checkbox_changed(self, state):
+        if state == Qt.Checked:
+            self.limit_group_box.setEnabled(True)
+            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
+        else:
+            self.limit_group_box.setEnabled(False)
+            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def get_default_config(self):
         default_config = {
@@ -758,6 +780,7 @@ class SpecConfigWindow(QDialog):
             "freq_scale_type": self.freq_scale_box.currentText(),
             "top_limit": self.top_limit_spinbox.value(),
             "bottom_limit": self.bottom_limit_spinbox.value(),
+            "custom_limit": self.custom_limit_checkbox.isChecked(),
         }
         return default_config
 
