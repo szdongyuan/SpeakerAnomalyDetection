@@ -499,7 +499,7 @@ class Spectrogram(QWidget):
                 y_ticks=custom_y_ticks,
                 background_color="white",
             )
-            self.stft_colorbar.setLevels(min_value, max_value)
+            self.stft_colorbar.setLevels((min_value, max_value))
             self.plot_container_layout.addWidget(cqt_plot_widget)
             self.current_plot_widget = cqt_plot_widget
 
