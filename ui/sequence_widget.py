@@ -499,7 +499,9 @@ class SequenceWindow(QWidget):
     def init_fft_and_stft_flag(self):
         model_item_list = self.analysis_config.get("display_sequence", "")
         for item_name in model_item_list:
-            self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"])
+            analysis_item = self.analysis_config.get(item_name, {})
+            item_type = analysis_item.get("type", None) 
+            self.data_struct.add_stft_or_fft_count(item_type)
 
     def init_result_files(self):
         current_time = datetime.now().strftime("%Y-%m-%d")

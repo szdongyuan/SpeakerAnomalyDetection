@@ -109,6 +109,7 @@ class AudioClipExtractionDialog(QDialog):
         self.clip_len_spinbox.setDecimals(3)
         self.clip_len_spinbox.setSingleStep(0.1)
         self.clip_len_spinbox.setValue(0.1)
+        self.clip_len_spinbox.setEnabled(False)
 
         self.fixed_len_checkbox.stateChanged.connect(self.change_fixed_len_box_state)
         self.clip_len_spinbox.valueChanged.connect(self.change_clip_value_spinbox)

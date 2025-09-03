@@ -218,6 +218,19 @@ class LoadUiConfig(object):
             port = int(port_text)
             return ip, port
 
+    @staticmethod
+    def _extract_analysis_list(raw_data):
+        try:
+            if isinstance(raw_data, list) and len(raw_data) > 0:
+                first = raw_data[0]
+                if isinstance(first, dict) and len(first) > 0:
+                    _, payload = next(iter(first.items()))
+                    analysis_list = payload.get("analysis_list", {}) if isinstance(payload, dict) else {}
+                    return analysis_list if isinstance(analysis_list, dict) else {}
+            return {}
+        except Exception:
+            return {}
+
 
 class ConfigManager(object):
     """负责读写分析窗口各项配置的通用管理器，迁移自 ui.analysis_config_window"""
