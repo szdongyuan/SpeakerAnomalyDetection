@@ -651,6 +651,7 @@ class SpecConfigWindow(QDialog):
             + ui_style_const.qlabel_style
             + ui_style_const.qpushbutton_style
             + ui_style_const.qcombobox_style
+            + ui_style_const.qspinbox_style
         )
 
     def create_spec_param(self):
@@ -701,6 +702,22 @@ class SpecConfigWindow(QDialog):
         colormap_layout.addWidget(colormap_label)
         colormap_layout.addWidget(self.colormap_box)
 
+        top_limit_label = QLabel("上限")
+        self.top_limit_spinbox = QSpinBox()
+        top_limit = self.load_config.get("top_limit", 70)
+        self.top_limit_spinbox.setValue(top_limit)
+        top_limit_layout = QHBoxLayout()
+        top_limit_layout.addWidget(top_limit_label)
+        top_limit_layout.addWidget(self.top_limit_spinbox)
+
+        bottom_limit_label = QLabel("下限")
+        self.bottom_limit_spinbox = QSpinBox()
+        bottom_limit = self.load_config.get("bottom_limit", 50)
+        self.bottom_limit_spinbox.setValue(bottom_limit)
+        bottom_limit_layout = QHBoxLayout()
+        bottom_limit_layout.addWidget(bottom_limit_label)
+        bottom_limit_layout.addWidget(self.bottom_limit_spinbox)
+
         param_layout = QVBoxLayout()
         param_layout.addStretch()
         param_layout.addLayout(freq_scale_layout)
@@ -712,6 +729,10 @@ class SpecConfigWindow(QDialog):
         param_layout.addLayout(window_layout)
         param_layout.addStretch()
         param_layout.addLayout(colormap_layout)
+        param_layout.addStretch()
+        param_layout.addLayout(top_limit_layout)
+        param_layout.addStretch()
+        param_layout.addLayout(bottom_limit_layout)
         param_layout.addStretch()
         param_layout.addSpacing(10)
         param_layout.setSpacing(10)
@@ -735,6 +756,8 @@ class SpecConfigWindow(QDialog):
             "window_func": self.window_func_box.currentText(),
             "color_map": self.colormap_box.currentText(),
             "freq_scale_type": self.freq_scale_box.currentText(),
+            "top_limit": self.top_limit_spinbox.value(),
+            "bottom_limit": self.bottom_limit_spinbox.value(),
         }
         return default_config
 

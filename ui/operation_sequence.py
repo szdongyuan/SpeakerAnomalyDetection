@@ -130,13 +130,13 @@ class AnalysisModelSelect(QDialog):
         analysis_item_item = QStandardItem("音频分析")
         analysis_items = [
             "声压级 (SPL) ",
+            "频谱分析 (Spec) ",
             "频响 (FR) ",
             "谐波失真 (HD) ",
             "松散颗粒 (LP) ",
             "峰值检测 (PD) ",
             "模式匹配(PM)",
             "AI 分析 ",
-            "频谱分析 (Spec) ",
             "事件检测 (ED) ",
         ]
         for item in analysis_items:
