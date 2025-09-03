@@ -21,7 +21,7 @@ class GenericFeatureParamsDialog(QDialog):
 
         for name, definition in self.param_definitions.items():
             default_value = self.current_values.get(name, definition.get('default'))
-            label_text = definition.get('label', name)  # 使用 label 字段作为标签
+            label_text = definition.get('label', name)
             param_type = definition.get('type')
             if param_type == 'dropdown':
                 editor = QComboBox()
