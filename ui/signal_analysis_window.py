@@ -69,6 +69,12 @@ class AnalysisGraphWidget(QWidget):
         self.analysis_plot_top.setBackground("white")
         self.analysis_plot_bottom.setBackground("white")
 
+        layout = QVBoxLayout()
+        layout.addWidget(self.analysis_plot_top)
+        layout.addWidget(self.analysis_plot_bottom)
+        self.setLayout(layout)
+
+    def set_plot_channel_flag(self):
         font_top = QFont()
         font_top.setPixelSize(20)
 
@@ -94,11 +100,7 @@ class AnalysisGraphWidget(QWidget):
         self.text_bottom.setPos(0, 0)  # 设置左上角位置
         self.text_bottom.setParentItem(self.analysis_plot_bottom.getViewBox())  # 绑定到视图框
         self.text_bottom.setZValue(1000)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self.analysis_plot_top)
-        layout.addWidget(self.analysis_plot_bottom)
-        self.setLayout(layout)
+        
 
     def set_plot_font_size(self, font_size: int):
         for i in self.plot_list:
@@ -129,6 +131,7 @@ class Spl(AnalysisGraphWidget):
         self.analysis_config = None
         self.result = {}
         self.setWindowTitle(title_name)
+        self.set_plot_channel_flag()
 
     def calculate_spl(self):
         # calculate Sound Pressure Level according to recorded_signal
@@ -352,6 +355,13 @@ class Spectrogram(QWidget):
         color_map = self.analysis_config.get("color_map", "viridis")
         window_func = self.analysis_config.get("window_func", "hann")
         freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
+        top_limit = self.analysis_config.get("top_limit", 70)
+        bottom_limit = self.analysis_config.get("bottom_limit", 50)
+        custom_limit_flag = self.analysis_config.get("custom_limit", False)
+
+        mid_value = (top_limit - bottom_limit) / 2
+        max_value = top_limit + mid_value
+        min_value = bottom_limit - mid_value
 
         if freq_scale_type == "log":
             fmin_cqt = librosa.note_to_hz("C1")
@@ -393,7 +403,7 @@ class Spectrogram(QWidget):
                 x=times_top,
                 y=freqs_top,
                 z=Z_top,
-                title="Spectrogram(Log Scale)Channel_1",
+                title="Spectrogram(Log Scale)(Channel_1)",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
@@ -406,7 +416,7 @@ class Spectrogram(QWidget):
                 x=times_bottom,
                 y=freqs_bottom,
                 z=Z_bottom,
-                title="Spectrogram(Log Scale)Channel_2",
+                title="Spectrogram(Log Scale)(Channel_2)",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
@@ -446,12 +456,12 @@ class Spectrogram(QWidget):
             self.img_item_top.setRect(pg.QtCore.QRectF(times_top_min, freqs_min, width_top, height))
             self.img_item_bottom.setRect(pg.QtCore.QRectF(times_bottom_min, freqs_min, width_bottom, height))
 
-            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)Channel_1")
+            self.stft_plot_widget_top.setTitle("Spectrogram (Linear Scale)(Channel_1)")
             self.stft_plot_widget_top.setLabel("bottom", "Time (s)")
             self.stft_plot_widget_top.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget_top.setLogMode(x=False, y=False)
 
-            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)Channel_2")
+            self.stft_plot_widget_bottom.setTitle("Spectrogram (Linear Scale)(Channel_2)")
             self.stft_plot_widget_bottom.setLabel("bottom", "Time (s)")
             self.stft_plot_widget_bottom.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget_bottom.setLogMode(x=False, y=False)
@@ -498,6 +508,11 @@ class Spectrogram(QWidget):
             self.plot_container_layout.addWidget(self.stft_plot_widget_top)
             self.plot_container_layout.addWidget(self.stft_plot_widget_bottom)
             self.current_plot_widget = self.stft_plot_widget_top
+
+        if custom_limit_flag:
+            self.stft_colorbar_top.setLevels((min_value, max_value))
+            self.stft_colorbar_bottom.setLevels((min_value, max_value))
+
         self.set_color_font_size()
 
 
@@ -628,9 +643,6 @@ class PeakDetection(AnalysisGraphWidget):
         pd_num_layout.addWidget(self.PD_num_label)
         pd_num_layout.setSpacing(20)
         self.layout().insertLayout(0, pd_num_layout)
-
-        # Hide Channel_1 text label for PeakDetection
-        self.text_top.setText("")
 
         self.setStyleSheet("font-size: 16px;")
 
