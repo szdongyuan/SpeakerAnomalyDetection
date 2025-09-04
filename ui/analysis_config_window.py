@@ -1688,6 +1688,7 @@ class PDTabbedPDConfigWindow(QDialog):
         self.accept()
         return config_data
 
+
 class PatternMatchConfigWindow(QDialog):
     def __init__(self, config_manager, model_type):
         super().__init__()
@@ -2004,6 +2005,8 @@ class PatternMatchConfigWindow(QDialog):
         has_params = feature_key and self.feature_registry[feature_key].get('params')
         self.feature_params_btn.setEnabled(bool(has_params))
 
+        self.update_algorithm_combo()
+
     def on_strategy_radio_changed(self):
         is_fixed_checked = self.fixed_threshold_radio.isChecked()
         self.threshold_spinbox.setEnabled(is_fixed_checked)
@@ -2014,6 +2017,28 @@ class PatternMatchConfigWindow(QDialog):
         self.low_freq_edit.setEnabled(is_checked)
         self.high_freq_edit.setEnabled(is_checked)
 
+
+    def update_algorithm_combo(self):
+        """Update dropdown box based on feature dimensions algorithm"""
+        feature_key = self.feature_combo.currentData()
+        if not feature_key:
+            return
+
+        feature_info = self.feature_registry.get(feature_key, {})
+        feature_dim = feature_info.get("dimensionality")
+        view = self.algorithm_combo.view()
+
+        for i in range(self.algorithm_combo.count()):
+            algo_key = self.algorithm_combo.itemData(i)
+            algo_info = self.algorithm_registry.get(algo_key, {})
+            is_compatible = feature_dim in algo_info.get("compatibility", ())
+            view.setRowHidden(i, not is_compatible)
+
+        if view.isRowHidden(self.algorithm_combo.currentIndex()):
+            for i in range(self.algorithm_combo.count()):
+                if not view.isRowHidden(i):
+                    self.algorithm_combo.setCurrentIndex(i)
+                    break
 
     def populate_ui_from_config(self, config):
         if not config:
