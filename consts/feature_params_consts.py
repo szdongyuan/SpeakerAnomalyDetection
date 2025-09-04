@@ -2,14 +2,17 @@
 FEATURE_CONFIG = {
     "waveform": {
         "display_name": "原始波形 (Waveform)",
+        "dimensionality": '1D',
         "params": {}
     },
     "fft": {
         "display_name": "快速傅里叶变换 (FFT)",
+        "dimensionality": '1D',
         "params": {}
     },
     "mfcc": {
         "display_name": "梅尔倒谱系数 (MFCC)",
+        "dimensionality": '2D',
         "params": {
             "n_mfcc": {
                 "label": "MFCC系数数量 (n_mfcc):",
@@ -67,6 +70,7 @@ FEATURE_CONFIG = {
     },
     "spec": {
         "display_name": "频谱图 (Spectrogram)",
+        "dimensionality": '2D',
         "params": {
             "n_fft": {
                 "label": "FFT窗口大小 (n_fft):",
@@ -96,12 +100,6 @@ FEATURE_CONFIG = {
                     {"display_name": "矩形窗 (Rectangular)", "value": "boxcar"}
                 ]
             },
-            "power": {
-                "label": "能量度:",
-                "type": "float",
-                "default": 2.0,
-                "validation": {"type": "float", "min": 1.0, "max": 2.0, "decimals": 1}
-            },
             "power_to_db": {
                 "label": "转换为分贝(dB):",
                 "type": "bool",
@@ -111,6 +109,7 @@ FEATURE_CONFIG = {
     },
     "melspec": {
         "display_name": "梅尔频谱图 (Mel Spectrogram)",
+        "dimensionality": '2D',
         "params": {
             "n_fft": {
                 "label": "FFT窗口大小 (n_fft):",
@@ -177,6 +176,7 @@ FEATURE_CONFIG = {
 ALGORITHM_CONFIG = {
     "distance": {
         "display_name": "距离度量 (DM)",
+        "compatibility": ('1D', '2D'),
         "params": {
             "metric": {
                 "label": "度量方法:",
@@ -192,6 +192,7 @@ ALGORITHM_CONFIG = {
     },
     "dtw": {
         "display_name": "动态时间规整 (DTW)",
+        "compatibility": ('1D', '2D'),
         "params": {
             "metric": {
                 "label": "距离度量:",
@@ -227,6 +228,7 @@ ALGORITHM_CONFIG = {
     },
     "lbp": {
         "display_name": "LBP特征匹配 (LBP)",
+        "compatibility": ('2D',),
         "params": {
             "radius": {
                 "label": "LBP采样半径 (Radius):",
@@ -268,6 +270,7 @@ ALGORITHM_CONFIG = {
     },
     "ncc": {
         "display_name": "归一化互相关 (NCC)",
+        "compatibility": ('2D',),
         "params": {}
     }
 }

@@ -985,11 +985,15 @@ class PatternMatch(QWidget):
         ch2_score_str = f"{results_ch2['score'] * 100:.2f}" if results_ch2['score'] is not None else "N/A"
         ch1_status_str = '成功' if results_ch1["success"] else '失败'
         ch2_status_str = '成功' if results_ch2["success"] else '失败'
+        ch1_threshold_str = f"{results_ch1.get('threshold', 'N/A'):.2f}" if results_ch1.get(
+            'threshold') is not None else "N/A"
+        ch2_threshold_str = f"{results_ch2.get('threshold', 'N/A'):.2f}" if results_ch2.get(
+            'threshold') is not None else "N/A"
 
         final_text = f"最终匹配结果: {'成功' if final_success else '失败'}\n"
         final_text += "------------------------------------\n"
-        final_text += f"通道 1 -> 得分: {ch1_score_str}, 状态: {ch1_status_str}\n"
-        final_text += f"通道 2 -> 得分: {ch2_score_str}, 状态: {ch2_status_str}"
+        final_text += f"通道 1 -> 得分: {ch1_score_str}, 状态: {ch1_status_str}, 阈值: {ch1_threshold_str}\n"
+        final_text += f"通道 2 -> 得分: {ch2_score_str}, 状态: {ch2_status_str}, 阈值: {ch2_threshold_str}"
 
         self.result_display.setPlainText(final_text)
 
@@ -1004,7 +1008,7 @@ class PatternMatch(QWidget):
         pattern_list = channel_config.get("pattern_list", [])
 
         if not pattern_list:
-            return {"score": None, "success": False}
+            return {"score": None, "success": False, "threshold": None}
 
         threshold_strategy = channel_config.get("threshold_strategy", "fixed_threshold")
 
@@ -1021,7 +1025,7 @@ class PatternMatch(QWidget):
                 all_scores.append(result['score'])
 
         if not all_scores:
-            return {"score": None, "success": False}
+            return {"score": None, "success": False, "threshold": None}
 
         best_score = np.max(all_scores)
         channel_is_successful = False
