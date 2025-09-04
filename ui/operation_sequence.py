@@ -126,10 +126,10 @@ class AnalysisModelSelect(QDialog):
         analysis_item_item = QStandardItem("音频分析")
         analysis_items = [
             "声压级 (SPL) ",
+            "频谱分析 (Spec) ",
             "松散颗粒 (LP) ",
             "峰值检测 (PD) ",
             "模式匹配(PM)",
-            "频谱分析 (Spec) ",
             "事件检测 (ED) ",
         ]
         for item in analysis_items:
@@ -258,6 +258,9 @@ class AnalysisModelSelect(QDialog):
                 return
 
     def ok_btn_clicked(self):
+        if not self.select_list.config:
+            QMessageBox.warning(self, "警告", "请添加录制模式！")
+            return
         if self.select_list.config[0].default_ed is None:
             QMessageBox.warning(self, "警告", "请选择默认的事件检测作为评判标准！")
             return
