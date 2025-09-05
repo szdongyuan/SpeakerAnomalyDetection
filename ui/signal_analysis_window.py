@@ -1648,8 +1648,12 @@ class PipelinePdPm(AnalysisGraphWidget):
         time_axis_ch2 = np.linspace(0, len(spl_series_ch2) / sample_rate, len(spl_series_ch2))
         
         # Plot both SPL curves on same plot (like PeakDetection)
-        plot_item.plot(time_axis_ch1, spl_series_ch1, pen=mkPen(color='g', width=1), name='Channel 1')
-        plot_item.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='Channel 2')
+        plot_item.plot(time_axis_ch1, spl_series_ch1, pen=mkPen(color='g', width=1), name='SPL CH1')
+        plot_item.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='SPL CH2')
+        
+        # Add legend for main plot
+        if not hasattr(plot_item, 'legend') or plot_item.legend is None:
+            plot_item.addLegend(offset=(10, 10))
         
         self._last_spl_series_ch1 = np.asarray(spl_series_ch1)
         self._last_spl_series_ch2 = np.asarray(spl_series_ch2)
@@ -1668,6 +1672,9 @@ class PipelinePdPm(AnalysisGraphWidget):
                     x=ch1_peak_times, y=ch1_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 255, 0, 200), size=8
                 )
                 plot_item.addItem(scatter_ch1)
+                # Add to legend
+                if hasattr(plot_item, 'legend') and plot_item.legend is not None:
+                    plot_item.legend.addItem(scatter_ch1, 'Peaks CH1')
             
             # Channel 2 peaks (blue scatter points)
             ch2_peak_indices = dual_peaks.get("channel_2", {}).get("peaks_index", [])
@@ -1679,6 +1686,9 @@ class PipelinePdPm(AnalysisGraphWidget):
                     x=ch2_peak_times, y=ch2_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 0, 255, 200), size=8
                 )
                 plot_item.addItem(scatter_ch2)
+                # Add to legend
+                if hasattr(plot_item, 'legend') and plot_item.legend is not None:
+                    plot_item.legend.addItem(scatter_ch2, 'Peaks CH2')
         elif peak_indices:
             # Fallback: use merged peak indices for both channels
             peak_indices_arr = np.clip(np.asarray(peak_indices, dtype=int), 0, min(len(spl_series_ch1), len(spl_series_ch2)) - 1)
@@ -1691,6 +1701,9 @@ class PipelinePdPm(AnalysisGraphWidget):
                     x=ch1_peak_times, y=ch1_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 255, 0, 200), size=8
                 )
                 plot_item.addItem(scatter_ch1)
+                # Add to legend
+                if hasattr(plot_item, 'legend') and plot_item.legend is not None:
+                    plot_item.legend.addItem(scatter_ch1, 'Peaks CH1')
                 
                 # Ch2 peaks (blue)  
                 ch2_peak_times = peak_indices_arr / float(sample_rate)
@@ -1699,6 +1712,9 @@ class PipelinePdPm(AnalysisGraphWidget):
                     x=ch2_peak_times, y=ch2_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 0, 255, 200), size=8
                 )
                 plot_item.addItem(scatter_ch2)
+                # Add to legend
+                if hasattr(plot_item, 'legend') and plot_item.legend is not None:
+                    plot_item.legend.addItem(scatter_ch2, 'Peaks CH2')
 
         # Setup dual axis for pattern matching similarity scores
         self._setup_dual_axis_if_needed()
@@ -1727,30 +1743,32 @@ class PipelinePdPm(AnalysisGraphWidget):
             ch1_scores = np.array(ch1_scores, dtype=float)
             ch2_scores = np.array(ch2_scores, dtype=float)
             
+            # Note: Cannot add legend to ViewBox directly - similarity bars will be distinguishable by color
+            
             if times.size > 0:
                 duration = max(max(time_axis_ch1[-1] - time_axis_ch1[0], time_axis_ch2[-1] - time_axis_ch2[0]), 1e-6)
                 bar_width = max(duration * 0.002, duration / 1000.0)
                 
-                # Channel 1 similarity bars (green-tinted)
+                # Channel 1 similarity bars (orange-tinted)
                 if np.any(ch1_scores > 0):
                     bars_ch1 = pg.BarGraphItem(
                         x=times - bar_width/4,  # Slight offset to avoid overlap
                         height=ch1_scores,
                         width=bar_width/2,
-                        brush=pg.mkBrush(100, 255, 100, 180),  # Green-tinted
-                        pen=pg.mkPen(0, 200, 0, 220),
+                        brush=pg.mkBrush(255, 140, 0, 180),  # Orange-tinted
+                        pen=pg.mkPen(255, 100, 0, 220),
                     )
                     self._right_view.addItem(bars_ch1)
                     self._bars_item_ch1 = bars_ch1
                 
-                # Channel 2 similarity bars (blue-tinted)
+                # Channel 2 similarity bars (purple-tinted)
                 if np.any(ch2_scores > 0):
                     bars_ch2 = pg.BarGraphItem(
                         x=times + bar_width/4,  # Slight offset to avoid overlap
                         height=ch2_scores,
                         width=bar_width/2,
-                        brush=pg.mkBrush(100, 100, 255, 180),  # Blue-tinted
-                        pen=pg.mkPen(0, 0, 200, 220),
+                        brush=pg.mkBrush(200, 0, 255, 180),  # Purple-tinted
+                        pen=pg.mkPen(150, 0, 200, 220),
                     )
                     self._right_view.addItem(bars_ch2)
                     self._bars_item_ch2 = bars_ch2
