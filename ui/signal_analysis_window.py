@@ -718,6 +718,10 @@ class PeakDetection(AnalysisGraphWidget):
         # 双通道峰值匹配：只有两个通道都检测到峰值时才算有效峰值
         # 单通道的峰值被视为噪声并删除
         merged_indices = []
+        matched_ch1_indices = []
+        matched_ch2_indices = []
+        matched_ch1_times = []
+        matched_ch2_times = []
         
         if len(peaks1_indices) > 0 and len(peaks2_indices) > 0:
             # 记录已匹配的通道2峰值索引，避免重复匹配
@@ -733,6 +737,11 @@ class PeakDetection(AnalysisGraphWidget):
                     p2 = peaks2_indices[min_distance_idx]
                     # 使用两个峰值的平均位置作为最终峰值位置
                     merged_indices.append(int((p1 + p2) / 2))
+                    # 保存原始通道峰值信息
+                    matched_ch1_indices.append(int(p1))
+                    matched_ch2_indices.append(int(p2))
+                    matched_ch1_times.append(float(p1) / sample_rate)
+                    matched_ch2_times.append(float(p2) / sample_rate)
                     used_ch2_indices.add(min_distance_idx)
                     
         # 去重并排序
@@ -744,7 +753,24 @@ class PeakDetection(AnalysisGraphWidget):
             "peaks_index": merged_indices,
             "peaks_time_sec": merged_times_sec,
             "num_peaks": len(merged_indices),
-            "spl_db_series": result_ch1.get("spl_db_series") # keep ch1's spl series for plotting
+            "spl_db_series": result_ch1.get("spl_db_series"), # keep ch1's spl series for plotting
+            # 新增：保存双通道原始峰值信息和SPL数据
+            "dual_channel_peaks": {
+                "channel_1": {
+                    "peaks_index": matched_ch1_indices,
+                    "peaks_time_sec": matched_ch1_times,
+                    "all_peaks_index": peaks1_indices.tolist(),
+                    "all_peaks_time_sec": (peaks1_indices / sample_rate).tolist(),
+                    "spl_db_series": result_ch1.get("spl_db_series", [])  # RMS-windowed SPL data
+                },
+                "channel_2": {
+                    "peaks_index": matched_ch2_indices,
+                    "peaks_time_sec": matched_ch2_times,
+                    "all_peaks_index": peaks2_indices.tolist(),
+                    "all_peaks_time_sec": (peaks2_indices / sample_rate).tolist(),
+                    "spl_db_series": result_ch2.get("spl_db_series", [])  # RMS-windowed SPL data
+                }
+            }
         }
 
 
@@ -931,7 +957,7 @@ class PeakDetection(AnalysisGraphWidget):
 
         # self._update_fonts()
         return self.result
-  
+
 
 class PatternMatch(QWidget):
     def __init__(self, title_name):
@@ -1295,7 +1321,7 @@ class PatternMatch(QWidget):
 
 
 
-class PipelinePdPm(QWidget):
+class PipelinePdPm(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -1303,6 +1329,7 @@ class PipelinePdPm(QWidget):
         self.deviation_value = None
         self.is_default_flag = False
         self.default_logger = LogManager.set_log_handler("core")
+        self.analysis_plot_bottom.close()  # Use single plot like PeakDetection
         self._init_ui()
         self.setWindowTitle(title_name)
 
@@ -1311,6 +1338,15 @@ class PipelinePdPm(QWidget):
         calculate the left and right grid points from the array
         """
         pattern_segment = np.asarray(pattern_segment).astype(float)
+        
+        # Handle multi-dimensional (dual-channel) arrays
+        if pattern_segment.ndim > 1:
+            # Use first channel for window calculation
+            pattern_segment = pattern_segment[0]
+        
+        # Ensure we have a 1D array (flatten if needed)
+        pattern_segment = np.asarray(pattern_segment).flatten()
+        
         seg_len = int(pattern_segment.size)
         if seg_len <= 0:
             return 0, 0, 0
@@ -1328,59 +1364,79 @@ class PipelinePdPm(QWidget):
         return seg_len, left_point, right_point
 
     def _init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.main_layout = QVBoxLayout(self)
-        # plot area for summary
-        self.plot_widget = pg.PlotWidget(background="white")
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.5)
-        self.plot_widget.setLabel("left", "SPL (dB)")
-        self.plot_widget.setLabel("bottom", "Time (s)")
+        # Configure single plot for dual-channel visualization
+        self.analysis_plot_top.setBackground("white")
+        self.analysis_plot_top.showGrid(x=True, y=True, alpha=0.5)
+        self.analysis_plot_top.setLabel("left", "SPL (dB)")
+        self.analysis_plot_top.setLabel("bottom", "Time (s)")
 
+        # Create additional UI components
         self.result_display = QTextEdit()
         self.result_display.setReadOnly(True)
-        # match result table
+        
+        # match result table with dual-channel columns
         self.table_widget = QTableWidget()
-        self.table_widget.setColumnCount(5)
-        self.table_widget.setHorizontalHeaderLabels(["序号", "时间(s)", "长度(ms)", "相似度", "SPL(dB)"])
+        self.table_widget.setColumnCount(7)  # Increased for dual-channel info
+        self.table_widget.setHorizontalHeaderLabels([
+            "序号", "时间(s)", "长度(ms)", "Ch1分数(%)", "Ch2分数(%)", "总分数(%)", "匹配状态"
+        ])
         header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
-        #  vertical stacking, right: table; overall left and right side by side, right about 2/5
+        
+        # Modify the existing layout from AnalysisGraphWidget instead of creating new one
+        existing_layout = self.layout()
+        if existing_layout:
+            # Clear existing layout and rebuild
+            while existing_layout.count():
+                child = existing_layout.takeAt(0)
+                if child.widget():
+                    child.widget().setParent(None)
+        else:
+            # Create new layout if none exists
+            existing_layout = QVBoxLayout(self)
+        
+        # Build new layout structure
         content_layout = QHBoxLayout()
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.addWidget(self.result_display)
-        left_layout.addWidget(self.plot_widget)
+        left_layout.addWidget(self.analysis_plot_top)  # Only use top plot
+        
         content_layout.addWidget(left_container)
         content_layout.addWidget(self.table_widget)
         content_layout.setStretch(0, 3)
         content_layout.setStretch(1, 2)
-        self.main_layout.addLayout(content_layout)
-        self.setLayout(self.main_layout)
+        
+        existing_layout.addLayout(content_layout)
+        
         self.setStyleSheet(ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style)
-
         self.result_display.setStyleSheet("font-size:20px;")
+        
+        # Single plot dual-axis setup for similarity visualization
         self._right_view = None
-        self._bars_item = None
-        self._last_spl_series = None
+        self._bars_item_ch1 = None
+        self._bars_item_ch2 = None
+        self._last_spl_series_ch1 = None
+        self._last_spl_series_ch2 = None
 
     def _setup_dual_axis_if_needed(self):
-        if self._right_view is not None:
-            return
-        plot_item = self.plot_widget.getPlotItem()
-        plot_item.showAxis("right")
-        right_axis = plot_item.getAxis("right")
-        right_axis.setLabel("相似度")
-        self._right_view = pg.ViewBox()
-        self._right_view.setXLink(plot_item.vb)
-        plot_item.scene().addItem(self._right_view)
-        right_axis.linkToView(self._right_view)
+        # Setup dual axis for single plot (similarity visualization)
+        if self._right_view is None:
+            plot_item = self.analysis_plot_top.getPlotItem()
+            plot_item.showAxis("right")
+            right_axis = plot_item.getAxis("right")
+            right_axis.setLabel("相似度")
+            self._right_view = pg.ViewBox()
+            self._right_view.setXLink(plot_item.vb)
+            plot_item.scene().addItem(self._right_view)
+            right_axis.linkToView(self._right_view)
 
-        def _update_views_geometry():
-            self._right_view.setGeometry(plot_item.vb.sceneBoundingRect())
-            self._right_view.linkedViewChanged(plot_item.vb, self._right_view.XAxis)
+            def _update_views_geometry():
+                self._right_view.setGeometry(plot_item.vb.sceneBoundingRect())
+                self._right_view.linkedViewChanged(plot_item.vb, self._right_view.XAxis)
 
-        plot_item.vb.sigResized.connect(_update_views_geometry)
-        _update_views_geometry()
+            plot_item.vb.sigResized.connect(_update_views_geometry)
+            _update_views_geometry()
 
     def _prepare_pipeline_context(self):
         """
@@ -1404,6 +1460,41 @@ class PipelinePdPm(QWidget):
             return None
 
         return recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls
+
+    def _validate_dual_channel_pm_config(self, pm_cfg):
+        """
+        Validate that the pattern matching configuration has proper dual-channel structure
+        """
+        if not isinstance(pm_cfg, dict):
+            return False
+        
+        # Check for required dual-channel configuration keys
+        channel_1_config = pm_cfg.get("channel_1_config")
+        channel_2_config = pm_cfg.get("channel_2_config")
+        
+        if not channel_1_config or not channel_2_config:
+            self.default_logger.warning("PM config missing channel_1_config or channel_2_config")
+            return False
+        
+        # Validate that each channel config has required fields
+        for ch_name, ch_config in [("channel_1", channel_1_config), ("channel_2", channel_2_config)]:
+            if not isinstance(ch_config, dict):
+                self.default_logger.warning(f"PM config {ch_name}_config is not a dictionary")
+                return False
+            
+            # Check for pattern list
+            pattern_list = ch_config.get("pattern_list", [])
+            if not isinstance(pattern_list, list) or len(pattern_list) == 0:
+                self.default_logger.warning(f"PM config {ch_name}_config missing or empty pattern_list")
+                return False
+            
+            # Check for threshold strategy  
+            threshold_strategy = ch_config.get("threshold_strategy")
+            if threshold_strategy not in ["fixed_threshold", "adaptive_threshold"]:
+                self.default_logger.warning(f"PM config {ch_name}_config has invalid threshold_strategy: {threshold_strategy}")
+                return False
+        
+        return True
 
     def _execute_pd(self, pd_cls, head_cfg):
         pd_instance = pd_cls(f"{self.windowTitle()}-PD")
@@ -1436,8 +1527,15 @@ class PipelinePdPm(QWidget):
             seg_len = max(0, int(left_point + right_point))
         return seg_len, left_point, right_point
 
-    def _execute_pm(self, pm_cls, sample_rate, recorded_signal, peak_indices, seg_len, left_point, right_point, pm_cfg):
-        n = len(recorded_signal)
+    def _execute_pm(self, pm_cls, sample_rate, recorded_signal_all_channels, peak_indices, seg_len, left_point, right_point, pm_cfg):
+        # Handle multi-channel data
+        if len(recorded_signal_all_channels) < 2:
+            return []
+        
+        recorded_signal_ch1 = recorded_signal_all_channels[0]
+        recorded_signal_ch2 = recorded_signal_all_channels[1]
+        n = len(recorded_signal_ch1)
+        
         pm_instance = pm_cls(f"{self.windowTitle()}-PM")
         pm_instance.sample_rate = sample_rate
 
@@ -1448,72 +1546,223 @@ class PipelinePdPm(QWidget):
             stop = min(n, start + seg_len)
             if stop - start <= 0:
                 continue
-            segment = np.asarray(recorded_signal[start:stop])
-            result_dict = pm_instance.calculate_pattern_match(target_data=segment, analysis_config=pm_cfg)
+            
+            # Extract dual-channel segments
+            segment_ch1 = np.asarray(recorded_signal_ch1[start:stop])
+            segment_ch2 = np.asarray(recorded_signal_ch2[start:stop])
+            dual_channel_segment = np.array([segment_ch1, segment_ch2])
+            
+            result_dict = pm_instance.calculate_pattern_match(target_data=dual_channel_segment, analysis_config=pm_cfg)
 
             if result_dict:
+                # Handle dual-channel results structure
+                final_success = result_dict.get("final_success", False)
+                ch1_result = result_dict.get("channel_1", {})
+                ch2_result = result_dict.get("channel_2", {})
+                
+                # Calculate combined score (average of both channels)
+                ch1_score = ch1_result.get("score", 0.0) or 0.0
+                ch2_score = ch2_result.get("score", 0.0) or 0.0
+                combined_score = (ch1_score + ch2_score) / 2.0
+                
                 results.append(
                     {
                         "peak_index": center,
                         "time_sec": center / float(sample_rate),
-                        "is_match": bool(result_dict.get("is_match", False)),
-                        "score": float(result_dict.get("score", 0.0)),
-                        "threshold": float(result_dict.get("threshold", 0.0)),
+                        "is_match": bool(final_success),
+                        "score": float(combined_score),
+                        "threshold": float(ch1_result.get("threshold", 0.0)),  # Use ch1 threshold as reference
                         "segment_len": int(stop - start),
                         "start_index": int(start),
                         "stop_index": int(stop),
+                        # Add dual-channel specific information
+                        "dual_channel_results": {
+                            "channel_1": {
+                                "score": float(ch1_score),
+                                "success": bool(ch1_result.get("success", False)),
+                                "threshold": float(ch1_result.get("threshold", 0.0))
+                            },
+                            "channel_2": {
+                                "score": float(ch2_score), 
+                                "success": bool(ch2_result.get("success", False)),
+                                "threshold": float(ch2_result.get("threshold", 0.0))
+                            },
+                            "final_success": bool(final_success)
+                        }
                     }
                 )
         return results
 
     def _render_plots(self, pd_result, recorded_signal, sample_rate, peak_indices, results):
-        self.plot_widget.clear()
-        plot_item = self.plot_widget.getPlotItem()
-        spl_series = []
+        # Clear single plot
+        self.analysis_plot_top.clear()
+        plot_item = self.analysis_plot_top.getPlotItem()
+
+        # Handle multi-channel data
+        if not isinstance(recorded_signal, (list, np.ndarray)) or len(recorded_signal) < 2:
+            return
+        
+        recorded_signal_ch1 = recorded_signal[0]
+        recorded_signal_ch2 = recorded_signal[1]
+        
+        # Extract proper RMS-windowed SPL data from PeakDetection dual_channel_peaks
+        spl_series_ch1 = None
+        spl_series_ch2 = None
+        
         if isinstance(pd_result, dict):
-            spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
-        if spl_series is None or len(spl_series) == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
-        time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
-        plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
-        self._last_spl_series = np.asarray(spl_series)
-
-        if peak_indices:
-            peak_indices_arr = np.clip(np.asarray(peak_indices, dtype=int), 0, len(spl_series) - 1)
-            peak_times = peak_indices_arr / float(sample_rate)
-            peak_values = np.asarray(spl_series)[peak_indices_arr]
-            scatter = pg.ScatterPlotItem(
-                x=peak_times, y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+            dual_channel_data = pd_result.get("dual_channel_peaks", {})
+            if dual_channel_data:
+                # Get RMS-windowed SPL data from individual channel results
+                ch1_data = dual_channel_data.get("channel_1", {})
+                ch2_data = dual_channel_data.get("channel_2", {})
+                
+                ch1_spl = ch1_data.get("spl_db_series", [])
+                ch2_spl = ch2_data.get("spl_db_series", [])
+                
+                if len(ch1_spl) > 0:
+                    spl_series_ch1 = np.asarray(ch1_spl, dtype=float)
+                if len(ch2_spl) > 0:
+                    spl_series_ch2 = np.asarray(ch2_spl, dtype=float)
+        
+        # Fallback: Use AudioThdFrequencyResponseAnalysis for proper RMS-windowed SPL if not available
+        if spl_series_ch1 is None or len(spl_series_ch1) == 0:
+            spl_series_ch1 = AudioThdFrequencyResponseAnalysis().spl_calculation(
+                recorded_signal_ch1, 
+                reference_pressure=20e-6,
+                window_size=1201,
+                method="rms",
+                deviation=self.deviation_value
             )
-            plot_item.addItem(scatter)
+        
+        if spl_series_ch2 is None or len(spl_series_ch2) == 0:
+            spl_series_ch2 = AudioThdFrequencyResponseAnalysis().spl_calculation(
+                recorded_signal_ch2,
+                reference_pressure=20e-6, 
+                window_size=1201,
+                method="rms",
+                deviation=self.deviation_value
+            )
+        
+        # Create time axis
+        time_axis_ch1 = np.linspace(0, len(spl_series_ch1) / sample_rate, len(spl_series_ch1))
+        time_axis_ch2 = np.linspace(0, len(spl_series_ch2) / sample_rate, len(spl_series_ch2))
+        
+        # Plot both SPL curves on same plot (like PeakDetection)
+        plot_item.plot(time_axis_ch1, spl_series_ch1, pen=mkPen(color='g', width=1), name='Channel 1')
+        plot_item.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='Channel 2')
+        
+        self._last_spl_series_ch1 = np.asarray(spl_series_ch1)
+        self._last_spl_series_ch2 = np.asarray(spl_series_ch2)
 
+        # Plot individual channel peaks if available in dual_channel_peaks
+        if isinstance(pd_result, dict) and "dual_channel_peaks" in pd_result:
+            dual_peaks = pd_result["dual_channel_peaks"]
+            
+            # Channel 1 peaks (green scatter points)
+            ch1_peak_indices = dual_peaks.get("channel_1", {}).get("peaks_index", [])
+            if ch1_peak_indices:
+                ch1_peak_indices_arr = np.clip(np.asarray(ch1_peak_indices, dtype=int), 0, len(spl_series_ch1) - 1)
+                ch1_peak_times = ch1_peak_indices_arr / float(sample_rate)
+                ch1_peak_values = np.asarray(spl_series_ch1)[ch1_peak_indices_arr]
+                scatter_ch1 = pg.ScatterPlotItem(
+                    x=ch1_peak_times, y=ch1_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 255, 0, 200), size=8
+                )
+                plot_item.addItem(scatter_ch1)
+            
+            # Channel 2 peaks (blue scatter points)
+            ch2_peak_indices = dual_peaks.get("channel_2", {}).get("peaks_index", [])
+            if ch2_peak_indices:
+                ch2_peak_indices_arr = np.clip(np.asarray(ch2_peak_indices, dtype=int), 0, len(spl_series_ch2) - 1)
+                ch2_peak_times = ch2_peak_indices_arr / float(sample_rate)
+                ch2_peak_values = np.asarray(spl_series_ch2)[ch2_peak_indices_arr]
+                scatter_ch2 = pg.ScatterPlotItem(
+                    x=ch2_peak_times, y=ch2_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 0, 255, 200), size=8
+                )
+                plot_item.addItem(scatter_ch2)
+        elif peak_indices:
+            # Fallback: use merged peak indices for both channels
+            peak_indices_arr = np.clip(np.asarray(peak_indices, dtype=int), 0, min(len(spl_series_ch1), len(spl_series_ch2)) - 1)
+            
+            # Ch1 peaks (green)
+            if len(peak_indices_arr) > 0:
+                ch1_peak_times = peak_indices_arr / float(sample_rate)
+                ch1_peak_values = np.asarray(spl_series_ch1)[peak_indices_arr]
+                scatter_ch1 = pg.ScatterPlotItem(
+                    x=ch1_peak_times, y=ch1_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 255, 0, 200), size=8
+                )
+                plot_item.addItem(scatter_ch1)
+                
+                # Ch2 peaks (blue)  
+                ch2_peak_times = peak_indices_arr / float(sample_rate)
+                ch2_peak_values = np.asarray(spl_series_ch2)[peak_indices_arr]
+                scatter_ch2 = pg.ScatterPlotItem(
+                    x=ch2_peak_times, y=ch2_peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(0, 0, 255, 200), size=8
+                )
+                plot_item.addItem(scatter_ch2)
+
+        # Setup dual axis for pattern matching similarity scores
         self._setup_dual_axis_if_needed()
-        if self._bars_item is not None:
-            self._right_view.removeItem(self._bars_item)
-            self._bars_item = None
+        
+        # Clear existing similarity bars
+        if self._bars_item_ch1 is not None:
+            self._right_view.removeItem(self._bars_item_ch1)
+            self._bars_item_ch1 = None
+        if self._bars_item_ch2 is not None:
+            self._right_view.removeItem(self._bars_item_ch2)
+            self._bars_item_ch2 = None
 
+        # Plot pattern matching similarity results with dual colors
         if results:
             times = np.array([r.get("time_sec", 0.0) for r in results], dtype=float)
-            scores = np.array([r.get("score", 0.0) for r in results], dtype=float)
+            
+            # Extract dual channel scores
+            ch1_scores = []
+            ch2_scores = []
+            
+            for r in results:
+                dual_results = r.get("dual_channel_results", {})
+                ch1_scores.append(dual_results.get("channel_1", {}).get("score", 0.0))
+                ch2_scores.append(dual_results.get("channel_2", {}).get("score", 0.0))
+            
+            ch1_scores = np.array(ch1_scores, dtype=float)
+            ch2_scores = np.array(ch2_scores, dtype=float)
+            
             if times.size > 0:
-                duration = max(time_axis[-1] - time_axis[0], 1e-6)
+                duration = max(max(time_axis_ch1[-1] - time_axis_ch1[0], time_axis_ch2[-1] - time_axis_ch2[0]), 1e-6)
                 bar_width = max(duration * 0.002, duration / 1000.0)
-                bars = pg.BarGraphItem(
-                    x=times,
-                    height=scores,
-                    width=bar_width,
-                    brush=pg.mkBrush(100, 149, 237, 180),
-                    pen=pg.mkPen(100, 149, 237, 220),
-                )
-                self._right_view.addItem(bars)
-                self._bars_item = bars
-                self._right_view.setYRange(0.0, np.max(scores), padding=0.05)
+                
+                # Channel 1 similarity bars (green-tinted)
+                if np.any(ch1_scores > 0):
+                    bars_ch1 = pg.BarGraphItem(
+                        x=times - bar_width/4,  # Slight offset to avoid overlap
+                        height=ch1_scores,
+                        width=bar_width/2,
+                        brush=pg.mkBrush(100, 255, 100, 180),  # Green-tinted
+                        pen=pg.mkPen(0, 200, 0, 220),
+                    )
+                    self._right_view.addItem(bars_ch1)
+                    self._bars_item_ch1 = bars_ch1
+                
+                # Channel 2 similarity bars (blue-tinted)
+                if np.any(ch2_scores > 0):
+                    bars_ch2 = pg.BarGraphItem(
+                        x=times + bar_width/4,  # Slight offset to avoid overlap
+                        height=ch2_scores,
+                        width=bar_width/2,
+                        brush=pg.mkBrush(100, 100, 255, 180),  # Blue-tinted
+                        pen=pg.mkPen(0, 0, 200, 220),
+                    )
+                    self._right_view.addItem(bars_ch2)
+                    self._bars_item_ch2 = bars_ch2
+                    
+                # Set similarity axis range based on all scores
+                max_score = max(np.max(ch1_scores) if np.any(ch1_scores > 0) else 0,
+                              np.max(ch2_scores) if np.any(ch2_scores > 0) else 0)
+                if max_score > 0:
+                    self._right_view.setYRange(0.0, max_score, padding=0.05)
 
     def _update_table(self, sample_rate, results):
-        # update the PM result table
+        # update the PM result table with dual-channel information
         if not hasattr(self, "table_widget"):
             return
         rows = len(results) if isinstance(results, list) else 0
@@ -1524,24 +1773,51 @@ class PipelinePdPm(QWidget):
             stop_idx = int(r.get("stop_index", start_idx))
             seg_len = max(0, stop_idx - start_idx)
             length_ms = seg_len / float(sample_rate) * 1000.0
-            score = float(r.get("score", 0.0)) * 100.0
-            # get the maximum SPL in the segment
-            spl_db = float("nan")
-            try:
-                if isinstance(self._last_spl_series, np.ndarray) and seg_len > 0:
-                    seg = self._last_spl_series[start_idx:stop_idx]
-                    if seg.size > 0:
-                        spl_db = float(np.max(seg))
-            except Exception:
-                spl_db = float("nan")
+            
+            # Extract dual-channel scores
+            dual_results = r.get("dual_channel_results", {})
+            ch1_result = dual_results.get("channel_1", {})
+            ch2_result = dual_results.get("channel_2", {})
+            final_success = dual_results.get("final_success", False)
+            
+            ch1_score = float(ch1_result.get("score", 0.0)) * 100.0
+            ch2_score = float(ch2_result.get("score", 0.0)) * 100.0
+            combined_score = float(r.get("score", 0.0)) * 100.0  # This is the average score from _execute_pm
+            
+            # Determine match status
+            ch1_success = ch1_result.get("success", False)
+            ch2_success = ch2_result.get("success", False)
+            if final_success:
+                match_status = "双通道匹配"
+            elif ch1_success and ch2_success:
+                match_status = "双通道成功"
+            elif ch1_success:
+                match_status = "仅Ch1匹配"
+            elif ch2_success:
+                match_status = "仅Ch2匹配"
+            else:
+                match_status = "无匹配"
 
+            # Table columns: ["序号", "时间(s)", "长度(ms)", "Ch1分数(%)", "Ch2分数(%)", "总分数(%)", "匹配状态"]
             items = [
                 QTableWidgetItem(str(idx + 1)),
                 QTableWidgetItem(f"{time_sec:.3f}"),
                 QTableWidgetItem(f"{length_ms:.1f}"),
-                QTableWidgetItem(f"{score:.2f}%"),
-                QTableWidgetItem(f"{spl_db:.2f}" if not np.isnan(spl_db) else "-"),
+                QTableWidgetItem(f"{ch1_score:.2f}"),
+                QTableWidgetItem(f"{ch2_score:.2f}"),
+                QTableWidgetItem(f"{combined_score:.2f}"),
+                QTableWidgetItem(match_status),
             ]
+            
+            # Color code the match status
+            status_item = items[-1]
+            if final_success:
+                status_item.setBackground(pg.mkBrush(200, 255, 200))  # Light green
+            elif ch1_success or ch2_success:
+                status_item.setBackground(pg.mkBrush(255, 255, 200))  # Light yellow
+            else:
+                status_item.setBackground(pg.mkBrush(255, 200, 200))  # Light red
+            
             for col, it in enumerate(items):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 self.table_widget.setItem(idx, col, it)
@@ -1594,12 +1870,18 @@ class PipelinePdPm(QWidget):
             return self._summarize_and_notify([], cfg.get("pass_condition", {}))
 
         pm_cfg = tail.get("config", {})
+        
+        # Validate dual-channel PM configuration
+        if not self._validate_dual_channel_pm_config(pm_cfg):
+            self.default_logger.warning("Invalid or missing dual-channel Pattern Match configuration")
+            return self._summarize_and_notify([], cfg.get("pass_condition", {}))
+        
         seg_len, left_point, right_point = self._compute_segment_window(cfg, pm_cfg)
 
         results = self._execute_pm(
             pm_cls=pm_cls,
             sample_rate=sample_rate,
-            recorded_signal=recorded_signal,
+            recorded_signal_all_channels=recorded_signal,
             peak_indices=peak_indices,
             seg_len=seg_len,
             left_point=left_point,
