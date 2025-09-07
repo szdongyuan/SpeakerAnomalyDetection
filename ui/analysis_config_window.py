@@ -1714,6 +1714,7 @@ class PatternMatchConfigWindow(QDialog):
 
         self.init_ui()
         self.initial_populate_ui()
+        self.init_auto_equal_checkbox()
 
     def init_ui(self):
         self.setWindowTitle("双通道模式匹配参数配置")
@@ -1744,6 +1745,13 @@ class PatternMatchConfigWindow(QDialog):
         splitter.setCollapsible(0, False)
         self.main_layout.addWidget(splitter)
 
+        # Add auto equal length checkbox at lower right corner
+        checkbox_layout = QHBoxLayout()
+        self._auto_equal_chk = QCheckBox("自动匹配模板长度（对齐模板峰值）")
+        checkbox_layout.addStretch()
+        checkbox_layout.addWidget(self._auto_equal_chk)
+        self.main_layout.addLayout(checkbox_layout)
+
         btn_layout = self.create_btn_layout()
         self.main_layout.addLayout(btn_layout)
 
@@ -1761,6 +1769,15 @@ class PatternMatchConfigWindow(QDialog):
             + ui_style_const.qtextedit_style
             + ui_style_const.qtableview_style
         )
+
+    def init_auto_equal_checkbox(self):
+        """Initialize auto equal checkbox with load config"""
+        try:
+            if isinstance(self.load_config, dict):
+                auto_flag = bool(self.load_config.get("auto_equal_length", False))
+                self._auto_equal_chk.setChecked(auto_flag)
+        except Exception:
+            pass
 
     def create_channel_management_group(self):
         group = QGroupBox("当前编辑通道")
@@ -2086,6 +2103,11 @@ class PatternMatchConfigWindow(QDialog):
             self.fixed_threshold_radio.setChecked(True)
             threshold_value = config.get("threshold_value", 90.0)
             self.threshold_spinbox.setValue(threshold_value)
+        
+        # Handle auto equal length checkbox
+        auto_equal_length = config.get("auto_equal_length", False)
+        if hasattr(self, "_auto_equal_chk"):
+            self._auto_equal_chk.setChecked(auto_equal_length)
 
 
     def refresh_data_view(self):
@@ -2118,6 +2140,7 @@ class PatternMatchConfigWindow(QDialog):
             "algorithm_params": self.algorithm_params.get(algo_key, {}),
             "threshold_strategy": strategy,
             "threshold_value": None,
+            "auto_equal_length": bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False,
         }
         if config["apply_filter"]:
             config["filter_range_hz"] = (int(self.low_freq_edit.text()), int(self.high_freq_edit.text()))
@@ -2573,35 +2596,17 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         row1.addWidget(self._right_grid_spin)
         row1.addStretch()
 
-        # second row: auto match template length
-        row2 = QHBoxLayout()
-        self._auto_equal_chk = QCheckBox("自动匹配模板长度（对齐模板峰值）")
-        row2.addWidget(self._auto_equal_chk)
-        row2.addStretch()
-
-        # when auto is checked, disable manual input
-        def on_auto_changed(checked):
-            self._left_grid_spin.setEnabled(not checked)
-            self._right_grid_spin.setEnabled(not checked)
-        self._auto_equal_chk.toggled.connect(on_auto_changed)
-
         # load existing configuration
         try:
             if isinstance(self.load_config, dict):
-                auto_flag = bool(self.load_config.get("auto_equal_length", False))
-                self._auto_equal_chk.setChecked(auto_flag)
-                self._left_grid_spin.setEnabled(not auto_flag)
-                self._right_grid_spin.setEnabled(not auto_flag)
-                if not auto_flag:
-                    lg = int(self.load_config.get("left_grid", 0) or 0)
-                    rg = int(self.load_config.get("right_grid", 0) or 0)
-                    self._left_grid_spin.setValue(max(0, lg))
-                    self._right_grid_spin.setValue(max(0, rg))
+                lg = int(self.load_config.get("left_grid", 0) or 0)
+                rg = int(self.load_config.get("right_grid", 0) or 0)
+                self._left_grid_spin.setValue(max(0, lg))
+                self._right_grid_spin.setValue(max(0, rg))
         except Exception:
             pass
 
         vbox.addLayout(row1)
-        vbox.addLayout(row2)
         length_group.setLayout(vbox)
 
         try:
@@ -2613,13 +2618,8 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
     def get_default_config(self):
         cfg = super().get_default_config()
         # pipeline itself configuration
-        cfg["auto_equal_length"] = bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False
-        if not cfg["auto_equal_length"]:
-            cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
-            cfg["right_grid"] = int(self._right_grid_spin.value()) if hasattr(self, "_right_grid_spin") else 0
-        else:
-            cfg.pop("left_grid", None)
-            cfg.pop("right_grid", None)
+        cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
+        cfg["right_grid"] = int(self._right_grid_spin.value()) if hasattr(self, "_right_grid_spin") else 0
         # pass condition
         cfg["pass_condition"] = {
             "n1": int(self._n1_spin.value()) if hasattr(self, "_n1_spin") else 1,

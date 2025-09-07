@@ -11,6 +11,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView
 from scipy.signal import find_peaks
+from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
 from scipy.spatial.distance import cosine, euclidean, cityblock
 from scipy.stats import pearsonr
 from skimage.feature import local_binary_pattern, match_template
@@ -983,7 +984,7 @@ class PatternMatch(QWidget):
             + ui_style_const.qtextedit_style
         )
 
-    def calculate_pattern_match(self, target_data=None, analysis_config=None):
+    def calculate_pattern_match(self, target_data=None, peak=None, analysis_config=None):
         if target_data is not None:
             self.target_data = target_data
         if analysis_config is not None:
@@ -999,6 +1000,18 @@ class PatternMatch(QWidget):
         if not config_ch1 or not config_ch2:
             self.result_display.setText("错误：配置不完整，缺少通道配置")
             return None
+
+        # Add auto_equal_length configuration to channel configs
+        auto_equal_length = self.analysis_config.get("auto_equal_length", False)
+        config_ch1 = config_ch1.copy()
+        config_ch2 = config_ch2.copy()
+        config_ch1["auto_equal_length"] = auto_equal_length
+        config_ch2["auto_equal_length"] = auto_equal_length
+        
+        # Add external peak parameter if provided
+        if peak is not None:
+            config_ch1["peak"] = peak
+            config_ch2["peak"] = peak
 
         target_ch1, target_ch2 = self.target_data[0], self.target_data[1]
 
@@ -1080,6 +1093,9 @@ class PatternMatch(QWidget):
 
 
     def process_single_channel(self, target_data, pattern_data, config):
+        # Check if external peak parameter is provided
+        peak = config.get("peak")
+        
         if config.get("apply_filter", False):
             start_freq, end_freq = config.get("filter_range_hz", [None, None])
             if start_freq is not None and end_freq is not None:
@@ -1088,12 +1104,22 @@ class PatternMatch(QWidget):
                 pattern_data = AudioEqualizer.apply_equalizer(pattern_data, self.sample_rate, start_freq=start_freq,
                                                               end_freq=end_freq)
 
+        # Handle auto equal length peak alignment
+        auto_equal = config.get("auto_equal_length", False)
+        if auto_equal:
+            # If external peak is provided, use it; otherwise calculate peak alignment
+            if peak is not None:
+                target_data, pattern_data = align_signals_with_peak(target_data, pattern_data, peak)
+            else:
+                target_data, pattern_data = align_signals_by_peaks(target_data, pattern_data)
+
         target_features, pattern_features = self.extract_features(target_data, pattern_data, config)
         if target_features is None or pattern_features is None:
             return None
 
         result = self.execute_match_algorithm(target_features, pattern_features, config)
         return result
+
 
     @staticmethod
     def execute_match_algorithm(target_features, pattern_features, config):
@@ -1333,35 +1359,6 @@ class PipelinePdPm(AnalysisGraphWidget):
         self._init_ui()
         self.setWindowTitle(title_name)
 
-    def _calc_left_right_from_array(self, pattern_segment: np.ndarray):
-        """
-        calculate the left and right grid points from the array
-        """
-        pattern_segment = np.asarray(pattern_segment).astype(float)
-        
-        # Handle multi-dimensional (dual-channel) arrays
-        if pattern_segment.ndim > 1:
-            # Use first channel for window calculation
-            pattern_segment = pattern_segment[0]
-        
-        # Ensure we have a 1D array (flatten if needed)
-        pattern_segment = np.asarray(pattern_segment).flatten()
-        
-        seg_len = int(pattern_segment.size)
-        if seg_len <= 0:
-            return 0, 0, 0
-        abs_seg = np.abs(pattern_segment)
-        peaks, _ = find_peaks(abs_seg)
-        if isinstance(peaks, (list, np.ndarray)) and len(peaks) > 0:
-            try:
-                peak_idx = int(peaks[int(np.argmax(abs_seg[peaks]))])
-            except Exception:
-                peak_idx = int(np.argmax(abs_seg))
-        else:
-            peak_idx = int(np.argmax(abs_seg))
-        left_point = max(0, min(peak_idx, seg_len - 1))
-        right_point = max(0, seg_len - peak_idx - 1)
-        return seg_len, left_point, right_point
 
     def _init_ui(self):
         # Configure single plot for dual-channel visualization
@@ -1508,51 +1505,31 @@ class PipelinePdPm(AnalysisGraphWidget):
             peak_indices = [int(i) for i in pd_result.get("peaks_index", [])]
         return pd_result, peak_indices
 
-    def _compute_segment_window(self, cfg, pm_cfg):
-        """
-        for auto length mode, calculate the length, left and right grid points from the peak of the pattern
-        """
-        auto_equal = bool(cfg.get("auto_equal_length", False))
-        seg_len, left_point, right_point = 0, 0, 0
 
-        if auto_equal:
-            rel_path = pm_cfg.get("pattern_save_path")
-            pattern_data_path = os.path.join(DEFAULT_DIR, rel_path) if rel_path else None
-            pattern_data, _ = load_audio_simple(pattern_data_path)
-            segment = np.asarray(pattern_data)
-            seg_len, left_point, right_point = self._calc_left_right_from_array(segment)
-        else:
-            left_point = int(cfg.get("left_grid", 0) or 0)
-            right_point = int(cfg.get("right_grid", 0) or 0)
-            seg_len = max(0, int(left_point + right_point))
-        return seg_len, left_point, right_point
-
-    def _execute_pm(self, pm_cls, sample_rate, recorded_signal_all_channels, peak_indices, seg_len, left_point, right_point, pm_cfg):
+    def _execute_pm(self, pm_cls, sample_rate, recorded_signal_all_channels, peak_indices, pm_cfg):
         # Handle multi-channel data
         if len(recorded_signal_all_channels) < 2:
             return []
         
         recorded_signal_ch1 = recorded_signal_all_channels[0]
         recorded_signal_ch2 = recorded_signal_all_channels[1]
-        n = len(recorded_signal_ch1)
         
         pm_instance = pm_cls(f"{self.windowTitle()}-PM")
         pm_instance.sample_rate = sample_rate
 
+        # Pass full dual-channel data to PatternMatch
+        dual_channel_data = np.array([recorded_signal_ch1, recorded_signal_ch2])
+
         results = []
         for pk in peak_indices:
-            center = int(pk)
-            start = max(0, center - left_point)
-            stop = min(n, start + seg_len)
-            if stop - start <= 0:
-                continue
+            peak_index = int(pk)
             
-            # Extract dual-channel segments
-            segment_ch1 = np.asarray(recorded_signal_ch1[start:stop])
-            segment_ch2 = np.asarray(recorded_signal_ch2[start:stop])
-            dual_channel_segment = np.array([segment_ch1, segment_ch2])
-            
-            result_dict = pm_instance.calculate_pattern_match(target_data=dual_channel_segment, analysis_config=pm_cfg)
+            # Pass full signal data + peak index to PatternMatch for alignment
+            result_dict = pm_instance.calculate_pattern_match(
+                target_data=dual_channel_data, 
+                peak=peak_index,
+                analysis_config=pm_cfg
+            )
 
             if result_dict:
                 # Handle dual-channel results structure
@@ -1567,14 +1544,11 @@ class PipelinePdPm(AnalysisGraphWidget):
                 
                 results.append(
                     {
-                        "peak_index": center,
-                        "time_sec": center / float(sample_rate),
+                        "peak_index": peak_index,
+                        "time_sec": peak_index / float(sample_rate),
                         "is_match": bool(final_success),
                         "score": float(combined_score),
                         "threshold": float(ch1_result.get("threshold", 0.0)),  # Use ch1 threshold as reference
-                        "segment_len": int(stop - start),
-                        "start_index": int(start),
-                        "stop_index": int(stop),
                         # Add dual-channel specific information
                         "dual_channel_results": {
                             "channel_1": {
@@ -1894,16 +1868,12 @@ class PipelinePdPm(AnalysisGraphWidget):
             self.default_logger.warning("Invalid or missing dual-channel Pattern Match configuration")
             return self._summarize_and_notify([], cfg.get("pass_condition", {}))
         
-        seg_len, left_point, right_point = self._compute_segment_window(cfg, pm_cfg)
 
         results = self._execute_pm(
             pm_cls=pm_cls,
             sample_rate=sample_rate,
             recorded_signal_all_channels=recorded_signal,
             peak_indices=peak_indices,
-            seg_len=seg_len,
-            left_point=left_point,
-            right_point=right_point,
             pm_cfg=pm_cfg,
         )
 

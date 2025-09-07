@@ -1,4 +1,14 @@
-import pywinusb.hid as hid
+import platform
+import sys
+
+try:
+    if platform.system() == "Windows":
+        import pywinusb.hid as hid
+    else:
+        # Mock for non-Windows platforms during development
+        hid = None
+except ImportError:
+    hid = None
 
 from base.log_manager import LogManager
 
@@ -14,6 +24,8 @@ class BarcodeScanner(object):
 
     @staticmethod
     def find_scanner(vendor_id, product_id):
+        if hid is None:
+            return None
         all_hid = hid.find_all_hid_devices()
         for device in all_hid:
             if device.vendor_id == vendor_id and device.product_id == product_id:
