@@ -7,9 +7,8 @@ from datetime import datetime
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon, QPainter, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QMessageBox
-from PyQt5.QtWidgets import QVBoxLayout, QWidget, QStackedWidget
+from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
 
 from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -19,15 +18,18 @@ from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
 from base.play_and_record import play_last_stimulus_wave, record_without_play, get_recorded_info
 from base.recording_management import RecordingManager
-from base.save_data import save_recorded_data_to_json, ensure_test_result_file
+from base.save_data import save_recorded_data_to_json
 from base.soundcard_calibration_manager import get_mic_deviation_value
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
-from consts import ui_style_const, error_code, model_consts
+from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.operation_sequence import AnalysisModelSelect
+from ui.sequence_tools_bar import SequenceToolsBar
 from ui.signal_analysis_window import get_class_mapping
+from ui.sequencement_count_board import SequenceCountBoard
+from ui.tcp_config_dialog import TcpConfigDialog
 
 
 class SequenceWindow(QWidget):
@@ -37,10 +39,10 @@ class SequenceWindow(QWidget):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.collect_or_analyse_layout = QHBoxLayout()
         self.recorded_path = None
         self.refresh_stimulus_flag = None
         self.add_or_update_wave_flag = True
+        self.count_board = None
 
         self.deviation_value = get_mic_deviation_value()
         self.sequence_config = list()
@@ -52,10 +54,9 @@ class SequenceWindow(QWidget):
         self.analysis_window = []
         self.default_ai = None
         self.default_ai_result = None
-        self.sequence_layout = QVBoxLayout()
-        self.player_btn = QPushButton()
-        self.replayer_btn = QPushButton()
-        self.data_btn = QPushButton()
+        
+        self.toolsbar = SequenceToolsBar()
+        self.count_board = SequenceCountBoard(self.analysis_config)
         self.player_status_flag = False
         self.scanner_barcode_thread = None
         self.barcode_scanner = BarcodeScanner()
@@ -65,13 +66,14 @@ class SequenceWindow(QWidget):
         self.ip_format = True
         self.port_format = True
         self.clicked_player_flag = False
-        self.tcp_ip = None
-        self.tcp_port = None
+        self.tcp_flag = False
         self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
         self.mode = None
         self.current_recorded_count = None
 
         self.default_logger = LogManager.set_log_handler("core")
+        self.set_member_connect()
+        self.init_lineedit_text()
         self.init_ui()
 
     def init_ui(self):
@@ -84,25 +86,25 @@ class SequenceWindow(QWidget):
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumHeight(700)
-        layout = self.create_layout()
         waveform_layout = self.create_waveform_layout()
 
-        self.sequence_layout.addLayout(layout)
-        self.sequence_layout.addLayout(waveform_layout)
-        self.sequence_layout.setAlignment(Qt.AlignCenter)
-        self.sequence_layout.setContentsMargins(0, 0, 0, 0)
+        sequence_layout = QVBoxLayout()
+        sequence_layout.addWidget(self.toolsbar)
+        sequence_layout.addLayout(waveform_layout)
+        sequence_layout.setAlignment(Qt.AlignCenter)
+        sequence_layout.setContentsMargins(1, 0, 1, 0)
 
-        self.setLayout(self.sequence_layout)
+        self.setLayout(sequence_layout)
 
-        self.ok_btn.clicked.connect(self.clicked_ok_or_ng)
-        self.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
-        sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
-        sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
+        sign.get_result_file_sign.connect(self.connect_get_result_file_sign, Qt.AutoConnection)
+        sign.set_result_file_sign.connect(self.connect_set_result_file_sign, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.get_sequence_config_from_json, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
-        sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
-        self.update_mode_display(0)
+        # sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
+        sign.update_mode_display_sign.connect(self.count_board.on_test_btn_clicked, Qt.AutoConnection)
+        # self.update_mode_display(0)
+        self.count_board.on_test_btn_clicked
         self.setStyleSheet(
             ui_style_const.qcombobox_style
             + ui_style_const.qpushbutton_style
@@ -112,6 +114,78 @@ class SequenceWindow(QWidget):
             + ui_style_const.qcheckbox_style
         )
 
+    def connect_set_result_file_sign(self, index, label, model_name):
+        if self.count_board.mode == "test":
+            self.count_board.set_test_result_file(label, model_name)
+        else:
+            self.count_board.set_mark_result_file(label)
+
+    def connect_get_result_file_sign(self):
+        if self.count_board.mode == "test":
+            self.count_board.set_test_text()
+        else:
+            self.count_board.set_mark_text()
+
+    def set_member_connect(self):
+        self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
+        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record())
+        self.data_btn.clicked.connect(self.run)
+        self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
+        self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
+        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
+        self.barcode_scanner_box.stateChanged.connect(self.clicked_scanner)
+        self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
+        self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
+        self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+
+    def init_lineedit_text(self):
+        last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
+        if last_recorded_info:
+            product_model = last_recorded_info.get("product_model", "S004-1")
+        else:
+            product_model = "S004-1"
+        self.lineedit_type.setText(product_model)
+
+        result, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
+        if result is None:
+            self.current_recorded_count = 1
+        else:
+            self.current_recorded_count = result
+
+        self.lineedit_count.setText(str(self.current_recorded_count))
+
+    @property
+    def player_btn(self):
+        return self.toolsbar.player_btn
+
+    @property
+    def replayer_btn(self):
+        return self.toolsbar.replayer_btn
+
+    @property
+    def data_btn(self):
+        return self.toolsbar.data_btn
+
+    @property
+    def lineedit_type(self):
+        return self.toolsbar.lineedit_type
+
+    @property
+    def lineedit_count(self):
+        return self.toolsbar.lineedit_count
+
+    @property
+    def lineedit_s_or_n(self):
+        return self.toolsbar.lineedit_s_or_n
+
+    @property
+    def barcode_scanner_box(self):
+        return self.toolsbar.barcode_scanner_box
+
+    @property
+    def tcp_btn(self):
+        return self.toolsbar.tcp_btn
+
     def init_data_struct_stimulus_config(self):
         if not self.sequence_config:
             return
@@ -120,214 +194,6 @@ class SequenceWindow(QWidget):
             AnalysisModelSelect.set_data_struct_stimulus_signal(self.data_struct, acq_config["detail"])
         else:
             self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
-
-    def create_layout(self):
-        """
-        Create the toolbar layout.
-
-        This method initializes and configures the toolbar layout for the application.
-        It sets up button styles, adds labels and input fields, and sets layout parameters.
-        The layout is used at the top of the interface to provide easy access to key functionalities.
-
-        Returns:
-            QHBoxLayout: The configured toolbar layout object.
-        """
-        self.player_btn.setFixedSize(100, 40)
-        self.setFocusPolicy(Qt.NoFocus)
-        self.player_btn.setToolTip("播放")
-        self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
-        self.player_btn.setIconSize(QSize(35, 35))
-        self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
-        self.replayer_btn.setFixedSize(100, 40)
-        self.replayer_btn.setToolTip("重播")
-        self.replayer_btn.setDisabled(True)
-        self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
-        self.replayer_btn.setIconSize(QSize(30, 30))
-        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record())
-
-        self.data_btn.setFixedSize(100, 40)
-        self.data_btn.setToolTip("分析")
-        self.data_btn.setEnabled(False)
-        self.data_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
-        self.data_btn.setIconSize(QSize(35, 35))
-
-        self.data_btn.clicked.connect(self.run)
-
-        type_label = QLabel(" 型 号： ")
-        last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
-        if last_recorded_info:
-            product_model = last_recorded_info.get("product_model", "S004-1")
-        else:
-            product_model = "S004-1"
-        type_label.setFixedHeight(40)
-        self.lineedit_type = QLineEdit(product_model)
-        self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
-        self.lineedit_type.setFixedHeight(35)
-        self.lineedit_type.setAlignment(Qt.AlignCenter)
-        label_count = QLabel(" 计 数： ")
-        label_count.setFixedHeight(40)
-
-        result, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
-        if result is None:
-            self.current_recorded_count = 1
-        else:
-            self.current_recorded_count = result
-        self.lineedit_count = QLineEdit(str(self.current_recorded_count))
-        self.lineedit_count.setFixedHeight(35)
-        self.lineedit_count.setAlignment(Qt.AlignCenter)
-        self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
-        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
-
-        self.barcode_scanner_box = QCheckBox("S/N:  ", self)
-        self.barcode_scanner_box.setChecked(False)
-        self.barcode_scanner_box.stateChanged.connect(self.clicked_scanner)
-
-        self.scanner_tcp = QCheckBox(" TCP ", self)
-        self.scanner_tcp.setChecked(False)
-        self.scanner_tcp.stateChanged.connect(self.is_clicked_tcp)
-
-        self.ip_label = QLabel(" IP:")
-        self.ip_edit = QLineEdit(self)
-        self.ip_edit.setPlaceholderText(f"{self.tcp_ip}")
-        self.ip_edit.setDisabled(True)
-        self.ip_edit.setFixedHeight(35)
-        self.ip_edit.setAlignment(Qt.AlignCenter)
-
-        self.port_label = QLabel(" Port:")
-        self.port_edit = QLineEdit(self)
-        self.port_edit.setPlaceholderText(f"{self.tcp_port}")
-        self.port_edit.setDisabled(True)
-        self.port_edit.setFixedHeight(35)
-        self.port_edit.setFixedWidth(80)
-        self.port_edit.setAlignment(Qt.AlignCenter)
-
-        self.lineedit_s_or_n = QLineEdit(self)
-        self.lineedit_s_or_n.setDisabled(True)
-        self.lineedit_s_or_n.setFixedHeight(35)
-        self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
-        self.lineedit_s_or_n.editingFinished.connect(lambda: self.validate_count(self.lineedit_s_or_n, False))
-        self.ip_edit.editingFinished.connect(self.validate_ip)
-        self.port_edit.editingFinished.connect(self.validate_port)
-
-        vertical_line_1 = QFrame()
-        vertical_line_2 = QFrame()
-        vertical_line_3 = QFrame()
-        vertical_line_4 = QFrame()
-        vertical_line_5 = QFrame()
-        vertical_line_6 = QFrame()
-        vertical_line_7 = QFrame()
-        vertical_line_8 = QFrame()
-        vertical_line_9 = QFrame()
-        vertical_line_1.setFrameShape(QFrame.VLine)
-        vertical_line_2.setFrameShape(QFrame.VLine)
-        vertical_line_3.setFrameShape(QFrame.VLine)
-        vertical_line_4.setFrameShape(QFrame.VLine)
-        vertical_line_5.setFrameShape(QFrame.VLine)
-        vertical_line_6.setFrameShape(QFrame.VLine)
-        vertical_line_9.setFrameShape(QFrame.VLine)
-        vertical_line_7.setFrameShape(QFrame.HLine)
-        vertical_line_8.setFrameShape(QFrame.HLine)
-        vertical_line_7.setFixedHeight(1)
-        vertical_line_8.setFixedHeight(1)
-
-        # Create and configure the toolbar layout
-        tools_layout = QVBoxLayout()
-        layout = QHBoxLayout()
-        layout.addWidget(self.player_btn)
-        layout.addWidget(vertical_line_1)
-        layout.addWidget(self.replayer_btn)
-        layout.addWidget(vertical_line_2)
-        layout.addWidget(self.data_btn)
-        layout.addWidget(vertical_line_3)
-        layout.addWidget(type_label)
-        layout.addWidget(self.lineedit_type)
-        layout.addSpacing(10)
-        layout.addWidget(vertical_line_4)
-        layout.addWidget(label_count)
-        layout.addWidget(self.lineedit_count)
-        layout.addSpacing(10)
-        layout.addWidget(vertical_line_5)
-        layout.addSpacing(10)
-        layout.addWidget(self.barcode_scanner_box)
-        layout.addWidget(self.lineedit_s_or_n)
-        layout.addSpacing(10)
-        layout.addWidget(vertical_line_9)
-        layout.addSpacing(10)
-        layout.addWidget(self.scanner_tcp)
-        layout.addSpacing(10)
-        layout.addWidget(self.ip_label)
-        layout.addSpacing(10)
-        layout.addWidget(self.ip_edit)
-        layout.addSpacing(10)
-        layout.addWidget(self.port_label)
-        layout.addSpacing(10)
-        layout.addWidget(self.port_edit)
-        layout.addSpacing(10)
-        layout.addWidget(vertical_line_6)
-        layout.addStretch()
-        layout.setContentsMargins(4, 0, 0, 0)
-        tools_layout.addWidget(vertical_line_7)
-        tools_layout.addLayout(layout)
-        tools_layout.addWidget(vertical_line_8)
-
-        tools_layout.setSpacing(0)
-
-        return tools_layout
-
-    def validate_ip(self):
-        ip = self.ip_edit.text()
-        pattern = r"^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$"
-        if not re.match(pattern, ip):
-            self.ip_format = False
-            QMessageBox.warning(self, "无效 IP", "每个段的值必须在 0 到 255 之间。")
-            self.ip_edit.setFocus()
-            self.scanner_tcp.setEnabled(False)
-            return False
-        self.ip_format = True
-        self.update_scanner_tcp_state()
-
-    def validate_port(self):
-        port_text = self.port_edit.text()
-        if not port_text.isdigit():
-            self.port_format = False
-            QMessageBox.warning(self, "无效端口", "端口号必须是数字")
-            self.port_edit.setFocus()
-            self.scanner_tcp.setEnabled(False)
-            return False
-        port = int(port_text)
-        if not (0 < port < 65536):
-            self.port_format = False
-            QMessageBox.warning(self, "无效端口", "请输入 1 到 65535 之间的端口号")
-            self.port_edit.setFocus()
-            self.scanner_tcp.setEnabled(False)
-            return False
-        self.port_format = True
-        self.update_scanner_tcp_state()
-
-    def update_scanner_tcp_state(self):
-        if self.ip_format and self.port_format:
-            self.scanner_tcp.setEnabled(True)
-            if self.ip_edit.text():
-                self.tcp_ip = self.ip_edit.text()
-            if self.port_edit.text():
-                self.tcp_port = self.port_edit.text()
-            LoadUiConfig.write_tcp_config(self.ip_edit.text(), self.port_edit.text(), self.default_logger)
-            return True
-        elif self.ip_format is False and self.port_format is True:
-            QMessageBox.warning(self, "无效 IP", "ip 不对")
-            self.scanner_tcp.setEnabled(False)
-            return False
-        elif self.ip_format is True and self.port_format is False:
-            QMessageBox.warning(self, "无效 端口", "端口 不对")
-            self.scanner_tcp.setEnabled(False)
-            return False
-        else:
-            QMessageBox.warning(self, "无效", "端口和ip都不对")
-            self.scanner_tcp.setEnabled(False)
-            return False
 
     def create_waveform_layout(self):
         """
@@ -344,7 +210,6 @@ class SequenceWindow(QWidget):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground("white")
-        left_area = self.create_left_layout()
         self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
         self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
         self.line_graph.showGrid(x=True, y=True)
@@ -358,190 +223,11 @@ class SequenceWindow(QWidget):
         b_axis.setTextPen("black")
         l_axis.setTextPen("black")
 
-        layout.addLayout(left_area, stretch=1)
+        layout.addWidget(self.count_board, stretch=1)
         layout.addSpacing(20)
         layout.addWidget(self.line_graph, stretch=8)
         layout.setContentsMargins(40, 20, 40, 20)
         layout.setSpacing(30)
-        return layout
-
-    def create_left_layout(self):
-        layout = QVBoxLayout()
-
-        mode_label = QLabel("模式：")
-        self.model_button = QHBoxLayout()
-        self.model_button.setSpacing(0)
-        self.test_btn = QPushButton("测试")
-        self.test_btn.setFixedSize(100, 35)
-        self.test_btn.setFont(QFont("Arial", 14))
-        self.test_btn.clicked.connect(lambda: self.update_mode_display(0))
-        self.mark_btn = QPushButton("标记")
-        self.mark_btn.setFixedSize(100, 35)
-        self.mark_btn.setFont(QFont("Arial", 14))
-        self.mark_btn.clicked.connect(lambda: self.update_mode_display(1))
-        self.model_button.addWidget(self.test_btn)
-        self.model_button.addWidget(self.mark_btn)
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(mode_label)
-        mode_layout.addLayout(self.model_button)
-
-        separator_line = QFrame()
-        separator_line.setFrameShape(QFrame.HLine)
-        separator_line.setFrameShadow(QFrame.Sunken)
-        separator_line.setStyleSheet("color: gray;")
-        separator_line.setFixedHeight(2)
-
-        # --- page 1：test ---
-        self.test_page = QWidget()
-        test_layout = QVBoxLayout()
-
-        total_layout = QHBoxLayout()
-        self.total_label = QLabel("总数：")
-        self.total_line_edit = QLineEdit()
-        self.total_line_edit.setFixedHeight(35)
-        self.total_line_edit.setFixedWidth(130)
-        self.total_line_edit.setDisabled(True)
-        self.total_line_edit.setAlignment(Qt.AlignCenter)
-        total_layout.addWidget(self.total_label)
-        total_layout.addWidget(self.total_line_edit)
-
-        ok_layout = QHBoxLayout()
-        self.ok_label = QLabel("OK数：")
-        self.ok_line_edit = QLineEdit()
-        self.ok_line_edit.setFixedHeight(35)
-        self.ok_line_edit.setFixedWidth(130)
-        self.ok_line_edit.setDisabled(True)
-        self.ok_line_edit.setAlignment(Qt.AlignCenter)
-        ok_layout.addWidget(self.ok_label)
-        ok_layout.addWidget(self.ok_line_edit)
-
-        ng_layout = QHBoxLayout()
-        self.ng_label = QLabel("NG数：")
-        self.ng_line_edit = QLineEdit()
-        self.ng_line_edit.setFixedHeight(35)
-        self.ng_line_edit.setFixedWidth(130)
-        self.ng_line_edit.setDisabled(True)
-        self.ng_line_edit.setAlignment(Qt.AlignCenter)
-        ng_layout.addWidget(self.ng_label)
-        ng_layout.addWidget(self.ng_line_edit)
-
-        yield_layout = QHBoxLayout()
-        self.yield_label = QLabel("良率：")
-        self.yield_line_edit = QLineEdit()
-        self.yield_line_edit.setFixedHeight(35)
-        self.yield_line_edit.setFixedWidth(130)
-        self.yield_line_edit.setDisabled(True)
-        self.yield_line_edit.setAlignment(Qt.AlignCenter)
-        yield_layout.addWidget(self.yield_label)
-        yield_layout.addWidget(self.yield_line_edit)
-
-        model_layout = QHBoxLayout()
-        self.model_label = QLabel("当前模型：")
-        self.model_line_edit = QLineEdit()
-        self.model_line_edit.setFixedHeight(35)
-        self.model_line_edit.setFixedWidth(130)
-        self.model_line_edit.setDisabled(True)
-        self.model_line_edit.setAlignment(Qt.AlignCenter)
-        model_layout.addWidget(self.model_label)
-        model_layout.addWidget(self.model_line_edit)
-
-        datatime_layout = QHBoxLayout()
-        self.datatime_label = QLabel("日期：")
-        self.datatime_line_edit = QLineEdit()
-        self.datatime_line_edit.setFixedHeight(35)
-        self.datatime_line_edit.setFixedWidth(130)
-        self.datatime_line_edit.setDisabled(True)
-        self.datatime_line_edit.setAlignment(Qt.AlignCenter)
-        datatime_layout.addWidget(self.datatime_label)
-        datatime_layout.addWidget(self.datatime_line_edit)
-
-        reset_btn_layout = QHBoxLayout()
-        reset_btn_layout.addStretch()
-        self.reset_btn = QPushButton("重置统计")
-        self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
-        reset_btn_layout.addWidget(self.reset_btn)
-        reset_btn_layout.addStretch()
-        self.reset_btn.clicked.connect(self.reset_test_reord)
-        test_layout.addLayout(total_layout, stretch=1)
-        test_layout.addLayout(ok_layout, stretch=1)
-        test_layout.addLayout(ng_layout, stretch=1)
-        test_layout.addLayout(yield_layout, stretch=1)
-        test_layout.addLayout(model_layout, stretch=1)
-        test_layout.addLayout(datatime_layout, stretch=1)
-        test_layout.addLayout(reset_btn_layout, stretch=1)
-        self.test_page.setLayout(test_layout)
-
-        # --- page 2：mark ---
-        self.mark_page = QWidget()
-        mark_layout = QVBoxLayout()
-
-        mark_total_layout = QHBoxLayout()
-        self.mark_total_label = QLabel("总数：")
-        self.mark_total_edit = QLineEdit("0")
-        self.mark_total_edit.setFixedHeight(35)
-        self.mark_total_edit.setFixedWidth(130)
-        self.mark_total_edit.setDisabled(True)
-        self.mark_total_edit.setAlignment(Qt.AlignCenter)
-        mark_total_layout.addWidget(self.mark_total_label)
-        mark_total_layout.addWidget(self.mark_total_edit)
-
-        mark_ok_layout = QHBoxLayout()
-        self.mark_ok_label = QLabel("OK数：")
-        self.mark_ok_edit = QLineEdit("0")
-        self.mark_ok_edit.setFixedHeight(35)
-        self.mark_ok_edit.setFixedWidth(130)
-        self.mark_ok_edit.setDisabled(True)
-        self.mark_ok_edit.setAlignment(Qt.AlignCenter)
-        mark_ok_layout.addWidget(self.mark_ok_label)
-        mark_ok_layout.addWidget(self.mark_ok_edit)
-
-        mark_ng_layout = QHBoxLayout()
-        self.mark_ng_label = QLabel("NG数：")
-        self.mark_ng_edit = QLineEdit("0")
-        self.mark_ng_edit.setFixedHeight(35)
-        self.mark_ng_edit.setFixedWidth(130)
-        self.mark_ng_edit.setDisabled(True)
-        self.mark_ng_edit.setAlignment(Qt.AlignCenter)
-        mark_ng_layout.addWidget(self.mark_ng_label)
-        mark_ng_layout.addWidget(self.mark_ng_edit)
-
-        ok_layout = QHBoxLayout()
-        ok_layout.addStretch()
-        self.ok_btn = QPushButton(" OK ")
-        ok_layout.addWidget(self.ok_btn)
-        ok_layout.addStretch()
-
-        ng_layout = QHBoxLayout()
-        ng_layout.addStretch()
-        self.ng_btn = QPushButton(" NG ")
-        ng_layout.addWidget(self.ng_btn)
-        ng_layout.addStretch()
-        self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ok_btn.setFixedSize(180, 80)
-        self.ok_btn.setIconSize(QSize(24, 24))
-        self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ng_btn.setFixedSize(180, 80)
-        self.ng_btn.setIconSize(QSize(24, 24))
-
-        mark_layout.addLayout(mark_total_layout, stretch=1)
-        mark_layout.addLayout(mark_ok_layout, stretch=1)
-        mark_layout.addLayout(mark_ng_layout, stretch=1)
-        mark_layout.addLayout(ok_layout, stretch=2)
-        mark_layout.addLayout(ng_layout, stretch=2)
-        self.mark_page.setLayout(mark_layout)
-
-        self.stacked_widget = QStackedWidget()
-        self.stacked_widget.addWidget(self.test_page)
-        self.stacked_widget.addWidget(self.mark_page)
-
-        layout.addLayout(mode_layout)
-        layout.addWidget(separator_line)
-        layout.addWidget(self.stacked_widget)
-        layout.addStretch()
-
-        self.init_result_files()
         return layout
 
     def init_fft_and_stft_flag(self):
@@ -567,109 +253,15 @@ class SequenceWindow(QWidget):
             with open(mark_result_path, "w") as f:
                 json.dump(mark_result_template, f, indent=4)
         else:
-            self.set_result_file(1, "init", None)
+            self.init_mark_result_file(mark_result_path, mark_result_template)
 
-    def get_result_file(self, index):
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        if index == 0:
-            ensure_test_result_file(self.analysis_config)
-            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            with open(test_result_path, "r") as f:
-                lines = f.readlines()
-                total = lines[0].split(":")[1].strip()
-                ok = lines[1].split(":")[1].strip()
-                ng = lines[2].split(":")[1].strip()
-                ok_percent = lines[3].split(":")[1].strip()
-                current_model = lines[4].split(":")[1].strip()
-                datatime = lines[5].split(":")[1].strip()
-                self.total_line_edit.setText(total)
-                self.ok_line_edit.setText(ok)
-                self.ng_line_edit.setText(ng)
-                self.yield_line_edit.setText(ok_percent)
-                self.model_line_edit.setText(current_model)
-                self.model_line_edit.setCursorPosition(0)
-                self.datatime_line_edit.setText(datatime)
-        if index == 1:
-            mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-            with open(mark_result_path, "r") as f:
-                data = json.load(f)
-                self.mark_total_edit.setText(str(data["total"]))
-                self.mark_ok_edit.setText(str(data["ok"]))
-                self.mark_ng_edit.setText(str(data["ng"]))
-
-    def set_result_file(self, index, params, analyse_model_name):
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        if index == 0:
-            ensure_test_result_file(self.analysis_config)
-            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            with open(test_result_path, "r") as f:
-                lines = f.readlines()
-                total = int(lines[0].split(":")[1].strip())
-                ok = int(lines[1].split(":")[1].strip())
-                ng = int(lines[2].split(":")[1].strip())
-
-                if params == "OK":
-                    total += 1
-                    ok += 1
-                elif params == "NG":
-                    total += 1
-                    ng += 1
-                lines[0] = f"total: {total}\n"
-                lines[1] = f"ok: {ok}\n"
-                lines[2] = f"ng: {ng}\n"
-                ok_percent = round(ok / total * 100, 2) if total > 0 else 0
-                lines[3] = f"ok_percent: {ok_percent}%\n"
-                if analyse_model_name:
-                    lines[4] = f"current_model: {analyse_model_name}\n"
-            with open(test_result_path, "w") as f:
-                f.writelines(lines)
-        if index == 1:
-            mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-            with open(mark_result_path, "r") as f:
-                data = json.load(f)
-            current_date = datetime.now().strftime("%Y-%m-%d")
-            if params == "init":
-                if data["datatime"] != current_date:
-                    data["total"] = 0
-                    data["ok"] = 0
-                    data["ng"] = 0
-                    data["not_labels"] = 0
-                    data["datatime"] = current_date
-            elif params == "OK":
-                total = int(self.mark_total_edit.text())
-                data["total"] = total + 1
-                data["ok"] += 1
-            elif params == "NG":
-                total = int(self.mark_total_edit.text())
-                data["total"] = total + 1
-                data["ng"] += 1
+    def init_mark_result_file(self, mark_result_path, mark_result_template):
+        with open(mark_result_path, "r") as f:
+            data = json.load(f)
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        if data["datatime"] != current_date:
             with open(mark_result_path, "w") as f:
-                json.dump(data, f, indent=4)
-
-    def update_mode_display(self, index):
-        if index == 0:
-            self.stacked_widget.setCurrentIndex(0)
-            self.get_result_file(0)
-            self.mode = "test"
-            default_ai_model = self.analysis_config.get("default_ai")
-            if default_ai_model:
-                analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
-                self.model_line_edit.setText(analyse_model_name)
-                self.model_line_edit.setCursorPosition(0)
-                self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-                self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-                self.test_btn.setEnabled(False)
-                self.mark_btn.setEnabled(True)
-            else:
-                self.update_mode_display(1)
-        else:
-            self.stacked_widget.setCurrentIndex(1)
-            self.get_result_file(1)
-            self.mode = "mark"
-            self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-            self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-            self.mark_btn.setEnabled(False)
-            self.test_btn.setEnabled(True)
+                json.dump(mark_result_template, f, indent=4) 
 
     def reset_test_reord(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -682,7 +274,7 @@ class SequenceWindow(QWidget):
             lines[3] = f"ok_percent: 0\n"
         with open(test_result_path, "w") as f:
             f.writelines(lines)
-        self.get_result_file(0)
+        self.count_board.set_mark_text()
 
     def lineedit_count_lose_focus(self, lineedit):
         self.current_recorded_count = int(lineedit.text())
@@ -750,10 +342,8 @@ class SequenceWindow(QWidget):
                 sign.signal_emitter.connect(self.on_barcode_received)
                 self.scanner_barcode_thread.start()
 
-    def is_clicked_tcp(self):
-        if self.scanner_tcp.isChecked():
-            self.ip_edit.setEnabled(True)
-            self.port_edit.setEnabled(True)
+    def swap_tcp_status(self):
+        if self.tcp_flag:
             self.barcode_scanner_box.setEnabled(False)
             self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
@@ -762,8 +352,6 @@ class SequenceWindow(QWidget):
             SequenceWindow.tcp_server = TcpServer(host=self.tcp_ip, port=self.tcp_port, callback=self.deal_package)
             SequenceWindow.tcp_server.start()
         else:
-            self.ip_edit.setEnabled(False)
-            self.port_edit.setEnabled(False)
             self.barcode_scanner_box.setEnabled(True)
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
@@ -806,6 +394,14 @@ class SequenceWindow(QWidget):
         if barcode:
             sign.signal_emitter.emit(barcode)
 
+    def on_tcp_btn_clicked(self):
+        tcp_config_dialog = TcpConfigDialog(self.tcp_flag, self.tcp_ip, self.tcp_port)
+        result = tcp_config_dialog.exec()
+        if result:
+            self.tcp_flag, self.tcp_ip, self.tcp_port = result
+            LoadUiConfig.write_tcp_config(self.tcp_ip, self.tcp_port, self.default_logger)
+            self.swap_tcp_status()
+
     def on_barcode_received(self, barcode):
         if barcode:
             self.lineedit_s_or_n.setText(barcode)
@@ -821,11 +417,9 @@ class SequenceWindow(QWidget):
 
     def clicked_scanner(self):
         if self.barcode_scanner_box.isChecked():
-            self.scanner_tcp.setEnabled(False)
             self.lineedit_s_or_n.setEnabled(True)
             self.scanner_barcode_process()
         else:
-            self.scanner_tcp.setEnabled(True)
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
             self.barcode_scanner.stop_scanning()
@@ -836,7 +430,7 @@ class SequenceWindow(QWidget):
                 self.default_logger.error(e)
 
     def get_match_hid_device(self):
-        hid_params = self.load_scanner_hid_params()
+        hid_params = LoadUiConfig.load_scanner_hid_params(self.default_logger)
         if hid_params:
             vendor_id, product_id = hid_params
             self.vendor_id = int(vendor_id, 16)
@@ -887,6 +481,8 @@ class SequenceWindow(QWidget):
         self.clicked_scanner()
 
     def update_recorded_signal_info_to_db(self):
+        if self.recorded_signal_info["labels"] == "not_labeled":
+            return
         new_file_path = FileOps.move_wav_to_dir(self.recorded_path, self.recorded_signal_info["labels"])
         old_file_path = self.recorded_signal_info["file_path"]
         self.recorded_signal_info["file_path"] = new_file_path.replace(DEFAULT_DIR, "")
@@ -898,19 +494,19 @@ class SequenceWindow(QWidget):
 
     def update_audio_label_info(self):
         button = self.sender()
-        if button == self.ok_btn or self.default_ai_result:
+        if button == self.count_board.ok_btn or self.default_ai_result:
             self.recorded_signal_info["labels"] = "OK"
-        elif button == self.ng_btn:
+        elif button == self.count_board.ng_btn:
             self.recorded_signal_info["labels"] = "NG"
 
     def mark_result(self):
         button = self.sender()
-        if button == self.ok_btn:
-            self.set_result_file(1, "OK", None)
-            self.get_result_file(1)
-        elif button == self.ng_btn:
-            self.set_result_file(1, "NG", None)
-            self.get_result_file(1)
+        if button == self.count_board.ok_btn or self.default_ai_result:
+            self.count_board.set_mark_result_file("OK")
+            self.count_board.set_mark_text()
+        elif button == self.count_board.ng_btn:
+            self.count_board.set_mark_result_file("NG")
+            self.count_board.set_mark_text()
 
     def update_recorded_label_in_test_mode(self, label: str):
         if label == "OK":
@@ -952,7 +548,7 @@ class SequenceWindow(QWidget):
         if self.clicked_player_flag is True:
             self.clicked_player_flag = False
         elif self.clicked_player_flag is False:
-            if self.scanner_tcp.isChecked():
+            if self.tcp_flag:
                 TempTcpClient(
                     SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
                 )
@@ -1052,7 +648,7 @@ class SequenceWindow(QWidget):
                 item_type = key_config.get("type")
                 self.instance_analysis_class(key, item_type, key_config)
             for instance in self.analysis_window:
-                if self.mode == "test":
+                if self.count_board.mode == "test":
                     if instance is self.default_ai:
                         continue
                 if hasattr(instance, "calculate_spl"):
@@ -1065,7 +661,7 @@ class SequenceWindow(QWidget):
                     instance.calculate_thd()
                     instance.show()
                 elif hasattr(instance, "calculate_ai_scores"):
-                    instance.calculate_ai_scores(self.mode, self.analysis_config)
+                    instance.calculate_ai_scores(self.count_board.mode, self.analysis_config)
                     instance.show()
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
@@ -1086,8 +682,8 @@ class SequenceWindow(QWidget):
                 instance.setMinimumSize(QSize(600, 500))
                 width += 20
                 height += 20
-            if self.mode == "test":
-                self.default_ai.calculate_ai_scores(self.mode, self.analysis_config)
+            if self.count_board.mode == "test":
+                self.default_ai.calculate_ai_scores(self.count_board.mode, self.analysis_config)
                 self.default_ai.show()
                 self.default_ai.setGeometry(width, height, 600, 500)
                 self.test_insert_data_into_db()
@@ -1113,6 +709,8 @@ class SequenceWindow(QWidget):
             self.sequence_config = result
             seq = self.sequence_config[0]["seq1"]
             self.analysis_config = seq.get("analysis_list", {})
+            if self.count_board:
+                self.count_board.analysis_config = seq.get("analysis_list", {})
         else:
             self.analysis_config = dict()
 
@@ -1139,11 +737,3 @@ class SequenceWindow(QWidget):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.setDisabled(False)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        width = self.width()
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(208, 206, 202))
-        painter.drawRect(1, 0, width - 2, 41)
-        painter.end()

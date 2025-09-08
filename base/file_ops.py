@@ -276,5 +276,7 @@ class FileOps(object):
                 target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
             elif label == "NG":
                 target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
+            else:
+                return
             shutil.move(recorded_path, target_path)
         return target_path
