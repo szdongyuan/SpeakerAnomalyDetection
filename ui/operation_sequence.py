@@ -475,7 +475,8 @@ class OptionList(QListView):
                 config_manager = ConfigManager(prev_config_file)
             type = self.config[0].analysis_list.get(name)["type"]
             if self.config[0].analysis_list.get(name):
-                config_manager.config = self.config[0].analysis_list
+                # Create isolated config dictionary to prevent cross-contamination between instances
+                config_manager.config = {name: self.config[0].analysis_list[name].copy()}
                 model_type = name
             model = self.create_config_dialog(model, config_manager, model_type, type, self.signal_len)
             model.setWindowTitle(name)

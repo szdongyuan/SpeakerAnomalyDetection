@@ -277,14 +277,22 @@ class ConfigManager(object):
     def load_config(self):
         try:
             if self.config:
-                return self.config
+                # Return merged config that includes temporary storage
+                return self._get_merged_config()
             with open(self.config_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
             if isinstance(raw_data, list):
                 self.config = LoadUiConfig._extract_analysis_list(raw_data)
             else:
                 self.config = raw_data
-            return self.config
+            return self._get_merged_config()
         except Exception as e:
             self.default_logger.error(f"Failed to load the default or temp config file. {e}")
             return {}
+    
+    def _get_merged_config(self):
+        """Return merged config including temporary storage for pipeline configs"""
+        merged = dict(self.config)
+        if hasattr(self, "_pipeline_temp_storage") and isinstance(self._pipeline_temp_storage, dict):
+            merged.update(self._pipeline_temp_storage)
+        return merged

@@ -1449,6 +1449,7 @@ class PDTabbedPDConfigWindow(QDialog):
         self.load_config = all_config.get(model_type, {})
         self.init_ui()
         self.load_channels()
+        # self.init_auto_equal_checkbox()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -1638,6 +1639,7 @@ class PDTabbedPDConfigWindow(QDialog):
             "dual_channel_window_ms": self.spin_dual_channel_window.value(),
             "final_test_peak_min": self.final_spin_test_peak_min.value(),
             "final_test_peak_max": self.final_spin_test_peak_max.value(),
+            "auto_equal_length": bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False,
         }
         save_flag = self.config_manager.save_default_config("PD", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
@@ -1654,6 +1656,7 @@ class PDTabbedPDConfigWindow(QDialog):
             "dual_channel_window_ms": self.spin_dual_channel_window.value(),
             "final_test_peak_min": self.final_spin_test_peak_min.value(),
             "final_test_peak_max": self.final_spin_test_peak_max.value(),
+            "auto_equal_length": bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False,
         }
         
         try:
@@ -1714,6 +1717,7 @@ class PatternMatchConfigWindow(QDialog):
 
         self.init_ui()
         self.initial_populate_ui()
+        # self.init_auto_equal_checkbox()
 
     def init_ui(self):
         self.setWindowTitle("双通道模式匹配参数配置")
@@ -1744,6 +1748,15 @@ class PatternMatchConfigWindow(QDialog):
         splitter.setCollapsible(0, False)
         self.main_layout.addWidget(splitter)
 
+        # Add auto equal length checkbox at lower right corner
+        checkbox_layout = QHBoxLayout()
+        self._auto_equal_chk = QCheckBox("自动匹配模板长度（对齐模板峰值）")
+        # self._auto_equal_chk.click.connect(self.init_auto_equal_checkbox)
+        self.init_auto_equal_checkbox()
+        checkbox_layout.addStretch()
+        checkbox_layout.addWidget(self._auto_equal_chk)
+        self.main_layout.addLayout(checkbox_layout)
+
         btn_layout = self.create_btn_layout()
         self.main_layout.addLayout(btn_layout)
 
@@ -1761,6 +1774,15 @@ class PatternMatchConfigWindow(QDialog):
             + ui_style_const.qtextedit_style
             + ui_style_const.qtableview_style
         )
+
+    def init_auto_equal_checkbox(self):
+        """Initialize auto equal checkbox with load config"""
+        try:
+            if isinstance(self.load_config, dict):
+                auto_flag = bool(self.load_config.get("auto_equal_length", False))
+                self._auto_equal_chk.setChecked(auto_flag)
+        except Exception:
+            pass
 
     def create_channel_management_group(self):
         group = QGroupBox("当前编辑通道")
@@ -2086,6 +2108,12 @@ class PatternMatchConfigWindow(QDialog):
             self.fixed_threshold_radio.setChecked(True)
             threshold_value = config.get("threshold_value", 90.0)
             self.threshold_spinbox.setValue(threshold_value)
+        
+        # Handle auto equal length checkbox
+        auto_equal_length = config.get("auto_equal_length", False)
+        print(auto_equal_length)
+        # if hasattr(self, "_auto_equal_chk"):
+        self._auto_equal_chk.setChecked(auto_equal_length)
 
 
     def refresh_data_view(self):
@@ -2118,6 +2146,7 @@ class PatternMatchConfigWindow(QDialog):
             "algorithm_params": self.algorithm_params.get(algo_key, {}),
             "threshold_strategy": strategy,
             "threshold_value": None,
+            "auto_equal_length": bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False,
         }
         if config["apply_filter"]:
             config["filter_range_hz"] = (int(self.low_freq_edit.text()), int(self.high_freq_edit.text()))
@@ -2350,6 +2379,8 @@ class PipelineConfigWindow(QDialog):
                     except Exception:
                         self.head_local_config = head.get("config", {})
                     self.btn_head_cfg.setEnabled(True)
+                    # Restore head configuration to config_manager for persistence
+                    self._restore_temp_config_to_manager("head")
             if isinstance(tail, dict):
                 if tail.get("type"):
                     self.tail_local_type = tail.get("type")
@@ -2358,6 +2389,8 @@ class PipelineConfigWindow(QDialog):
                     except Exception:
                         self.tail_local_config = tail.get("config", {})
                     self.btn_tail_cfg.setEnabled(True)
+                    # Restore tail configuration to config_manager for persistence
+                    self._restore_temp_config_to_manager("tail")
 
     def set_types(self, head_type: str, tail_type: str):
         """由子类调用，设置首/尾分析类型（如 "SPL"、"PD" 等）。"""
@@ -2365,6 +2398,11 @@ class PipelineConfigWindow(QDialog):
         self.tail_local_type = tail_type
         self.btn_head_cfg.setEnabled(bool(head_type))
         self.btn_tail_cfg.setEnabled(bool(tail_type))
+        # Restore configurations to config_manager if they exist
+        if self.head_local_config and head_type:
+            self._restore_temp_config_to_manager("head")
+        if self.tail_local_config and tail_type:
+            self._restore_temp_config_to_manager("tail")
 
     def set_button_texts(self, head_text: str, tail_text: str):
         """由子类调用，设置按钮文案。"""
@@ -2444,26 +2482,42 @@ class PipelineConfigWindow(QDialog):
         self._open_and_capture_local(a_type, slot)
 
     def _prefill_temp_config_to_manager(self, slot: str, temp_name: str):
-        """把本地缓存的 head/tail 配置写入到 config_manager.config[temp_name] 以便子窗体读取。
-        不持久化到文件，仅在会话内保留，避免另一个节点被“看起来清空”。"""
-        if not hasattr(self.config_manager, "config") or not isinstance(self.config_manager.config, dict):
-            self.config_manager.config = {}
+        """把本地缓存的 head/tail 配置写入到临时存储以便子窗体读取。
+        使用独立的临时存储，不污染主配置。"""
+        # Create separate temporary storage for pipeline configs
+        if not hasattr(self.config_manager, "_pipeline_temp_storage"):
+            self.config_manager._pipeline_temp_storage = {}
+        
         local_cfg = self.head_local_config if slot == "head" else self.tail_local_config
         if isinstance(local_cfg, dict) and local_cfg:
             # 使用副本，避免子窗体原地修改带来意外引用问题
             try:
-                self.config_manager.config[temp_name] = dict(local_cfg)
+                self.config_manager._pipeline_temp_storage[temp_name] = dict(local_cfg)
             except Exception:
-                self.config_manager.config[temp_name] = local_cfg
+                self.config_manager._pipeline_temp_storage[temp_name] = local_cfg
         else:
             # 确保有键，哪怕是空 dict
-            self.config_manager.config.setdefault(temp_name, {})
+            self.config_manager._pipeline_temp_storage.setdefault(temp_name, {})
+
+    def _restore_temp_config_to_manager(self, slot: str):
+        """Restore saved configuration to temporary storage for temporary name access"""
+        temp_name = self._get_slot_model_name(slot)
+        local_cfg = self.head_local_config if slot == "head" else self.tail_local_config
+        if not hasattr(self.config_manager, "_pipeline_temp_storage"):
+            self.config_manager._pipeline_temp_storage = {}
+        if isinstance(local_cfg, dict) and local_cfg:
+            try:
+                self.config_manager._pipeline_temp_storage[temp_name] = dict(local_cfg)
+            except Exception:
+                self.config_manager._pipeline_temp_storage[temp_name] = local_cfg
+        else:
+            self.config_manager._pipeline_temp_storage.setdefault(temp_name, {})
 
     def _write_back_temp_config(self, slot: str, temp_name: str, updated: dict):
-        """子窗体关闭后，把最新配置回写到 config_manager.config[temp_name]，用于后续再次打开预填。"""
-        if not hasattr(self.config_manager, "config") or not isinstance(self.config_manager.config, dict):
-            self.config_manager.config = {}
-        self.config_manager.config[temp_name] = dict(updated) if isinstance(updated, dict) else {}
+        """子窗体关闭后，把最新配置回写到临时存储，用于后续再次打开预填。"""
+        if not hasattr(self.config_manager, "_pipeline_temp_storage"):
+            self.config_manager._pipeline_temp_storage = {}
+        self.config_manager._pipeline_temp_storage[temp_name] = dict(updated) if isinstance(updated, dict) else {}
 
     def on_click_head_cfg(self):
         self._open_and_update_child("head")
@@ -2573,35 +2627,17 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         row1.addWidget(self._right_grid_spin)
         row1.addStretch()
 
-        # second row: auto match template length
-        row2 = QHBoxLayout()
-        self._auto_equal_chk = QCheckBox("自动匹配模板长度（对齐模板峰值）")
-        row2.addWidget(self._auto_equal_chk)
-        row2.addStretch()
-
-        # when auto is checked, disable manual input
-        def on_auto_changed(checked):
-            self._left_grid_spin.setEnabled(not checked)
-            self._right_grid_spin.setEnabled(not checked)
-        self._auto_equal_chk.toggled.connect(on_auto_changed)
-
         # load existing configuration
         try:
             if isinstance(self.load_config, dict):
-                auto_flag = bool(self.load_config.get("auto_equal_length", False))
-                self._auto_equal_chk.setChecked(auto_flag)
-                self._left_grid_spin.setEnabled(not auto_flag)
-                self._right_grid_spin.setEnabled(not auto_flag)
-                if not auto_flag:
-                    lg = int(self.load_config.get("left_grid", 0) or 0)
-                    rg = int(self.load_config.get("right_grid", 0) or 0)
-                    self._left_grid_spin.setValue(max(0, lg))
-                    self._right_grid_spin.setValue(max(0, rg))
+                lg = int(self.load_config.get("left_grid", 0) or 0)
+                rg = int(self.load_config.get("right_grid", 0) or 0)
+                self._left_grid_spin.setValue(max(0, lg))
+                self._right_grid_spin.setValue(max(0, rg))
         except Exception:
             pass
 
         vbox.addLayout(row1)
-        vbox.addLayout(row2)
         length_group.setLayout(vbox)
 
         try:
@@ -2613,13 +2649,8 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
     def get_default_config(self):
         cfg = super().get_default_config()
         # pipeline itself configuration
-        cfg["auto_equal_length"] = bool(self._auto_equal_chk.isChecked()) if hasattr(self, "_auto_equal_chk") else False
-        if not cfg["auto_equal_length"]:
-            cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
-            cfg["right_grid"] = int(self._right_grid_spin.value()) if hasattr(self, "_right_grid_spin") else 0
-        else:
-            cfg.pop("left_grid", None)
-            cfg.pop("right_grid", None)
+        cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
+        cfg["right_grid"] = int(self._right_grid_spin.value()) if hasattr(self, "_right_grid_spin") else 0
         # pass condition
         cfg["pass_condition"] = {
             "n1": int(self._n1_spin.value()) if hasattr(self, "_n1_spin") else 1,
