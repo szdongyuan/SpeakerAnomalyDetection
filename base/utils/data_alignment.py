@@ -2,6 +2,7 @@ import librosa
 import numpy as np
 from scipy.signal import correlate, find_peaks
 
+from base.utils.smooth import smooth
 class data_alignment(object):
     def __init__(self, audio_data, input_data, sr=44100):
         self.sr = sr
@@ -125,57 +126,9 @@ def align_signals_by_peaks(target_data, pattern_data, behavior="min"):
     Returns:
         tuple: (aligned_target_segment, aligned_pattern_segment)
     """
+    target_peak_index = np.argmax(smooth(target_data, padding_mode="same", window_size = 10)) 
     try:
-        # Find peaks for both signals
-        target_peak_idx = find_signal_peak(target_data)
-        pattern_peak_idx = find_signal_peak(pattern_data)
-        
-        # Calculate segment length from pattern peak
-        _, left_point, right_point = _calc_left_right_from_array(pattern_data)
-        segment_length = left_point + right_point
-        
-        if behavior == "padding":
-            # Zero padding mode: pad target if needed, keep pattern unchanged
-            target_start = target_peak_idx - left_point
-            target_end = target_start + segment_length
-            
-            # Handle padding for target if indices are out of bounds
-            if target_start < 0:
-                # Pad at beginning
-                padding_left = -target_start
-                target_segment = np.pad(target_data, (padding_left, 0), mode='constant', constant_values=0)
-                target_start = 0
-                target_end = segment_length
-            elif target_end > len(target_data):
-                # Pad at end
-                padding_right = target_end - len(target_data)
-                target_segment = np.pad(target_data, (0, padding_right), mode='constant', constant_values=0)
-                target_start = target_peak_idx - left_point
-                target_end = target_start + segment_length
-            else:
-                target_segment = target_data
-            
-            target_segment = target_segment[target_start:target_end]
-            
-            # Extract pattern segment normally
-            pattern_start = max(0, pattern_peak_idx - left_point)
-            pattern_end = min(len(pattern_data), pattern_start + segment_length)
-            pattern_segment = pattern_data[pattern_start:pattern_end]
-            
-        else:  # behavior == "min" (default)
-            # Min mode: cut to intersection length
-            target_start = max(0, target_peak_idx - left_point)
-            target_end = min(len(target_data), target_start + segment_length)
-            target_segment = target_data[target_start:target_end]
-            
-            pattern_start = max(0, pattern_peak_idx - left_point) 
-            pattern_end = min(len(pattern_data), pattern_start + segment_length)
-            pattern_segment = pattern_data[pattern_start:pattern_end]
-            
-            # Ensure both segments have same length (intersection)
-            min_len = min(len(target_segment), len(pattern_segment))
-            target_segment = target_segment[:min_len]
-            pattern_segment = pattern_segment[:min_len]
+        target_segment, pattern_segment = align_signals_with_peak(target_data, pattern_data,target_peak_index, behavior)
         
         return target_segment, pattern_segment
     except Exception:
