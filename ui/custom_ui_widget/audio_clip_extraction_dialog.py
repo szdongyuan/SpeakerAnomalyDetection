@@ -4,10 +4,8 @@ import librosa
 import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QCursor, QIcon
-from PyQt5.QtWidgets import (
-    QDialog, QPushButton, QHBoxLayout, QLineEdit, QToolTip, QVBoxLayout, QCheckBox,
-    QDoubleSpinBox, QApplication, QFileDialog, QMessageBox
-)
+from PyQt5.QtWidgets import QDoubleSpinBox, QApplication, QFileDialog, QMessageBox, QComboBox
+from PyQt5.QtWidgets import QDialog, QPushButton, QHBoxLayout, QLineEdit, QToolTip, QVBoxLayout, QCheckBox
 import pyqtgraph as pg
 
 from base.file_ops import FileOps
@@ -19,14 +17,15 @@ from ui.graph_widget import DraggablePlotWidget
 
 class AudioClipExtractionDialog(QDialog):
 
-    def __init__(self,
-                 source_file=None,
-                 source_audio=None,
-                 clip_len=None,
-                 sample_rate=None,
-                 save_clip=False,
-                 save_clip_path=None,
-                 dialog_title="提取音频片段",
+    def __init__(
+        self,
+        source_file=None,
+        source_audio=None,
+        clip_len=None,
+        sample_rate=None,
+        save_clip=False,
+        save_clip_path=None,
+        dialog_title="提取音频片段",
     ):
         super(AudioClipExtractionDialog, self).__init__()
         self.source_file = source_file
@@ -38,6 +37,7 @@ class AudioClipExtractionDialog(QDialog):
         self.dialog_title = dialog_title
 
         self.audio_data = None
+        self.select_channel = 0
         self.selected_region_time = (None, None)
         self.return_value = (None, None, None)
 
@@ -76,14 +76,20 @@ class AudioClipExtractionDialog(QDialog):
         self.file_path_edit = QLineEdit()
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setPlaceholderText("请上传源音频文件...")
+
+        self.channel_combobox = QComboBox()
+        self.channel_combobox.addItems(["......"])
+        self.channel_combobox.currentIndexChanged.connect(self.channel_changed)
         layout.addWidget(open_file_btn)
         layout.addWidget(self.file_path_edit)
+        layout.addWidget(self.channel_combobox)
         return layout
 
     def create_plot_widget(self):
-        self.plot_curve = pg.PlotDataItem(pen='k')
-        self.region = pg.LinearRegionItem(values=[0, 0], brush=(50, 150, 250, 50),
-                                          pen={'color': (0, 0, 255), 'width': 2})
+        self.plot_curve = pg.PlotDataItem(pen="k")
+        self.region = pg.LinearRegionItem(
+            values=[0, 0], brush=(50, 150, 250, 50), pen={"color": (0, 0, 255), "width": 2}
+        )
         self.region.setZValue(10)
         self.region.sigRegionChanged.connect(self.on_region_changed)
 
@@ -138,12 +144,26 @@ class AudioClipExtractionDialog(QDialog):
             self.region.hide()
             self.selected_region_time = (None, None)
 
+    def set_channel_text(self, audio_data):
+        self.channel_combobox.clear()
+        for i in range(audio_data.shape[0]):
+            self.channel_combobox.addItem(f"In {i+1}")
+
+    def channel_changed(self, index):
+        self.select_channel = index
+        self.plot_curve.clear()
+        time_array = np.linspace(0, len(self.audio_data[index]) / self.sample_rate, num=len(self.audio_data[index]))
+        self.plot_curve.setData(time_array, self.audio_data[index])
+        self.region.setBounds([0, time_array[-1]])
+        self.plot_widget.setActive(True)
+
     def load_and_display_waveform(self, file_path):
         try:
-            audio_data, sample_rate = librosa.load(file_path, sr=self.sample_rate, mono=True)
+            audio_data, sample_rate = librosa.load(file_path, sr=self.sample_rate, mono=False)
             self.audio_data, self.sample_rate = audio_data, sample_rate
-            time_array = np.linspace(0, len(audio_data) / sample_rate, num=len(audio_data))
-            self.plot_curve.setData(time_array, audio_data)
+            self.set_channel_text(self.audio_data)
+            time_array = np.linspace(0, len(audio_data[0]) / sample_rate, num=len(audio_data[0]))
+            self.plot_curve.setData(time_array, audio_data[0])
             self.region.setBounds([0, time_array[-1]])
             self.plot_widget.setActive(True)
         except Exception as e:
@@ -186,7 +206,7 @@ class AudioClipExtractionDialog(QDialog):
             start_time, end_time = self.selected_region_time
             start_sample = int(start_time * self.sample_rate)
             end_sample = int(end_time * self.sample_rate)
-            clip_data = self.audio_data[start_sample:end_sample]
+            clip_data = self.audio_data[self.select_channel][start_sample:end_sample]
 
             relative_path = self.save_clip_path
             if self.save_clip:
