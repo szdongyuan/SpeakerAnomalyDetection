@@ -17,7 +17,7 @@ from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
-from ui.sequence_widget import SequenceWindow
+from ui.sequence.sequence_widget import SequenceWindow
 
 
 class MainWindow(QMainWindow):

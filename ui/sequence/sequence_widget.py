@@ -26,9 +26,9 @@ from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.operation_sequence import AnalysisModelSelect
-from ui.sequence_tools_bar import SequenceToolsBar
+from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.signal_analysis_window import get_class_mapping
-from ui.sequencement_count_board import SequenceCountBoard
+from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
 
 
