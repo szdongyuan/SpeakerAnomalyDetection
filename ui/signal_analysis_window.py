@@ -289,20 +289,26 @@ class Spectrogram(QWidget):
         self.img_item_top = None
         self.stft_colorbar_top = None
         self.stft_colorbar_top = None
+        self.spectral_flux_plot_widget = None
         self.init_ui()
         self.setWindowTitle(title_name)
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.main_layout = QVBoxLayout(self)
-
+        self.main_layout = QHBoxLayout(self)
         self.plot_container = QWidget()
         self.plot_container_layout = QVBoxLayout(self.plot_container)
         self.plot_container_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.main_layout.addWidget(self.plot_container)
+        self.spectral_flux_container = QWidget()
+        self.spectral_flux_container_layout = QVBoxLayout(self.spectral_flux_container)
+        self.spectral_flux_container_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.main_layout.addWidget(self.plot_container, 6)  # 占6/10
+        self.main_layout.addWidget(self.spectral_flux_container, 4)  
 
         self._init_stft_plot_components()
+        self._init_spectral_flux_components()
 
     def _init_stft_plot_components(self):
         self.stft_plot_widget_top = pg.PlotWidget()
@@ -314,6 +320,16 @@ class Spectrogram(QWidget):
         self.stft_plot_widget_bottom.setBackground("white")
         self.img_item_bottom = pg.ImageItem()
         self.stft_plot_widget_bottom.addItem(self.img_item_bottom)
+
+    def _init_spectral_flux_components(self):
+        self.spectral_flux_plot_widget = pg.PlotWidget()
+        self.spectral_flux_plot_widget.setBackground("white")
+        self.spectral_flux_plot_widget.setLabel('left', 'Spectral Flux')
+        self.spectral_flux_plot_widget.setLabel('bottom', 'Time (s)')
+        self.spectral_flux_plot_widget.setTitle('Spectral Flux')
+        
+        # 默认隐藏频谱通量容器
+        self.spectral_flux_container.setVisible(False)
 
     def set_color_font_size(self):
         plot_widgets = self.plot_container.findChildren(pg.PlotWidget)
@@ -331,6 +347,22 @@ class Spectrogram(QWidget):
 
             current_title = plot_widget.plotItem.titleLabel.text  # 获取当前标题
             plot_widget.setTitle(current_title, size="20px", color="black")
+
+        # 设置频谱通量图的字体
+        if self.spectral_flux_plot_widget:
+            font = QFont()
+            font.setPixelSize(20)
+            b_axis = self.spectral_flux_plot_widget.getAxis("bottom")
+            l_axis = self.spectral_flux_plot_widget.getAxis("left")
+            b_axis.setTickFont(font)
+            l_axis.setTickFont(font)
+            b_axis.setTextPen("black")
+            l_axis.setTextPen("black")
+            b_axis.setLabel(b_axis.labelText, **{"font-size": "18px"})
+            l_axis.setLabel(l_axis.labelText, **{"font-size": "18px"})
+            
+            current_title = self.spectral_flux_plot_widget.plotItem.titleLabel.text
+            self.spectral_flux_plot_widget.setTitle(current_title, size="18px", color="black")
 
         if self.stft_colorbar_top:
             color_bar_axis_top = self.stft_colorbar_top.axis
@@ -514,7 +546,52 @@ class Spectrogram(QWidget):
             self.stft_colorbar_top.setLevels((min_value, max_value))
             self.stft_colorbar_bottom.setLevels((min_value, max_value))
 
+        # 检查是否需要绘制频谱通量
+        specflux_enabled = self.analysis_config.get("specflux_enabled", False)
+        if specflux_enabled:
+            self._plot_spectral_flux(recorded_signal, sample_rate)
+        else:
+            self.spectral_flux_container.setVisible(False)
+
         self.set_color_font_size()
+
+    def _plot_spectral_flux(self, recorded_signal, sample_rate):
+        """绘制频谱通量图"""
+        n_fft = self.analysis_config.get("n_fft", 2048)
+        hop_length = self.analysis_config.get("hop_length", 256)
+        
+        self.spectral_flux_container.setVisible(True)
+        
+        self.spectral_flux_plot_widget.clear()
+        # 清除图例
+        self.spectral_flux_plot_widget.plotItem.legend = None
+        
+        flux_ch1, times_ch1 = AudioFeatureExtraction.spectral_flux(
+            recorded_signal[0], sample_rate, 
+            n_fft=n_fft, hop_length=hop_length
+        )
+        
+        flux_ch2, times_ch2 = AudioFeatureExtraction.spectral_flux(
+            recorded_signal[1], sample_rate,
+            n_fft=n_fft, hop_length=hop_length
+        )
+        
+        pen_ch1 = mkPen(color='g', width=1)
+        pen_ch2 = mkPen(color='b', width=1)
+        
+        self.spectral_flux_plot_widget.plot(times_ch1, flux_ch1, pen=pen_ch1, name='Channel 1')
+        self.spectral_flux_plot_widget.plot(times_ch2, flux_ch2, pen=pen_ch2, name='Channel 2')
+        
+        # 在绘制完所有数据后添加图例
+        self.spectral_flux_plot_widget.addLegend(offset=(1, 1))
+        
+        self.spectral_flux_plot_widget.setLabel('left', 'Spectral Flux')
+        self.spectral_flux_plot_widget.setLabel('bottom', 'Time (s)')
+        
+        # 添加到布局
+        if self.spectral_flux_plot_widget not in [self.spectral_flux_container_layout.itemAt(i).widget() 
+                                                   for i in range(self.spectral_flux_container_layout.count())]:
+            self.spectral_flux_container_layout.addWidget(self.spectral_flux_plot_widget)
 
 
 class LooseParticle(AnalysisGraphWidget):
@@ -861,7 +938,7 @@ class PeakDetection(AnalysisGraphWidget):
                 result_ch2["peaks_index"] = pidx2_f
                 result_ch2["peaks_time_sec"] = (np.array(pidx2_f, dtype=float) / float(sample_rate)).tolist()
                 result_ch2["num_peaks"] = len(pidx2_f)
-
+        
         merged_results = self._merge_peak_results(result_ch1, result_ch2, self.analysis_config)
         self.result = merged_results
 

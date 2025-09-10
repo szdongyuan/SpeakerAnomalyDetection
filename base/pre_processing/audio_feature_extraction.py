@@ -399,7 +399,7 @@ class AudioFeatureExtraction(object):
         return np.array(xf_list)
 
     @staticmethod
-    def spectral_flux(signal, sr, n_fft=1024, hop_length=128):
+    def spectral_flux(signal, sr, n_fft=1024, hop_length=128, win_length=None):
         """
             Calculates the spectral flux of a given audio signal.
 
@@ -412,6 +412,8 @@ class AudioFeatureExtraction(object):
                 Length of the windowed signal after padding with zeros.
             - hop_length: int
                 Number of samples between successive frames.
+            - win_length: int or None
+                Length of the window for STFT (default: None, uses n_fft).
 
             Returns:
             - flux: array
@@ -419,7 +421,7 @@ class AudioFeatureExtraction(object):
             - times: array
                 The time axis for the flux values.
         """
-        S = np.abs(librosa.stft(y=np.asarray(signal, dtype=np.float64), n_fft=n_fft, hop_length=hop_length))
+        S = np.abs(librosa.stft(y=np.asarray(signal, dtype=np.float64), n_fft=n_fft, hop_length=hop_length, win_length=win_length))
         diff = S[:, 1:] - S[:, :-1]
         diff = np.maximum(diff, 0.0)
         flux = np.sum(diff, axis=0)

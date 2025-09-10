@@ -749,9 +749,27 @@ class SpecConfigWindow(QDialog):
         param_layout.addStretch()
         param_layout.addWidget(self.limit_group_box)
         param_layout.addStretch()
+        
+        # 频谱通量配置
+        specflux_layout = self.create_spectral_flux_config()
+        param_layout.addLayout(specflux_layout)
+        param_layout.addStretch()
+        
         param_layout.addSpacing(10)
         param_layout.setSpacing(10)
         return param_layout
+
+    def create_spectral_flux_config(self):
+        """创建频谱通量配置布局"""
+        # 只需要一个复选框来启用/禁用频谱通量绘图
+        self.chk_specflux = QCheckBox("同时绘制 Spectral Flux")
+        self.chk_specflux.setChecked(self.load_config.get("specflux_enabled", False))
+        
+        # 创建简单布局，只包含复选框
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(self.chk_specflux)
+        
+        return main_layout
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
@@ -782,6 +800,7 @@ class SpecConfigWindow(QDialog):
             "top_limit": self.top_limit_spinbox.value(),
             "bottom_limit": self.bottom_limit_spinbox.value(),
             "custom_limit": self.custom_limit_checkbox.isChecked(),
+            "specflux_enabled": self.chk_specflux.isChecked(),
         }
         return default_config
 
@@ -1310,10 +1329,9 @@ class PDForm(QWidget):
         row_hop_length.addStretch(1)
         row_hop_length.addWidget(QLabel("格点数:"))
         self.combo_hop_length = QComboBox()
-        # 生成16的幂次，最高到1024
-        hop_values = [str(16 * (2 ** i)) for i in range(7)]  # 16, 32, 64, 128, 256, 512, 1024
+        hop_values = [str(16 * (2 ** i)) for i in range(8)]  # 16, 32, 64, 128, 256, 512, 1024
         self.combo_hop_length.addItems(hop_values)
-        current_hop = str(self.load_config.get("hop_length", 512))
+        current_hop = str(self.load_config.get("spectral_flux_hop_length", 512))
         if current_hop in hop_values:
             self.combo_hop_length.setCurrentText(current_hop)
         else:
@@ -1321,9 +1339,27 @@ class PDForm(QWidget):
         self.combo_hop_length.currentTextChanged.connect(lambda _: self.get_config())
         row_hop_length.addWidget(self.combo_hop_length)
 
+        # 频谱通量窗口长度选项
+        row_window_length = QHBoxLayout()
+        row_window_length.addWidget(QLabel("频谱通量窗口长度"))
+        row_window_length.addStretch(1)
+        row_window_length.addWidget(QLabel("格点数:"))
+        self.combo_window_length = QComboBox()
+
+        window_values = [str(2 ** i) for i in range(6, 14)]  # 64 to 8192
+        self.combo_window_length.addItems(window_values)
+        current_window = str(self.load_config.get("spectral_flux_window_length", 1024))
+        if current_window in window_values:
+            self.combo_window_length.setCurrentText(current_window)
+        else:
+            self.combo_window_length.setCurrentText("1024")
+        self.combo_window_length.currentTextChanged.connect(lambda _: self.get_config())
+        row_window_length.addWidget(self.combo_window_length)
+
         adv_layout.addLayout(row_convex_len)
         adv_layout.addLayout(row_dmode)
         adv_layout.addLayout(row_hop_length)
+        adv_layout.addLayout(row_window_length)
         adv_layout.addStretch()
         adv_layout.setSpacing(10)
         adv_layout.setContentsMargins(10, 20, 10, 20)
@@ -1435,7 +1471,8 @@ class PDForm(QWidget):
             "convex_time_sec": float(self.spin_convex_time.value()),
             "duration_ref_unit": ("peak" if self.combo_duration_ref_unit.currentIndex() == 0 else "db"),
             "duration_ref_value": float(self.spin_duration_ref.value()),
-            "hop_length": int(self.combo_hop_length.currentText()),
+            "spectral_flux_hop_length": int(self.combo_hop_length.currentText()),
+            "spectral_flux_window_length": int(self.combo_window_length.currentText()),
         }
 
 class PDTabbedPDConfigWindow(QDialog):
