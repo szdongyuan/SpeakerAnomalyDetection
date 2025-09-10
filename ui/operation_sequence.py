@@ -18,11 +18,21 @@ from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
-from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow, \
-    PatternMatchConfigWindow
-from ui.analysis_config_window import LPConfigWindow
-from ui.analysis_config_window import PDConfigWindow
-from ui.analysis_config_window import PipelinePdPmConfigWindow
+
+# from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow, \
+#     PatternMatchConfigWindow
+# from ui.analysis_config_window import LPConfigWindow
+# from ui.analysis_config_window import PDConfigWindow
+# from ui.analysis_config_window import PipelinePdPmConfigWindow
+from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
+from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
+from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
+from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
+from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
+from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
+from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
+from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
+from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
 
 class AnalysisModelSelect(QDialog):
@@ -893,7 +903,7 @@ class OptionList(QListView):
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
             return
-        
+
         default_of_type = data.get(type, {})
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type

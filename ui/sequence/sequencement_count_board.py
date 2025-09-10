@@ -273,7 +273,7 @@ class SequenceCountBoard(QWidget):
         data = dict()
         total = total + 1
         if params == "OK":
-            data["ok"] = ok + 1
+            ok = ok + 1
         elif params == "NG":
             ng = ng + 1
         data["total"] = total
