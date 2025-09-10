@@ -242,7 +242,7 @@ def _prominence_filter(series: np.ndarray, peaks: np.ndarray, enabled: bool, min
     return valid, vals
 
 
-def spectral_flux_peak_detection(audio_signal, sample_rate, threshold, window_s=0.1, n_fft=1024, hop_length=128):
+def spectral_flux_peak_detection(audio_signal, sample_rate, threshold, window_s=0.1, n_fft=1024, hop_length=128, win_length=None):
     """
     Perform peak detection directly on spectral flux.
     
@@ -253,6 +253,7 @@ def spectral_flux_peak_detection(audio_signal, sample_rate, threshold, window_s=
         window_s: Time window for minimum distance between peaks (in seconds)
         n_fft: FFT size for spectral flux calculation
         hop_length: Hop length for spectral flux calculation
+        win_length: Window length for STFT calculation (default: None, uses n_fft)
     
     Returns:
         List of peak indices in audio signal
@@ -260,7 +261,7 @@ def spectral_flux_peak_detection(audio_signal, sample_rate, threshold, window_s=
     try:
         # Compute spectral flux
         flux, flux_times = AudioFeatureExtraction.spectral_flux(
-            audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length
+            audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length, win_length=win_length
         )
         
         if flux is None or flux.size == 0:
@@ -288,7 +289,7 @@ def spectral_flux_peak_detection(audio_signal, sample_rate, threshold, window_s=
         return []
 
 
-def filter_peaks_by_spectral_flux(peaks_idx, sample_rate, audio_signal, window_s=0.02, threshold=0.0, n_fft=1024, hop_length=128):
+def filter_peaks_by_spectral_flux(peaks_idx, sample_rate, audio_signal, window_s=0.02, threshold=0.0, n_fft=1024, hop_length=128, win_length=None):
     """
     Filter peaks based on spectral flux values around each peak.
     
@@ -300,6 +301,7 @@ def filter_peaks_by_spectral_flux(peaks_idx, sample_rate, audio_signal, window_s
         threshold: Minimum spectral flux threshold
         n_fft: FFT size for spectral flux calculation
         hop_length: Hop length for spectral flux calculation
+        win_length: Window length for STFT calculation (default: None, uses n_fft)
     
     Returns:
         List of filtered peak indices
@@ -314,7 +316,7 @@ def filter_peaks_by_spectral_flux(peaks_idx, sample_rate, audio_signal, window_s
     # Compute spectral flux using AudioFeatureExtraction
     try:
         flux, flux_times = AudioFeatureExtraction.spectral_flux(
-            audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length
+            audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length, win_length=win_length
         )
     except Exception:
         # If spectral flux calculation fails, return original peaks
@@ -480,6 +482,7 @@ def peak_detection(
     spectral_flux_window_s = float(config.get("spectral_flux_window_s", 0.1))
     spectral_flux_n_fft = int(config.get("spectral_flux_n_fft", 1024))
     spectral_flux_hop_length = int(config.get("spectral_flux_hop_length", 128))
+    spectral_flux_window_length = int(config.get("spectral_flux_window_length", 1024))
     
     if spectral_flux_enabled and spectral_flux_threshold > 0.0:
         # Check if this should be used as primary detection method
@@ -493,7 +496,8 @@ def peak_detection(
                 threshold=spectral_flux_threshold,
                 window_s=spectral_flux_window_s,
                 n_fft=spectral_flux_n_fft,
-                hop_length=spectral_flux_hop_length
+                hop_length=spectral_flux_hop_length,
+                win_length=spectral_flux_window_length
             )
         else:
             # Use spectral flux as a filter on existing peaks
@@ -504,7 +508,8 @@ def peak_detection(
                 window_s=spectral_flux_window_s,
                 threshold=spectral_flux_threshold,
                 n_fft=spectral_flux_n_fft,
-                hop_length=spectral_flux_hop_length
+                hop_length=spectral_flux_hop_length,
+                win_length=spectral_flux_window_length
             )
 
     final_peaks = np.array(peaks_after_spectral_flux_filter, dtype=int)
