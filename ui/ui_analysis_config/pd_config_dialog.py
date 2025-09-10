@@ -355,239 +355,227 @@ class PDConfigWindow(QDialog):
         group_box.setLayout(vbox)
         return group_box
 
+    def create_advanced_group(self):
+        adv_group = QGroupBox("高级选项")
+        adv_layout = QVBoxLayout()
+        adv_layout.addWidget(self.create_preprocess_group())
 
-def create_advanced_group(self):
-    adv_group = QGroupBox("高级选项")
-    adv_layout = QVBoxLayout()
-    adv_layout.addWidget(self.create_preprocess_group())
+        row_convex_len = QHBoxLayout()
+        row_convex_len.addWidget(QLabel("峰凸起度计算窗口"))
+        row_convex_len.addStretch(1)
+        row_convex_len.addWidget(QLabel("单位:"))
+        self.combo_convex_unit = QComboBox()
+        self.combo_convex_unit.addItems(["音频长度", "格点数", "时长(秒)"])
+        self.combo_convex_unit.setCurrentIndex(
+            {"audio": 0, "points": 1, "time": 2}.get(self.load_config.get("convex_unit", "audio"), 0)
+        )
+        self.combo_convex_unit.currentIndexChanged.connect(
+            lambda _: (self._update_convex_unit_enabled(), self.get_default_config())
+        )
+        row_convex_len.addWidget(self.combo_convex_unit)
+        self.spin_convex_audio_ratio = QDoubleSpinBox()
+        self.spin_convex_audio_ratio.setRange(0.001, 1.000)
+        self.spin_convex_audio_ratio.setDecimals(4)
+        self.spin_convex_audio_ratio.setSingleStep(0.01)
+        self.spin_convex_audio_ratio.setValue(float(self.load_config.get("convex_audio_ratio", 1.0)))
+        self.spin_convex_audio_ratio.valueChanged.connect(lambda _: self.get_default_config())
+        row_convex_len.addWidget(self.spin_convex_audio_ratio)
+        self.spin_convex_points = QSpinBox()
+        self.spin_convex_points.setRange(1, 100000000)
+        self.spin_convex_points.setValue(int(self.load_config.get("convex_points", 1024)))
+        self.spin_convex_points.valueChanged.connect(lambda _: self.get_default_config())
+        row_convex_len.addWidget(self.spin_convex_points)
+        self.spin_convex_time = QDoubleSpinBox()
+        self.spin_convex_time.setRange(0.000, 999.000)
+        self.spin_convex_time.setDecimals(3)
+        self.spin_convex_time.setSingleStep(0.1)
+        self.spin_convex_time.setValue(float(self.load_config.get("convex_time_sec", 0.0)))
+        self.spin_convex_time.valueChanged.connect(lambda _: self.get_default_config())
+        row_convex_len.addWidget(self.spin_convex_time)
 
-    row_convex_len = QHBoxLayout()
-    row_convex_len.addWidget(QLabel("峰凸起度计算窗口"))
-    row_convex_len.addStretch(1)
-    row_convex_len.addWidget(QLabel("单位:"))
-    self.combo_convex_unit = QComboBox()
-    self.combo_convex_unit.addItems(["音频长度", "格点数", "时长(秒)"])
-    self.combo_convex_unit.setCurrentIndex(
-        {"audio": 0, "points": 1, "time": 2}.get(self.load_config.get("convex_unit", "audio"), 0)
-    )
-    self.combo_convex_unit.currentIndexChanged.connect(
-        lambda _: (self._update_convex_unit_enabled(), self.get_default_config())
-    )
-    row_convex_len.addWidget(self.combo_convex_unit)
-    self.spin_convex_audio_ratio = QDoubleSpinBox()
-    self.spin_convex_audio_ratio.setRange(0.001, 1.000)
-    self.spin_convex_audio_ratio.setDecimals(4)
-    self.spin_convex_audio_ratio.setSingleStep(0.01)
-    self.spin_convex_audio_ratio.setValue(float(self.load_config.get("convex_audio_ratio", 1.0)))
-    self.spin_convex_audio_ratio.valueChanged.connect(lambda _: self.get_default_config())
-    row_convex_len.addWidget(self.spin_convex_audio_ratio)
-    self.spin_convex_points = QSpinBox()
-    self.spin_convex_points.setRange(1, 100000000)
-    self.spin_convex_points.setValue(int(self.load_config.get("convex_points", 1024)))
-    self.spin_convex_points.valueChanged.connect(lambda _: self.get_default_config())
-    row_convex_len.addWidget(self.spin_convex_points)
-    self.spin_convex_time = QDoubleSpinBox()
-    self.spin_convex_time.setRange(0.000, 999.000)
-    self.spin_convex_time.setDecimals(3)
-    self.spin_convex_time.setSingleStep(0.1)
-    self.spin_convex_time.setValue(float(self.load_config.get("convex_time_sec", 0.0)))
-    self.spin_convex_time.valueChanged.connect(lambda _: self.get_default_config())
-    row_convex_len.addWidget(self.spin_convex_time)
+        # 峰持续时间参考点（始终启用）
+        row_dmode = QHBoxLayout()
+        row_dmode.addWidget(QLabel("峰持续时间参考点"))
+        row_dmode.addStretch(1)
+        row_dmode.addWidget(QLabel("单位:"))
 
-    # 峰持续时间参考点（始终启用）
-    row_dmode = QHBoxLayout()
-    row_dmode.addWidget(QLabel("峰持续时间参考点"))
-    row_dmode.addStretch(1)
-    row_dmode.addWidget(QLabel("单位:"))
+        ref_unit_saved = self.load_config.get("duration_ref_unit", "peak")
+        ref_value_saved = float(self.load_config.get("duration_ref_value", 0.50 if ref_unit_saved == "peak" else 100.0))
 
-    ref_unit_saved = self.load_config.get("duration_ref_unit", "peak")
-    ref_value_saved = float(self.load_config.get("duration_ref_value", 0.50 if ref_unit_saved == "peak" else 100.0))
+        self.combo_duration_ref_unit = QComboBox()
+        self.combo_duration_ref_unit.addItems(["Vpeak", "dBL"])
+        self.combo_duration_ref_unit.setCurrentIndex(0 if ref_unit_saved == "peak" else 1)
+        self.combo_duration_ref_unit.currentIndexChanged.connect(
+            lambda _: (self._update_duration_ref_unit(), self.get_default_config())
+        )
+        row_dmode.addWidget(self.combo_duration_ref_unit)
 
-    self.combo_duration_ref_unit = QComboBox()
-    self.combo_duration_ref_unit.addItems(["Vpeak", "dBL"])
-    self.combo_duration_ref_unit.setCurrentIndex(0 if ref_unit_saved == "peak" else 1)
-    self.combo_duration_ref_unit.currentIndexChanged.connect(
-        lambda _: (self._update_duration_ref_unit(), self.get_default_config())
-    )
-    row_dmode.addWidget(self.combo_duration_ref_unit)
-
-    self.spin_duration_ref = QDoubleSpinBox()
-    self.spin_duration_ref.setDecimals(2)
-    self.spin_duration_ref.setSingleStep(0.01)
-    row_dmode.addWidget(self.spin_duration_ref)
-    # set the range/step according to the unit, and fill the value
-    self._update_duration_ref_unit()
-    self.spin_duration_ref.setValue(float(ref_value_saved))
-    self.spin_duration_ref.valueChanged.connect(lambda _: self.get_default_config())
-
-    adv_layout.addLayout(row_convex_len)
-    adv_layout.addLayout(row_dmode)
-    adv_layout.addStretch()
-    adv_layout.setSpacing(10)
-    adv_layout.setContentsMargins(10, 20, 10, 20)
-    adv_group.setLayout(adv_layout)
-    adv_group.setMinimumWidth(260)
-
-    self._update_convex_unit_enabled()
-    return adv_group
-
-
-def on_toggle_advanced_mode(self):
-    # switch only affects the display, not the configuration selection semantics
-    self.advanced_visible = not getattr(self, "advanced_visible", False)
-    self.advanced_panel.setVisible(self.advanced_visible)
-    self.btn_toggle_advanced.setText("高级模式 <<<" if self.advanced_visible else "高级模式 >>>")
-    if self.advanced_visible:
-        self.setMinimumWidth(940)
-    else:
-        self.setMinimumWidth(820)
-    self.adjustSize()
-
-
-def create_btn_layout(self):
-    btn_layout = QHBoxLayout()
-    default_btn = QPushButton(" 设为默认 ")
-    ok_btn = QPushButton(" 确  认 ")
-    default_btn.clicked.connect(self.on_click_default_btn)
-    ok_btn.clicked.connect(self.on_click_ok_btn)
-    btn_layout.addWidget(default_btn)
-    btn_layout.addStretch()
-    btn_layout.addWidget(ok_btn)
-    return btn_layout
-
-
-def get_default_config(self):
-    default_config = {
-        # preprocess(advanced)
-        "filter_enabled": self.chk_filter.isChecked(),
-        "filter_ranges": self.edit_filter_ranges.text().strip(),
-        "filter_type": "bandpass" if self.combo_filter_type.currentIndex() == 0 else "bandstop",
-        "smooth_enabled": self.chk_smooth.isChecked(),
-        "smooth_unit": "time" if self.combo_smooth_unit.currentIndex() == 0 else "points",
-        "smooth_time_sec": float(self.spin_smooth_time.value()),
-        "smooth_points": int(self.spin_smooth_points.value()),
-        # based parameter
-        "peak_count_enabled": self.chk_peak_count.isChecked(),
-        "peak_count": int(self.spin_peak_count.value()),
-        "peak_size_enabled": self.chk_peak_size.isChecked(),
-        "peak_size_unit": ("rms" if self.combo_peak_size_unit.currentIndex() == 0 else "db"),
-        "peak_min_value": float(self.spin_peak_size.value()),
-        "peak_slope_enabled": self.chk_peak_slope.isChecked(),
-        "peak_slope_unit": ("rms" if self.combo_peak_slope_unit.currentIndex() == 0 else "db"),
-        "peak_min_slope": float(self.spin_peak_slope.value()),
-        "nms_enabled": self.chk_nms.isChecked(),
-        "nms_unit": "time" if self.combo_nms_unit.currentIndex() == 0 else "points",
-        "nms_time_sec": float(self.spin_nms_time.value()),
-        "nms_points": int(self.spin_nms_points.value()),
-        "spl_window_unit": ("time" if self.combo_spl_window_unit.currentIndex() == 0 else "points"),
-        "spl_window_time_sec": float(self.spin_spl_window_time.value()),
-        "spl_window_points": int(self.spin_spl_window_points.value()),
-        "duration_enabled": self.chk_duration.isChecked(),
-        "duration_min": float(self.spin_duration_min.value()),
-        "duration_max": float(self.spin_duration_max.value()),
-        # advanced mode
-        "advanced_mode": bool(getattr(self, "advanced_visible", False)),
-        "filter_order": int(self.spin_filter_order.value()),
-        "smooth_algo": int(self.group_smooth_algo.checkedId() or 1),
-        "convex_unit": (
-            "audio"
-            if self.combo_convex_unit.currentIndex() == 0
-            else ("points" if self.combo_convex_unit.currentIndex() == 1 else "time")
-        ),
-        "convex_audio_ratio": float(self.spin_convex_audio_ratio.value()),
-        "convex_points": int(self.spin_convex_points.value()),
-        "convex_time_sec": float(self.spin_convex_time.value()),
-        "duration_ref_unit": ("peak" if self.combo_duration_ref_unit.currentIndex() == 0 else "db"),
-        "duration_ref_value": float(self.spin_duration_ref.value()),
-        # test option
-        "test_peak_op": self.combo_test_peak_op.currentText(),
-        "test_peak_value": int(self.spin_test_peak_value.value()),
-    }
-    return default_config
-
-
-def _update_duration_ref_unit(self):
-    # adjust the range and precision according to the selected unit
-    is_peak_unit = self.combo_duration_ref_unit.currentIndex() == 0
-    if is_peak_unit:
-        self.spin_duration_ref.setRange(0.00, 1.00)
+        self.spin_duration_ref = QDoubleSpinBox()
         self.spin_duration_ref.setDecimals(2)
         self.spin_duration_ref.setSingleStep(0.01)
-    else:
-        self.spin_duration_ref.setRange(-200.0, 500.0)
-        self.spin_duration_ref.setDecimals(1)
-        self.spin_duration_ref.setSingleStep(1.0)
+        row_dmode.addWidget(self.spin_duration_ref)
+        # set the range/step according to the unit, and fill the value
+        self._update_duration_ref_unit()
+        self.spin_duration_ref.setValue(float(ref_value_saved))
+        self.spin_duration_ref.valueChanged.connect(lambda _: self.get_default_config())
 
+        adv_layout.addLayout(row_convex_len)
+        adv_layout.addLayout(row_dmode)
+        adv_layout.addStretch()
+        adv_layout.setSpacing(10)
+        adv_layout.setContentsMargins(10, 20, 10, 20)
+        adv_group.setLayout(adv_layout)
+        adv_group.setMinimumWidth(260)
 
-def _update_smooth_unit_enabled(self):
-    is_time = self.combo_smooth_unit.currentIndex() == 0
-    self.spin_smooth_time.setVisible(is_time)
-    self.spin_smooth_points.setVisible(not is_time)
+        self._update_convex_unit_enabled()
+        return adv_group
 
+    def on_toggle_advanced_mode(self):
+        # switch only affects the display, not the configuration selection semantics
+        self.advanced_visible = not getattr(self, "advanced_visible", False)
+        self.advanced_panel.setVisible(self.advanced_visible)
+        self.btn_toggle_advanced.setText("高级模式 <<<" if self.advanced_visible else "高级模式 >>>")
+        if self.advanced_visible:
+            self.setMinimumWidth(940)
+        else:
+            self.setMinimumWidth(820)
+        self.adjustSize()
 
-def _update_nms_unit_enabled(self):
-    is_time = self.combo_nms_unit.currentIndex() == 0
-    self.spin_nms_time.setVisible(is_time)
-    self.spin_nms_points.setVisible(not is_time)
+    def create_btn_layout(self):
+        btn_layout = QHBoxLayout()
+        default_btn = QPushButton(" 设为默认 ")
+        ok_btn = QPushButton(" 确  认 ")
+        default_btn.clicked.connect(self.on_click_default_btn)
+        ok_btn.clicked.connect(self.on_click_ok_btn)
+        btn_layout.addWidget(default_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        return btn_layout
 
+    def get_default_config(self):
+        default_config = {
+            # preprocess(advanced)
+            "filter_enabled": self.chk_filter.isChecked(),
+            "filter_ranges": self.edit_filter_ranges.text().strip(),
+            "filter_type": "bandpass" if self.combo_filter_type.currentIndex() == 0 else "bandstop",
+            "smooth_enabled": self.chk_smooth.isChecked(),
+            "smooth_unit": "time" if self.combo_smooth_unit.currentIndex() == 0 else "points",
+            "smooth_time_sec": float(self.spin_smooth_time.value()),
+            "smooth_points": int(self.spin_smooth_points.value()),
+            # based parameter
+            "peak_count_enabled": self.chk_peak_count.isChecked(),
+            "peak_count": int(self.spin_peak_count.value()),
+            "peak_size_enabled": self.chk_peak_size.isChecked(),
+            "peak_size_unit": ("rms" if self.combo_peak_size_unit.currentIndex() == 0 else "db"),
+            "peak_min_value": float(self.spin_peak_size.value()),
+            "peak_slope_enabled": self.chk_peak_slope.isChecked(),
+            "peak_slope_unit": ("rms" if self.combo_peak_slope_unit.currentIndex() == 0 else "db"),
+            "peak_min_slope": float(self.spin_peak_slope.value()),
+            "nms_enabled": self.chk_nms.isChecked(),
+            "nms_unit": "time" if self.combo_nms_unit.currentIndex() == 0 else "points",
+            "nms_time_sec": float(self.spin_nms_time.value()),
+            "nms_points": int(self.spin_nms_points.value()),
+            "spl_window_unit": ("time" if self.combo_spl_window_unit.currentIndex() == 0 else "points"),
+            "spl_window_time_sec": float(self.spin_spl_window_time.value()),
+            "spl_window_points": int(self.spin_spl_window_points.value()),
+            "duration_enabled": self.chk_duration.isChecked(),
+            "duration_min": float(self.spin_duration_min.value()),
+            "duration_max": float(self.spin_duration_max.value()),
+            # advanced mode
+            "advanced_mode": bool(getattr(self, "advanced_visible", False)),
+            "filter_order": int(self.spin_filter_order.value()),
+            "smooth_algo": int(self.group_smooth_algo.checkedId() or 1),
+            "convex_unit": (
+                "audio"
+                if self.combo_convex_unit.currentIndex() == 0
+                else ("points" if self.combo_convex_unit.currentIndex() == 1 else "time")
+            ),
+            "convex_audio_ratio": float(self.spin_convex_audio_ratio.value()),
+            "convex_points": int(self.spin_convex_points.value()),
+            "convex_time_sec": float(self.spin_convex_time.value()),
+            "duration_ref_unit": ("peak" if self.combo_duration_ref_unit.currentIndex() == 0 else "db"),
+            "duration_ref_value": float(self.spin_duration_ref.value()),
+            # test option
+            "test_peak_op": self.combo_test_peak_op.currentText(),
+            "test_peak_value": int(self.spin_test_peak_value.value()),
+        }
+        return default_config
 
-def _update_spl_window_unit_enabled(self):
-    is_time = self.combo_spl_window_unit.currentIndex() == 0
-    self.spin_spl_window_time.setVisible(is_time)
-    self.spin_spl_window_points.setVisible(not is_time)
+    def _update_duration_ref_unit(self):
+        # adjust the range and precision according to the selected unit
+        is_peak_unit = self.combo_duration_ref_unit.currentIndex() == 0
+        if is_peak_unit:
+            self.spin_duration_ref.setRange(0.00, 1.00)
+            self.spin_duration_ref.setDecimals(2)
+            self.spin_duration_ref.setSingleStep(0.01)
+        else:
+            self.spin_duration_ref.setRange(-200.0, 500.0)
+            self.spin_duration_ref.setDecimals(1)
+            self.spin_duration_ref.setSingleStep(1.0)
 
+    def _update_smooth_unit_enabled(self):
+        is_time = self.combo_smooth_unit.currentIndex() == 0
+        self.spin_smooth_time.setVisible(is_time)
+        self.spin_smooth_points.setVisible(not is_time)
 
-def _update_convex_unit_enabled(self):
-    idx = self.combo_convex_unit.currentIndex()
-    is_audio = idx == 0
-    is_points = idx == 1
-    is_time = idx == 2
-    self.spin_convex_audio_ratio.setVisible(is_audio)
-    self.spin_convex_points.setVisible(is_points)
-    self.spin_convex_time.setVisible(is_time)
+    def _update_nms_unit_enabled(self):
+        is_time = self.combo_nms_unit.currentIndex() == 0
+        self.spin_nms_time.setVisible(is_time)
+        self.spin_nms_points.setVisible(not is_time)
 
+    def _update_spl_window_unit_enabled(self):
+        is_time = self.combo_spl_window_unit.currentIndex() == 0
+        self.spin_spl_window_time.setVisible(is_time)
+        self.spin_spl_window_points.setVisible(not is_time)
 
-def _update_peak_units(self):
-    is_db_for_size = self.combo_peak_size_unit.currentIndex() == 1
-    if is_db_for_size:
-        self.spin_peak_size.setRange(-200.0, 500.0)
-        self.spin_peak_size.setDecimals(1)
-        self.spin_peak_size.setSingleStep(1.0)
-    else:
-        # rmsV/Vmax -> 0~1 decimal
-        self.spin_peak_size.setRange(0.0, 1.0)
-        self.spin_peak_size.setDecimals(3)
-        self.spin_peak_size.setSingleStep(0.001)
-        v = float(self.spin_peak_size.value())
-        if v < 0.0:
-            self.spin_peak_size.setValue(0.0)
-        elif v > 1.0:
-            self.spin_peak_size.setValue(1.0)
+    def _update_convex_unit_enabled(self):
+        idx = self.combo_convex_unit.currentIndex()
+        is_audio = idx == 0
+        is_points = idx == 1
+        is_time = idx == 2
+        self.spin_convex_audio_ratio.setVisible(is_audio)
+        self.spin_convex_points.setVisible(is_points)
+        self.spin_convex_time.setVisible(is_time)
 
-    # peak slope
-    is_db_for_slope = self.combo_peak_slope_unit.currentIndex() == 1
-    if is_db_for_slope:
-        self.spin_peak_slope.setRange(0.0, 10000.0)
-        self.spin_peak_slope.setDecimals(1)
-        self.spin_peak_slope.setSingleStep(1.0)
-    else:
-        self.spin_peak_slope.setRange(0.0, 1.0)
-        self.spin_peak_slope.setDecimals(3)
-        self.spin_peak_slope.setSingleStep(0.001)
-        v2 = float(self.spin_peak_slope.value())
-        if v2 < 0.0:
-            self.spin_peak_slope.setValue(0.0)
-        elif v2 > 1.0:
-            self.spin_peak_slope.setValue(1.0)
+    def _update_peak_units(self):
+        is_db_for_size = self.combo_peak_size_unit.currentIndex() == 1
+        if is_db_for_size:
+            self.spin_peak_size.setRange(-200.0, 500.0)
+            self.spin_peak_size.setDecimals(1)
+            self.spin_peak_size.setSingleStep(1.0)
+        else:
+            # rmsV/Vmax -> 0~1 decimal
+            self.spin_peak_size.setRange(0.0, 1.0)
+            self.spin_peak_size.setDecimals(3)
+            self.spin_peak_size.setSingleStep(0.001)
+            v = float(self.spin_peak_size.value())
+            if v < 0.0:
+                self.spin_peak_size.setValue(0.0)
+            elif v > 1.0:
+                self.spin_peak_size.setValue(1.0)
 
+        # peak slope
+        is_db_for_slope = self.combo_peak_slope_unit.currentIndex() == 1
+        if is_db_for_slope:
+            self.spin_peak_slope.setRange(0.0, 10000.0)
+            self.spin_peak_slope.setDecimals(1)
+            self.spin_peak_slope.setSingleStep(1.0)
+        else:
+            self.spin_peak_slope.setRange(0.0, 1.0)
+            self.spin_peak_slope.setDecimals(3)
+            self.spin_peak_slope.setSingleStep(0.001)
+            v2 = float(self.spin_peak_slope.value())
+            if v2 < 0.0:
+                self.spin_peak_slope.setValue(0.0)
+            elif v2 > 1.0:
+                self.spin_peak_slope.setValue(1.0)
 
-def on_click_default_btn(self):
-    config_data = self.get_default_config()
-    save_flag = self.config_manager.save_default_config("PD", config_data)
-    PopupUtils().save_popup(self, success_flag=save_flag)
+    def on_click_default_btn(self):
+        config_data = self.get_default_config()
+        save_flag = self.config_manager.save_default_config("PD", config_data)
+        PopupUtils().save_popup(self, success_flag=save_flag)
 
-
-def on_click_ok_btn(self):
-    config_data = self.get_default_config()
-    self.accept()
-    return config_data
+    def on_click_ok_btn(self):
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
