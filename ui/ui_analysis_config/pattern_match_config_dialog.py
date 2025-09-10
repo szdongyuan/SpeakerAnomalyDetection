@@ -28,7 +28,7 @@ class PatternMatchConfigWindow(QDialog):
         # self.audio_file_path = None
         # self.pattern_save_path = None
         # self.audio_data = None
-        self.sample_rate = self.load_config["sample_rate"]
+        self.sample_rate = self.load_config.get("sample_rate", 44100)
         # self.selected_region_time = (None, None)
         self.config_data = None
 
