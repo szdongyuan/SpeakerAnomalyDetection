@@ -44,10 +44,10 @@ class SequenceWindow(QWidget):
         self.deviation_value = get_mic_deviation_value()
         self.sequence_config = list()
         self.analysis_config = dict()
+        self.spec_list = list()
         self.get_sequence_config_from_json()
         self.init_data_struct_stimulus_config()
         self.init_fft_and_stft_flag()
-        self.signal_info = {}
         self.analysis_window = []
         self.default_ed = None
         self.default_ed_result = None
@@ -94,11 +94,11 @@ class SequenceWindow(QWidget):
         self.setLayout(self.sequence_layout)
 
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
-        sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
-        sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
+        # sign.get_result_file_sign.connect(self.get_result_file, Qt.AutoConnection)
+        # sign.set_result_file_sign.connect(self.set_result_file, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.get_sequence_config_from_json, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
-        sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
+        # sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         self.update_mode_display(0)
         self.setStyleSheet(
             ui_style_const.qcombobox_style
@@ -337,11 +337,7 @@ class SequenceWindow(QWidget):
         font_top = QFont()
         font_top.setPixelSize(20)
 
-        self.text_top = pg.TextItem(
-            text="Channel_1", 
-            color=(0, 0, 0),  # 黑色
-            fill=(255, 255, 255, 127)  # 半透明背景
-        )
+        self.text_top = pg.TextItem(text="Channel_1", color=(0, 0, 0), fill=(255, 255, 255, 127))  # 黑色  # 半透明背景
         self.text_top.setFont(font_top)
         self.text_top.setPos(0, 0)  # 设置左上角位置
         self.text_top.setParentItem(self.line_graph_top.getViewBox())  # 绑定到视图框
@@ -358,9 +354,7 @@ class SequenceWindow(QWidget):
         font_bottom.setPixelSize(20)
 
         self.text_bottom = pg.TextItem(
-            text="Channel_2", 
-            color=(0, 0, 0),  # 黑色
-            fill=(255, 255, 255, 127)  # 半透明背景
+            text="Channel_2", color=(0, 0, 0), fill=(255, 255, 255, 127)  # 黑色  # 半透明背景
         )
         self.text_bottom.setFont(font_bottom)
         self.text_bottom.setPos(0, 0)  # 设置左上角位置
@@ -500,7 +494,7 @@ class SequenceWindow(QWidget):
         model_item_list = self.analysis_config.get("display_sequence", "")
         for item_name in model_item_list:
             analysis_item = self.analysis_config.get(item_name, {})
-            item_type = analysis_item.get("type", None) 
+            item_type = analysis_item.get("type", None)
             self.data_struct.add_stft_or_fft_count(item_type)
 
     def init_result_files(self):
@@ -540,6 +534,7 @@ class SequenceWindow(QWidget):
                 self.ng_line_edit.setText(ng)
                 self.yield_line_edit.setText(ok_percent)
                 self.datatime_line_edit.setText(datatime)
+
     def set_result_file(self, index, params):
         current_time = datetime.now().strftime("%Y-%m-%d")
         if index == 0:
@@ -607,7 +602,7 @@ class SequenceWindow(QWidget):
             last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
             lineedit.setText(str(last_recorded_info.get("product_model", "S004-1")))
 
-    def validate_count(self, lineedit, is_s_or_n: bool):
+    def validate_count(self, lineedit):
         """
             Validates the count input from the user.
 
@@ -618,21 +613,13 @@ class SequenceWindow(QWidget):
             Parameters:
             lineedit (QLineEdit): The QLineEdit object containing the user's count input.
         """
-        s_or_n_count = lineedit.text()
+        count = lineedit.text()
         result_count, result_scanner_barcode = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
-        reg = None
-        if is_s_or_n:
-            reg = r"^[0-9]*$"
-        else:
-            reg = r"^[0-9a-zA-Z]*$"
-
-        if not re.match(reg, s_or_n_count):
+        reg = r"^[0-9]*$"
+        if not re.match(reg, count):
             lineedit.setText(str(result_count))
-        if s_or_n_count == "":
-            if is_s_or_n:
-                lineedit.setText(str(result_count))
-            else:
-                lineedit.setText(str(result_scanner_barcode))
+        if count == "":
+            lineedit.setText(str(result_count))
 
     def is_clicked_tcp(self):
         if self.scanner_tcp.isChecked():
@@ -699,21 +686,26 @@ class SequenceWindow(QWidget):
             self.default_logger.error("Failed to update recorded signal.")
 
     def update_recorded_label_in_test_mode(self, label: str):
+        self.default_ed_result = label
         if label == "OK":
             self.recorded_signal_info["labels"] = "OK"
         elif label == "NG":
             self.recorded_signal_info["labels"] = "NG"
 
     def test_insert_data_into_db(self):
-        self.update_recorded_signal_info_to_db()
+        # self.update_recorded_signal_info_to_db()
         self.player_status_flag = False
-        self.signal_info.clear()
-        self.replayer_btn.setDisabled(True)
-        self.data_btn.setEnabled(False)
-        self.default_ed_result = None
+        # self.replayer_btn.setDisabled(True)
+        # self.data_btn.setEnabled(False)
+        # self.default_ed_result = None
         self.default_ed = None
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        if self.default_ed_result:
+            self.update_recorded_signal_info_to_db()
+            self.set_result_file(0, self.default_ed_result)
+            self.get_result_file(0)
+
         self.clicked_player_flag = True
         self.start_this_play(label)
 
@@ -735,7 +727,9 @@ class SequenceWindow(QWidget):
             self.clicked_player_flag = False
         elif self.clicked_player_flag is False:
             if self.scanner_tcp.isChecked():
-                TempTcpClient(SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish")
+                TempTcpClient(
+                    SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
+                )
 
     def checked_work_status_message(self):
         if not self.sequence_config:
@@ -807,6 +801,8 @@ class SequenceWindow(QWidget):
                 if self.analysis_config["default_ed"] == key:
                     self.default_ed = class_instance
                     class_instance.is_default_flag = True
+                if type == "Spec":
+                    self.spec_list.append(class_instance)
                 class_instance.deviation_value = self.deviation_value
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
@@ -853,7 +849,10 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, "calculate_pipeline_pd_pm"):
                     instance.calculate_pipeline_pd_pm()
                     instance.show()
-                instance.setGeometry(width, height, 600, 500)
+                if instance in self.spec_list:
+                    instance.setGeometry(width, height, 800, 500)
+                else:
+                    instance.setGeometry(width, height, 600, 500)
                 instance.setMinimumSize(QSize(600, 500))
                 width += 20
                 height += 20

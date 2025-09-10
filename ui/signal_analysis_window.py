@@ -1931,8 +1931,8 @@ class PipelinePdPm(AnalysisGraphWidget):
         self.result_display.setHtml(summary_line)
 
         if self.is_default_flag:
-            sign.set_result_file_sign.emit(0, status_text)
-            sign.get_result_file_sign.emit(0)
+            # sign.set_result_file_sign.emit(0, status_text)
+            # sign.get_result_file_sign.emit(0)
             sign.test_insert_data_into_db_sign.emit(status_text)
         return {"results": results, "matched": matched, "total": total, "passed": passed}
 
