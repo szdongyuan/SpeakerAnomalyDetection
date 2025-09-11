@@ -145,6 +145,7 @@ def get_mac_address():
 
         adapter = adapter_info.Next
     if len(physical_adapters) > 0:
-        return physical_adapters[0]["mac_address"]
+        address = physical_adapters[0]["mac_address"].lower()
+        return address
 
     raise Exception("No MAC address found")
