@@ -146,14 +146,24 @@ class AudioClipExtractionDialog(QDialog):
 
     def set_channel_text(self, audio_data):
         self.channel_combobox.clear()
-        for i in range(audio_data.shape[0]):
-            self.channel_combobox.addItem(f"In {i+1}")
+        if audio_data.ndim == 1:
+            self.channel_combobox.addItem("Mono")
+        else:
+            for i in range(audio_data.shape[0]):
+                self.channel_combobox.addItem(f"In {i+1}")
 
     def channel_changed(self, index):
         self.select_channel = index
         self.plot_curve.clear()
-        time_array = np.linspace(0, len(self.audio_data[index]) / self.sample_rate, num=len(self.audio_data[index]))
-        self.plot_curve.setData(time_array, self.audio_data[index])
+        if self.audio_data.ndim == 1:
+            selected_channel_data = self.audio_data
+        else:
+            selected_channel_data = self.audio_data[index]
+
+        time_array = np.linspace(0, len(selected_channel_data) / self.sample_rate, 
+                                num=len(selected_channel_data))
+        self.plot_curve.setData(time_array, selected_channel_data)
+
         self.region.setBounds([0, time_array[-1]])
         self.plot_widget.setActive(True)
 
@@ -162,8 +172,16 @@ class AudioClipExtractionDialog(QDialog):
             audio_data, sample_rate = librosa.load(file_path, sr=self.sample_rate, mono=False)
             self.audio_data, self.sample_rate = audio_data, sample_rate
             self.set_channel_text(self.audio_data)
-            time_array = np.linspace(0, len(audio_data[0]) / sample_rate, num=len(audio_data[0]))
-            self.plot_curve.setData(time_array, audio_data[0])
+
+            if audio_data.ndim == 1:
+                display_data = audio_data
+                self.channel_combobox.setEnabled(False)
+            else:
+                display_data = audio_data[0]
+                self.channel_combobox.setEnabled(True)
+
+            time_array = np.linspace(0, len(display_data) / sample_rate, num=len(display_data))
+            self.plot_curve.setData(time_array, display_data)
             self.region.setBounds([0, time_array[-1]])
             self.plot_widget.setActive(True)
         except Exception as e:
@@ -206,7 +224,12 @@ class AudioClipExtractionDialog(QDialog):
             start_time, end_time = self.selected_region_time
             start_sample = int(start_time * self.sample_rate)
             end_sample = int(end_time * self.sample_rate)
-            clip_data = self.audio_data[self.select_channel][start_sample:end_sample]
+            if self.audio_data.ndim == 1:
+                # 单声道音频
+                clip_data = self.audio_data[start_sample:end_sample]
+            else:
+                # 多声道音频
+                clip_data = self.audio_data[self.select_channel][start_sample:end_sample]
 
             relative_path = self.save_clip_path
             if self.save_clip:
