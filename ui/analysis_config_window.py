@@ -1618,12 +1618,22 @@ class PDTabbedPDConfigWindow(QDialog):
             cfg = ch_map.get(ch, {})
             cfg_id = int(cfg.get("id")) if cfg.get("id") is not None else self._next_id()
             self.add_tab(int(ch), cfg, cfg_id)
+        # 默认选择通道1，如果不存在则选择第一个标签
+        target_idx = None
+        for i in range(self.tabs.count()):
+            form = self.tabs.widget(i)
+            if hasattr(form, "channel_id") and int(getattr(form, "channel_id", 0)) == 1:
+                target_idx = i
+                break
+        if target_idx is None and self.tabs.count() > 0:
+            target_idx = 0
+        if target_idx is not None:
+            self.tabs.setCurrentIndex(target_idx)
 
     def add_tab(self, channel_id: int, cfg: dict, config_id: int):
         form = PDForm(cfg, channel_id, config_id)
         tab_title = f"通道{int(channel_id)}"
-        idx = self.tabs.addTab(form, tab_title)
-        self.tabs.setCurrentIndex(idx)
+        self.tabs.addTab(form, tab_title)
 
     def _next_id(self):
         while True:
@@ -2148,10 +2158,8 @@ class PatternMatchConfigWindow(QDialog):
         
         # Handle auto equal length checkbox
         auto_equal_length = config.get("auto_equal_length", False)
-        print(auto_equal_length)
         # if hasattr(self, "_auto_equal_chk"):
         self._auto_equal_chk.setChecked(auto_equal_length)
-
 
     def refresh_data_view(self):
         self.data_view.model().setRowCount(0)
@@ -2585,7 +2593,6 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         self.set_button_texts("配置峰值检测参数", "配置模式匹配参数")
         self.set_child_window_titles("峰值检测参数", "模式匹配参数")
         self.set_group_title("峰值检测 -> 模式匹配")
-        self._init_length_group()
         self._init_pass_condition_group()
 
     def _init_pass_condition_group(self):
@@ -2641,53 +2648,8 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         except Exception:
             pass
 
-    def _init_length_group(self):
-        root_layout = self.layout()
-        if not root_layout:
-            return
-        length_group = QGroupBox("长度控制")
-        vbox = QVBoxLayout()
-
-        # first row: left/right grid points (include peak point)
-        row1 = QHBoxLayout()
-        lbl_l = QLabel("左侧格点数")
-        lbl_r = QLabel("右侧格点数")
-        self._left_grid_spin = QSpinBox()
-        self._right_grid_spin = QSpinBox()
-        for sp in (self._left_grid_spin, self._right_grid_spin):
-            sp.setRange(0, 9999999)
-            sp.setSingleStep(1)
-        row1.addWidget(lbl_l)
-        row1.addWidget(self._left_grid_spin)
-        row1.addSpacing(12)
-        row1.addWidget(lbl_r)
-        row1.addWidget(self._right_grid_spin)
-        row1.addStretch()
-
-        # load existing configuration
-        try:
-            if isinstance(self.load_config, dict):
-                lg = int(self.load_config.get("left_grid", 0) or 0)
-                rg = int(self.load_config.get("right_grid", 0) or 0)
-                self._left_grid_spin.setValue(max(0, lg))
-                self._right_grid_spin.setValue(max(0, rg))
-        except Exception:
-            pass
-
-        vbox.addLayout(row1)
-        length_group.setLayout(vbox)
-
-        try:
-            # insert after button group, before pass condition
-            root_layout.insertWidget(1, length_group)
-        except Exception:
-            root_layout.addWidget(length_group)
-
     def get_default_config(self):
         cfg = super().get_default_config()
-        # pipeline itself configuration
-        cfg["left_grid"] = int(self._left_grid_spin.value()) if hasattr(self, "_left_grid_spin") else 0
-        cfg["right_grid"] = int(self._right_grid_spin.value()) if hasattr(self, "_right_grid_spin") else 0
         # pass condition
         cfg["pass_condition"] = {
             "n1": int(self._n1_spin.value()) if hasattr(self, "_n1_spin") else 1,
