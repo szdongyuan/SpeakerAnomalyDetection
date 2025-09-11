@@ -10,7 +10,6 @@ from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView
-from scipy.signal import find_peaks
 from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
 from scipy.spatial.distance import cosine, euclidean, cityblock
 from scipy.stats import pearsonr
@@ -751,14 +750,14 @@ class PeakDetection(AnalysisGraphWidget):
             
         return False
     
-    def _spectral_flux_peak_detection(self, audio_signal, sample_rate, threshold, window_s=0.1, n_fft=1024, hop_length=128):
+    def _spectral_flux_peak_detection(self, audio_signal, sample_rate, threshold, window_s=0.1, n_fft=1024, hop_length=128, win_length=None):
         """
         Perform peak detection directly on spectral flux
         """
         try:
             # Compute spectral flux
             flux, flux_times = AudioFeatureExtraction.spectral_flux(
-                audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length
+                audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length, win_length=win_length
             )
             
             if flux is None or flux.size == 0:
@@ -893,51 +892,75 @@ class PeakDetection(AnalysisGraphWidget):
 
         # Apply spectral flux filtering/detection if configured
         specflux_min = float(self.analysis_config.get("specflux_min_value", 0.0))
-        window_s = 0.1
-        
         # Check if spectral flux should be used as primary or secondary detection method
         use_spectral_flux_primary = specflux_min > 0.0 and self._is_spectral_flux_only_mode()
         
         if use_spectral_flux_primary:
             # Use spectral flux as the primary peak detection method
+            # Channel 1 params
+            ch1_specflux_min = float(config_ch1.get("specflux_min_value", 0.0))
+            ch1_window_s = float(config_ch1.get("spectral_flux_window_s", 0.1))
+            ch1_win_len = int(config_ch1.get("spectral_flux_window_length", 1024))
+            ch1_n_fft = ch1_win_len
+            ch1_hop = int(config_ch1.get("spectral_flux_hop_length", 128))
+
+            # Channel 2 params
+            ch2_specflux_min = float(config_ch2.get("specflux_min_value", 0.0)) if config_ch2 else 0.0
+            ch2_window_s = float(config_ch2.get("spectral_flux_window_s", 0.1)) if config_ch2 else 0.1
+            ch2_win_len = int(config_ch2.get("spectral_flux_window_length", 1024)) if config_ch2 else 1024
+            ch2_n_fft = ch2_win_len
+            ch2_hop = int(config_ch2.get("spectral_flux_hop_length", 128)) if config_ch2 else 128
+
             if result_ch1:
                 pidx1_f = self._spectral_flux_peak_detection(
-                    recorded_signal_ch1, sample_rate, specflux_min, window_s
+                    recorded_signal_ch1, sample_rate, ch1_specflux_min, ch1_window_s, n_fft=ch1_n_fft, hop_length=ch1_hop, win_length=ch1_win_len
                 )
                 result_ch1["peaks_index"] = pidx1_f
                 result_ch1["peaks_time_sec"] = (np.array(pidx1_f, dtype=float) / float(sample_rate)).tolist()
                 result_ch1["num_peaks"] = len(pidx1_f)
                 
-            if result_ch2:
+            if result_ch2 and recorded_signal_ch2 is not None:
                 pidx2_f = self._spectral_flux_peak_detection(
-                    recorded_signal_ch2, sample_rate, specflux_min, window_s
+                    recorded_signal_ch2, sample_rate, ch2_specflux_min, ch2_window_s, n_fft=ch2_n_fft, hop_length=ch2_hop, win_length=ch2_win_len
                 )
                 result_ch2["peaks_index"] = pidx2_f
                 result_ch2["peaks_time_sec"] = (np.array(pidx2_f, dtype=float) / float(sample_rate)).tolist()
                 result_ch2["num_peaks"] = len(pidx2_f)
         else:
             # Use spectral flux as a filter on existing peaks
-            if result_ch1 and specflux_min > 0.0:
-                pidx1 = result_ch1.get("peaks_index", [])
-                pidx1_f = filter_peaks_by_spectral_flux(
-                    pidx1, sample_rate, recorded_signal_ch1, 
-                    window_s=window_s, threshold=specflux_min, 
-                    n_fft=1024, hop_length=128
-                )
-                result_ch1["peaks_index"] = pidx1_f
-                result_ch1["peaks_time_sec"] = (np.array(pidx1_f, dtype=float) / float(sample_rate)).tolist()
-                result_ch1["num_peaks"] = len(pidx1_f)
+            if result_ch1:
+                ch1_specflux_min = float(config_ch1.get("specflux_min_value", 0.0))
+                if ch1_specflux_min > 0.0:
+                    ch1_window_s = float(config_ch1.get("spectral_flux_window_s", 0.1))
+                    ch1_win_len = int(config_ch1.get("spectral_flux_window_length", 1024))
+                    ch1_n_fft = ch1_win_len
+                    ch1_hop = int(config_ch1.get("spectral_flux_hop_length", 128))
+                    pidx1 = result_ch1.get("peaks_index", [])
+                    pidx1_f = filter_peaks_by_spectral_flux(
+                        pidx1, sample_rate, recorded_signal_ch1, 
+                        window_s=ch1_window_s, threshold=ch1_specflux_min, 
+                        n_fft=ch1_n_fft, hop_length=ch1_hop, win_length=ch1_win_len
+                    )
+                    result_ch1["peaks_index"] = pidx1_f
+                    result_ch1["peaks_time_sec"] = (np.array(pidx1_f, dtype=float) / float(sample_rate)).tolist()
+                    result_ch1["num_peaks"] = len(pidx1_f)
                 
-            if result_ch2 and specflux_min > 0.0:
-                pidx2 = result_ch2.get("peaks_index", [])
-                pidx2_f = filter_peaks_by_spectral_flux(
-                    pidx2, sample_rate, recorded_signal_ch2, 
-                    window_s=window_s, threshold=specflux_min, 
-                    n_fft=1024, hop_length=128
-                )
-                result_ch2["peaks_index"] = pidx2_f
-                result_ch2["peaks_time_sec"] = (np.array(pidx2_f, dtype=float) / float(sample_rate)).tolist()
-                result_ch2["num_peaks"] = len(pidx2_f)
+            if result_ch2 and recorded_signal_ch2 is not None:
+                ch2_specflux_min = float(config_ch2.get("specflux_min_value", 0.0)) if config_ch2 else 0.0
+                if ch2_specflux_min > 0.0:
+                    ch2_window_s = float(config_ch2.get("spectral_flux_window_s", 0.1)) if config_ch2 else 0.1
+                    ch2_win_len = int(config_ch2.get("spectral_flux_window_length", 1024)) if config_ch2 else 1024
+                    ch2_n_fft = ch2_win_len
+                    ch2_hop = int(config_ch2.get("spectral_flux_hop_length", 128)) if config_ch2 else 128
+                    pidx2 = result_ch2.get("peaks_index", [])
+                    pidx2_f = filter_peaks_by_spectral_flux(
+                        pidx2, sample_rate, recorded_signal_ch2, 
+                        window_s=ch2_window_s, threshold=ch2_specflux_min, 
+                        n_fft=ch2_n_fft, hop_length=ch2_hop, win_length=ch2_win_len
+                    )
+                    result_ch2["peaks_index"] = pidx2_f
+                    result_ch2["peaks_time_sec"] = (np.array(pidx2_f, dtype=float) / float(sample_rate)).tolist()
+                    result_ch2["num_peaks"] = len(pidx2_f)
         
         merged_results = self._merge_peak_results(result_ch1, result_ch2, self.analysis_config)
         self.result = merged_results
