@@ -6,29 +6,30 @@ import pyqtgraph as pg
 from librosa.core import spectrum
 from librosa.feature import spectral
 from librosa.sequence import dtw
-from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton
+from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtWidgets import QHeaderView, QHBoxLayout, QLabel, QTableWidget, QPushButton
+from PyQt5.QtWidgets import QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget
+from pyqtgraph import mkPen
 from scipy.signal import find_peaks
-from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
-from scipy.spatial.distance import cosine, euclidean, cityblock
+from scipy.spatial.distance import cityblock, cosine, euclidean
 from scipy.stats import pearsonr
-from scipy.signal import find_peaks
 from skimage.feature import local_binary_pattern, match_template
-from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
-from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from base.pre_processing.audio_peak_detection import peak_detection, filter_peaks_by_spectral_flux, spectral_flux_peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
+from base.pre_processing.audio_peak_detection import filter_peaks_by_spectral_flux, peak_detection
+from base.pre_processing.audio_peak_detection import spectral_flux_peak_detection
+from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.utils.custom_signals import sign
+from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
 from base.utils.smooth import smooth
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.graph_widget import plot_2d_image, custom_log_tick_strings
+from ui.graph_widget import custom_log_tick_strings, plot_2d_image
 
 
 def get_class_mapping():
@@ -1159,6 +1160,7 @@ class PatternMatch(QWidget):
         self.target_data = self.data_struct.store_wave_data
         self.analysis_config = None
         self.sample_rate = self.data_struct.sample_rate
+        self.default_logger = LogManager.set_log_handler("core") # 记录日志
         self.init_ui()
         self.setWindowTitle(title_name)
 
@@ -1199,7 +1201,7 @@ class PatternMatch(QWidget):
         config_ch2 = config_ch2.copy()
         config_ch1["auto_equal_length"] = auto_equal_length
         config_ch2["auto_equal_length"] = auto_equal_length
-        
+
         # Add external peak parameter if provided
         if peak is not None:
             if isinstance(peak, (list, tuple, np.ndarray)) and len(peak) == 2:
@@ -1251,15 +1253,19 @@ class PatternMatch(QWidget):
 
         all_scores = []
         for pattern_info in pattern_list:
-            pattern_path = os.path.join(DEFAULT_DIR, pattern_info["clip_path"])
-            if not os.path.exists(pattern_path):
+            try:
+                pattern_path = os.path.join(DEFAULT_DIR, pattern_info["clip_path"])
+                if not os.path.exists(pattern_path):
+                    continue
+
+                pattern_data, _ = load_audio_simple(pattern_path, self.sample_rate)
+                result = self.process_single_channel(target_data, pattern_data, channel_config)
+
+                if result and result['score'] is not None:
+                    all_scores.append(result['score'])
+            except Exception as e:
+                self.default_logger.error(e)
                 continue
-
-            pattern_data, _ = load_audio_simple(pattern_path, self.sample_rate)
-            result = self.process_single_channel(target_data, pattern_data, channel_config)
-
-            if result and result['score'] is not None:
-                all_scores.append(result['score'])
 
         if not all_scores:
             return {"score": None, "success": False, "threshold": None}
@@ -1289,11 +1295,10 @@ class PatternMatch(QWidget):
                 "threshold": threshold * 100
                 }
 
-
     def process_single_channel(self, target_data, pattern_data, config):
         # Check if external peak parameter is provided
         peak = config.get("peak")
-        
+
         if config.get("apply_filter", False):
             start_freq, end_freq = config.get("filter_range_hz", [None, None])
             if start_freq is not None and end_freq is not None:
@@ -1311,8 +1316,6 @@ class PatternMatch(QWidget):
                 target_data, pattern_data = align_signals_by_peaks(target_data, pattern_data)
 
         target_features, pattern_features = self.extract_features(target_data, pattern_data, config)
-        if target_features is None or pattern_features is None:
-            return None
 
         result = self.execute_match_algorithm(target_features, pattern_features, config)
         return result
@@ -1328,11 +1331,10 @@ class PatternMatch(QWidget):
             "ncc": PatternMatch.match_ncc,
         }
         if algorithm not in dispatcher:
-            return None
+            raise ValueError(f"配置错误：未知的匹配算法 '{algorithm}'。")
 
-        score_value = dispatcher[algorithm](target_features, pattern_features, params)
+        score_value = dispatcher[algorithm](target_features, pattern_features, params, )
         return {"score": score_value}
-
 
     @staticmethod
     def match_distance(target, pattern, params):
@@ -1343,10 +1345,9 @@ class PatternMatch(QWidget):
             target, pattern = target[:min_len], pattern[:min_len]
         metric_map = {"euclidean": euclidean, "cosine": cosine, "manhattan": cityblock}
         if metric not in metric_map:
-            return None
+            raise ValueError(f"配置错误：无效的距离度量 '{metric}'。")
 
         distance = metric_map[metric](target, pattern)
-
         if metric == 'cosine':
             score = 1 - distance
             score = (score + 1) / 2
@@ -1360,30 +1361,25 @@ class PatternMatch(QWidget):
         normalization = params.get("normalization", "none")
         global_constraints = params.get("global_constraints", False)
         band_rad = params.get("band_rad", 0.25)
-        try:
-            D, wp = dtw(X=target, Y=pattern, metric=metric, backtrack=True, global_constraints=global_constraints,
-                        band_rad=band_rad)
-            distance = D[-1, -1]
-            if normalization == 'path_length':
-                if len(wp) > 0:
-                    distance /= len(wp)
-            elif normalization == 'sum_length':
-                total_len = target.shape[1] + pattern.shape[1]
-                if total_len > 0:
-                    distance /= total_len
 
-            score = 1 / (1 + distance)
-            return score
-        except Exception as e:
-            return None
+        D, wp = dtw(X=target, Y=pattern, metric=metric, backtrack=True, global_constraints=global_constraints,
+                    band_rad=band_rad)
+        distance = D[-1, -1]
+        if normalization == 'path_length':
+            if len(wp) > 0:
+                distance /= len(wp)
+        elif normalization == 'sum_length':
+            total_len = len(target) + len(pattern)
+            if total_len > 0:
+                distance /= total_len
+
+        score = 1 / (1 + distance)
+        return score
 
     @staticmethod
     def match_lbp(target_spec, pattern_spec, params):
-        try:
-            target_hist = PatternMatch.extract_lbp_histogram(target_spec, params)
-            pattern_hist = PatternMatch.extract_lbp_histogram(pattern_spec, params)
-        except Exception as e:
-            return None
+        target_hist = PatternMatch.extract_lbp_histogram(target_spec, params)
+        pattern_hist = PatternMatch.extract_lbp_histogram(pattern_spec, params)
 
         metric = params.get("metric", "chi2")
 
@@ -1404,21 +1400,18 @@ class PatternMatch(QWidget):
             score = 1 - distance
             score = (score + 1) / 2
         else:
-            return None
-
+            raise ValueError(f"配置错误：无效的 LBP 直方图比较度量: '{metric}'")
         return score
 
     @staticmethod
     def match_ncc(target, pattern, params):
-        try:
-            if pattern.shape[0] > target.shape[0] or pattern.shape[1] > target.shape[1]:
-                return None
-            result = match_template(target, pattern)
-            score_raw = np.max(result)
-            score = (score_raw + 1) / 2
-            return score
-        except Exception as e:
-            return None
+
+        if pattern.shape[0] > target.shape[0] or pattern.shape[1] > target.shape[1]:
+            raise ValueError("NCC 匹配失败：模板维度大于目标维度。")
+        result = match_template(target, pattern)
+        score_raw = np.max(result)
+        score = (score_raw + 1) / 2
+        return score
 
     @staticmethod
     def extract_lbp_histogram(features, params):
@@ -1446,34 +1439,32 @@ class PatternMatch(QWidget):
         sample_rate = config.get("sample_rate")
         params = config.get("feature_params")
         convert_to_db = params.pop("power_to_db", False)
-        try:
-            if feature_type == "waveform":
-                return target_data, pattern_data
-            elif feature_type == "mfcc":
-                target_f = spectral.mfcc(y=target_data, sr=sample_rate, **params)
-                pattern_f = spectral.mfcc(y=pattern_data, sr=sample_rate, **params)
-                return target_f, pattern_f
-            elif feature_type == "fft":
-                target_len = len(target_data)
-                pattern_len = len(pattern_data)
-                target_f = np.abs(np.fft.fft(target_data) / target_len)[:target_len // 2]
-                pattern_f = np.abs(np.fft.fft(pattern_data) / pattern_len)[:pattern_len // 2]
-                return target_f, pattern_f
-            elif feature_type == "spec" or feature_type == "melspec":
-                if feature_type == "spec":
-                    target_f = np.abs(spectrum.stft(y=target_data, **params))
-                    pattern_f = np.abs(spectrum.stft(y=pattern_data, **params))
-                else:
-                    target_f = spectral.melspectrogram(y=target_data, sr=sample_rate, **params)
-                    pattern_f = spectral.melspectrogram(y=pattern_data, sr=sample_rate, **params)
-                if convert_to_db:
-                    target_f = librosa.amplitude_to_db(target_f, ref=np.max)
-                    pattern_f = librosa.amplitude_to_db(pattern_f, ref=np.max)
-                return target_f, pattern_f
+
+        if feature_type == "waveform":
+            return target_data, pattern_data
+        elif feature_type == "mfcc":
+            target_f = spectral.mfcc(y=target_data, sr=sample_rate, **params)
+            pattern_f = spectral.mfcc(y=pattern_data, sr=sample_rate, **params)
+            return target_f, pattern_f
+        elif feature_type == "fft":
+            target_len = len(target_data)
+            pattern_len = len(pattern_data)
+            target_f = np.abs(np.fft.fft(target_data) / target_len)[:target_len // 2]
+            pattern_f = np.abs(np.fft.fft(pattern_data) / pattern_len)[:pattern_len // 2]
+            return target_f, pattern_f
+        elif feature_type == "spec" or feature_type == "melspec":
+            if feature_type == "spec":
+                target_f = np.abs(spectrum.stft(y=target_data, **params))
+                pattern_f = np.abs(spectrum.stft(y=pattern_data, **params))
             else:
-                return None, None
-        except Exception as e:
-            return None, None
+                target_f = spectral.melspectrogram(y=target_data, sr=sample_rate, **params)
+                pattern_f = spectral.melspectrogram(y=pattern_data, sr=sample_rate, **params)
+            if convert_to_db:
+                target_f = librosa.amplitude_to_db(target_f, ref=np.max)
+                pattern_f = librosa.amplitude_to_db(pattern_f, ref=np.max)
+            return target_f, pattern_f
+        else:
+            raise ValueError(f"配置错误：不支持的特征类型 '{feature_type}'。")
 
     @staticmethod
     def calculate_loocv_threshold(channel_config, sample_rate):
