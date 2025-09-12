@@ -1591,9 +1591,9 @@ class PipelinePdPm(AnalysisGraphWidget):
         
         # match result table with dual-channel columns
         self.table_widget = QTableWidget()
-        self.table_widget.setColumnCount(7)  # Increased for dual-channel info
+        self.table_widget.setColumnCount(6)  # Increased for dual-channel info
         self.table_widget.setHorizontalHeaderLabels([
-            "序号", "时间(s)", "长度(ms)", "Ch1分数(%)", "Ch2分数(%)", "总分数(%)", "匹配状态"
+            "序号", "时间(s)", "Ch1分数(%)", "Ch2分数(%)", "总分数(%)", "匹配状态"
         ])
         header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
@@ -2089,7 +2089,7 @@ class PipelinePdPm(AnalysisGraphWidget):
             start_idx = int(r.get("start_index", 0))
             stop_idx = int(r.get("stop_index", start_idx))
             seg_len = max(0, stop_idx - start_idx)
-            length_ms = seg_len / float(sample_rate) * 1000.0
+            # length_ms = seg_len / float(sample_rate) * 1000.0
             
             # Extract dual-channel scores
             dual_results = r.get("dual_channel_results", {})
@@ -2119,7 +2119,7 @@ class PipelinePdPm(AnalysisGraphWidget):
             items = [
                 QTableWidgetItem(str(idx + 1)),
                 QTableWidgetItem(f"{time_sec:.3f}"),
-                QTableWidgetItem(f"{length_ms:.1f}"),
+                # QTableWidgetItem(f"{length_ms:.1f}"),
                 QTableWidgetItem(f"{ch1_score:.2f}"),
                 QTableWidgetItem(f"{ch2_score:.2f}"),
                 QTableWidgetItem(f"{combined_score:.2f}"),

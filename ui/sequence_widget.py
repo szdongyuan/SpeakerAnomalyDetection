@@ -798,6 +798,11 @@ class SequenceWindow(QWidget):
             cls_map = class_mapping.get(type)
             if cls_map:
                 class_instance = cls_map(key)
+                # Ensure widget deletes itself when closed to prevent lingering windows
+                try:
+                    class_instance.setAttribute(Qt.WA_DeleteOnClose, True)
+                except Exception:
+                    pass
                 if self.analysis_config["default_ed"] == key:
                     self.default_ed = class_instance
                     class_instance.is_default_flag = True
@@ -816,7 +821,26 @@ class SequenceWindow(QWidget):
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
-        self.default_ed = None
+        # Close and delete any existing analysis windows before starting a new run
+        existing_windows = []
+        try:
+            if getattr(self, "analysis_window", None):
+                existing_windows.extend(self.analysis_window)
+            if getattr(self, "default_ed", None):
+                existing_windows.append(self.default_ed)
+        except Exception:
+            pass
+        for w in existing_windows:
+            try:
+                w.close()
+            except Exception:
+                pass
+            try:
+                w.deleteLater()
+            except Exception:
+                pass
+        QApplication.processEvents()
+
         self.analysis_window = []
         self.spec_list = []
         width = int((self.screen().size().width() - 400) / 3)
