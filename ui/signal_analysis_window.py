@@ -10,6 +10,7 @@ from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton
+from scipy.signal import find_peaks
 from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
 from scipy.spatial.distance import cosine, euclidean, cityblock
 from scipy.stats import pearsonr
