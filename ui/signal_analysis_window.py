@@ -6,29 +6,30 @@ import pyqtgraph as pg
 from librosa.core import spectrum
 from librosa.feature import spectral
 from librosa.sequence import dtw
-from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton
+from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtWidgets import QHeaderView, QHBoxLayout, QLabel, QTableWidget, QPushButton
+from PyQt5.QtWidgets import QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget
+from pyqtgraph import mkPen
 from scipy.signal import find_peaks
-from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
-from scipy.spatial.distance import cosine, euclidean, cityblock
+from scipy.spatial.distance import cityblock, cosine, euclidean
 from scipy.stats import pearsonr
-from scipy.signal import find_peaks
 from skimage.feature import local_binary_pattern, match_template
-from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
-from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from base.pre_processing.audio_peak_detection import peak_detection, filter_peaks_by_spectral_flux, spectral_flux_peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
+from base.pre_processing.audio_peak_detection import filter_peaks_by_spectral_flux, peak_detection
+from base.pre_processing.audio_peak_detection import spectral_flux_peak_detection
+from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.utils.custom_signals import sign
+from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
 from base.utils.smooth import smooth
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.graph_widget import plot_2d_image, custom_log_tick_strings
+from ui.graph_widget import custom_log_tick_strings, plot_2d_image
 
 
 def get_class_mapping():
