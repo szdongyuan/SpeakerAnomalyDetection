@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Tuple, List, Union
+from typing import Optional, Callable, Tuple, List, Union, Dict, Any
 
 import numpy as np
 from scipy.signal import windows
@@ -334,4 +334,75 @@ class AudioEqualizer:
                     complement_mode_fre=False,
                 )
             return result
+
+    # -------------------- Reusable helpers for config-driven filtering --------------------
+    @staticmethod
+    def parse_frequency_ranges_string(frequency_ranges_str: str) -> List[Tuple[float, float]]:
+        """
+        Parse a semicolon-separated ranges string like "lo,hi;lo,hi" into a list of (lo, hi) tuples.
+        Invalid parts are ignored.
+        """
+        if not frequency_ranges_str:
+            return []
+        parts = [p.strip() for p in str(frequency_ranges_str).split(';') if p.strip()]
+        ranges: List[Tuple[float, float]] = []
+        for part in parts:
+            try:
+                lo_str, hi_str = part.split(',')
+                lo_val = float(lo_str.strip())
+                hi_val = float(hi_str.strip())
+                if hi_val > lo_val:
+                    ranges.append((lo_val, hi_val))
+            except Exception:
+                continue
+        return ranges
+
+    @staticmethod
+    def apply_filter_from_config(
+        audio_signal: np.ndarray,
+        sample_rate: float,
+        config: Dict[str, Any]
+    ) -> np.ndarray:
+        """
+        Apply multi-band filter according to a UI/config dict.
+
+        Expected keys in config:
+        - "filter_enabled": bool
+        - "filter_ranges": str like "lo,hi;lo,hi" (Hz)
+        - "filter_type": "bandpass" or "bandstop"
+        - "filter_order": int
+        """
+        try:
+            enabled = bool(config.get("filter_enabled", False))
+            if not enabled:
+                return audio_signal
+
+            ranges = AudioEqualizer.parse_frequency_ranges_string(str(config.get("filter_ranges", "")))
+            if not ranges:
+                return audio_signal
+
+            filter_type = str(config.get("filter_type", "bandpass"))
+            filter_order = int(config.get("filter_order", 4))
+            transition_width = 1.0 / max(1, filter_order)
+
+            if filter_type == "bandpass":
+                mode = "sum"
+                gains = 1.0
+            else:
+                mode = "cascade"
+                gains = 0.0
+
+            return AudioEqualizer.apply_multi_band_equalizer(
+                audio_signal=np.asarray(audio_signal, dtype=float),
+                sample_rate=float(sample_rate),
+                frequency_ranges=ranges,
+                gains=gains,
+                gain_mode="linear",
+                window_type=None,
+                transition_width=transition_width,
+                transition_type="cosine",
+                mode=mode,
+            )
+        except Exception:
+            return audio_signal
     
