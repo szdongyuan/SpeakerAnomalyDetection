@@ -9,10 +9,12 @@ from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt5.QtWidgets import QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QPushButton
+from scipy.signal import find_peaks
 from base.utils.data_alignment import align_signals_by_peaks, align_signals_with_peak
 from scipy.spatial.distance import cosine, euclidean, cityblock
 from scipy.stats import pearsonr
+from scipy.signal import find_peaks
 from skimage.feature import local_binary_pattern, match_template
 from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 
@@ -20,7 +22,7 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from base.pre_processing.audio_peak_detection import peak_detection, filter_peaks_by_spectral_flux
+from base.pre_processing.audio_peak_detection import peak_detection, filter_peaks_by_spectral_flux, spectral_flux_peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
@@ -714,14 +716,31 @@ class PeakDetection(AnalysisGraphWidget):
         # top status bar
         self.status_label = QLabel()
         self.PD_num_label = QLabel("PD 数量: -")
+        self.toggle_plot_button = QPushButton("显示频谱通量")
+        self.toggle_plot_button.setCheckable(True)
+        self.toggle_plot_button.setChecked(False)
+        self.toggle_plot_button.clicked.connect(self._toggle_plot_mode)
+        self.toggle_plot_button.setEnabled(False)
         pd_num_layout = QHBoxLayout()
         pd_num_layout.addStretch()
         pd_num_layout.addWidget(self.status_label)
         pd_num_layout.addWidget(self.PD_num_label)
+        pd_num_layout.addWidget(self.toggle_plot_button)
         pd_num_layout.setSpacing(20)
         self.layout().insertLayout(0, pd_num_layout)
 
         self.setStyleSheet("font-size: 16px;")
+        # plotting mode and caches
+        self._current_plot_mode = "spl"  # or "specflux"
+        self._specflux_enabled = False
+        self._last_result_ch1 = None
+        self._last_result_ch2 = None
+        self._last_spl_ch1 = None
+        self._last_spl_ch2 = None
+        self._last_flux_ch1 = None
+        self._last_flux_times_ch1 = None
+        self._last_flux_ch2 = None
+        self._last_flux_times_ch2 = None
 
     def _update_fonts(self):
         # only adjust the font size of the upper time series plot
@@ -750,39 +769,114 @@ class PeakDetection(AnalysisGraphWidget):
             
         return False
     
-    def _spectral_flux_peak_detection(self, audio_signal, sample_rate, threshold, window_s=0.1, n_fft=1024, hop_length=128, win_length=None):
-        """
-        Perform peak detection directly on spectral flux
-        """
+    def _toggle_plot_mode(self):
+        if not self._specflux_enabled:
+            self.toggle_plot_button.setChecked(False)
+            return
+        self._current_plot_mode = "specflux" if self.toggle_plot_button.isChecked() else "spl"
+        if self._current_plot_mode == "specflux":
+            self.toggle_plot_button.setText("显示声压级")
+        else:
+            self.toggle_plot_button.setText("显示频谱通量")
         try:
-            # Compute spectral flux
-            flux, flux_times = AudioFeatureExtraction.spectral_flux(
-                audio_signal, sample_rate, n_fft=n_fft, hop_length=hop_length, win_length=win_length
-            )
-            
-            if flux is None or flux.size == 0:
-                return []
-            
-            # Find peaks in spectral flux
-            min_distance_samples = max(1, int(window_s * sample_rate / hop_length))
-            peaks_flux_idx, _ = find_peaks(flux, height=threshold, distance=min_distance_samples)
-            
-            # Convert flux peak indices to audio sample indices
-            if len(peaks_flux_idx) == 0:
-                return []
-                
-            # Map flux time indices back to audio sample indices
-            peak_times = flux_times[peaks_flux_idx]
-            peak_sample_indices = (peak_times * sample_rate).astype(int)
-            
-            # Ensure indices are within bounds
-            peak_sample_indices = np.clip(peak_sample_indices, 0, len(audio_signal) - 1)
-            
-            return peak_sample_indices.tolist()
-            
+            self._render_peak_plot()
         except Exception:
-            # If spectral flux fails, return empty list
-            return []
+            pass
+
+    def _render_peak_plot(self):
+        plot = self.analysis_plot_top
+        plot.clear()
+        plot.getPlotItem().addLegend()
+
+        sample_rate = self.data_struct.sample_rate or 1
+
+        # Draw based on current mode
+        if self._current_plot_mode == "specflux" and self._specflux_enabled:
+            # Plot spectral flux for both channels
+            if self._last_flux_ch1 is not None and self._last_flux_times_ch1 is not None and len(self._last_flux_ch1) > 0:
+                plot.plot(self._last_flux_times_ch1, self._last_flux_ch1, pen=mkPen(color='g', width=1), name='Channel 1')
+            if self._last_flux_ch2 is not None and self._last_flux_times_ch2 is not None and len(self._last_flux_ch2) > 0:
+                plot.plot(self._last_flux_times_ch2, self._last_flux_ch2, pen=mkPen(color='b', width=1), name='Channel 2')
+
+            # Vertical lines for original peaks
+            if self._last_result_ch1:
+                pen_ch1_peak = mkPen(color=(0, 255, 0, 150), style=Qt.DashLine)
+                for peak_time in self._last_result_ch1.get("peaks_time_sec", []):
+                    line = pg.InfiniteLine(angle=90, movable=False, pos=peak_time, pen=pen_ch1_peak)
+                    plot.addItem(line)
+            if self._last_result_ch2:
+                pen_ch2_peak = mkPen(color=(0, 0, 255, 150), style=Qt.DashLine)
+                for peak_time in self._last_result_ch2.get("peaks_time_sec", []):
+                    line = pg.InfiniteLine(angle=90, movable=False, pos=peak_time, pen=pen_ch2_peak)
+                    plot.addItem(line)
+
+            # Scatter for merged peaks using nearest flux value
+            merged_peak_times = (self.result or {}).get("peaks_time_sec", [])
+            if merged_peak_times:
+                def sample_flux(t: float) -> float:
+                    vals = []
+                    if self._last_flux_times_ch1 is not None and self._last_flux_ch1 is not None and len(self._last_flux_times_ch1) > 0:
+                        idx = int(np.argmin(np.abs(np.asarray(self._last_flux_times_ch1) - float(t))))
+                        idx = max(0, min(idx, len(self._last_flux_ch1) - 1))
+                        vals.append(float(self._last_flux_ch1[idx]))
+                    if self._last_flux_times_ch2 is not None and self._last_flux_ch2 is not None and len(self._last_flux_times_ch2) > 0:
+                        idx2 = int(np.argmin(np.abs(np.asarray(self._last_flux_times_ch2) - float(t))))
+                        idx2 = max(0, min(idx2, len(self._last_flux_ch2) - 1))
+                        vals.append(float(self._last_flux_ch2[idx2]))
+                    return max(vals) if vals else 0.0
+
+                xs = np.asarray(merged_peak_times, dtype=float)
+                ys = np.array([sample_flux(t) for t in xs], dtype=float)
+                scatter = pg.ScatterPlotItem(x=xs, y=ys, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=10, name="Merged Peak")
+                plot.addItem(scatter)
+
+            plot.setLabel("left", "Spectral Flux")
+            plot.setLabel("bottom", "Time (s)")
+            plot.showGrid(x=True, y=True)
+            return
+
+        # Default: SPL plot
+        spl_series_ch1 = np.asarray(self._last_spl_ch1, dtype=float) if self._last_spl_ch1 is not None else np.array([], dtype=float)
+        spl_series_ch2 = np.asarray(self._last_spl_ch2, dtype=float) if self._last_spl_ch2 is not None else np.array([], dtype=float)
+
+        if spl_series_ch1.size > 0:
+            time_axis = np.linspace(0, len(spl_series_ch1) / sample_rate, len(spl_series_ch1))
+            plot.plot(time_axis, spl_series_ch1, pen=mkPen(color='g', width=1), name='Channel 1')
+        if spl_series_ch2.size > 0:
+            time_axis_ch2 = np.linspace(0, len(spl_series_ch2) / sample_rate, len(spl_series_ch2))
+            plot.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='Channel 2')
+
+        # Vertical lines for original peaks
+        if self._last_result_ch1:
+            pen_ch1_peak = mkPen(color=(0, 255, 0, 150), style=Qt.DashLine)
+            for peak_time in self._last_result_ch1.get("peaks_time_sec", []):
+                line = pg.InfiniteLine(angle=90, movable=False, pos=peak_time, pen=pen_ch1_peak)
+                plot.addItem(line)
+        if self._last_result_ch2:
+            pen_ch2_peak = mkPen(color=(0, 0, 255, 150), style=Qt.DashLine)
+            for peak_time in self._last_result_ch2.get("peaks_time_sec", []):
+                line = pg.InfiniteLine(angle=90, movable=False, pos=peak_time, pen=pen_ch2_peak)
+                plot.addItem(line)
+
+        # Scatter for merged peaks
+        merged_peak_times = (self.result or {}).get("peaks_time_sec", [])
+        if merged_peak_times and (spl_series_ch1.size > 0 or spl_series_ch2.size > 0):
+            max_len = 0
+            if spl_series_ch1.size > 0:
+                max_len = len(spl_series_ch1)
+            if spl_series_ch2.size > 0:
+                max_len = max(max_len, len(spl_series_ch2))
+            if max_len > 0:
+                merged_peak_indices = np.clip((np.array(merged_peak_times) * sample_rate).astype(int), 0, max_len - 1)
+                peak_values_ch1 = spl_series_ch1[merged_peak_indices] if spl_series_ch1.size > 0 else np.zeros_like(merged_peak_indices, dtype=float)
+                peak_values_ch2 = spl_series_ch2[merged_peak_indices] if spl_series_ch2.size > 0 else np.zeros_like(merged_peak_indices, dtype=float)
+                peak_values = np.maximum(peak_values_ch1, peak_values_ch2)
+                scatter = pg.ScatterPlotItem(x=np.array(merged_peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=10, name="Merged Peak")
+                plot.addItem(scatter)
+
+        plot.setLabel("left", "SPL (dB)")
+        plot.setLabel("bottom", "Time (s)")
+        plot.showGrid(x=True, y=True)
 
     def _merge_peak_results(self, result_ch1, result_ch2, config):
         peaks1_indices = np.array(result_ch1.get("peaks_index", []))
@@ -868,18 +962,27 @@ class PeakDetection(AnalysisGraphWidget):
         config_ch1 = ch_configs.get("channel_1", {})
         config_ch2 = ch_configs.get("channel_2", {})
 
+        # Apply filtering in UI via reusable base helper (moved from core)
         result_ch1, result_ch2 = None, None
         try:
-            if recorded_signal_ch1 is not None:
+            filtered_ch1 = AudioEqualizer.apply_filter_from_config(recorded_signal_ch1, sample_rate, config_ch1) if recorded_signal_ch1 is not None else None
+        except Exception:
+            filtered_ch1 = recorded_signal_ch1
+        try:
+            filtered_ch2 = AudioEqualizer.apply_filter_from_config(recorded_signal_ch2, sample_rate, config_ch2) if recorded_signal_ch2 is not None and config_ch2 else None
+        except Exception:
+            filtered_ch2 = recorded_signal_ch2
+        try:
+            if filtered_ch1 is not None:
                 result_ch1 = peak_detection(
-                    np.asarray(recorded_signal_ch1, dtype=np.float64),
+                    np.asarray(filtered_ch1, dtype=np.float64),
                     int(sample_rate),
                     config_ch1,
                     deviation=self.deviation_value,
                 )
-            if recorded_signal_ch2 is not None:
+            if filtered_ch2 is not None:
                 result_ch2 = peak_detection(
-                    np.asarray(recorded_signal_ch2, dtype=np.float64),
+                    np.asarray(filtered_ch2, dtype=np.float64),
                     int(sample_rate),
                     config_ch2,
                     deviation=self.deviation_value,
@@ -912,16 +1015,16 @@ class PeakDetection(AnalysisGraphWidget):
             ch2_hop = int(config_ch2.get("spectral_flux_hop_length", 128)) if config_ch2 else 128
 
             if result_ch1:
-                pidx1_f = self._spectral_flux_peak_detection(
-                    recorded_signal_ch1, sample_rate, ch1_specflux_min, ch1_window_s, n_fft=ch1_n_fft, hop_length=ch1_hop, win_length=ch1_win_len
+                pidx1_f = spectral_flux_peak_detection(
+                    filtered_ch1, sample_rate, ch1_specflux_min, ch1_window_s, n_fft=ch1_n_fft, hop_length=ch1_hop, win_length=ch1_win_len
                 )
                 result_ch1["peaks_index"] = pidx1_f
                 result_ch1["peaks_time_sec"] = (np.array(pidx1_f, dtype=float) / float(sample_rate)).tolist()
                 result_ch1["num_peaks"] = len(pidx1_f)
                 
-            if result_ch2 and recorded_signal_ch2 is not None:
-                pidx2_f = self._spectral_flux_peak_detection(
-                    recorded_signal_ch2, sample_rate, ch2_specflux_min, ch2_window_s, n_fft=ch2_n_fft, hop_length=ch2_hop, win_length=ch2_win_len
+            if result_ch2 and filtered_ch2 is not None:
+                pidx2_f = spectral_flux_peak_detection(
+                    filtered_ch2, sample_rate, ch2_specflux_min, ch2_window_s, n_fft=ch2_n_fft, hop_length=ch2_hop, win_length=ch2_win_len
                 )
                 result_ch2["peaks_index"] = pidx2_f
                 result_ch2["peaks_time_sec"] = (np.array(pidx2_f, dtype=float) / float(sample_rate)).tolist()
@@ -937,7 +1040,7 @@ class PeakDetection(AnalysisGraphWidget):
                     ch1_hop = int(config_ch1.get("spectral_flux_hop_length", 128))
                     pidx1 = result_ch1.get("peaks_index", [])
                     pidx1_f = filter_peaks_by_spectral_flux(
-                        pidx1, sample_rate, recorded_signal_ch1, 
+                        pidx1, sample_rate, filtered_ch1, 
                         window_s=ch1_window_s, threshold=ch1_specflux_min, 
                         n_fft=ch1_n_fft, hop_length=ch1_hop, win_length=ch1_win_len
                     )
@@ -945,7 +1048,7 @@ class PeakDetection(AnalysisGraphWidget):
                     result_ch1["peaks_time_sec"] = (np.array(pidx1_f, dtype=float) / float(sample_rate)).tolist()
                     result_ch1["num_peaks"] = len(pidx1_f)
                 
-            if result_ch2 and recorded_signal_ch2 is not None:
+            if result_ch2 and filtered_ch2 is not None:
                 ch2_specflux_min = float(config_ch2.get("specflux_min_value", 0.0)) if config_ch2 else 0.0
                 if ch2_specflux_min > 0.0:
                     ch2_window_s = float(config_ch2.get("spectral_flux_window_s", 0.1)) if config_ch2 else 0.1
@@ -954,7 +1057,7 @@ class PeakDetection(AnalysisGraphWidget):
                     ch2_hop = int(config_ch2.get("spectral_flux_hop_length", 128)) if config_ch2 else 128
                     pidx2 = result_ch2.get("peaks_index", [])
                     pidx2_f = filter_peaks_by_spectral_flux(
-                        pidx2, sample_rate, recorded_signal_ch2, 
+                        pidx2, sample_rate, filtered_ch2, 
                         window_s=ch2_window_s, threshold=ch2_specflux_min, 
                         n_fft=ch2_n_fft, hop_length=ch2_hop, win_length=ch2_win_len
                     )
@@ -970,83 +1073,72 @@ class PeakDetection(AnalysisGraphWidget):
         indices_list = [int(i) for i in peak_indices] if len(peak_indices) > 0 else []
         analysis_key = self.windowTitle()
         self.data_struct.pd_peak_grid_points_map[analysis_key] = indices_list
+        # Cache results for plotting
+        self._last_result_ch1 = result_ch1
+        self._last_result_ch2 = result_ch2
 
-        # --- Plotting ---
-        self.analysis_plot_top.clear()
-        self.analysis_plot_top.getPlotItem().addLegend()
-
-        # 1. & 2. Get/Calculate and Plot SPL series for both channels
+        # Prepare SPL series and cache
         spl_series_ch1 = []
         if result_ch1:
             spl_series_ch1 = np.asarray(result_ch1.get("spl_db_series", []), dtype=float)
-        if len(spl_series_ch1) == 0 and recorded_signal_ch1 is not None and len(recorded_signal_ch1) > 0:
+        if len(spl_series_ch1) == 0 and filtered_ch1 is not None and hasattr(filtered_ch1, "__len__") and len(filtered_ch1) > 0:
             ref_p = 20e-6
-            spl_series_ch1 = 20.0 * np.log10(np.maximum(np.abs(recorded_signal_ch1), 1e-30) / ref_p)
+            spl_series_ch1 = 20.0 * np.log10(np.maximum(np.abs(filtered_ch1), 1e-30) / ref_p)
             if self.deviation_value is not None:
                 spl_series_ch1 = spl_series_ch1 + float(self.deviation_value)
+        self._last_spl_ch1 = spl_series_ch1
 
         spl_series_ch2 = []
         if result_ch2:
             spl_series_ch2 = np.asarray(result_ch2.get("spl_db_series", []), dtype=float)
-        if len(spl_series_ch2) == 0 and recorded_signal_ch2 is not None and len(recorded_signal_ch2) > 0:
+        if len(spl_series_ch2) == 0 and filtered_ch2 is not None and hasattr(filtered_ch2, "__len__") and len(filtered_ch2) > 0:
             ref_p = 20e-6
-            spl_series_ch2 = 20.0 * np.log10(np.maximum(np.abs(recorded_signal_ch2), 1e-30) / ref_p)
+            spl_series_ch2 = 20.0 * np.log10(np.maximum(np.abs(filtered_ch2), 1e-30) / ref_p)
             if self.deviation_value is not None:
                 spl_series_ch2 = spl_series_ch2 + float(self.deviation_value)
+        self._last_spl_ch2 = spl_series_ch2
 
-        # Plot if data exists
-        if len(spl_series_ch1) > 0:
-            time_axis = np.linspace(0, len(spl_series_ch1) / sample_rate, len(spl_series_ch1))
-            self.analysis_plot_top.plot(time_axis, spl_series_ch1, pen=mkPen(color='g', width=1), name='Channel 1')
+        # Compute spectral flux series if enabled and cache
+        specflux_enabled_flag = bool(self.analysis_config.get("specflux_enabled", False))
+        ch1_specflux_min_cfg = float(config_ch1.get("specflux_min_value", 0.0)) if isinstance(config_ch1, dict) else 0.0
+        ch2_specflux_min_cfg = float(config_ch2.get("specflux_min_value", 0.0)) if isinstance(config_ch2, dict) else 0.0
+        self._specflux_enabled = bool(specflux_enabled_flag or ch1_specflux_min_cfg > 0.0 or ch2_specflux_min_cfg > 0.0)
+        self.toggle_plot_button.setEnabled(self._specflux_enabled)
 
-        if len(spl_series_ch2) > 0:
-            time_axis_ch2 = np.linspace(0, len(spl_series_ch2) / sample_rate, len(spl_series_ch2))
-            self.analysis_plot_top.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='Channel 2')
+        if self._specflux_enabled:
+            try:
+                # Channel 1
+                win_len_ch1 = int(config_ch1.get("spectral_flux_window_length", 1024)) if isinstance(config_ch1, dict) else 1024
+                hop_len_ch1 = int(config_ch1.get("spectral_flux_hop_length", 128)) if isinstance(config_ch1, dict) else 128
+                sig_ch1 = filtered_ch1 if filtered_ch1 is not None else recorded_signal_ch1
+                if sig_ch1 is not None:
+                    flux1, times1 = AudioFeatureExtraction.spectral_flux(sig_ch1, sample_rate, n_fft=win_len_ch1, hop_length=hop_len_ch1, win_length=win_len_ch1)
+                    self._last_flux_ch1 = np.asarray(flux1) if flux1 is not None else None
+                    self._last_flux_times_ch1 = np.asarray(times1) if times1 is not None else None
+            except Exception:
+                self._last_flux_ch1, self._last_flux_times_ch1 = None, None
+            try:
+                # Channel 2
+                win_len_ch2 = int(config_ch2.get("spectral_flux_window_length", 1024)) if isinstance(config_ch2, dict) else 1024
+                hop_len_ch2 = int(config_ch2.get("spectral_flux_hop_length", 128)) if isinstance(config_ch2, dict) else 128
+                sig_ch2 = filtered_ch2 if filtered_ch2 is not None else recorded_signal_ch2
+                if sig_ch2 is not None:
+                    flux2, times2 = AudioFeatureExtraction.spectral_flux(sig_ch2, sample_rate, n_fft=win_len_ch2, hop_length=hop_len_ch2, win_length=win_len_ch2)
+                    self._last_flux_ch2 = np.asarray(flux2) if flux2 is not None else None
+                    self._last_flux_times_ch2 = np.asarray(times2) if times2 is not None else None
+            except Exception:
+                self._last_flux_ch2, self._last_flux_times_ch2 = None, None
 
-        # 3. Plot original peaks as vertical lines
-        if result_ch1:
-            pen_ch1_peak = mkPen(color=(0, 255, 0, 150), style=Qt.DashLine)
-            for peak_time in result_ch1.get("peaks_time_sec", []):
-                line = pg.InfiniteLine(angle=90, movable=False, pos=peak_time, pen=pen_ch1_peak)
-                self.analysis_plot_top.addItem(line)
+        # Render according to current mode
+        self._render_peak_plot()
 
-        if result_ch2:
-            pen_ch2_peak = mkPen(color=(0, 0, 255, 150), style=Qt.DashLine)
-            for peak_time in result_ch2.get("peaks_time_sec", []):
-                line = pg.InfiniteLine(angle=90, movable=False, pos=peak_time, pen=pen_ch2_peak)
-                self.analysis_plot_top.addItem(line)
-
-        # 4. Highlight merged peaks with scatter plot
-        merged_peak_times = self.result.get("peaks_time_sec", [])
-        if merged_peak_times and (len(spl_series_ch1) > 0 or len(spl_series_ch2) > 0):
-            max_len = 0
-            if len(spl_series_ch1) > 0:
-                max_len = len(spl_series_ch1)
-            if len(spl_series_ch2) > 0:
-                max_len = max(max_len, len(spl_series_ch2))
-
-            merged_peak_indices = np.clip((np.array(merged_peak_times) * sample_rate).astype(int), 0, max_len - 1)
-            
-            peak_values_ch1 = spl_series_ch1[merged_peak_indices] if len(spl_series_ch1) > 0 else np.zeros_like(merged_peak_indices, dtype=float)
-            peak_values_ch2 = spl_series_ch2[merged_peak_indices] if len(spl_series_ch2) > 0 else np.zeros_like(merged_peak_indices, dtype=float)
-            peak_values = np.maximum(peak_values_ch1, peak_values_ch2)
-
-            scatter = pg.ScatterPlotItem(
-                x=np.array(merged_peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=10, name="Merged Peak"
-            )
-            self.analysis_plot_top.addItem(scatter)
-
-        # Clear bottom plot (spectral flux plotting removed)
+        # Clear bottom plot (not used)
         try:
             if self.analysis_plot_bottom is not None:
                 self.analysis_plot_bottom.clear()
         except:
             pass
         
-        self.analysis_plot_top.setLabel("left", "SPL (dB)")
-        self.analysis_plot_top.setLabel("bottom", "Time (s)")
-        self.analysis_plot_top.showGrid(x=True, y=True)
-
         # Update the number and status based on merged results
         num_peaks = int(self.result.get("num_peaks", 0))
         final_peak_min = self.analysis_config.get("final_test_peak_min", 0)
@@ -1450,7 +1542,6 @@ class PatternMatch(QWidget):
         return np.sum(np.sqrt(h1_norm * h2_norm))
 
 
-
 class PipelinePdPm(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
@@ -1462,6 +1553,23 @@ class PipelinePdPm(AnalysisGraphWidget):
         self.analysis_plot_bottom.close()  # Use single plot like PeakDetection
         self._init_ui()
         self.setWindowTitle(title_name)
+        # default size (not fixed)
+        try:
+            self.resize(1200, 600)
+        except Exception:
+            pass
+        # plotting mode & caches
+        self._current_plot_mode = "spl"  # or "specflux"
+        self._specflux_enabled = False
+        self._last_spl_series_ch1 = None
+        self._last_spl_series_ch2 = None
+        self._last_flux_ch1 = None
+        self._last_flux_times_ch1 = None
+        self._last_flux_ch2 = None
+        self._last_flux_times_ch2 = None
+        self._last_pd_result = None
+        self._last_sample_rate = None
+        self._pd_cfg_for_flux = None
 
 
     def _init_ui(self):
@@ -1474,6 +1582,12 @@ class PipelinePdPm(AnalysisGraphWidget):
         # Create additional UI components
         self.result_display = QTextEdit()
         self.result_display.setReadOnly(True)
+        # Toggle button for SPL / Spectral Flux
+        self.toggle_plot_button = QPushButton("显示频谱通量")
+        self.toggle_plot_button.setCheckable(True)
+        self.toggle_plot_button.setChecked(False)
+        self.toggle_plot_button.setEnabled(False)
+        self.toggle_plot_button.clicked.connect(self._toggle_pipeline_plot_mode)
         
         # match result table with dual-channel columns
         self.table_widget = QTableWidget()
@@ -1501,7 +1615,18 @@ class PipelinePdPm(AnalysisGraphWidget):
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.addWidget(self.result_display)
+        header_layout = QHBoxLayout()
+        header_layout.addStretch()
+        header_layout.addWidget(self.toggle_plot_button)
+        left_layout.addLayout(header_layout)
         left_layout.addWidget(self.analysis_plot_top)  # Only use top plot
+        # control left panel vertical ratio: text:plot ≈ 1:7, keep header minimal
+        try:
+            left_layout.setStretch(0, 1)   # result_display
+            left_layout.setStretch(1, 0)   # header (toggle)
+            left_layout.setStretch(2, 7)   # analysis_plot_top
+        except Exception:
+            pass
         
         content_layout.addWidget(left_container)
         content_layout.addWidget(self.table_widget)
@@ -1519,6 +1644,24 @@ class PipelinePdPm(AnalysisGraphWidget):
         self._bars_item_ch2 = None
         self._last_spl_series_ch1 = None
         self._last_spl_series_ch2 = None
+
+    def _toggle_pipeline_plot_mode(self):
+        if not self._specflux_enabled:
+            self.toggle_plot_button.setChecked(False)
+            return
+        self._current_plot_mode = "specflux" if self.toggle_plot_button.isChecked() else "spl"
+        if self._current_plot_mode == "specflux":
+            self.toggle_plot_button.setText("显示声压级")
+        else:
+            self.toggle_plot_button.setText("显示频谱通量")
+        try:
+            # Re-render using last cached data
+            # Use last known pd_result and sample rate if available
+            if self._last_pd_result is not None and self._last_sample_rate is not None:
+                # recorded signal isn't cached here; rely on cached series in _render_plots path
+                self._render_plots(self._last_pd_result, None, self._last_sample_rate, [], [])
+        except Exception:
+            pass
 
     def _setup_dual_axis_if_needed(self):
         # Setup dual axis for single plot (similarity visualization)
@@ -1602,6 +1745,8 @@ class PipelinePdPm(AnalysisGraphWidget):
         pd_instance.data_struct = self.data_struct
         pd_instance.deviation_value = self.deviation_value
         pd_instance.analysis_config = head_cfg.get("config", {})
+        # cache PD config for spectral flux rendering
+        self._pd_cfg_for_flux = pd_instance.analysis_config
         pd_result = pd_instance.calculate_peak_detection()
         peak_indices = []
         if isinstance(pd_result, dict):
@@ -1686,11 +1831,12 @@ class PipelinePdPm(AnalysisGraphWidget):
         plot_item = self.analysis_plot_top.getPlotItem()
 
         # Handle multi-channel data
-        if not isinstance(recorded_signal, (list, np.ndarray)) or len(recorded_signal) < 2:
+        if recorded_signal is not None and (not isinstance(recorded_signal, (list, np.ndarray)) or len(recorded_signal) < 2):
             return
         
-        recorded_signal_ch1 = recorded_signal[0]
-        recorded_signal_ch2 = recorded_signal[1]
+        # Use provided signal or fallback to cached series
+        recorded_signal_ch1 = recorded_signal[0] if recorded_signal is not None else None
+        recorded_signal_ch2 = recorded_signal[1] if recorded_signal is not None else None
         
         # Extract proper RMS-windowed SPL data from PeakDetection dual_channel_peaks
         spl_series_ch1 = None
@@ -1730,20 +1876,64 @@ class PipelinePdPm(AnalysisGraphWidget):
                 deviation=self.deviation_value
             )
         
-        # Create time axis
-        time_axis_ch1 = np.linspace(0, len(spl_series_ch1) / sample_rate, len(spl_series_ch1))
-        time_axis_ch2 = np.linspace(0, len(spl_series_ch2) / sample_rate, len(spl_series_ch2))
-        
-        # Plot both SPL curves on same plot (like PeakDetection)
-        plot_item.plot(time_axis_ch1, spl_series_ch1, pen=mkPen(color='g', width=1), name='SPL CH1')
-        plot_item.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='SPL CH2')
+        # Cache SPL for toggle rendering
+        self._last_spl_series_ch1 = np.asarray(spl_series_ch1)
+        self._last_spl_series_ch2 = np.asarray(spl_series_ch2)
+
+        # Determine if spectral flux should be enabled based on PD config
+        # Enable if explicitly configured or thresholds present
+        if isinstance(self._pd_cfg_for_flux, dict):
+            cfg = self._pd_cfg_for_flux
+            ch_cfgs = cfg.get("channels", {}) if isinstance(cfg.get("channels", {}), dict) else {}
+            ch1_cfg = ch_cfgs.get("channel_1", {}) if isinstance(ch_cfgs.get("channel_1", {}), dict) else {}
+            ch2_cfg = ch_cfgs.get("channel_2", {}) if isinstance(ch_cfgs.get("channel_2", {}), dict) else {}
+            top_flag = bool(cfg.get("specflux_enabled", False)) or float(cfg.get("specflux_min_value", 0.0)) > 0.0
+            ch_flag = float(ch1_cfg.get("specflux_min_value", 0.0)) > 0.0 or float(ch2_cfg.get("specflux_min_value", 0.0)) > 0.0
+            self._specflux_enabled = bool(top_flag or ch_flag)
+            self.toggle_plot_button.setEnabled(self._specflux_enabled)
+
+        # Compute spectral flux series if needed and not cached
+        if self._specflux_enabled and (self._last_flux_ch1 is None or self._last_flux_times_ch1 is None or self._last_flux_ch2 is None or self._last_flux_times_ch2 is None):
+            try:
+                ch_cfgs = self._pd_cfg_for_flux.get("channels", {}) if isinstance(self._pd_cfg_for_flux, dict) else {}
+                cfg1 = ch_cfgs.get("channel_1", {}) if isinstance(ch_cfgs, dict) else {}
+                cfg2 = ch_cfgs.get("channel_2", {}) if isinstance(ch_cfgs, dict) else {}
+                nfft1 = int(cfg1.get("spectral_flux_window_length", 1024)) if isinstance(cfg1, dict) else 1024
+                hop1 = int(cfg1.get("spectral_flux_hop_length", 128)) if isinstance(cfg1, dict) else 128
+                nfft2 = int(cfg2.get("spectral_flux_window_length", 1024)) if isinstance(cfg2, dict) else 1024
+                hop2 = int(cfg2.get("spectral_flux_hop_length", 128)) if isinstance(cfg2, dict) else 128
+                if recorded_signal_ch1 is not None:
+                    flux1, times1 = AudioFeatureExtraction.spectral_flux(recorded_signal_ch1, sample_rate, n_fft=nfft1, hop_length=hop1, win_length=nfft1)
+                    self._last_flux_ch1 = np.asarray(flux1) if flux1 is not None else None
+                    self._last_flux_times_ch1 = np.asarray(times1) if times1 is not None else None
+                if recorded_signal_ch2 is not None:
+                    flux2, times2 = AudioFeatureExtraction.spectral_flux(recorded_signal_ch2, sample_rate, n_fft=nfft2, hop_length=hop2, win_length=nfft2)
+                    self._last_flux_ch2 = np.asarray(flux2) if flux2 is not None else None
+                    self._last_flux_times_ch2 = np.asarray(times2) if times2 is not None else None
+            except Exception:
+                self._last_flux_ch1, self._last_flux_times_ch1 = None, None
+                self._last_flux_ch2, self._last_flux_times_ch2 = None, None
+
+        # Render according to mode
+        if self._current_plot_mode == "specflux" and self._specflux_enabled:
+            if self._last_flux_ch1 is not None and self._last_flux_times_ch1 is not None and len(self._last_flux_ch1) > 0:
+                plot_item.plot(self._last_flux_times_ch1, self._last_flux_ch1, pen=mkPen(color='g', width=1), name='Flux CH1')
+            if self._last_flux_ch2 is not None and self._last_flux_times_ch2 is not None and len(self._last_flux_ch2) > 0:
+                plot_item.plot(self._last_flux_times_ch2, self._last_flux_ch2, pen=mkPen(color='b', width=1), name='Flux CH2')
+        else:
+            # Default SPL rendering
+            time_axis_ch1 = np.linspace(0, len(spl_series_ch1) / sample_rate, len(spl_series_ch1))
+            time_axis_ch2 = np.linspace(0, len(spl_series_ch2) / sample_rate, len(spl_series_ch2))
+            plot_item.plot(time_axis_ch1, spl_series_ch1, pen=mkPen(color='g', width=1), name='SPL CH1')
+            plot_item.plot(time_axis_ch2, spl_series_ch2, pen=mkPen(color='b', width=1), name='SPL CH2')
         
         # Add legend for main plot
         if not hasattr(plot_item, 'legend') or plot_item.legend is None:
             plot_item.addLegend(offset=(10, 10))
         
-        self._last_spl_series_ch1 = np.asarray(spl_series_ch1)
-        self._last_spl_series_ch2 = np.asarray(spl_series_ch2)
+        # Cache pd result and sample rate for toggle re-rendering
+        self._last_pd_result = pd_result
+        self._last_sample_rate = sample_rate
 
         # Plot individual channel peaks if available in dual_channel_peaks
         if isinstance(pd_result, dict) and "dual_channel_peaks" in pd_result:
@@ -1802,6 +1992,20 @@ class PipelinePdPm(AnalysisGraphWidget):
                 # Add to legend
                 if hasattr(plot_item, 'legend') and plot_item.legend is not None:
                     plot_item.legend.addItem(scatter_ch2, 'Peaks CH2')
+
+        # For spectral flux mode, also draw vertical lines at peak times
+        if self._current_plot_mode == "specflux" and self._specflux_enabled and isinstance(pd_result, dict):
+            pen_ch1_peak = mkPen(color=(0, 255, 0, 150), style=Qt.DashLine)
+            pen_ch2_peak = mkPen(color=(0, 0, 255, 150), style=Qt.DashLine)
+            ch1_times = []
+            ch2_times = []
+            dual = pd_result.get("dual_channel_peaks", {})
+            ch1_times = dual.get("channel_1", {}).get("peaks_time_sec", [])
+            ch2_times = dual.get("channel_2", {}).get("peaks_time_sec", [])
+            for t in ch1_times:
+                plot_item.addItem(pg.InfiniteLine(angle=90, movable=False, pos=float(t), pen=pen_ch1_peak))
+            for t in ch2_times:
+                plot_item.addItem(pg.InfiniteLine(angle=90, movable=False, pos=float(t), pen=pen_ch2_peak))
 
         # Setup dual axis for pattern matching similarity scores
         self._setup_dual_axis_if_needed()
@@ -1865,6 +2069,14 @@ class PipelinePdPm(AnalysisGraphWidget):
                               np.max(ch2_scores) if np.any(ch2_scores > 0) else 0)
                 if max_score > 0:
                     self._right_view.setYRange(0.0, max_score, padding=0.05)
+
+        # Update axis labels depending on mode
+        if self._current_plot_mode == "specflux" and self._specflux_enabled:
+            self.analysis_plot_top.setLabel("left", "Spectral Flux")
+            self.analysis_plot_top.setLabel("bottom", "Time (s)")
+        else:
+            self.analysis_plot_top.setLabel("left", "SPL (dB)")
+            self.analysis_plot_top.setLabel("bottom", "Time (s)")
 
     def _update_table(self, sample_rate, results):
         # update the PM result table with dual-channel information
