@@ -850,7 +850,7 @@ class SequenceWindow(QWidget):
                     instance.calculate_pipeline_pd_pm()
                     instance.show()
                 if instance in self.spec_list:
-                    instance.setGeometry(width, height, 800, 500)
+                    instance.setGeometry(width, height, 1000, 600)
                 else:
                     instance.setGeometry(width, height, 600, 500)
                 instance.setMinimumSize(QSize(600, 500))

@@ -128,11 +128,11 @@ def align_signals_by_peaks(target_data, pattern_data, behavior="min"):
     Returns:
         tuple: (aligned_target_segment, aligned_pattern_segment)
     """
-    target_peak_index = np.argmax(smooth(target_data, padding_mode="same", window_size = 10)) 
+    target_peak_index = np.argmax(smooth(target_data, padding_mode="same", window_size = 64))
     try:
-        target_segment, pattern_segment = align_signals_with_peak(target_data, pattern_data,target_peak_index, behavior)
-        
+        target_segment, pattern_segment = align_signals_with_peak(target_data, pattern_data, target_peak_index, behavior)
         return target_segment, pattern_segment
+        
     except Exception:
         # If alignment fails, return original data
         return target_data, pattern_data

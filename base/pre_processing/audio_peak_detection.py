@@ -361,19 +361,11 @@ def peak_detection(
     the return value contains the peak location, number, whether it passed the test, and the intermediate sequence for plotting/debugging.
     """
 
-    # 1) pre-processing: filter
-    filtered = _design_and_apply_filter(
-        audio_signal=audio_signal,
-        sample_rate=sample_rate,
-        enabled=bool(config.get("filter_enabled", False)),
-        frequency_ranges_str=str(config.get("filter_ranges", "")),
-        filter_type=str(config.get("filter_type", "bandpass")),
-        filter_order=int(config.get("filter_order", 4)),
-    )
+    # 1) pre-processing: filtering is now handled by caller (UI). Use audio_signal directly.
 
     # 2) compute SPL/RMS series (used for amplitude/threshold and duration measurement)
     rms_envelope, spl_db_series_raw = _compute_rms_spl_series(
-        filtered,
+        audio_signal,
         sample_rate,
         window_unit=str(config.get("spl_window_unit", "time")),
         window_time_sec=float(config.get("spl_window_time_sec", 0.050)),
