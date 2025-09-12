@@ -816,7 +816,9 @@ class SequenceWindow(QWidget):
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
+        self.default_ed = None
         self.analysis_window = []
+        self.spec_list = []
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
         if self.analysis_config:
