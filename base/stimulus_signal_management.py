@@ -67,7 +67,7 @@ class StimulusSignalManagement(object):
                 normalized_info = stimulus_info.copy()
                 normalized_info.setdefault('num_steps', None)
                 normalized_info.setdefault('voltage_type', 'RMS')
-                normalized_info['voltage'] = float(normalized_info.get('voltage', 0.0))
+                normalized_info['voltage'] = float(normalized_info.get("voltage", 1.0))
                 stimulus_info.setdefault('num_steps', normalized_info['num_steps'])
                 stimulus_info.setdefault('voltage_type', normalized_info['voltage_type'])
                 stimulus_info['voltage'] = normalized_info['voltage']

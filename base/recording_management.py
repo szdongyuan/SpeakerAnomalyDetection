@@ -67,7 +67,7 @@ class RecordingManager(object):
         normalized_parameter = stimulus_parameter.copy()
         normalized_parameter.setdefault("num_steps", None)
         normalized_parameter.setdefault("voltage_type", "RMS")
-        normalized_parameter["voltage"] = float(normalized_parameter.get("voltage", 0.0))
+        normalized_parameter["voltage"] = float(normalized_parameter.get("voltage", 1.0))
         stimulus_data = tuple(normalized_parameter.get(key) for key in model_consts.STIMULUS_CONFIG_COLUMNS)
         result = database.query_matching_data(
             [stimulus_data],
