@@ -140,7 +140,7 @@ class DataSave(object):
             if "voltage_type" not in existing_columns:
                 alter_sql.append("ALTER TABLE stimulus_signal_table ADD COLUMN voltage_type TEXT NOT NULL DEFAULT 'RMS'")
             if "voltage" not in existing_columns:
-                alter_sql.append("ALTER TABLE stimulus_signal_table ADD COLUMN voltage REAL NOT NULL DEFAULT 0.0")
+                alter_sql.append("ALTER TABLE stimulus_signal_table ADD COLUMN voltage REAL NOT NULL DEFAULT 1.0")
             for sql in alter_sql:
                 self.cursor.execute(sql)
             if alter_sql:
