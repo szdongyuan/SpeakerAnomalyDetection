@@ -55,6 +55,8 @@ class DataSave(object):
                 sample_rate INTEGER NOT NULL CHECK (sample_rate > 0), 
                 total_time INTEGER NOT NULL CHECK (total_time > 0),
                 num_steps INTEGER DEFAULT NULL CHECK (num_steps >= 0),
+                voltage_type TEXT NOT NULL DEFAULT 'RMS',
+                voltage REAL NOT NULL DEFAULT 0.0,
                 is_default INTEGER NOT NULL CHECK (is_default IN (0, 1)),
                 stimulus_name TEXT
             );
@@ -93,6 +95,7 @@ class DataSave(object):
             self.cursor.execute(create_training_model_table_sql)
             self.cursor.execute(create_users_table_sql)
             self.cursor.execute(create_system_info_table_sql)
+            self._ensure_stimulus_voltage_columns()
             create_insert_trigger_sql = """
             CREATE TRIGGER IF NOT EXISTS ensure_one_admin_user
             BEFORE INSERT ON users_table
@@ -128,6 +131,24 @@ class DataSave(object):
             err_msg = "Failed to create table. %s" % (str(e)[:40])
             self.logger.error(err_msg)
             return error_code.INVALID_CREATE_TABLE, err_msg
+
+    def _ensure_stimulus_voltage_columns(self):
+        try:
+            self.cursor.execute("PRAGMA table_info(stimulus_signal_table)")
+            existing_columns = {row[1] for row in self.cursor.fetchall()}
+            alter_sql = []
+            if "voltage_type" not in existing_columns:
+                alter_sql.append("ALTER TABLE stimulus_signal_table ADD COLUMN voltage_type TEXT NOT NULL DEFAULT 'RMS'")
+            if "voltage" not in existing_columns:
+                alter_sql.append("ALTER TABLE stimulus_signal_table ADD COLUMN voltage REAL NOT NULL DEFAULT 0.0")
+            for sql in alter_sql:
+                self.cursor.execute(sql)
+            if alter_sql:
+                self.connection.commit()
+        except Exception as e:
+            err_msg = "Failed to ensure stimulus voltage columns. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
+            raise
 
     def get_audio_data_list(self, source_dir_list, label):
         data_list = []
@@ -208,6 +229,9 @@ class DataSave(object):
                 int(stop_feq),
                 sample_rate,
                 total_time,
+                None,
+                "RMS",
+                0.0,
                 is_default,
             )
         return audio_stimulus_data
