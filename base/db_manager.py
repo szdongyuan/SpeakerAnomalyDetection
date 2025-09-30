@@ -231,7 +231,7 @@ class DataSave(object):
                 total_time,
                 None,
                 "RMS",
-                0.0,
+                1.0,
                 is_default,
             )
         return audio_stimulus_data
