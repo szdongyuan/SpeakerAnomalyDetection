@@ -49,6 +49,8 @@ DB_STIMULUS_COLUMNS = [
     "sample_rate",
     "total_time",
     "num_steps",
+    "voltage_type",
+    "voltage",
     "is_default",
     "stimulus_name",
 ]

@@ -64,9 +64,11 @@ class RecordingManager(object):
     @staticmethod
     def get_stimulus_info_to_db(stimulus_parameter: dict, database):
         flag = False
-        stimulus_data = tuple(
-            stimulus_parameter[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_parameter
-        )
+        normalized_parameter = stimulus_parameter.copy()
+        normalized_parameter.setdefault("num_steps", None)
+        normalized_parameter.setdefault("voltage_type", "RMS")
+        normalized_parameter["voltage"] = float(normalized_parameter.get("voltage", 0.0))
+        stimulus_data = tuple(normalized_parameter.get(key) for key in model_consts.STIMULUS_CONFIG_COLUMNS)
         result = database.query_matching_data(
             [stimulus_data],
             "stimulus_signal_table",

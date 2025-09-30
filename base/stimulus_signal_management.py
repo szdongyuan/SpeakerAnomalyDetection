@@ -64,16 +64,33 @@ class StimulusSignalManagement(object):
     def save_stimulus_info_to_db(stimulus_info: dict):
         try:
             with DataSave(model_consts.DATABASE_PATH) as database:
-                stimulus_config = tuple(stimulus_info[key] for key in model_consts.STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
-                result = database.query_matching_data([stimulus_config], "stimulus_signal_table",
-                                                      model_consts.STIMULUS_CONFIG_COLUMNS, ['stimulus_id'])
-                name_result = database.query_matching_data([[stimulus_info.get("stimulus_name")]], "stimulus_signal_table",['stimulus_name'], ['stimulus_id'])
+                normalized_info = stimulus_info.copy()
+                normalized_info.setdefault('num_steps', None)
+                normalized_info.setdefault('voltage_type', 'RMS')
+                normalized_info['voltage'] = float(normalized_info.get('voltage', 0.0))
+                stimulus_info.setdefault('num_steps', normalized_info['num_steps'])
+                stimulus_info.setdefault('voltage_type', normalized_info['voltage_type'])
+                stimulus_info['voltage'] = normalized_info['voltage']
+                stimulus_config = tuple(normalized_info.get(key) for key in model_consts.STIMULUS_CONFIG_COLUMNS)
+                name_result = database.query_matching_data(
+                    [[stimulus_info.get("stimulus_name")]],
+                    "stimulus_signal_table",
+                    ['stimulus_name'],
+                    ['stimulus_id']
+                )
                 if name_result: 
                     return error_code.INVALID_NAME, "This stimulus signals name info already exists."
+                result = database.query_matching_data(
+                    [stimulus_config],
+                    "stimulus_signal_table",
+                    model_consts.STIMULUS_CONFIG_COLUMNS,
+                    ['stimulus_id']
+                )
                 if not result:
                     is_default = database.set_default("stimulus_signal_table")
                     stimulus_info["is_default"] = is_default
-                    insert_stimulus_config = tuple(stimulus_info[key] for key in model_consts.INERT_STIMULUS_CONFIG_COLUMNS if key in stimulus_info)
+                    normalized_info["is_default"] = is_default
+                    insert_stimulus_config = tuple(normalized_info.get(key) for key in model_consts.INERT_STIMULUS_CONFIG_COLUMNS)
                     insert_stimulus_config = database.get_data_id([insert_stimulus_config], 0)
                     insert_code, msg = database.insert_data_into_db("stimulus_signal_table",
                                                                     model_consts.DB_STIMULUS_COLUMNS, insert_stimulus_config)

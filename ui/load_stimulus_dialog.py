@@ -58,12 +58,16 @@ class LoadStimulusDialog(DataManageDialog):
                 "采样频率",
                 "信号时长",
                 "步进数量",
+                "电压类型",
+                "电压(V)",
             ]
         )
         self.verticalHeader().setVisible(False)
         self.insert_stimulus_config_to_table(self.loaded_stimulus)
         self.set_column_alignment(4, Qt.AlignCenter)
         self.set_column_alignment(9, Qt.AlignCenter)
+        self.set_column_alignment(10, Qt.AlignCenter)
+        self.set_column_alignment(11, Qt.AlignCenter)
         self.select_data_num.hide()
 
         self.set_bottom_layout()
@@ -130,8 +134,10 @@ class LoadStimulusDialog(DataManageDialog):
                     "repeat_times": query_data_idx[3],
                     "sample_rate": query_data_idx[6],
                     "num_steps": query_data_idx[8],
-                    "is_default": query_data_idx[9],
-                    "stimulus_name": query_data_idx[10],
+                    "voltage_type": query_data_idx[9],
+                    "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 0.0,
+                    "is_default": query_data_idx[11],
+                    "stimulus_name": query_data_idx[12],
                 }
                 stimulus_list.append(stimulus)
         return stimulus_list
@@ -150,6 +156,8 @@ class LoadStimulusDialog(DataManageDialog):
                 stimulus["sample_rate"],
                 stimulus["total_time"],
                 stimulus["num_steps"],
+                stimulus["voltage_type"],
+                f"{stimulus['voltage']:.2f}",
             ]
             self.add_row_data(config_list)
 

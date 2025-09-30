@@ -425,6 +425,12 @@ class StimulusWindow(QDialog):
     def update_amplitude(self):
         self.stimulus_info["amplitude"] = self.get_predict_amplitude(self.voltage_spin_box.value())
 
+    def sync_voltage_info(self):
+        """Ensure voltage-related fields mirror the current UI selection before persisting data."""
+        self.stimulus_info["voltage_type"] = self.voltage_combo_box.currentText()
+        self.stimulus_info["voltage"] = float(self.voltage_spin_box.value())
+        self.update_amplitude()
+
     def switch_group_box_availability(self, enable_status=True):
         stimulus_method = self.STIMULUS_DICT[self.stimulus_method_combo_box.currentText()]["name"]
         for widget in self.box_checked_enable_dict["step"]:
@@ -565,6 +571,8 @@ class StimulusWindow(QDialog):
         Parameters:
         self: The class instance containing stimulus information (stimulus_info) and stimulus signal (stimulus_signal).
         """
+        self.sync_voltage_info()
+
         # Generate the name of the stimulus signal based on the stimulus information
         stimulus_name = "_".join(str(value) for value in self.stimulus_info.values())
         stimulus_signal_path = model_consts.STORED_STIMULUS_PATH + "/" + stimulus_name + ".wav"
@@ -661,6 +669,7 @@ class StimulusWindow(QDialog):
         for stimulus_item in loaded_stimulus:
             self.stimulus_info[stimulus_item] = loaded_stimulus[stimulus_item]
         self.update_stimulus_ui_value(self.stimulus_info)
+        self.sync_voltage_info()
         self.switch_group_box_availability(True)
         self.create_signal_from_stimulus_info()
         self.graph_stimulus()
@@ -679,6 +688,7 @@ class StimulusWindow(QDialog):
             self.stimulus_info["stimulus_name"] = stimulus_name
         else:
             return
+        self.sync_voltage_info()
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
         if save_code == error_code.OK:
             self.default_logger.info("Successfully saving stimulus info to database.")
@@ -772,6 +782,7 @@ class StimulusWindow(QDialog):
     def default_config_btn_clicked(self):
         self.stimulus_info = self.get_stimulus_info_from_json(True)
         self.update_stimulus_ui_value(self.stimulus_info)
+        self.sync_voltage_info()
         self.switch_group_box_availability(True)
         self.create_signal_from_stimulus_info()
         self.graph_stimulus()
@@ -814,6 +825,7 @@ class StimulusWindow(QDialog):
 
     def ok_btn_clicked(self):
         self.refresh_stimulus_info = True
+        self.sync_voltage_info()
         if not self.custom_chk_box.isChecked():
             if self.start_custom_check_status:
                 self.set_ai_popup()
