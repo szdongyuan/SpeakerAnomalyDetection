@@ -56,7 +56,7 @@ class DataSave(object):
                 total_time INTEGER NOT NULL CHECK (total_time > 0),
                 num_steps INTEGER DEFAULT NULL CHECK (num_steps >= 0),
                 voltage_type TEXT NOT NULL DEFAULT 'RMS',
-                voltage REAL NOT NULL DEFAULT 0.0,
+                voltage REAL NOT NULL DEFAULT 1.0,
                 is_default INTEGER NOT NULL CHECK (is_default IN (0, 1)),
                 stimulus_name TEXT
             );
