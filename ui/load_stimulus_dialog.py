@@ -135,7 +135,7 @@ class LoadStimulusDialog(DataManageDialog):
                     "sample_rate": query_data_idx[6],
                     "num_steps": query_data_idx[8],
                     "voltage_type": query_data_idx[9],
-                    "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 0.0,
+                    "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 1.0,
                     "is_default": query_data_idx[11],
                     "stimulus_name": query_data_idx[12],
                 }
