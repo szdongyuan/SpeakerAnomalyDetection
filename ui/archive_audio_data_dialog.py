@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QPushButton, QProgressDialog, QMessageBox, QFileDialog, QApplication
@@ -47,10 +48,11 @@ class ArchiveAudioDataDialog(audioDataManageDialog):
             if msg_box.clickedButton() != confirm_btn:
                 return
 
+        file_name = "audio_data_export_%s" % datetime.now().strftime("%Y%m%d")
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "选择保存位置",
-            os.path.join(model_consts.STORED_PACKAGE_PATH, "audio_data_export"),
+            os.path.join(model_consts.STORED_PACKAGE_PATH, file_name),
             "压缩文件 (*.zip)",
         )
 
