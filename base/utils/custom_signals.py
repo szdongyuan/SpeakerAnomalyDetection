@@ -17,5 +17,7 @@ class MySignals(QObject):
 
     update_mode_display_sign = pyqtSignal(int)
 
+    stream_audio_chunk_signal = pyqtSignal(object)  # Emits numpy array chunks for streaming audio
+
 
 sign = MySignals()

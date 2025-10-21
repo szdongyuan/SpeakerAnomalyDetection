@@ -33,6 +33,7 @@ class ModelInfoList(DataManageDialog):
 
         self.select_model_row = None
         self.model_management = TrainingModelManagement()
+        self.model_info = list()
 
         self.init_ui()
 
@@ -46,7 +47,6 @@ class ModelInfoList(DataManageDialog):
         self.layout().setContentsMargins(13, 20, 13, 13)
         self.set_column_alignment(3, Qt.AlignCenter)
         self.select_data_num.hide()
-
         self.load_model_info_from_db()
 
     def create_btn_layout(self):
