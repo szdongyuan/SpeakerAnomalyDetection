@@ -49,8 +49,16 @@ class CNN1d(NeuralNetManager):
 
     def _init_model(self):
         self.model = models.Sequential()
-        self.model.add(Input(shape=(self.init_config.get("input_len_1"),
-                                    self.init_config.get("input_len_2"))))
+
+        input_len_1 = self.init_config.get("input_len_1")
+        input_len_2 = self.init_config.get("input_len_2")
+        input_channels = self.init_config.get("input_channels", None)
+        if input_channels is not None:
+            input_shape = (input_len_1, input_len_2, input_channels)
+        else:
+            input_shape = (input_len_1, input_len_2)
+        self.model.add(Input(shape=input_shape))
+
         for layer_param in self.init_config.get("layers_param", []):
             self._build_layer(layer_param)
         compile_kwargs = self.init_config.get("compile_param", {})
