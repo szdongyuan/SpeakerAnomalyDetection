@@ -6,7 +6,7 @@ from datetime import datetime
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
 
@@ -16,12 +16,18 @@ from base.file_ops import FileOps
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
-from base.play_and_record import play_last_stimulus_wave, record_without_play, get_recorded_info
+from base.play_and_record import (
+    play_last_stimulus_wave, record_without_play, get_recorded_info,
+    stream_play_and_record, stream_record_without_play
+)
 from base.recording_management import RecordingManager
-from base.save_data import save_recorded_data_to_json
+from base.save_data import save_recorded_data_to_json, save_audio_simple
 from base.soundcard_calibration_manager import get_mic_deviation_value
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
+from base.streaming_file_writer import StreamingWavWriter
+from base.pre_processing.alignment_processing import AlignmentProcessing
+from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -56,6 +62,7 @@ class SequenceWindow(QWidget):
         self.default_ai_result = None
         
         self.toolsbar = SequenceToolsBar()
+        self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
         self.player_status_flag = False
         self.scanner_barcode_thread = None
@@ -72,6 +79,21 @@ class SequenceWindow(QWidget):
         self.current_recorded_count = None
 
         self.default_logger = LogManager.set_log_handler("core")
+
+        # Streaming state variables
+        self.streaming_buffer = []
+        self.streaming_time_data = []
+        self.streaming_plot_item = None  # Persistent plot item for zoom preservation
+        self.streaming_wav_writer = None  # WAV file writer for incremental saving
+        self.streaming_processor = None  # StreamingAudioProcessor instance
+        self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
+        self.streaming_mode = None  # "play_record" or "record_only"
+        self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
+
+        # Create QTimer in Qt main thread for queue polling
+        self.streaming_poll_timer = QTimer(self)
+        self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
+
         self.set_member_connect()
         self.init_lineedit_text()
         self.init_ui()
@@ -103,6 +125,8 @@ class SequenceWindow(QWidget):
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         # sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.count_board.on_test_btn_clicked, Qt.AutoConnection)
+        # Streaming audio chunk signal for real-time waveform updates
+        sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
         # self.update_mode_display(0)
         self.count_board.on_test_btn_clicked
         self.setStyleSheet(
@@ -577,6 +601,11 @@ class SequenceWindow(QWidget):
             self.data_struct, total_time
         )
 
+        # Add device information for streaming mode
+        recorded_dict["device"] = self.mic
+        recorded_dict["input_device"] = self.mic
+        recorded_dict["output_device"] = self.speaker
+
         return stimulus_dict, recorded_dict, sample_rate
 
     def judge_play_and_record(self, label="not_labeled"):
@@ -584,18 +613,60 @@ class SequenceWindow(QWidget):
             return
 
         self.update_player_btn_is_playing()
+
+        # Clear plot and reset streaming state for NEW recording
         if self.player_status_flag:
             self.line_graph.clear()
+
+        self.streaming_buffer = []
+        self.streaming_time_data = []
+        self.streaming_plot_item = None  # Reset plot item for new recording
+
         self.player_status_flag = True
         QApplication.processEvents()
 
         stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
 
-        if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-            play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
+        # Choose streaming or blocking(Not in use now) mode
+        if self.use_streaming:
+            # Use modern streaming approach with true real-time updates (non-blocking)
+            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+                # Start streaming play+record (non-blocking)
+                # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
+                temp_path = self.recorded_path.replace('.wav', '_temp.wav')
+                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
+                self.streaming_temp_path = temp_path
+
+                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
+                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+                )
+                self.streaming_mode = "play_record"
+
+            else:
+                # Start streaming record-only (non-blocking)
+                # Create WAV file writer for streaming saves (useful for long recordings)
+                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
+
+                self.streaming_processor, _ = stream_record_without_play(
+                    recorded_dict, self.recorded_path, self.recorded_signal_info
+                )
+                self.streaming_mode = "record_only"
+                self.streaming_stimulus_data = None
+
+            # Start polling timer to process queue and detect completion
+            self.streaming_poll_timer.start(10)  # Poll every 50ms
+
+            # Return immediately - completion will be handled by _on_streaming_complete()
+            # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
+            return
+
         else:
-            record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+            # Use legacy blocking approach
+            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+                play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
+            else:
+                record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
+            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
 
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
@@ -727,6 +798,158 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         line_graph.plot(signal_duration, recorded_signal, pen="k")
+
+    def on_audio_chunk_received(self, chunk):
+        """
+        Handle streaming audio chunk for real-time waveform display.
+
+        Updates plot incrementally while preserving zoom/pan state.
+        Also writes chunk to file via connected wav_writer.
+
+        Args:
+            chunk (np.ndarray): Audio chunk received from streaming processor
+        """
+        # Append chunk to streaming buffer
+        self.streaming_buffer.append(chunk)
+
+        # Calculate accumulated audio data
+        accumulated_audio = np.concatenate(self.streaming_buffer)
+
+        # Calculate time axis for accumulated data
+        sample_rate = self.data_struct.sample_rate
+        time_axis = np.linspace(0, len(accumulated_audio) / sample_rate, len(accumulated_audio))
+
+        # Update plot - preserve zoom/pan by updating existing PlotDataItem
+        if self.streaming_plot_item is None:
+            # First chunk - create new plot item
+            self.streaming_plot_item = self.line_graph.plot(time_axis, accumulated_audio, pen="k")
+        else:
+            # Subsequent chunks - update existing item (preserves zoom/pan) incrementally
+            self.streaming_plot_item.setData(time_axis, accumulated_audio)    
+
+        # Write chunk to file (if wav_writer is connected)
+        if self.streaming_wav_writer:
+            try:
+                self.streaming_wav_writer.write_chunk(chunk)
+            except Exception as e:
+                self.default_logger.error(f"Error writing audio chunk to file: {e}")
+
+    def _poll_streaming_queue(self):
+        """
+        Poll streaming queue and check for completion.
+
+        Called by QTimer every 50ms from Qt main thread.
+        Processes audio chunks from queue and checks if recording is finished.
+        """
+        if self.streaming_processor is None:
+            return
+
+        # Process all available chunks from queue (non-blocking)
+        self.streaming_processor.process_queue()
+
+        # Check if recording is complete
+        if not self.streaming_processor.is_recording:
+            self.streaming_poll_timer.stop()
+            self._on_streaming_complete()
+
+    def _on_streaming_complete(self):
+        """
+        Handle streaming completion: alignment, file save, and analysis.
+
+        Called when streaming recording is finished. Performs:
+        - Get recorded data from processor
+        - Alignment (for play+record mode)
+        - Finalize WAV file
+        - Store data for analysis
+        - Save to database
+        - Enable buttons and optionally run analysis
+        """
+        try:
+            # Get the complete recorded data
+            recorded_data = self.streaming_processor.get_recorded_data()
+            sample_rate = self.data_struct.sample_rate
+
+            # Perform alignment if in play+record mode
+            if self.streaming_mode == "play_record" and self.streaming_stimulus_data is not None:
+                # Finalize temp file first
+                if self.streaming_wav_writer:
+                    self.streaming_wav_writer.finalize()
+                    self.streaming_wav_writer = None
+
+                aligned_data = AlignmentProcessing.align_play_and_rec_data_using_gccphat(
+                    self.streaming_stimulus_data, recorded_data
+                )
+
+                # Update plot with aligned data (refresh display)
+                final_time_axis = np.linspace(0, len(aligned_data) / sample_rate, len(aligned_data))
+                if self.streaming_plot_item:
+                    self.streaming_plot_item.setData(final_time_axis, aligned_data)
+                else:
+                    self.streaming_plot_item = self.line_graph.plot(final_time_axis, aligned_data, pen="k")
+
+                # Store aligned data
+                self.data_struct.store_wave_data = aligned_data
+
+                # Save aligned data to final file
+                save_audio_simple(self.recorded_path, aligned_data, sample_rate)
+
+                # Delete temp file AFTER successful save (for data safety)
+                try:
+                    if hasattr(self, 'streaming_temp_path') and os.path.exists(self.streaming_temp_path):
+                        os.remove(self.streaming_temp_path)
+                        self.default_logger.info(f"Deleted temp file: {self.streaming_temp_path}")
+                except Exception as e:
+                    self.default_logger.warning(f"Failed to delete temp file: {e}")
+
+            else:
+                # Record-only mode - no alignment needed
+                self.data_struct.store_wave_data = recorded_data
+
+                # Finalize WAV file (for record-only, this is the final file)
+                if self.streaming_wav_writer:
+                    self.streaming_wav_writer.finalize()
+                    self.streaming_wav_writer = None
+
+            # Handle repeat signal splitting if needed
+            if self.streaming_mode == "play_record":
+                repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
+                if repeat_times > 1:
+                    kwargs = {"repeat_times": repeat_times}
+                    self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
+                        self.data_struct.store_wave_data, sample_rate, **kwargs
+                    )
+
+            # Clean up streaming state
+            self.streaming_processor = None
+            self.streaming_stimulus_data = None
+            self.streaming_mode = None
+
+            # Enable buttons for replay and data analysis
+            self.data_btn.setEnabled(True)
+            self.replayer_btn.setEnabled(True)
+
+            # Run auto-analysis if enabled
+            if self.analysis_config.get("auto_analysis", False):
+                self.run()
+
+            # Update player button state
+            self.update_player_btn_is_paused()
+
+            self.default_logger.info("Streaming recording completed successfully")
+
+        except Exception as e:
+            self.default_logger.error(f"Error in streaming completion: {e}")
+            # Clean up on error
+            if self.streaming_wav_writer:
+                self.streaming_wav_writer.finalize()
+                self.streaming_wav_writer = None
+            self.streaming_processor = None
+            self.streaming_stimulus_data = None
+            self.streaming_mode = None
+            # Still enable buttons even on error
+            self.data_btn.setEnabled(True)
+            self.replayer_btn.setEnabled(True)
+            self.update_player_btn_is_paused()
 
     def update_player_btn_is_playing(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
