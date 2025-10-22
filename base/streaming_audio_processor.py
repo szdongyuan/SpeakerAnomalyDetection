@@ -55,24 +55,27 @@ class StreamingAudioProcessor:
         samples_before = self.samples_captured
         self.samples_captured += len(chunk)
 
-        # Check if we've reached or exceeded target, if exceeded, trim chunk and **stop**
-        if samples_before < self.target_samples and self.samples_captured >= self.target_samples:
-            # We've reached the target - trigger stop
-            # Use thread to avoid blocking callback
-            threading.Thread(target=self.stop_streaming, daemon=True).start()
+        # Check if we've reached or exceeded target
+        reached_target = samples_before < self.target_samples and self.samples_captured >= self.target_samples
 
-            # Trim chunk if we exceeded target
+        # Trim chunk if we exceeded target
+        if reached_target:
             excess = self.samples_captured - self.target_samples
             if excess > 0:
                 chunk = chunk[:-excess]
                 self.samples_captured = self.target_samples
                 self.logger.info(f"Reached target samples: {self.target_samples}, trimmed {excess} samples from final chunk")
 
-        # Put in thread-safe queue for processing in main thread
+        # CRITICAL: Put chunk in queue FIRST (including trimmed final chunk)
+        # This ensures the final chunk is queued before is_recording becomes False
         try:
             self.audio_queue.put_nowait(chunk)
         except queue.Full:
             self.logger.warning("Audio queue full, dropping chunk")
+
+        # ONLY AFTER chunk is safely queued, trigger stop (avoids dropping final chunk)
+        if reached_target:
+            threading.Thread(target=self.stop_streaming, daemon=True).start()
 
     def process_queue(self):
         """

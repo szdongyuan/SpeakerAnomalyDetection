@@ -37,13 +37,13 @@ from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
 class AnalysisModelSelect(QDialog):
 
-    def __init__(self):
+    def __init__(self, mic=None, speaker=None):
         super().__init__()
 
         self.analysis_list = QTreeView()
         self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
-        self.select_list = OptionList(self.default_logger)
+        self.select_list = OptionList(self.default_logger, mic=mic, speaker=speaker)
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
         self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
 
@@ -323,7 +323,7 @@ class AnalysisModelSelect(QDialog):
 
 class OptionList(QListView):
 
-    def __init__(self, logger):
+    def __init__(self, logger, mic=None, speaker=None):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.select_analysis_model = QStandardItemModel()
@@ -333,6 +333,8 @@ class OptionList(QListView):
         self.select_analysis_model.dataChanged.connect(self.is_edit_model_item)
 
         self.default_logger = logger
+        self.mic = mic
+        self.speaker = speaker
         self.row_num = None
         self.darpflag = None
         self.sound_item_type = None
@@ -483,9 +485,9 @@ class OptionList(QListView):
         model = QDialog(self)
         if name == self.config[0].name:
             if "播放与录制" in self.config[0].name:
-                model = PlayRecordConfigWindow(self.config[0].detail)
+                model = PlayRecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             elif "录制音频" in self.config[0].name:
-                model = RecordConfigWindow(self.config[0].detail)
+                model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
