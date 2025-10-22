@@ -77,6 +77,7 @@ class SequenceWindow(QWidget):
         self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
         self.mode = None
         self.current_recorded_count = None
+        self.last_play_count = None  # Cache last play count for replay
 
         self.default_logger = LogManager.set_log_handler("core")
 
@@ -152,7 +153,7 @@ class SequenceWindow(QWidget):
 
     def set_member_connect(self):
         self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
-        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record())
+        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record(is_replay=True))
         self.data_btn.clicked.connect(self.run)
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
@@ -471,7 +472,7 @@ class SequenceWindow(QWidget):
         error_msg.setStandardButtons(QMessageBox.Ok)
         error_msg.exec_()
 
-    def clicked_ok_or_ng(self):
+    def clicked_ok_or_ng(self, manual=True):
         """
         Handles the logic when the OK or NG button is clicked.
 
@@ -485,6 +486,8 @@ class SequenceWindow(QWidget):
 
         Parameters:
             self: The instance of the class containing this method.
+            manual: If True (default), this is a manual user click; if False, this is an auto-triggered call.
+                    Only manual calls will disable the replay and data buttons.
         """
         if not self.player_status_flag:
             QMessageBox.warning(self, "警告", "请先录制声音！")
@@ -498,8 +501,13 @@ class SequenceWindow(QWidget):
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
         self.line_graph.clear()
-        self.replayer_btn.setDisabled(True)
-        self.data_btn.setEnabled(False)
+
+        # Only disable buttons when manually clicking OK/NG
+        # Auto-triggered calls should keep buttons enabled for user verification
+        if manual:
+            self.replayer_btn.setDisabled(True)
+            self.data_btn.setEnabled(False)
+
         self.default_ai_result = None
         self.default_ai = None
         self.clicked_scanner()
@@ -559,15 +567,22 @@ class SequenceWindow(QWidget):
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
 
-        self.judge_play_and_record(label)
+        # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
+
+        # Cache this count for replay
+        self.last_play_count = self.current_recorded_count
+
         save_recorded_data_to_json(
             self.lineedit_type.text(),
             self.lineedit_count.text(),
             self.lineedit_s_or_n.text(),
             self.barcode_scanner_box.isChecked(),
         )
+
+        # Record with new count
+        self.judge_play_and_record(label, is_replay=False)
 
         if self.clicked_player_flag is True:
             self.clicked_player_flag = False
@@ -589,10 +604,14 @@ class SequenceWindow(QWidget):
             QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
             return
 
-    def reset_work_pram(self, label):
+    def reset_work_pram(self, label, count=None):
         self.data_struct.clear_data()
+
+        # Use provided count if available (for replay), otherwise use lineedit value
+        count_str = str(count) if count is not None else self.lineedit_count.text()
+
         self.recorded_path, self.recorded_signal_info = get_recorded_info(
-            self.lineedit_type.text(), self.lineedit_count.text(), self.lineedit_s_or_n.text(), label
+            self.lineedit_type.text(), count_str, self.lineedit_s_or_n.text(), label
         )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
@@ -608,9 +627,13 @@ class SequenceWindow(QWidget):
 
         return stimulus_dict, recorded_dict, sample_rate
 
-    def judge_play_and_record(self, label="not_labeled"):
+    def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if self.checked_work_status_message():
             return
+
+        # CRITICAL: Clean up any existing streaming resources before starting new recording
+        # This prevents device conflicts and freezing when replay is clicked multiple times
+        self._cleanup_streaming_resources()
 
         self.update_player_btn_is_playing()
 
@@ -623,9 +646,23 @@ class SequenceWindow(QWidget):
         self.streaming_plot_item = None  # Reset plot item for new recording
 
         self.player_status_flag = True
+
+        # Disable replay and data buttons during recording/playback
+        # They will be re-enabled in _on_streaming_complete()
+        self.replayer_btn.setDisabled(True)
+        self.data_btn.setDisabled(True)
+
         QApplication.processEvents()
 
-        stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
+        # For replay: use cached count to overwrite the same file
+        # For play: use current lineedit count (already incremented in start_this_play)
+        if is_replay:
+            if self.last_play_count is None:
+                QMessageBox.warning(self, "提示", "请先进行录音")
+                return
+            stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
+        else:
+            stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
 
         # Choose streaming or blocking(Not in use now) mode
         if self.use_streaming:
@@ -763,7 +800,7 @@ class SequenceWindow(QWidget):
                     for instance in self.analysis_window:
                         instance.close()
                     self.default_ai_result = True
-                    self.clicked_ok_or_ng()
+                    self.clicked_ok_or_ng(manual=False)
 
     def get_sequence_config_from_json(self):
         """
@@ -869,6 +906,17 @@ class SequenceWindow(QWidget):
             recorded_data = self.streaming_processor.get_recorded_data()
             sample_rate = self.data_struct.sample_rate
 
+            # VERIFICATION: Check if we captured the expected number of samples
+            expected_samples = self.streaming_processor.target_samples
+            actual_samples = len(recorded_data)
+            if actual_samples != expected_samples:
+                self.default_logger.warning(
+                    f"Sample count mismatch! Expected: {expected_samples}, Got: {actual_samples}, "
+                    f"Missing: {expected_samples - actual_samples} samples ({(expected_samples - actual_samples) / sample_rate * 1000:.1f}ms)"
+                )
+            else:
+                self.default_logger.info(f"Recording complete: {actual_samples} samples captured (matches target)")
+
             # Perform alignment if in play+record mode
             if self.streaming_mode == "play_record" and self.streaming_stimulus_data is not None:
                 # Finalize temp file first
@@ -950,6 +998,43 @@ class SequenceWindow(QWidget):
             self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)
             self.update_player_btn_is_paused()
+
+    def _cleanup_streaming_resources(self):
+        """
+        Clean up all streaming resources (timer, processor, wav_writer).
+        
+        Called before starting a new recording to prevent resource conflicts.
+        Safe to call multiple times (idempotent).
+        """
+        # 1. Stop timer first (prevent callbacks during cleanup)
+        try:
+            if self.streaming_poll_timer.isActive():
+                self.streaming_poll_timer.stop()
+                self.default_logger.debug("Stopped streaming poll timer")
+        except Exception as e:
+            self.default_logger.error(f"Error stopping timer: {e}")
+        
+        # 2. Stop processor (stops audio streams - CRITICAL for preventing device conflicts)
+        try:
+            if self.streaming_processor is not None:
+                self.streaming_processor.stop_streaming()
+                self.streaming_processor = None
+                self.default_logger.debug("Stopped streaming processor")
+        except Exception as e:
+            self.default_logger.error(f"Error stopping processor: {e}")
+        
+        # 3. Finalize wav writer
+        try:
+            if self.streaming_wav_writer is not None:
+                self.streaming_wav_writer.finalize()
+                self.streaming_wav_writer = None
+                self.default_logger.debug("Finalized wav writer")
+        except Exception as e:
+            self.default_logger.error(f"Error finalizing wav writer: {e}")
+        
+        # 4. Clean up other state
+        self.streaming_stimulus_data = None
+        self.streaming_mode = None
 
     def update_player_btn_is_playing(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
