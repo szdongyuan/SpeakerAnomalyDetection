@@ -14,10 +14,13 @@ from ui.stimulus_window import StimulusWindow
 
 
 class BaseConfigWindow(QDialog):
-    def __init__(self):
+    def __init__(self, mic=None):
         super().__init__()
         self.final_data = None
-        _, self.mic = SoundDeviceManager().get_default_device("mic")
+        if mic is not None:
+            self.mic = mic
+        else:
+            _, self.mic = SoundDeviceManager().get_default_device("mic", refresh=False)
         self.setup_ui()
 
     def setup_ui(self):
@@ -62,12 +65,15 @@ class BaseConfigWindow(QDialog):
 
 
 class PlayRecordConfigWindow(BaseConfigWindow):
-    def __init__(self, stimulus_config_data):
-        super().__init__()
+    def __init__(self, stimulus_config_data, mic=None, speaker=None):
+        super().__init__(mic=mic)
         self.stimulus_config_data = deepcopy(stimulus_config_data)
         self.clicked_stimulus_btn_flag = False
         self.stimulus_signal = None
-        _, self.speaker = SoundDeviceManager().get_default_device("speaker")
+        if speaker is not None:
+            self.speaker = speaker
+        else:
+            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
         self.init_ui()
 
     def init_ui(self):
@@ -154,7 +160,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
 
 class RecordConfigWindow(BaseConfigWindow):
-    def __init__(self, input_data):
+    def __init__(self, input_data, mic=None):
         super().__init__()
         self.input_data = input_data
         self.init_ui()

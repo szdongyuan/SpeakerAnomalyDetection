@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
-        analysis_model_select_dialog = AnalysisModelSelect()
+        analysis_model_select_dialog = AnalysisModelSelect(mic=self.mic, speaker=self.speaker)
         analysis_model_select_dialog.exec()
 
     def show_statusbar_layout(self):
