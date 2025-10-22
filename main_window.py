@@ -3,7 +3,7 @@ import sys
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
@@ -295,6 +295,11 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_hardware_window_init(self):
+        # Prevent hardware changes during playback/recording
+        if self.sequence_window.player_status_flag:
+            QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
+            return
+
         dlg = HardwareWindow(self.speaker, self.mic)
         self.speaker, self.mic = dlg.on_exec()
         self.update_statusbar()

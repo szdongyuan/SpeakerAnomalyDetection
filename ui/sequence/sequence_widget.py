@@ -595,14 +595,16 @@ class SequenceWindow(QWidget):
     def checked_work_status_message(self):
         if not self.sequence_config:
             QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
-            return
+            return True
 
         if not self.mic:
             QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
-            return
+            return True
         if not self.speaker:
             QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
-            return
+            return True
+
+        return False
 
     def reset_work_pram(self, label, count=None):
         self.data_struct.clear_data()
@@ -820,6 +822,7 @@ class SequenceWindow(QWidget):
             if self.count_board:
                 self.count_board.analysis_config = seq.get("analysis_list", {})
         else:
+            self.sequence_config = []
             self.analysis_config = dict()
 
     @staticmethod
