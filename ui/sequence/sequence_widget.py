@@ -949,6 +949,14 @@ class SequenceWindow(QWidget):
                 # Save aligned data to final file
                 save_audio_simple(self.recorded_path, aligned_data, sample_rate)
 
+                # Save to database
+                self.recorded_signal_info["sample_rate"] = sample_rate
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.data_struct.stimulus_info)
+                if save_code == error_code.OK:
+                    self.default_logger.info(f"Database save successful: {save_msg}")
+                else:
+                    self.default_logger.error(f"Database save failed: {save_msg}")
+
                 # Delete temp file AFTER successful save (for data safety)
                 try:
                     if hasattr(self, 'streaming_temp_path') and os.path.exists(self.streaming_temp_path):
@@ -965,6 +973,14 @@ class SequenceWindow(QWidget):
                 if self.streaming_wav_writer:
                     self.streaming_wav_writer.finalize()
                     self.streaming_wav_writer = None
+
+                # Save to database
+                self.recorded_signal_info["sample_rate"] = sample_rate
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+                if save_code == error_code.OK:
+                    self.default_logger.info(f"Database save successful: {save_msg}")
+                else:
+                    self.default_logger.error(f"Database save failed: {save_msg}")
 
             # Handle repeat signal splitting if needed
             if self.streaming_mode == "play_record":
