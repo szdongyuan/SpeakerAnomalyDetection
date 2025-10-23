@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QApplication, QPushButton, QMessageBox
 
 from base.log_manager import LogManager
 from base.stimulus_signal_management import StimulusSignalManagement
+from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from consts import error_code
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
@@ -33,10 +34,21 @@ class LoadStimulusDialog(DataManageDialog):
         self.is_clicked_ok = False
         self.select_stimulus_row = None
         self.is_edit_item = True
+        self._suppress_data_changed = False
+
+        # Constraints aligned with StimulusWindow
+        self.ALLOWED_SAMPLE_RATES = {44100, 48000}
+        self.FREQ_MIN, self.FREQ_MAX = 10, 24000
+        self.REPEAT_MIN, self.REPEAT_MAX = 1, 10
+        self.STEPS_MIN, self.STEPS_MAX = 1, 100
+        self.TOTAL_TIME_MIN, self.TOTAL_TIME_MAX = 0.5, 60.0
+        self.VOLTAGE_MIN = 0.1
 
         self.loaded_stimulus = self.load_stimulus_config_from_db()
 
-        self.init_ui_layout(0, 10, [1])
+        # Enable editing for: Name(1), Repeat(4), Start Freq(5), Stop Freq(6), Sample Rate(7),
+        # Total Time(8), Steps(9), Voltage(11). Keep mode(2), type(3) and voltage type(10) read-only.
+        self.init_ui_layout(0, 12, [1, 4, 5, 6, 7, 8, 9, 11])
 
         self.set_view_checked_changed(self.on_row_checkbox_toggled)
         self.model().dataChanged.connect(self.is_edit_model_item)
@@ -135,7 +147,7 @@ class LoadStimulusDialog(DataManageDialog):
                     "sample_rate": query_data_idx[6],
                     "num_steps": query_data_idx[8],
                     "voltage_type": query_data_idx[9],
-                    "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 1.0,
+                    "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 0.1,
                     "is_default": query_data_idx[11],
                     "stimulus_name": query_data_idx[12],
                 }
@@ -164,38 +176,208 @@ class LoadStimulusDialog(DataManageDialog):
     def get_selected_stimulus_config(self):
         if self.select_stimulus_row is None:
             return None
-        self.loaded_stimulus[self.select_stimulus_row].pop("stimulus_name")
-        self.loaded_stimulus[self.select_stimulus_row].pop("is_default")
-        self.loaded_stimulus[self.select_stimulus_row].pop("stimulus_id")
-        return self.loaded_stimulus[self.select_stimulus_row]
+        # Create a copy to avoid mutating the original data
+        result = self.loaded_stimulus[self.select_stimulus_row].copy()
+        result.pop("stimulus_name")
+        result.pop("is_default")
+        result.pop("stimulus_id")
+        return result
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
-        if Qt.EditRole in roles:
-            for row in range(topLeft.row(), bottomRight.row() + 1):
-                index = self.model().index(row, topLeft.column())
-            self.on_data_changed(index, self.is_edit_item)
-        else:
+        if self._suppress_data_changed:
+            return
+        if Qt.EditRole not in roles:
+            return
+        # Handle each edited cell within the changed index range
+        for row in range(topLeft.row(), bottomRight.row() + 1):
+            for col in range(topLeft.column(), bottomRight.column() + 1):
+                index = self.model().index(row, col)
+                self.on_data_changed(index)
+
+    def on_data_changed(self, index: QStandardItem):
+        """Validate, persist and reflect edits per cell.
+
+        Columns mapping:
+        1: stimulus_name (string, non-empty, unique)
+        4: repeat_times (int 1-10)
+        5: start_freq (int 10-24000)
+        6: stop_freq (int 10-24000)
+        7: sample_rate (int in {44100, 48000})
+        8: total_time (float 0.5-60.0)
+        9: num_steps (int 1-100)
+        11: voltage (float 0.1 - max_voltage if available)
+        """
+        row = index.row()
+        col = index.column()
+        new_text = index.data()
+
+        # Guard: ignore empty edits for name; revert to previous
+        if new_text is None:
             return
 
-    def on_data_changed(self, index: QStandardItem, is_edit_item):
-        if index.data() != "":
-            if is_edit_item:
-                stimulus_id = self.loaded_stimulus[index.row()].get("stimulus_id")
-                new_name = index.data()
-                update_info = {"stimulus_id": stimulus_id, "new_name": new_name}
-                code, msg = StimulusSignalManagement().update_stimulus_info_to_db(update_info)
-                self.loaded_stimulus[index.row()]["stimulus_name"] = new_name
-                if code == error_code.OK:
-                    self.logger.info(msg)
-                else:
-                    self.logger.error(msg)
-            else:
-                is_edit_item = True
-                return
-        else:
-            is_edit_item = False
-            self.model().setData(index, self.loaded_stimulus[index.row()].get("stimulus_name"))
+        # Cols that are intentionally read-only are not editable via flags, but guard just in case
+        if col in (0, 2, 3, 10):
             return
+
+        # Helper to revert display to previous value without re-triggering handler
+        def revert_to_previous():
+            self._suppress_data_changed = True
+            try:
+                prev_val = self._get_display_value_for_cell(row, col)
+                self.model().setData(index, prev_val)
+            finally:
+                self._suppress_data_changed = False
+
+        # Name change
+        if col == 1:
+            new_name = str(new_text).strip()
+            if new_name == "":
+                QMessageBox.warning(self, "提示", "配置名称不能为空")
+                revert_to_previous()
+                return
+            stimulus_id = self.loaded_stimulus[row].get("stimulus_id")
+            update_info = {"stimulus_id": stimulus_id, "new_name": new_name}
+            code, msg = StimulusSignalManagement().update_stimulus_info_to_db(update_info)
+            if code == error_code.OK:
+                self.loaded_stimulus[row]["stimulus_name"] = new_name
+                self.logger.info(msg)
+            else:
+                self.logger.error(msg)
+                QMessageBox.warning(self, "重命名失败", msg)
+                revert_to_previous()
+            return
+
+        # Map column to db field and validator
+        field_by_col = {
+            4: "repeat_times",
+            5: "start_freq",
+            6: "stop_freq",
+            7: "sample_rate",
+            8: "total_time",
+            9: "num_steps",
+            11: "voltage",
+        }
+        field = field_by_col.get(col)
+        if not field:
+            return
+
+        # Parse and validate according to StimulusWindow constraints
+        try:
+            if field in ("repeat_times", "start_freq", "stop_freq", "sample_rate", "num_steps"):
+                # Integer fields
+                value = int(float(str(new_text).strip()))
+                if field == "repeat_times" and not (self.REPEAT_MIN <= value <= self.REPEAT_MAX):
+                    raise ValueError(f"重复次数需在 {self.REPEAT_MIN}-{self.REPEAT_MAX} 范围内")
+                if field in ("start_freq", "stop_freq") and not (self.FREQ_MIN <= value <= self.FREQ_MAX):
+                    raise ValueError(f"频率需在 {self.FREQ_MIN}-{self.FREQ_MAX} Hz 范围内")
+                if field == "sample_rate" and value not in self.ALLOWED_SAMPLE_RATES:
+                    raise ValueError("采样频率仅支持 44100 或 48000")
+                if field == "num_steps" and not (self.STEPS_MIN <= value <= self.STEPS_MAX):
+                    raise ValueError(f"步进数量需在 {self.STEPS_MIN}-{self.STEPS_MAX} 范围内")
+            elif field == "total_time":
+                value = float(str(new_text).strip())
+                if not (self.TOTAL_TIME_MIN <= value <= self.TOTAL_TIME_MAX):
+                    raise ValueError(f"信号时长需在 {self.TOTAL_TIME_MIN}-{self.TOTAL_TIME_MAX} s 范围内")
+                # Normalize format to 1 decimal
+                value = round(value, 1)
+            elif field == "voltage":
+                value = float(str(new_text).strip())
+                max_v = self._get_max_input_voltage()
+                if value < self.VOLTAGE_MIN:
+                    raise ValueError(f"电压需不小于 {self.VOLTAGE_MIN} V")
+                if max_v is not None and value > max_v:
+                    raise ValueError(f"电压不能超过标定上限 {max_v} V")
+                # Normalize to 2 decimals for display
+                value = round(value, 2)
+            else:
+                return
+        except ValueError as ve:
+            QMessageBox.warning(self, "输入无效", str(ve))
+            revert_to_previous()
+            return
+        except (TypeError, AttributeError) as e:
+            self.logger.error(f"Unexpected error in on_data_changed: {e}")
+            QMessageBox.warning(self, "输入无效", "请输入有效的数值")
+            revert_to_previous()
+            return
+
+        # Check if value actually changed before updating DB
+        current_value = self.loaded_stimulus[row].get(field)
+        value_changed = False
+        if field in ("total_time", "voltage"):
+            # Use epsilon comparison for floats
+            value_changed = abs(float(current_value) - float(value)) > 1e-6
+        else:
+            # Direct comparison for integers
+            value_changed = int(current_value) != int(value)
+
+        if not value_changed:
+            # Value unchanged, just normalize display
+            display_val = self._format_display_value(field, value)
+            self._suppress_data_changed = True
+            try:
+                self.model().setData(index, display_val)
+            finally:
+                self._suppress_data_changed = False
+            return
+
+        # Persist to DB
+        stimulus_id = self.loaded_stimulus[row].get("stimulus_id")
+        code, msg = StimulusSignalManagement().update_stimulus_params_to_db(stimulus_id, {field: value})
+        if code != error_code.OK:
+            self.logger.error(msg)
+            QMessageBox.warning(self, "保存失败", msg)
+            revert_to_previous()
+            return
+
+        # Success: update in-memory and normalize cell display
+        self.loaded_stimulus[row][field] = value
+        display_val = self._format_display_value(field, value)
+        self._suppress_data_changed = True
+        try:
+            self.model().setData(index, display_val)
+        finally:
+            self._suppress_data_changed = False
+        self.logger.info("Stimulus parameter updated: %s=%s" % (field, value))
+        return
+
+    def _get_max_input_voltage(self):
+        """Fetch max voltage from calibration file; return None if unavailable."""
+        try:
+            code, data = SoundcardCalibrationManager().load_data_from_json("calibration_coefficients.json")
+            if code == error_code.OK:
+                return float(data.get("max_voltage", 0.0))
+        except Exception:
+            pass
+        return None
+
+    def _format_display_value(self, field: str, value):
+        if field == "total_time":
+            return f"{float(value):.1f}"
+        if field == "voltage":
+            return f"{float(value):.2f}"
+        return str(int(value)) if isinstance(value, int) or field in {
+            "repeat_times", "start_freq", "stop_freq", "sample_rate", "num_steps"
+        } else str(value)
+
+    def _get_display_value_for_cell(self, row: int, col: int):
+        field_by_col = {
+            1: "stimulus_name",
+            4: "repeat_times",
+            5: "start_freq",
+            6: "stop_freq",
+            7: "sample_rate",
+            8: "total_time",
+            9: "num_steps",
+            11: "voltage",
+        }
+        field = field_by_col.get(col)
+        if not field:
+            # Columns not tracked; fallback to existing model data
+            return self.model().data(self.model().index(row, col))
+        value = self.loaded_stimulus[row].get(field)
+        # Normalize for display
+        return self._format_display_value(field, value) if field != "stimulus_name" else value
 
     def ok_btn_clicked(self):
         if self.select_stimulus_row is None:
@@ -208,11 +390,19 @@ class LoadStimulusDialog(DataManageDialog):
         if self.select_stimulus_row is not None:
             stimulus_name = self.loaded_stimulus[self.select_stimulus_row].get("stimulus_name")
             code, msg = StimulusSignalManagement().delete_stimulus_info_from_db(stimulus_name)
-            if "FOREIGN KEY" in msg:
-                QMessageBox.warning(self, "提示", "请先删除该激励信号下的所有数据")
+
+            # Check if deletion failed
+            if code != error_code.OK:
+                # Check for foreign key constraint (case-insensitive, supports Chinese and English)
+                if "FOREIGN KEY" in msg.upper() or "外键" in msg:
+                    QMessageBox.warning(self, "提示", "请先删除该激励信号下的所有数据")
+                else:
+                    QMessageBox.warning(self, "删除失败", msg)
+                    self.logger.error("delete stimulus config %s failed: %s" % (stimulus_name, msg))
                 return
-            if code == error_code.OK:
-                self.logger.info("delete stimulus config %s success" % stimulus_name)
+
+            # Only update UI on successful deletion
+            self.logger.info("delete stimulus config %s success" % stimulus_name)
             self.loaded_stimulus.pop(self.select_stimulus_row)
             self.model().removeRow(self.select_stimulus_row)
             self.select_stimulus_row = None
