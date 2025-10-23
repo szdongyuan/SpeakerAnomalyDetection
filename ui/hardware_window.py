@@ -14,6 +14,9 @@ class HardwareWindow(QDialog):
         super().__init__()
         self.speaker = current_speaker
         self.mic = current_mic
+        # save initial devices to allow cancel action(future use)
+        self.initial_speaker = current_speaker
+        self.initial_mic = current_mic
 
         self.init_ui()
         self.refresh_device_display()
@@ -164,11 +167,14 @@ class HardwareWindow(QDialog):
         mic_idx = self.mic["index"] if self.mic else -1
         speaker_idx = self.speaker["index"] if self.speaker else -1
         SoundDeviceManager().change_default_device(mic_idx, speaker_idx)
-        self.close()
+        self.accept()
 
     def on_exec(self):
-        self.exec()
-        return self.speaker, self.mic
+        result = self.exec()
+        if result == QDialog.Accepted:
+            return self.speaker, self.mic
+        else:
+            return self.initial_speaker, self.initial_mic
 
 
 class DeviceListWindow(QDialog):

@@ -147,7 +147,7 @@ class StreamingAudioProcessor:
             self.error_occurred = True
             self.error_message = str(e)
             self.logger.error(f"Error starting streaming recording: {e}")
-            return error_code.INVALID_REC, f"Failed to start streaming: {e}"
+            return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
     def start_streaming_playrec(self, stimulus_dict, sample_rate=44100, target_samples=None,
                                  input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000):
