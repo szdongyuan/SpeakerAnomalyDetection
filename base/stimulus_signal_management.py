@@ -125,24 +125,3 @@ class StimulusSignalManagement(object):
             err_msg = "Failed to update the stimulus info to the database. %s" % str(e)
             return error_code.INVALID_UPDATE, err_msg
 
-    @staticmethod
-    def load_stimulus_from_json():
-        """
-            Load stimulus configuration from a JSON file.
-
-            This method attempts to load stimulus configuration from a predefined JSON file path and parse the
-        configuration into a dictionary.
-            If the JSON file does not exist, it returns an appropriate error code and message.
-
-            Returns:
-                tuple: A tuple containing the error code and configuration data or error message.
-                    If the operation is successful, the error code is error_code.OK, and the configuration data is the
-                 parsed dictionary.
-                    If the operation fails, the error code is error_code.INVALID_DATA_LOADING, and the error message is a string.
-        """
-        json_file_path = running_consts.DEFAULT_DIR + "ui/ui_config/stimulus.json"
-        if not os.path.exists(json_file_path):
-            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        with open(json_file_path, 'r') as json_file:
-            data = json.load(json_file)
-            return error_code.OK, data

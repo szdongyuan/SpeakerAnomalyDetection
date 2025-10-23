@@ -101,7 +101,8 @@ class TrainingModelManagement(object):
         if not os.path.exists(config_path):
             return error_code.INVALID_PATH, "The config path does not exist."
         model_name = os.path.splitext(os.path.basename(model_path))[0]
-        training_model = load_model(model_path)
+        # Skip optimizer state when loading; we only inspect shapes here.
+        training_model = load_model(model_path, compile=False)
         input_dim = f"{signal_length} x {1}"
         output_shape = training_model.output_shape
         if len(output_shape) >= 2:

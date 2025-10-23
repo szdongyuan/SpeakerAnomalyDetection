@@ -40,12 +40,12 @@ class StimulusWindow(QDialog):
         "粉噪音": "pink_noise",
     }
 
-    def __init__(self, stimulus_config_data=None):
+    def __init__(self, stimulus_config_data=None, speaker=None):
         """Initialize stimulus window with default configurations"""
         super().__init__()
         # initialize stimulus signal type， and create variable to store stimulus signal data
         self.data_struct = DataDealStruct()
-        self.speaker = None
+        self.speaker = speaker
         self.load_wav_path = ""
         self.load_stimulus_signal_path = None
         self.refresh_stimulus_info = False
@@ -810,11 +810,15 @@ class StimulusWindow(QDialog):
         and uses an instance of the SoundcardAudioProcessor class to call the sd_play method
         for playing the signal. If the playback fails, an error log is recorded.
         """
+        # Extract device index from speaker if available
+        device_idx = self.speaker["index"] if self.speaker else None
+
         # Construct the stimulus parameter dictionary, including signal data, amplitude, and sample rate
         stimulus_param = {
             "data": self.stimulus_data,
             "amplitude": self.stimulus_info["amplitude"],
             "sr": self.stimulus_info["sample_rate"],
+            "device": device_idx,
         }
         # Create an instance of SoundcardAudioProcessor and play the stimulus signal
         sap = SoundcardAudioProcessor()

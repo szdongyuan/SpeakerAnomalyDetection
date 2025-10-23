@@ -31,7 +31,8 @@ class SoundcardAudioProcessor(object):
             print(data)
             sr = stimulus_params.get("sr")
             blocking = stimulus_params.get("blocking", True)
-            sd.play(data, samplerate=sr, blocking=blocking)
+            device = stimulus_params.get("device", None)
+            sd.play(data, samplerate=sr, device=device, blocking=blocking)
             return error_code.OK, "play successfully"
         except Exception as e:
             err_msg = "Failed to play audio. [%s]" % (str(e)[:50])

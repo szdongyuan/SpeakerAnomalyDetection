@@ -142,7 +142,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
     def open_stimulus_window(self):
         self.clicked_stimulus_btn_flag = True
-        self.stimulus_window = StimulusWindow(stimulus_config_data=self.stimulus_config_data)
+        self.stimulus_window = StimulusWindow(stimulus_config_data=self.stimulus_config_data, speaker=self.speaker)
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
             self.stimulus_config_data = self.stimulus_window.final_save_data

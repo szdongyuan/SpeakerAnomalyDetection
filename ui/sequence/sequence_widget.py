@@ -489,7 +489,7 @@ class SequenceWindow(QWidget):
             manual: If True (default), this is a manual user click; if False, this is an auto-triggered call.
                     Only manual calls will disable the replay and data buttons.
         """
-        if not self.player_status_flag:
+        if not hasattr(self.data_struct, 'store_wave_data') or self.data_struct.store_wave_data is None or len(self.data_struct.store_wave_data) == 0:
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
 
@@ -633,6 +633,7 @@ class SequenceWindow(QWidget):
         if self.checked_work_status_message():
             return
 
+        self.line_graph.clear()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
         # This prevents device conflicts and freezing when replay is clicked multiple times
         self._cleanup_streaming_resources()
@@ -693,7 +694,7 @@ class SequenceWindow(QWidget):
                 self.streaming_stimulus_data = None
 
             # Start polling timer to process queue and detect completion
-            self.streaming_poll_timer.start(10)  # Poll every 50ms
+            self.streaming_poll_timer.start(50)  # Poll every 50ms
 
             # Return immediately - completion will be handled by _on_streaming_complete()
             # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
@@ -707,6 +708,7 @@ class SequenceWindow(QWidget):
                 record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
             self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
 
+        self.player_status_flag = False  # Recording complete, allow hardware access
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
 
@@ -836,7 +838,8 @@ class SequenceWindow(QWidget):
         sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
         """
         line_graph.clear()
-        signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
+        # Use np.arange for correct sample time stamps (0, 1/fs, 2/fs, ..., (N-1)/fs)
+        signal_duration = np.arange(len(recorded_signal)) / sample_rate
         line_graph.plot(signal_duration, recorded_signal, pen="k")
 
     def on_audio_chunk_received(self, chunk):
@@ -856,8 +859,10 @@ class SequenceWindow(QWidget):
         accumulated_audio = np.concatenate(self.streaming_buffer)
 
         # Calculate time axis for accumulated data
+        # Use np.arange to ensure fixed time stamps for each sample point
+        # This prevents time drift caused by linspace's varying interval (N/(N-1)/fs instead of 1/fs)
         sample_rate = self.data_struct.sample_rate
-        time_axis = np.linspace(0, len(accumulated_audio) / sample_rate, len(accumulated_audio))
+        time_axis = np.arange(len(accumulated_audio)) / sample_rate
 
         # Update plot - preserve zoom/pan by updating existing PlotDataItem
         if self.streaming_plot_item is None:
@@ -974,6 +979,7 @@ class SequenceWindow(QWidget):
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            self.player_status_flag = False  # Recording complete, allow hardware access
 
             # Enable buttons for replay and data analysis
             self.data_btn.setEnabled(True)
@@ -997,6 +1003,7 @@ class SequenceWindow(QWidget):
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
             # Still enable buttons even on error
             self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)

@@ -85,7 +85,9 @@ class NeuralNetManager(ModelManager):
                                                     ret_str, model_description)
 
     def load_model(self, load_model_path):
-        self.model = models.load_model(load_model_path)
+        # For inference/inspection we don't need optimizer state; avoid Keras warnings
+        # about optimizer variable mismatch by skipping compiled state on load.
+        self.model = models.load_model(load_model_path, compile=False)
 
     def parse_fit_config(self):
         fit_kwargs = {
