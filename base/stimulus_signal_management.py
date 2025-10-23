@@ -125,3 +125,60 @@ class StimulusSignalManagement(object):
             err_msg = "Failed to update the stimulus info to the database. %s" % str(e)
             return error_code.INVALID_UPDATE, err_msg
 
+    @staticmethod
+    def update_stimulus_params_to_db(stimulus_id: int, update_params: dict):
+        """
+        Update editable stimulus parameters for a given stimulus_id.
+
+        Only allows updating of configurable numeric parameters consistent with UI constraints.
+        The following fields are supported (all optional):
+        - repeat_times (int)
+        - start_freq (int)
+        - stop_freq (int)
+        - sample_rate (int)
+        - total_time (float)
+        - num_steps (int)
+        - voltage (float)
+
+        Args:
+            stimulus_id: int, primary key in stimulus_signal_table
+            update_params: dict, subset of supported fields to update
+
+        Returns:
+            (code, message) tuple
+        """
+        if not isinstance(update_params, dict) or not update_params:
+            return error_code.INVALID_UPDATE, "No parameters provided to update."
+        # Whitelist supported fields to avoid accidental updates
+        allowed_fields = {
+            "repeat_times",
+            "start_freq",
+            "stop_freq",
+            "sample_rate",
+            "total_time",
+            "num_steps",
+            "voltage",
+        }
+        # Filter update_params by allowed fields
+        update_data = {k: v for k, v in update_params.items() if k in allowed_fields}
+        if not update_data:
+            return error_code.INVALID_UPDATE, "No valid parameters to update."
+        try:
+            with DataSave(model_consts.DATABASE_PATH) as database:
+                # Ensure record exists
+                result = database.query_matching_data(
+                    [(stimulus_id,)], "stimulus_signal_table", ["stimulus_id"], ["stimulus_id"]
+                )
+                if not result:
+                    return error_code.INVALID_UPDATE, "Stimulus ID does not exist."
+                update_code, msg = database.update_table_data(
+                    "stimulus_signal_table", update_data, {"stimulus_id": stimulus_id}
+                )
+                if update_code == error_code.OK:
+                    return error_code.OK, "Stimulus parameters updated."
+                else:
+                    return error_code.INVALID_UPDATE, msg
+        except Exception as e:
+            err_msg = "Failed to update the stimulus parameters. %s" % str(e)
+            return error_code.INVALID_UPDATE, err_msg
+
