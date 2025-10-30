@@ -35,10 +35,11 @@ class SoundcardCalibrationManager(object):
         self.voltages = []
         self.logger = LogManager.set_log_handler("soundcard_core")
 
-    def add_data(self, amplitude, voltage):
+    def add_data(self, amplitude, voltage, validation=True):
         """
             Add amplitude and voltage data.
             Args:
+                validation: bool
                 amplitude: int or float
                     The input amplitude value.
                 voltage: int or float
@@ -46,10 +47,11 @@ class SoundcardCalibrationManager(object):
             Returns:
                  A tuple containing the status code and message.
         """
-        if not amplitude or not voltage:
-            return error_code.INVALID_DATA_LOADING, "Input data cannot be None."
-        if not isinstance(amplitude, (int, float)) or not isinstance(voltage, (int, float)):
-            return error_code.INVALID_TYPE_DATA, "Input data must be numeric."
+        if validation:
+            if not amplitude or not voltage:
+                return error_code.INVALID_DATA_LOADING, "Input data cannot be None."
+            if not isinstance(amplitude, (int, float)) or not isinstance(voltage, (int, float)):
+                return error_code.INVALID_TYPE_DATA, "Input data must be numeric."
         self.amplitudes.append(amplitude)
         self.voltages.append(voltage)
         return error_code.OK, "Successfully add data."
@@ -67,13 +69,14 @@ class SoundcardCalibrationManager(object):
             self.logger.error("Amplitudes and voltages must have the same length.")
             return error_code.INVALID_DATA_LOADING, "Amplitudes and voltages must have the same length."
         coefficients, residuals, *_ = np.polyfit(self.voltages, self.amplitudes, 1, full=True)
-        if len(residuals) == 0:
-            self.logger.error("Residuals is empty.")
-            return error_code.INVALID_CALIBRATION, "Residuals is empty, please readjust."
-        mse = np.nanmean(residuals ** 2)
-        if mse > threshold or mse < 0 or not np.isfinite(mse):
-            self.logger.error("Calibration is not accurate, please readjust.")
-            return error_code.INVALID_CALIBRATION, "Calibration is not accurate, please readjust."
+        if len(self.voltages) > 2:
+            if len(residuals) == 0:
+                self.logger.error("Residuals is empty.")
+                return error_code.INVALID_CALIBRATION, "Residuals is empty, please readjust."
+            mse = np.nanmean(residuals ** 2)
+            if mse > threshold or mse < 0 or not np.isfinite(mse):
+                self.logger.error("Calibration is not accurate, please readjust.")
+                return error_code.INVALID_CALIBRATION, "Calibration is not accurate, please readjust."
         else:
             save_code, msg = self.save_coefficients_to_json(coefficients, max(self.voltages), json_file_name)
             if save_code == error_code.OK:

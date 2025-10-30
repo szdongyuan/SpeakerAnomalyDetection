@@ -133,9 +133,10 @@ class CalibrationWindow(QDialog):
 class OutputCalibration(QWidget):
     def __init__(self):
         super().__init__()
+        self.default_calibration_nums = 1
         self.output_voltage_value = []
         self.default_logger = LogManager.set_log_handler("core")
-        self.calibration_param = {"calibration_nums": 5}
+        self.calibration_param = {"calibration_nums": self.default_calibration_nums}
         self.current_count = 1
         self.countdown = 10
         self.play_flag = False
@@ -194,8 +195,8 @@ class OutputCalibration(QWidget):
         calibration_nums_label = QLabel("校准次数")
         self.calibration_nums_box = QSpinBox()
         self.calibration_nums_box.setSuffix(" 次")
-        self.calibration_nums_box.setRange(3, 20)
-        self.calibration_nums_box.setValue(5)
+        self.calibration_nums_box.setRange(1, 20)
+        self.calibration_nums_box.setValue(1)
         self.calibration_nums_box.setFixedSize(90, 30)
         self.calibration_nums_box.editingFinished.connect(self.get_calibration_param)
         h_spacer_1 = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -379,7 +380,10 @@ class OutputCalibration(QWidget):
         """
         calibration_nums = self.calibration_nums_box.value()
         output_voltage = self.output_voltage_value
-        amplitude_list = np.linspace(0.05, 0.95, calibration_nums)
+        if calibration_nums == 1:
+            amplitude_list = np.array([0.95])
+        else:
+            amplitude_list = np.linspace(0.05, 0.95, calibration_nums)
         self.calibration_param = {
             "calibration_nums": calibration_nums,
             "output_voltage": output_voltage,
@@ -457,7 +461,7 @@ class OutputCalibration(QWidget):
         self.output_voltage_value.clear()
         self.output_voltage_box.setValue(0)
         self.target_voltage_box.setValue(0)
-        self.calibration_nums_box.setValue(5)
+        self.calibration_nums_box.setValue(self.default_calibration_nums)
         self.timer.stop()
         self.current_count = 1
         self.countdown = 10
@@ -486,6 +490,8 @@ class OutputCalibration(QWidget):
             self.calibration_popup(success_flag=False)
             self.default_logger.error("The saved voltage does not meet the requirement of calibration times.")
         else:
+            if self.calibration_param["calibration_nums"] == 1:
+                scm.add_data(0, 0, validation=False)
             for amplitude, voltage in zip(self.calibration_param["amplitude_list"], self.output_voltage_value):
                 scm.add_data(amplitude, voltage)
             fit_code, msg = scm.fit()
