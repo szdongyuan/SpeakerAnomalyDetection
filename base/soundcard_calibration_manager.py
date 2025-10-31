@@ -77,11 +77,10 @@ class SoundcardCalibrationManager(object):
             if mse > threshold or mse < 0 or not np.isfinite(mse):
                 self.logger.error("Calibration is not accurate, please readjust.")
                 return error_code.INVALID_CALIBRATION, "Calibration is not accurate, please readjust."
-        else:
-            save_code, msg = self.save_coefficients_to_json(coefficients, max(self.voltages), json_file_name)
-            if save_code == error_code.OK:
-                return error_code.OK, coefficients
-            return save_code, msg
+        save_code, msg = self.save_coefficients_to_json(coefficients, max(self.voltages), json_file_name)
+        if save_code == error_code.OK:
+            return error_code.OK, coefficients
+        return save_code, msg
 
     @staticmethod
     def predict_amplitude(coefficients, target_voltage):
