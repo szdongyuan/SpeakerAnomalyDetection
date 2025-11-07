@@ -1,4 +1,5 @@
 from tensorflow.keras import layers, models, Input
+import tensorflow as tf
 
 CUSTOM_LAYER_REGISTRY = {}
 
@@ -11,6 +12,7 @@ def register_layer(layer_name: str):
     return decorator
 
 
+@tf.keras.utils.register_keras_serializable()
 @register_layer("TransformerEncoder")
 class TransformerEncoder(layers.Layer):
     def __init__(self, embed_dim, dense_dim, num_heads=8, **kwargs):
