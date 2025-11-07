@@ -14,7 +14,8 @@ class TrainingModelManagement(object):
     def __init__(self):
         self.db_path = model_consts.DATABASE_PATH
 
-    def save_training_model_info_to_db(self, signal_length, model_path, config_path, ret_str=None, model_description="No description"):
+    def save_training_model_info_to_db(self, signal_length, model_path, config_path, ret_str=None,
+                                       model_description="No description"):
         try:
             if os.path.isabs(model_path):
                 model_path = FileOps.get_relative_path(model_path, model_consts.DEFAULT_DIR)
@@ -30,35 +31,40 @@ class TrainingModelManagement(object):
         except Exception as e:
             err_msg = "Failed to save the training model info to the database. %s" % (str(e)[:70])
             return error_code.INVALID_INSERT, err_msg
-        
-    def register_new_model_info_to_db(self, 
+
+    def register_new_model_info_to_db(self,
                                       model_name: str = None,
-                                      config_path: str = model_consts.CONFIG_PATH, 
+                                      config_path: str = model_consts.CONFIG_PATH,
                                       input_dim: str = None,
                                       output_dim: str = None,
                                       model_description="No description",
-                                      model_type:str = "keras"):
-        if model_name and input_dim and output_dim and config_path:
-            try:
-                with DataSave(self.db_path) as database:
-                    model_id = str(uuid.uuid1())
-                    update_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    model_path = "models/" + model_name + "." + model_type
-                    model_info = [model_id, model_name, model_path, config_path, input_dim, output_dim, None, update_date, model_description]
-                    database.insert_data_into_db("training_model_table",
-                                                 model_consts.DB_MODEL_COLUMNS, 
-                                                 [model_info])
-                    return error_code.OK, "Successfully saved the model info to the database."
-            except Exception as e:
-                err_msg = "Failed to save the model info to the database. %s" % (str(e)[:70])
-                return error_code.INVALID_INSERT, err_msg
-        else:
+                                      model_type: str = "keras",
+                                      model_path: str = None):
+        if not (model_name and input_dim and output_dim and config_path and model_path):
             return error_code.INVALID_DATA_LOADING, "The model info is empty."
-        
+
+        try:
+            with DataSave(self.db_path) as database:
+                model_id = str(uuid.uuid1())
+                update_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                model_info = [model_id, model_name, model_path, config_path, input_dim, output_dim, None, update_date,
+                              model_description]
+                code, msg = database.insert_data_into_db("training_model_table",
+                                                         model_consts.DB_MODEL_COLUMNS,
+                                                         [model_info])
+                if code != error_code.OK:
+                    return code, msg
+
+                return error_code.OK, "Successfully saved the model info to the database."
+        except Exception as e:
+            err_msg = "Failed to save the model info to the database. %s" % (str(e)[:70])
+            return error_code.INVALID_INSERT, err_msg
+
     def update_model_info_to_db(self, model_data: dict):
         try:
             with DataSave(self.db_path) as database:
-                result = database.query_matching_data([(model_data.get("old_name"),)], "training_model_table", ["model_name"],
+                result = database.query_matching_data([(model_data.get("old_name"),)], "training_model_table",
+                                                      ["model_name"],
                                                       ['model_id'])
                 if result:
                     if model_data.get("model_name", False):
@@ -146,11 +152,13 @@ class TrainingModelManagement(object):
         except Exception as e:
             err_msg = "Failed to query the all model name. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
-        
+
     def get_all_model_info_from_db(self):
         try:
             with DataSave(self.db_path) as database:
-                query_code, query_result = database.query("training_model_table", ["model_name", "input_dim", "output_dim", "accuracy", "model_description", "config_path", "model_path"])
+                query_code, query_result = database.query("training_model_table",
+                                                          ["model_name", "input_dim", "output_dim", "accuracy",
+                                                           "model_description", "config_path", "model_path"])
                 if query_code == error_code.OK and query_result:
                     return error_code.OK, query_result
                 else:
@@ -158,4 +166,3 @@ class TrainingModelManagement(object):
         except Exception as e:
             err_msg = "Failed to query the all model name. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
-        
