@@ -218,6 +218,9 @@ class AudioThdFrequencyResponseAnalysis(object):
         freq = self.get_harmonic(recorded_signal, freq_dict, sr, harmonics_list, gap_len, delay_frames)
         n_harmonics = len(harmonics_list)
         for i in range(int(min(base_freq_list)), gap_len * (len(freq) + 1), gap_len):
+            # Skip frequencies that don't exist in freq dictionary
+            if i not in freq:
+                continue
             plot_x.append(i)
             harmonic = freq[i]["harmonic"]
             f = freq[i]["harmonic_base"]
