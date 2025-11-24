@@ -107,3 +107,42 @@ class TestHarmonicIndexBuilder:
         assert np.all(mask_matrix[0, :] == 0)
         # Should have exactly 5 ones per step (fundamental + 4 harmonics)
         assert np.all(np.sum(mask_matrix, axis=0) == 5)
+
+    def test_build_step_signal_index_matrix_with_stft_params(self):
+        """Test that step signal index matrix can be built with STFT window parameters"""
+        builder = HarmonicIndexBuilder()
+        stimulus_metadata = {
+            'stimulus_method': 'steps',
+            'stimulus_type': 'linear',
+            'start_freq': 500.0,
+            'stop_freq': 2000.0,
+            'num_steps': 16,
+            'total_time': 4.0,
+            'repeat_times': 3,
+            'sample_rate': 44100
+        }
+
+        # Calculate step duration for window size
+        single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+        step_duration = single_rep_duration / stimulus_metadata['num_steps']
+        step_samples = int(step_duration * stimulus_metadata['sample_rate'])
+
+        # For STFT: window_size = step_samples (no trimming)
+        stft_window_size = step_samples
+        max_order = 35
+
+        index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+            stimulus_metadata, sr=44100, n_fft=stft_window_size, max_harmonic_order=max_order
+        )
+
+        # Verify shape and structure
+        assert index_matrix.shape == (16, 36)  # 36 = max_order + 1
+        assert np.all(index_matrix[:, 0] == 0)  # Column 0 is sentinel
+        assert np.all(index_matrix[:, 1] > 0)    # Column 1 has fundamental bins
+        assert len(fund_freqs) == 16
+        assert fund_freqs[0] == pytest.approx(500.0, abs=1.0)
+        assert fund_freqs[-1] == pytest.approx(2000.0, abs=1.0)
+
+        # Verify FFT freqs match STFT expectations
+        expected_n_bins = stft_window_size // 2 + 1
+        assert len(fft_freqs) == expected_n_bins + 1  # +1 for dummy bin
