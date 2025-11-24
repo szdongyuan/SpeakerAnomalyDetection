@@ -5,6 +5,7 @@ Computes THD for step signals using pre-built masks from Phase 1B.
 """
 import numpy as np
 from typing import Dict, Tuple
+from scipy import signal as scipy_signal
 from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
 
 
@@ -18,6 +19,8 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         harmonic_orders: list,
         harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray],
         trim_samples: int = 2205,
+        use_stft: bool = False,
+        stft_window_type: str = 'hann',
         **kwargs
     ) -> Dict:
         """
@@ -28,7 +31,9 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
             stimulus_metadata: Config with num_steps, repeat_times, total_time
             harmonic_orders: Selected harmonics (for reference only)
             harmonic_mask: (mask_matrix, fundamental_freqs, fundamental_bins) from Phase 1B
-            trim_samples: Samples to trim from step boundaries
+            trim_samples: Samples to trim from step boundaries (only used if use_stft=False)
+            use_stft: If True, use STFT instead of batch FFT (no trimming)
+            stft_window_type: Window function for STFT (default 'hann')
 
         Returns:
             {
@@ -48,13 +53,25 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
 
         thd_per_rep = []
         for repetition_signal in repetitions:
-            # Split into steps and trim
-            step_segments = self._split_and_trim_steps(
-                repetition_signal, num_steps, trim_samples
-            )
+            if use_stft:
+                # STFT approach: no splitting, no trimming
+                # Calculate STFT parameters
+                single_rep_duration = total_time / repeat_times
+                step_duration = single_rep_duration / num_steps
+                step_samples = int(step_duration * self.sample_rate)
+                stft_window_size = step_samples
+                stft_hop_size = step_samples  # No overlap
 
-            # Batch FFT (vectorized)
-            spectrum_matrix = self._compute_batch_fft(step_segments)
+                # Compute STFT (results in exactly num_steps frames)
+                spectrum_matrix = self._compute_stft(
+                    repetition_signal, stft_window_size, stft_hop_size, stft_window_type
+                )
+            else:
+                # Original FFT approach: split, trim, batch FFT
+                step_segments = self._split_and_trim_steps(
+                    repetition_signal, num_steps, trim_samples
+                )
+                spectrum_matrix = self._compute_batch_fft(step_segments)
 
             # Add dummy bin
             spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
@@ -109,3 +126,40 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         spectrum_matrix = np.abs(np.fft.rfft(step_matrix, axis=0))
 
         return spectrum_matrix
+
+    def _compute_stft(
+        self,
+        signal: np.ndarray,
+        window_size: int,
+        hop_size: int,
+        window_type: str
+    ) -> np.ndarray:
+        """
+        Compute STFT magnitude for step signal.
+
+        For step signals with STFT, window_size = step_duration and
+        hop_size = step_duration (no overlap), resulting in exactly
+        one STFT frame per step.
+
+        Args:
+            signal: Input signal (one repetition)
+            window_size: STFT window size (equals step duration in samples)
+            hop_size: STFT hop size (equals step duration - no overlap)
+            window_type: Window function type (e.g., 'hann')
+
+        Returns:
+            stft_magnitude: (n_bins, n_steps) magnitude spectrum
+        """
+        freqs, times, Zxx = scipy_signal.stft(
+            signal,
+            fs=self.sample_rate,
+            window=window_type,
+            nperseg=window_size,
+            noverlap=window_size - hop_size,
+            nfft=window_size,
+            return_onesided=True,
+            boundary=None,
+            padded=False
+        )
+
+        return np.abs(Zxx)
