@@ -70,3 +70,40 @@ class TestHarmonicIndexBuilder:
         # Fund freqs should be time-varying
         assert len(fund_freqs) == index_matrix.shape[0]
         assert fund_freqs[0] < fund_freqs[-1]  # Log chirp: low to high
+
+    def test_create_mask_from_indices(self):
+        """Test converting selected harmonic indices to binary mask matrix"""
+        builder = HarmonicIndexBuilder()
+
+        # Build overall index first
+        stimulus_metadata = {
+            'stimulus_method': 'steps',
+            'stimulus_type': 'linear',
+            'start_freq': 500.0,
+            'stop_freq': 2000.0,
+            'num_steps': 16,
+            'total_time': 4.0,
+            'repeat_times': 3,
+            'sample_rate': 44100
+        }
+
+        n_fft = 35280
+        index_matrix, _, fft_freqs = builder.build_step_signal_index_matrix(
+            stimulus_metadata, sr=44100, n_fft=n_fft, max_harmonic_order=35
+        )
+
+        # User selects harmonics [2, 3, 4, 5]
+        harmonic_orders = [2, 3, 4, 5]
+        n_bins_with_dummy = len(fft_freqs)
+
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, n_bins_with_dummy
+        )
+
+        # Mask should be binary (n_bins+1, num_steps)
+        assert mask_matrix.shape == (n_bins_with_dummy, 16)
+        assert np.all((mask_matrix == 0) | (mask_matrix == 1))
+        # Row 0 (dummy bin) should be all zeros
+        assert np.all(mask_matrix[0, :] == 0)
+        # Should have exactly 5 ones per step (fundamental + 4 harmonics)
+        assert np.all(np.sum(mask_matrix, axis=0) == 5)

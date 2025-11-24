@@ -172,3 +172,41 @@ class HarmonicIndexBuilder:
         fft_freqs_with_dummy = np.insert(fft_freqs, 0, 0.0)
 
         return index_matrix, fund_freqs, time_array, fft_freqs_with_dummy
+
+    def create_mask_from_indices(
+        self,
+        index_matrix: np.ndarray,
+        harmonic_orders: list,
+        n_bins_with_dummy: int
+    ) -> np.ndarray:
+        """
+        Convert selected harmonic indices to binary mask matrix.
+
+        Phase 1B: Extract user-selected harmonics from overall index matrix.
+
+        Args:
+            index_matrix: (num_steps_or_frames, max_order+1) from Phase 1A
+            harmonic_orders: List of selected harmonics, e.g., [2, 3, 4, 5]
+            n_bins_with_dummy: Total FFT bins including dummy row 0
+
+        Returns:
+            mask_matrix: (n_bins_with_dummy, num_steps_or_frames) binary mask
+                         Row 0: dummy bin (zeros)
+                         Rows 1+: 1.0 for selected harmonics, 0.0 elsewhere
+        """
+        num_steps_or_frames = index_matrix.shape[0]
+
+        # Initialize mask (all zeros)
+        mask_matrix = np.zeros((n_bins_with_dummy, num_steps_or_frames), dtype=np.float32)
+
+        # Extract columns: fundamental (column 1) + selected harmonics
+        columns_to_extract = [1] + harmonic_orders
+        selected_indices = index_matrix[:, columns_to_extract]
+
+        # Set mask values using advanced indexing
+        for harmonic_idx in range(selected_indices.shape[1]):
+            bin_indices = selected_indices[:, harmonic_idx]
+            frame_indices = np.arange(num_steps_or_frames)
+            mask_matrix[bin_indices, frame_indices] = 1.0
+
+        return mask_matrix
