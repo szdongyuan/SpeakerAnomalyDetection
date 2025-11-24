@@ -99,12 +99,12 @@ class TestDeprecationWarnings:
             )
 
             if freq_dict:  # Only proceed if we have valid data
-                freq_dict = AudioThdFrequencyResponseAnalysis.get_harmonic(
-                    recorded_signal, freq_dict, sr, harmonics=[1, 2, 3, 4, 5]
-                )
-
-                analyzer = AudioThdFrequencyResponseAnalysis()
                 try:
+                    freq_dict = AudioThdFrequencyResponseAnalysis.get_harmonic(
+                        recorded_signal, freq_dict, sr, harmonics=[1, 2, 3, 4, 5]
+                    )
+
+                    analyzer = AudioThdFrequencyResponseAnalysis()
                     plot_x, plot_h, plot_thd = analyzer.calculate_thd(
                         freq_dict, base_freq_list, recorded_signal, sr, gap_len=10
                     )
