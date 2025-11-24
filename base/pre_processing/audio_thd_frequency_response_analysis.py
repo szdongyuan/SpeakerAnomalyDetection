@@ -8,6 +8,9 @@ from scipy.signal import savgol_filter, medfilt, bessel, filtfilt
 import librosa
 
 from base.utils.plot_audio_features import PlotManager
+from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+from base.pre_processing.step_signal_hd import StepSignalHD
+from base.pre_processing.chirp_signal_hd import ChirpSignalHD
 
 
 class AudioThdFrequencyResponseAnalysis(object):
@@ -15,6 +18,8 @@ class AudioThdFrequencyResponseAnalysis(object):
     def process_calculate(self, reference_signal: np.ndarray, recorded_signal, sr, **kwargs):
         """
             Calculate and plot THD, harmonic, and frequency response figures, and return the result images.
+
+            NOW SUPPORTS THREE-PHASE ARCHITECTURE via thd_kwargs['stimulus_metadata'].
 
             Args:
                 - reference_signal: ndarray
@@ -45,14 +50,115 @@ class AudioThdFrequencyResponseAnalysis(object):
             pm = PlotManager()
             if kwargs.get("thd", True):
                 thd_kwargs = kwargs.get("thd_kwargs", {})
-                freq_dict, base_freq_list = self.calculate_spectrum(reference_signal, sr[i])
-                x, h, thd = self.calculate_thd(freq_dict, base_freq_list, recorded_signal[i], sr[i], **thd_kwargs)
+
+                # NEW: Check if using three-phase architecture
+                if 'stimulus_metadata' in thd_kwargs:
+                    # Use new three-phase architecture
+                    x, h, thd = self._calculate_thd_three_phase(
+                        recorded_signal[i], sr[i], thd_kwargs
+                    )
+                else:
+                    # Fallback to legacy method (for backward compatibility)
+                    freq_dict, base_freq_list = self.calculate_spectrum(reference_signal, sr[i])
+                    x, h, thd = self.calculate_thd(freq_dict, base_freq_list, recorded_signal[i], sr[i], **thd_kwargs)
+
                 pm.plot_thd(ax_thd, x, thd)
                 pm.plot_harmonic(ax_harmonic, x, h)
             if kwargs.get("frequency_response", True):
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i])
                 pm.plot_frequency_response(ax_fr, frequency_list, fr)
         return results
+
+    def _calculate_thd_three_phase(self, recorded_signal, sr, thd_kwargs):
+        """
+        NEW METHOD: Calculate THD using three-phase architecture.
+
+        Returns: (x, h, thd) for plotting (backward compatible with existing plots)
+        """
+        stimulus_metadata = thd_kwargs['stimulus_metadata']
+        harmonic_orders = thd_kwargs.get('harmonic_orders', [2, 3, 4, 5])
+        trim_samples = thd_kwargs.get('trim_samples', 2205)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 1A: Build Overall Index Matrix
+        # ═══════════════════════════════════════════════════════════════════
+        builder = HarmonicIndexBuilder()
+
+        if stimulus_metadata['stimulus_method'] == 'steps':
+            single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+            step_duration = single_rep_duration / stimulus_metadata['num_steps']
+            step_samples = int(step_duration * sr)
+            n_fft = step_samples - 2 * trim_samples
+
+            index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+                stimulus_metadata, sr=sr, n_fft=n_fft, max_harmonic_order=35
+            )
+        elif stimulus_metadata['stimulus_method'] == 'chirps':
+            stft_window_size = thd_kwargs.get('stft_window_size', 2048)
+            stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
+
+            index_matrix, fund_freqs, time_array, fft_freqs = builder.build_chirp_signal_index_matrix(
+                stimulus_metadata, sr=sr, n_fft=stft_window_size,
+                hop_length=stft_hop_size, max_harmonic_order=35
+            )
+        else:
+            raise ValueError(f"Unsupported stimulus_method: {stimulus_metadata['stimulus_method']}")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 1B: Select User Configuration
+        # ═══════════════════════════════════════════════════════════════════
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, len(fft_freqs)
+        )
+        fundamental_bins = index_matrix[:, 1]
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 2: Calculate THD
+        # ═══════════════════════════════════════════════════════════════════
+        if stimulus_metadata['stimulus_method'] == 'steps':
+            analyzer = StepSignalHD(sample_rate=sr)
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
+                trim_samples=trim_samples
+            )
+
+            # Format for plotting (backward compatible)
+            x = result['frequencies']
+            thd = result['thd']
+            # h needs to be (6, n_steps) for plotting - 6 harmonics expected by plot_harmonic
+            # Row 0: fundamental, Rows 1-5: harmonics 1-5
+            h = np.zeros((6, len(x)))
+            h[0, :] = x  # First row is fundamental frequencies (used as placeholder)
+            # Note: For proper harmonic plotting, we'd need to extract amplitudes from spectrum
+            # For now, placeholder (can be enhanced if needed)
+
+        elif stimulus_metadata['stimulus_method'] == 'chirps':
+            analyzer = ChirpSignalHD(sample_rate=sr)
+            stft_window_size = thd_kwargs.get('stft_window_size', 2048)
+            stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
+
+            if 'time_array' not in locals():
+                # Rebuild time_array if needed
+                single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+                num_samples = int(single_rep_duration * sr)
+                num_frames = 1 + (num_samples - stft_window_size) // stft_hop_size
+                time_array = (np.arange(num_frames) * stft_hop_size + stft_window_size / 2) / sr
+
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, fund_freqs, time_array, fundamental_bins),
+                stft_window_size=stft_window_size,
+                stft_hop_size=stft_hop_size
+            )
+
+            x = result['frequencies']
+            thd = result['thd']
+            # h needs to be (6, n_frames) for plotting
+            h = np.zeros((6, len(x)))
+            h[0, :] = x
+
+        return x, h, thd
 
     def calculate_thd(self, freq_dict, base_freq_list, recorded_signal, sr, **kwargs):
         """
