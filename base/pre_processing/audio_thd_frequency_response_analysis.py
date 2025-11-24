@@ -212,7 +212,9 @@ class AudioThdFrequencyResponseAnalysis(object):
             h = harmonic
             td = (sum([i ** 2 for i in h])) ** 0.5
             plot_h.append([f] + harmonic + [0] * (n_harmonics - len(harmonic)))
-            plot_thd.append((td / (f ** 2 + td ** 2) ** 0.5) * 100)
+            denominator = (f ** 2 + td ** 2) ** 0.5
+            thd_value = (td / denominator * 100) if denominator > 1e-10 else 0.0
+            plot_thd.append(thd_value)
         plot_h = np.array(plot_h).T
         return plot_x, plot_h, plot_thd
 
