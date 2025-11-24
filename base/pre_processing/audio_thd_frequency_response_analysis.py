@@ -1,4 +1,5 @@
 from typing import Optional
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
@@ -164,6 +165,10 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
             Calculate the Total Harmonic Distortion (THD).
 
+            DEPRECATED: Use three-phase architecture with stimulus_metadata instead.
+            This method will be removed in a future version.
+            See docs/hd_refactoring_guide.md for migration instructions.
+
             Args:
                 - freq_dict: dict
                     The input reference signal.
@@ -188,6 +193,12 @@ class AudioThdFrequencyResponseAnalysis(object):
                 - plot_thd : list
                     The Total Harmonic Distortion (THD) at each time point.
         """
+        warnings.warn(
+            "calculate_thd is deprecated. Use three-phase architecture with "
+            "stimulus_metadata in thd_kwargs. See docs/hd_refactoring_guide.md",
+            DeprecationWarning,
+            stacklevel=2
+        )
         plot_x, plot_h, plot_thd = [], [], []
         gap_len = kwargs.get("gap_len", 10)
         delay_frames = kwargs.get("delay_frames", 0)
@@ -211,6 +222,10 @@ class AudioThdFrequencyResponseAnalysis(object):
             Calculate the spectrum of the reference signal, returning the base frequency
             and its maximum amplitude for each time window.
 
+            DEPRECATED: Use HarmonicIndexBuilder.build_*_index_matrix instead.
+            This method will be removed in a future version.
+            See docs/hd_refactoring_guide.md for migration instructions.
+
             Args:
                 - reference_signal : ndarray
                     The input reference signal.
@@ -228,18 +243,24 @@ class AudioThdFrequencyResponseAnalysis(object):
                 - base_freq_list: list
                     A list containing the base frequency for each time window.
         """
+        warnings.warn(
+            "calculate_spectrum is deprecated. Use HarmonicIndexBuilder "
+            "to build index matrices. See docs/hd_refactoring_guide.md",
+            DeprecationWarning,
+            stacklevel=2
+        )
         win_len = sr // gap_len
         noverlap = win_len - hop_length
         if noverlap < 0:
-             noverlap = 0 
+             noverlap = 0
 
         f, t, xf = signal.stft(reference_signal, fs=sr, nperseg=win_len, noverlap=noverlap,
                                 nfft=win_len, return_onesided=True, boundary=None, padded=False, window=window)
 
         abs_xf = np.abs(xf)
         argmax_indices = np.argmax(abs_xf, axis=0)
-        all_base_freqs = f[argmax_indices] 
-        max_amplitudes = np.max(abs_xf, axis=0) 
+        all_base_freqs = f[argmax_indices]
+        max_amplitudes = np.max(abs_xf, axis=0)
 
         freq_dict = {}
         num_windows = abs_xf.shape[1]
@@ -392,6 +413,10 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
             Extract harmonic information from the recorded signal and update the frequency dictionary.
 
+            DEPRECATED: Use HarmonicIndexBuilder and mask-based approach instead.
+            This method will be removed in a future version.
+            See docs/hd_refactoring_guide.md for migration instructions.
+
             Args:
                 - recorded_signal : ndarray
                     The input recorded signal.
@@ -412,6 +437,12 @@ class AudioThdFrequencyResponseAnalysis(object):
                     The updated frequency dictionary with harmonic amplitude lists and the base frequency amplitude.
 
         """
+        warnings.warn(
+            "get_harmonic is deprecated. Use HarmonicIndexBuilder with "
+            "mask-based approach. See docs/hd_refactoring_guide.md",
+            DeprecationWarning,
+            stacklevel=2
+        )
         win_len = sr // gap_len
         for base_freq in freq_dict:
             i_with_delay = freq_dict[base_freq]["i"] + delay_frames
