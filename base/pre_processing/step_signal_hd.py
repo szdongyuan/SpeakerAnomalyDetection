@@ -66,6 +66,18 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
                 spectrum_matrix = self._compute_stft(
                     repetition_signal, stft_window_size, stft_hop_size, stft_window_type
                 )
+
+                # Add dummy bin
+                spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
+
+                # Validate and align frame counts (defensive programming)
+                num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
+                spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
+                mask_trimmed = mask_matrix[:, :num_frames]
+                fund_bins_trimmed = fundamental_bins[:num_frames]
+
+                # Compute THD using pre-built mask
+                thd = self.compute_thd_batch(spectrum_trimmed, mask_trimmed, fund_bins_trimmed)
             else:
                 # Original FFT approach: split, trim, batch FFT
                 step_segments = self._split_and_trim_steps(
@@ -73,11 +85,11 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
                 )
                 spectrum_matrix = self._compute_batch_fft(step_segments)
 
-            # Add dummy bin
-            spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
+                # Add dummy bin
+                spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
 
-            # Compute THD using pre-built mask
-            thd = self.compute_thd_batch(spectrum_with_dummy, mask_matrix, fundamental_bins)
+                # Compute THD using pre-built mask
+                thd = self.compute_thd_batch(spectrum_with_dummy, mask_matrix, fundamental_bins)
             thd_per_rep.append(thd)
 
         # Average across repetitions

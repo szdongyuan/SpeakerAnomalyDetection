@@ -60,8 +60,6 @@ class TestStepSignalHD:
     def test_compute_distortion_with_stft(self):
         """Test THD computation for step signal using STFT instead of batch FFT"""
         # Build mask in Phase 1
-        from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
-
         builder = HarmonicIndexBuilder()
         stimulus_metadata = {
             'stimulus_method': 'steps',
@@ -79,7 +77,7 @@ class TestStepSignalHD:
         step_duration = single_rep_duration / stimulus_metadata['num_steps']
         step_samples = int(step_duration * stimulus_metadata['sample_rate'])
         stft_window_size = step_samples
-        stft_hop_size = step_samples  # No overlap - hop equals window
+        stft_hop_size = step_samples  # No overlap - calculated for documentation purposes
 
         # Phase 1A: Build overall index (using STFT window size)
         index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
