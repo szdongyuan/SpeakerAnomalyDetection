@@ -38,3 +38,38 @@ class TestAudioThdRefactored:
 
         assert results['thd_fig'] is not None
         assert results['harmonic_fig'] is not None
+
+    def test_process_calculate_uses_stft_for_step_signals(self):
+        """Test that refactored code supports STFT for step signals"""
+        analyzer = AudioThdFrequencyResponseAnalysis()
+
+        sr = 44100
+        duration = 1.0
+        reference_signal = np.random.randn(int(duration * sr))
+        recorded_signal = [np.random.randn(int(duration * sr))]
+
+        results = analyzer.process_calculate(
+            reference_signal,
+            recorded_signal,
+            [sr],
+            thd=True,
+            frequency_response=False,
+            thd_kwargs={
+                'stimulus_metadata': {
+                    'stimulus_method': 'steps',
+                    'stimulus_type': 'linear',
+                    'start_freq': 500.0,
+                    'stop_freq': 2000.0,
+                    'num_steps': 4,
+                    'total_time': 1.0,
+                    'repeat_times': 1,
+                    'sample_rate': sr
+                },
+                'harmonic_orders': [2, 3, 4, 5],
+                'use_stft': True,  # NEW PARAMETER
+                'stft_window_type': 'hann'  # NEW PARAMETER
+            }
+        )
+
+        assert results['thd_fig'] is not None
+        assert results['harmonic_fig'] is not None
