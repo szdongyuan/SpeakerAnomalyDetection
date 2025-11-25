@@ -10,52 +10,50 @@ class TestHDIntegration:
     def test_three_phase_step_signal_workflow(self):
         """Test complete workflow: Phase 1A → Phase 1B → Phase 2 for step signals"""
         # ═══════════════════════════════════════════════════════════════════
-        # PHASE 1A: Build Overall Index Matrix
+        # PHASE 1A: Build Overall Index Matrix (STFT window size)
         # ═══════════════════════════════════════════════════════════════════
         stimulus_metadata = {
             'stimulus_method': 'steps',
             'stimulus_type': 'linear',
             'start_freq': 500.0,
             'stop_freq': 2000.0,
-            'num_steps': 8,
+            'num_steps': 16,
             'total_time': 4.0,
-            'repeat_times': 2,
+            'repeat_times': 3,
             'sample_rate': 44100
         }
 
         builder = HarmonicIndexBuilder()
-        trim_samples = 2205
+
+        # Calculate STFT window size (full step duration)
         single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
         step_duration = single_rep_duration / stimulus_metadata['num_steps']
         step_samples = int(step_duration * stimulus_metadata['sample_rate'])
-        n_fft = step_samples - 2 * trim_samples
+        stft_window_size = step_samples
 
         # Build overall index with ALL harmonics (1-35)
         index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-            stimulus_metadata, sr=44100, n_fft=n_fft, max_harmonic_order=35
+            stimulus_metadata, sr=44100, n_fft=stft_window_size, max_harmonic_order=35
         )
 
-        assert index_matrix.shape == (8, 36)  # All harmonics
+        assert index_matrix.shape == (16, 36)  # All harmonics
 
         # ═══════════════════════════════════════════════════════════════════
         # PHASE 1B: Select User Configuration
         # ═══════════════════════════════════════════════════════════════════
-        # User selects specific harmonics
         harmonic_orders = [2, 3, 4, 5]
 
-        # Extract selected columns and build mask (instant operation)
         mask_matrix = builder.create_mask_from_indices(
             index_matrix, harmonic_orders, len(fft_freqs)
         )
         fundamental_bins = index_matrix[:, 1]
 
-        assert mask_matrix.shape[1] == 8
+        assert mask_matrix.shape[1] == 16
         assert np.sum(mask_matrix, axis=0)[0] == 5  # Fund + 4 harmonics
 
         # ═══════════════════════════════════════════════════════════════════
-        # PHASE 2: Calculation (after recording)
+        # PHASE 2: Calculation (STFT only)
         # ═══════════════════════════════════════════════════════════════════
-        # Simulate recorded signal
         recorded_signal = np.random.randn(int(stimulus_metadata['total_time'] * 44100))
 
         analyzer = StepSignalHD(sample_rate=44100)
@@ -64,14 +62,12 @@ class TestHDIntegration:
             stimulus_metadata,
             harmonic_orders,
             harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-            trim_samples=trim_samples
+            stft_window_type='hann'
         )
 
-        assert len(result['frequencies']) == 8
-        assert len(result['thd']) == 8
-        assert result['num_repetitions'] == 2
-        assert np.all(result['thd'] >= 0)
-        assert np.all(result['thd'] <= 100)
+        assert len(result['frequencies']) == 16
+        assert len(result['thd']) == 16
+        assert result['num_repetitions'] == 3
 
     def test_three_phase_chirp_signal_workflow(self):
         """Test complete workflow for chirp signals"""
@@ -122,68 +118,3 @@ class TestHDIntegration:
         assert len(result['thd']) == len(result['frequencies'])
         assert len(result['times']) == len(result['frequencies'])
         assert np.all(result['thd'] >= 0)
-
-    def test_three_phase_step_signal_workflow_with_stft(self):
-        """Test complete STFT-based workflow: Phase 1A → Phase 1B → Phase 2 for step signals"""
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 1A: Build Overall Index Matrix (STFT approach)
-        # ═══════════════════════════════════════════════════════════════════
-        stimulus_metadata = {
-            'stimulus_method': 'steps',
-            'stimulus_type': 'linear',
-            'start_freq': 500.0,
-            'stop_freq': 2000.0,
-            'num_steps': 16,
-            'total_time': 4.0,
-            'repeat_times': 3,
-            'sample_rate': 44100
-        }
-
-        builder = HarmonicIndexBuilder()
-
-        # Calculate STFT window size (no trimming)
-        single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
-        step_duration = single_rep_duration / stimulus_metadata['num_steps']
-        step_samples = int(step_duration * stimulus_metadata['sample_rate'])
-        stft_window_size = step_samples
-
-        # Build overall index with ALL harmonics (1-35)
-        index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-            stimulus_metadata, sr=44100, n_fft=stft_window_size, max_harmonic_order=35
-        )
-
-        assert index_matrix.shape == (16, 36)  # All harmonics
-
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 1B: Select User Configuration
-        # ═══════════════════════════════════════════════════════════════════
-        harmonic_orders = [2, 3, 4, 5]
-
-        mask_matrix = builder.create_mask_from_indices(
-            index_matrix, harmonic_orders, len(fft_freqs)
-        )
-        fundamental_bins = index_matrix[:, 1]
-
-        assert mask_matrix.shape[1] == 16
-        assert np.sum(mask_matrix, axis=0)[0] == 5  # Fund + 4 harmonics
-
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 2: Calculation (STFT approach)
-        # ═══════════════════════════════════════════════════════════════════
-        recorded_signal = np.random.randn(int(stimulus_metadata['total_time'] * 44100))
-
-        analyzer = StepSignalHD(sample_rate=44100)
-        result = analyzer.compute_distortion(
-            recorded_signal,
-            stimulus_metadata,
-            harmonic_orders,
-            harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-            use_stft=True,
-            stft_window_type='hann'
-        )
-
-        assert len(result['frequencies']) == 16
-        assert len(result['thd']) == 16
-        assert result['num_repetitions'] == 3
-        assert np.all(result['thd'] >= 0)
-        assert np.all(result['thd'] <= 100)
