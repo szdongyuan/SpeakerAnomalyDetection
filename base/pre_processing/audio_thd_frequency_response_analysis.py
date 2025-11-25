@@ -80,7 +80,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
         stimulus_metadata = thd_kwargs['stimulus_metadata']
         harmonic_orders = thd_kwargs.get('harmonic_orders', [2, 3, 4, 5])
-        use_stft = thd_kwargs.get('use_stft', False)  # NEW
+        use_stft = thd_kwargs.get('use_stft', True)  # Default to STFT (Task 2 compatibility)
         stft_window_type = thd_kwargs.get('stft_window_type', 'hann')  # NEW
         trim_samples = thd_kwargs.get('trim_samples', 2205)
 

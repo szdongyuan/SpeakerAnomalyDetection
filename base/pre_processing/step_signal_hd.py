@@ -18,21 +18,17 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         stimulus_metadata: Dict,
         harmonic_orders: list,
         harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray],
-        trim_samples: int = 2205,
-        use_stft: bool = False,
         stft_window_type: str = 'hann',
         **kwargs
     ) -> Dict:
         """
-        Compute THD for step signals using pre-built mask.
+        Compute THD for step signals using pre-built mask and STFT.
 
         Args:
             recorded_signal: Recorded audio
             stimulus_metadata: Config with num_steps, repeat_times, total_time
             harmonic_orders: Selected harmonics (for reference only)
             harmonic_mask: (mask_matrix, fundamental_freqs, fundamental_bins) from Phase 1B
-            trim_samples: Samples to trim from step boundaries (only used if use_stft=False)
-            use_stft: If True, use STFT instead of batch FFT (no trimming)
             stft_window_type: Window function for STFT (default 'hann')
 
         Returns:
@@ -53,43 +49,29 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
 
         thd_per_rep = []
         for repetition_signal in repetitions:
-            if use_stft:
-                # STFT approach: no splitting, no trimming
-                # Calculate STFT parameters
-                single_rep_duration = total_time / repeat_times
-                step_duration = single_rep_duration / num_steps
-                step_samples = int(step_duration * self.sample_rate)
-                stft_window_size = step_samples
-                stft_hop_size = step_samples  # No overlap
+            # Calculate STFT parameters
+            single_rep_duration = total_time / repeat_times
+            step_duration = single_rep_duration / num_steps
+            step_samples = int(step_duration * self.sample_rate)
+            stft_window_size = step_samples
+            stft_hop_size = step_samples  # No overlap
 
-                # Compute STFT (results in exactly num_steps frames)
-                spectrum_matrix = self._compute_stft(
-                    repetition_signal, stft_window_size, stft_hop_size, stft_window_type
-                )
+            # Compute STFT (results in exactly num_steps frames)
+            spectrum_matrix = self._compute_stft(
+                repetition_signal, stft_window_size, stft_hop_size, stft_window_type
+            )
 
-                # Add dummy bin
-                spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
+            # Add dummy bin
+            spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
 
-                # Validate and align frame counts (defensive programming)
-                num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
-                spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
-                mask_trimmed = mask_matrix[:, :num_frames]
-                fund_bins_trimmed = fundamental_bins[:num_frames]
+            # Validate and align frame counts (defensive programming)
+            num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
+            spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
+            mask_trimmed = mask_matrix[:, :num_frames]
+            fund_bins_trimmed = fundamental_bins[:num_frames]
 
-                # Compute THD using pre-built mask
-                thd = self.compute_thd_batch(spectrum_trimmed, mask_trimmed, fund_bins_trimmed)
-            else:
-                # Original FFT approach: split, trim, batch FFT
-                step_segments = self._split_and_trim_steps(
-                    repetition_signal, num_steps, trim_samples
-                )
-                spectrum_matrix = self._compute_batch_fft(step_segments)
-
-                # Add dummy bin
-                spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
-
-                # Compute THD using pre-built mask
-                thd = self.compute_thd_batch(spectrum_with_dummy, mask_matrix, fundamental_bins)
+            # Compute THD using pre-built mask
+            thd = self.compute_thd_batch(spectrum_trimmed, mask_trimmed, fund_bins_trimmed)
             thd_per_rep.append(thd)
 
         # Average across repetitions
@@ -108,36 +90,6 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
 
         rep_length = len(signal) // repeat_times
         return [signal[i*rep_length:(i+1)*rep_length] for i in range(repeat_times)]
-
-    def _split_and_trim_steps(
-        self, signal: np.ndarray, num_steps: int, trim_samples: int
-    ) -> list:
-        """Split repetition into steps and trim boundaries."""
-        step_samples = len(signal) // num_steps
-        step_segments = []
-
-        for step_idx in range(num_steps):
-            start = step_idx * step_samples
-            step_signal = signal[start:start + step_samples]
-            trimmed = step_signal[trim_samples:-trim_samples]
-            step_segments.append(trimmed)
-
-        return step_segments
-
-    def _compute_batch_fft(self, segments: list) -> np.ndarray:
-        """Compute FFT for all segments in batch (vectorized)."""
-        max_len = max(len(seg) for seg in segments)
-        n_steps = len(segments)
-
-        # Create zero-padded matrix
-        step_matrix = np.zeros((max_len, n_steps))
-        for i, seg in enumerate(segments):
-            step_matrix[:len(seg), i] = seg
-
-        # Batch FFT
-        spectrum_matrix = np.abs(np.fft.rfft(step_matrix, axis=0))
-
-        return spectrum_matrix
 
     def _compute_stft(
         self,
