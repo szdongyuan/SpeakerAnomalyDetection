@@ -21,16 +21,13 @@ class HarmonicIndexBuilder:
         """
         Build overall index matrix for step signals with ALL harmonics.
 
-        This method works with both FFT-based (with trimming) and STFT-based
-        (without trimming) processing approaches. For STFT, set n_fft to the
-        full step duration in samples.
+        For step signals, n_fft should equal the full step duration in samples
+        (used as STFT window size - no trimming).
 
         Args:
             stimulus_metadata: Config dict with start_freq, stop_freq, num_steps, stimulus_type
             sr: Sample rate
-            n_fft: FFT/STFT window size
-                   - For FFT with trimming: step_samples - 2*trim_samples
-                   - For STFT without trimming: step_samples
+            n_fft: STFT window size = step duration in samples (full step, no trimming)
             max_harmonic_order: Maximum harmonic order to compute (default 35)
 
         Returns:
