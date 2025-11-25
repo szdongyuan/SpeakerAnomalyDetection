@@ -74,15 +74,12 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
         NEW METHOD: Calculate THD using three-phase architecture.
 
-        Supports both FFT (with trimming) and STFT (without trimming) approaches.
+        Step signals use STFT exclusively. Chirp signals use STFT exclusively.
 
         Returns: (x, h, thd) for plotting (backward compatible with existing plots)
         """
         stimulus_metadata = thd_kwargs['stimulus_metadata']
         harmonic_orders = thd_kwargs.get('harmonic_orders', [2, 3, 4, 5])
-        use_stft = thd_kwargs.get('use_stft', True)  # Default to STFT (Task 2 compatibility)
-        stft_window_type = thd_kwargs.get('stft_window_type', 'hann')  # NEW
-        trim_samples = thd_kwargs.get('trim_samples', 2205)
 
         # ═══════════════════════════════════════════════════════════════════
         # PHASE 1A: Build Overall Index Matrix
@@ -90,16 +87,14 @@ class AudioThdFrequencyResponseAnalysis(object):
         builder = HarmonicIndexBuilder()
 
         if stimulus_metadata['stimulus_method'] == 'steps':
+            # STFT window type for step signals
+            stft_window_type = thd_kwargs.get('stft_window_type', 'hann')
+
+            # Calculate STFT parameters (full step duration - no trimming)
             single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
             step_duration = single_rep_duration / stimulus_metadata['num_steps']
             step_samples = int(step_duration * sr)
-
-            if use_stft:
-                # STFT approach: window size = step duration (no trimming)
-                n_fft = step_samples
-            else:
-                # FFT approach: window size = step duration - 2*trim
-                n_fft = step_samples - 2 * trim_samples
+            n_fft = step_samples  # STFT window size = step duration
 
             index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
                 stimulus_metadata, sr=sr, n_fft=n_fft, max_harmonic_order=35
@@ -131,9 +126,7 @@ class AudioThdFrequencyResponseAnalysis(object):
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-                trim_samples=trim_samples,
-                use_stft=use_stft,  # PASS THROUGH
-                stft_window_type=stft_window_type  # PASS THROUGH
+                stft_window_type=stft_window_type
             )
 
             # Format for plotting (backward compatible)
