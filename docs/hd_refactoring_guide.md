@@ -282,53 +282,37 @@ print(f"Times: {result['times']}")               # Frame center times
 
 ---
 
-## Step Signal Processing: FFT vs STFT
+## Step Signal Processing: STFT-Only
 
-Step signals can be processed using two approaches:
+Step signals use STFT exclusively for harmonic distortion analysis.
 
-### FFT Approach (Original)
-- **Trimming**: Remove samples from step boundaries (default 2205 samples ~50ms)
-- **Processing**: Split signal into steps, trim boundaries, batch FFT
-- **Window**: Implicit rectangular window (no windowing)
-- **FFT Size**: `step_samples - 2 * trim_samples`
+### STFT Parameters
 
-### STFT Approach (New)
 - **Trimming**: None - uses full step duration
-- **Processing**: STFT with window_size = step_duration, hop_size = step_duration
-- **Window**: Configurable (default Hann window)
+- **Processing**: STFT on entire repetition signal
+- **Window**: Configurable (default: Hann window)
+- **Window Size**: `step_samples` (full step duration)
+- **Hop Size**: `step_samples` (no overlap → exactly one frame per step)
 - **FFT Size**: `step_samples` (full step duration)
-- **Frames**: Exactly one STFT frame per step (no overlap)
 
-### Usage Examples
+### Usage Example
 
-**FFT Approach (with trimming):**
 ```python
 result = analyzer.compute_distortion(
     recorded_signal,
     stimulus_metadata,
     harmonic_orders,
     harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-    trim_samples=2205,  # Trim boundaries
-    use_stft=False      # Use batch FFT
+    stft_window_type='hann'  # Default Hann window
 )
 ```
 
-**STFT Approach (no trimming, Hann window):**
-```python
-result = analyzer.compute_distortion(
-    recorded_signal,
-    stimulus_metadata,
-    harmonic_orders,
-    harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-    use_stft=True,              # Use STFT
-    stft_window_type='hann'     # Hann window
-)
-```
+### Benefits
 
-### When to Use Each Approach
-
-- **FFT with trimming**: When step boundaries contain transients or switching artifacts
-- **STFT without trimming**: When you want unified processing with chirp signals, or when using proper windowing is preferred over trimming
+- **Better spectral characteristics**: Proper windowing reduces spectral leakage
+- **No boundary artifacts**: No trimming needed
+- **Unified processing**: Same approach as chirp signals
+- **One clear path**: Simplified codebase with no FFT/STFT branching
 
 ---
 

@@ -412,17 +412,9 @@ def calculate_thd(
 ) -> Dict[str, np.ndarray]:
 ```
 
-### 4.2.1 Step Signals: FFT vs STFT Approaches
+### 4.2.1 Step Signals: STFT Processing
 
-**FFT Approach (with boundary trimming):**
-```
-1. Split repetition into steps
-2. Trim boundaries: step_signal[trim_samples:-trim_samples]
-3. Batch FFT on all trimmed segments
-4. FFT size: step_samples - 2*trim_samples
-```
-
-**STFT Approach (no trimming, with windowing):**
+**STFT Approach (only method):**
 ```
 1. Compute STFT on entire repetition signal
 2. Window size: step_samples (full step duration)
@@ -431,11 +423,13 @@ def calculate_thd(
 5. STFT returns exactly num_steps frames
 ```
 
-Both approaches produce identical output structure: (n_bins, num_steps) spectrum matrix.
+Output structure: (n_bins, num_steps) spectrum matrix.
 
-**Trade-offs:**
-- FFT + trimming: Removes boundary artifacts, rectangular window (spectral leakage)
-- STFT + Hann: No trimming needed, better spectral characteristics, unified with chirp processing
+**Benefits:**
+- Proper windowing reduces spectral leakage
+- No boundary trimming artifacts
+- Unified with chirp signal processing approach
+- Simplified implementation with single code path
 
 ### 4.2 For Step Signals
 
