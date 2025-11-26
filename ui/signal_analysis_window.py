@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import re
@@ -5,6 +6,7 @@ import sys
 
 import librosa
 import numpy as np
+import openpyxl
 import pyqtgraph as pg
 from librosa.core import spectrum
 from librosa.feature import spectral
@@ -171,7 +173,9 @@ class Spl(AnalysisGraphWidget):
                 lower_limit = self.analysis_config.get("lower_limit")
                 self.plot_spl(signal_duration, signal_spl, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
-                self.plot_spl(signal_duration, signal_spl)
+                excel_path = self.analysis_config.get("config_dir")
+                csv_time_list, csv_upper_list, csv_lower_list = Frequency.load_excel_limit(excel_path)
+                self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
         self.result = {
@@ -180,6 +184,44 @@ class Spl(AnalysisGraphWidget):
             "signal_spl": signal_spl.tolist(),
         }
         return self.result
+
+    def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
+        self.analysis_plot.clear()
+        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
+
+        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+
+        self.analysis_plot.plot(csv_time_list, csv_upper_list, pen=dashed_pen)
+        self.analysis_plot.plot(csv_time_list, csv_lower_list, pen=dashed_pen)
+
+        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("bottom", "Time (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+        out_range_points = []
+        current_out_range = []
+        max_time_diff = 0.01  # 10 ms
+
+        for index, i in enumerate(signal_duration):
+            table_index = int(np.argmin(np.abs(csv_time_list - i)))
+            nearest_time = csv_time_list[table_index]
+            if abs(nearest_time - i) > max_time_diff:
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+                continue
+            if signal_spl[index] >= csv_upper_list[table_index] or signal_spl[index] <= csv_lower_list[table_index]:
+                current_out_range.append((signal_duration[index], signal_spl[index]))
+            else:
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+        if current_out_range:
+            out_range_points.append(current_out_range)
+        for points in out_range_points:
+            x = [point[0] for point in points]
+            y = [point[1] for point in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            self.analysis_plot.addItem(out_range_plot)
 
     def plot_spl(self, signal_duration, signal_spl, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
@@ -241,11 +283,138 @@ class Frequency(AnalysisGraphWidget):
                 lower_limit = self.analysis_config.get("lower_limit")
                 self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
-                self.plot_fr(frequency_list, fr)
+                excel_path = self.analysis_config.get("config_dir")
+                csv_freq_list, csv_upper_list, csv_lower_list = self.load_excel_limit(excel_path)
+                self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_fr(frequency_list, fr)
         self.result = {"fr": fr.tolist(), "frequency_list": frequency_list.tolist()}
         return self.result
+
+    @staticmethod
+    def load_excel_limit(excel_path):
+        ext = os.path.splitext(excel_path)[1].lower()
+        if ext == ".xlsx":
+            wb = openpyxl.load_workbook(excel_path, data_only=True)
+            ws = wb.active
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                new_row = []
+                for cell in row:
+                    if cell is None:
+                        new_row.append("")
+                    else:
+                        new_row.append(str(cell))
+                rows.append(new_row)
+        elif ext == ".csv":
+            with open(excel_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+        else:
+            QMessageBox.warning(None, "提示", f"Do not support the analysis of this Excel type:\n{excel_path}")
+
+        csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
+
+        lenth = len(rows[0])
+        if lenth == 3 and rows[0][1] == "upperbound":
+            upperbound = True
+        elif lenth == 3 and rows[0][1] == "lowerbound":
+            upperbound = False
+        elif lenth == 2 and rows[0][1] == "upperbound":
+            upperbound = True
+        elif lenth == 2 and rows[0][1] == "lowerbound":
+            upperbound = False
+        else:
+            QMessageBox.warning(
+                None,
+                "提示",
+                "Excel/CSV 格式不符合要求：\n第二列必须为 upperbound 或 lowerbound"
+            )
+            return None
+        for row in rows:
+            if lenth == 3 and upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[1])
+                    lval = float(row[2])
+                except ValueError:
+                    continue
+                csv_freq_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(lval)
+            elif lenth == 3 and not upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[2])
+                    lval = float(row[1])
+                except ValueError:
+                    continue
+                csv_freq_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(lval)
+            elif lenth == 2 and upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[1])
+                except ValueError:
+                    continue
+                csv_freq_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(np.nan)
+            elif lenth == 2 and not upperbound:
+                try:
+                    fval = float(row[0])
+                    lval = float(row[1])
+                except ValueError:
+                    continue
+                csv_freq_list.append(fval)
+                csv_upper_list.append(np.nan)
+                csv_lower_list.append(lval)
+        return (np.asarray(csv_freq_list, dtype=float),
+            np.asarray(csv_upper_list, dtype=float),
+            np.asarray(csv_lower_list, dtype=float))
+
+    def plot_fr_with_limits(self, frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list):
+        """
+        Parameters:
+        - frequency_list : Array of test frequencies (X-axis).
+        - fr             : Raw FR data (Y-axis).
+        - csv_freq_list  : Frequency list defined in the CSV file.
+        - csv_upper_list : Corresponding upper limits (may contain NaN).
+        - csv_lower_list : Corresponding lower limits (may contain NaN).
+        """
+        self.analysis_plot.clear()
+        fr_disp = fr + 94 + self.deviation_value
+        self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77)))
+
+        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+
+        self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
+        self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
+
+        self.analysis_plot.setLabel("left", "Amplitude (dB)")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.showGrid(x=True, y=True)
+        out_range_points = []
+        current_out_range = []
+
+        for i in frequency_list:
+            if i in csv_freq_list:
+                index = np.where(frequency_list == i)[0][0]
+                table_index = np.where(csv_freq_list == i)[0][0]
+                if fr_disp[index] >= csv_upper_list[table_index] or fr_disp[index] <= csv_lower_list[table_index]:
+                    current_out_range.append((frequency_list[index], fr_disp[index]))
+                else:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+        if current_out_range:
+            out_range_points.append(current_out_range)
+
+        for points in out_range_points:
+            x = [point[0] for point in points]
+            y = [point[1] for point in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            self.analysis_plot.addItem(out_range_plot)
 
     def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
