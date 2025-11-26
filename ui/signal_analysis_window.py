@@ -174,7 +174,7 @@ class Spl(AnalysisGraphWidget):
             else:
                 excel_path = self.analysis_config.get("config_dir")
                 result = Frequency.load_excel_limit(excel_path)
-                if result is None:
+                if not result:
                     return False
                 csv_time_list, csv_upper_list, csv_lower_list = result
                 self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
@@ -287,7 +287,7 @@ class Frequency(AnalysisGraphWidget):
             else:
                 excel_path = self.analysis_config.get("config_dir")
                 result = self.load_excel_limit(excel_path)
-                if result is None:
+                if not result:
                     return False
                 csv_freq_list, csv_upper_list, csv_lower_list = result
                 self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
