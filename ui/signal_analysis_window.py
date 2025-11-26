@@ -299,18 +299,6 @@ class Frequency(AnalysisGraphWidget):
     @staticmethod
     def load_excel_limit(excel_path):
         ext = os.path.splitext(excel_path)[1].lower()
-        # if ext == ".xlsx":
-        #     wb = openpyxl.load_workbook(excel_path, data_only=True)
-        #     ws = wb.active
-        #     rows = []
-        #     for row in ws.iter_rows(values_only=True):
-        #         new_row = []
-        #         for cell in row:
-        #             if cell is None:
-        #                 new_row.append("")
-        #             else:
-        #                 new_row.append(str(cell))
-        #         rows.append(new_row)
         if ext == ".csv":
             with open(excel_path, "r", encoding="utf-8", newline="") as f:
                 reader = csv.reader(f)
