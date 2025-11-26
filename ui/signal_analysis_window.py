@@ -6,7 +6,6 @@ import sys
 
 import librosa
 import numpy as np
-import openpyxl
 import pyqtgraph as pg
 from librosa.core import spectrum
 from librosa.feature import spectral
@@ -174,7 +173,10 @@ class Spl(AnalysisGraphWidget):
                 self.plot_spl(signal_duration, signal_spl, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
                 excel_path = self.analysis_config.get("config_dir")
-                csv_time_list, csv_upper_list, csv_lower_list = Frequency.load_excel_limit(excel_path)
+                result = Frequency.load_excel_limit(excel_path)
+                if result is None:
+                    return False
+                csv_time_list, csv_upper_list, csv_lower_list = result
                 self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
@@ -284,7 +286,10 @@ class Frequency(AnalysisGraphWidget):
                 self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
                 excel_path = self.analysis_config.get("config_dir")
-                csv_freq_list, csv_upper_list, csv_lower_list = self.load_excel_limit(excel_path)
+                result = self.load_excel_limit(excel_path)
+                if result is None:
+                    return False
+                csv_freq_list, csv_upper_list, csv_lower_list = result
                 self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_fr(frequency_list, fr)
@@ -294,27 +299,27 @@ class Frequency(AnalysisGraphWidget):
     @staticmethod
     def load_excel_limit(excel_path):
         ext = os.path.splitext(excel_path)[1].lower()
-        if ext == ".xlsx":
-            wb = openpyxl.load_workbook(excel_path, data_only=True)
-            ws = wb.active
-            rows = []
-            for row in ws.iter_rows(values_only=True):
-                new_row = []
-                for cell in row:
-                    if cell is None:
-                        new_row.append("")
-                    else:
-                        new_row.append(str(cell))
-                rows.append(new_row)
-        elif ext == ".csv":
+        # if ext == ".xlsx":
+        #     wb = openpyxl.load_workbook(excel_path, data_only=True)
+        #     ws = wb.active
+        #     rows = []
+        #     for row in ws.iter_rows(values_only=True):
+        #         new_row = []
+        #         for cell in row:
+        #             if cell is None:
+        #                 new_row.append("")
+        #             else:
+        #                 new_row.append(str(cell))
+        #         rows.append(new_row)
+        if ext == ".csv":
             with open(excel_path, "r", encoding="utf-8", newline="") as f:
                 reader = csv.reader(f)
                 rows = list(reader)
         else:
             QMessageBox.warning(None, "提示", f"Do not support the analysis of this Excel type:\n{excel_path}")
+            return None
 
         csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
-
         lenth = len(rows[0])
         if lenth == 3 and rows[0][1] == "upperbound":
             upperbound = True

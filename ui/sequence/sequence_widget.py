@@ -764,10 +764,14 @@ class SequenceWindow(QWidget):
                     if instance is self.default_ai:
                         continue
                 if hasattr(instance, "calculate_spl"):
-                    instance.calculate_spl()
+                    ok = instance.calculate_spl()
+                    if ok is False:
+                        continue
                     instance.show()
                 elif hasattr(instance, "calculate_fr"):
-                    instance.calculate_fr()
+                    ok = instance.calculate_fr()
+                    if ok is False:
+                        continue
                     instance.show()
                 elif hasattr(instance, "calculate_thd"):
                     instance.calculate_thd()
