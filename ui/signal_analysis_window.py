@@ -175,12 +175,47 @@ class Distortion(AnalysisGraphWidget):
         )
         
         # DIAGNOSTIC: Log returned data
-        print(f"[DEBUG] freq_value shape: {np.array(freq_value).shape}, values: {freq_value[:5] if len(freq_value) > 5 else freq_value}")
-        print(f"[DEBUG] thd shape: {np.array(thd).shape}, values: {thd[:5] if len(thd) > 5 else thd}")
-        print(f"[DEBUG] harmonic shape: {np.array(harmonic).shape}")
+        print(f"[DEBUG] freq_value shape: {np.array(freq_value).shape}, first 5: {freq_value[:5] if len(freq_value) > 5 else freq_value}")
+        print(f"[DEBUG] thd shape: {np.array(thd).shape}, first 5: {thd[:5] if len(thd) > 5 else thd}")
+        
+        # Handle mirror chirps: average forward and backward sweeps
+        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
+            print(f"[DEBUG] Detected mirror chirp - averaging bidirectional sweeps")
+            
+            # Split data in half
+            mid_point = len(thd) // 2
+            thd_backward = thd[:mid_point]
+            thd_forward = thd[mid_point:]
+            freq_backward = freq_value[:mid_point]
+            freq_forward = freq_value[mid_point:]
+            
+            print(f"[DEBUG] Split point: {mid_point}")
+            print(f"[DEBUG] Backward sweep: {len(thd_backward)} points, freq range: {freq_backward[0]:.2f} -> {freq_backward[-1]:.2f}")
+            print(f"[DEBUG] Forward sweep: {len(thd_forward)} points, freq range: {freq_forward[0]:.2f} -> {freq_forward[-1]:.2f}")
+            
+            # Reverse backward sweep to align with forward sweep
+            thd_backward_reversed = thd_backward[::-1]
+            freq_backward_reversed = freq_backward[::-1]
+            
+            print(f"[DEBUG] After reversal, backward freq range: {freq_backward_reversed[0]:.2f} -> {freq_backward_reversed[-1]:.2f}")
+            
+            # Average the two sweeps (handle potential length mismatch)
+            min_len = min(len(thd_forward), len(thd_backward_reversed))
+            thd_averaged = (thd_forward[:min_len] + thd_backward_reversed[:min_len]) / 2.0
+            freq_averaged = freq_forward[:min_len]  # Use forward frequencies
+            
+            print(f"[DEBUG] Averaged curve: {len(thd_averaged)} points")
+            print(f"[DEBUG] Averaged freq range: {freq_averaged[0]:.2f} -> {freq_averaged[-1]:.2f}")
+            print(f"[DEBUG] Averaged THD first 5: {thd_averaged[:5]}")
+            
+            # Update for plotting
+            thd = thd_averaged
+            freq_value = freq_averaged
+        
+        # DIAGNOSTIC: Log final plotting data
+        print(f"[DEBUG] Final data for plotting - freq_value length: {len(freq_value)}, thd length: {len(thd)}")
         
         # Plot the results
-        print(f"[DEBUG] Calling plot_graph with freq_value length: {len(freq_value)}, thd length: {len(thd)}")
         self.plot_graph(freq_value, thd)
         
         # Convert to list format for result storage
