@@ -20,17 +20,17 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
             Calculate and plot THD, harmonic, and frequency response figures, and return the result images.
 
-            NOW SUPPORTS THREE-PHASE ARCHITECTURE via thd_kwargs['stimulus_metadata'].
+            Uses three-phase architecture. Requires thd_kwargs['stimulus_metadata'].
 
             Args:
                 - reference_signal: ndarray
-                    The input reference signal.
+                    The input reference signal (not used in three-phase architecture, kept for API compatibility).
                 - recorded_signal: list
                     A list of recorded signals
                 - sr: list
                     A list consisting of the sample rate of the signal
                 - kwargs : dict
-                    Additional optional parameters
+                    Required: thd_kwargs with 'stimulus_metadata' key
 
             Returns:
                 - results: dict
@@ -52,16 +52,17 @@ class AudioThdFrequencyResponseAnalysis(object):
             if kwargs.get("thd", True):
                 thd_kwargs = kwargs.get("thd_kwargs", {})
 
-                # NEW: Check if using three-phase architecture
-                if 'stimulus_metadata' in thd_kwargs:
-                    # Use new three-phase architecture
-                    x, h, thd = self._calculate_thd_three_phase(
-                        recorded_signal[i], sr[i], thd_kwargs
+                # Three-phase architecture (required)
+                if 'stimulus_metadata' not in thd_kwargs:
+                    raise ValueError(
+                        "thd_kwargs must contain 'stimulus_metadata'. "
+                        "Legacy methods have been removed. "
+                        "See docs/hd_refactoring_guide.md for migration instructions."
                     )
-                else:
-                    # Fallback to legacy method (for backward compatibility)
-                    freq_dict, base_freq_list = self.calculate_spectrum(reference_signal, sr[i])
-                    x, h, thd = self.calculate_thd(freq_dict, base_freq_list, recorded_signal[i], sr[i], **thd_kwargs)
+
+                x, h, thd = self._calculate_thd_three_phase(
+                    recorded_signal[i], sr[i], thd_kwargs
+                )
 
                 pm.plot_thd(ax_thd, x, thd)
                 pm.plot_harmonic(ax_harmonic, x, h)
@@ -136,8 +137,16 @@ class AudioThdFrequencyResponseAnalysis(object):
             # Row 0: fundamental, Rows 1-5: harmonics 1-5
             h = np.zeros((6, len(x)))
             h[0, :] = x  # First row is fundamental frequencies (used as placeholder)
-            # Note: For proper harmonic plotting, we'd need to extract amplitudes from spectrum
-            # For now, placeholder (can be enhanced if needed)
+
+            # Extract harmonic amplitudes from STFT spectrum using index matrix
+            spectrum = result['spectrum_matrix']  # Shape: (n_bins+1, n_steps) with dummy bin
+            for step_idx in range(len(x)):
+                # Extract harmonics 1-5 using index matrix
+                for harmonic_order in range(1, 6):
+                    bin_idx = index_matrix[step_idx, harmonic_order]
+                    if bin_idx > 0:  # Not sentinel/dummy bin
+                        h[harmonic_order, step_idx] = spectrum[bin_idx, step_idx]
+
 
         elif stimulus_metadata['stimulus_method'] == 'chirps':
             analyzer = ChirpSignalHD(sample_rate=sr)
@@ -166,128 +175,7 @@ class AudioThdFrequencyResponseAnalysis(object):
 
         return x, h, thd
 
-    def calculate_thd(self, freq_dict, base_freq_list, recorded_signal, sr, **kwargs):
-        """
-            Calculate the Total Harmonic Distortion (THD).
 
-            DEPRECATED: Use three-phase architecture with stimulus_metadata instead.
-            This method will be removed in a future version.
-            See docs/hd_refactoring_guide.md for migration instructions.
-
-            Args:
-                - freq_dict: dict
-                    The input reference signal.
-                - base_freq_list: list
-
-                - recorded_signal: ndarray
-                    The input recorded signal
-                - sr: int
-                    The sample rate of the signals.
-                - kwargs : optional
-                    - gap_len : int, default 10
-                        The length of each gap between frequency points.
-                    - delay_frames : int, default 0
-                        The number of frames to delay.
-                    - harmonics : list, default [1, 2, 3, 4, 5]
-                        The list of harmonics to be calculated.
-            Returns:
-                - plot_x: list
-                    the base frequency at different time points.
-                - plot_h : ndarray
-                    The harmonic amplitudes at each time point.
-                - plot_thd : list
-                    The Total Harmonic Distortion (THD) at each time point.
-        """
-        warnings.warn(
-            "calculate_thd is deprecated. Use three-phase architecture with "
-            "stimulus_metadata in thd_kwargs. See docs/hd_refactoring_guide.md",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        plot_x, plot_h, plot_thd = [], [], []
-        gap_len = kwargs.get("gap_len", 10)
-        delay_frames = kwargs.get("delay_frames", 0)
-        harmonics_list = kwargs.get("harmonics", list(range(1, 6)))
-        freq = self.get_harmonic(recorded_signal, freq_dict, sr, harmonics_list, gap_len, delay_frames)
-        n_harmonics = len(harmonics_list)
-        for i in range(int(min(base_freq_list)), gap_len * (len(freq) + 1), gap_len):
-            # Skip frequencies that don't exist in freq dictionary
-            if i not in freq:
-                continue
-            plot_x.append(i)
-            harmonic = freq[i]["harmonic"]
-            f = freq[i]["harmonic_base"]
-            h = harmonic
-            td = (sum([i ** 2 for i in h])) ** 0.5
-            plot_h.append([f] + harmonic + [0] * (n_harmonics - len(harmonic)))
-            denominator = (f ** 2 + td ** 2) ** 0.5
-            thd_value = (td / denominator * 100) if denominator > 1e-10 else 0.0
-            plot_thd.append(thd_value)
-        plot_h = np.array(plot_h).T
-        return plot_x, plot_h, plot_thd
-
-    @staticmethod
-    def calculate_spectrum(reference_signal, sr, gap_len=10, hop_length = 16, window = 'boxcar'):
-        """
-            Calculate the spectrum of the reference signal, returning the base frequency
-            and its maximum amplitude for each time window.
-
-            DEPRECATED: Use HarmonicIndexBuilder.build_*_index_matrix instead.
-            This method will be removed in a future version.
-            See docs/hd_refactoring_guide.md for migration instructions.
-
-            Args:
-                - reference_signal : ndarray
-                    The input reference signal.
-                - sr: int
-                    The sample rate of the signals.
-                - gap_len : int, optional (default is 10)
-                    The length of each time window used to calculate.
-                - delay_frames : int, default 0
-                    The number of frames to delay.
-
-            Returns:
-                - freq_dict: dict
-                    A dictionary with the base frequency as the key, storing the maximum amplitude,
-                    position, and index information.
-                - base_freq_list: list
-                    A list containing the base frequency for each time window.
-        """
-        warnings.warn(
-            "calculate_spectrum is deprecated. Use HarmonicIndexBuilder "
-            "to build index matrices. See docs/hd_refactoring_guide.md",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        win_len = sr // gap_len
-        noverlap = win_len - hop_length
-        if noverlap < 0:
-             noverlap = 0
-
-        f, t, xf = signal.stft(reference_signal, fs=sr, nperseg=win_len, noverlap=noverlap,
-                                nfft=win_len, return_onesided=True, boundary=None, padded=False, window=window)
-
-        abs_xf = np.abs(xf)
-        argmax_indices = np.argmax(abs_xf, axis=0)
-        all_base_freqs = f[argmax_indices]
-        max_amplitudes = np.max(abs_xf, axis=0)
-
-        freq_dict = {}
-        num_windows = abs_xf.shape[1]
-
-        for j in range(num_windows):
-            base_freq = all_base_freqs[j]
-            amplitude = max_amplitudes[j]
-            i = j * hop_length
-            argmax = argmax_indices[j]
-
-            # Update dict if this window has a higher amplitude for this base_freq
-            if amplitude > freq_dict.get(base_freq, {'bf_v': -1.0}).get("bf_v"):
-                 freq_dict[base_freq] = {"bf_v": amplitude, "i": i, "argmax": argmax}
-
-        base_freq_list = list(all_base_freqs)
-
-        return freq_dict, base_freq_list
 
     @staticmethod
     def calculate_fundamental_freq(reference_signal, sr, **kwargs):
@@ -418,54 +306,6 @@ class AudioThdFrequencyResponseAnalysis(object):
         times = librosa.times_like(C, sr=sr, hop_length=hop_length)
         return C, freqs, times
 
-    @staticmethod
-    def get_harmonic(recorded_signal, freq_dict, sr, harmonics, gap_len=10, delay_frames=0):
-        """
-            Extract harmonic information from the recorded signal and update the frequency dictionary.
-
-            DEPRECATED: Use HarmonicIndexBuilder and mask-based approach instead.
-            This method will be removed in a future version.
-            See docs/hd_refactoring_guide.md for migration instructions.
-
-            Args:
-                - recorded_signal : ndarray
-                    The input recorded signal.
-                - freq_dict: dict
-                    A dictionary with the base frequency as the key, storing the maximum amplitude,
-                    position, and index information.
-                - sr: int
-                    The sample rate of the signals.
-                - harmonics: list
-                    A list specifying the harmonics to extract, e.g., [1, 2, 3, 4, 5] for 1st to 5th harmonics.
-                - gap_len : int, optional (default is 10)
-                    The length of each time window used to calculate.
-                - delay_frames : int, default 0
-                    The number of frames to delay.
-
-            Returns:
-                - freq_dict: dict
-                    The updated frequency dictionary with harmonic amplitude lists and the base frequency amplitude.
-
-        """
-        warnings.warn(
-            "get_harmonic is deprecated. Use HarmonicIndexBuilder with "
-            "mask-based approach. See docs/hd_refactoring_guide.md",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        win_len = sr // gap_len
-        for base_freq in freq_dict:
-            i_with_delay = freq_dict[base_freq]["i"] + delay_frames
-            argmax = freq_dict[base_freq]["argmax"]
-            data_fft = np.abs(np.fft.fft(recorded_signal[i_with_delay: i_with_delay + win_len])[: win_len // 2])
-            harmonics_base = data_fft[argmax]
-            harmonic_list = []
-            for j in harmonics:
-                if argmax * (j + 1) < win_len // 2:
-                    harmonic_list.append(data_fft[argmax * (j + 1)])
-            freq_dict[base_freq]["harmonic"] = harmonic_list
-            freq_dict[base_freq]["harmonic_base"] = harmonics_base
-        return freq_dict
 
     @staticmethod
     def calculate_fr(reference_signal, recorded_signal, sr, is_smooth=True):

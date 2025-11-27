@@ -105,26 +105,61 @@ class Distortion(AnalysisGraphWidget):
         self.setWindowTitle(title_name)
 
     def calculate_thd(self):
-        freq_value, harmonic, thd = [], [], []
-        self.selected_harmonics = self.analysis_config["selected_labels"]
-        self.selected_harmonics = [i - 1 for i in self.selected_harmonics]
-        if self.selected_harmonics:
-            kwargs = {"harmonics": self.selected_harmonics}
-            stimulus_signal = self.data_struct.stimulus_data
-            recorded_signal = self.data_struct.store_wave_data
-            sample_rate = self.data_struct.sample_rate
-            atfra = AudioThdFrequencyResponseAnalysis()
-            if self.refresh_stimulus_flag or (self.freq_dict is None or self.base_freq_list is None):
-                self.freq_dict, self.base_freq_list = atfra.calculate_spectrum(stimulus_signal, sample_rate)
-                self.refresh_stimulus_flag = False
-            freq_value, harmonic, thd = atfra.calculate_thd(
-                self.freq_dict, self.base_freq_list, recorded_signal, sample_rate, **kwargs
-            )
-        self.plot_graph(freq_value, thd)
-        if isinstance("harmonic", np.ndarray):
-            harmonic = harmonic.tolist()
-        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
-        return self.result
+        # TODO: MIGRATE TO NEW THREE-PHASE ARCHITECTURE
+        # This method uses deprecated legacy methods that have been removed.
+        # You need to update this to use the new three-phase architecture:
+        #
+        # 1. Define stimulus_metadata with signal parameters:
+        #    stimulus_metadata = {
+        #        'stimulus_method': 'steps',  # or 'chirps'
+        #        'stimulus_type': 'linear',   # or 'log'
+        #        'start_freq': ...,
+        #        'stop_freq': ...,
+        #        'num_steps': ...,
+        #        'total_time': ...,
+        #        'repeat_times': ...,
+        #        'sample_rate': sample_rate
+        #    }
+        #
+        # 2. Call the new architecture:
+        #    atfra = AudioThdFrequencyResponseAnalysis()
+        #    thd_kwargs = {
+        #        'stimulus_metadata': stimulus_metadata,
+        #        'harmonic_orders': self.selected_harmonics
+        #    }
+        #    freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
+        #        recorded_signal, sample_rate, thd_kwargs
+        #    )
+        #
+        # See docs/hd_refactoring_guide.md for more details.
+
+        raise NotImplementedError(
+            "This method needs to be migrated to the new three-phase architecture. "
+            "Legacy methods (calculate_spectrum, calculate_thd, get_harmonic) have been removed. "
+            "See the TODO comment above and docs/hd_refactoring_guide.md for migration instructions."
+        )
+
+        # OLD CODE (REMOVED - kept for reference):
+        # freq_value, harmonic, thd = [], [], []
+        # self.selected_harmonics = self.analysis_config["selected_labels"]
+        # self.selected_harmonics = [i - 1 for i in self.selected_harmonics]
+        # if self.selected_harmonics:
+        #     kwargs = {"harmonics": self.selected_harmonics}
+        #     stimulus_signal = self.data_struct.stimulus_data
+        #     recorded_signal = self.data_struct.store_wave_data
+        #     sample_rate = self.data_struct.sample_rate
+        #     atfra = AudioThdFrequencyResponseAnalysis()
+        #     if self.refresh_stimulus_flag or (self.freq_dict is None or self.base_freq_list is None):
+        #         self.freq_dict, self.base_freq_list = atfra.calculate_spectrum(stimulus_signal, sample_rate)
+        #         self.refresh_stimulus_flag = False
+        #     freq_value, harmonic, thd = atfra.calculate_thd(
+        #         self.freq_dict, self.base_freq_list, recorded_signal, sample_rate, **kwargs
+        #     )
+        # self.plot_graph(freq_value, thd)
+        # if isinstance("harmonic", np.ndarray):
+        #     harmonic = harmonic.tolist()
+        # self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
+        # return self.result
 
     def plot_graph(self, freq_value, thd):
         # Draw a graph based on the calculated thd

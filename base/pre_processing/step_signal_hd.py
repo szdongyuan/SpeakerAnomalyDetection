@@ -35,7 +35,8 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
             {
                 'frequencies': fundamental_freqs,
                 'thd': thd_values,
-                'num_repetitions': repeat_times
+                'num_repetitions': repeat_times,
+                'spectrum_matrix': averaged_spectrum (with dummy bin at index 0)
             }
         """
         mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
@@ -48,6 +49,7 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         repetitions = self._split_repetitions(recorded_signal, repeat_times)
 
         thd_per_rep = []
+        spectrum_per_rep = []
         for repetition_signal in repetitions:
             # Calculate STFT parameters
             single_rep_duration = total_time / repeat_times
@@ -73,14 +75,17 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
             # Compute THD using pre-built mask
             thd = self.compute_thd_batch(spectrum_trimmed, mask_trimmed, fund_bins_trimmed)
             thd_per_rep.append(thd)
+            spectrum_per_rep.append(spectrum_trimmed)
 
         # Average across repetitions
         averaged_thd = np.mean(thd_per_rep, axis=0)
+        averaged_spectrum = np.mean(spectrum_per_rep, axis=0)
 
         return {
             'frequencies': fundamental_freqs,
             'thd': averaged_thd,
-            'num_repetitions': repeat_times
+            'num_repetitions': repeat_times,
+            'spectrum_matrix': averaged_spectrum
         }
 
     def _split_repetitions(self, signal: np.ndarray, repeat_times: int) -> list:
