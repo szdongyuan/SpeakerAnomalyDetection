@@ -105,39 +105,74 @@ class Distortion(AnalysisGraphWidget):
         self.setWindowTitle(title_name)
 
     def calculate_thd(self):
-        # TODO: MIGRATE TO NEW THREE-PHASE ARCHITECTURE
-        # This method uses deprecated legacy methods that have been removed.
-        # You need to update this to use the new three-phase architecture:
-        #
-        # 1. Define stimulus_metadata with signal parameters:
-        #    stimulus_metadata = {
-        #        'stimulus_method': 'steps',  # or 'chirps'
-        #        'stimulus_type': 'linear',   # or 'log'
-        #        'start_freq': ...,
-        #        'stop_freq': ...,
-        #        'num_steps': ...,
-        #        'total_time': ...,
-        #        'repeat_times': ...,
-        #        'sample_rate': sample_rate
-        #    }
-        #
-        # 2. Call the new architecture:
-        #    atfra = AudioThdFrequencyResponseAnalysis()
-        #    thd_kwargs = {
-        #        'stimulus_metadata': stimulus_metadata,
-        #        'harmonic_orders': self.selected_harmonics
-        #    }
-        #    freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
-        #        recorded_signal, sample_rate, thd_kwargs
-        #    )
-        #
-        # See docs/hd_refactoring_guide.md for more details.
-
-        raise NotImplementedError(
-            "This method needs to be migrated to the new three-phase architecture. "
-            "Legacy methods (calculate_spectrum, calculate_thd, get_harmonic) have been removed. "
-            "See the TODO comment above and docs/hd_refactoring_guide.md for migration instructions."
+        """
+        Calculate THD using the new three-phase architecture.
+        
+        Retrieves stimulus metadata from data_struct and calls the modern THD calculation pipeline.
+        """
+        # Get selected harmonics from analysis config
+        self.selected_harmonics = self.analysis_config["selected_labels"]
+        # Convert from 1-indexed to 0-indexed, but keep as harmonic orders (2, 3, 4, etc.)
+        # The UI labels are 1=2nd harmonic, 2=3rd harmonic, etc.
+        self.selected_harmonics = [i + 1 for i in self.selected_harmonics]
+        
+        if not self.selected_harmonics:
+            # No harmonics selected, nothing to calculate
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+        
+        # Get signals and metadata from data_struct
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        stimulus_info = self.data_struct.stimulus_info
+        
+        if recorded_signal is None or sample_rate is None or stimulus_info is None:
+            raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
+        
+        # Convert stimulus_info to stimulus_metadata format
+        # Handle naming differences: "chirp" -> "chirps", normalize method names
+        stimulus_method = stimulus_info.get("stimulus_method", "steps")
+        if stimulus_method == "chirp":
+            stimulus_method = "chirps"
+        elif stimulus_method == "step":
+            stimulus_method = "steps"
+        
+        stimulus_metadata = {
+            'stimulus_method': stimulus_method,
+            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
+            'start_freq': stimulus_info.get("start_freq"),
+            'stop_freq': stimulus_info.get("stop_freq"),
+            'num_steps': stimulus_info.get("num_steps"),
+            'total_time': stimulus_info.get("total_time"),
+            'repeat_times': stimulus_info.get("repeat_times"),
+            'sample_rate': sample_rate
+        }
+        
+        # Call the new three-phase architecture
+        atfra = AudioThdFrequencyResponseAnalysis()
+        thd_kwargs = {
+            'stimulus_metadata': stimulus_metadata,
+            'harmonic_orders': self.selected_harmonics
+        }
+        
+        freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
+            recorded_signal, sample_rate, thd_kwargs
         )
+        
+        # Plot the results
+        self.plot_graph(freq_value, thd)
+        
+        # Convert to list format for result storage
+        if isinstance(harmonic, np.ndarray):
+            harmonic = harmonic.tolist()
+        if isinstance(freq_value, np.ndarray):
+            freq_value = freq_value.tolist()
+        if isinstance(thd, np.ndarray):
+            thd = thd.tolist()
+        
+        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
+        return self.result
 
         # OLD CODE (REMOVED - kept for reference):
         # freq_value, harmonic, thd = [], [], []
