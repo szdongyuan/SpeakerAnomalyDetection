@@ -55,7 +55,7 @@ class HdConfigWindow(QDialog):
         self.scroll_area.setFixedSize(120, 150)
         box_container = QWidget()
         self.box_layout = QVBoxLayout()
-        for i in range(2, 31):
+        for i in range(2, 36):
             label = QLabel("  " + str(i))
             label.setFixedSize(90, 25)
             label.setAlignment(Qt.AlignLeft)
@@ -80,7 +80,7 @@ class HdConfigWindow(QDialog):
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
             self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
-            self.selected_labels = list(range(2, 31))
+            self.selected_labels = list(range(2, 36))
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
                 text = label.text().strip()
