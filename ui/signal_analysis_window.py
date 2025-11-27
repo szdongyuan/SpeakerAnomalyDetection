@@ -109,18 +109,13 @@ class Distortion(AnalysisGraphWidget):
         Calculate THD using the new three-phase architecture.
         
         Retrieves stimulus metadata from data_struct and calls the modern THD calculation pipeline.
+        For mirror chirps, averages the forward and backward sweeps into a single curve.
         """
-        # DIAGNOSTIC: Log entry
-        print(f"[DEBUG] calculate_thd() called")
-        
         # Get selected harmonics from analysis config
         self.selected_harmonics = self.analysis_config["selected_labels"]
         # Convert from 1-indexed to 0-indexed, but keep as harmonic orders (2, 3, 4, etc.)
         # The UI labels are 1=2nd harmonic, 2=3rd harmonic, etc.
         self.selected_harmonics = [i + 1 for i in self.selected_harmonics]
-        
-        # DIAGNOSTIC: Log selected harmonics
-        print(f"[DEBUG] Selected harmonics: {self.selected_harmonics}")
         
         if not self.selected_harmonics:
             # No harmonics selected, nothing to calculate
@@ -135,11 +130,6 @@ class Distortion(AnalysisGraphWidget):
         
         if recorded_signal is None or sample_rate is None or stimulus_info is None:
             raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
-        
-        # DIAGNOSTIC: Log input data
-        print(f"[DEBUG] recorded_signal shape: {np.array(recorded_signal).shape}")
-        print(f"[DEBUG] sample_rate: {sample_rate}")
-        print(f"[DEBUG] stimulus_info: {stimulus_info}")
         
         # Convert stimulus_info to stimulus_metadata format
         # Handle naming differences: "chirp" -> "chirps", normalize method names
@@ -160,9 +150,6 @@ class Distortion(AnalysisGraphWidget):
             'sample_rate': sample_rate
         }
         
-        # DIAGNOSTIC: Log stimulus metadata
-        print(f"[DEBUG] stimulus_metadata: {stimulus_metadata}")
-        
         # Call the new three-phase architecture
         atfra = AudioThdFrequencyResponseAnalysis()
         thd_kwargs = {
@@ -174,46 +161,22 @@ class Distortion(AnalysisGraphWidget):
             recorded_signal, sample_rate, thd_kwargs
         )
         
-        # DIAGNOSTIC: Log returned data
-        print(f"[DEBUG] freq_value shape: {np.array(freq_value).shape}, first 5: {freq_value[:5] if len(freq_value) > 5 else freq_value}")
-        print(f"[DEBUG] thd shape: {np.array(thd).shape}, first 5: {thd[:5] if len(thd) > 5 else thd}")
-        
         # Handle mirror chirps: average forward and backward sweeps
         if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
-            print(f"[DEBUG] Detected mirror chirp - averaging bidirectional sweeps")
-            
-            # Split data in half
+            # Split data in half (first half = backward sweep, second half = forward sweep)
             mid_point = len(thd) // 2
             thd_backward = thd[:mid_point]
             thd_forward = thd[mid_point:]
             freq_backward = freq_value[:mid_point]
             freq_forward = freq_value[mid_point:]
             
-            print(f"[DEBUG] Split point: {mid_point}")
-            print(f"[DEBUG] Backward sweep: {len(thd_backward)} points, freq range: {freq_backward[0]:.2f} -> {freq_backward[-1]:.2f}")
-            print(f"[DEBUG] Forward sweep: {len(thd_forward)} points, freq range: {freq_forward[0]:.2f} -> {freq_forward[-1]:.2f}")
-            
-            # Reverse backward sweep to align with forward sweep
+            # Reverse backward sweep to align frequencies with forward sweep
             thd_backward_reversed = thd_backward[::-1]
-            freq_backward_reversed = freq_backward[::-1]
             
-            print(f"[DEBUG] After reversal, backward freq range: {freq_backward_reversed[0]:.2f} -> {freq_backward_reversed[-1]:.2f}")
-            
-            # Average the two sweeps (handle potential length mismatch)
+            # Average the two sweeps (handle potential length mismatch from odd/even split)
             min_len = min(len(thd_forward), len(thd_backward_reversed))
-            thd_averaged = (thd_forward[:min_len] + thd_backward_reversed[:min_len]) / 2.0
-            freq_averaged = freq_forward[:min_len]  # Use forward frequencies
-            
-            print(f"[DEBUG] Averaged curve: {len(thd_averaged)} points")
-            print(f"[DEBUG] Averaged freq range: {freq_averaged[0]:.2f} -> {freq_averaged[-1]:.2f}")
-            print(f"[DEBUG] Averaged THD first 5: {thd_averaged[:5]}")
-            
-            # Update for plotting
-            thd = thd_averaged
-            freq_value = freq_averaged
-        
-        # DIAGNOSTIC: Log final plotting data
-        print(f"[DEBUG] Final data for plotting - freq_value length: {len(freq_value)}, thd length: {len(thd)}")
+            thd = (thd_forward[:min_len] + thd_backward_reversed[:min_len]) / 2.0
+            freq_value = freq_forward[:min_len]  # Use forward frequencies (ascending order)
         
         # Plot the results
         self.plot_graph(freq_value, thd)
@@ -227,7 +190,6 @@ class Distortion(AnalysisGraphWidget):
             thd = thd.tolist()
         
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
-        print(f"[DEBUG] calculate_thd() completed")
         return self.result
 
         # OLD CODE (REMOVED - kept for reference):
@@ -253,30 +215,16 @@ class Distortion(AnalysisGraphWidget):
         # return self.result
 
     def plot_graph(self, freq_value, thd):
-        # DIAGNOSTIC: Log plot_graph call
-        print(f"[DEBUG] plot_graph() called")
-        print(f"[DEBUG] freq_value type: {type(freq_value)}, length: {len(freq_value) if hasattr(freq_value, '__len__') else 'N/A'}")
-        print(f"[DEBUG] thd type: {type(thd)}, length: {len(thd) if hasattr(thd, '__len__') else 'N/A'}")
-        
         # Draw a graph based on the calculated thd
-        print(f"[DEBUG] Clearing plot...")
         self.analysis_plot.clear()
-        
-        print(f"[DEBUG] Checking valid data...")
         if self.check_valid_data(freq_value) and self.check_valid_data(thd):
-            print(f"[DEBUG] Data is valid, plotting...")
             self.analysis_plot.plot(freq_value, thd, pen="b", name="THD")
-            print(f"[DEBUG] Plot added to analysis_plot")
-        else:
-            print(f"[DEBUG] Data is NOT valid - skipping plot")
-            
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
         self.analysis_plot.setLabel("bottom", "Frequency")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
-        print(f"[DEBUG] plot_graph() completed")
 
     @staticmethod
     def check_valid_data(data):
