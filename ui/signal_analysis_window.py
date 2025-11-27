@@ -110,11 +110,17 @@ class Distortion(AnalysisGraphWidget):
         
         Retrieves stimulus metadata from data_struct and calls the modern THD calculation pipeline.
         """
+        # DIAGNOSTIC: Log entry
+        print(f"[DEBUG] calculate_thd() called")
+        
         # Get selected harmonics from analysis config
         self.selected_harmonics = self.analysis_config["selected_labels"]
         # Convert from 1-indexed to 0-indexed, but keep as harmonic orders (2, 3, 4, etc.)
         # The UI labels are 1=2nd harmonic, 2=3rd harmonic, etc.
         self.selected_harmonics = [i + 1 for i in self.selected_harmonics]
+        
+        # DIAGNOSTIC: Log selected harmonics
+        print(f"[DEBUG] Selected harmonics: {self.selected_harmonics}")
         
         if not self.selected_harmonics:
             # No harmonics selected, nothing to calculate
@@ -129,6 +135,11 @@ class Distortion(AnalysisGraphWidget):
         
         if recorded_signal is None or sample_rate is None or stimulus_info is None:
             raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
+        
+        # DIAGNOSTIC: Log input data
+        print(f"[DEBUG] recorded_signal shape: {np.array(recorded_signal).shape}")
+        print(f"[DEBUG] sample_rate: {sample_rate}")
+        print(f"[DEBUG] stimulus_info: {stimulus_info}")
         
         # Convert stimulus_info to stimulus_metadata format
         # Handle naming differences: "chirp" -> "chirps", normalize method names
@@ -149,6 +160,9 @@ class Distortion(AnalysisGraphWidget):
             'sample_rate': sample_rate
         }
         
+        # DIAGNOSTIC: Log stimulus metadata
+        print(f"[DEBUG] stimulus_metadata: {stimulus_metadata}")
+        
         # Call the new three-phase architecture
         atfra = AudioThdFrequencyResponseAnalysis()
         thd_kwargs = {
@@ -160,7 +174,13 @@ class Distortion(AnalysisGraphWidget):
             recorded_signal, sample_rate, thd_kwargs
         )
         
+        # DIAGNOSTIC: Log returned data
+        print(f"[DEBUG] freq_value shape: {np.array(freq_value).shape}, values: {freq_value[:5] if len(freq_value) > 5 else freq_value}")
+        print(f"[DEBUG] thd shape: {np.array(thd).shape}, values: {thd[:5] if len(thd) > 5 else thd}")
+        print(f"[DEBUG] harmonic shape: {np.array(harmonic).shape}")
+        
         # Plot the results
+        print(f"[DEBUG] Calling plot_graph with freq_value length: {len(freq_value)}, thd length: {len(thd)}")
         self.plot_graph(freq_value, thd)
         
         # Convert to list format for result storage
@@ -172,6 +192,7 @@ class Distortion(AnalysisGraphWidget):
             thd = thd.tolist()
         
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
+        print(f"[DEBUG] calculate_thd() completed")
         return self.result
 
         # OLD CODE (REMOVED - kept for reference):
@@ -197,16 +218,30 @@ class Distortion(AnalysisGraphWidget):
         # return self.result
 
     def plot_graph(self, freq_value, thd):
+        # DIAGNOSTIC: Log plot_graph call
+        print(f"[DEBUG] plot_graph() called")
+        print(f"[DEBUG] freq_value type: {type(freq_value)}, length: {len(freq_value) if hasattr(freq_value, '__len__') else 'N/A'}")
+        print(f"[DEBUG] thd type: {type(thd)}, length: {len(thd) if hasattr(thd, '__len__') else 'N/A'}")
+        
         # Draw a graph based on the calculated thd
+        print(f"[DEBUG] Clearing plot...")
         self.analysis_plot.clear()
+        
+        print(f"[DEBUG] Checking valid data...")
         if self.check_valid_data(freq_value) and self.check_valid_data(thd):
+            print(f"[DEBUG] Data is valid, plotting...")
             self.analysis_plot.plot(freq_value, thd, pen="b", name="THD")
+            print(f"[DEBUG] Plot added to analysis_plot")
+        else:
+            print(f"[DEBUG] Data is NOT valid - skipping plot")
+            
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
         self.analysis_plot.setLabel("bottom", "Frequency")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
+        print(f"[DEBUG] plot_graph() completed")
 
     @staticmethod
     def check_valid_data(data):
