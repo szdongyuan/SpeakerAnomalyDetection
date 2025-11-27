@@ -23,7 +23,9 @@ class RbConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.selected_labels = self.load_config.get("selected_labels", [])
+        # Filter harmonics to valid range (10-35)
+        loaded_labels = self.load_config.get("selected_labels", [])
+        self.selected_labels = [h for h in loaded_labels if 10 <= h <= 35]
         self.init_ui()
 
     def init_ui(self):
@@ -114,8 +116,7 @@ class RbConfigWindow(QDialog):
         if label_value in self.selected_labels:
             self.selected_labels.remove(label_value)
             self.selected_labels.sort()
-            label.setText(label.text().replace(checked_box, "").lstrip())
-            label.setText("  " + label.text().replace(checked_box, ""))
+            label.setText("  " + label.text().replace(checked_box, "").strip())
         else:
             self.selected_labels.append(label_value)
             label.setText(checked_box + label.text().strip())
