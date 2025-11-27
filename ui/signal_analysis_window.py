@@ -44,6 +44,7 @@ def get_class_mapping():
         "SPL": Spl,
         "FR": Frequency,
         "HD": Distortion,
+        "RB": RubAndBuzz,  # Rub & Buzz (high-order harmonic distortion)
         "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
