@@ -246,88 +246,27 @@ class RubAndBuzz(Distortion):
 
     def calculate_thd(self):
         """
-        Calculate THD using the three-phase architecture.
+        Calculate THD for Rub & Buzz (high-order harmonics).
 
-        For RubAndBuzz, selected_labels ARE the harmonic orders (10, 15, 20, etc.)
-        Unlike the parent Distortion class which does i+1 conversion.
+        RB config sends harmonic orders directly [10, 15, 20]
+        HD config sends indices that need +1 conversion [9, 14, 19] -> [10, 15, 20]
+        To reuse parent logic, convert RB orders to HD indices (subtract 1)
         """
-        # Get selected harmonics from analysis config
-        self.selected_harmonics = self.analysis_config["selected_labels"]
-        # For RB, no conversion needed - selected_labels ARE the harmonic orders
+        # Store original config
+        original_labels = self.analysis_config["selected_labels"].copy()
 
-        if not self.selected_harmonics:
-            # No harmonics selected, nothing to calculate
-            self.plot_graph([], [])
-            self.result = {"freq_value": [], "harmonic": [], "thd": []}
-            return self.result
+        # Convert harmonic orders to indices for parent method
+        # RB: [10, 15, 20] -> HD indices: [9, 14, 19] -> parent adds 1 -> [10, 15, 20]
+        self.analysis_config["selected_labels"] = [h - 1 for h in original_labels]
 
-        # Get signals and metadata from data_struct
-        recorded_signal = self.data_struct.store_wave_data
-        sample_rate = self.data_struct.sample_rate
-        stimulus_info = self.data_struct.stimulus_info
+        try:
+            # Call parent method which handles all THD calculation logic
+            result = super().calculate_thd()
+        finally:
+            # Restore original config
+            self.analysis_config["selected_labels"] = original_labels
 
-        if recorded_signal is None or sample_rate is None or stimulus_info is None:
-            raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
-
-        # Convert stimulus_info to stimulus_metadata format
-        stimulus_method = stimulus_info.get("stimulus_method", "steps")
-        if stimulus_method == "chirp":
-            stimulus_method = "chirps"
-        elif stimulus_method == "step":
-            stimulus_method = "steps"
-
-        stimulus_metadata = {
-            'stimulus_method': stimulus_method,
-            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
-            'start_freq': stimulus_info.get("start_freq"),
-            'stop_freq': stimulus_info.get("stop_freq"),
-            'num_steps': stimulus_info.get("num_steps"),
-            'total_time': stimulus_info.get("total_time"),
-            'repeat_times': stimulus_info.get("repeat_times"),
-            'sample_rate': sample_rate
-        }
-
-        # Call the new three-phase architecture
-        atfra = AudioThdFrequencyResponseAnalysis()
-        thd_kwargs = {
-            'stimulus_metadata': stimulus_metadata,
-            'harmonic_orders': self.selected_harmonics  # No conversion - use directly
-        }
-
-        freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
-            recorded_signal, sample_rate, thd_kwargs
-        )
-
-        # Handle mirror chirps: average forward and backward sweeps
-        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
-            # Split data in half (first half = backward sweep, second half = forward sweep)
-            mid_point = len(thd) // 2
-            thd_backward = thd[:mid_point]
-            thd_forward = thd[mid_point:]
-            freq_backward = freq_value[:mid_point]
-            freq_forward = freq_value[mid_point:]
-
-            # Reverse backward sweep to align frequencies with forward sweep
-            thd_backward_reversed = thd_backward[::-1]
-
-            # Average the two sweeps (handle potential length mismatch from odd/even split)
-            min_len = min(len(thd_forward), len(thd_backward_reversed))
-            thd = (thd_forward[:min_len] + thd_backward_reversed[:min_len]) / 2.0
-            freq_value = freq_forward[:min_len]  # Use forward frequencies (ascending order)
-
-        # Plot the results
-        self.plot_graph(freq_value, thd)
-
-        # Convert to list format for result storage
-        if isinstance(harmonic, np.ndarray):
-            harmonic = harmonic.tolist()
-        if isinstance(freq_value, np.ndarray):
-            freq_value = freq_value.tolist()
-        if isinstance(thd, np.ndarray):
-            thd = thd.tolist()
-
-        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
-        return self.result
+        return result
 
 
 class Spl(AnalysisGraphWidget):
