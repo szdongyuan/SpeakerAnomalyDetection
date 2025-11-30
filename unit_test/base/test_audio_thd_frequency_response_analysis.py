@@ -1,4 +1,4 @@
-import mock
+from unittest import mock
 import numpy as np
 import pytest
 
@@ -7,8 +7,10 @@ from matplotlib import pyplot as plt
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from unit_test.compare_methods import compare_dicts
 
+test_path = "base.pre_processing.audio_thd_frequency_response_analysis"
 
 
+class TestAudioThdFrequencyResponseAnalysis:
     @pytest.mark.parametrize("input_ret, result_ret", [
         ({"fftfreq_ret": np.array([1, 2, 3]),
           "fft_ret": np.array([2, 3, 4]),

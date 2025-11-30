@@ -1,4 +1,4 @@
-import mock
+from unittest import mock
 import pytest
 
 from base.soundcard_calibration_manager import SoundcardCalibrationManager

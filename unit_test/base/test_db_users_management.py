@@ -1,4 +1,4 @@
-import mock
+from unittest import mock
 import pytest
 
 from base.db_users_management import UsersManagement
