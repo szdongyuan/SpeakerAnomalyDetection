@@ -45,6 +45,7 @@ def get_class_mapping():
         "FR": Frequency,
         "HD": Distortion,
         "RB": RubAndBuzz,  # Rub & Buzz (high-order harmonic distortion)
+        "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (psychoacoustic loudness in phons)
         "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
