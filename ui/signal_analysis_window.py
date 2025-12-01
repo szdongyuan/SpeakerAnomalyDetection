@@ -113,10 +113,8 @@ class Distortion(AnalysisGraphWidget):
         For mirror chirps, averages the forward and backward sweeps into a single curve.
         """
         # Get selected harmonics from analysis config
+        # UI config stores harmonic orders directly (2, 3, 4, 10, 15, etc.)
         self.selected_harmonics = self.analysis_config["selected_labels"]
-        # Convert from 1-indexed to 0-indexed, but keep as harmonic orders (2, 3, 4, etc.)
-        # The UI labels are 1=2nd harmonic, 2=3rd harmonic, etc.
-        self.selected_harmonics = [i + 1 for i in self.selected_harmonics]
         
         if not self.selected_harmonics:
             # No harmonics selected, nothing to calculate
@@ -236,38 +234,14 @@ class RubAndBuzz(Distortion):
     """
     Rub & Buzz analysis widget - displays high-order harmonic distortion (10th+ harmonics).
 
-    Inherits from Distortion and reuses calculate_thd() method.
+    Inherits from Distortion and reuses all calculation methods.
     The only difference is the harmonic range enforced by RbConfigWindow (10-35 instead of 2-35).
     """
 
     def __init__(self, title_name):
         super().__init__(title_name)
         # Inherits all attributes and methods from Distortion
-        # No additional state needed - harmonic range is controlled by config dialog
-
-    def calculate_thd(self):
-        """
-        Calculate THD for Rub & Buzz (high-order harmonics).
-
-        RB config sends harmonic orders directly [10, 15, 20]
-        HD config sends indices that need +1 conversion [9, 14, 19] -> [10, 15, 20]
-        To reuse parent logic, convert RB orders to HD indices (subtract 1)
-        """
-        # Store original config
-        original_labels = self.analysis_config["selected_labels"].copy()
-
-        # Convert harmonic orders to indices for parent method
-        # RB: [10, 15, 20] -> HD indices: [9, 14, 19] -> parent adds 1 -> [10, 15, 20]
-        self.analysis_config["selected_labels"] = [h - 1 for h in original_labels]
-
-        try:
-            # Call parent method which handles all THD calculation logic
-            result = super().calculate_thd()
-        finally:
-            # Restore original config
-            self.analysis_config["selected_labels"] = original_labels
-
-        return result
+        # No additional state or overrides needed - harmonic range is controlled by config dialog
 
 
 class Spl(AnalysisGraphWidget):
