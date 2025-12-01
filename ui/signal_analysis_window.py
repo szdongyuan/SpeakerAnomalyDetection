@@ -244,6 +244,115 @@ class RubAndBuzz(Distortion):
         # No additional state or overrides needed - harmonic range is controlled by config dialog
 
 
+class PerceptualRubAndBuzz(RubAndBuzz):
+    """
+    Perceptual Rub & Buzz analysis widget - displays perceived loudness (phons) of high-order harmonics.
+
+    Inherits from RubAndBuzz but uses psychoacoustic models (ISO 226 equal-loudness + masking).
+    Y-axis shows phons instead of THD percentage.
+    """
+
+    def __init__(self, title_name):
+        super().__init__(title_name)
+
+    def calculate_thd(self):
+        """
+        Calculate perceptual loudness using three-phase architecture with psychoacoustic models.
+
+        Overrides parent method to use _calculate_perceptual_thd_three_phase instead of
+        _calculate_thd_three_phase.
+        """
+        # Get selected harmonics from analysis config
+        self.selected_harmonics = self.analysis_config["selected_labels"]
+
+        if not self.selected_harmonics:
+            # No harmonics selected, nothing to calculate
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+
+        # Get signals and metadata from data_struct
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        stimulus_info = self.data_struct.stimulus_info
+
+        if recorded_signal is None or sample_rate is None or stimulus_info is None:
+            raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
+
+        # Convert stimulus_info to stimulus_metadata format
+        stimulus_method = stimulus_info.get("stimulus_method", "steps")
+        if stimulus_method == "chirp":
+            stimulus_method = "chirps"
+        elif stimulus_method == "step":
+            stimulus_method = "steps"
+
+        stimulus_metadata = {
+            'stimulus_method': stimulus_method,
+            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
+            'start_freq': stimulus_info.get("start_freq"),
+            'stop_freq': stimulus_info.get("stop_freq"),
+            'num_steps': stimulus_info.get("num_steps"),
+            'total_time': stimulus_info.get("total_time"),
+            'repeat_times': stimulus_info.get("repeat_times"),
+            'sample_rate': sample_rate
+        }
+
+        # Call the PERCEPTUAL three-phase architecture
+        atfra = AudioThdFrequencyResponseAnalysis()
+        thd_kwargs = {
+            'stimulus_metadata': stimulus_metadata,
+            'harmonic_orders': self.selected_harmonics
+        }
+
+        freq_value, harmonic, perceptual_loudness = atfra._calculate_perceptual_thd_three_phase(
+            recorded_signal, sample_rate, thd_kwargs
+        )
+
+        # Handle mirror chirps: average forward and backward sweeps
+        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
+            # Split data in half
+            mid_point = len(perceptual_loudness) // 2
+            loudness_backward = perceptual_loudness[:mid_point]
+            loudness_forward = perceptual_loudness[mid_point:]
+            freq_backward = freq_value[:mid_point]
+            freq_forward = freq_value[mid_point:]
+
+            # Reverse backward sweep
+            loudness_backward_reversed = loudness_backward[::-1]
+
+            # Average the two sweeps
+            min_len = min(len(loudness_forward), len(loudness_backward_reversed))
+            perceptual_loudness = (loudness_forward[:min_len] + loudness_backward_reversed[:min_len]) / 2.0
+            freq_value = freq_forward[:min_len]
+
+        # Plot the results (Y-axis will be in phons)
+        self.plot_graph(freq_value, perceptual_loudness)
+
+        # Convert to list format for result storage
+        if isinstance(harmonic, np.ndarray):
+            harmonic = harmonic.tolist()
+        if isinstance(freq_value, np.ndarray):
+            freq_value = freq_value.tolist()
+        if isinstance(perceptual_loudness, np.ndarray):
+            perceptual_loudness = perceptual_loudness.tolist()
+
+        # Note: "thd" key name kept for backward compatibility, but contains phons
+        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": perceptual_loudness}
+        return self.result
+
+    def plot_graph(self, freq_value, perceptual_loudness):
+        """Plot perceptual loudness with correct phons label."""
+        self.analysis_plot.clear()
+        if self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness):
+            self.analysis_plot.plot(freq_value, perceptual_loudness, pen="b", name="Perceived Loudness")
+        if self.selected_label is not None:
+            self.analysis_plot.setTitle(f"Perceived Loudness of {self.selected_label.text()} order")
+        self.analysis_plot.setLabel("left", "Perceived Loudness (phons)")
+        self.analysis_plot.setLabel("bottom", "Frequency")
+        self.analysis_plot.setLogMode(x=True, y=False)
+        self.analysis_plot.showGrid(x=True, y=True)
+
+
 class Spl(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
