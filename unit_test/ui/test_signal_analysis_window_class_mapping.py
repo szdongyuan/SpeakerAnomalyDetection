@@ -11,9 +11,9 @@ def test_class_mapping_includes_rb():
 
 
 def test_class_mapping_preserves_existing():
-    """Verify adding RB doesn't break existing mappings"""
+    """Verify adding RB and PRB doesn't break existing mappings"""
     mapping = get_class_mapping()
 
-    # Original mappings should still exist
-    expected_keys = {"SPL", "FR", "HD", "AI", "Spec", "LP", "PD", "PM", "ED", "RB"}
+    # Original mappings should still exist, plus RB and PRB
+    expected_keys = {"SPL", "FR", "HD", "AI", "Spec", "LP", "PD", "PM", "ED", "RB", "PRB"}
     assert set(mapping.keys()) == expected_keys
