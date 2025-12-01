@@ -6,6 +6,7 @@ Computes THD using pre-built masks from Phase 1B.
 import numpy as np
 from typing import Dict
 from abc import ABC, abstractmethod
+from base.pre_processing.psychoacoustic_utils import spl_to_phons, apply_masking
 
 
 class HarmonicDistortionAnalyzer(ABC):
@@ -81,3 +82,90 @@ class HarmonicDistortionAnalyzer(ABC):
         thd_percentage = thd_ratio * 100.0
 
         return thd_percentage
+
+    def compute_perceptual_thd_batch(
+        self,
+        spectrum_matrix: np.ndarray,
+        mask_matrix: np.ndarray,
+        fundamental_bins: np.ndarray,
+        fundamental_freqs: np.ndarray
+    ) -> np.ndarray:
+        """
+        Compute perceptual loudness (in phons) of harmonics using psychoacoustic models.
+
+        Applies ISO 226 equal-loudness contours and simultaneous masking from fundamental.
+        Only harmonics above masking threshold contribute to perceived loudness.
+
+        Args:
+            spectrum_matrix: (n_bins+1, n_frames) magnitude spectrum with dummy bin
+            mask_matrix: (n_bins+1, n_frames) binary mask for selected harmonics
+            fundamental_bins: (n_frames,) indices of fundamental in spectrum
+            fundamental_freqs: (n_frames,) fundamental frequencies in Hz
+
+        Returns:
+            perceptual_loudness: (n_frames,) perceived loudness in phons
+        """
+        n_cols = spectrum_matrix.shape[1]
+        perceptual_loudness = np.zeros(n_cols)
+
+        # Extract fundamental amplitudes
+        row_indices = fundamental_bins.astype(int)
+        col_indices = np.arange(n_cols)
+        fundamental_amplitudes = spectrum_matrix[row_indices, col_indices]
+
+        # Convert amplitude to SPL (dB)
+        # Assuming amplitude is in linear scale, SPL = 20 * log10(amplitude / reference)
+        # Using reference amplitude = 1.0 for simplicity
+        reference_amplitude = 1.0
+        fundamental_spl = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_amplitude, 1e-10))
+
+        for frame_idx in range(n_cols):
+            # Extract harmonic amplitudes for this frame
+            harmonic_mask_col = mask_matrix[:, frame_idx]
+
+            # Exclude fundamental from harmonic mask
+            harmonic_mask_col = harmonic_mask_col.copy()
+            harmonic_mask_col[row_indices[frame_idx]] = 0.0
+
+            # Find which bins have harmonics
+            harmonic_bin_indices = np.where(harmonic_mask_col > 0)[0]
+
+            if len(harmonic_bin_indices) == 0:
+                # No harmonics selected
+                perceptual_loudness[frame_idx] = 0.0
+                continue
+
+            # Get harmonic amplitudes
+            harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
+
+            # Convert harmonic amplitudes to SPL
+            harmonic_spls = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_amplitude, 1e-10))
+
+            # Compute harmonic frequencies (from FFT bin index)
+            # Frequency = bin_index * sample_rate / (2 * n_bins)
+            n_bins = spectrum_matrix.shape[0] - 1  # Subtract dummy bin
+            harmonic_freqs = harmonic_bin_indices * (self.sample_rate / 2.0) / n_bins
+
+            # Apply masking from fundamental
+            masked_spls = apply_masking(
+                fundamental_freqs[frame_idx],
+                fundamental_spl[frame_idx],
+                harmonic_freqs,
+                harmonic_spls
+            )
+
+            # Convert masked SPLs to phons
+            audible_indices = masked_spls > 0
+            if np.any(audible_indices):
+                audible_freqs = harmonic_freqs[audible_indices]
+                audible_spls = masked_spls[audible_indices]
+
+                phons_values = spl_to_phons(audible_freqs, audible_spls)
+
+                # Total perceived loudness (sum in phons, simplified model)
+                # In reality, loudness summation is complex; we use simple sum
+                perceptual_loudness[frame_idx] = np.sum(phons_values)
+            else:
+                perceptual_loudness[frame_idx] = 0.0
+
+        return perceptual_loudness
