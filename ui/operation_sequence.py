@@ -144,7 +144,7 @@ class AnalysisModelSelect(QDialog):
             "频谱分析 (Spec) ",
             "频响 (FR) ",
             "谐波失真 (HD) ",
-            "Rubb&Buzz (RB) ",
+            "高阶谐波失真 (RB) ",
             "松散颗粒 (LP) ",
             "峰值检测 (PD) ",
             "模式匹配(PM)",
