@@ -109,14 +109,20 @@ class Distortion(AnalysisGraphWidget):
     def calculate_thd(self):
         """
         Calculate THD using the new three-phase architecture.
-        
+
         Retrieves stimulus metadata from data_struct and calls the modern THD calculation pipeline.
         For mirror chirps, averages the forward and backward sweeps into a single curve.
         """
         # Get selected harmonics from analysis config
         # UI config stores harmonic orders directly (2, 3, 4, 10, 15, etc.)
-        self.selected_harmonics = self.analysis_config["selected_labels"]
-        
+        # Handle case where config might not have selected_labels (e.g., during initialization)
+        if self.analysis_config is None:
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+
+        self.selected_harmonics = self.analysis_config.get("selected_labels", [])
+
         if not self.selected_harmonics:
             # No harmonics selected, nothing to calculate
             self.plot_graph([], [])
@@ -264,7 +270,13 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         _calculate_thd_three_phase.
         """
         # Get selected harmonics from analysis config
-        self.selected_harmonics = self.analysis_config["selected_labels"]
+        # Handle case where config might not have selected_labels (e.g., during initialization)
+        if self.analysis_config is None:
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+
+        self.selected_harmonics = self.analysis_config.get("selected_labels", [])
 
         if not self.selected_harmonics:
             # No harmonics selected, nothing to calculate
