@@ -12,6 +12,8 @@ from base.utils.plot_audio_features import PlotManager
 from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
 from base.pre_processing.step_signal_hd import StepSignalHD
 from base.pre_processing.chirp_signal_hd import ChirpSignalHD
+from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
 
 
 class AudioThdFrequencyResponseAnalysis(object):
@@ -175,7 +177,86 @@ class AudioThdFrequencyResponseAnalysis(object):
 
         return x, h, thd
 
+    def _calculate_perceptual_thd_three_phase(
+        self,
+        recorded_signal: np.ndarray,
+        sample_rate: int,
+        thd_kwargs: dict
+    ) -> tuple:
+        """
+        Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
 
+        Similar to _calculate_thd_three_phase but returns perceived loudness instead of THD percentage.
+
+        Args:
+            recorded_signal: Recorded audio signal
+            sample_rate: Sample rate
+            thd_kwargs: {
+                'stimulus_metadata': dict with stimulus configuration,
+                'harmonic_orders': list of harmonic orders (e.g., [10, 11, 12])
+            }
+
+        Returns:
+            (freq_value, harmonic, perceptual_loudness):
+                - freq_value: Fundamental frequencies
+                - harmonic: Harmonic orders array
+                - perceptual_loudness: Perceived loudness in phons
+        """
+        stimulus_metadata = thd_kwargs['stimulus_metadata']
+        harmonic_orders = thd_kwargs.get('harmonic_orders', [])
+
+        # Phase 1A: Build overall index matrix
+        builder = HarmonicIndexBuilder()
+
+        stimulus_method = stimulus_metadata['stimulus_method']
+
+        if stimulus_method == 'steps':
+            # Calculate STFT parameters (full step duration - no trimming)
+            single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+            step_duration = single_rep_duration / stimulus_metadata['num_steps']
+            step_samples = int(step_duration * sample_rate)
+            n_fft = step_samples  # STFT window size = step duration
+
+            index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+                stimulus_metadata, sr=sample_rate, n_fft=n_fft, max_harmonic_order=35
+            )
+        elif stimulus_method == 'chirps':
+            stft_window_size = thd_kwargs.get('stft_window_size', 2048)
+            stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
+
+            index_matrix, fund_freqs, time_array, fft_freqs = builder.build_chirp_signal_index_matrix(
+                stimulus_metadata, sr=sample_rate, n_fft=stft_window_size,
+                hop_length=stft_hop_size, max_harmonic_order=35
+            )
+        else:
+            raise ValueError(f"Unsupported stimulus_method: {stimulus_method}")
+
+        # Phase 1B: Create mask from selected harmonics
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, len(fft_freqs)
+        )
+        fundamental_bins = index_matrix[:, 1]
+
+        # Phase 2: Compute perceptual loudness using perceptual analyzers
+        if stimulus_method == 'steps':
+            analyzer = PerceptualStepSignalHD(sample_rate)
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins)
+            )
+        else:  # chirps
+            analyzer = PerceptualChirpSignalHD(sample_rate)
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, fund_freqs, time_array, fundamental_bins)
+            )
+
+        # Extract results
+        freq_value = result['frequencies']
+        perceptual_loudness = result['perceptual_loudness']
+        harmonic = np.array(harmonic_orders)
+
+        return freq_value, harmonic, perceptual_loudness
 
     @staticmethod
     def calculate_fundamental_freq(reference_signal, sr, **kwargs):
