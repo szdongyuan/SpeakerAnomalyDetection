@@ -30,6 +30,7 @@ from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
 from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
 from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
+from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
 from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
 from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
@@ -534,6 +535,8 @@ class OptionList(QListView):
             model = HdConfigWindow(config_manager, name)
         elif type == "RB":
             model = RbConfigWindow(config_manager, name)
+        elif type == "PRB":
+            model = PerceptualRbConfigWindow(config_manager, name)
         elif type == "AI":
             model = AIConfigWindow(config_manager, name, signal_len)
         elif type == "Spec":
