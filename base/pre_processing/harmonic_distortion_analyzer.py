@@ -115,9 +115,16 @@ class HarmonicDistortionAnalyzer(ABC):
 
         # Convert amplitude to SPL (dB)
         # Assuming amplitude is in linear scale, SPL = 20 * log10(amplitude / reference)
-        # Using reference amplitude = 1.0 for simplicity
+        # Using reference amplitude = 1.0 gives relative dB values
         reference_amplitude = 1.0
-        fundamental_spl = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_amplitude, 1e-10))
+        fundamental_spl_relative = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_amplitude, 1e-10))
+
+        # Normalize to standard listening level for psychoacoustic models
+        # Psychoacoustic models (ISO 226, masking) expect absolute SPL in 0-120 dB range
+        # Normalize loudest fundamental to 80 dB SPL (typical listening level)
+        max_fundamental_spl = np.max(fundamental_spl_relative)
+        spl_offset = 80.0 - max_fundamental_spl
+        fundamental_spl = fundamental_spl_relative + spl_offset
 
         for frame_idx in range(n_cols):
             # Extract harmonic amplitudes for this frame
@@ -138,8 +145,9 @@ class HarmonicDistortionAnalyzer(ABC):
             # Get harmonic amplitudes
             harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
 
-            # Convert harmonic amplitudes to SPL
-            harmonic_spls = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_amplitude, 1e-10))
+            # Convert harmonic amplitudes to SPL (apply same offset as fundamental)
+            harmonic_spls_relative = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_amplitude, 1e-10))
+            harmonic_spls = harmonic_spls_relative + spl_offset
 
             # Compute harmonic frequencies (from FFT bin index)
             # Frequency = bin_index * sample_rate / (2 * n_bins)

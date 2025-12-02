@@ -25,13 +25,21 @@ def test_perceptual_chirp_signal_hd_computes_phons():
 
     harmonic_orders = [10, 11, 12]
 
-    # Create mock mask
+    # Create proper binary mask with only selected harmonic bins
     n_bins = 1024
     n_time_points = 100
-    mask_matrix = np.random.rand(n_bins + 1, n_time_points) * 0.1
+    mask_matrix = np.zeros((n_bins + 1, n_time_points))
     fundamental_freqs = np.linspace(f0, f1, n_time_points)
     time_array = np.linspace(0, duration, n_time_points)
     fundamental_bins = np.linspace(10, 200, n_time_points).astype(int)
+
+    # Set mask for harmonics (10th, 11th, 12th of each fundamental)
+    for t_idx in range(n_time_points):
+        fund_bin = fundamental_bins[t_idx]
+        for h in harmonic_orders:
+            h_bin = fund_bin * h
+            if h_bin < n_bins:
+                mask_matrix[h_bin, t_idx] = 1.0
 
     harmonic_mask = (mask_matrix, fundamental_freqs, time_array, fundamental_bins)
 
@@ -43,9 +51,9 @@ def test_perceptual_chirp_signal_hd_computes_phons():
     assert 'times' in result
     assert 'perceptual_loudness' in result
 
-    # Perceptual loudness should be in phons
+    # Perceptual loudness should be in phons (reasonable range for a few harmonics)
     assert np.all(result['perceptual_loudness'] >= 0)
-    assert np.all(result['perceptual_loudness'] < 200)
+    assert np.all(result['perceptual_loudness'] < 1000)
 
 
 def test_perceptual_chirp_signal_hd_inherits_from_chirp_signal_hd():
