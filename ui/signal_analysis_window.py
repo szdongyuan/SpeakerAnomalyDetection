@@ -18,15 +18,14 @@ from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
+from base.load_config import load_config
 from base.log_manager import LogManager
-from base.predict_model import predict_from_audio
+from base.predict_model import predict_from_audio, predict_multichannel_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from base.pre_processing.audio_peak_detection import peak_detection
-from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
-from consts import error_code, ui_style_const
+from consts import error_code, ui_style_const, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings
 
@@ -260,18 +259,38 @@ class AI(QWidget):
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
-        ret_str = predict_from_audio(
-            signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
-            file_names=["modelpredict.wav"],
-            fs=[self.data_struct.sample_rate],
-            load_model_path=model_path,
-            **kwargs,
-        )
+        # 读取配置判断单/多通道
+        config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+        full_config_path = config_path
+        data_load_config = load_config(config_path=full_config_path, module_name="data_load")
+        multichannel_config = data_load_config.get("multichannel", {})
+        if multichannel_config.get("enabled"):
+            # 多通道预测
+            raw_data = np.array(self.data_struct.store_wave_data, dtype=np.float32)
+            if raw_data.ndim == 2 and raw_data.shape[0] > raw_data.shape[1]:
+                raw_data = raw_data.T
+            ret_str = predict_multichannel_from_audio(
+                multichannel_signal=np.array(raw_data, dtype=np.float32),
+                file_name="modelpredict.wav",
+                sr=self.data_struct.sample_rate,
+                load_model_path=model_path,
+                **kwargs,
+            )
+        else:
+            ret_str = predict_from_audio(
+                signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
+                file_names=["modelpredict.wav"],
+                fs=[self.data_struct.sample_rate],
+                load_model_path=model_path,
+                **kwargs,
+            )
         ret_dict = json.loads(ret_str)
         predict_result = ret_dict["result"]
         predict_label = predict_result[0][1]
         ok_scores = float(predict_result[0][2]) * 100
         ng_scores = 100 - ok_scores
+        # 如果有通道详情（多通道），则显示
+        channel_details = predict_result[0][3] if len(predict_result[0]) > 3 else None
         self.result = predict_label
         result_text = (
             f"评分结果: {predict_label} \n \n"
@@ -279,6 +298,9 @@ class AI(QWidget):
             f"\xa0\xa0OK Score: {ok_scores:.2f}%\n"
             f"\xa0\xa0NG Score: {ng_scores:.2f}%"
         )
+        if channel_details:
+            result_text += f"\n\xa0\xa0通道详情: {channel_details}"
+
         return result_text
 
     @staticmethod

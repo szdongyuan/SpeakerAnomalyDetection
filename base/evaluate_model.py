@@ -13,14 +13,20 @@ from consts import error_code, model_consts
 def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
     logger = LogManager.set_log_handler("evaluate")
 
-    ret_code, ret = get_pre_labeled_audios(predict_dir)
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
+
+    # 读取 data_load 配置（包含多通道设置）
+    data_load_config = load_config(config_path=config_path, module_name="data_load")
+
+    # 将配置传递给数据加载函数
+    ret_code, ret = get_pre_labeled_audios(predict_dir, **data_load_config)
+    # ================================================
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
         return json.dumps({"ret_code": ret_code, "ret_msg": ret, "result": ret})
     signals, file_names, fs, labels = ret
 
-    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
-    config_path = model_consts.DEFAULT_DIR + save_config_path
     preprocess_config = load_config(config_path=config_path, module_name="preprocess")
 
     if load_model_path:
@@ -44,14 +50,17 @@ def evaluate(predict_dir, load_model_path=None, model=None, **kwargs):
 def evaluate_with_data(predict_dir, load_model_path=None, model=None, **kwargs):
     logger = LogManager.set_log_handler("evaluate")
 
-    ret_code, ret = get_pre_labeled_audios_from_dict(predict_dir)
+    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
+    config_path = model_consts.DEFAULT_DIR + save_config_path
+    data_load_config = load_config(config_path=config_path, module_name="data_load")
+
+    ret_code, ret = get_pre_labeled_audios_from_dict(predict_dir, **data_load_config)
+    # ================================================
     if ret_code != error_code.OK:
         logger.error("failed to load audio samples")
         return json.dumps({"ret_code": ret_code, "ret_msg": ret, "result": ret})
     signals, file_names, fs, labels = ret
 
-    save_config_path = kwargs.get("config_path", model_consts.CONFIG_PATH)
-    config_path = model_consts.DEFAULT_DIR + save_config_path
     preprocess_config = load_config(config_path=config_path, module_name="preprocess")
 
     if load_model_path:
