@@ -144,7 +144,7 @@ class LoadUiConfig(object):
         return None, None
 
     @staticmethod
-    def get_rec_and_play_dict_base_sequence_dict(data_struct, total_time=None):
+    def get_rec_and_play_dict_base_sequence_dict(data_struct, total_time=None, channels=1):
         """
         Generate dictionaries containing stimulus signal data and recording parameters.
 
@@ -152,8 +152,9 @@ class LoadUiConfig(object):
         and another for the recording parameters. These dictionaries are used for subsequent signal processing and analysis.
 
         Args:
-        - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
-        - total_time (int): The total recording time, indicates the duration of the recording.
+        - data_struct: Data structure containing stimulus and sample rate information.
+        - total_time (float): The total recording time, indicates the duration of the recording.
+        - channels (int): Number of recording channels (1-4 supported). Defaults to 1.
 
         Returns:
         - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
@@ -174,11 +175,8 @@ class LoadUiConfig(object):
             num_frames = int(total_time * data_struct.sample_rate)
             prolong_frames = 0
 
-        # Get channel count from sequence config or default to 1
-        channel_count = sequence_dict.get("channel_count", 1)
-
         recorded_dict = {
-            "channels": channel_count,  # Dynamic channel count (1-4 supported)
+            "channels": channels,  # Dynamic channel count (1-4 supported)
             "sr": data_struct.sample_rate,
             "num_frames": num_frames,
             "prolong_frames": prolong_frames,

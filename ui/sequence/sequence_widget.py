@@ -619,9 +619,10 @@ class SequenceWindow(QWidget):
         )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
+        channels = int(acq_detail.get("channels", 1))
         sample_rate = self.data_struct.sample_rate
         stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
-            self.data_struct, total_time
+            self.data_struct, total_time, channels
         )
 
         # Add device information for streaming mode
