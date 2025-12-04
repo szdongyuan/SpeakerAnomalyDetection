@@ -677,7 +677,8 @@ class SequenceWindow(QWidget):
                 # Start streaming play+record (non-blocking)
                 # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
                 temp_path = self.recorded_path.replace('.wav', '_temp.wav')
-                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
+                channels = recorded_dict.get("channels", 1)  # Get channel count from config
+                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate, channels)
                 self.streaming_temp_path = temp_path
 
                 self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
@@ -688,7 +689,8 @@ class SequenceWindow(QWidget):
             else:
                 # Start streaming record-only (non-blocking)
                 # Create WAV file writer for streaming saves (useful for long recordings)
-                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
+                channels = recorded_dict.get("channels", 1)  # Get channel count from config
+                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels)
 
                 self.streaming_processor, _ = stream_record_without_play(
                     recorded_dict, self.recorded_path, self.recorded_signal_info
