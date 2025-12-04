@@ -25,13 +25,14 @@ class StreamingAudioProcessor:
     def __init__(self):
         """Initialize streaming audio processor."""
         self.logger = LogManager.set_log_handler("streaming_core")
-        self.stream = None  
+        self.stream = None
         self.audio_queue = queue.Queue()
         self.accumulated_chunks = []
         self.is_recording = False
         self.target_samples = 0
         self.samples_captured = 0
         self.sample_rate = 44100
+        self.num_channels = 1  # Track channel count (1-4 supported)
         self.error_occurred = False
         self.error_message = ""
 
@@ -48,12 +49,17 @@ class StreamingAudioProcessor:
         if status:
             self.logger.warning(f"Audio callback status: {status}")
 
-        # Copy data to avoid issues with buffer reuse
-        chunk = indata.copy().flatten()
+        # Copy data preserving channel structure
+        # indata shape: (frames, channels)
+        if self.num_channels == 1:
+            chunk = indata.copy().flatten()  # (frames,) for single channel
+        else:
+            chunk = indata.copy()  # (frames, channels) for multi-channel
 
-        # Track samples captured
+        # Track samples captured (always count samples, not samples*channels)
         samples_before = self.samples_captured
-        self.samples_captured += len(chunk)
+        chunk_length = len(chunk) if self.num_channels == 1 else chunk.shape[0]
+        self.samples_captured += chunk_length
 
         # Check if we've reached or exceeded target
         reached_target = samples_before < self.target_samples and self.samples_captured >= self.target_samples
@@ -96,7 +102,7 @@ class StreamingAudioProcessor:
             # No more chunks to process
             pass
 
-    def start_streaming_rec(self, sample_rate=44100, target_samples=None, duration=None, device=None):
+    def start_streaming_rec(self, sample_rate=44100, target_samples=None, duration=None, device=None, channels=1):
         """
         Start streaming audio recording (record-only mode).
 
@@ -105,6 +111,7 @@ class StreamingAudioProcessor:
             target_samples (int): Target number of samples to record (optional)
             duration (float): Recording duration in seconds (optional, used if target_samples not provided)
             device: Input device (None for default)
+            channels (int): Number of channels to record (1-4)
 
         Returns:
             tuple: (error_code, message)
@@ -121,16 +128,17 @@ class StreamingAudioProcessor:
         self.accumulated_chunks = []
         self.is_recording = True
         self.error_occurred = False
+        self.num_channels = channels  # Set channel count
 
         try:
             # Set default device if specified
             if device:
                 sd.default.device = device['index']
 
-            # Create input stream
+            # Create input stream with multi-channel support
             self.stream = sd.InputStream(
                 samplerate=sample_rate,
-                channels=1,
+                channels=self.num_channels,
                 callback=self._audio_callback,
                 blocksize=2048  # Process in chunks of 2048 samples
             )
@@ -150,7 +158,7 @@ class StreamingAudioProcessor:
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
     def start_streaming_playrec(self, stimulus_dict, sample_rate=44100, target_samples=None,
-                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000):
+                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000, channels=1):
         """
         Start streaming play and record (simultaneous playback and recording).
 
@@ -166,6 +174,7 @@ class StreamingAudioProcessor:
             output_device: Output device (None for default)
             prepare_frames (int): Silent frames before stimulus
             prolong_frames (int): Silent frames after stimulus
+            channels (int): Number of channels to record (1-4)
 
         Returns:
             tuple: (error_code, message)
@@ -183,6 +192,7 @@ class StreamingAudioProcessor:
         self.accumulated_chunks = []
         self.is_recording = True
         self.error_occurred = False
+        self.num_channels = channels  # Set channel count
 
         try:
             self.playback_data = np.concatenate([
@@ -222,10 +232,10 @@ class StreamingAudioProcessor:
                 device=output_device['index'] if output_device else None
             )
 
-            # Create input stream (recording) - reuse existing _audio_callback
+            # Create input stream (recording) - multi-channel
             self.stream = sd.InputStream(
                 samplerate=sample_rate,
-                channels=1,
+                channels=self.num_channels,
                 callback=self._audio_callback,
                 blocksize=2048,
                 device=input_device['index'] if input_device else None
@@ -276,12 +286,18 @@ class StreamingAudioProcessor:
         Get the complete recorded audio data.
 
         Returns:
-            np.ndarray: Complete recorded audio as single numpy array
+            np.ndarray: Complete recorded audio
+                - Shape (samples,) for single channel
+                - Shape (samples, channels) for multi-channel
         """
         if not self.accumulated_chunks:
             return np.array([], dtype=np.float32)
 
-        return np.concatenate(self.accumulated_chunks).astype(np.float32)
+        # Concatenate along time axis (axis=0)
+        if self.num_channels == 1:
+            return np.concatenate(self.accumulated_chunks).astype(np.float32)
+        else:
+            return np.concatenate(self.accumulated_chunks, axis=0).astype(np.float32)
 
     def wait_until_finished(self, timeout=None):
         """

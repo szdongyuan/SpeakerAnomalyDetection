@@ -15,11 +15,27 @@ class SoundcardAudioProcessor(object):
         data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
         prepare_frames = record_dict.get("prepare_frames", 1000)
         prolong_frames = record_dict.get("prolong_frames", 10000)
+        channels = record_dict.get("channels", 1)  # Get channel count from config
         prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
         sr = stimulus_dict.get("sr")
-        rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
-        align_frames = self.calculate_alignment(data, rec_data)
-        aligned_data = rec_data[align_frames: align_frames + len(data)]
+
+        # Record multi-channel (shape: (frames, channels))
+        rec_data = sd.playrec(prolong_data, samplerate=sr, channels=channels, blocking=True)
+
+        # Alignment: use channel 0 as reference (most reliable for GCC-PHAT)
+        if channels == 1:
+            rec_data_mono = rec_data[:, 0]
+        else:
+            rec_data_mono = rec_data[:, 0]  # Use first channel for alignment
+
+        align_frames = self.calculate_alignment(data, rec_data_mono)
+
+        # Align all channels together
+        if channels == 1:
+            aligned_data = rec_data_mono[align_frames: align_frames + len(data)]
+        else:
+            aligned_data = rec_data[align_frames: align_frames + len(data), :]  # Keep all channels
+
         save_audio_simple(recording_path, aligned_data, sr)
         return error_code.OK, aligned_data
 
@@ -45,7 +61,16 @@ class SoundcardAudioProcessor(object):
         channels = recorded_dict.get("channels", 1)
         blocking = recorded_dict.get("blocking", True)
         prolong_frames = recorded_dict.get("prolong_frames", 0)
-        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T[0]
+
+        # Record with specified channels (sd.rec returns shape: (frames, channels))
+        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking)
+
+        # Handle shape based on channel count
+        if channels == 1:
+            recorded_data = recorded_data[:, 0]  # Convert (frames, 1) → (frames,) for backward compatibility
+        # else: keep (frames, channels) shape
+
+        # Remove prolong frames if needed
         if prolong_frames > 0:
             recorded_data = recorded_data[prolong_frames:]
 

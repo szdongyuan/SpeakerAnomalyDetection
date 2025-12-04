@@ -42,7 +42,8 @@ def get_audio_files_and_labels(signal_path, sr=None, with_labels=-1, **kwargs):
         single_audio_path = os.path.join(signal_path, signal_file).replace("\\", "/")
 
         try:
-            y, sr = librosa.load(single_audio_path, sr=sr)
+            # AI training uses mono audio only
+            y, sr = librosa.load(single_audio_path, sr=sr, mono=True)
             if fs and sr != fs[-1]:
                 pass
             else:
@@ -69,7 +70,8 @@ def get_pre_labeled_audios_from_dict(pre_labeled_dict, **kwargs):
         else:
             label = 0
         try:
-            y, sr = librosa.load(path, sr=value[0])
+            # AI training uses mono audio only
+            y, sr = librosa.load(path, sr=value[0], mono=True)
             if fs and sr != fs[-1]:
                 pass
             else:
@@ -119,9 +121,28 @@ def get_pre_labeled_audios(pre_labeled_dir, **kwargs):
 
 
 def load_audio_simple(audio_path, sr=None):
+    """
+    Load audio file with multi-channel support.
+
+    Args:
+        audio_path (str): Path to audio file
+        sr (int, optional): Target sample rate
+
+    Returns:
+        y (np.ndarray): Audio data
+            - Shape (samples,) for mono
+            - Shape (samples, channels) for multi-channel
+        t (np.ndarray): Time array
+    """
     if not audio_path:
         return None, None
-    # we assume audio is mono channel
-    y, sr = librosa.load(audio_path, sr=sr)
-    t = np.linspace(0, len(y) - 1, len(y)) / sr
+
+    # Load audio with multi-channel support
+    y, sr = librosa.load(audio_path, sr=sr, mono=False)
+
+    # If y is 2D, transpose from (channels, samples) to (samples, channels)
+    if y.ndim == 2:
+        y = y.T
+
+    t = np.linspace(0, len(y) - 1, len(y)) / sr if y.ndim == 1 else np.linspace(0, y.shape[0] - 1, y.shape[0]) / sr
     return y, t

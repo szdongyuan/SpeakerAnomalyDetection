@@ -8,7 +8,19 @@ from consts.running_consts import DEFAULT_DIR
 
 
 def save_audio_simple(save_path, audio, sr=44100):
-    # we assume audio is mono channel
+    """
+    Save audio to WAV file with multi-channel support.
+
+    Args:
+        save_path (str): Output WAV file path
+        audio (np.ndarray): Audio data
+            - Shape (samples,) for mono
+            - Shape (samples, channels) for multi-channel
+        sr (int): Sample rate (default: 44100)
+
+    Note:
+        scipy.io.wavfile.write() natively supports both mono and multi-channel.
+    """
     audio = audio.astype("float32")
     wavfile.write(save_path, sr, audio)
 

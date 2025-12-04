@@ -839,14 +839,25 @@ class SequenceWindow(QWidget):
         Plot a line graph of the recorded signal.
 
         Parameters:
-        recorded_signal (list or numpy.array): The recorded signal data to be plotted.
-        line_graph (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
+        recorded_signal (np.ndarray): The recorded signal data to be plotted
+            - Shape (samples,) for single channel
+            - Shape (samples, channels) for multi-channel
+        line_graph (pyqtgraph.PlotWidget): The PlotWidget object used for plotting the line graph.
         sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
+
+        Note: For multi-channel signals, only channel 0 is plotted for performance.
         """
         line_graph.clear()
+
+        # For multi-channel, extract channel 0 for plotting
+        if isinstance(recorded_signal, np.ndarray) and recorded_signal.ndim == 2:
+            plot_signal = recorded_signal[:, 0]
+        else:
+            plot_signal = recorded_signal
+
         # Use np.arange for correct sample time stamps (0, 1/fs, 2/fs, ..., (N-1)/fs)
-        signal_duration = np.arange(len(recorded_signal)) / sample_rate
-        line_graph.plot(signal_duration, recorded_signal, pen="k")
+        signal_duration = np.arange(len(plot_signal)) / sample_rate
+        line_graph.plot(signal_duration, plot_signal, pen="k")
 
     def on_audio_chunk_received(self, chunk):
         """
@@ -857,26 +868,34 @@ class SequenceWindow(QWidget):
 
         Args:
             chunk (np.ndarray): Audio chunk received from streaming processor
+                - Shape (samples,) for single channel
+                - Shape (samples, channels) for multi-channel
         """
         # Append chunk to streaming buffer
         self.streaming_buffer.append(chunk)
 
         # Calculate accumulated audio data
-        accumulated_audio = np.concatenate(self.streaming_buffer)
+        accumulated_audio = np.concatenate(self.streaming_buffer, axis=0)
+
+        # For multi-channel, extract channel 0 for plotting (performance optimization)
+        if accumulated_audio.ndim == 2:
+            plot_audio = accumulated_audio[:, 0]
+        else:
+            plot_audio = accumulated_audio
 
         # Calculate time axis for accumulated data
         # Use np.arange to ensure fixed time stamps for each sample point
         # This prevents time drift caused by linspace's varying interval (N/(N-1)/fs instead of 1/fs)
         sample_rate = self.data_struct.sample_rate
-        time_axis = np.arange(len(accumulated_audio)) / sample_rate
+        time_axis = np.arange(len(plot_audio)) / sample_rate
 
         # Update plot - preserve zoom/pan by updating existing PlotDataItem
         if self.streaming_plot_item is None:
             # First chunk - create new plot item
-            self.streaming_plot_item = self.line_graph.plot(time_axis, accumulated_audio, pen="k")
+            self.streaming_plot_item = self.line_graph.plot(time_axis, plot_audio, pen="k")
         else:
             # Subsequent chunks - update existing item (preserves zoom/pan) incrementally
-            self.streaming_plot_item.setData(time_axis, accumulated_audio)    
+            self.streaming_plot_item.setData(time_axis, plot_audio)
 
         # Write chunk to file (if wav_writer is connected)
         if self.streaming_wav_writer:
@@ -987,6 +1006,9 @@ class SequenceWindow(QWidget):
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
                     self.default_logger.error(f"Database save failed: {save_msg}")
+
+            # Update channel count based on stored data shape
+            self.data_struct.update_channel_count()
 
             # Handle repeat signal splitting if needed
             if self.streaming_mode == "play_record":

@@ -17,6 +17,7 @@ class DataDealStruct(object):
             self.stimulus_data = None
             self.stimulus_info = None
             self.sample_rate = None
+            self.num_channels = 1  # Track channel count (1-4 supported)
 
             self.stft_flag = 0
             self.fft_flag = 0
@@ -29,6 +30,7 @@ class DataDealStruct(object):
     def clear_data(self):
         self.store_wave_data = None
         self.split_repeat_data = None
+        self.num_channels = 1  # Reset to default
         # self.stimulus_data = None
         self.fft_result = None
         self.stft_result = None
@@ -52,3 +54,11 @@ class DataDealStruct(object):
     def clear_fft_and_stft_flag(self):
         self.fft_flag = 0
         self.stft_flag = 0
+
+    def update_channel_count(self):
+        """Automatically update num_channels based on store_wave_data shape."""
+        if self.store_wave_data is not None:
+            if self.store_wave_data.ndim == 1:
+                self.num_channels = 1
+            elif self.store_wave_data.ndim == 2:
+                self.num_channels = self.store_wave_data.shape[1]

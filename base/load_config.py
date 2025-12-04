@@ -173,8 +173,12 @@ class LoadUiConfig(object):
         else:
             num_frames = int(total_time * data_struct.sample_rate)
             prolong_frames = 0
+
+        # Get channel count from sequence config or default to 1
+        channel_count = sequence_dict.get("channel_count", 1)
+
         recorded_dict = {
-            "channels": 1,
+            "channels": channel_count,  # Dynamic channel count (1-4 supported)
             "sr": data_struct.sample_rate,
             "num_frames": num_frames,
             "prolong_frames": prolong_frames,
