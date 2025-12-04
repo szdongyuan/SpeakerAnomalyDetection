@@ -191,6 +191,11 @@ class RecordConfigWindow(BaseConfigWindow):
         self.samplerate_combo.addItems(["44100", "48000"])
         self.samplerate_combo.setCurrentText(str(self.input_data.get("sample_rate")))
 
+        label_channels = QLabel("通道数:")
+        self.channels_combo = QComboBox()
+        self.channels_combo.addItems(["1", "2", "3", "4"])
+        self.channels_combo.setCurrentText(str(self.input_data.get("channels", 1)))
+
         label_input_device = QLabel("输入设备:")
         self.input_device_display = QLineEdit()
         self.input_device_display.setReadOnly(True)
@@ -205,8 +210,11 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(label_samplerate, 1, 0)
         grid_layout.addWidget(self.samplerate_combo, 1, 1)
 
-        grid_layout.addWidget(label_input_device, 2, 0)
-        grid_layout.addWidget(self.input_device_display, 2, 1)
+        grid_layout.addWidget(label_channels, 2, 0)
+        grid_layout.addWidget(self.channels_combo, 2, 1)
+
+        grid_layout.addWidget(label_input_device, 3, 0)
+        grid_layout.addWidget(self.input_device_display, 3, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -215,6 +223,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.final_data = {
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
+            "channels": int(self.channels_combo.currentText()),
         }
         self.accept()
 
