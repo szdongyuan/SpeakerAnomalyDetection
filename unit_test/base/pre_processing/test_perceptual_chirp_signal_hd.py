@@ -41,7 +41,7 @@ def test_perceptual_chirp_signal_hd_computes_phons():
             if h_bin < n_bins:
                 mask_matrix[h_bin, t_idx] = 1.0
 
-    harmonic_mask = (mask_matrix, fundamental_freqs, time_array, fundamental_bins)
+    harmonic_mask = (mask_matrix, None, fundamental_freqs, time_array, fundamental_bins)
 
     result = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders, harmonic_mask

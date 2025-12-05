@@ -5,7 +5,7 @@ Computes perceptual loudness (phons) for chirp signals using psychoacoustic mode
 Extends ChirpSignalHD with perceptual THD computation.
 """
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 from base.pre_processing.chirp_signal_hd import ChirpSignalHD
 
 
@@ -17,7 +17,7 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         recorded_signal: np.ndarray,
         stimulus_metadata: Dict,
         harmonic_orders: list,
-        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        harmonic_mask: Tuple[np.ndarray, Optional[np.ndarray], np.ndarray, np.ndarray, np.ndarray],
         stft_window_size: int = 2048,
         stft_hop_size: int = 1024,
         stft_window_type: str = 'hann',
@@ -30,7 +30,7 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
             recorded_signal: Recorded audio
             stimulus_metadata: Config with start_freq, stop_freq, total_time
             harmonic_orders: Selected harmonics (for reference only)
-            harmonic_mask: (mask_matrix, fundamental_freqs, time_array, fundamental_bins) from Phase 1B
+            harmonic_mask: (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins) from Phase 1B
             stft_window_size: STFT window size (default 2048)
             stft_hop_size: STFT hop size (default 512)
             stft_window_type: Window function for STFT (default 'hann')
@@ -43,7 +43,7 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
                 'spectrum_matrix': spectrum
             }
         """
-        mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
+        mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
 
         # Compute STFT (reuse parent method)
         spectrum_matrix = self._compute_stft(
