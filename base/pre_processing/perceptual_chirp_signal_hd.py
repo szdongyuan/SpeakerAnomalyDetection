@@ -5,7 +5,7 @@ Computes perceptual loudness (phons) for chirp signals using psychoacoustic mode
 Extends ChirpSignalHD with perceptual THD computation.
 """
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple
 from base.pre_processing.chirp_signal_hd import ChirpSignalHD
 
 
@@ -17,7 +17,7 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         recorded_signal: np.ndarray,
         stimulus_metadata: Dict,
         harmonic_orders: list,
-        harmonic_mask: Tuple[np.ndarray, Optional[np.ndarray], np.ndarray, np.ndarray, np.ndarray],
+        harmonic_mask: Tuple = None,
         stft_window_size: int = 2048,
         stft_hop_size: int = 1024,
         stft_window_type: str = 'hann',
@@ -31,9 +31,12 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
             recorded_signal: Recorded audio
             stimulus_metadata: Config with start_freq, stop_freq, total_time
             harmonic_orders: Selected harmonics (for reference only)
-            harmonic_mask: (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins) from Phase 1B
+            harmonic_mask: Either:
+                - 4-tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins) - legacy format
+                - 5-tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins)
+                - None to create automatically
             stft_window_size: STFT window size (default 2048)
-            stft_hop_size: STFT hop size (default 512)
+            stft_hop_size: STFT hop size (default 1024)
             stft_window_type: Window function for STFT (default 'hann')
             masking_config: Optional masking configuration dict with keys:
                 - 'masking_range': (start, end) harmonic orders for masking
@@ -48,12 +51,29 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
                 'spectrum_matrix': spectrum
             }
         """
-        mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
+        # Create harmonic mask if not provided
+        if harmonic_mask is None:
+            harmonic_mask = self._create_harmonic_mask(
+                stimulus_metadata, harmonic_orders,
+                stft_window_size, stft_hop_size,
+                masking_config=masking_config
+            )
+
+        # Support both old 4-tuple and new 5-tuple for backward compatibility
+        if len(harmonic_mask) == 4:
+            # Old format without time_array
+            mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+            time_array = None
+        elif len(harmonic_mask) == 5:
+            # New format with time_array
+            mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
+        else:
+            raise ValueError(f"harmonic_mask must be 4-tuple or 5-tuple, got {len(harmonic_mask)}")
 
         # If cumulative masking is enabled, ensure masking_mask_matrix is available
         if masking_config and masking_config.get('enable_cumulative', False):
             if masking_mask_matrix is None:
-                raise ValueError("enable_cumulative=True requires masking_mask_matrix in harmonic_mask tuple")
+                raise ValueError("enable_cumulative=True requires masking_mask_matrix (4-tuple or 5-tuple harmonic_mask)")
 
         # Compute STFT (reuse parent method)
         spectrum_matrix = self._compute_stft(
