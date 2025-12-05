@@ -21,6 +21,7 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         stft_window_size: int = 2048,
         stft_hop_size: int = 1024,
         stft_window_type: str = 'hann',
+        masking_config: Dict = None,
         **kwargs
     ) -> Dict:
         """
@@ -34,6 +35,10 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
             stft_window_size: STFT window size (default 2048)
             stft_hop_size: STFT hop size (default 512)
             stft_window_type: Window function for STFT (default 'hann')
+            masking_config: Optional masking configuration dict with keys:
+                - 'masking_range': (start, end) harmonic orders for masking
+                - 'enable_cumulative': bool to enable cumulative masking
+                - 'weight_function': str ('exponential', 'gaussian', etc.)
 
         Returns:
             {
@@ -44,6 +49,11 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
             }
         """
         mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
+
+        # If cumulative masking is enabled, ensure masking_mask_matrix is available
+        if masking_config and masking_config.get('enable_cumulative', False):
+            if masking_mask_matrix is None:
+                raise ValueError("enable_cumulative=True requires masking_mask_matrix in harmonic_mask tuple")
 
         # Compute STFT (reuse parent method)
         spectrum_matrix = self._compute_stft(
@@ -60,9 +70,19 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         fund_bins_trimmed = fundamental_bins[:num_frames]
         fund_freqs_trimmed = fundamental_freqs[:num_frames]
 
-        # Compute perceptual loudness
+        # Trim masking mask if present
+        masking_mask_trimmed = None
+        if masking_mask_matrix is not None:
+            masking_mask_trimmed = masking_mask_matrix[:, :num_frames]
+
+        # Compute perceptual loudness with masking config
         perceptual_loudness = self.compute_perceptual_thd_batch(
-            spectrum_trimmed, mask_trimmed, fund_bins_trimmed, fund_freqs_trimmed
+            spectrum_trimmed,
+            mask_trimmed,
+            fund_bins_trimmed,
+            fund_freqs_trimmed,
+            masking_mask_matrix=masking_mask_trimmed,
+            masking_config=masking_config
         )
 
         # Compute time values
