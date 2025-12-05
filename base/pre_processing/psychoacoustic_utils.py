@@ -170,7 +170,7 @@ def compute_bark_weight(bark_distance: float, function: str) -> float:
     frequency distance. Nearby frequencies mask more effectively.
 
     Args:
-        bark_distance: Distance in Bark scale (always positive)
+        bark_distance: Distance in Bark scale (will be normalized to positive)
         function: Weight function type
             - 'exponential': exp(-distance/2.0) [standard, recommended]
             - 'gaussian': exp(-(distance²)/2.0)
@@ -183,13 +183,16 @@ def compute_bark_weight(bark_distance: float, function: str) -> float:
     Raises:
         ValueError: If function type is unknown
     """
+    # Normalize to positive distance (Bark distance is symmetric)
+    distance = abs(bark_distance)
+
     if function == 'exponential':
-        return np.exp(-bark_distance / 2.0)
+        return np.exp(-distance / 2.0)
     elif function == 'gaussian':
-        return np.exp(-(bark_distance ** 2) / 2.0)
+        return np.exp(-(distance ** 2) / 2.0)
     elif function == 'linear':
-        return max(0.0, 1.0 - bark_distance / 5.0)
+        return max(0.0, 1.0 - distance / 5.0)
     elif function == 'inverse':
-        return 1.0 / (1.0 + bark_distance)
+        return 1.0 / (1.0 + distance)
     else:
         raise ValueError(f"Unknown weight function: {function}")
