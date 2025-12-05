@@ -167,6 +167,11 @@ class HarmonicDistortionAnalyzer(ABC):
                 masking_mask_col = masking_mask_matrix[:, frame_idx]
                 masking_bin_indices = np.where(masking_mask_col > 0)[0]
 
+                # Filter out fundamental bin to avoid double-counting
+                # (fundamental will be prepended explicitly below)
+                fundamental_bin = fundamental_bins[frame_idx]
+                masking_bin_indices = masking_bin_indices[masking_bin_indices != fundamental_bin]
+
                 if len(masking_bin_indices) > 0:
                     # Extract amplitudes and convert to SPL
                     masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx]

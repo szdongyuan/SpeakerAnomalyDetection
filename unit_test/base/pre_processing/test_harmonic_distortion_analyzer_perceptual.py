@@ -176,3 +176,70 @@ def test_compute_perceptual_thd_batch_backward_compatible():
 
     assert len(result) == n_frames
     assert result[0] >= 0
+
+
+def test_fundamental_not_double_counted_in_cumulative_masking():
+    """Verify fundamental appears only once in masker lists (not double-counted)"""
+    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
+    analyzer.sample_rate = 44100
+
+    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from unittest.mock import patch
+
+    analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
+
+    # Create spectrum with fundamental and harmonics
+    n_bins = 1024
+    n_frames = 1
+    spectrum_matrix = np.zeros((n_bins + 1, n_frames))
+
+    # Fundamental at bin 10 (100 Hz)
+    fundamental_bin = 10
+    spectrum_matrix[fundamental_bin, 0] = 0.5
+
+    # Add harmonics 2-9
+    for h in range(2, 10):
+        spectrum_matrix[fundamental_bin * h, 0] = 0.05
+
+    # Analysis mask: only 10th harmonic
+    mask_matrix = np.zeros((n_bins + 1, n_frames))
+    mask_matrix[fundamental_bin * 10, 0] = 1.0
+
+    # Masking mask: harmonics 1-9 (includes fundamental)
+    masking_mask_matrix = np.zeros((n_bins + 1, n_frames))
+    for h in range(1, 10):
+        masking_mask_matrix[fundamental_bin * h, 0] = 1.0
+
+    fundamental_bins = np.array([fundamental_bin])
+    fundamental_freqs = np.array([100.0])
+
+    masking_config = {
+        'masking_range': (1, 9),
+        'enable_cumulative': True,
+        'weight_function': 'exponential'
+    }
+
+    # Patch apply_cumulative_masking to capture its inputs
+    with patch('base.pre_processing.psychoacoustic_utils.apply_cumulative_masking') as mock_masking:
+        # Set a return value to prevent errors
+        mock_masking.return_value = np.array([50.0])
+
+        analyzer.compute_perceptual_thd_batch(
+            spectrum_matrix, mask_matrix, fundamental_bins, fundamental_freqs,
+            masking_mask_matrix=masking_mask_matrix,
+            masking_config=masking_config
+        )
+
+        # Verify apply_cumulative_masking was called
+        assert mock_masking.called
+
+        # Get the masker frequencies passed to apply_cumulative_masking
+        call_args = mock_masking.call_args[0]
+        masker_freqs = call_args[0]
+
+        # Count occurrences of fundamental frequency (100 Hz)
+        fundamental_freq = 100.0
+        fundamental_count = np.sum(np.isclose(masker_freqs, fundamental_freq))
+
+        # Fundamental should appear exactly once
+        assert fundamental_count == 1, f"Fundamental appears {fundamental_count} times in masker list, expected 1"
