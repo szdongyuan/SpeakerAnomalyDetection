@@ -21,3 +21,4 @@ ui/readme.md
 /.serena
 /doc
 *.md
+/.worktrees/
