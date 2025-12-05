@@ -193,3 +193,97 @@ class TestStepSignalHD:
         measured_thd_2 = result_2['thd'][0]
         assert abs(measured_thd_2 - expected_thd_2) < 5.0, \
             f"THD(2nd) mismatch: measured={measured_thd_2:.2f}%, expected={expected_thd_2:.2f}%"
+
+    def test_create_harmonic_mask_with_masking_config(self):
+        """Test _create_harmonic_mask creates masking mask when config provided"""
+        analyzer = StepSignalHD(sample_rate=44100)
+
+        stimulus_metadata = {
+            'num_steps': 4,
+            'start_freq': 100,
+            'stop_freq': 800,
+            'total_time': 1.0
+        }
+
+        harmonic_orders = [10, 11, 12]  # Analyze 10th-12th
+
+        masking_config = {
+            'masking_range': (1, 9),
+            'enable_cumulative': True
+        }
+
+        result = analyzer._create_harmonic_mask(stimulus_metadata, harmonic_orders, masking_config)
+
+        # Should return 4-tuple now
+        assert len(result) == 4
+        mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = result
+
+        # Masking mask should exist
+        assert masking_mask_matrix is not None
+        assert masking_mask_matrix.shape == mask_matrix.shape
+
+        # Check that masking harmonics (1-9) are marked in masking_mask
+        # And analysis harmonics (10-12) are in analysis mask
+        # They should not overlap (except possibly the fundamental)
+        n_bins = mask_matrix.shape[0]
+        n_frames = mask_matrix.shape[1]
+
+        for frame_idx in range(n_frames):
+            # Get all bins that are set in each mask
+            analysis_bins = set(np.where(mask_matrix[:, frame_idx] == 1.0)[0])
+            masking_bins = set(np.where(masking_mask_matrix[:, frame_idx] == 1.0)[0])
+
+            # Analysis mask should have exactly 4 bins (fundamental + 10th, 11th, 12th)
+            assert len(analysis_bins) == 4, f"Frame {frame_idx}: expected 4 analysis bins, got {len(analysis_bins)}"
+
+            # Masking mask should have 9 bins (harmonics 1-9)
+            assert len(masking_bins) == 9, f"Frame {frame_idx}: expected 9 masking bins, got {len(masking_bins)}"
+
+            # The only potential overlap should be the fundamental
+            overlap = analysis_bins & masking_bins
+            # Both masks include the fundamental by design from create_mask_from_indices
+            assert len(overlap) <= 1, f"Frame {frame_idx}: too much overlap between masks"
+
+    def test_create_harmonic_mask_without_masking_config(self):
+        """Test backward compatibility: no masking config = no masking mask"""
+        analyzer = StepSignalHD(sample_rate=44100)
+
+        stimulus_metadata = {
+            'num_steps': 4,
+            'start_freq': 100,
+            'stop_freq': 800,
+            'total_time': 1.0
+        }
+
+        harmonic_orders = [10, 11, 12]
+
+        result = analyzer._create_harmonic_mask(stimulus_metadata, harmonic_orders, masking_config=None)
+
+        # Should return 4-tuple with None masking_mask
+        assert len(result) == 4
+        mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = result
+
+        assert masking_mask_matrix is None
+
+    def test_create_harmonic_mask_disabled_cumulative(self):
+        """Test masking config with enable_cumulative=False"""
+        analyzer = StepSignalHD(sample_rate=44100)
+
+        stimulus_metadata = {
+            'num_steps': 4,
+            'start_freq': 100,
+            'stop_freq': 800,
+            'total_time': 1.0
+        }
+
+        harmonic_orders = [10, 11, 12]
+
+        masking_config = {
+            'masking_range': (1, 9),
+            'enable_cumulative': False  # Disabled
+        }
+
+        result = analyzer._create_harmonic_mask(stimulus_metadata, harmonic_orders, masking_config)
+
+        _, masking_mask_matrix, _, _ = result
+        assert masking_mask_matrix is None
