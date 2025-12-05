@@ -160,3 +160,36 @@ def apply_masking(
                     masked_spls[i] = h_spl
 
     return masked_spls
+
+
+def compute_bark_weight(bark_distance: float, function: str) -> float:
+    """
+    Compute weight based on Bark distance between masker and maskee.
+
+    Weighting functions model how masking effectiveness decreases with
+    frequency distance. Nearby frequencies mask more effectively.
+
+    Args:
+        bark_distance: Distance in Bark scale (always positive)
+        function: Weight function type
+            - 'exponential': exp(-distance/2.0) [standard, recommended]
+            - 'gaussian': exp(-(distance²)/2.0)
+            - 'linear': max(0, 1 - distance/5.0)
+            - 'inverse': 1/(1 + distance)
+
+    Returns:
+        weight: Weighting factor in [0, 1]
+
+    Raises:
+        ValueError: If function type is unknown
+    """
+    if function == 'exponential':
+        return np.exp(-bark_distance / 2.0)
+    elif function == 'gaussian':
+        return np.exp(-(bark_distance ** 2) / 2.0)
+    elif function == 'linear':
+        return max(0.0, 1.0 - bark_distance / 5.0)
+    elif function == 'inverse':
+        return 1.0 / (1.0 + bark_distance)
+    else:
+        raise ValueError(f"Unknown weight function: {function}")
