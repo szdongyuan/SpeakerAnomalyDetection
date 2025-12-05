@@ -421,3 +421,90 @@ def test_num_repetitions_correctly_returned():
         # Should return the correct num_repetitions
         assert result['num_repetitions'] == repeat_times, \
             f"Expected num_repetitions={repeat_times}, got {result['num_repetitions']}"
+
+
+def test_invalid_repeat_times_zero_raises_error():
+    """Test that repeat_times=0 raises ValueError"""
+    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+
+    duration = 1.0
+    sample_rate = 44100
+    t = np.linspace(0, duration, int(sample_rate * duration))
+    f0 = 100
+    f1 = 800
+    chirp = np.sin(2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration)))
+    recorded_signal = chirp
+
+    stimulus_metadata = {
+        'total_time': duration,
+        'start_freq': f0,
+        'stop_freq': f1,
+        'repeat_times': 0  # Invalid
+    }
+
+    harmonic_orders = [10, 11, 12]
+
+    with pytest.raises(ValueError, match="repeat_times must be a positive integer"):
+        analyzer.compute_distortion(
+            recorded_signal, stimulus_metadata, harmonic_orders,
+            harmonic_mask=None,
+            masking_config=None
+        )
+
+
+def test_invalid_repeat_times_negative_raises_error():
+    """Test that negative repeat_times raises ValueError"""
+    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+
+    duration = 1.0
+    sample_rate = 44100
+    t = np.linspace(0, duration, int(sample_rate * duration))
+    f0 = 100
+    f1 = 800
+    chirp = np.sin(2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration)))
+    recorded_signal = chirp
+
+    stimulus_metadata = {
+        'total_time': duration,
+        'start_freq': f0,
+        'stop_freq': f1,
+        'repeat_times': -1  # Invalid
+    }
+
+    harmonic_orders = [10, 11, 12]
+
+    with pytest.raises(ValueError, match="repeat_times must be a positive integer"):
+        analyzer.compute_distortion(
+            recorded_signal, stimulus_metadata, harmonic_orders,
+            harmonic_mask=None,
+            masking_config=None
+        )
+
+
+def test_invalid_repeat_times_float_raises_error():
+    """Test that float repeat_times raises ValueError"""
+    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+
+    duration = 1.0
+    sample_rate = 44100
+    t = np.linspace(0, duration, int(sample_rate * duration))
+    f0 = 100
+    f1 = 800
+    chirp = np.sin(2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration)))
+    recorded_signal = chirp
+
+    stimulus_metadata = {
+        'total_time': duration,
+        'start_freq': f0,
+        'stop_freq': f1,
+        'repeat_times': 2.5  # Invalid - float
+    }
+
+    harmonic_orders = [10, 11, 12]
+
+    with pytest.raises(ValueError, match="repeat_times must be a positive integer"):
+        analyzer.compute_distortion(
+            recorded_signal, stimulus_metadata, harmonic_orders,
+            harmonic_mask=None,
+            masking_config=None
+        )

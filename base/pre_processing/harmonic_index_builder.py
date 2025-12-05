@@ -116,6 +116,10 @@ class HarmonicIndexBuilder:
         repeat_times = stimulus_metadata['repeat_times']
         stimulus_type = stimulus_metadata['stimulus_type']
 
+        # Validate repeat_times
+        if not isinstance(repeat_times, int) or repeat_times <= 0:
+            raise ValueError(f"repeat_times must be a positive integer, got {repeat_times}")
+
         # Calculate single repetition duration and number of frames
         single_rep_duration = total_time / repeat_times
         num_samples = int(single_rep_duration * sr)

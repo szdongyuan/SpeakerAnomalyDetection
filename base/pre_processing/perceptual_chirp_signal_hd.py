@@ -55,9 +55,14 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         """
         # Create harmonic mask if not provided
         if harmonic_mask is None:
-            # Ensure required metadata fields exist with defaults
-            if 'repeat_times' not in stimulus_metadata:
+            # Validate repeat_times if provided
+            if 'repeat_times' in stimulus_metadata:
+                rt = stimulus_metadata['repeat_times']
+                if not isinstance(rt, int) or rt <= 0:
+                    raise ValueError(f"repeat_times must be a positive integer, got {rt}")
+            else:
                 stimulus_metadata['repeat_times'] = 1  # Default to single repetition
+
             if 'stimulus_type' not in stimulus_metadata:
                 stimulus_metadata['stimulus_type'] = 'linear'  # Default to linear chirp
 
