@@ -88,7 +88,9 @@ class HarmonicDistortionAnalyzer(ABC):
         spectrum_matrix: np.ndarray,
         mask_matrix: np.ndarray,
         fundamental_bins: np.ndarray,
-        fundamental_freqs: np.ndarray
+        fundamental_freqs: np.ndarray,
+        masking_mask_matrix: np.ndarray = None,
+        masking_config: dict = None
     ) -> np.ndarray:
         """
         Compute perceptual loudness (in phons) of harmonics using psychoacoustic models.
@@ -101,6 +103,11 @@ class HarmonicDistortionAnalyzer(ABC):
             mask_matrix: (n_bins+1, n_frames) binary mask for selected harmonics
             fundamental_bins: (n_frames,) indices of fundamental in spectrum
             fundamental_freqs: (n_frames,) fundamental frequencies in Hz
+            masking_mask_matrix: Optional (n_bins+1, n_frames) binary mask for masking harmonics
+            masking_config: Optional dict with keys:
+                - 'masking_range': (start, end) harmonic orders
+                - 'enable_cumulative': bool
+                - 'weight_function': str ('exponential', 'gaussian', etc.)
 
         Returns:
             perceptual_loudness: (n_frames,) perceived loudness in phons
@@ -154,13 +161,48 @@ class HarmonicDistortionAnalyzer(ABC):
             n_bins = spectrum_matrix.shape[0] - 1  # Subtract dummy bin
             harmonic_freqs = harmonic_bin_indices * (self.sample_rate / 2.0) / n_bins
 
-            # Apply masking from fundamental
-            masked_spls = apply_masking(
-                fundamental_freqs[frame_idx],
-                fundamental_spl[frame_idx],
-                harmonic_freqs,
-                harmonic_spls
-            )
+            # Apply masking (cumulative or fundamental-only)
+            if masking_mask_matrix is not None and masking_config and masking_config.get('enable_cumulative'):
+                # Extract masking harmonics
+                masking_mask_col = masking_mask_matrix[:, frame_idx]
+                masking_bin_indices = np.where(masking_mask_col > 0)[0]
+
+                if len(masking_bin_indices) > 0:
+                    # Extract amplitudes and convert to SPL
+                    masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx]
+                    masking_spls_relative = 20.0 * np.log10(
+                        np.maximum(masking_amplitudes / reference_amplitude, 1e-10)
+                    )
+                    masking_spls = masking_spls_relative + spl_offset
+
+                    # Compute frequencies
+                    masking_freqs = masking_bin_indices * (self.sample_rate / 2.0) / n_bins
+
+                    # Combine fundamental + masking harmonics
+                    all_masker_freqs = np.concatenate([[fundamental_freqs[frame_idx]], masking_freqs])
+                    all_masker_spls = np.concatenate([[fundamental_spl[frame_idx]], masking_spls])
+                else:
+                    # No masking harmonics found, use fundamental only
+                    all_masker_freqs = np.array([fundamental_freqs[frame_idx]])
+                    all_masker_spls = np.array([fundamental_spl[frame_idx]])
+
+                # Apply cumulative masking
+                from base.pre_processing.psychoacoustic_utils import apply_cumulative_masking
+                masked_spls = apply_cumulative_masking(
+                    all_masker_freqs,
+                    all_masker_spls,
+                    harmonic_freqs,
+                    harmonic_spls,
+                    masking_config.get('weight_function', 'exponential')
+                )
+            else:
+                # Use existing fundamental-only masking
+                masked_spls = apply_masking(
+                    fundamental_freqs[frame_idx],
+                    fundamental_spl[frame_idx],
+                    harmonic_freqs,
+                    harmonic_spls
+                )
 
             # Convert masked SPLs to phons
             audible_indices = masked_spls > 0
