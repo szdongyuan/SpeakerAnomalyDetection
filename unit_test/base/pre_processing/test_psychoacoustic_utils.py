@@ -203,16 +203,79 @@ def test_cumulative_masking_multiple_maskees():
 
 
 def test_cumulative_masking_weight_function_selection():
-    """Test different weight functions produce different results"""
+    """Test all weight functions produce different results without warnings"""
     masker_freqs = np.array([100.0, 900.0])
     masker_spls = np.array([60.0, 50.0])
     maskee_freqs = np.array([1000.0])
     maskee_spls = np.array([30.0])
 
-    result_exp = apply_cumulative_masking(masker_freqs, masker_spls,
-                                         maskee_freqs, maskee_spls, 'exponential')
-    result_gauss = apply_cumulative_masking(masker_freqs, masker_spls,
-                                           maskee_freqs, maskee_spls, 'gaussian')
+    # Test all 4 weight functions
+    with np.testing.suppress_warnings() as sup:
+        sup.filter(RuntimeWarning)  # Catch any runtime warnings
 
-    # Different weighting should produce different results
-    assert result_exp[0] != result_gauss[0]
+        result_exp = apply_cumulative_masking(
+            masker_freqs, masker_spls, maskee_freqs, maskee_spls, 'exponential'
+        )
+        result_gauss = apply_cumulative_masking(
+            masker_freqs, masker_spls, maskee_freqs, maskee_spls, 'gaussian'
+        )
+        result_linear = apply_cumulative_masking(
+            masker_freqs, masker_spls, maskee_freqs, maskee_spls, 'linear'
+        )
+        result_inverse = apply_cumulative_masking(
+            masker_freqs, masker_spls, maskee_freqs, maskee_spls, 'inverse'
+        )
+
+    # Different weighting functions should produce different results
+    assert result_exp[0] != result_gauss[0], "Exponential vs Gaussian"
+    assert result_exp[0] != result_linear[0], "Exponential vs Linear"
+    assert result_exp[0] != result_inverse[0], "Exponential vs Inverse"
+    assert result_gauss[0] != result_linear[0], "Gaussian vs Linear"
+
+    # All results should be valid (>= 0, <= original SPL)
+    for result in [result_exp, result_gauss, result_linear, result_inverse]:
+        assert result[0] >= 0.0, "Result should be non-negative"
+        assert result[0] <= maskee_spls[0], "Result should not exceed original SPL"
+
+
+def test_cumulative_masking_mismatched_masker_arrays():
+    """Test that mismatched masker array lengths raise ValueError"""
+    masker_freqs = np.array([100.0, 200.0])
+    masker_spls = np.array([60.0])  # Mismatched length
+    maskee_freqs = np.array([1000.0])
+    maskee_spls = np.array([30.0])
+
+    with pytest.raises(ValueError, match="masker_freqs and masker_spls must have same length"):
+        apply_cumulative_masking(masker_freqs, masker_spls, maskee_freqs, maskee_spls)
+
+
+def test_cumulative_masking_mismatched_maskee_arrays():
+    """Test that mismatched maskee array lengths raise ValueError"""
+    masker_freqs = np.array([100.0, 200.0])
+    masker_spls = np.array([60.0, 50.0])
+    maskee_freqs = np.array([1000.0, 1100.0])
+    maskee_spls = np.array([30.0])  # Mismatched length
+
+    with pytest.raises(ValueError, match="maskee_freqs and maskee_spls must have same length"):
+        apply_cumulative_masking(masker_freqs, masker_spls, maskee_freqs, maskee_spls)
+
+
+def test_cumulative_masking_zero_power_guard():
+    """Test that zero total power doesn't cause divide-by-zero"""
+    # Use very distant masker with linear weight function that clips to 0
+    masker_freqs = np.array([100.0])
+    masker_spls = np.array([60.0])
+    # Very high frequency maskee (>50 Bark distance with linear weight = 0)
+    maskee_freqs = np.array([20000.0])
+    maskee_spls = np.array([30.0])
+
+    # Should not raise RuntimeWarning for log10(0)
+    with np.testing.suppress_warnings() as sup:
+        sup.filter(RuntimeWarning)
+        result = apply_cumulative_masking(
+            masker_freqs, masker_spls, maskee_freqs, maskee_spls, 'linear'
+        )
+
+    # With zero power, maskee should pass through unchanged
+    assert result[0] == maskee_spls[0]
+

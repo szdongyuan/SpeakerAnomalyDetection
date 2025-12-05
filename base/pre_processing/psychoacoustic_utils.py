@@ -233,7 +233,23 @@ def apply_cumulative_masking(
 
     Returns:
         masked_spls: Masked SPL values for each maskee in dB (n_maskees,)
+
+    Raises:
+        ValueError: If masker_freqs and masker_spls have different lengths
+        ValueError: If maskee_freqs and maskee_spls have different lengths
     """
+    # Validate input array lengths
+    if len(masker_freqs) != len(masker_spls):
+        raise ValueError(
+            f"masker_freqs and masker_spls must have same length: "
+            f"{len(masker_freqs)} != {len(masker_spls)}"
+        )
+    if len(maskee_freqs) != len(maskee_spls):
+        raise ValueError(
+            f"maskee_freqs and maskee_spls must have same length: "
+            f"{len(maskee_freqs)} != {len(maskee_spls)}"
+        )
+
     n_maskees = len(maskee_freqs)
     n_maskers = len(masker_freqs)
     masked_spls = np.zeros(n_maskees)
@@ -266,7 +282,15 @@ def apply_cumulative_masking(
 
         # Convert to linear power, weight, sum, convert back
         powers = weights * np.power(10.0, thresholds / 10.0)
-        combined_threshold = 10.0 * np.log10(np.sum(powers))
+        total_power = np.sum(powers)
+
+        # Guard against zero total power (would cause log10(0) -> -inf)
+        if total_power <= 0:
+            # No masking effect if total power is zero or negative
+            masked_spls[i] = maskee_spls[i]
+            continue
+
+        combined_threshold = 10.0 * np.log10(total_power)
 
         # Apply masking
         if maskee_spls[i] <= combined_threshold:
