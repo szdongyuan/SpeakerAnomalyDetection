@@ -7,10 +7,11 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
+from base.load_audio import load_audio_simple
 from base.unified_hid_device_manager import UnifiedHardwareManager
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
@@ -494,6 +495,9 @@ class SequenceWindow(QWidget):
         if not hasattr(self.data_struct, 'store_wave_data') or self.data_struct.store_wave_data is None or len(self.data_struct.store_wave_data) == 0:
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
+            QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
+            return
 
         self.update_audio_label_info()
         self.update_recorded_signal_info_to_db()
@@ -560,8 +564,35 @@ class SequenceWindow(QWidget):
         self.clicked_scanner()
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+        if acq_mode == "IMPORT_AUDIO":
+            self.import_audio_and_analyze()
+            return
         self.clicked_player_flag = True
         self.start_this_play(label)
+
+    def import_audio_and_analyze(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择音频文件",
+            DEFAULT_DIR + "audio_data/stored_data",
+            "WAV Files (*.wav);;All Files (*)",
+        )
+        if not file_path:
+            return
+        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        sample_rate = acq_detail.get("sample_rate", 44100)
+        y, _ = load_audio_simple(file_path, sample_rate)
+
+        self.data_struct.store_wave_data = y
+        self.data_struct.sample_rate = sample_rate
+
+        self.line_graph.clear()
+        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
+
+        self.data_btn.setEnabled(True)
+        if self.analysis_config.get("auto_analysis"):
+            self.run()
 
     def start_this_play(self, label="not_labeled"):
         if self.clicked_player_flag is False:
