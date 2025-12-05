@@ -8,11 +8,12 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog
 
 from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
+from base.load_audio import load_audio_simple
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
@@ -558,8 +559,35 @@ class SequenceWindow(QWidget):
         self.clicked_scanner()
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+        if acq_mode == "IMPORT_AUDIO":
+            self.import_audio_and_analyze()
+            return
         self.clicked_player_flag = True
         self.start_this_play(label)
+
+    def import_audio_and_analyze(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择音频文件",
+            DEFAULT_DIR + "audio_data/stored_data",
+            "WAV Files (*.wav);;All Files (*)",
+        )
+        if not file_path:
+            return
+        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        sample_rate = acq_detail.get("sample_rate", 44100)
+        y, t = load_audio_simple(file_path, sample_rate)
+
+        self.data_struct.store_wave_data = y
+        self.data_struct.sample_rate = sample_rate
+
+        self.line_graph.clear()
+        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
+
+        self.data_btn.setEnabled(True)
+        if self.analysis_config.get("auto_analysis"):
+            self.run()
 
     def start_this_play(self, label="not_labeled"):
         if self.clicked_player_flag is False:
