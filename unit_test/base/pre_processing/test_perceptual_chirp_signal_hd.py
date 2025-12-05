@@ -345,3 +345,79 @@ def test_automatic_mask_creation():
     assert 'times' in result
     assert len(result['perceptual_loudness']) > 0
     assert np.all(result['perceptual_loudness'] >= 0)
+
+
+def test_automatic_mask_creation_with_minimal_metadata():
+    """Test that auto-creation works with minimal metadata (only start/stop/total_time)"""
+    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+
+    # Create simple chirp signal
+    duration = 1.0
+    sample_rate = 44100
+    t = np.linspace(0, duration, int(sample_rate * duration))
+    f0 = 100
+    f1 = 800
+    chirp = np.sin(2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration)))
+    recorded_signal = chirp + 0.01 * np.sin(2 * np.pi * 10 * f0 * t)
+
+    # Minimal metadata - no repeat_times or stimulus_type
+    stimulus_metadata = {
+        'total_time': duration,
+        'start_freq': f0,
+        'stop_freq': f1
+    }
+
+    harmonic_orders = [10, 11, 12]
+
+    # Should not crash - defaults should be applied
+    result = analyzer.compute_distortion(
+        recorded_signal, stimulus_metadata, harmonic_orders,
+        harmonic_mask=None,
+        masking_config=None
+    )
+
+    assert 'perceptual_loudness' in result
+    assert 'frequencies' in result
+    assert 'times' in result
+    assert 'num_repetitions' in result
+
+    # Should default to 1 repetition
+    assert result['num_repetitions'] == 1
+    assert len(result['perceptual_loudness']) > 0
+    assert np.all(result['perceptual_loudness'] >= 0)
+
+
+def test_num_repetitions_correctly_returned():
+    """Test that num_repetitions is correctly returned from metadata"""
+    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+
+    # Create simple chirp signal
+    duration = 1.0
+    sample_rate = 44100
+    t = np.linspace(0, duration, int(sample_rate * duration))
+    f0 = 100
+    f1 = 800
+    chirp = np.sin(2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration)))
+    recorded_signal = chirp
+
+    # Test with different repeat_times values
+    for repeat_times in [1, 2, 3, 5]:
+        stimulus_metadata = {
+            'total_time': duration,
+            'start_freq': f0,
+            'stop_freq': f1,
+            'repeat_times': repeat_times,
+            'stimulus_type': 'linear'
+        }
+
+        harmonic_orders = [10, 11, 12]
+
+        result = analyzer.compute_distortion(
+            recorded_signal, stimulus_metadata, harmonic_orders,
+            harmonic_mask=None,
+            masking_config=None
+        )
+
+        # Should return the correct num_repetitions
+        assert result['num_repetitions'] == repeat_times, \
+            f"Expected num_repetitions={repeat_times}, got {result['num_repetitions']}"

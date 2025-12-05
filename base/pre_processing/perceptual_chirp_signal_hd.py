@@ -29,7 +29,8 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
 
         Args:
             recorded_signal: Recorded audio
-            stimulus_metadata: Config with start_freq, stop_freq, total_time
+            stimulus_metadata: Config with start_freq, stop_freq, total_time.
+                Optional fields: repeat_times (default 1), stimulus_type (default 'linear')
             harmonic_orders: Selected harmonics (for reference only)
             harmonic_mask: Either:
                 - 4-tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins) - legacy format
@@ -48,11 +49,18 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
                 'frequencies': fundamental_freqs,
                 'times': time_values,
                 'perceptual_loudness': loudness_values_in_phons,
-                'spectrum_matrix': spectrum
+                'spectrum_matrix': spectrum,
+                'num_repetitions': repeat_times from metadata (default 1)
             }
         """
         # Create harmonic mask if not provided
         if harmonic_mask is None:
+            # Ensure required metadata fields exist with defaults
+            if 'repeat_times' not in stimulus_metadata:
+                stimulus_metadata['repeat_times'] = 1  # Default to single repetition
+            if 'stimulus_type' not in stimulus_metadata:
+                stimulus_metadata['stimulus_type'] = 'linear'  # Default to linear chirp
+
             harmonic_mask = self._create_harmonic_mask(
                 stimulus_metadata, harmonic_orders,
                 stft_window_size, stft_hop_size,
@@ -108,10 +116,14 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         # Compute time values
         times = np.arange(num_frames) * stft_hop_size / self.sample_rate
 
+        # Get actual repeat_times from metadata (default to 1 if not present)
+        # Note: Averaging across repetitions happens in higher-level callers if needed
+        num_repetitions = stimulus_metadata.get('repeat_times', 1)
+
         return {
             'frequencies': fund_freqs_trimmed,
             'times': times,
             'perceptual_loudness': perceptual_loudness,
             'spectrum_matrix': spectrum_trimmed,
-            'num_repetitions': 1
+            'num_repetitions': num_repetitions
         }
