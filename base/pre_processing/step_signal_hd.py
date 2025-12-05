@@ -194,8 +194,8 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
             index_matrix, harmonic_orders, n_bins_with_dummy
         )
 
-        # Extract fundamental bins (remove +1 offset for actual bin indices)
-        fundamental_bins = index_matrix[:, 1] - 1
+        # Extract fundamental bins (keep +1 offset for mask_matrix alignment)
+        fundamental_bins = index_matrix[:, 1]
 
         # Create masking mask if cumulative masking enabled
         if masking_config and masking_config.get('enable_cumulative', False):

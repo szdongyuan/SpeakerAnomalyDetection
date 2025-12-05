@@ -222,12 +222,27 @@ class TestStepSignalHD:
         assert masking_mask_matrix is not None
         assert masking_mask_matrix.shape == mask_matrix.shape
 
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITICAL: Verify fundamental_bins point to correct bins in mask_matrix
+        # ═══════════════════════════════════════════════════════════════════
+        n_frames = mask_matrix.shape[1]
+        for frame_idx in range(n_frames):
+            fund_bin = fundamental_bins[frame_idx]
+
+            # Fundamental bin should be > 0 (not the dummy bin)
+            assert fund_bin > 0, f"Frame {frame_idx}: fundamental_bin={fund_bin} should be > 0"
+
+            # Fundamental bin should be marked in the analysis mask
+            assert mask_matrix[fund_bin, frame_idx] == 1.0, \
+                f"Frame {frame_idx}: fundamental_bin={fund_bin} not marked in mask_matrix"
+
+            # Fundamental bin should also be marked in the masking mask (it's the 1st harmonic)
+            assert masking_mask_matrix[fund_bin, frame_idx] == 1.0, \
+                f"Frame {frame_idx}: fundamental_bin={fund_bin} not marked in masking_mask_matrix"
+
         # Check that masking harmonics (1-9) are marked in masking_mask
         # And analysis harmonics (10-12) are in analysis mask
         # They should not overlap (except possibly the fundamental)
-        n_bins = mask_matrix.shape[0]
-        n_frames = mask_matrix.shape[1]
-
         for frame_idx in range(n_frames):
             # Get all bins that are set in each mask
             analysis_bins = set(np.where(mask_matrix[:, frame_idx] == 1.0)[0])
@@ -287,3 +302,90 @@ class TestStepSignalHD:
 
         _, masking_mask_matrix, _, _ = result
         assert masking_mask_matrix is None
+
+    def test_fundamental_bins_correctness(self):
+        """
+        Verify that fundamental_bins correctly point to the fundamental frequencies
+        in the FFT spectrum with the +1 offset for dummy bin alignment.
+        """
+        from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+
+        analyzer = StepSignalHD(sample_rate=44100)
+        builder = HarmonicIndexBuilder()
+
+        stimulus_metadata = {
+            'num_steps': 3,
+            'start_freq': 500.0,
+            'stop_freq': 1500.0,
+            'stimulus_type': 'linear',
+            'total_time': 1.0
+        }
+
+        # Expected fundamental frequencies: 500 Hz, 1000 Hz, 1500 Hz
+        expected_fund_freqs = [500.0, 1000.0, 1500.0]
+
+        # Calculate STFT parameters
+        step_duration = stimulus_metadata['total_time'] / stimulus_metadata['num_steps']
+        step_samples = int(step_duration * 44100)
+        n_fft = step_samples
+
+        # Build index matrix
+        index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+            stimulus_metadata, sr=44100, n_fft=n_fft, max_harmonic_order=12
+        )
+
+        # Create harmonic mask
+        harmonic_orders = [2, 3]
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, len(fft_freqs)
+        )
+        fundamental_bins = index_matrix[:, 1]
+
+        # Verify fundamental frequencies match expected
+        np.testing.assert_array_almost_equal(fund_freqs, expected_fund_freqs, decimal=1)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # CRITICAL: Verify fundamental_bins point to correct FFT bins
+        # ═══════════════════════════════════════════════════════════════════
+        for step_idx in range(stimulus_metadata['num_steps']):
+            fund_bin = fundamental_bins[step_idx]
+            expected_freq = expected_fund_freqs[step_idx]
+
+            # Fund_bin should have +1 offset (account for dummy bin at index 0)
+            assert fund_bin > 0, f"Step {step_idx}: fund_bin should be > 0 (has dummy offset)"
+
+            # The actual frequency at this bin (accounting for dummy bin)
+            actual_freq = fft_freqs[fund_bin]  # fft_freqs already has dummy bin at index 0
+
+            # Should be close to expected fundamental frequency
+            assert abs(actual_freq - expected_freq) < 10.0, \
+                f"Step {step_idx}: fund_bin={fund_bin} points to {actual_freq:.1f} Hz, expected ~{expected_freq:.1f} Hz"
+
+            # Verify fundamental bin is marked in mask_matrix
+            assert mask_matrix[fund_bin, step_idx] == 1.0, \
+                f"Step {step_idx}: fundamental_bin={fund_bin} not marked in mask_matrix"
+
+        # ═══════════════════════════════════════════════════════════════════
+        # Verify specific harmonic bins are set correctly (2nd and 3rd harmonics)
+        # ═══════════════════════════════════════════════════════════════════
+        for step_idx in range(stimulus_metadata['num_steps']):
+            expected_freq = expected_fund_freqs[step_idx]
+
+            # Get all marked bins for this step
+            marked_bins = np.where(mask_matrix[:, step_idx] == 1.0)[0]
+
+            # Should have fundamental + 2 harmonics = 3 bins
+            assert len(marked_bins) == 3, \
+                f"Step {step_idx}: expected 3 marked bins (fund + 2 harmonics), got {len(marked_bins)}"
+
+            # Check frequencies of marked bins
+            marked_freqs = [fft_freqs[bin_idx] for bin_idx in marked_bins]
+            marked_freqs.sort()
+
+            # Should be approximately: fundamental, 2*fundamental, 3*fundamental
+            expected_freqs = [expected_freq, 2*expected_freq, 3*expected_freq]
+
+            for i, (actual, expected) in enumerate(zip(marked_freqs, expected_freqs)):
+                assert abs(actual - expected) < 20.0, \
+                    f"Step {step_idx}, harmonic {i}: freq={actual:.1f} Hz, expected ~{expected:.1f} Hz"
+
