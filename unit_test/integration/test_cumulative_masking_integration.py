@@ -214,10 +214,10 @@ def test_cumulative_masking_preserves_curve_trend():
     # Define 10th harmonic amplitudes: increasing strength
     # Use sufficiently large amplitudes to ensure they remain audible despite masking
     h10_amplitudes = [
-        0.005,   # Weak
-        0.015,   # Medium
-        0.035,   # Strong
-        0.065,   # Very strong
+        0.02,    # Weak
+        0.04,    # Medium
+        0.08,    # Strong
+        0.12,    # Very strong
     ]
 
     signal = np.zeros(int(sample_rate * duration))
@@ -241,7 +241,10 @@ def test_cumulative_masking_preserves_curve_trend():
     stimulus_metadata = {
         'num_steps': 4,
         'repeat_times': 1,
-        'total_time': duration
+        'total_time': duration,
+        'start_freq': 100,  # All steps use 100 Hz
+        'stop_freq': 100,   # All steps use 100 Hz
+        'stimulus_type': 'linear'  # Linear interpolation from 100 to 100 = constant
     }
 
     harmonic_orders = [10]
@@ -276,6 +279,11 @@ def test_cumulative_masking_preserves_curve_trend():
     # 2. For steps that are audible in both methods, verify ordering is preserved
     # Find steps where both methods produce non-zero values
     audible_mask = (phons_fundamental > TOLERANCE) & (phons_cumulative > TOLERANCE)
+
+    # Ensure at least 2 steps are audible to validate trend preservation
+    assert np.sum(audible_mask) >= 2, \
+        f"Expected at least 2 audible steps for trend test, got {np.sum(audible_mask)}. " \
+        f"Cumulative phons: {phons_cumulative}, Fundamental phons: {phons_fundamental}"
 
     if np.sum(audible_mask) >= 2:
         # If we have at least 2 audible steps, verify relative ordering
