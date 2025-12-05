@@ -29,8 +29,10 @@ class PerceptualStepSignalHD(StepSignalHD):
             recorded_signal: Recorded audio
             stimulus_metadata: Config with num_steps, repeat_times, total_time
             harmonic_orders: Selected harmonics (for reference only)
-            harmonic_mask: (mask_matrix, fundamental_freqs, fundamental_bins) from Phase 1B
-                          or None to create automatically
+            harmonic_mask: Either:
+                - 3-tuple: (mask_matrix, fundamental_freqs, fundamental_bins) - legacy format
+                - 4-tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins)
+                - None to create automatically
             stft_window_type: Window function for STFT (default 'hann')
             masking_config: Optional masking configuration dict with keys:
                 - 'masking_range': (start, end) harmonic orders for masking
@@ -51,8 +53,19 @@ class PerceptualStepSignalHD(StepSignalHD):
                 stimulus_metadata, harmonic_orders, masking_config=masking_config
             )
 
-        # Unpack harmonic mask (now 4-tuple with masking_mask_matrix)
-        mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+        # Support both old 3-tuple and new 4-tuple for backward compatibility
+        if len(harmonic_mask) == 3:
+            mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+            masking_mask_matrix = None
+        elif len(harmonic_mask) == 4:
+            mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+        else:
+            raise ValueError(f"harmonic_mask must be 3-tuple or 4-tuple, got {len(harmonic_mask)}")
+
+        # If cumulative masking is enabled, ensure masking_mask_matrix is available
+        if masking_config and masking_config.get('enable_cumulative', False):
+            if masking_mask_matrix is None:
+                raise ValueError("enable_cumulative=True requires masking_mask_matrix (4-tuple harmonic_mask)")
 
         num_steps = stimulus_metadata['num_steps']
         repeat_times = stimulus_metadata['repeat_times']
