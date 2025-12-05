@@ -5,7 +5,8 @@ from base.pre_processing.psychoacoustic_utils import (
     spl_to_phons,
     compute_simultaneous_masking_threshold,
     apply_masking,
-    compute_bark_weight
+    compute_bark_weight,
+    apply_cumulative_masking
 )
 
 
@@ -140,3 +141,78 @@ def test_bark_weight_invalid_function():
     """Test invalid weight function raises error"""
     with pytest.raises(ValueError, match="Unknown weight function"):
         compute_bark_weight(1.0, 'invalid')
+
+
+def test_cumulative_masking_single_masker():
+    """Test cumulative masking with single masker (should match fundamental-only)"""
+    masker_freqs = np.array([100.0])
+    masker_spls = np.array([60.0])
+    maskee_freqs = np.array([1000.0])
+    maskee_spls = np.array([20.0])
+
+    result = apply_cumulative_masking(masker_freqs, masker_spls, maskee_freqs, maskee_spls)
+
+    assert len(result) == 1
+    assert result[0] == 20.0, "With distant masker, harmonic should pass through"
+
+
+def test_cumulative_masking_close_maskers():
+    """Test cumulative masking with close masker (9th masking 10th)"""
+    # 100 Hz fundamental, 900 Hz (9th) and 1000 Hz (10th)
+    masker_freqs = np.array([100.0, 900.0])
+    masker_spls = np.array([60.0, 50.0])  # Strong 9th harmonic
+    maskee_freqs = np.array([1000.0])
+    maskee_spls = np.array([30.0])  # Weak 10th harmonic
+
+    result = apply_cumulative_masking(masker_freqs, masker_spls, maskee_freqs, maskee_spls)
+
+    # 9th harmonic (900 Hz) is ~0.7 Bark from 10th (1000 Hz)
+    # Should provide significant masking
+    assert result[0] < 30.0, "Close masker should reduce harmonic SPL"
+    assert result[0] > 0.0, "Harmonic not fully masked"
+
+
+def test_cumulative_masking_full_masking():
+    """Test that weak harmonic below threshold is fully masked"""
+    masker_freqs = np.array([100.0, 900.0])
+    masker_spls = np.array([60.0, 60.0])  # Very strong 9th
+    maskee_freqs = np.array([1000.0])
+    maskee_spls = np.array([10.0])  # Very weak 10th
+
+    result = apply_cumulative_masking(masker_freqs, masker_spls, maskee_freqs, maskee_spls)
+
+    assert result[0] == 0.0, "Weak harmonic should be fully masked"
+
+
+def test_cumulative_masking_multiple_maskees():
+    """Test cumulative masking with multiple target harmonics"""
+    # Fundamental + 1st-9th harmonics as maskers
+    masker_freqs = np.array([100.0, 200.0, 300.0, 400.0, 500.0,
+                             600.0, 700.0, 800.0, 900.0])
+    masker_spls = np.full(9, 50.0)  # All at 50 dB
+
+    # Target: 10th, 11th, 12th harmonics
+    maskee_freqs = np.array([1000.0, 1100.0, 1200.0])
+    maskee_spls = np.array([30.0, 28.0, 26.0])
+
+    result = apply_cumulative_masking(masker_freqs, masker_spls, maskee_freqs, maskee_spls)
+
+    assert len(result) == 3
+    # All should be reduced by cumulative masking
+    assert all(result < maskee_spls)
+
+
+def test_cumulative_masking_weight_function_selection():
+    """Test different weight functions produce different results"""
+    masker_freqs = np.array([100.0, 900.0])
+    masker_spls = np.array([60.0, 50.0])
+    maskee_freqs = np.array([1000.0])
+    maskee_spls = np.array([30.0])
+
+    result_exp = apply_cumulative_masking(masker_freqs, masker_spls,
+                                         maskee_freqs, maskee_spls, 'exponential')
+    result_gauss = apply_cumulative_masking(masker_freqs, masker_spls,
+                                           maskee_freqs, maskee_spls, 'gaussian')
+
+    # Different weighting should produce different results
+    assert result_exp[0] != result_gauss[0]

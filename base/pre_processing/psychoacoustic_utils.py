@@ -26,6 +26,21 @@ _freq_to_spl_40_phon = interp1d(
 )
 
 
+def freq_to_bark(f: float) -> float:
+    """
+    Convert frequency to Bark scale (critical band scale).
+
+    Uses Traunmüller's formula for the Bark scale.
+
+    Args:
+        f: Frequency in Hz
+
+    Returns:
+        bark: Critical band rate in Bark
+    """
+    return 13.0 * np.arctan(0.00076 * f) + 3.5 * np.arctan((f / 7500.0) ** 2)
+
+
 def spl_to_phons(frequencies: np.ndarray, spl_values: np.ndarray) -> np.ndarray:
     """
     Convert SPL (dB) to phons using ISO 226:2003 equal-loudness contours.
@@ -82,9 +97,6 @@ def compute_simultaneous_masking_threshold(
         threshold: Masking threshold in dB SPL at maskee_freq
     """
     # Convert frequencies to Bark scale (critical band scale)
-    def freq_to_bark(f):
-        return 13.0 * np.arctan(0.00076 * f) + 3.5 * np.arctan((f / 7500.0) ** 2)
-
     masker_bark = freq_to_bark(masker_freq)
     maskee_bark = freq_to_bark(maskee_freq)
     bark_distance = maskee_bark - masker_bark
@@ -196,3 +208,78 @@ def compute_bark_weight(bark_distance: float, function: str) -> float:
         return 1.0 / (1.0 + distance)
     else:
         raise ValueError(f"Unknown weight function: {function}")
+
+
+def apply_cumulative_masking(
+    masker_freqs: np.ndarray,
+    masker_spls: np.ndarray,
+    maskee_freqs: np.ndarray,
+    maskee_spls: np.ndarray,
+    weight_function: str = 'exponential'
+) -> np.ndarray:
+    """
+    Apply cumulative masking from multiple maskers to maskees.
+
+    Uses distance-weighted power summation of masking thresholds.
+    Each masker contributes to masking based on its Bark distance from
+    the maskee, with closer maskers having more influence.
+
+    Args:
+        masker_freqs: Frequencies of all maskers (fundamental + harmonics 1-9) in Hz
+        masker_spls: SPL levels of all maskers in dB
+        maskee_freqs: Frequencies of harmonics being analyzed in Hz
+        maskee_spls: SPL levels of harmonics being analyzed in dB
+        weight_function: 'exponential', 'gaussian', 'linear', or 'inverse'
+
+    Returns:
+        masked_spls: Masked SPL values for each maskee in dB (n_maskees,)
+    """
+    n_maskees = len(maskee_freqs)
+    n_maskers = len(masker_freqs)
+    masked_spls = np.zeros(n_maskees)
+
+    # Convert frequencies to Bark scale
+    masker_barks = np.array([freq_to_bark(f) for f in masker_freqs])
+    maskee_barks = np.array([freq_to_bark(f) for f in maskee_freqs])
+
+    # Compute weight matrix (n_maskees × n_maskers)
+    weight_matrix = np.zeros((n_maskees, n_maskers))
+    for i, maskee_bark in enumerate(maskee_barks):
+        for j, masker_bark in enumerate(masker_barks):
+            bark_distance = abs(maskee_bark - masker_bark)
+            weight_matrix[i, j] = compute_bark_weight(bark_distance, weight_function)
+
+    # Compute threshold matrix (n_maskees × n_maskers)
+    threshold_matrix = np.zeros((n_maskees, n_maskers))
+    for i, (maskee_freq, maskee_bark) in enumerate(zip(maskee_freqs, maskee_barks)):
+        for j, (masker_freq, masker_spl) in enumerate(zip(masker_freqs, masker_spls)):
+            threshold = compute_simultaneous_masking_threshold(
+                masker_freq, masker_spl, maskee_freq
+            )
+            threshold_matrix[i, j] = threshold
+
+    # Apply weighted power summation for each maskee
+    for i in range(n_maskees):
+        # Weighted power summation
+        weights = weight_matrix[i, :]
+        thresholds = threshold_matrix[i, :]
+
+        # Convert to linear power, weight, sum, convert back
+        powers = weights * np.power(10.0, thresholds / 10.0)
+        combined_threshold = 10.0 * np.log10(np.sum(powers))
+
+        # Apply masking
+        if maskee_spls[i] <= combined_threshold:
+            # Fully masked
+            masked_spls[i] = 0.0
+        else:
+            # Partial masking (30% of threshold)
+            # Only apply reduction if threshold is positive
+            if combined_threshold > 0:
+                masking_reduction = combined_threshold * 0.3
+                masked_spls[i] = max(maskee_spls[i] - masking_reduction, 0.0)
+            else:
+                # No masking effect if threshold is negative or zero
+                masked_spls[i] = maskee_spls[i]
+
+    return masked_spls
