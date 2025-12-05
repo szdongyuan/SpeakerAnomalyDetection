@@ -495,6 +495,9 @@ class SequenceWindow(QWidget):
         if not hasattr(self.data_struct, 'store_wave_data') or self.data_struct.store_wave_data is None or len(self.data_struct.store_wave_data) == 0:
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
+            QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
+            return
 
         self.update_audio_label_info()
         self.update_recorded_signal_info_to_db()
@@ -579,7 +582,7 @@ class SequenceWindow(QWidget):
             return
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         sample_rate = acq_detail.get("sample_rate", 44100)
-        y, t = load_audio_simple(file_path, sample_rate)
+        y, _ = load_audio_simple(file_path, sample_rate)
 
         self.data_struct.store_wave_data = y
         self.data_struct.sample_rate = sample_rate
