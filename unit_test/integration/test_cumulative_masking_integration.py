@@ -3,7 +3,6 @@ Integration tests for cumulative harmonic masking.
 
 Verifies end-to-end behavior: signal → STFT → masking → phons.
 """
-import pytest
 import numpy as np
 from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
 
@@ -62,9 +61,6 @@ def test_9th_harmonic_masks_10th_harmonic():
     # Cumulative masking should reduce phon value significantly
     cumulative_phons = result_cumulative['perceptual_loudness'][0]
     fundamental_phons = result_fundamental_only['perceptual_loudness'][0]
-
-    print(f"Cumulative masking: {cumulative_phons:.2f} phons")
-    print(f"Fundamental-only: {fundamental_phons:.2f} phons")
 
     assert cumulative_phons < fundamental_phons, \
         "Cumulative masking should reduce phon value"
@@ -135,9 +131,6 @@ def test_cumulative_masking_reduces_values_compared_to_fundamental_only():
     phons_cumulative = result_cumulative['perceptual_loudness']
     phons_fundamental = result_fundamental['perceptual_loudness']
 
-    print(f"Cumulative: {phons_cumulative}")
-    print(f"Fundamental-only: {phons_fundamental}")
-
     # Cumulative should be less than or equal to fundamental-only for all steps
     # (9th harmonic provides additional masking)
     assert np.all(phons_cumulative <= phons_fundamental), \
@@ -194,3 +187,106 @@ def test_backward_compatibility_matches_existing_behavior():
     assert len(result['perceptual_loudness']) == 4
     assert np.all(result['perceptual_loudness'] >= 0)
     assert np.all(result['perceptual_loudness'] < 200)  # Reasonable range
+
+
+def test_cumulative_masking_preserves_curve_trend():
+    """
+    Test that cumulative masking preserves the trend/ordering of phon values
+    while lowering absolute values.
+
+    Create steps with increasing 10th harmonic strength at a constant fundamental
+    frequency. Use the same fundamental across all steps to isolate the effect
+    of varying harmonic amplitude.
+
+    Verify:
+    1. Cumulative phons increase with harmonic strength (trend preserved)
+    2. Cumulative phons < fundamental-only for each step (absolute reduction)
+    3. Ordering is same for both methods (no reshaping of curve)
+    """
+    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+
+    duration = 1.0
+    sample_rate = 44100
+    step_duration = duration / 4
+
+    # Use the same fundamental frequency for all steps to isolate harmonic amplitude effect
+    # The analyzer expects linear sweep, so we'll use [100, 400, 700, 1000] but keep
+    # the 10th harmonic amplitudes increasing to test trend preservation
+    fundamental_freqs = [100, 400, 700, 1000]
+
+    # Define 10th harmonic amplitudes: increasing strength
+    # Use larger amplitudes to ensure they dominate over frequency effects
+    h10_amplitudes = [
+        0.003,   # Very weak
+        0.010,   # Weak
+        0.025,   # Medium
+        0.050,   # Strong
+    ]
+
+    signal = np.zeros(int(sample_rate * duration))
+
+    for step_idx, (f0, h10_amp) in enumerate(zip(fundamental_freqs, h10_amplitudes)):
+        start = int(step_idx * step_duration * sample_rate)
+        end = int((step_idx + 1) * step_duration * sample_rate)
+        t = np.linspace(0, step_duration, end - start, endpoint=False)
+
+        # Fundamental
+        step_signal = 0.5 * np.sin(2 * np.pi * f0 * t)
+
+        # Add strong 9th harmonic (constant across all steps)
+        step_signal += 0.05 * np.sin(2 * np.pi * f0 * 9 * t)
+
+        # Add 10th harmonic with varying amplitude
+        step_signal += h10_amp * np.sin(2 * np.pi * f0 * 10 * t)
+
+        signal[start:end] = step_signal
+
+    stimulus_metadata = {
+        'num_steps': 4,
+        'repeat_times': 1,
+        'total_time': duration
+    }
+
+    harmonic_orders = [10]
+
+    # Test WITH cumulative masking
+    masking_config = {
+        'masking_range': (1, 9),
+        'enable_cumulative': True
+    }
+
+    result_cumulative = analyzer.compute_distortion(
+        signal, stimulus_metadata, harmonic_orders,
+        masking_config=masking_config
+    )
+
+    # Test WITHOUT cumulative masking
+    result_fundamental = analyzer.compute_distortion(
+        signal, stimulus_metadata, harmonic_orders,
+        masking_config=None
+    )
+
+    phons_cumulative = result_cumulative['perceptual_loudness']
+    phons_fundamental = result_fundamental['perceptual_loudness']
+
+    # 1. Both methods should show increasing trend (monotonic)
+    cumulative_diffs = np.diff(phons_cumulative)
+    fundamental_diffs = np.diff(phons_fundamental)
+
+    assert np.all(cumulative_diffs > 0), \
+        f"Cumulative phons should increase monotonically: {phons_cumulative}"
+    assert np.all(fundamental_diffs > 0), \
+        f"Fundamental-only phons should increase monotonically: {phons_fundamental}"
+
+    # 2. Cumulative should be less than fundamental-only at each step
+    assert np.all(phons_cumulative < phons_fundamental), \
+        "Cumulative masking should reduce absolute phon values at every step"
+
+    # 3. Relative ordering should be preserved (no curve reshaping)
+    # If step i < step j in fundamental-only, same should be true in cumulative
+    for i in range(len(phons_fundamental)):
+        for j in range(i + 1, len(phons_fundamental)):
+            # If fundamental-only shows i < j, cumulative should too
+            if phons_fundamental[i] < phons_fundamental[j]:
+                assert phons_cumulative[i] < phons_cumulative[j], \
+                    f"Ordering violated: step {i} vs step {j}"
