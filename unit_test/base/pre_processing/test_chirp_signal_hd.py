@@ -30,8 +30,8 @@ def test_create_harmonic_mask_with_masking_config():
         stimulus_metadata, harmonic_orders, stft_window_size, stft_hop_size, masking_config
     )
 
-    assert len(result) == 4
-    mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = result
+    assert len(result) == 5
+    mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = result
 
     assert masking_mask_matrix is not None
     assert masking_mask_matrix.shape == mask_matrix.shape
@@ -70,8 +70,8 @@ def test_create_harmonic_mask_backward_compatible():
         stimulus_metadata, harmonic_orders, stft_window_size, stft_hop_size, masking_config=None
     )
 
-    assert len(result) == 4
-    _, masking_mask_matrix, _, _ = result
+    assert len(result) == 5
+    _, masking_mask_matrix, _, _, _ = result
     assert masking_mask_matrix is None
 
 
@@ -101,5 +101,5 @@ def test_create_harmonic_mask_disabled_cumulative():
         stimulus_metadata, harmonic_orders, stft_window_size, stft_hop_size, masking_config
     )
 
-    _, masking_mask_matrix, _, _ = result
+    _, masking_mask_matrix, _, _, _ = result
     assert masking_mask_matrix is None

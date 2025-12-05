@@ -18,7 +18,7 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
         recorded_signal: np.ndarray,
         stimulus_metadata: Dict,
         harmonic_orders: list,
-        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
         stft_window_size: int = 2048,
         stft_hop_size: int = 1024,
         stft_window_type: str = 'hann',
@@ -31,7 +31,7 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
             recorded_signal: Recorded audio
             stimulus_metadata: Config with repeat_times, total_time
             harmonic_orders: Selected harmonics (for reference)
-            harmonic_mask: (mask_matrix, fund_freqs, time_array, fund_bins) from Phase 1B
+            harmonic_mask: (mask_matrix, masking_mask_matrix, fund_freqs, time_array, fund_bins) from Phase 1B
             stft_window_size: STFT window size
             stft_hop_size: STFT hop size
             stft_window_type: Window function type
@@ -44,7 +44,7 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
                 'num_repetitions': repeat_times
             }
         """
-        mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
+        mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
         repeat_times = stimulus_metadata['repeat_times']
 
         # Split into repetitions
@@ -134,10 +134,11 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
                 - 'enable_cumulative': bool to enable cumulative masking
 
         Returns:
-            tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins)
+            tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins)
                 - mask_matrix: Binary mask for selected harmonics
                 - masking_mask_matrix: Binary mask for masking harmonics (or None)
                 - fundamental_freqs: Fundamental frequencies
+                - time_array: Time values for each frame
                 - fundamental_bins: Fundamental bin indices
         """
         from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
@@ -189,4 +190,4 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
         else:
             masking_mask_matrix = None
 
-        return (mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins)
+        return (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins)
