@@ -17,8 +17,9 @@ class PerceptualStepSignalHD(StepSignalHD):
         recorded_signal: np.ndarray,
         stimulus_metadata: Dict,
         harmonic_orders: list,
-        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray],
+        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray] = None,
         stft_window_type: str = 'hann',
+        masking_config: Dict = None,
         **kwargs
     ) -> Dict:
         """
@@ -28,8 +29,15 @@ class PerceptualStepSignalHD(StepSignalHD):
             recorded_signal: Recorded audio
             stimulus_metadata: Config with num_steps, repeat_times, total_time
             harmonic_orders: Selected harmonics (for reference only)
-            harmonic_mask: (mask_matrix, fundamental_freqs, fundamental_bins) from Phase 1B
+            harmonic_mask: Either:
+                - 3-tuple: (mask_matrix, fundamental_freqs, fundamental_bins) - legacy format
+                - 4-tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins)
+                - None to create automatically
             stft_window_type: Window function for STFT (default 'hann')
+            masking_config: Optional masking configuration dict with keys:
+                - 'masking_range': (start, end) harmonic orders for masking
+                - 'enable_cumulative': bool to enable cumulative masking
+                - 'weight_function': str ('exponential', 'gaussian', etc.)
 
         Returns:
             {
@@ -39,7 +47,25 @@ class PerceptualStepSignalHD(StepSignalHD):
                 'spectrum_matrix': averaged_spectrum
             }
         """
-        mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+        # Create harmonic mask if not provided
+        if harmonic_mask is None:
+            harmonic_mask = self._create_harmonic_mask(
+                stimulus_metadata, harmonic_orders, masking_config=masking_config
+            )
+
+        # Support both old 3-tuple and new 4-tuple for backward compatibility
+        if len(harmonic_mask) == 3:
+            mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+            masking_mask_matrix = None
+        elif len(harmonic_mask) == 4:
+            mask_matrix, masking_mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+        else:
+            raise ValueError(f"harmonic_mask must be 3-tuple or 4-tuple, got {len(harmonic_mask)}")
+
+        # If cumulative masking is enabled, ensure masking_mask_matrix is available
+        if masking_config and masking_config.get('enable_cumulative', False):
+            if masking_mask_matrix is None:
+                raise ValueError("enable_cumulative=True requires masking_mask_matrix (4-tuple harmonic_mask)")
 
         num_steps = stimulus_metadata['num_steps']
         repeat_times = stimulus_metadata['repeat_times']
@@ -74,9 +100,19 @@ class PerceptualStepSignalHD(StepSignalHD):
             fund_bins_trimmed = fundamental_bins[:num_frames]
             fund_freqs_trimmed = fundamental_freqs[:num_frames]
 
-            # Compute perceptual loudness using new method
+            # Trim masking mask if present
+            masking_mask_trimmed = None
+            if masking_mask_matrix is not None:
+                masking_mask_trimmed = masking_mask_matrix[:, :num_frames]
+
+            # Compute perceptual loudness with masking config
             perceptual_loudness = self.compute_perceptual_thd_batch(
-                spectrum_trimmed, mask_trimmed, fund_bins_trimmed, fund_freqs_trimmed
+                spectrum_trimmed,
+                mask_trimmed,
+                fund_bins_trimmed,
+                fund_freqs_trimmed,
+                masking_mask_matrix=masking_mask_trimmed,
+                masking_config=masking_config
             )
 
             perceptual_loudness_per_rep.append(perceptual_loudness)

@@ -109,7 +109,7 @@ class TestHDIntegration:
             recorded_signal,
             stimulus_metadata,
             harmonic_orders,
-            harmonic_mask=(mask_matrix, fund_freqs, time_array, fundamental_bins),
+            harmonic_mask=(mask_matrix, None, fund_freqs, time_array, fundamental_bins),
             stft_window_size=stft_window_size,
             stft_hop_size=stft_hop_size
         )

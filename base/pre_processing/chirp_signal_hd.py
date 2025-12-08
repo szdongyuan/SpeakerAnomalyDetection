@@ -18,7 +18,7 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
         recorded_signal: np.ndarray,
         stimulus_metadata: Dict,
         harmonic_orders: list,
-        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
         stft_window_size: int = 2048,
         stft_hop_size: int = 1024,
         stft_window_type: str = 'hann',
@@ -31,7 +31,7 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
             recorded_signal: Recorded audio
             stimulus_metadata: Config with repeat_times, total_time
             harmonic_orders: Selected harmonics (for reference)
-            harmonic_mask: (mask_matrix, fund_freqs, time_array, fund_bins) from Phase 1B
+            harmonic_mask: (mask_matrix, masking_mask_matrix, fund_freqs, time_array, fund_bins) from Phase 1B
             stft_window_size: STFT window size
             stft_hop_size: STFT hop size
             stft_window_type: Window function type
@@ -44,7 +44,7 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
                 'num_repetitions': repeat_times
             }
         """
-        mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
+        mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
         repeat_times = stimulus_metadata['repeat_times']
 
         # Split into repetitions
@@ -112,3 +112,82 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
         )
 
         return np.abs(Zxx)
+
+    def _create_harmonic_mask(
+        self,
+        stimulus_metadata: Dict,
+        harmonic_orders: list,
+        stft_window_size: int,
+        stft_hop_size: int,
+        masking_config=None
+    ):
+        """
+        Create binary mask matrices for harmonic extraction.
+
+        Args:
+            stimulus_metadata: Stimulus configuration
+            harmonic_orders: List of harmonic orders to analyze (e.g., [10, 11, 12])
+            stft_window_size: STFT window size
+            stft_hop_size: STFT hop size
+            masking_config: Optional masking configuration dict with keys:
+                - 'masking_range': (start, end) harmonic orders for masking
+                - 'enable_cumulative': bool to enable cumulative masking
+
+        Returns:
+            tuple: (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins)
+                - mask_matrix: Binary mask for selected harmonics
+                - masking_mask_matrix: Binary mask for masking harmonics (or None)
+                - fundamental_freqs: Fundamental frequencies
+                - time_array: Time values for each frame
+                - fundamental_bins: Fundamental bin indices
+        """
+        from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+
+        builder = HarmonicIndexBuilder()
+
+        # Determine max harmonic order needed
+        max_analysis_order = max(harmonic_orders) if harmonic_orders else 12
+        max_masking_order = 9  # Default
+        if masking_config and masking_config.get('enable_cumulative', False):
+            masking_range = masking_config['masking_range']
+            max_masking_order = masking_range[1]
+
+        max_harmonic_order = max(max_analysis_order, max_masking_order)
+
+        # Build index matrix with all harmonics
+        index_matrix, fundamental_freqs, time_array, fft_freqs_with_dummy = builder.build_chirp_signal_index_matrix(
+            stimulus_metadata, self.sample_rate, stft_window_size, stft_hop_size, max_harmonic_order
+        )
+
+        n_bins_with_dummy = len(fft_freqs_with_dummy)
+        n_frames = len(time_array)
+
+        # Create analysis mask for selected harmonics
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, n_bins_with_dummy
+        )
+
+        # Extract fundamental bins (keep +1 offset for mask_matrix alignment)
+        fundamental_bins = index_matrix[:, 1]
+
+        # Create masking mask if cumulative masking enabled
+        if masking_config and masking_config.get('enable_cumulative', False):
+            masking_range = masking_config['masking_range']
+            masking_orders = list(range(masking_range[0], masking_range[1] + 1))
+
+            # Create masking mask - Note: masking_orders are actual harmonic numbers (1-9)
+            # which map to columns 1-9 in the index_matrix, but we want harmonics 1-9,
+            # not the fundamental. Column N in index_matrix = Nth harmonic.
+            masking_mask_matrix = np.zeros((n_bins_with_dummy, n_frames), dtype=np.float32)
+
+            for frame_idx in range(n_frames):
+                for order in masking_orders:
+                    # Get the bin index for this harmonic order from index_matrix
+                    if order < index_matrix.shape[1]:
+                        bin_idx = index_matrix[frame_idx, order]
+                        if bin_idx > 0:  # Valid bin (not sentinel/Nyquist)
+                            masking_mask_matrix[bin_idx, frame_idx] = 1.0
+        else:
+            masking_mask_matrix = None
+
+        return (mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins)

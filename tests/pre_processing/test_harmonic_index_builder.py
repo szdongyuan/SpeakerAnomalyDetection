@@ -146,3 +146,78 @@ class TestHarmonicIndexBuilder:
         # Verify FFT freqs match STFT expectations
         expected_n_bins = stft_window_size // 2 + 1
         assert len(fft_freqs) == expected_n_bins + 1  # +1 for dummy bin
+
+    def test_chirp_invalid_repeat_times_zero_raises_error(self):
+        """Test that repeat_times=0 raises ValueError in chirp index builder"""
+        builder = HarmonicIndexBuilder()
+        stimulus_metadata = {
+            'stimulus_method': 'chirps',
+            'stimulus_type': 'log',
+            'start_freq': 80.0,
+            'stop_freq': 8000.0,
+            'total_time': 4.0,
+            'repeat_times': 0,  # Invalid
+            'sample_rate': 44100
+        }
+
+        stft_window_size = 2048
+        stft_hop_size = 1024
+
+        with pytest.raises(ValueError, match="repeat_times must be a positive integer"):
+            builder.build_chirp_signal_index_matrix(
+                stimulus_metadata,
+                sr=44100,
+                n_fft=stft_window_size,
+                hop_length=stft_hop_size,
+                max_harmonic_order=35
+            )
+
+    def test_chirp_invalid_repeat_times_negative_raises_error(self):
+        """Test that negative repeat_times raises ValueError in chirp index builder"""
+        builder = HarmonicIndexBuilder()
+        stimulus_metadata = {
+            'stimulus_method': 'chirps',
+            'stimulus_type': 'log',
+            'start_freq': 80.0,
+            'stop_freq': 8000.0,
+            'total_time': 4.0,
+            'repeat_times': -1,  # Invalid
+            'sample_rate': 44100
+        }
+
+        stft_window_size = 2048
+        stft_hop_size = 1024
+
+        with pytest.raises(ValueError, match="repeat_times must be a positive integer"):
+            builder.build_chirp_signal_index_matrix(
+                stimulus_metadata,
+                sr=44100,
+                n_fft=stft_window_size,
+                hop_length=stft_hop_size,
+                max_harmonic_order=35
+            )
+
+    def test_chirp_invalid_repeat_times_float_raises_error(self):
+        """Test that float repeat_times raises ValueError in chirp index builder"""
+        builder = HarmonicIndexBuilder()
+        stimulus_metadata = {
+            'stimulus_method': 'chirps',
+            'stimulus_type': 'log',
+            'start_freq': 80.0,
+            'stop_freq': 8000.0,
+            'total_time': 4.0,
+            'repeat_times': 2.5,  # Invalid - float
+            'sample_rate': 44100
+        }
+
+        stft_window_size = 2048
+        stft_hop_size = 1024
+
+        with pytest.raises(ValueError, match="repeat_times must be a positive integer"):
+            builder.build_chirp_signal_index_matrix(
+                stimulus_metadata,
+                sr=44100,
+                n_fft=stft_window_size,
+                hop_length=stft_hop_size,
+                max_harmonic_order=35
+            )
