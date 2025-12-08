@@ -144,9 +144,8 @@ def fuse_channel_results(channel_preds, channel_scores, strategy="majority", wei
     n_channels = len(channel_preds)
     ok_count = sum(channel_preds)
     avg_score = float(np.mean(channel_scores))
-
-    channel_details = "|".join([
-        f"CH{i}:{'OK' if channel_preds[i] else 'NG'}({channel_scores[i]:.3f})"
+    channel_details = " | ".join([
+        f"CH{i}: {'OK' if channel_preds[i] else 'NG'} ({channel_scores[i]:.2f})"
         for i in range(n_channels)
     ])
 
