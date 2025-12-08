@@ -293,13 +293,28 @@ class AI(QWidget):
         channel_details = predict_result[0][3] if len(predict_result[0]) > 3 else None
         self.result = predict_label
         result_text = (
-            f"评分结果: {predict_label} \n \n"
+            f"评分结果: {predict_label}\n\n"
             f"\xa0\xa0评分模型: {model_name}\n"
             f"\xa0\xa0OK Score: {ok_scores:.2f}%\n"
-            f"\xa0\xa0NG Score: {ng_scores:.2f}%"
+            f"\xa0\xa0NG Score: {ng_scores:.2f}%\n"
         )
+
         if channel_details:
-            result_text += f"\n\xa0\xa0通道详情: {channel_details}"
+            # 按 | 分割，找到括号里的数字乘以 100 转为百分数
+            parts = channel_details.split(" | ")
+            formatted_parts = []
+            for part in parts:
+                # part 格式：CH0: OK (0.92)
+                start = part.index("(") + 1
+                end = part.index(")")
+                score = float(part[start:end])
+                # 替换为百分数格式：CH0: OK (92.00%)
+                formatted_part = part[:start] + f"{score * 100:.2f}%)"
+                formatted_parts.append(formatted_part)
+
+            # 换行显示，每行缩进
+            formatted_details = "\n\xa0\xa0\xa0\xa0".join(formatted_parts)
+            result_text += f"\n\xa0\xa0通道详情:\n\xa0\xa0\xa0\xa0{formatted_details}"
 
         return result_text
 

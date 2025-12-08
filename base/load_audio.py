@@ -3,7 +3,11 @@ import os
 import numpy as np
 import librosa
 
+from base.log_manager import LogManager
 from consts import error_code, running_consts
+
+
+_logger = LogManager.set_log_handler("train")
 
 
 # ==================== 入口函数（根据配置分发） ====================
@@ -28,6 +32,8 @@ def get_audio_files_and_labels(signal_path, sr=None, with_labels=-1, **kwargs):
     multichannel_config = kwargs.get("multichannel", {})
     multichannel_enabled = multichannel_config.get("enabled", False)
 
+    _logger.info(f"[多通道检测] 配置内容: {multichannel_config}")
+    _logger.info(f"[多通道检测] 多通道模式启用: {multichannel_enabled}")
     if multichannel_enabled:
         return load_audio_multichannel(signal_path, sr, with_labels, **kwargs)
     else:
@@ -182,6 +188,8 @@ def load_audio_multichannel(signal_path, sr=None, with_labels=-1, **kwargs):
     multichannel_config = kwargs.get("multichannel", {})
     n_channels = multichannel_config.get("n_channels", "all")
     split_to_samples = multichannel_config.get("split_to_samples", True)
+    _logger.info(f"[多通道加载] 音频路径: {signal_path}")
+    _logger.info(f"[多通道加载] 目标通道数: {n_channels}, 拆分样本: {split_to_samples}")
 
     signal_path = signal_path.replace("\\", "/")
     if os.path.isfile(signal_path):
@@ -201,6 +209,7 @@ def load_audio_multichannel(signal_path, sr=None, with_labels=-1, **kwargs):
         try:
             # 多通道加载
             y, loaded_sr = librosa.load(single_audio_path, sr=sr, mono=False)
+            _logger.info(f"[多通道加载] 加载文件: {signal_file}, shape: {y.shape}, 采样率: {loaded_sr}")
 
             # 如果是1D（单通道文件），转为2D: (1, n_samples)
             if y.ndim == 1:
