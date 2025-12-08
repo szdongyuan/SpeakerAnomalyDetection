@@ -119,14 +119,17 @@ class HarmonicDistortionAnalyzer(ABC):
         reference_amplitude = 1.0
         fundamental_spl_relative = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_amplitude, 1e-10))
 
-        # Normalize to standard listening level for psychoacoustic models
-        # Psychoacoustic models (ISO 226, masking) expect absolute SPL in 0-120 dB range
-        # Normalize loudest fundamental to 80 dB SPL (typical listening level)
-        max_fundamental_spl = np.max(fundamental_spl_relative)
-        spl_offset = 80.0 - max_fundamental_spl
-        fundamental_spl = fundamental_spl_relative + spl_offset
-
+        # Process each frame independently
         for frame_idx in range(n_cols):
+            # Normalize to standard listening level for psychoacoustic models
+            # Psychoacoustic models (ISO 226, masking) expect absolute SPL in 0-120 dB range
+            # Normalize THIS FRAME'S fundamental to 60 dB SPL (moderate listening level)
+            # This preserves relative loudness between fundamental and harmonics within each frame
+            # 60 dB ensures harmonics stay in the 0-100 phon range specified in docs
+            frame_fundamental_spl_relative = fundamental_spl_relative[frame_idx]
+            frame_spl_offset = 60.0 - frame_fundamental_spl_relative
+            frame_fundamental_spl = frame_fundamental_spl_relative + frame_spl_offset
+
             # Extract harmonic amplitudes for this frame
             harmonic_mask_col = mask_matrix[:, frame_idx]
 
@@ -145,9 +148,9 @@ class HarmonicDistortionAnalyzer(ABC):
             # Get harmonic amplitudes
             harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
 
-            # Convert harmonic amplitudes to SPL (apply same offset as fundamental)
+            # Convert harmonic amplitudes to SPL (apply same per-frame offset)
             harmonic_spls_relative = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_amplitude, 1e-10))
-            harmonic_spls = harmonic_spls_relative + spl_offset
+            harmonic_spls = harmonic_spls_relative + frame_spl_offset
 
             # Compute harmonic frequencies (from FFT bin index)
             # Frequency = bin_index * sample_rate / (2 * n_bins)
@@ -157,7 +160,7 @@ class HarmonicDistortionAnalyzer(ABC):
             # Apply masking from fundamental
             masked_spls = apply_masking(
                 fundamental_freqs[frame_idx],
-                fundamental_spl[frame_idx],
+                frame_fundamental_spl,
                 harmonic_freqs,
                 harmonic_spls
             )
@@ -170,9 +173,12 @@ class HarmonicDistortionAnalyzer(ABC):
 
                 phons_values = spl_to_phons(audible_freqs, audible_spls)
 
-                # Total perceived loudness (sum in phons, simplified model)
-                # In reality, loudness summation is complex; we use simple sum
-                perceptual_loudness[frame_idx] = np.sum(phons_values)
+                # Total perceived loudness using sones summation (psychoacoustically correct)
+                # Phons are NOT additive; must convert to sones, sum, then convert back
+                # Sones = 2^((phons - 40) / 10), Phons = 40 + 10*log2(sones)
+                sones_values = np.power(2.0, (phons_values - 40.0) / 10.0)
+                total_sones = np.sum(sones_values)
+                perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones)
             else:
                 perceptual_loudness[frame_idx] = 0.0
 

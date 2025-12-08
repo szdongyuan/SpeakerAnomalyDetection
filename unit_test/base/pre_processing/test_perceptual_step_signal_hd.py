@@ -8,11 +8,30 @@ def test_perceptual_step_signal_hd_computes_phons():
     """Verify perceptual step signal HD returns phons instead of THD percentage"""
     analyzer = PerceptualStepSignalHD(sample_rate=44100)
 
-    # Create test signal (sine wave sweep)
+    # Create test signal with realistic harmonic content
+    # Simulate a stepped frequency sweep with harmonics
     duration = 1.0
     sample_rate = 44100
-    t = np.linspace(0, duration, int(sample_rate * duration))
-    recorded_signal = np.sin(2 * np.pi * 500 * t) + 0.01 * np.sin(2 * np.pi * 5000 * t)
+    step_duration = duration / 4  # 4 steps
+    fundamental_freqs = np.array([100, 200, 400, 800])
+
+    # Generate signal with harmonics
+    recorded_signal = np.zeros(int(sample_rate * duration))
+    for step_idx, f0 in enumerate(fundamental_freqs):
+        start_sample = int(step_idx * step_duration * sample_rate)
+        end_sample = int((step_idx + 1) * step_duration * sample_rate)
+        n_samples = end_sample - start_sample
+        t = np.linspace(0, step_duration, n_samples, endpoint=False)
+
+        # Fundamental at amplitude 0.5
+        step_signal = 0.5 * np.sin(2 * np.pi * f0 * t)
+
+        # Add harmonics (10th, 11th, 12th order) with decreasing amplitude
+        for h in [10, 11, 12]:
+            harmonic_amp = 0.01 / h  # ~0.001 amplitude, -60 dB below fundamental
+            step_signal += harmonic_amp * np.sin(2 * np.pi * f0 * h * t)
+
+        recorded_signal[start_sample:end_sample] = step_signal
 
     # Stimulus metadata
     stimulus_metadata = {
@@ -27,7 +46,6 @@ def test_perceptual_step_signal_hd_computes_phons():
     n_bins = 1024
     n_frames = 4
     mask_matrix = np.zeros((n_bins + 1, n_frames))
-    fundamental_freqs = np.array([100, 200, 400, 800])
     fundamental_bins = np.array([10, 20, 40, 80])
 
     # Set mask for harmonics (10th, 11th, 12th of each fundamental)
@@ -50,10 +68,11 @@ def test_perceptual_step_signal_hd_computes_phons():
     assert 'perceptual_loudness' in result
     assert 'num_repetitions' in result
 
-    # Perceptual loudness should be in phons (positive, reasonable range for a few harmonics)
-    # With only 3 harmonics per frame, expect < 1000 phons total
+    # Perceptual loudness should be in phons (positive, reasonable range)
+    # Typical range per spec: 0-100 phons
+    # With 3 harmonics at ~0.001 amplitude (-60 dB), expect < 200 phons total
     assert np.all(result['perceptual_loudness'] >= 0)
-    assert np.all(result['perceptual_loudness'] < 1000)
+    assert np.all(result['perceptual_loudness'] < 200)
 
 
 def test_perceptual_step_signal_hd_inherits_from_step_signal_hd():
