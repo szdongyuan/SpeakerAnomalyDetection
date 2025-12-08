@@ -140,33 +140,59 @@ def predict_multichannel_from_audio(multichannel_signal,
 
 
 def fuse_channel_results(channel_preds, channel_scores, strategy="majority", weights=None):
-    """融合多通道预测结果"""
+    """
+    融合多通道预测结果（支持严格两位小数精度）
+    """
     n_channels = len(channel_preds)
+    channel_scores = np.array(channel_scores)
+    channel_scores = np.round(channel_scores, 2)
+
     ok_count = sum(channel_preds)
-    avg_score = float(np.mean(channel_scores))
+    avg_score = float(round(np.mean(channel_scores), 2))
     channel_details = " | ".join([
         f"CH{i}: {'OK' if channel_preds[i] else 'NG'} ({channel_scores[i]:.2f})"
         for i in range(n_channels)
     ])
 
+    final_pred = 0
+    final_score = 0.0
+
     if strategy == "majority":
+        # 多数投票（平局算NG）
         final_pred = 1 if ok_count > n_channels / 2 else 0
-        final_score = round(avg_score, 3)
+        final_score = avg_score  # 已经是两位小数了
+
     elif strategy == "any_ng":
+        # 只要有一个 NG 就是 NG (即必须全 OK 才是 OK)
         final_pred = 1 if ok_count == n_channels else 0
-        final_score = round(min(channel_scores), 3)
+        final_score = float(round(np.min(channel_scores), 2))
+
+    elif strategy == "all_ng":
+        # 全部 NG 才是 NG (即只要有一个 OK 就是 OK)
+        final_pred = 1 if ok_count > 0 else 0
+        final_score = float(round(np.max(channel_scores), 2))
+
     elif strategy == "weighted":
-        if weights is None:
-            final_score = round(avg_score, 3)
+        # 加权模式， 增加长度校验，防止权重配置错误
+        if weights is not None and len(weights) == n_channels:
+            # 计算加权平均
+            raw_weighted = np.average(channel_scores, weights=weights)
+            final_score = float(round(raw_weighted, 2))
         else:
-            final_score = float(np.average(np.array(channel_scores), weights=weights))
+            # 权重没配对，降级为普通平均
+            final_score = avg_score
+
         final_pred = 1 if final_score >= 0.5 else 0
+
     elif strategy == "max_score":
+        # 谁分数高听谁的
         max_idx = int(np.argmax(channel_scores))
         final_pred = channel_preds[max_idx]
-        final_score = round(channel_scores[max_idx], 3)
+        final_score = float(channel_scores[max_idx])
+
     else:
+        # 默认策略 (majority)
         final_pred = 1 if ok_count > n_channels / 2 else 0
-        final_score = round(avg_score, 3)
+        final_score = avg_score
 
     return final_pred, final_score, channel_details
