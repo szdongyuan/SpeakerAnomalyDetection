@@ -137,8 +137,9 @@ class HarmonicDistortionAnalyzer(ABC):
         fundamental_spl = 20.0 * np.log10(
             np.maximum(fundamental_amplitudes / reference_pressure, min_amplitude)
         )
-        # Silence gating is based on pre-calibration SPL to avoid calibration offsets lifting noise.
-        silence_spl_threshold = -60.0  # dB SPL (uncalibrated) to more aggressively gate no-load noise
+        # Clip calibrated SPL below 0 dB to 0 (post-calibration floor)
+        fundamental_spl = np.maximum(fundamental_spl, 0.0)
+        silence_spl_threshold_calibrated = 0.0  # dB SPL (calibrated floor)
 
         # Process each frame independently
         for frame_idx in range(n_cols):
@@ -165,14 +166,13 @@ class HarmonicDistortionAnalyzer(ABC):
             harmonic_spls = 20.0 * np.log10(
                 np.maximum(harmonic_amplitudes / reference_pressure, min_amplitude)
             )
+            # Clip calibrated SPL below 0 dB to 0
+            harmonic_spls = np.maximum(harmonic_spls, 0.0)
 
-            # If both fundamental and harmonics are below the silence threshold (before calibration), treat frame as silence
-            harmonic_spls_uncalibrated = 20.0 * np.log10(
-                np.maximum(raw_harmonic_amplitudes / reference_pressure, min_amplitude)
-            )
+            # If both fundamental and harmonics are at/below calibrated floor, treat frame as silence
             if (
-                fundamental_spl_uncalibrated[frame_idx] < silence_spl_threshold
-                and np.max(harmonic_spls_uncalibrated) < silence_spl_threshold
+                fundamental_spl[frame_idx] <= silence_spl_threshold_calibrated
+                and np.max(harmonic_spls) <= silence_spl_threshold_calibrated
             ):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
