@@ -159,16 +159,27 @@ class HarmonicDistortionAnalyzer(ABC):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
-            # --- Fullband sones cap (per-bin, frequency-aware) ---
+            # --- Fullband sones anchor (per-bin, frequency-aware, calibrated) ---
             calibrated_frame_amplitudes = spectrum_matrix[:, frame_idx] * calibration_multiplier
+            # Remove fundamental from anchor to avoid coupling harmonic loudness to fundamental level
+            fund_bin = row_indices[frame_idx]
+            calibrated_frame_amplitudes = calibrated_frame_amplitudes.copy()
+            if fund_bin < calibrated_frame_amplitudes.shape[0]:
+                calibrated_frame_amplitudes[fund_bin] = 0.0
+
             calibrated_frame_spl = 20.0 * np.log10(
                 np.maximum(calibrated_frame_amplitudes / reference_pressure, min_amplitude)
             )
-            calibrated_frame_spl = np.maximum(calibrated_frame_spl, 0.0)  # apply 0 dB floor
             n_bins = spectrum_matrix.shape[0] - 1  # Subtract dummy bin
             bin_freqs = np.arange(spectrum_matrix.shape[0]) * (self.sample_rate / 2.0) / n_bins
             fullband_phons = spl_to_phons(bin_freqs, calibrated_frame_spl)
-            fullband_sones = np.power(2.0, (fullband_phons - 40.0) / 10.0)
+            # Only count audible components for total sones anchor
+            audible_fullband = fullband_phons > 0.0
+            fullband_sones = np.zeros_like(fullband_phons)
+            if np.any(audible_fullband):
+                fullband_sones[audible_fullband] = np.power(
+                    2.0, (fullband_phons[audible_fullband] - 40.0) / 10.0
+                )
             total_sones_fullband = np.sum(fullband_sones)
 
             # Get harmonic amplitudes
@@ -258,11 +269,12 @@ class HarmonicDistortionAnalyzer(ABC):
                 harmonic_sones_sum = np.sum(sones_values)
 
                 if harmonic_sones_sum > 0 and total_sones_fullband > 0:
-                    scale = min(1.0, total_sones_fullband / harmonic_sones_sum)
-                    sones_values = sones_values * scale
-                    total_sones = np.sum(sones_values)
+                    # Pure proportional allocation of total sones to unmasked harmonics
+                    weights = sones_values / harmonic_sones_sum
+                    sones_values = weights * total_sones_fullband
+                    total_sones = total_sones_fullband
                 else:
-                    total_sones = harmonic_sones_sum
+                    total_sones = 0.0
 
                 perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones) if total_sones > 0 else 0.0
             else:
