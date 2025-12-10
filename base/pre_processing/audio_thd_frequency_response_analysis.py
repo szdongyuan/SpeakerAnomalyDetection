@@ -182,7 +182,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         recorded_signal: np.ndarray,
         sample_rate: int,
         thd_kwargs: dict,
-        spl_calibration_db: float = 94.0
+        spl_calibration_db: float = 0.0
     ) -> tuple:
         """
         Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
@@ -196,8 +196,10 @@ class AudioThdFrequencyResponseAnalysis(object):
                 'stimulus_metadata': dict with stimulus configuration,
                 'harmonic_orders': list of harmonic orders (e.g., [10, 11, 12])
             }
-            spl_calibration_db: Microphone calibration in dB (default 94.0).
-                Applied in amplitude domain before log transform.
+            spl_calibration_db: Microphone calibration deviation in dB (default 0.0).
+                This is the deviation/offset value (e.g., from mic_calibration.txt).
+                Applied in amplitude domain before log transform:
+                calibrated_amp = amp * 10^(calibration_db/20)
 
         Returns:
             (freq_value, harmonic, perceptual_loudness):

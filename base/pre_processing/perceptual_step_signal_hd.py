@@ -20,7 +20,7 @@ class PerceptualStepSignalHD(StepSignalHD):
         harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray] = None,
         stft_window_type: str = 'hann',
         masking_config: Dict = None,
-        spl_calibration_db: float = 94.0,
+        spl_calibration_db: float = 0.0,
         **kwargs
     ) -> Dict:
         """
