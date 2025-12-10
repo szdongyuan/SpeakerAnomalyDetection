@@ -159,6 +159,19 @@ class HarmonicDistortionAnalyzer(ABC):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
+            # --- Fullband sones cap (no anchor): sum sones across all bins as upper limit ---
+            calibrated_frame_amplitudes = spectrum_matrix[:, frame_idx] * calibration_multiplier
+            calibrated_frame_spl = 20.0 * np.log10(
+                np.maximum(calibrated_frame_amplitudes / reference_pressure, min_amplitude)
+            )
+            calibrated_frame_spl = np.maximum(calibrated_frame_spl, 0.0)  # apply 0 dB floor
+            # Frequencies per bin (dummy bin at 0 already)
+            n_bins = spectrum_matrix.shape[0] - 1  # Subtract dummy bin
+            bin_freqs = np.arange(spectrum_matrix.shape[0]) * (self.sample_rate / 2.0) / n_bins
+            fullband_phons = spl_to_phons(bin_freqs, calibrated_frame_spl)
+            fullband_sones = np.power(2.0, (fullband_phons - 40.0) / 10.0)
+            total_sones_fullband = np.sum(fullband_sones)
+
             # Get harmonic amplitudes
             raw_harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
             harmonic_amplitudes = raw_harmonic_amplitudes * calibration_multiplier
@@ -244,6 +257,11 @@ class HarmonicDistortionAnalyzer(ABC):
                 # Sones = 2^((phons - 40) / 10), Phons = 40 + 10*log2(sones)
                 sones_values = np.power(2.0, (phons_values - 40.0) / 10.0)
                 total_sones = np.sum(sones_values)
+                # Cap harmonic sones to fullband sones to avoid exceeding total energy
+                if total_sones_fullband > 0.0 and total_sones > total_sones_fullband:
+                    scale = total_sones_fullband / total_sones
+                    sones_values = sones_values * scale
+                    total_sones = np.sum(sones_values)
                 perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones)
             else:
                 perceptual_loudness[frame_idx] = 0.0
