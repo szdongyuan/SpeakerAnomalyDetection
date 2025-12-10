@@ -159,13 +159,12 @@ class HarmonicDistortionAnalyzer(ABC):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
-            # --- Fullband sones cap (no anchor): sum sones across all bins as upper limit ---
+            # --- Fullband sones cap (per-bin, frequency-aware) ---
             calibrated_frame_amplitudes = spectrum_matrix[:, frame_idx] * calibration_multiplier
             calibrated_frame_spl = 20.0 * np.log10(
                 np.maximum(calibrated_frame_amplitudes / reference_pressure, min_amplitude)
             )
             calibrated_frame_spl = np.maximum(calibrated_frame_spl, 0.0)  # apply 0 dB floor
-            # Frequencies per bin (dummy bin at 0 already)
             n_bins = spectrum_matrix.shape[0] - 1  # Subtract dummy bin
             bin_freqs = np.arange(spectrum_matrix.shape[0]) * (self.sample_rate / 2.0) / n_bins
             fullband_phons = spl_to_phons(bin_freqs, calibrated_frame_spl)
@@ -256,13 +255,16 @@ class HarmonicDistortionAnalyzer(ABC):
                 # Phons are NOT additive; must convert to sones, sum, then convert back
                 # Sones = 2^((phons - 40) / 10), Phons = 40 + 10*log2(sones)
                 sones_values = np.power(2.0, (phons_values - 40.0) / 10.0)
-                total_sones = np.sum(sones_values)
-                # Cap harmonic sones to fullband sones to avoid exceeding total energy
-                if total_sones_fullband > 0.0 and total_sones > total_sones_fullband:
-                    scale = total_sones_fullband / total_sones
+                harmonic_sones_sum = np.sum(sones_values)
+
+                if harmonic_sones_sum > 0 and total_sones_fullband > 0:
+                    scale = min(1.0, total_sones_fullband / harmonic_sones_sum)
                     sones_values = sones_values * scale
                     total_sones = np.sum(sones_values)
-                perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones)
+                else:
+                    total_sones = harmonic_sones_sum
+
+                perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones) if total_sones > 0 else 0.0
             else:
                 perceptual_loudness[frame_idx] = 0.0
 
