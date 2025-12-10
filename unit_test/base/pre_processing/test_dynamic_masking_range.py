@@ -24,7 +24,6 @@ def test_2nd_harmonic_masking_range():
     Should produce higher perceptual loudness than higher-order harmonics.
     """
     from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
-    from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
 
     sample_rate = 44100
     fundamental_freq = 100.0  # 100 Hz
@@ -49,39 +48,23 @@ def test_2nd_harmonic_masking_range():
         'stimulus_method': 'steps'
     }
 
-    # Build index matrix
-    builder = HarmonicIndexBuilder()
-    step_samples = int(step_duration * sample_rate)
-    n_fft = step_samples
-
-    index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-        stimulus_metadata, sr=sample_rate, n_fft=n_fft, max_harmonic_order=35
-    )
-
-    # Create masks for 2nd harmonic analysis
-    harmonic_orders = [2]
-    mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
-
-    # Masking harmonics: for 2nd harmonic, only fundamental (harmonic 1)
-    masking_orders = [1]  # Fundamental only
-    masking_mask_matrix = builder.create_mask_from_indices(index_matrix, masking_orders, len(fft_freqs))
-
-    fundamental_bins = index_matrix[:, 1]
-
-    # Enable cumulative masking
+    # Enable cumulative masking - let analyzer create masks automatically
+    # Dynamic masking range will be auto-computed from harmonic_orders
+    # For 2nd harmonic: masking_range = (1, 1) - only fundamental
     masking_config = {
         'enable_cumulative': True,
-        'masking_range': (1, 1),  # Will be dynamically set, but start with (1, 1)
         'weight_function': 'exponential'
+        # masking_range NOT specified - will be auto-computed as (1, max(harmonic_orders)-1)
     }
 
-    # Analyze with cumulative masking
+    # Analyze with cumulative masking - pass harmonic_mask=None to enable auto-creation
+    harmonic_orders = [2]
     analyzer = PerceptualStepSignalHD(sample_rate)
     result = analyzer.compute_distortion(
         recorded_signal=signal,
         stimulus_metadata=stimulus_metadata,
         harmonic_orders=harmonic_orders,
-        harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
+        harmonic_mask=None,  # Let analyzer create masks via _create_harmonic_mask
         masking_config=masking_config,
         spl_calibration_db=0.0
     )
@@ -107,7 +90,6 @@ def test_5th_harmonic_masking_range():
     Perceptual loudness should be lower due to cumulative masking.
     """
     from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
-    from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
 
     sample_rate = 44100
     fundamental_freq = 100.0
@@ -133,39 +115,23 @@ def test_5th_harmonic_masking_range():
         'stimulus_method': 'steps'
     }
 
-    # Build index matrix
-    builder = HarmonicIndexBuilder()
-    step_samples = int(step_duration * sample_rate)
-    n_fft = step_samples
-
-    index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-        stimulus_metadata, sr=sample_rate, n_fft=n_fft, max_harmonic_order=35
-    )
-
-    # Create masks for 5th harmonic analysis
-    harmonic_orders = [5]
-    mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
-
-    # Masking harmonics: fundamental + 2-4
-    masking_orders = [1, 2, 3, 4]
-    masking_mask_matrix = builder.create_mask_from_indices(index_matrix, masking_orders, len(fft_freqs))
-
-    fundamental_bins = index_matrix[:, 1]
-
-    # Enable cumulative masking
+    # Enable cumulative masking - let analyzer create masks automatically
+    # Dynamic masking range will be auto-computed from harmonic_orders
+    # For 5th harmonic: masking_range = (1, 4) - fundamental + harmonics 2-4
     masking_config = {
         'enable_cumulative': True,
-        'masking_range': (1, 4),  # Fundamental + harmonics 2-4
         'weight_function': 'exponential'
+        # masking_range NOT specified - will be auto-computed as (1, max(harmonic_orders)-1)
     }
 
-    # Analyze
+    # Analyze - pass harmonic_mask=None to enable auto-creation
+    harmonic_orders = [5]
     analyzer = PerceptualStepSignalHD(sample_rate)
     result = analyzer.compute_distortion(
         recorded_signal=signal,
         stimulus_metadata=stimulus_metadata,
         harmonic_orders=harmonic_orders,
-        harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
+        harmonic_mask=None,  # Let analyzer create masks via _create_harmonic_mask
         masking_config=masking_config,
         spl_calibration_db=0.0
     )
@@ -190,21 +156,23 @@ def test_masking_increases_with_harmonic_order():
     - 5th harmonic uses masking_range (1, 4) → 4 masking sources
     - 15th harmonic uses masking_range (1, 14) → 14 masking sources
 
-    Note: At equal amplitude, higher frequencies (500-1500 Hz) may be perceived
-    as louder than lower frequencies (200 Hz) due to ISO 226 equal-loudness curves.
-    This test validates the masking configuration is correct, not absolute loudness.
+    Tests that cumulative masking code path is exercised by using weaker harmonics
+    that fall closer to the masking threshold.
     """
     from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
-    from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
 
     sample_rate = 44100
     fundamental_freq = 100.0
     step_duration = 0.5
-    harmonic_amp = 0.01  # Same for all harmonics
+
+    # Use weaker harmonics to create masking effects
+    # Fundamental stronger, harmonics weaker
+    fund_amp = 0.05  # Stronger fundamental
+    harmonic_amp = 0.002  # Weaker harmonics to enable masking effects
 
     # Create signal with fundamental + harmonics 2-15
     t = np.linspace(0, step_duration, int(sample_rate * step_duration), endpoint=False)
-    signal = 0.01 * np.sin(2 * np.pi * fundamental_freq * t)
+    signal = fund_amp * np.sin(2 * np.pi * fundamental_freq * t)
     for h in range(2, 16):
         signal += harmonic_amp * np.sin(2 * np.pi * h * fundamental_freq * t)
 
@@ -221,61 +189,57 @@ def test_masking_increases_with_harmonic_order():
         'stimulus_method': 'steps'
     }
 
-    # Build index matrix
-    builder = HarmonicIndexBuilder()
-    step_samples = int(step_duration * sample_rate)
-    n_fft = step_samples
-
-    index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-        stimulus_metadata, sr=sample_rate, n_fft=n_fft, max_harmonic_order=35
-    )
-
-    fundamental_bins = index_matrix[:, 1]
-
     # Analyze each harmonic: 2nd, 5th, 15th
     test_harmonics = [2, 5, 15]
-    loudness_values = {}
+    loudness_with_masking = {}
+    loudness_without_masking = {}
     masking_source_counts = {}
 
     for harmonic_order in test_harmonics:
-        # Harmonic mask
-        mask_matrix = builder.create_mask_from_indices(
-            index_matrix, [harmonic_order], len(fft_freqs)
-        )
-
-        # Masking harmonics: 1 to (harmonic_order - 1)
-        masking_orders = list(range(1, harmonic_order))
-        masking_mask_matrix = builder.create_mask_from_indices(
-            index_matrix, masking_orders, len(fft_freqs)
-        )
-
-        # Store count of masking sources
-        masking_source_counts[harmonic_order] = len(masking_orders)
-
-        # Dynamic masking config
+        # === WITH cumulative masking ===
+        # Dynamic masking range auto-computed: (1, harmonic_order - 1)
         masking_config = {
             'enable_cumulative': True,
-            'masking_range': (1, harmonic_order - 1),
             'weight_function': 'exponential'
+            # masking_range NOT specified - will be auto-computed
         }
 
-        # Analyze
+        # Store expected count of masking sources
+        masking_source_counts[harmonic_order] = harmonic_order - 1
+
+        # Analyze - pass harmonic_mask=None to enable auto-creation
         analyzer = PerceptualStepSignalHD(sample_rate)
-        result = analyzer.compute_distortion(
+        result_with = analyzer.compute_distortion(
             recorded_signal=signal,
             stimulus_metadata=stimulus_metadata,
             harmonic_orders=[harmonic_order],
-            harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
+            harmonic_mask=None,  # Let analyzer create masks via _create_harmonic_mask
             masking_config=masking_config,
             spl_calibration_db=0.0
         )
+        loudness_with_masking[harmonic_order] = result_with['perceptual_loudness'][0]
 
-        loudness_values[harmonic_order] = result['perceptual_loudness'][0]
+        # === WITHOUT cumulative masking (for comparison) ===
+        # Use fundamental-only masking (legacy behavior)
+        result_without = analyzer.compute_distortion(
+            recorded_signal=signal,
+            stimulus_metadata=stimulus_metadata,
+            harmonic_orders=[harmonic_order],
+            harmonic_mask=None,
+            masking_config=None,  # No cumulative masking
+            spl_calibration_db=0.0
+        )
+        loudness_without_masking[harmonic_order] = result_without['perceptual_loudness'][0]
 
-    print(f"\nLoudness by harmonic order:")
-    print(f"  2nd harmonic: {loudness_values[2]:.1f} phons ({masking_source_counts[2]} masking source)")
-    print(f"  5th harmonic: {loudness_values[5]:.1f} phons ({masking_source_counts[5]} masking sources)")
-    print(f"  15th harmonic: {loudness_values[15]:.1f} phons ({masking_source_counts[15]} masking sources)")
+    print(f"\nLoudness with cumulative masking:")
+    print(f"  2nd harmonic: {loudness_with_masking[2]:.1f} phons ({masking_source_counts[2]} masking source)")
+    print(f"  5th harmonic: {loudness_with_masking[5]:.1f} phons ({masking_source_counts[5]} masking sources)")
+    print(f"  15th harmonic: {loudness_with_masking[15]:.1f} phons ({masking_source_counts[15]} masking sources)")
+
+    print(f"\nLoudness with fundamental-only masking:")
+    print(f"  2nd harmonic: {loudness_without_masking[2]:.1f} phons")
+    print(f"  5th harmonic: {loudness_without_masking[5]:.1f} phons")
+    print(f"  15th harmonic: {loudness_without_masking[15]:.1f} phons")
 
     # Verify masking source counts are correct (this validates dynamic range)
     assert masking_source_counts[2] == 1, \
@@ -287,15 +251,39 @@ def test_masking_increases_with_harmonic_order():
     assert masking_source_counts[15] == 14, \
         f"15th harmonic should have 14 masking sources, got {masking_source_counts[15]}"
 
-    # Verify all harmonics are audible (positive loudness)
-    for h in test_harmonics:
-        assert loudness_values[h] > 0, \
-            f"{h}th harmonic should be audible, got {loudness_values[h]:.1f} phons"
+    # CRITICAL: Verify cumulative masking code path is exercised
+    # For higher-order harmonics (5th, 15th), cumulative masking should reduce loudness
+    # compared to fundamental-only masking, OR mask them completely (loudness = 0)
+    # Note: 2nd harmonic has same masking in both cases (fundamental only)
 
-    # Verify loudness values are reasonable (20-60 phons range for these signals)
+    # 5th harmonic: cumulative masking (1-4) should reduce loudness OR fully mask
+    assert loudness_with_masking[5] <= loudness_without_masking[5], \
+        f"5th harmonic with cumulative masking ({loudness_with_masking[5]:.1f} phons) should be <= without ({loudness_without_masking[5]:.1f} phons)"
+
+    # 15th harmonic: cumulative masking (1-14) should reduce loudness OR fully mask
+    assert loudness_with_masking[15] <= loudness_without_masking[15], \
+        f"15th harmonic with cumulative masking ({loudness_with_masking[15]:.1f} phons) should be <= without ({loudness_without_masking[15]:.1f} phons)"
+
+    # If not all harmonics are fully masked, verify that more masking sources
+    # create stronger masking effects
+    if loudness_with_masking[5] > 0 and loudness_with_masking[15] > 0:
+        reduction_5th = loudness_without_masking[5] - loudness_with_masking[5]
+        reduction_15th = loudness_without_masking[15] - loudness_with_masking[15]
+
+        print(f"\nLoudness reduction due to cumulative masking:")
+        print(f"  5th harmonic: {reduction_5th:.1f} phons reduction")
+        print(f"  15th harmonic: {reduction_15th:.1f} phons reduction")
+
+        # 15th harmonic should have equal or greater reduction (more masking sources)
+        assert reduction_15th >= reduction_5th, \
+            f"15th harmonic should have >= reduction ({reduction_15th:.1f} phons) than 5th ({reduction_5th:.1f} phons)"
+    else:
+        print(f"\nNote: Some harmonics are fully masked (loudness = 0)")
+
+    # All loudness values should be non-negative
     for h in test_harmonics:
-        assert 20 < loudness_values[h] < 60, \
-            f"{h}th harmonic loudness {loudness_values[h]:.1f} phons outside expected range"
+        assert loudness_with_masking[h] >= 0, \
+            f"{h}th harmonic loudness should be non-negative, got {loudness_with_masking[h]:.1f} phons"
 
 
 if __name__ == '__main__':

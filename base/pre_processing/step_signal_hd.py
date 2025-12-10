@@ -168,8 +168,13 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         max_analysis_order = max(harmonic_orders) if harmonic_orders else 12
         max_masking_order = 9  # Default
         if masking_config and masking_config.get('enable_cumulative', False):
-            masking_range = masking_config['masking_range']
-            max_masking_order = masking_range[1]
+            # Dynamic masking range: if not provided, infer from harmonic_orders
+            if 'masking_range' in masking_config:
+                masking_range = masking_config['masking_range']
+                max_masking_order = masking_range[1]
+            else:
+                # Auto-compute: mask using harmonics 1 to (max_analyzed - 1)
+                max_masking_order = max_analysis_order - 1
 
         max_harmonic_order = max(max_analysis_order, max_masking_order)
 
@@ -199,7 +204,14 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
 
         # Create masking mask if cumulative masking enabled
         if masking_config and masking_config.get('enable_cumulative', False):
-            masking_range = masking_config['masking_range']
+            # Dynamic masking range: if not provided, infer from harmonic_orders
+            # Masking range should be (1, max_harmonic_order - 1)
+            if 'masking_range' in masking_config:
+                masking_range = masking_config['masking_range']
+            else:
+                # Auto-compute: mask using harmonics 1 to (max_analyzed - 1)
+                masking_range = (1, max_analysis_order - 1)
+
             masking_orders = list(range(masking_range[0], masking_range[1] + 1))
 
             # Create masking mask - Note: masking_orders are actual harmonic numbers (1-9)
