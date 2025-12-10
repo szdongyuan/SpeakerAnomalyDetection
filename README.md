@@ -8,7 +8,7 @@ A comprehensive audio analysis system for speaker testing and quality control.
 - **FR**: Frequency Response analysis
 - **HD**: Harmonic Distortion (2nd-35th harmonics)
 - **RB**: Rub & Buzz (high-order harmonic distortion, 10th-35th harmonics)
-- **PRB**: Perceptual Rub & Buzz (psychoacoustic loudness in phons, 10th-35th harmonics)
+- **PRB**: Perceptual Rub & Buzz (psychoacoustic loudness in phons, 2nd-35th harmonics)
 - **AI**: Machine learning-based anomaly detection
 - **Spec**: Spectrogram visualization
 - **LP**: Loose Particle detection

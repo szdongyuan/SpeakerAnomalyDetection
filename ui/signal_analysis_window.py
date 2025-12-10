@@ -44,8 +44,8 @@ def get_class_mapping():
         "SPL": Spl,
         "FR": Frequency,
         "HD": Distortion,
-        "RB": RubAndBuzz,  # Rub & Buzz (high-order harmonic distortion)
-        "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (psychoacoustic loudness in phons)
+        "RB": RubAndBuzz,  # Rub & Buzz (high-order 10th-35th harmonic distortion)
+        "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (2nd-35th harmonics, psychoacoustic loudness in phons)
         "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
@@ -253,10 +253,11 @@ class RubAndBuzz(Distortion):
 
 class PerceptualRubAndBuzz(RubAndBuzz):
     """
-    Perceptual Rub & Buzz analysis widget - displays perceived loudness (phons) of high-order harmonics.
+    Perceptual Rub & Buzz analysis widget - displays perceived loudness (phons) of harmonics (2nd-35th).
 
     Inherits from RubAndBuzz but uses psychoacoustic models (ISO 226 equal-loudness + masking).
-    Y-axis shows phons instead of THD percentage.
+    Y-axis shows phons instead of THD percentage. Unlike standard RB (10th-35th), PRB analyzes
+    the full harmonic range (2nd-35th).
     """
 
     def __init__(self, title_name):

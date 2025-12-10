@@ -2,7 +2,7 @@
 
 ## Overview
 
-Perceptual Rub & Buzz (PRB) is an advanced psychoacoustic analysis that measures the perceived loudness of high-order harmonics (10th-35th) in phons, taking into account the human ear's frequency response and masking effects. Unlike standard Rub & Buzz which measures harmonic distortion as a percentage, PRB provides a measure of how loud these artifacts actually sound to the human ear.
+Perceptual Rub & Buzz (PRB) is an advanced psychoacoustic analysis that measures the perceived loudness of harmonics (2nd-35th) in phons, taking into account the human ear's frequency response and masking effects. Unlike standard Rub & Buzz (RB) which measures only high-order harmonic distortion (10th-35th) as a percentage, PRB analyzes a broader range and provides a measure of how loud these artifacts actually sound to the human ear.
 
 ## When to Use
 
@@ -32,9 +32,10 @@ PRB applies simultaneous masking models based on critical band theory:
 ## Configuration
 
 ### Harmonic Selection
-- **Range:** 10th to 35th harmonics (26 harmonics total)
+- **Range:** 2nd to 35th harmonics (34 harmonics total)
 - **Selection:** Individual harmonics or "Select All"
 - **Minimum:** At least one harmonic must be selected
+- **Note:** Standard RB (Rub & Buzz) remains 10th-35th for high-order distortion analysis
 
 ### Calculation Pipeline
 
@@ -52,12 +53,13 @@ PRB applies simultaneous masking models based on critical band theory:
 The analysis displays:
 - **X-axis:** Fundamental frequency (logarithmic scale)
 - **Y-axis:** Perceived loudness in phons
-- **Curve:** Total perceived loudness of selected high-order harmonics
+- **Curve:** Total perceived loudness of selected harmonics (2nd-35th range available)
 
 ## Differences from Standard Rub & Buzz
 
 | Feature | RB (Rub & Buzz) | PRB (Perceptual Rub & Buzz) |
 |---------|-----------------|----------------------------|
+| Harmonic Range | 10th-35th only | 2nd-35th (full range) |
 | Metric | THD percentage | Perceived loudness (phons) |
 | Frequency Weighting | None | ISO 226 equal-loudness |
 | Masking | None | Simultaneous masking |
