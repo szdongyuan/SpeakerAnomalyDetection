@@ -138,7 +138,7 @@ class HarmonicDistortionAnalyzer(ABC):
             np.maximum(fundamental_amplitudes / reference_pressure, min_amplitude)
         )
         # Silence gating is based on pre-calibration SPL to avoid calibration offsets lifting noise.
-        silence_spl_threshold = -80.0  # dB SPL (uncalibrated)
+        silence_spl_threshold = -60.0  # dB SPL (uncalibrated) to more aggressively gate no-load noise
 
         # Process each frame independently
         for frame_idx in range(n_cols):
