@@ -123,13 +123,13 @@ class HarmonicDistortionAnalyzer(ABC):
         col_indices = np.arange(n_cols)
         fundamental_amplitudes = spectrum_matrix[row_indices, col_indices]
 
-        # Convert amplitude to SPL (dB) using digital reference (1.0 = 0 dB)
-        reference_amplitude = 1.0
-        fundamental_spl_uncalibrated = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_amplitude, 1e-10))
+        # Convert amplitude to SPL (dB re 20 μPa) - standard acoustic reference
+        reference_pressure = 20e-6
+        fundamental_spl_uncalibrated = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_pressure, 1e-10))
 
-        # Apply calibration as offset (deviation from standard calibrator reading)
-        # Calibration process: calibrator emits 94 dB → software measures X dB → deviation = 94 - X
-        # Actual SPL = measured SPL + calibration_deviation
+        # Apply calibration as offset (deviation from calibrator reading)
+        # Calibration: calibrator emits 94 dB → software measures X dB → deviation = 94 - X
+        # Actual SPL = uncalibrated SPL + deviation
         fundamental_spl = fundamental_spl_uncalibrated + spl_calibration_db
 
         # Process each frame independently
@@ -153,8 +153,8 @@ class HarmonicDistortionAnalyzer(ABC):
             # Get harmonic amplitudes
             harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
 
-            # Convert to SPL (dB) and apply calibration offset
-            harmonic_spls_uncalibrated = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_amplitude, 1e-10))
+            # Convert to SPL (dB re 20 μPa) and apply calibration offset
+            harmonic_spls_uncalibrated = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_pressure, 1e-10))
             harmonic_spls = harmonic_spls_uncalibrated + spl_calibration_db
 
             # Compute harmonic frequencies (from FFT bin index)
@@ -177,9 +177,9 @@ class HarmonicDistortionAnalyzer(ABC):
                     # Extract amplitudes
                     masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx]
 
-                    # Convert to SPL (dB) and apply calibration offset
+                    # Convert to SPL (dB re 20 μPa) and apply calibration offset
                     masking_spls_uncalibrated = 20.0 * np.log10(
-                        np.maximum(masking_amplitudes / reference_amplitude, 1e-10)
+                        np.maximum(masking_amplitudes / reference_pressure, 1e-10)
                     )
                     masking_spls = masking_spls_uncalibrated + spl_calibration_db
 

@@ -37,7 +37,7 @@ def test_single_pure_tone_loudness():
 
     sample_rate = 44100
     step_duration = 0.5
-    calibration_db = 94.0
+    calibration_db = 0.0  # No calibration deviation for these tests
 
     # Test cases: (fundamental_freq, harmonic_order, harmonic_amplitude, expected_phons_approx, tolerance)
     # Fundamental is very weak (1e-8) to avoid masking
@@ -84,10 +84,9 @@ def test_single_pure_tone_loudness():
 
         loudness = result['perceptual_loudness'][0]
 
-        # Calculate expected SPL
-        calibration_multiplier = 10.0 ** (calibration_db / 20.0)
-        windowed_amp = harm_amp * calibration_multiplier * 0.5  # Hann window
-        expected_spl = 20.0 * np.log10(windowed_amp)
+        # Calculate expected SPL (uncalibrated, re 20 μPa)
+        windowed_amp = harm_amp * 0.5  # Hann window reduces amplitude by 0.5
+        expected_spl = 20.0 * np.log10(windowed_amp / 20e-6)
 
         print(f"\n{actual_freq:.0f} Hz (fund={fund_freq}Hz × {harm_order}), amplitude {harm_amp:.4f}:")
         print(f"  Expected SPL: {expected_spl:.1f} dB")
@@ -126,7 +125,7 @@ def test_multiple_pure_tones_no_masking():
 
     sample_rate = 44100
     step_duration = 0.5
-    calibration_db = 94.0
+    calibration_db = 0.0  # No calibration deviation for these tests
 
     fundamental_freq = 1.0  # 1 Hz fundamental
     fundamental_amp = 1e-8  # Very weak, won't mask anything
@@ -224,7 +223,7 @@ def test_loudness_scales_with_spl():
 
     sample_rate = 44100
     step_duration = 0.5
-    calibration_db = 94.0
+    calibration_db = 0.0  # No calibration deviation for these tests
 
     fundamental_freq = 10.0
     fundamental_amp = 1e-8  # Very weak
@@ -269,10 +268,9 @@ def test_loudness_scales_with_spl():
         loudness = result['perceptual_loudness'][0]
         loudness_values.append(loudness)
 
-        # Calculate SPL
-        calibration_multiplier = 10.0 ** (calibration_db / 20.0)
-        windowed_amp = harm_amp * calibration_multiplier * 0.5
-        spl = 20.0 * np.log10(windowed_amp)
+        # Calculate SPL (uncalibrated, re 20 μPa)
+        windowed_amp = harm_amp * 0.5  # Hann window
+        spl = 20.0 * np.log10(windowed_amp / 20e-6)
         spl_values.append(spl)
 
         print(f"Amplitude {harm_amp:.4f} → SPL {spl:.1f} dB → {loudness:.1f} phons")
