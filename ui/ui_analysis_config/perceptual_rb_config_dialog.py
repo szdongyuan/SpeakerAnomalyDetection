@@ -14,7 +14,7 @@ class PerceptualRbConfigWindow(QDialog):
     """
     Configuration dialog for Perceptual Rub & Buzz analysis.
 
-    Allows selecting harmonics from 10th order to 35th order.
+    Allows selecting harmonics from 2nd order to 35th order (34 harmonics total).
     Identical to RbConfigWindow but with "感知 Rub & Buzz" title and "PRB" model type.
     """
     selected_labels_changed = pyqtSignal()
@@ -23,9 +23,9 @@ class PerceptualRbConfigWindow(QDialog):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        # Filter harmonics to valid range (10-35)
+        # Filter harmonics to valid range (2-35)
         loaded_labels = self.load_config.get("selected_labels", [])
-        self.selected_labels = [h for h in loaded_labels if 10 <= h <= 35]
+        self.selected_labels = [h for h in loaded_labels if 2 <= h <= 35]
         self.init_ui()
 
     def init_ui(self):
@@ -59,14 +59,14 @@ class PerceptualRbConfigWindow(QDialog):
         )
 
     def create_harmonic_slider_layout(self):
-        """Create harmonic selection layout with harmonics 10-35"""
+        """Create harmonic selection layout with harmonics 2-35"""
         harmonic_slider_layout = QVBoxLayout()
         self.scroll_area = QScrollArea()
         self.scroll_area.setFixedSize(120, 150)
         box_container = QWidget()
         self.box_layout = QVBoxLayout()
-        # Perceptual Rub & Buzz: harmonics 10-35 (26 harmonics total)
-        for i in range(10, 36):
+        # Perceptual Rub & Buzz: harmonics 2-35 (34 harmonics total)
+        for i in range(2, 36):
             label = QLabel("  " + str(i))
             label.setFixedSize(90, 25)
             label.setAlignment(Qt.AlignLeft)
@@ -91,8 +91,8 @@ class PerceptualRbConfigWindow(QDialog):
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
             self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
-            # Select all perceptual rub&buzz harmonics (10-35)
-            self.selected_labels = list(range(10, 36))
+            # Select all perceptual rub&buzz harmonics (2-35)
+            self.selected_labels = list(range(2, 36))
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
                 text = label.text().strip()
