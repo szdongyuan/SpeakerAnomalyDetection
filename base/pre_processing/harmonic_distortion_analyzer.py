@@ -7,6 +7,10 @@ import numpy as np
 from typing import Dict
 from abc import ABC, abstractmethod
 from base.pre_processing.psychoacoustic_utils import spl_to_phons, apply_masking
+try:
+    from mosqito.sq_metrics.loudness import loudness_zwst_freq
+except Exception:
+    loudness_zwst_freq = None
 
 
 class HarmonicDistortionAnalyzer(ABC):
@@ -159,28 +163,9 @@ class HarmonicDistortionAnalyzer(ABC):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
-            # --- Fullband sones anchor (per-bin, frequency-aware, calibrated) ---
-            calibrated_frame_amplitudes = spectrum_matrix[:, frame_idx] * calibration_multiplier
-            # Remove fundamental from anchor to avoid coupling harmonic loudness to fundamental level
-            fund_bin = row_indices[frame_idx]
-            calibrated_frame_amplitudes = calibrated_frame_amplitudes.copy()
-            if fund_bin < calibrated_frame_amplitudes.shape[0]:
-                calibrated_frame_amplitudes[fund_bin] = 0.0
-
-            calibrated_frame_spl = 20.0 * np.log10(
-                np.maximum(calibrated_frame_amplitudes / reference_pressure, min_amplitude)
-            )
+            # --- Frequency axis (used later for loudness calculation) ---
             n_bins = spectrum_matrix.shape[0] - 1  # Subtract dummy bin
             bin_freqs = np.arange(spectrum_matrix.shape[0]) * (self.sample_rate / 2.0) / n_bins
-            fullband_phons = spl_to_phons(bin_freqs, calibrated_frame_spl)
-            # Only count audible components for total sones anchor
-            audible_fullband = fullband_phons > 0.0
-            fullband_sones = np.zeros_like(fullband_phons)
-            if np.any(audible_fullband):
-                fullband_sones[audible_fullband] = np.power(
-                    2.0, (fullband_phons[audible_fullband] - 40.0) / 10.0
-                )
-            total_sones_fullband = np.sum(fullband_sones)
 
             # Get harmonic amplitudes
             raw_harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
@@ -257,24 +242,32 @@ class HarmonicDistortionAnalyzer(ABC):
             # Convert masked SPLs to phons
             audible_indices = masked_spls > 0
             if np.any(audible_indices):
-                audible_freqs = harmonic_freqs[audible_indices]
-                audible_spls = masked_spls[audible_indices]
+                # Build calibrated spectrum containing only audible harmonics (fundamental excluded)
+                calibrated_frame_amplitudes = spectrum_matrix[:, frame_idx] * calibration_multiplier
+                masked_spectrum = np.zeros_like(calibrated_frame_amplitudes)
+                audible_bins = harmonic_bin_indices[audible_indices]
+                masked_spectrum[audible_bins] = calibrated_frame_amplitudes[audible_bins]
 
-                phons_values = spl_to_phons(audible_freqs, audible_spls)
+                total_sones = 0.0
+                if loudness_zwst_freq is not None:
+                    try:
+                        total_sones, _, _ = loudness_zwst_freq(
+                            masked_spectrum,
+                            bin_freqs,
+                            field_type="free"
+                        )
+                        if isinstance(total_sones, np.ndarray):
+                            total_sones = float(np.mean(total_sones))
+                    except Exception:
+                        total_sones = 0.0
 
-                # Total perceived loudness using sones summation (psychoacoustically correct)
-                # Phons are NOT additive; must convert to sones, sum, then convert back
-                # Sones = 2^((phons - 40) / 10), Phons = 40 + 10*log2(sones)
-                sones_values = np.power(2.0, (phons_values - 40.0) / 10.0)
-                harmonic_sones_sum = np.sum(sones_values)
-
-                if harmonic_sones_sum > 0 and total_sones_fullband > 0:
-                    # Pure proportional allocation of total sones to unmasked harmonics
-                    weights = sones_values / harmonic_sones_sum
-                    sones_values = weights * total_sones_fullband
-                    total_sones = total_sones_fullband
-                else:
-                    total_sones = 0.0
+                # Fallback: sum sones of audible harmonics only
+                if total_sones == 0.0:
+                    audible_freqs = harmonic_freqs[audible_indices]
+                    audible_spls = masked_spls[audible_indices]
+                    phons_values = spl_to_phons(audible_freqs, audible_spls)
+                    sones_values = np.power(2.0, (phons_values - 40.0) / 10.0)
+                    total_sones = np.sum(sones_values)
 
                 perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones) if total_sones > 0 else 0.0
             else:
