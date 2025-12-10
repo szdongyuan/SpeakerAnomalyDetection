@@ -123,12 +123,13 @@ class TcpConfigDialog(QDialog):
         self.swap_able_status()
 
     def on_ip_lineedit_editingfinshed(self):
+        if self.ip_format:
+            return
         self.ip_format = True
         self._editing_ip = True
         ip = self.ip_lineedit.text()
         pattern = r"^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$"
         if not re.match(pattern, ip):
-            
             QMessageBox.warning(self, "警告", "无效IP格式。")
             self.ip_lineedit.setFocus()
             self.ip_lineedit.setText(self.ip)
@@ -140,11 +141,12 @@ class TcpConfigDialog(QDialog):
         self.ip_format = False
 
     def on_port_lineedit_editingfinshed(self):
+        if self.port_format:
+            return
         self.port_format = True
         self._editing_port = True
         port_text = self.port_lineedit.text()
         if not port_text.isdigit():
-            
             QMessageBox.warning(self, "无效端口", "端口号必须是数字")
             self.port_lineedit.setFocus()
             self.port_lineedit.setText(str(self.port))
