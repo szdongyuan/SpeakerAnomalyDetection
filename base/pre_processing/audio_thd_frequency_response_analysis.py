@@ -242,20 +242,35 @@ class AudioThdFrequencyResponseAnalysis(object):
         )
         fundamental_bins = index_matrix[:, 1]
 
+        # Build masking_mask_matrix for cumulative masking
+        masking_mask_matrix = None
+        masking_config = thd_kwargs.get('masking_config')
+        if masking_config and masking_config.get('enable_cumulative'):
+            # For cumulative masking, include all lower-order harmonics up to max analyzed harmonic
+            max_harmonic = max(harmonic_orders)
+            masking_orders = list(range(1, max_harmonic))  # Fundamental to (max - 1)
+
+            if masking_orders:  # Only create if there are masking harmonics
+                masking_mask_matrix = builder.create_mask_from_indices(
+                    index_matrix, masking_orders, len(fft_freqs)
+                )
+
         # Phase 2: Compute perceptual loudness using perceptual analyzers
         if stimulus_method == 'steps':
             analyzer = PerceptualStepSignalHD(sample_rate)
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
-                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-                spl_calibration_db=spl_calibration_db
+                harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
+                spl_calibration_db=spl_calibration_db,
+                masking_config=masking_config
             )
         else:  # chirps
             analyzer = PerceptualChirpSignalHD(sample_rate)
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
-                harmonic_mask=(mask_matrix, None, fund_freqs, time_array, fundamental_bins),
-                spl_calibration_db=spl_calibration_db
+                harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, time_array, fundamental_bins),
+                spl_calibration_db=spl_calibration_db,
+                masking_config=masking_config
             )
 
         # Extract results
