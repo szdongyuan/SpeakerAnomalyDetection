@@ -83,10 +83,17 @@ def compute_simultaneous_masking_threshold(
     maskee_freq: float
 ) -> float:
     """
-    Compute simultaneous masking threshold using simplified spreading function.
+    Compute simultaneous masking threshold using improved spreading function.
 
-    Based on psychoacoustic masking models (Zwicker & Fastl, 1999).
-    Masking spreads asymmetrically: stronger upward in frequency than downward.
+    Based on:
+    - Zwicker & Fastl (1999) psychoacoustic masking model
+    - MPEG psychoacoustic model 1 (ISO/IEC 11172-3)
+    - Terhardt (1979) frequency-dependent masking slopes
+
+    Improvements over simplified model:
+    1. Frequency-dependent slopes (varies with masker frequency)
+    2. Level-dependent offset (stronger maskers have lower offset)
+    3. Asymmetric spreading (upward masking stronger than downward)
 
     Args:
         masker_freq: Frequency of masker in Hz
@@ -95,27 +102,50 @@ def compute_simultaneous_masking_threshold(
 
     Returns:
         threshold: Masking threshold in dB SPL at maskee_freq
+
+    References:
+        - Zwicker & Fastl (1999) "Psychoacoustics: Facts and Models"
+        - ISO/IEC 11172-3 (MPEG-1 Audio)
+        - Terhardt (1979) "Calculating virtual pitch"
     """
     # Convert frequencies to Bark scale (critical band scale)
     masker_bark = freq_to_bark(masker_freq)
     maskee_bark = freq_to_bark(maskee_freq)
     bark_distance = maskee_bark - masker_bark
 
-    # Spreading function (asymmetric slopes)
+    # Frequency-dependent spreading function slopes
+    # Based on Terhardt (1979) and MPEG psychoacoustic model
     if bark_distance >= 0:
-        # Upward spread: -27 dB/Bark slope
-        slope = -27.0
+        # Upward spread (masker masks higher frequencies)
+        # Slope becomes steeper at higher frequencies
+        # Low freq: -27 dB/Bark, High freq: -30 dB/Bark
+        slope = -27.0 - 3.0 * (masker_freq / 5000.0)
+        slope = max(slope, -30.0)  # Limit to -30 dB/Bark
     else:
-        # Downward spread: -24 dB/Bark slope (gentler)
-        slope = -24.0
+        # Downward spread (masker masks lower frequencies)
+        # MPEG model uses positive slope for downward masking
+        # But Zwicker uses negative (gentler attenuation)
+        # We use Zwicker's approach for consistency
+        slope = -24.0 + 3.0 * (masker_freq / 5000.0)
+        slope = min(slope, -20.0)  # Limit to -20 dB/Bark (gentler)
 
-    # Masking threshold = masker_level + slope * distance - offset
-    # Offset accounts for masker bandwidth and other factors
-    offset = 6.0  # Typical value for tonal masker
+    # Level-dependent offset (based on MPEG psychoacoustic model)
+    # Stronger maskers (high SPL) have lower offset → stronger masking
+    # Weaker maskers (low SPL) have higher offset → weaker masking
+    if masker_level >= 60:
+        # Strong masker: offset 3 dB
+        offset = 3.0
+    elif masker_level >= 40:
+        # Medium masker: offset 6 dB (original value)
+        offset = 6.0
+    else:
+        # Weak masker: offset 10 dB
+        offset = 10.0
 
+    # Compute masking threshold
     threshold = masker_level + slope * abs(bark_distance) - offset
 
-    # Threshold cannot be negative
+    # Threshold cannot be negative (below absolute threshold of hearing)
     threshold = max(threshold, 0.0)
 
     return threshold
@@ -130,10 +160,13 @@ def apply_masking(
     """
     Apply simultaneous masking from fundamental to higher harmonics.
 
-    For each harmonic:
-    1. Compute masking threshold from fundamental
-    2. If harmonic SPL < threshold, set to 0 (fully masked)
-    3. Otherwise, reduce harmonic SPL by masking effect
+    Binary masking approach based on Zwicker & Fastl (1999):
+    - If harmonic SPL ≤ masking threshold: fully masked (0 dB contribution)
+    - If harmonic SPL > masking threshold: fully audible (no attenuation)
+
+    This follows the standard psychoacoustic approach where masking determines
+    detectability, not loudness reduction. Once detected, harmonics contribute
+    their full loudness value.
 
     Args:
         fundamental_freq: Fundamental frequency in Hz
@@ -143,33 +176,27 @@ def apply_masking(
 
     Returns:
         masked_spls: Harmonic SPLs after masking in dB (n,)
+                     0 dB if fully masked, original SPL if audible
+
+    References:
+        - Zwicker & Fastl (1999) "Psychoacoustics: Facts and Models"
+        - ISO 226:2003 (equal-loudness contours)
     """
     masked_spls = np.zeros_like(harmonic_spls)
 
     for i, (h_freq, h_spl) in enumerate(zip(harmonic_freqs, harmonic_spls)):
-        # Compute masking threshold from fundamental
+        # Compute masking threshold from fundamental using improved spreading function
         threshold = compute_simultaneous_masking_threshold(
             fundamental_freq, fundamental_spl, h_freq
         )
 
-        # If harmonic is below threshold, fully masked
+        # Binary masking decision
         if h_spl <= threshold:
+            # Fully masked: harmonic is inaudible
             masked_spls[i] = 0.0
         else:
-            # Harmonic is above threshold, partially audible
-            # Apply masking reduction based on threshold
-            if threshold > 0:
-                masking_reduction = threshold * 0.3  # 30% of threshold
-                masked_spls[i] = max(h_spl - masking_reduction, 0.0)
-            else:
-                # Even with zero threshold, apply minimal masking from strong fundamental
-                # This accounts for general masking effects beyond critical bands
-                if fundamental_spl > 60.0:  # Strong fundamental
-                    # Apply small reduction (1-5 dB) based on fundamental level
-                    general_masking = (fundamental_spl - 60.0) * 0.05  # 0.05 dB per dB above 60
-                    masked_spls[i] = max(h_spl - general_masking, 0.0)
-                else:
-                    masked_spls[i] = h_spl
+            # Above threshold: harmonic is fully audible, no attenuation
+            masked_spls[i] = h_spl
 
     return masked_spls
 
@@ -292,18 +319,12 @@ def apply_cumulative_masking(
 
         combined_threshold = 10.0 * np.log10(total_power)
 
-        # Apply masking
+        # Binary masking decision (following Zwicker approach)
         if maskee_spls[i] <= combined_threshold:
-            # Fully masked
+            # Fully masked: inaudible
             masked_spls[i] = 0.0
         else:
-            # Partial masking (30% of threshold)
-            # Only apply reduction if threshold is positive
-            if combined_threshold > 0:
-                masking_reduction = combined_threshold * 0.3
-                masked_spls[i] = max(maskee_spls[i] - masking_reduction, 0.0)
-            else:
-                # No masking effect if threshold is negative or zero
-                masked_spls[i] = maskee_spls[i]
+            # Above threshold: fully audible, no attenuation
+            masked_spls[i] = maskee_spls[i]
 
     return masked_spls

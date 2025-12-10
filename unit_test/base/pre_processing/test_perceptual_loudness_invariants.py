@@ -171,7 +171,10 @@ def test_harmonic_loudness_invariant_across_time():
         'num_steps': num_steps,
         'repeat_times': 1,
         'total_time': total_time,
-        'step_duration': step_duration
+        'step_duration': step_duration,
+        'start_freq': 100.0,  # All steps at 100 Hz
+        'stop_freq': 100.0,   # All steps at 100 Hz (constant frequency)
+        'stimulus_type': 'linear'  # linear with start==stop gives constant frequency
     }
 
     # Analyze
