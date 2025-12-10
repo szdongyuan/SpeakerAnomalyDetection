@@ -311,6 +311,10 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         }
 
         # Call the PERCEPTUAL three-phase architecture
+        # Get microphone calibration deviation
+        from base.soundcard_calibration_manager import get_mic_deviation_value
+        mic_deviation_db = get_mic_deviation_value()
+
         atfra = AudioThdFrequencyResponseAnalysis()
         thd_kwargs = {
             'stimulus_metadata': stimulus_metadata,
@@ -318,7 +322,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         }
 
         freq_value, harmonic, perceptual_loudness = atfra._calculate_perceptual_thd_three_phase(
-            recorded_signal, sample_rate, thd_kwargs
+            recorded_signal, sample_rate, thd_kwargs, spl_calibration_db=mic_deviation_db
         )
 
         # Handle mirror chirps: average forward and backward sweeps

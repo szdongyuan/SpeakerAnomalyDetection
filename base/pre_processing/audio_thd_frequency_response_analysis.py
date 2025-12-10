@@ -181,7 +181,8 @@ class AudioThdFrequencyResponseAnalysis(object):
         self,
         recorded_signal: np.ndarray,
         sample_rate: int,
-        thd_kwargs: dict
+        thd_kwargs: dict,
+        spl_calibration_db: float = 94.0
     ) -> tuple:
         """
         Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
@@ -195,6 +196,8 @@ class AudioThdFrequencyResponseAnalysis(object):
                 'stimulus_metadata': dict with stimulus configuration,
                 'harmonic_orders': list of harmonic orders (e.g., [10, 11, 12])
             }
+            spl_calibration_db: Microphone calibration in dB (default 94.0).
+                Applied in amplitude domain before log transform.
 
         Returns:
             (freq_value, harmonic, perceptual_loudness):
@@ -242,13 +245,15 @@ class AudioThdFrequencyResponseAnalysis(object):
             analyzer = PerceptualStepSignalHD(sample_rate)
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
-                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins)
+                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
+                spl_calibration_db=spl_calibration_db
             )
         else:  # chirps
             analyzer = PerceptualChirpSignalHD(sample_rate)
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
-                harmonic_mask=(mask_matrix, None, fund_freqs, time_array, fundamental_bins)
+                harmonic_mask=(mask_matrix, None, fund_freqs, time_array, fundamental_bins),
+                spl_calibration_db=spl_calibration_db
             )
 
         # Extract results
