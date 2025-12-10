@@ -15,21 +15,21 @@ def qapp():
 
 
 def test_perceptual_rb_config_window_harmonic_range(qapp):
-    """Verify perceptual rub&buzz only allows harmonics 10-35"""
+    """Verify perceptual rub&buzz allows harmonics 2-35"""
     config_manager = Mock()
     config_manager.load_config.return_value = {"PRB": {"selected_labels": [10, 15, 20], "all_checked": False}}
 
     window = PerceptualRbConfigWindow(config_manager, "PRB")
 
-    # Should have 26 labels (harmonics 10-35 inclusive)
-    assert window.box_layout.count() == 26
+    # Should have 34 labels (harmonics 2-35 inclusive)
+    assert window.box_layout.count() == 34
 
-    # First label should be harmonic 10
+    # First label should be harmonic 2
     first_label = window.box_layout.itemAt(0).widget()
-    assert "10" in first_label.text()
+    assert "2" in first_label.text()
 
     # Last label should be harmonic 35
-    last_label = window.box_layout.itemAt(25).widget()
+    last_label = window.box_layout.itemAt(33).widget()
     assert "35" in last_label.text()
 
 
