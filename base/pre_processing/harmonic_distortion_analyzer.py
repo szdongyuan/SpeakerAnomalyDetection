@@ -117,20 +117,22 @@ class HarmonicDistortionAnalyzer(ABC):
         """
         n_cols = spectrum_matrix.shape[1]
         perceptual_loudness = np.zeros(n_cols)
+        # Convert calibration offset (dB) to linear multiplier so calibration happens
+        # in the amplitude domain before the log transform. This prevents very small
+        # bins from being artificially lifted by adding a constant dB offset.
+        calibration_multiplier = np.power(10.0, spl_calibration_db / 20.0) if spl_calibration_db != 0.0 else 1.0
+        min_amplitude = 1e-12  # avoid log(0) after calibration
 
         # Extract fundamental amplitudes
         row_indices = fundamental_bins.astype(int)
         col_indices = np.arange(n_cols)
-        fundamental_amplitudes = spectrum_matrix[row_indices, col_indices]
+        fundamental_amplitudes = spectrum_matrix[row_indices, col_indices] * calibration_multiplier
 
         # Convert amplitude to SPL (dB re 20 μPa) - standard acoustic reference
         reference_pressure = 20e-6
-        fundamental_spl_uncalibrated = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_pressure, 1e-10))
-
-        # Apply calibration as offset (deviation from calibrator reading)
-        # Calibration: calibrator emits 94 dB → software measures X dB → deviation = 94 - X
-        # Actual SPL = uncalibrated SPL + deviation
-        fundamental_spl = fundamental_spl_uncalibrated + spl_calibration_db
+        fundamental_spl = 20.0 * np.log10(
+            np.maximum(fundamental_amplitudes / reference_pressure, min_amplitude)
+        )
 
         # Process each frame independently
         for frame_idx in range(n_cols):
@@ -151,11 +153,12 @@ class HarmonicDistortionAnalyzer(ABC):
                 continue
 
             # Get harmonic amplitudes
-            harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
+            harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx] * calibration_multiplier
 
-            # Convert to SPL (dB re 20 μPa) and apply calibration offset
-            harmonic_spls_uncalibrated = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_pressure, 1e-10))
-            harmonic_spls = harmonic_spls_uncalibrated + spl_calibration_db
+            # Convert to SPL (dB re 20 μPa) after calibration
+            harmonic_spls = 20.0 * np.log10(
+                np.maximum(harmonic_amplitudes / reference_pressure, min_amplitude)
+            )
 
             # Compute harmonic frequencies (from FFT bin index)
             # Frequency = bin_index * sample_rate / (2 * n_bins)
@@ -175,13 +178,12 @@ class HarmonicDistortionAnalyzer(ABC):
 
                 if len(masking_bin_indices) > 0:
                     # Extract amplitudes
-                    masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx]
+                    masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx] * calibration_multiplier
 
-                    # Convert to SPL (dB re 20 μPa) and apply calibration offset
-                    masking_spls_uncalibrated = 20.0 * np.log10(
-                        np.maximum(masking_amplitudes / reference_pressure, 1e-10)
+                    # Convert to SPL (dB re 20 μPa) after calibration
+                    masking_spls = 20.0 * np.log10(
+                        np.maximum(masking_amplitudes / reference_pressure, min_amplitude)
                     )
-                    masking_spls = masking_spls_uncalibrated + spl_calibration_db
 
                     # Compute frequencies
                     masking_freqs = masking_bin_indices * (self.sample_rate / 2.0) / n_bins
