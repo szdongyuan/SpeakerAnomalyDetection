@@ -22,6 +22,7 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         stft_hop_size: int = 1024,
         stft_window_type: str = 'hann',
         masking_config: Dict = None,
+        spl_calibration_db: float = 0.0,
         **kwargs
     ) -> Dict:
         """
@@ -108,14 +109,15 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         if masking_mask_matrix is not None:
             masking_mask_trimmed = masking_mask_matrix[:, :num_frames]
 
-        # Compute perceptual loudness with masking config
+        # Compute perceptual loudness with masking config and calibration
         perceptual_loudness = self.compute_perceptual_thd_batch(
             spectrum_trimmed,
             mask_trimmed,
             fund_bins_trimmed,
             fund_freqs_trimmed,
             masking_mask_matrix=masking_mask_trimmed,
-            masking_config=masking_config
+            masking_config=masking_config,
+            spl_calibration_db=spl_calibration_db
         )
 
         # Compute time values
