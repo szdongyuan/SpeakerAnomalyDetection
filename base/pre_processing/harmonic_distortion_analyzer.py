@@ -135,7 +135,7 @@ class HarmonicDistortionAnalyzer(ABC):
         )
         # Treat frames with essentially no fundamental as silence to avoid lifting
         # ambient noise (e.g., unplugged mic) via calibration.
-        silence_spl_threshold = -80.0  # dB SPL; treat frames below this as silence
+        silence_spl_threshold = 20.0  # dB SPL; treat very low-level frames as silence (no-load)
 
         # Process each frame independently
         for frame_idx in range(n_cols):
@@ -157,15 +157,15 @@ class HarmonicDistortionAnalyzer(ABC):
 
             # Get harmonic amplitudes
             harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx] * calibration_multiplier
-            # If no meaningful fundamental, treat as silence to avoid phantom phons
-            if fundamental_spl[frame_idx] < silence_spl_threshold:
-                perceptual_loudness[frame_idx] = 0.0
-                continue
-
             # Convert to SPL (dB re 20 μPa) after calibration
             harmonic_spls = 20.0 * np.log10(
                 np.maximum(harmonic_amplitudes / reference_pressure, min_amplitude)
             )
+
+            # If both fundamental and harmonics are below the silence threshold, treat frame as silence
+            if fundamental_spl[frame_idx] < silence_spl_threshold and np.max(harmonic_spls) < silence_spl_threshold:
+                perceptual_loudness[frame_idx] = 0.0
+                continue
 
             # Compute harmonic frequencies (from FFT bin index)
             # Frequency = bin_index * sample_rate / (2 * n_bins)
