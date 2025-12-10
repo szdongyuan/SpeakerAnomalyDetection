@@ -493,8 +493,20 @@ class AI(QWidget):
             first_match = matches[0]
             first_match.mergeCharFormat(format)
 
-    def calculate_ai_scores(self, mode, analysis_config):
+    def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
+        if acq_mode == "IMPORT_AUDIO":
+            query_code, query_result = TrainingModelManagement().get_input_dim_info_by_name(model_name)
+            if query_code == error_code.OK:
+                input_dim = str(query_result).split("x")[0].strip()
+                if input_dim != str(len(self.data_struct.store_wave_data)):
+                    self.ai_analyse_score_textedit.setPlainText("模型与音频时长不匹配")
+                    return
+                else:
+                    self.default_logger.info("The model matches the audio duration. Starting analysis...")
+            else:
+                self.ai_analyse_score_textedit.setPlainText("查询数据库模型时长失败")
+                return
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
             self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
