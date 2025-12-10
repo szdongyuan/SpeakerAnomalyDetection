@@ -118,24 +118,19 @@ class HarmonicDistortionAnalyzer(ABC):
         n_cols = spectrum_matrix.shape[1]
         perceptual_loudness = np.zeros(n_cols)
 
-        # Convert calibration from dB to linear multiplier
-        # This MUST be done before log transform to avoid numerical errors
-        # calibration_db = 20 * log10(multiplier) => multiplier = 10^(calibration_db/20)
-        calibration_multiplier = 10.0 ** (spl_calibration_db / 20.0)
-
-        # Extract fundamental amplitudes and apply calibration
+        # Extract fundamental amplitudes
         row_indices = fundamental_bins.astype(int)
         col_indices = np.arange(n_cols)
         fundamental_amplitudes = spectrum_matrix[row_indices, col_indices]
 
-        # Apply calibration in amplitude domain
-        fundamental_amplitudes_calibrated = fundamental_amplitudes * calibration_multiplier
-
-        # Convert calibrated amplitude to absolute SPL (dB re 20 μPa)
-        # Reference amplitude = 1.0 corresponds to 0 dB in the digital domain
-        # After calibration, this becomes absolute SPL
+        # Convert amplitude to SPL (dB) using digital reference (1.0 = 0 dB)
         reference_amplitude = 1.0
-        fundamental_spl = 20.0 * np.log10(np.maximum(fundamental_amplitudes_calibrated / reference_amplitude, 1e-10))
+        fundamental_spl_uncalibrated = 20.0 * np.log10(np.maximum(fundamental_amplitudes / reference_amplitude, 1e-10))
+
+        # Apply calibration as offset (deviation from standard calibrator reading)
+        # Calibration process: calibrator emits 94 dB → software measures X dB → deviation = 94 - X
+        # Actual SPL = measured SPL + calibration_deviation
+        fundamental_spl = fundamental_spl_uncalibrated + spl_calibration_db
 
         # Process each frame independently
         for frame_idx in range(n_cols):
@@ -155,12 +150,12 @@ class HarmonicDistortionAnalyzer(ABC):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
-            # Get harmonic amplitudes and apply calibration
+            # Get harmonic amplitudes
             harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
-            harmonic_amplitudes_calibrated = harmonic_amplitudes * calibration_multiplier
 
-            # Convert calibrated harmonic amplitudes to absolute SPL
-            harmonic_spls = 20.0 * np.log10(np.maximum(harmonic_amplitudes_calibrated / reference_amplitude, 1e-10))
+            # Convert to SPL (dB) and apply calibration offset
+            harmonic_spls_uncalibrated = 20.0 * np.log10(np.maximum(harmonic_amplitudes / reference_amplitude, 1e-10))
+            harmonic_spls = harmonic_spls_uncalibrated + spl_calibration_db
 
             # Compute harmonic frequencies (from FFT bin index)
             # Frequency = bin_index * sample_rate / (2 * n_bins)
@@ -179,14 +174,14 @@ class HarmonicDistortionAnalyzer(ABC):
                 masking_bin_indices = masking_bin_indices[masking_bin_indices != fundamental_bin]
 
                 if len(masking_bin_indices) > 0:
-                    # Extract amplitudes and apply calibration
+                    # Extract amplitudes
                     masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx]
-                    masking_amplitudes_calibrated = masking_amplitudes * calibration_multiplier
 
-                    # Convert to absolute SPL
-                    masking_spls = 20.0 * np.log10(
-                        np.maximum(masking_amplitudes_calibrated / reference_amplitude, 1e-10)
+                    # Convert to SPL (dB) and apply calibration offset
+                    masking_spls_uncalibrated = 20.0 * np.log10(
+                        np.maximum(masking_amplitudes / reference_amplitude, 1e-10)
                     )
+                    masking_spls = masking_spls_uncalibrated + spl_calibration_db
 
                     # Compute frequencies
                     masking_freqs = masking_bin_indices * (self.sample_rate / 2.0) / n_bins
