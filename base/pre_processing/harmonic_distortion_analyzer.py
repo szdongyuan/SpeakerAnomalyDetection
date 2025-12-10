@@ -126,16 +126,19 @@ class HarmonicDistortionAnalyzer(ABC):
         # Extract fundamental amplitudes
         row_indices = fundamental_bins.astype(int)
         col_indices = np.arange(n_cols)
-        fundamental_amplitudes = spectrum_matrix[row_indices, col_indices] * calibration_multiplier
+        raw_fundamental_amplitudes = spectrum_matrix[row_indices, col_indices]
+        fundamental_amplitudes = raw_fundamental_amplitudes * calibration_multiplier
 
         # Convert amplitude to SPL (dB re 20 μPa) - standard acoustic reference
         reference_pressure = 20e-6
+        fundamental_spl_uncalibrated = 20.0 * np.log10(
+            np.maximum(raw_fundamental_amplitudes / reference_pressure, min_amplitude)
+        )
         fundamental_spl = 20.0 * np.log10(
             np.maximum(fundamental_amplitudes / reference_pressure, min_amplitude)
         )
-        # Treat frames with essentially no fundamental as silence to avoid lifting
-        # ambient noise (e.g., unplugged mic) via calibration.
-        silence_spl_threshold = 20.0  # dB SPL; treat very low-level frames as silence (no-load)
+        # Silence gating is based on pre-calibration SPL to avoid calibration offsets lifting noise.
+        silence_spl_threshold = -80.0  # dB SPL (uncalibrated)
 
         # Process each frame independently
         for frame_idx in range(n_cols):
@@ -156,14 +159,21 @@ class HarmonicDistortionAnalyzer(ABC):
                 continue
 
             # Get harmonic amplitudes
-            harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx] * calibration_multiplier
+            raw_harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
+            harmonic_amplitudes = raw_harmonic_amplitudes * calibration_multiplier
             # Convert to SPL (dB re 20 μPa) after calibration
             harmonic_spls = 20.0 * np.log10(
                 np.maximum(harmonic_amplitudes / reference_pressure, min_amplitude)
             )
 
-            # If both fundamental and harmonics are below the silence threshold, treat frame as silence
-            if fundamental_spl[frame_idx] < silence_spl_threshold and np.max(harmonic_spls) < silence_spl_threshold:
+            # If both fundamental and harmonics are below the silence threshold (before calibration), treat frame as silence
+            harmonic_spls_uncalibrated = 20.0 * np.log10(
+                np.maximum(raw_harmonic_amplitudes / reference_pressure, min_amplitude)
+            )
+            if (
+                fundamental_spl_uncalibrated[frame_idx] < silence_spl_threshold
+                and np.max(harmonic_spls_uncalibrated) < silence_spl_threshold
+            ):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
