@@ -1,8 +1,8 @@
 import numpy as np
-import sounddevice as sd
 
 from base.log_manager import LogManager
 from base.save_data import save_audio_simple
+from base.sound_device_manager import sd
 from consts import error_code
 
 
