@@ -167,8 +167,13 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
     prepare_frames = recorded_dict.get("prepare_frames", 1000)
     prolong_frames = recorded_dict.get("prolong_frames", 10000)
 
-    # Calculate exact target samples
-    target_samples = prepare_frames + len(stimulus_data) + prolong_frames
+    # Calculate exact target samples, accounting for playback offset
+    base_target_samples = prepare_frames + len(stimulus_data) + prolong_frames
+
+    # When offset > 0: recording starts first and runs longer to capture full playback
+    # When offset < 0: playback starts first, recording still needs to capture full stimulus
+    offset_frames = int(abs(playback_offset) * sample_rate)
+    target_samples = base_target_samples + offset_frames
 
     input_device = recorded_dict.get("input_device")
     output_device = recorded_dict.get("output_device")
