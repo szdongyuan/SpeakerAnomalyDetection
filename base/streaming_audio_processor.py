@@ -205,23 +205,12 @@ class StreamingAudioProcessor:
         self.recording_skipped_frames = 0
 
         try:
-            # Adjust playback data based on offset
-            if playback_offset > 0:
-                # Positive offset: Prepend silence to playback
-                # Recording captures real background noise while playback outputs silence
-                self.playback_data = np.concatenate([
-                    np.zeros(offset_frames),  # Silence for offset duration
-                    np.zeros(prepare_frames),
-                    stimulus_data,
-                    np.zeros(prolong_frames)
-                ]).astype(np.float32)
-            else:
-                # Zero or negative offset: Standard playback data
-                self.playback_data = np.concatenate([
-                    np.zeros(prepare_frames),
-                    stimulus_data,
-                    np.zeros(prolong_frames)
-                ]).astype(np.float32)
+            # Standard playback data (no prepended silence)
+            self.playback_data = np.concatenate([
+                np.zeros(prepare_frames),
+                stimulus_data,
+                np.zeros(prolong_frames)
+            ]).astype(np.float32)
 
             self.playback_index = 0
 
@@ -295,11 +284,26 @@ class StreamingAudioProcessor:
                 )
 
             # Start both streams immediately (no blocking!)
-            self.output_stream.start()
-            self.stream.start()
+            # For positive offset, start recording first to ensure it's capturing from the beginning
+            if playback_offset > 0:
+                # Start recording immediately
+                self.stream.start()
+                self.logger.info(f"Recording started, playback will start in {playback_offset}s")
+
+                # Start playback after delay in background thread (non-blocking)
+                def delayed_playback_start():
+                    time.sleep(playback_offset)
+                    self.output_stream.start()
+                    self.logger.info(f"Playback started after {playback_offset}s delay")
+
+                threading.Thread(target=delayed_playback_start, daemon=True).start()
+            else:
+                # Zero or negative offset: Start both immediately
+                self.output_stream.start()
+                self.stream.start()
 
             if playback_offset > 0:
-                self.logger.info(f"Started streaming play+record with +{playback_offset}s offset: playback outputs {playback_offset}s silence first, recording captures real background noise")
+                self.logger.info(f"Started streaming play+record with +{playback_offset}s offset: recording captures background noise before playback")
             elif playback_offset < 0:
                 self.logger.info(f"Started streaming play+record with {playback_offset}s offset: recording skips first {abs(playback_offset)}s")
             else:
