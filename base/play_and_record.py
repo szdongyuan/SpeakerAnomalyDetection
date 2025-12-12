@@ -136,7 +136,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         raise RuntimeError(f"Failed to start streaming recording: {msg}")
 
 
-def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info):
+def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info, playback_offset=0.0):
     """
     Start streaming play+record (non-blocking).
 
@@ -155,6 +155,9 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
             - 'output_device': Output device (optional)
         recorded_path (str): Path where WAV file will be saved (managed by UI)
         recorded_signal_info (dict): Recording metadata (saved by UI after completion)
+        playback_offset (float): Time offset for playback relative to recording (seconds)
+            - Positive: playback delayed (recording captures background noise first)
+            - Negative: playback advanced (playback starts before recording)
 
     Returns:
         tuple: (StreamingAudioProcessor instance, stimulus_data, sample_rate)
@@ -181,7 +184,8 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         input_device=input_device,
         output_device=output_device,
         prepare_frames=prepare_frames,
-        prolong_frames=prolong_frames
+        prolong_frames=prolong_frames,
+        playback_offset=playback_offset
     )
 
     if record_code == error_code.OK:

@@ -5,6 +5,7 @@ Enables non-blocking audio capture with real-time chunk processing.
 
 import queue
 import threading
+import time
 import numpy as np
 import sounddevice as sd
 
@@ -150,7 +151,8 @@ class StreamingAudioProcessor:
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
     def start_streaming_playrec(self, stimulus_dict, sample_rate=44100, target_samples=None,
-                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000):
+                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000,
+                                 playback_offset=0.0):
         """
         Start streaming play and record (simultaneous playback and recording).
 
@@ -166,6 +168,9 @@ class StreamingAudioProcessor:
             output_device: Output device (None for default)
             prepare_frames (int): Silent frames before stimulus
             prolong_frames (int): Silent frames after stimulus
+            playback_offset (float): Time offset for playback relative to recording (seconds)
+                - Positive: playback delayed (recording captures background noise first)
+                - Negative: playback advanced (playback starts before recording)
 
         Returns:
             tuple: (error_code, message)
@@ -231,11 +236,27 @@ class StreamingAudioProcessor:
                 device=input_device['index'] if input_device else None
             )
 
-            # Start both streams simultaneously
-            self.output_stream.start()
-            self.stream.start()
+            # Start streams with offset timing
+            if playback_offset > 0:
+                # Positive offset: Recording starts first, playback delayed
+                # This captures background noise before playback begins
+                self.stream.start()
+                self.logger.info(f"Recording started, delaying playback by {playback_offset}s to capture background noise")
+                time.sleep(playback_offset)
+                self.output_stream.start()
+            elif playback_offset < 0:
+                # Negative offset: Playback starts first, recording delayed
+                # First portion of playback will not be recorded
+                self.output_stream.start()
+                self.logger.info(f"Playback started, delaying recording by {abs(playback_offset)}s")
+                time.sleep(abs(playback_offset))
+                self.stream.start()
+            else:
+                # Zero offset: Start both streams simultaneously (current behavior)
+                self.output_stream.start()
+                self.stream.start()
 
-            self.logger.info(f"Started streaming play+record: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz")
+            self.logger.info(f"Started streaming play+record: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz, offset={playback_offset}s")
 
             # No timer needed - callback handles stopping based on sample count
             # Note: QTimer for queue polling is managed by UI layer

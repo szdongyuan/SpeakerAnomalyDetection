@@ -677,8 +677,12 @@ class SequenceWindow(QWidget):
                 self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
                 self.streaming_temp_path = temp_path
 
+                # Extract playback offset from config
+                acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+                playback_offset = acq_detail.get("playback_offset", 0.0)
+
                 self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info, playback_offset
                 )
                 self.streaming_mode = "play_record"
 
@@ -932,7 +936,7 @@ class SequenceWindow(QWidget):
                     self.streaming_wav_writer.finalize()
                     self.streaming_wav_writer = None
 
-                aligned_data = AlignmentProcessing.align_play_and_rec_data_using_gccphat(
+                aligned_data, pre_alignment_data = AlignmentProcessing.align_play_and_rec_data_using_gccphat(
                     self.streaming_stimulus_data, recorded_data
                 )
 
@@ -943,8 +947,9 @@ class SequenceWindow(QWidget):
                 else:
                     self.streaming_plot_item = self.line_graph.plot(final_time_axis, aligned_data, pen="k")
 
-                # Store aligned data
+                # Store aligned data and pre-alignment data
                 self.data_struct.store_wave_data = aligned_data
+                self.data_struct.pre_alignment_data = pre_alignment_data
 
                 # Save aligned data to final file
                 save_audio_simple(self.recorded_path, aligned_data, sample_rate)

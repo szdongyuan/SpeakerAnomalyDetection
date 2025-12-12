@@ -129,15 +129,26 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.config_button = QPushButton("激励信号配置")
         self.config_button.clicked.connect(self.open_stimulus_window)
 
-        grid_layout.addWidget(label_output_device, 0, 0)
+        label_playback_offset = QLabel("播放时间偏移:")
+        self.playback_offset_input = QDoubleSpinBox()
+        self.playback_offset_input.setRange(-2.0, 2.0)
+        self.playback_offset_input.setDecimals(2)
+        self.playback_offset_input.setValue(self.stimulus_config_data.get("playback_offset", 0.0))
+        self.playback_offset_input.setSingleStep(0.1)
+        self.playback_offset_input.setSuffix(" 秒")
+        self.playback_offset_input.setToolTip("正值:播放延迟,录制先开始(捕获背景噪声)\n负值:播放先开始,录制延迟")
 
+        grid_layout.addWidget(label_output_device, 0, 0)
         grid_layout.addWidget(self.output_device_display, 0, 1)
         grid_layout.addWidget(self.config_button, 1, 1)
+        grid_layout.addWidget(label_playback_offset, 2, 0)
+        grid_layout.addWidget(self.playback_offset_input, 2, 1)
         out_group_box.setLayout(grid_layout)
         return out_group_box
 
     def on_click_ok_btn(self):
         self.final_data = self.stimulus_config_data
+        self.final_data["playback_offset"] = self.playback_offset_input.value()
         self.accept()
 
     def open_stimulus_window(self):
