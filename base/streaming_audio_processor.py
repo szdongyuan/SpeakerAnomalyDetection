@@ -6,9 +6,9 @@ Enables non-blocking audio capture with real-time chunk processing.
 import queue
 import threading
 import numpy as np
-import sounddevice as sd
 
 from base.log_manager import LogManager
+from base.sound_device_manager import sd
 from base.utils.custom_signals import sign
 from consts import error_code
 
