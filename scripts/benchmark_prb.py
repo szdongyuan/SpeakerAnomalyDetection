@@ -3,6 +3,7 @@ import cProfile
 import io
 import os
 import pstats
+import sys
 import time
 from typing import List
 
@@ -13,6 +14,8 @@ from scipy.io import wavfile
 # mosqito may import matplotlib under the hood.
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(_PROJECT_ROOT, ".mplconfig"))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
 
