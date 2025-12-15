@@ -28,6 +28,7 @@ from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
 from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
+from base.pre_processing.psychoacoustic_utils import compute_noise_spectrum
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -950,6 +951,11 @@ class SequenceWindow(QWidget):
                 # Store aligned data and pre-alignment data
                 self.data_struct.store_wave_data = aligned_data
                 self.data_struct.pre_alignment_data = pre_alignment_data
+
+                # Compute and store noise spectrum from pre-alignment data
+                if pre_alignment_data is not None and len(pre_alignment_data) > 0:
+                    self.data_struct.noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
+                    self.default_logger.info(f"Computed noise spectrum from {len(pre_alignment_data)} samples")
 
                 # Save aligned data to final file
                 save_audio_simple(self.recorded_path, aligned_data, sample_rate)

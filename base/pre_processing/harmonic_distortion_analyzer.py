@@ -87,6 +87,47 @@ class HarmonicDistortionAnalyzer(ABC):
 
         return thd_percentage
 
+    def _apply_noise_correction(
+        self,
+        harmonic_bins: np.ndarray,
+        harmonic_amplitudes: np.ndarray,
+        noise_spectrum: np.ndarray
+    ) -> np.ndarray:
+        """
+        Apply background noise correction to harmonic amplitudes using quadrature subtraction.
+
+        Interpolates noise spectrum to harmonic frequencies and subtracts noise power
+        from signal power in quadrature (sqrt(signal^2 - noise^2)).
+
+        Args:
+            harmonic_bins: (n_harmonics,) bin indices of harmonics in spectrum
+            harmonic_amplitudes: (n_harmonics,) amplitude values at harmonic bins
+            noise_spectrum: (n_fft//2 + 1,) background noise magnitude spectrum
+
+        Returns:
+            corrected_amplitudes: (n_harmonics,) noise-corrected amplitude values
+        """
+        # Interpolate noise spectrum to harmonic bin indices
+        noise_interp = np.interp(
+            harmonic_bins,
+            np.arange(len(noise_spectrum)),
+            noise_spectrum
+        )
+
+        # Quadrature subtraction: corrected = sqrt(signal^2 - noise^2)
+        signal_power = harmonic_amplitudes ** 2
+        noise_power = noise_interp ** 2
+
+        # Clip to prevent negative values (when noise > signal)
+        corrected_power = np.maximum(signal_power - noise_power, 0.0)
+        corrected_amplitudes = np.sqrt(corrected_power)
+
+        # Apply minimum threshold to prevent log(0) later
+        min_amplitude = 1e-12
+        corrected_amplitudes = np.maximum(corrected_amplitudes, min_amplitude)
+
+        return corrected_amplitudes
+
     def compute_perceptual_thd_batch(
         self,
         spectrum_matrix: np.ndarray,
@@ -95,7 +136,8 @@ class HarmonicDistortionAnalyzer(ABC):
         fundamental_freqs: np.ndarray,
         masking_mask_matrix: np.ndarray = None,
         masking_config: dict = None,
-        spl_calibration_db: float = 0.0
+        spl_calibration_db: float = 0.0,
+        noise_spectrum: np.ndarray = None
     ) -> np.ndarray:
         """
         Compute perceptual loudness (in phons) of harmonics using psychoacoustic models.
@@ -115,6 +157,8 @@ class HarmonicDistortionAnalyzer(ABC):
                 - 'weight_function': str ('exponential', 'gaussian', etc.)
             spl_calibration_db: Calibration offset in dB (default 0.0).
                 Applied in amplitude domain: calibrated_amp = amp * 10^(calibration_db/20)
+            noise_spectrum: Optional (n_fft//2 + 1,) background noise magnitude spectrum.
+                If provided, applies background noise correction to harmonics.
 
         Returns:
             perceptual_loudness: (n_frames,) perceived loudness in phons
@@ -170,7 +214,16 @@ class HarmonicDistortionAnalyzer(ABC):
             # Get harmonic amplitudes
             raw_harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
             harmonic_amplitudes = raw_harmonic_amplitudes * calibration_multiplier
-            # Convert to SPL (dB re 20 μPa) after calibration
+
+            # Apply noise correction if noise spectrum is provided
+            if noise_spectrum is not None:
+                harmonic_amplitudes = self._apply_noise_correction(
+                    harmonic_bin_indices,
+                    harmonic_amplitudes,
+                    noise_spectrum
+                )
+
+            # Convert to SPL (dB re 20 μPa) after calibration (and optional noise correction)
             harmonic_spls = 20.0 * np.log10(
                 np.maximum(harmonic_amplitudes / reference_pressure, min_amplitude)
             )
@@ -236,11 +289,11 @@ class HarmonicDistortionAnalyzer(ABC):
                     fundamental_freqs[frame_idx],
                     fundamental_spl[frame_idx],
                     harmonic_freqs,
-                    harmonic_spls
+                    harmonic_spls,
                 )
 
             # Convert masked SPLs to phons
-            audible_indices = masked_spls > 0
+            audible_indices = masked_spls > 20
             if np.any(audible_indices):
                 # Build calibrated spectrum containing only audible harmonics (fundamental excluded)
                 calibrated_frame_amplitudes = spectrum_matrix[:, frame_idx] * calibration_multiplier

@@ -328,3 +328,43 @@ def apply_cumulative_masking(
             masked_spls[i] = maskee_spls[i]
 
     return masked_spls
+
+
+def compute_noise_spectrum(pre_alignment_data: np.ndarray, sample_rate: int) -> np.ndarray:
+    """
+    Compute background noise magnitude spectrum from pre-alignment data.
+
+    Uses fixed 0.5s window with Hann window. If data is longer than 0.5s,
+    extracts middle 0.5s segment to match typical measurement conditions.
+
+    Args:
+        pre_alignment_data: Background noise signal
+        sample_rate: Sample rate in Hz
+
+    Returns:
+        noise_spectrum: (n_fft//2 + 1,) magnitude spectrum
+    """
+    n_fft = int(0.5 * sample_rate)  # Fixed 0.5s window
+
+    if len(pre_alignment_data) < n_fft:
+        # Pad with zeros if too short
+        pre_alignment_data = np.pad(
+            pre_alignment_data,
+            (0, n_fft - len(pre_alignment_data)),
+            mode='constant'
+        )
+
+    # Extract middle 0.5s if longer than 0.5s
+    if len(pre_alignment_data) > n_fft:
+        mid_point = len(pre_alignment_data) // 2
+        start = mid_point - n_fft // 2
+        pre_alignment_data = pre_alignment_data[start:start + n_fft]
+
+    # Apply Hann window (same as PRB STFT)
+    window = np.hanning(n_fft)
+    windowed_data = pre_alignment_data * window
+
+    # Compute magnitude spectrum
+    noise_spectrum = np.abs(np.fft.rfft(windowed_data, n=n_fft))
+
+    return noise_spectrum

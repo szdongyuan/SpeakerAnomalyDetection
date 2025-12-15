@@ -182,7 +182,8 @@ class AudioThdFrequencyResponseAnalysis(object):
         recorded_signal: np.ndarray,
         sample_rate: int,
         thd_kwargs: dict,
-        spl_calibration_db: float = 0.0
+        spl_calibration_db: float = 0.0,
+        noise_spectrum: np.ndarray = None
     ) -> tuple:
         """
         Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
@@ -200,6 +201,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                 This is the deviation/offset value (e.g., from mic_calibration.txt).
                 Applied in amplitude domain before log transform:
                 calibrated_amp = amp * 10^(calibration_db/20)
+            noise_spectrum: Optional (n_fft//2 + 1,) background noise magnitude spectrum
 
         Returns:
             (freq_value, harmonic, perceptual_loudness):
@@ -262,7 +264,8 @@ class AudioThdFrequencyResponseAnalysis(object):
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
                 spl_calibration_db=spl_calibration_db,
-                masking_config=masking_config
+                masking_config=masking_config,
+                noise_spectrum=noise_spectrum
             )
         else:  # chirps
             analyzer = PerceptualChirpSignalHD(sample_rate)
@@ -270,7 +273,8 @@ class AudioThdFrequencyResponseAnalysis(object):
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, time_array, fundamental_bins),
                 spl_calibration_db=spl_calibration_db,
-                masking_config=masking_config
+                masking_config=masking_config,
+                noise_spectrum=noise_spectrum
             )
 
         # Extract results

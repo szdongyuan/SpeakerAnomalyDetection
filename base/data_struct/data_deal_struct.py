@@ -18,6 +18,7 @@ class DataDealStruct(object):
             self.stimulus_info = None
             self.sample_rate = None
             self.pre_alignment_data = None
+            self.noise_spectrum = None
 
             self.stft_flag = 0
             self.fft_flag = 0
@@ -31,6 +32,7 @@ class DataDealStruct(object):
         self.store_wave_data = None
         self.split_repeat_data = None
         self.pre_alignment_data = None
+        self.noise_spectrum = None
         # self.stimulus_data = None
         self.fft_result = None
         self.stft_result = None
