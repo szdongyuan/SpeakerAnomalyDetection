@@ -124,7 +124,7 @@ class SplConfigWindow(QDialog):
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
         self.config_dir_box.textChanged.connect(self.get_default_config)
-        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
+        icon_path = DEFAULT_DIR + "ui/ui_pic/folder/folder-s.png"
         config_dir_icon = QIcon(icon_path)
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")

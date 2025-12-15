@@ -259,7 +259,7 @@ class SequenceCountBoard(QWidget):
         ok_percent = round(ok / total * 100, 2) if total > 0 else 0
         lines.append(f"ok_percent: {ok_percent}%\n")
         if analyse_model_name:
-            lines.append("current_model: {analyse_model_name}\n")
+            lines.append(f"current_model: {analyse_model_name}\n")
         lines.append(f"current_time: {current_time}\n")
         with open(test_result_path, "w") as f:
             f.writelines(lines)
