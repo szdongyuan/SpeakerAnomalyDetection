@@ -1,11 +1,10 @@
 import os
 
+os.environ["SD_ENABLE_ASIO"] = "1"
+
 import sounddevice as sd
 
 from consts import error_code
-
-
-os.environ["SD_ENABLE_ASIO"] = "1"
 
 
 class SoundDeviceManager(object):
