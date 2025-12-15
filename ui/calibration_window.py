@@ -40,6 +40,8 @@ class CalibrationWindow(QDialog):
         self.setMaximumSize(600, 580)
         cal_wnd_layout = QVBoxLayout()
 
+        self.input_calibration_flag = False
+
         self.tabwidget = QTabWidget()
         self.output_cal_wnd = OutputCalibration()
         self.input_cal_wnd = InputCalibration()
@@ -51,7 +53,7 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout.addWidget(self.tabwidget)
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style + 
+        self.setStyleSheet(ui_style_const.qpushbutton_style +
                            ui_style_const.qtabwidget_style)
 
     def create_btn_box(self):
@@ -80,7 +82,7 @@ class CalibrationWindow(QDialog):
     def clicked_calibration_button(self):
         """
             Handles the event when the calibration button is clicked.
-            
+
             This function first determines which tab is currently active, and then performs the corresponding
         calibration operation based on the active tab.
             If the first tab is active, it calls the calibration method of the output_cal_wnd object.
@@ -93,11 +95,12 @@ class CalibrationWindow(QDialog):
         elif current_tab_index == 1:
             self.cal_btn.setDisabled(True)
             self.input_cal_wnd.clicked_calibration()
+            self.input_calibration_flag = True
 
     def clicked_reset_button(self):
         """
             Handles the event when the reset button is clicked.
-            
+
             This function first determines which tab is currently active, and then performs the reset operation
         according to the index of the active tab.
             If the first tab is active, it calls the reset_btn_clicked method of the output_cal_wnd object to perform
@@ -112,11 +115,12 @@ class CalibrationWindow(QDialog):
         elif current_tab_index == 1:
             self.input_cal_wnd.reset_btn_clicked()
             self.cal_btn.setDisabled(False)
+            self.input_calibration_flag = False
 
     def clicked_close_button(self):
         """
             Handles the event when the close button is clicked.
-            
+
             This function checks which tab is currently active in the tab widget, and then performs the corresponding
         operation to close the window.
             If the first tab is active, it directly closes the window; if the second tab is active, it first stops the
@@ -214,7 +218,7 @@ class OutputCalibration(QWidget):
 
             This function is responsible for generating a group box containing controls related to output voltage settings.
             It includes a play button, countdown display, output voltage adjustment spin box, and save button.
-            Return: 
+            Return:
                 the created output voltage group box
         """
         output_box = QGroupBox("输出电压")
@@ -437,7 +441,7 @@ class OutputCalibration(QWidget):
             Display a calibration test popup message.
 
             This function creates a QMessageBox instance, sets its icon, text, title, and buttons,
-            then displays the message box and waits for user interaction. 
+            then displays the message box and waits for user interaction.
             It returns whether the user clicked the OK button.
 
             Returns:
@@ -454,7 +458,7 @@ class OutputCalibration(QWidget):
     def reset_btn_clicked(self):
         """
             Handles the reset button click event.
-            
+
             This function resets various settings and displays in the user interface to their default or initial states. 
             It clears output voltage values, resets voltage settings, restores calibration counts, stops the timer, etc.
         """
@@ -478,7 +482,7 @@ class OutputCalibration(QWidget):
     def calibration(self):
         """
             Performs the soundcard calibration process.
-            
+
             This method first checks if the number of saved voltage values meets the required calibration times.
             If not, it logs an error and prompts the user through a popup window.
             If the conditions are met, it adds the amplitude and voltage data to the SoundcardCalibrationManager for
@@ -543,7 +547,7 @@ class InputCalibration(QWidget):
     def init_ui(self):
         """
             Initializes the user interface.
-            
+
             This method sets up the window title, window properties, and size constraints. 
             It also initializes the UI layout and applies custom stylesheets to various widgets.
         """
@@ -668,7 +672,7 @@ class InputCalibration(QWidget):
     def set_standard_spl(self):
         """
             Sets the value of standard_spl_flag based on the selected SPL standard.
-            
+
             If self.standard_spl_i is checked, sets self.standard_spl_flag to True.
             If self.standard_spl_ii is checked, sets self.standard_spl_flag to False.
         """
@@ -680,7 +684,7 @@ class InputCalibration(QWidget):
     def clicked_calibration(self):
         """
             Execute calibration process upon clicking the calibration button.
-            
+
             This function initializes the recording parameters, starts a thread to calculate the average sound pressure
         level, updates the recording time, and then calculates the deviation value based on the average value.
             If the deviation value is not 'inf', it indicates successful calibration, and the deviation value is saved.
@@ -795,10 +799,10 @@ class InputCalibration(QWidget):
     def save_deviation_value_to_text(deviation_value):
         """
             Save the deviation value to a text file.
-            
+
             This method writes the given deviation value to a specified text file, along with the current date.
             This is particularly useful for tracking and debugging changes in UI configuration.
-            
+
             Parameters:
             deviation_value (float): The deviation value to be saved.
         """

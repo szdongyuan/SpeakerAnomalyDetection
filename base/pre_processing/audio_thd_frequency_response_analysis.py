@@ -420,8 +420,8 @@ class AudioThdFrequencyResponseAnalysis(object):
             spl = spl + deviation
         return spl
 
-    @staticmethod    
-    def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size):
+    @staticmethod
+    def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size, deviation):
         """
             Calculate the sound pressure level of loose particles.
 
@@ -432,7 +432,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                 -kernel_size (int): The size of the median filter kernel, must be an odd number.
 
             Returns:
-                -filtered_spl:np.array 
+                -filtered_spl:np.array
                     The sound pressure level array after median filtering.
                 -rms_deviation: float
                     The root mean square deviation of the sound pressure level.
@@ -441,12 +441,10 @@ class AudioThdFrequencyResponseAnalysis(object):
         normal_cutoff = cutoff / nyquist
         b, a = bessel(4, normal_cutoff, btype='high', analog=False)
         analytic_signal = filtfilt(b, a, recorded_signal)
-        amplitude = np.abs(analytic_signal)
-        reference_pressure = 20e-6
-        signal_spl = 20 * np.log10(amplitude / reference_pressure)
+        signal_spl = AudioThdFrequencyResponseAnalysis.spl_calculation(analytic_signal, deviation=float(deviation))
         filtered_spl = medfilt(signal_spl, kernel_size)
         sum_squares = float()
-        for i in range(len(filtered_spl)): 
+        for i in range(len(filtered_spl)):
             sum_squares += filtered_spl[i] ** 2
         rms_deviation = np.sqrt(sum_squares / len(filtered_spl)) * (np.sqrt(2) / 2)
 
