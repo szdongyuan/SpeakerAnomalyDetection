@@ -65,6 +65,28 @@ def _critical_band_index_from_bark(bark: np.ndarray) -> np.ndarray:
     return np.clip(idx, 0, 24)
 
 
+def _partition_index_from_bark(bark: np.ndarray, *, partitions_per_bark: int = 3) -> np.ndarray:
+    """
+    Map Bark values to MPEG-style partitions (roughly 0.33 Bark for partitions_per_bark=3).
+    """
+    if partitions_per_bark <= 0:
+        raise ValueError(f"partitions_per_bark must be positive, got {partitions_per_bark}")
+    idx = np.floor(np.asarray(bark, dtype=float) * float(partitions_per_bark)).astype(int)
+    return np.clip(idx, 0, int(24 * partitions_per_bark))
+
+
+def _spreading_function_mpeg1_model1(dz_bark: np.ndarray) -> np.ndarray:
+    """
+    MPEG-1 psychoacoustic model 1 spreading function approximation in dB (Johnston-style).
+
+    The exact MPEG reference includes additional details (partition tables, further decimation rules).
+    This captures the characteristic asymmetric Bark-domain spread used by model 1.
+    """
+    dz = np.asarray(dz_bark, dtype=float)
+    x = dz + 0.474
+    return 15.81 + 7.5 * x - 17.5 * np.sqrt(1.0 + x * x)
+
+
 def pick_maskers_model1_like(
     spl_spectrum_db: np.ndarray,
     freqs_hz: np.ndarray,
@@ -326,6 +348,225 @@ def masking_threshold_from_maskers_model1_like(
     offsets = np.where(masker_levels >= 60.0, 3.0, np.where(masker_levels >= 40.0, 6.0, 10.0))
 
     thr = (masker_levels + corr - offsets)[:, None] + slopes * abs_dz
+    thr = np.maximum(thr, 0.0)
+
+    combined_power = np.sum(_db_to_power(thr), axis=0)
+    return _power_to_db(combined_power)
+
+
+def pick_maskers_mpeg1_model1(
+    spl_spectrum_db: np.ndarray,
+    freqs_hz: np.ndarray,
+    *,
+    bark_bins: np.ndarray | None = None,
+    partition_index: np.ndarray | None = None,
+    partitions_per_bark: int = 3,
+    forced_tonal_bins: np.ndarray | None = None,
+    tonal_peak_prominence_db: float = 7.0,
+    min_over_ath_db: float = 0.0,
+    tonal_neighbor_merge_bins: int = 1,
+    max_tonal_per_partition: int = 1,
+    enable_noise_maskers: bool = True,
+    min_noise_over_ath_db: float = 0.0,
+) -> MaskerSet:
+    """
+    Pick tonal and noise maskers using an MPEG-1 psychoacoustic model-1 style workflow.
+
+    Differences vs `pick_maskers_model1_like`:
+      - Uses finer Bark partitions (~0.33 Bark by default).
+      - Uses MPEG-like tonal detection (local max + neighbor prominence checks).
+      - Computes noise maskers from residual energy per partition using bincount.
+    """
+    spl = np.asarray(spl_spectrum_db, dtype=float)
+    freqs = np.asarray(freqs_hz, dtype=float)
+    if spl.ndim != 1 or freqs.ndim != 1 or spl.shape[0] != freqs.shape[0]:
+        raise ValueError("spl_spectrum_db and freqs_hz must be 1D arrays with the same length")
+    if spl.size < 3:
+        return MaskerSet(
+            tonal_freqs_hz=np.array([], dtype=float),
+            tonal_levels_db=np.array([], dtype=float),
+            noise_freqs_hz=np.array([], dtype=float),
+            noise_levels_db=np.array([], dtype=float),
+        )
+
+    if bark_bins is None:
+        bark_bins = freq_to_bark(freqs)
+    bark_bins = np.asarray(bark_bins, dtype=float)
+    if bark_bins.shape != freqs.shape:
+        raise ValueError("bark_bins must have the same shape as freqs_hz")
+
+    if partition_index is None:
+        partition_index = _partition_index_from_bark(bark_bins, partitions_per_bark=partitions_per_bark)
+    partition_index = np.asarray(partition_index, dtype=int)
+    if partition_index.shape != freqs.shape:
+        raise ValueError("partition_index must have the same shape as freqs_hz")
+
+    n_partitions = int(np.max(partition_index)) + 1 if partition_index.size else 0
+    if n_partitions <= 0:
+        return MaskerSet(
+            tonal_freqs_hz=np.array([], dtype=float),
+            tonal_levels_db=np.array([], dtype=float),
+            noise_freqs_hz=np.array([], dtype=float),
+            noise_levels_db=np.array([], dtype=float),
+        )
+
+    ath_db = absolute_threshold_of_hearing_db(freqs)
+
+    # Tonal peak picking with neighbor prominence (MPEG-like).
+    peak_bins = np.array([], dtype=int)
+    if spl.size >= 5:
+        mid = np.arange(2, spl.size - 2)
+        is_peak = (
+            (spl[mid] > spl[mid - 1])
+            & (spl[mid] >= spl[mid + 1])
+            & ((spl[mid] - spl[mid - 1]) >= tonal_peak_prominence_db)
+            & ((spl[mid] - spl[mid + 1]) >= tonal_peak_prominence_db)
+            & ((spl[mid] - spl[mid - 2]) >= tonal_peak_prominence_db)
+            & ((spl[mid] - spl[mid + 2]) >= tonal_peak_prominence_db)
+        )
+        peak_bins = mid[is_peak]
+    else:
+        center = spl[1:-1]
+        left = spl[:-2]
+        right = spl[2:]
+        peak_mask = (center > left) & (center >= right)
+        peak_bins = np.nonzero(peak_mask)[0] + 1
+
+    # Force-insert known tonal bins (e.g., fundamental bin), and treat them as tonal components.
+    if forced_tonal_bins is not None:
+        forced = np.asarray(forced_tonal_bins, dtype=int).reshape(-1)
+        forced = forced[(forced >= 1) & (forced < spl.size - 1)]
+        if forced.size:
+            if peak_bins.size:
+                peak_bins = np.unique(np.concatenate([peak_bins, forced]))
+            else:
+                peak_bins = np.unique(forced)
+
+    if peak_bins.size == 0 and not enable_noise_maskers:
+        return MaskerSet(
+            tonal_freqs_hz=np.array([], dtype=float),
+            tonal_levels_db=np.array([], dtype=float),
+            noise_freqs_hz=np.array([], dtype=float),
+            noise_levels_db=np.array([], dtype=float),
+        )
+
+    # ATH gate
+    peak_bins = peak_bins[spl[peak_bins] > (ath_db[peak_bins] + min_over_ath_db)]
+
+    power = _db_to_power(spl)
+    residual_power = power.copy()
+
+    # Build tonal candidates by merging neighborhood power and removing from residual.
+    tonal_candidates_bins = []
+    tonal_candidates_levels = []
+    if peak_bins.size:
+        for k in peak_bins:
+            lo = max(int(k) - tonal_neighbor_merge_bins, 0)
+            hi = min(int(k) + tonal_neighbor_merge_bins + 1, spl.size)
+            region_power = float(np.sum(power[lo:hi]))
+            if region_power <= 0.0:
+                continue
+            tonal_candidates_bins.append(int(k))
+            tonal_candidates_levels.append(float(_power_to_db(region_power)))
+            residual_power[lo:hi] = 0.0
+
+    tonal_bins = np.asarray(tonal_candidates_bins, dtype=int)
+    tonal_levels_db = np.asarray(tonal_candidates_levels, dtype=float)
+    if tonal_bins.size:
+        tonal_partitions = partition_index[tonal_bins]
+        kept = np.zeros(tonal_bins.size, dtype=bool)
+        for p in np.unique(tonal_partitions):
+            idx = np.where(tonal_partitions == p)[0]
+            if idx.size == 0:
+                continue
+            order = np.argsort(tonal_levels_db[idx])[::-1]
+            keep_idx = idx[order[:max_tonal_per_partition]]
+            kept[keep_idx] = True
+        tonal_bins = tonal_bins[kept]
+        tonal_levels_db = tonal_levels_db[kept]
+
+    tonal_freqs = freqs[tonal_bins] if tonal_bins.size else np.array([], dtype=float)
+
+    # Noise maskers from residual energy per partition (bincount for performance).
+    noise_freqs = np.array([], dtype=float)
+    noise_levels_db = np.array([], dtype=float)
+    if enable_noise_maskers:
+        part_power = np.bincount(partition_index, weights=residual_power, minlength=n_partitions).astype(float)
+        part_freq_power = np.bincount(partition_index, weights=residual_power * freqs, minlength=n_partitions).astype(float)
+        valid = part_power > 0.0
+        if np.any(valid):
+            centroids = np.zeros(n_partitions, dtype=float)
+            centroids[valid] = part_freq_power[valid] / part_power[valid]
+            part_levels_db = np.full(n_partitions, -np.inf, dtype=float)
+            part_levels_db[valid] = _power_to_db(part_power[valid])
+
+            # Select only local maxima of the noise-energy partitions to avoid over-counting
+            # many highly correlated noise maskers (closer to MPEG model behavior).
+            if n_partitions >= 3:
+                center = part_levels_db[1:-1]
+                left = part_levels_db[:-2]
+                right = part_levels_db[2:]
+                peak_mask = (center > left) & (center >= right)
+                peak_parts = np.nonzero(peak_mask)[0] + 1
+            else:
+                peak_parts = np.where(valid)[0]
+
+            peak_parts = peak_parts[valid[peak_parts]]
+            if peak_parts.size:
+                freqs_centroid = centroids[peak_parts]
+                levels = part_levels_db[peak_parts]
+                ath_centroid = absolute_threshold_of_hearing_db(freqs_centroid)
+                keep = levels > (ath_centroid + min_noise_over_ath_db)
+                noise_freqs = freqs_centroid[keep]
+                noise_levels_db = levels[keep]
+
+    return MaskerSet(
+        tonal_freqs_hz=np.asarray(tonal_freqs, dtype=float),
+        tonal_levels_db=np.asarray(tonal_levels_db, dtype=float),
+        noise_freqs_hz=np.asarray(noise_freqs, dtype=float),
+        noise_levels_db=np.asarray(noise_levels_db, dtype=float),
+    )
+
+
+def masking_threshold_from_maskers_mpeg1_model1(
+    *,
+    masker_freqs_hz: np.ndarray,
+    masker_levels_db: np.ndarray,
+    is_tonal: np.ndarray,
+    target_freqs_hz: np.ndarray,
+    target_bark: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Compute a combined masking threshold in dB SPL at arbitrary target frequencies (maskers only, no ATH max).
+    """
+    masker_freqs = np.asarray(masker_freqs_hz, dtype=float).reshape(-1)
+    masker_levels = np.asarray(masker_levels_db, dtype=float).reshape(-1)
+    tonal_flags = np.asarray(is_tonal, dtype=bool).reshape(-1)
+    targets = np.asarray(target_freqs_hz, dtype=float).reshape(-1)
+
+    if masker_freqs.size == 0:
+        return np.zeros_like(targets, dtype=float)
+    if masker_freqs.size != masker_levels.size or masker_freqs.size != tonal_flags.size:
+        raise ValueError("masker_freqs_hz, masker_levels_db, and is_tonal must have the same length")
+
+    if target_bark is None:
+        target_bark = freq_to_bark(targets)
+    else:
+        target_bark = np.asarray(target_bark, dtype=float).reshape(-1)
+        if target_bark.size != targets.size:
+            raise ValueError("target_bark must have the same length as target_freqs_hz")
+
+    masker_bark = freq_to_bark(masker_freqs)
+    dz = target_bark[None, :] - masker_bark[:, None]
+
+    sf = _spreading_function_mpeg1_model1(dz)
+
+    # Tonal vs noise masker offsets (MPEG model-1 style).
+    tonal_base = masker_levels - 0.275 * masker_bark - 6.025
+    noise_base = masker_levels - 0.175 * masker_bark - 2.025
+    base = np.where(tonal_flags, tonal_base, noise_base).astype(float)
+
+    thr = base[:, None] + sf
     thr = np.maximum(thr, 0.0)
 
     combined_power = np.sum(_db_to_power(thr), axis=0)

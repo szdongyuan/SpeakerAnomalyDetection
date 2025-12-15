@@ -13,8 +13,8 @@ from base.pre_processing.psychoacoustic_utils import (
     freq_to_bark,
 )
 from base.pre_processing.mpeg_psychoacoustic_masking import (
-    pick_maskers_model1_like,
-    masking_threshold_from_maskers_model1_like,
+    pick_maskers_mpeg1_model1,
+    masking_threshold_from_maskers_mpeg1_model1,
 )
 try:
     from mosqito.sq_metrics.loudness import loudness_zwst_freq
@@ -210,12 +210,20 @@ class HarmonicDistortionAnalyzer(ABC):
 
         rfft_freqs = np.fft.rfftfreq(n_fft, d=1.0 / self.sample_rate)
         rfft_bark_bins = freq_to_bark(rfft_freqs)
-        rfft_band_index = np.clip(np.floor(rfft_bark_bins).astype(int), 0, 24)
 
         masking_config = masking_config or {}
-        masker_min_over_ath_db = float(masking_config.get("min_over_ath_db", 5.0))
+        partitions_per_bark = int(masking_config.get("partitions_per_bark", 3))
+        rfft_partition_index = np.clip(
+            np.floor(rfft_bark_bins * float(partitions_per_bark)).astype(int),
+            0,
+            int(24 * partitions_per_bark),
+        )
+        tonal_peak_prominence_db = float(masking_config.get("tonal_peak_prominence_db", 7.0))
+        masker_min_over_ath_db = float(masking_config.get("min_over_ath_db", 0.0))
         tonal_neighbor_merge_bins = int(masking_config.get("tonal_neighbor_merge_bins", 1))
-        max_tonal_per_band = int(masking_config.get("max_tonal_per_band", 1))
+        max_tonal_per_partition = int(
+            masking_config.get("max_tonal_per_partition", masking_config.get("max_tonal_per_band", 1))
+        )
         enable_noise_maskers = bool(masking_config.get("enable_noise_maskers", True))
         min_noise_over_ath_db = float(masking_config.get("min_noise_over_ath_db", 0.0))
         max_total_maskers = int(masking_config.get("max_total_maskers", 64))
@@ -319,68 +327,40 @@ class HarmonicDistortionAnalyzer(ABC):
             frame_spls = 20.0 * np.log10(np.maximum(frame_amplitudes / reference_pressure, min_amplitude))
             frame_spls = np.maximum(frame_spls, 0.0)
 
-            maskers = pick_maskers_model1_like(
+            fundamental_rfft_bin = int(max(row_indices[frame_idx] - 1, 0))
+            forced_bins = None
+            if 0 <= fundamental_rfft_bin < rfft_freqs.size:
+                forced_bins = np.array([fundamental_rfft_bin], dtype=int)
+
+            maskers = pick_maskers_mpeg1_model1(
                 frame_spls,
                 rfft_freqs,
                 bark_bins=rfft_bark_bins,
-                band_index=rfft_band_index,
+                partition_index=rfft_partition_index,
+                partitions_per_bark=partitions_per_bark,
+                forced_tonal_bins=forced_bins,
+                tonal_peak_prominence_db=tonal_peak_prominence_db,
                 min_over_ath_db=masker_min_over_ath_db,
                 tonal_neighbor_merge_bins=tonal_neighbor_merge_bins,
-                max_tonal_per_band=max_tonal_per_band,
+                max_tonal_per_partition=max_tonal_per_partition,
                 enable_noise_maskers=enable_noise_maskers,
                 min_noise_over_ath_db=min_noise_over_ath_db,
             )
 
-            tonal_freqs = maskers.tonal_freqs_hz
-            tonal_levels = maskers.tonal_levels_db
-            noise_freqs = maskers.noise_freqs_hz
-            noise_levels = maskers.noise_levels_db
+            masker_freqs = maskers.all_freqs_hz()
+            masker_levels = maskers.all_levels_db()
+            is_tonal = maskers.all_is_tonal()
 
-            # Ensure the fundamental is considered as a tonal masker (robust even with leakage).
-            fundamental_rfft_bin = int(max(row_indices[frame_idx] - 1, 0))
-            if fundamental_rfft_bin < rfft_freqs.size:
-                f0_freq = float(rfft_freqs[fundamental_rfft_bin])
-                f0_spl = float(fundamental_spl[frame_idx])
-                if tonal_freqs.size == 0:
-                    tonal_freqs = np.array([f0_freq], dtype=float)
-                    tonal_levels = np.array([f0_spl], dtype=float)
-                else:
-                    if not np.any(np.isclose(tonal_freqs, f0_freq, rtol=0.0, atol=1e-9)):
-                        tonal_freqs = np.concatenate([tonal_freqs, [f0_freq]])
-                        tonal_levels = np.concatenate([tonal_levels, [f0_spl]])
-
-            if tonal_freqs.size == 0 and noise_freqs.size == 0:
+            if masker_freqs.size == 0:
                 combined_thresholds = np.zeros_like(harmonic_spls)
             else:
-                masker_freqs = (
-                    tonal_freqs
-                    if noise_freqs.size == 0
-                    else (noise_freqs if tonal_freqs.size == 0 else np.concatenate([tonal_freqs, noise_freqs]))
-                )
-                masker_levels = (
-                    tonal_levels
-                    if noise_levels.size == 0
-                    else (noise_levels if tonal_levels.size == 0 else np.concatenate([tonal_levels, noise_levels]))
-                )
-                is_tonal = (
-                    np.ones(tonal_levels.size, dtype=bool)
-                    if noise_levels.size == 0
-                    else (
-                        np.zeros(noise_levels.size, dtype=bool)
-                        if tonal_levels.size == 0
-                        else np.concatenate(
-                            [np.ones(tonal_levels.size, dtype=bool), np.zeros(noise_levels.size, dtype=bool)]
-                        )
-                    )
-                )
-
                 if masker_levels.size > max_total_maskers:
                     keep = np.argsort(masker_levels)[-max_total_maskers:]
                     masker_freqs = masker_freqs[keep]
                     masker_levels = masker_levels[keep]
                     is_tonal = is_tonal[keep]
 
-                combined_thresholds = masking_threshold_from_maskers_model1_like(
+                combined_thresholds = masking_threshold_from_maskers_mpeg1_model1(
                     masker_freqs_hz=masker_freqs,
                     masker_levels_db=masker_levels,
                     is_tonal=is_tonal,

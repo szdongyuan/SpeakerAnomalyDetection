@@ -217,16 +217,16 @@ def test_strong_nearby_masker_changes_results():
     instantaneous_freq = f0 + (f1 - f0) * t / duration
     phase = 2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration))
 
-    # Fundamental
-    fundamental = 0.5 * np.sin(phase)
+    # Fundamental (kept relatively small so the target harmonic isn't fully masked by f0 alone)
+    fundamental = 0.05 * np.sin(phase)
 
     # Strong 9th harmonic (masker)
     h9_phase = 2 * np.pi * (9 * f0 * t + 9 * (f1 - f0) * t**2 / (2 * duration))
-    h9 = 0.05 * np.sin(h9_phase)
+    h9 = 0.4 * np.sin(h9_phase)
 
     # Weak 10th harmonic (target to be masked)
     h10_phase = 2 * np.pi * (10 * f0 * t + 10 * (f1 - f0) * t**2 / (2 * duration))
-    h10 = 0.01 * np.sin(h10_phase)
+    h10 = 0.2 * np.sin(h10_phase)
 
     recorded_signal = fundamental + h9 + h10
 
@@ -245,20 +245,21 @@ def test_strong_nearby_masker_changes_results():
     result_no_9th = analyzer.compute_distortion(
         recorded_signal_no_9th, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
-        masking_config=None
+        masking_config=None,
     )
 
     result_with_9th = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
-        masking_config=None
+        masking_config=None,
     )
 
     loudness_no_9th = result_no_9th['perceptual_loudness']
     loudness_with_9th = result_with_9th['perceptual_loudness']
 
-    assert not np.allclose(loudness_no_9th, loudness_with_9th, rtol=0.01)
-    assert np.any(loudness_with_9th <= loudness_no_9th)
+    nonzero = loudness_no_9th > 0.0
+    assert np.any(nonzero)
+    assert np.any((loudness_no_9th[nonzero] - loudness_with_9th[nonzero]) > 0.05)
 
 
 def test_automatic_mask_creation():
