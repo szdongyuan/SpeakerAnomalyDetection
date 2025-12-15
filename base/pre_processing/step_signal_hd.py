@@ -80,9 +80,10 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         # Average across repetitions
         averaged_thd = np.mean(thd_per_rep, axis=0)
         averaged_spectrum = np.mean(spectrum_per_rep, axis=0)
+        num_frames = len(averaged_thd)
 
         return {
-            'frequencies': fundamental_freqs,
+            'frequencies': fundamental_freqs[:num_frames],
             'thd': averaged_thd,
             'num_repetitions': repeat_times,
             'spectrum_matrix': averaged_spectrum
@@ -155,10 +156,21 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
 
         num_steps = stimulus_metadata['num_steps']
         total_time = stimulus_metadata['total_time']
+        repeat_times = stimulus_metadata.get('repeat_times', 1)
+        if not isinstance(repeat_times, int) or repeat_times <= 0:
+            raise ValueError(f"repeat_times must be a positive integer, got {repeat_times}")
 
         # Calculate STFT parameters
-        step_duration = total_time / num_steps
+        # NOTE: total_time is expected to include all repetitions (see docs/hd_refactoring_guide.md),
+        # so STFT sizing should be derived from a single repetition.
+        single_rep_duration = total_time / repeat_times
+        step_duration = single_rep_duration / num_steps
         step_samples = int(step_duration * self.sample_rate)
+        if step_samples < 2:
+            raise ValueError(
+                f"Step duration too short for STFT: step_samples={step_samples}. "
+                f"Check total_time={total_time}, repeat_times={repeat_times}, num_steps={num_steps}."
+            )
         n_fft = step_samples
 
         # Build index matrix with all harmonics

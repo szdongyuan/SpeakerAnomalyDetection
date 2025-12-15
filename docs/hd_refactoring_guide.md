@@ -473,7 +473,7 @@ Abstract base class implementing vectorized THD computation.
 - `compute_thd_batch()`: Vectorized batch THD calculation using mask
 - `compute_distortion()`: Abstract method for subclasses
 
-**Formula**: THD = sqrt(sum(H_i²)) / sqrt(F² + sum(H_i²)) × 100%
+**Formula**: THD = sqrt(sum(H_i²)) / F × 100%
 
 Where F is fundamental, H_i are harmonics.
 

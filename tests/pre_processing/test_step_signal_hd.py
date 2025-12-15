@@ -129,7 +129,7 @@ class TestStepSignalHD:
         # THD = sqrt(H2² + H3² + H4²) / sqrt(F² + H2² + H3² + H4²) × 100
         harmonic_power = h2_amp**2 + h3_amp**2 + h4_amp**2
         total_power = fund_amp**2 + harmonic_power
-        expected_thd = np.sqrt(harmonic_power / total_power) * 100
+        expected_thd = np.sqrt(harmonic_power) / fund_amp * 100
 
         # Allow ~5% tolerance due to windowing effects (Hann window)
         measured_thd = result_all['thd'][0]
@@ -156,7 +156,7 @@ class TestStepSignalHD:
         # Expected THD for 2nd + 3rd harmonics only
         harmonic_power_2_3 = h2_amp**2 + h3_amp**2
         total_power_2_3 = fund_amp**2 + harmonic_power_2_3
-        expected_thd_2_3 = np.sqrt(harmonic_power_2_3 / total_power_2_3) * 100
+        expected_thd_2_3 = np.sqrt(harmonic_power_2_3) / fund_amp * 100
 
         measured_thd_2_3 = result_2_3['thd'][0]
         assert abs(measured_thd_2_3 - expected_thd_2_3) < 5.0, \
@@ -188,7 +188,7 @@ class TestStepSignalHD:
         # Expected distortion for 2nd harmonic only
         harmonic_power_2 = h2_amp**2
         total_power_2 = fund_amp**2 + harmonic_power_2
-        expected_thd_2 = np.sqrt(harmonic_power_2 / total_power_2) * 100
+        expected_thd_2 = np.sqrt(harmonic_power_2) / fund_amp * 100
 
         measured_thd_2 = result_2['thd'][0]
         assert abs(measured_thd_2 - expected_thd_2) < 5.0, \
@@ -388,4 +388,3 @@ class TestStepSignalHD:
             for i, (actual, expected) in enumerate(zip(marked_freqs, expected_freqs)):
                 assert abs(actual - expected) < 20.0, \
                     f"Step {step_idx}, harmonic {i}: freq={actual:.1f} Hz, expected ~{expected:.1f} Hz"
-

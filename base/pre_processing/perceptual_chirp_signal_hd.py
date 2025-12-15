@@ -12,6 +12,17 @@ from base.pre_processing.chirp_signal_hd import ChirpSignalHD
 class PerceptualChirpSignalHD(ChirpSignalHD):
     """Perceptual loudness analyzer for chirp signals."""
 
+    @staticmethod
+    def _pad_or_trim_mask_rows(mask_matrix: np.ndarray, target_rows: int) -> np.ndarray:
+        """Pad (with zeros) or trim a mask matrix to a target number of rows."""
+        if mask_matrix.shape[0] == target_rows:
+            return mask_matrix
+        if mask_matrix.shape[0] > target_rows:
+            return mask_matrix[:target_rows, :]
+        padded = np.zeros((target_rows, mask_matrix.shape[1]), dtype=mask_matrix.dtype)
+        padded[:mask_matrix.shape[0], :] = mask_matrix
+        return padded
+
     def compute_distortion(
         self,
         recorded_signal: np.ndarray,
@@ -92,49 +103,71 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
             if masking_mask_matrix is None:
                 raise ValueError("enable_cumulative=True requires masking_mask_matrix (4-tuple or 5-tuple harmonic_mask)")
 
-        # Compute STFT (reuse parent method)
-        spectrum_matrix = self._compute_stft(
-            recorded_signal, stft_window_size, stft_hop_size, stft_window_type
-        )
-
-        # Add dummy bin
-        spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
-
-        # Validate and align frame counts
-        num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
-        spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
-        mask_trimmed = mask_matrix[:, :num_frames]
-        fund_bins_trimmed = fundamental_bins[:num_frames]
-        fund_freqs_trimmed = fundamental_freqs[:num_frames]
-
-        # Trim masking mask if present
-        masking_mask_trimmed = None
-        if masking_mask_matrix is not None:
-            masking_mask_trimmed = masking_mask_matrix[:, :num_frames]
-
-        # Compute perceptual loudness with masking config and calibration
-        perceptual_loudness = self.compute_perceptual_thd_batch(
-            spectrum_trimmed,
-            mask_trimmed,
-            fund_bins_trimmed,
-            fund_freqs_trimmed,
-            masking_mask_matrix=masking_mask_trimmed,
-            masking_config=masking_config,
-            spl_calibration_db=spl_calibration_db,
-            noise_spectrum=noise_spectrum
-        )
-
-        # Compute time values
-        times = np.arange(num_frames) * stft_hop_size / self.sample_rate
-
-        # Get actual repeat_times from metadata (default to 1 if not present)
-        # Note: Averaging across repetitions happens in higher-level callers if needed
+        # Split into repetitions and average across them (consistent with ChirpSignalHD)
         num_repetitions = stimulus_metadata.get('repeat_times', 1)
+        repetitions = self._split_repetitions(recorded_signal, num_repetitions)
+
+        perceptual_loudness_per_rep = []
+        spectrum_per_rep = []
+
+        for repetition_signal in repetitions:
+            # Compute STFT (reuse parent method)
+            spectrum_matrix = self._compute_stft(
+                repetition_signal, stft_window_size, stft_hop_size, stft_window_type
+            )
+
+            # Add dummy bin
+            spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
+            target_rows = spectrum_with_dummy.shape[0]
+            mask_matrix_aligned = self._pad_or_trim_mask_rows(mask_matrix, target_rows)
+            masking_mask_matrix_aligned = None
+            if masking_mask_matrix is not None:
+                masking_mask_matrix_aligned = self._pad_or_trim_mask_rows(masking_mask_matrix, target_rows)
+
+            # Validate and align frame counts
+            num_frames = min(spectrum_with_dummy.shape[1], mask_matrix_aligned.shape[1])
+            spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
+            mask_trimmed = mask_matrix_aligned[:, :num_frames]
+            fund_bins_trimmed = fundamental_bins[:num_frames]
+            fund_freqs_trimmed = fundamental_freqs[:num_frames]
+
+            # Trim masking mask if present
+            masking_mask_trimmed = None
+            if masking_mask_matrix_aligned is not None:
+                masking_mask_trimmed = masking_mask_matrix_aligned[:, :num_frames]
+
+            # Compute perceptual loudness with masking config and calibration
+            perceptual_loudness = self.compute_perceptual_thd_batch(
+                spectrum_trimmed,
+                mask_trimmed,
+                fund_bins_trimmed,
+                fund_freqs_trimmed,
+                masking_mask_matrix=masking_mask_trimmed,
+                masking_config=masking_config,
+                spl_calibration_db=spl_calibration_db,
+                noise_spectrum=noise_spectrum,
+                n_fft=stft_window_size
+            )
+
+            perceptual_loudness_per_rep.append(perceptual_loudness)
+            spectrum_per_rep.append(spectrum_trimmed)
+
+        # Average across repetitions
+        averaged_loudness = np.mean(perceptual_loudness_per_rep, axis=0)
+        averaged_spectrum = np.mean(spectrum_per_rep, axis=0)
+        num_frames = len(averaged_loudness)
+
+        # Compute time values (within a single repetition)
+        if time_array is not None:
+            times = time_array[:num_frames]
+        else:
+            # Match HarmonicIndexBuilder's frame-center convention.
+            times = (np.arange(num_frames) * stft_hop_size + stft_window_size / 2.0) / self.sample_rate
 
         return {
-            'frequencies': fund_freqs_trimmed,
+            'frequencies': fundamental_freqs[:num_frames],
             'times': times,
-            'perceptual_loudness': perceptual_loudness,
-            'spectrum_matrix': spectrum_trimmed,
+            'perceptual_loudness': averaged_loudness,
+            'spectrum_matrix': averaged_spectrum,
             'num_repetitions': num_repetitions
         }

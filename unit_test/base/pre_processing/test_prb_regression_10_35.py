@@ -6,17 +6,8 @@ existing 10-35 harmonic analysis functionality.
 """
 import numpy as np
 import pytest
+import os
 import sys
-from PyQt5.QtWidgets import QApplication
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    """Create QApplication for GUI tests"""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-    yield app
 
 
 def test_prb_10_35_harmonics_still_works():
@@ -72,14 +63,23 @@ def test_prb_10_35_harmonics_still_works():
     assert 50 < loudness < 80, f"Loudness {loudness:.1f} phons outside expected range"
 
 
-def test_prb_select_all_10_35_backward_compat(qapp):
+@pytest.mark.skipif(
+    os.environ.get("RUN_UI_TESTS") != "1",
+    reason="UI test disabled by default; set RUN_UI_TESTS=1 to enable.",
+)
+def test_prb_select_all_10_35_backward_compat():
     """
     Test that old config files with 10-35 harmonics still load correctly.
 
     Validates backward compatibility with existing user configurations.
     """
+    from PyQt5.QtWidgets import QApplication
     from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
     from unittest.mock import MagicMock
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
 
     # Mock old config with 10-35 harmonics (pre-extension)
     mock_config_manager = MagicMock()

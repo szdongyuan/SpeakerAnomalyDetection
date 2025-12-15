@@ -12,6 +12,17 @@ from base.pre_processing.step_signal_hd import StepSignalHD
 class PerceptualStepSignalHD(StepSignalHD):
     """Perceptual loudness analyzer for step signals."""
 
+    @staticmethod
+    def _pad_or_trim_mask_rows(mask_matrix: np.ndarray, target_rows: int) -> np.ndarray:
+        """Pad (with zeros) or trim a mask matrix to a target number of rows."""
+        if mask_matrix.shape[0] == target_rows:
+            return mask_matrix
+        if mask_matrix.shape[0] > target_rows:
+            return mask_matrix[:target_rows, :]
+        padded = np.zeros((target_rows, mask_matrix.shape[1]), dtype=mask_matrix.dtype)
+        padded[:mask_matrix.shape[0], :] = mask_matrix
+        return padded
+
     def compute_distortion(
         self,
         recorded_signal: np.ndarray,
@@ -86,6 +97,11 @@ class PerceptualStepSignalHD(StepSignalHD):
             single_rep_duration = total_time / repeat_times
             step_duration = single_rep_duration / num_steps
             step_samples = int(step_duration * self.sample_rate)
+            if step_samples < 2:
+                raise ValueError(
+                    f"Step duration too short for STFT: step_samples={step_samples}. "
+                    f"Check total_time={total_time}, repeat_times={repeat_times}, num_steps={num_steps}."
+                )
             stft_window_size = step_samples
             stft_hop_size = step_samples
 
@@ -96,18 +112,23 @@ class PerceptualStepSignalHD(StepSignalHD):
 
             # Add dummy bin
             spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
+            target_rows = spectrum_with_dummy.shape[0]
+            mask_matrix_aligned = self._pad_or_trim_mask_rows(mask_matrix, target_rows)
+            masking_mask_matrix_aligned = None
+            if masking_mask_matrix is not None:
+                masking_mask_matrix_aligned = self._pad_or_trim_mask_rows(masking_mask_matrix, target_rows)
 
             # Validate and align frame counts
-            num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
+            num_frames = min(spectrum_with_dummy.shape[1], mask_matrix_aligned.shape[1])
             spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
-            mask_trimmed = mask_matrix[:, :num_frames]
+            mask_trimmed = mask_matrix_aligned[:, :num_frames]
             fund_bins_trimmed = fundamental_bins[:num_frames]
             fund_freqs_trimmed = fundamental_freqs[:num_frames]
 
             # Trim masking mask if present
             masking_mask_trimmed = None
-            if masking_mask_matrix is not None:
-                masking_mask_trimmed = masking_mask_matrix[:, :num_frames]
+            if masking_mask_matrix_aligned is not None:
+                masking_mask_trimmed = masking_mask_matrix_aligned[:, :num_frames]
 
             # Compute perceptual loudness with masking config and calibration
             perceptual_loudness = self.compute_perceptual_thd_batch(
@@ -118,7 +139,8 @@ class PerceptualStepSignalHD(StepSignalHD):
                 masking_mask_matrix=masking_mask_trimmed,
                 masking_config=masking_config,
                 spl_calibration_db=spl_calibration_db,
-                noise_spectrum=noise_spectrum
+                noise_spectrum=noise_spectrum,
+                n_fft=stft_window_size
             )
 
             perceptual_loudness_per_rep.append(perceptual_loudness)
@@ -127,9 +149,10 @@ class PerceptualStepSignalHD(StepSignalHD):
         # Average across repetitions
         averaged_loudness = np.mean(perceptual_loudness_per_rep, axis=0)
         averaged_spectrum = np.mean(spectrum_per_rep, axis=0)
+        num_frames = len(averaged_loudness)
 
         return {
-            'frequencies': fundamental_freqs,
+            'frequencies': fundamental_freqs[:num_frames],
             'perceptual_loudness': averaged_loudness,
             'num_repetitions': repeat_times,
             'spectrum_matrix': averaged_spectrum

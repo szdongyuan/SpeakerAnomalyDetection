@@ -93,7 +93,7 @@ def compute_simultaneous_masking_threshold(
     Improvements over simplified model:
     1. Frequency-dependent slopes (varies with masker frequency)
     2. Level-dependent offset (stronger maskers have lower offset)
-    3. Asymmetric spreading (upward masking stronger than downward)
+    3. Asymmetric spreading (different slopes above/below)
 
     Args:
         masker_freq: Frequency of masker in Hz
@@ -160,13 +160,14 @@ def apply_masking(
     """
     Apply simultaneous masking from fundamental to higher harmonics.
 
-    Binary masking approach based on Zwicker & Fastl (1999):
-    - If harmonic SPL ≤ masking threshold: fully masked (0 dB contribution)
-    - If harmonic SPL > masking threshold: fully audible (no attenuation)
+    Returns an *effective* SPL after masking by removing the masking threshold
+    in the power domain:
 
-    This follows the standard psychoacoustic approach where masking determines
-    detectability, not loudness reduction. Once detected, harmonics contribute
-    their full loudness value.
+        P_eff = max(P_harmonic - P_threshold, 0)
+        SPL_eff = 10 * log10(P_eff)
+
+    This produces a smooth reduction when the harmonic is near the masking
+    threshold, while still yielding 0 dB SPL when fully masked.
 
     Args:
         fundamental_freq: Fundamental frequency in Hz
@@ -175,8 +176,8 @@ def apply_masking(
         harmonic_spls: Harmonic SPLs in dB (n,)
 
     Returns:
-        masked_spls: Harmonic SPLs after masking in dB (n,)
-                     0 dB if fully masked, original SPL if audible
+        masked_spls: Effective harmonic SPLs after masking in dB (n,)
+                     In [0, harmonic_spl] for each harmonic.
 
     References:
         - Zwicker & Fastl (1999) "Psychoacoustics: Facts and Models"
@@ -190,13 +191,25 @@ def apply_masking(
             fundamental_freq, fundamental_spl, h_freq
         )
 
-        # Binary masking decision
+        # No masking effect at/below 0 dB SPL threshold
+        if threshold <= 0.0:
+            masked_spls[i] = h_spl
+            continue
+
+        # Fully masked
         if h_spl <= threshold:
-            # Fully masked: harmonic is inaudible
+            masked_spls[i] = 0.0
+            continue
+
+        # Partial masking: remove threshold in power domain
+        harmonic_power = np.power(10.0, h_spl / 10.0)
+        threshold_power = np.power(10.0, threshold / 10.0)
+        residual_power = harmonic_power - threshold_power
+
+        if residual_power <= 0.0:
             masked_spls[i] = 0.0
         else:
-            # Above threshold: harmonic is fully audible, no attenuation
-            masked_spls[i] = h_spl
+            masked_spls[i] = max(10.0 * np.log10(residual_power), 0.0)
 
     return masked_spls
 
@@ -247,19 +260,23 @@ def apply_cumulative_masking(
     """
     Apply cumulative masking from multiple maskers to maskees.
 
-    Uses distance-weighted power summation of masking thresholds.
-    Each masker contributes to masking based on its Bark distance from
-    the maskee, with closer maskers having more influence.
+    Uses power summation of individual masking thresholds (in the power domain).
+
+    NOTE: Each individual masking threshold is already a function of Bark distance
+    via `compute_simultaneous_masking_threshold` (spreading function). Applying an
+    additional distance-based weight here would effectively "double count" the
+    distance attenuation. The `weight_function` parameter is retained for backward
+    compatibility but is not used.
 
     Args:
         masker_freqs: Frequencies of all maskers (fundamental + harmonics 1-9) in Hz
         masker_spls: SPL levels of all maskers in dB
         maskee_freqs: Frequencies of harmonics being analyzed in Hz
         maskee_spls: SPL levels of harmonics being analyzed in dB
-        weight_function: 'exponential', 'gaussian', 'linear', or 'inverse'
+        weight_function: Kept for backward compatibility (currently unused).
 
     Returns:
-        masked_spls: Masked SPL values for each maskee in dB (n_maskees,)
+        masked_spls: Effective masked SPL values for each maskee in dB (n_maskees,)
 
     Raises:
         ValueError: If masker_freqs and masker_spls have different lengths
@@ -281,20 +298,9 @@ def apply_cumulative_masking(
     n_maskers = len(masker_freqs)
     masked_spls = np.zeros(n_maskees)
 
-    # Convert frequencies to Bark scale
-    masker_barks = np.array([freq_to_bark(f) for f in masker_freqs])
-    maskee_barks = np.array([freq_to_bark(f) for f in maskee_freqs])
-
-    # Compute weight matrix (n_maskees × n_maskers)
-    weight_matrix = np.zeros((n_maskees, n_maskers))
-    for i, maskee_bark in enumerate(maskee_barks):
-        for j, masker_bark in enumerate(masker_barks):
-            bark_distance = abs(maskee_bark - masker_bark)
-            weight_matrix[i, j] = compute_bark_weight(bark_distance, weight_function)
-
     # Compute threshold matrix (n_maskees × n_maskers)
     threshold_matrix = np.zeros((n_maskees, n_maskers))
-    for i, (maskee_freq, maskee_bark) in enumerate(zip(maskee_freqs, maskee_barks)):
+    for i, maskee_freq in enumerate(maskee_freqs):
         for j, (masker_freq, masker_spl) in enumerate(zip(masker_freqs, masker_spls)):
             threshold = compute_simultaneous_masking_threshold(
                 masker_freq, masker_spl, maskee_freq
@@ -303,12 +309,10 @@ def apply_cumulative_masking(
 
     # Apply weighted power summation for each maskee
     for i in range(n_maskees):
-        # Weighted power summation
-        weights = weight_matrix[i, :]
         thresholds = threshold_matrix[i, :]
 
-        # Convert to linear power, weight, sum, convert back
-        powers = weights * np.power(10.0, thresholds / 10.0)
+        # Convert to linear power, sum, convert back
+        powers = np.power(10.0, thresholds / 10.0)
         total_power = np.sum(powers)
 
         # Guard against zero total power (would cause log10(0) -> -inf)
@@ -319,13 +323,25 @@ def apply_cumulative_masking(
 
         combined_threshold = 10.0 * np.log10(total_power)
 
-        # Binary masking decision (following Zwicker approach)
+        # No masking effect at/below 0 dB SPL threshold
+        if combined_threshold <= 0.0:
+            masked_spls[i] = maskee_spls[i]
+            continue
+
+        # Fully masked
         if maskee_spls[i] <= combined_threshold:
-            # Fully masked: inaudible
+            masked_spls[i] = 0.0
+            continue
+
+        # Partial masking: remove combined threshold in power domain
+        maskee_power = np.power(10.0, maskee_spls[i] / 10.0)
+        threshold_power = np.power(10.0, combined_threshold / 10.0)
+        residual_power = maskee_power - threshold_power
+
+        if residual_power <= 0.0:
             masked_spls[i] = 0.0
         else:
-            # Above threshold: fully audible, no attenuation
-            masked_spls[i] = maskee_spls[i]
+            masked_spls[i] = max(10.0 * np.log10(residual_power), 0.0)
 
     return masked_spls
 

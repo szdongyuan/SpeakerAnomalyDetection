@@ -19,6 +19,8 @@ test.py
 ui/readme.md
 /.claude
 /.serena
+/.mplconfig/
+/.numba_cache/
 /doc
 *.md
 /.worktrees/

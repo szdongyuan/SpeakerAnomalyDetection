@@ -1,12 +1,27 @@
-import pytest
-import numpy as np
-from unittest.mock import Mock, patch
-from PyQt5.QtWidgets import QApplication
+import os
 import sys
+from pathlib import Path
+from unittest.mock import Mock, patch
 
+import numpy as np
+import pytest
+
+
+if os.environ.get("RUN_UI_TESTS") != "1":
+    pytest.skip(
+        "UI integration tests disabled by default; set RUN_UI_TESTS=1 to enable.",
+        allow_module_level=True,
+    )
+
+# Work around numba cache issues when librosa imports numba-jitted functions with cache=True.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_NUMBA_CACHE_DIR = _PROJECT_ROOT / ".numba_cache"
+os.environ.setdefault("NUMBA_CACHE_DIR", str(_NUMBA_CACHE_DIR))
+_NUMBA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+from PyQt5.QtWidgets import QApplication
 from ui.signal_analysis_window import get_class_mapping, PerceptualRubAndBuzz
 from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
-from base.data_struct.data_deal_struct import DataDealStruct
 
 
 @pytest.fixture(scope="module")

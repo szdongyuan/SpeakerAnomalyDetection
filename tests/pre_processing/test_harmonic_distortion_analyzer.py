@@ -33,4 +33,4 @@ class TestHarmonicDistortionAnalyzer:
         # THD should be array of percentages
         assert thd.shape == (n_steps,)
         assert np.all(thd >= 0)
-        assert np.all(thd <= 100)
+        assert np.all(np.isfinite(thd))
