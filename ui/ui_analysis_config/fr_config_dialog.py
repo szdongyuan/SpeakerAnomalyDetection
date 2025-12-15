@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QLabel, QRadioButton, QLineEdit, QDoubleSpinBox
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils, check_upper_lower_limit
+from ui.signal_analysis_window import Frequency
 
 
 class FrConfigWindow(QDialog):
@@ -143,12 +144,18 @@ class FrConfigWindow(QDialog):
 
     def config_dir_btn_clicked(self):
         self.file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="All Files (*);;"
+            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="CSV 文件 (*.csv)"
         )
         if self.file_path:
+            result = Frequency.load_excel_limit(self.file_path)
+            if not result:
+                self.file_path = None
+                self.config_dir = None
+                self.config_dir_box.setText("")
+                return
             self.config_dir = self.file_path
             config_dir_name = os.path.basename(self.file_path)
-        self.config_dir_box.setText(config_dir_name)
+            self.config_dir_box.setText(config_dir_name)
 
     def on_limit_checkbox_changed(self, state):
         self.get_default_config()

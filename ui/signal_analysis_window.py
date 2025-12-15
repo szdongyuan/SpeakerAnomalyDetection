@@ -298,13 +298,16 @@ class Frequency(AnalysisGraphWidget):
 
     @staticmethod
     def load_excel_limit(excel_path):
+        if not excel_path:
+            QMessageBox.warning(None, "提示", f"Excel路径为空, 请选择一个Excel文件路径！")
+            return None
         ext = os.path.splitext(excel_path)[1].lower()
         if ext == ".csv":
             with open(excel_path, "r", encoding="utf-8", newline="") as f:
                 reader = csv.reader(f)
                 rows = list(reader)
         else:
-            QMessageBox.warning(None, "提示", f"Do not support the analysis of this Excel type:\n{excel_path}")
+            QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
             return None
 
         csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
@@ -318,20 +321,18 @@ class Frequency(AnalysisGraphWidget):
         elif lenth == 2 and rows[0][1] == "lowerbound":
             upperbound = False
         else:
-            QMessageBox.warning(
-                None,
-                "提示",
-                "Excel/CSV 格式不符合要求：\n第二列必须为 upperbound 或 lowerbound"
-            )
+            QMessageBox.warning(None,"提示","Excel/CSV 格式不符合要求!")
             return None
-        for row in rows:
+        for index, row in enumerate(rows[1:], start=2):
+            csv_line_no = index
             if lenth == 3 and upperbound:
                 try:
                     fval = float(row[0])
                     uval = float(row[1])
                     lval = float(row[2])
                 except ValueError:
-                    continue
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
                 csv_lower_list.append(lval)
@@ -341,7 +342,8 @@ class Frequency(AnalysisGraphWidget):
                     uval = float(row[2])
                     lval = float(row[1])
                 except ValueError:
-                    continue
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
                 csv_lower_list.append(lval)
@@ -350,7 +352,8 @@ class Frequency(AnalysisGraphWidget):
                     fval = float(row[0])
                     uval = float(row[1])
                 except ValueError:
-                    continue
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
                 csv_lower_list.append(np.nan)
@@ -359,10 +362,23 @@ class Frequency(AnalysisGraphWidget):
                     fval = float(row[0])
                     lval = float(row[1])
                 except ValueError:
-                    continue
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(np.nan)
                 csv_lower_list.append(lval)
+        for i, (x, u, l) in enumerate(zip(csv_freq_list, csv_upper_list, csv_lower_list)):
+            if (u is not None) and (l is not None) and (not np.isnan(u)) and (not np.isnan(l)):
+                if l > u:
+                    QMessageBox.warning(
+                        None,
+                        "提示",
+                        f"CSV 上下限配置错误：下限不能大于上限。\n"
+                        f"位置: 第{i+2}条数据, X={x}\n"
+                        f"lower={l}, upper={u}\n"
+                        f"文件: {excel_path}"
+                    )
+                    return None
         return (np.asarray(csv_freq_list, dtype=float),
             np.asarray(csv_upper_list, dtype=float),
             np.asarray(csv_lower_list, dtype=float))
@@ -398,7 +414,8 @@ class Frequency(AnalysisGraphWidget):
                 if fr_disp[index] >= csv_upper_list[table_index] or fr_disp[index] <= csv_lower_list[table_index]:
                     current_out_range.append((frequency_list[index], fr_disp[index]))
                 else:
-                    out_range_points.append(current_out_range)
+                    if current_out_range:
+                        out_range_points.append(current_out_range)
                     current_out_range = []
         if current_out_range:
             out_range_points.append(current_out_range)
