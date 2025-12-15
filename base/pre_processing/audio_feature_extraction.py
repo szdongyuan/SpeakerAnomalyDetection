@@ -160,23 +160,6 @@ class AudioFeatureExtraction(object):
         return spectral_flatness
 
     @staticmethod
-    def sound_pressure_level(signal):
-        """
-            Calculates the sound pressure level (SPL) of the given audio signal.
-
-            Args:
-            - signal: array
-                The audio signal data.
-            Returns:
-            - spl: int
-                The sound pressure level of the given audio signal.
-        """
-        rms = np.sqrt(np.mean(signal ** 2))
-        p0 = 20e-6
-        spl = 20 * np.log10(rms / p0)
-        return spl
-
-    @staticmethod
     def data_normalize(signal, sr, **kwargs):
         """To normalize audio raw data to [-1, 1] """
         signal_normalized = librosa.util.normalize(signal)

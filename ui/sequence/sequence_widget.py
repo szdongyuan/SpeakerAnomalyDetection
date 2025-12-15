@@ -137,6 +137,9 @@ class SequenceWindow(QWidget):
             + ui_style_const.qcheckbox_style
         )
 
+    def update_deviation_value(self):
+        self.deviation_value = get_mic_deviation_value()
+
     def connect_set_result_file_sign(self, index, label, model_name):
         if self.count_board.mode == "test":
             self.count_board.set_test_result_file(label, model_name)

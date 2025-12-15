@@ -1,4 +1,5 @@
 import sys
+from webbrowser import get
 
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
@@ -311,6 +312,8 @@ class MainWindow(QMainWindow):
         dlg = CalibrationWindow()
         dlg.speaker = self.speaker
         dlg.exec()
+        if dlg.input_calibration_flag:
+            self.sequence_window.update_deviation_value()
 
     def on_window_close(self):
         # close the window

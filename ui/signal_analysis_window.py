@@ -756,6 +756,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.analysis_config = None
         self.lp_num_label = QLabel("LP 数量: %s" % self.result)
         self.status_label = QLabel()
+        self.deviation_value = None
         self.threshould = None
         self.setWindowTitle(title_name)
         self.add_label_to_layout()
@@ -773,7 +774,7 @@ class LooseParticle(AnalysisGraphWidget):
     def calculate_loose_particle(self):
         recorded_signal = self.data_struct.store_wave_data
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
-            recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67
+            recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67, self.deviation_value
         )
         self.plot_graph(filtered_spl, deviation)
         self.lp_num_label.setText("LP 数量: %s" % self.result)
