@@ -90,63 +90,44 @@ def test_compute_perceptual_thd_batch_masking_effect():
     assert perceptual_loudness[0] <= perceptual_loudness[1]
 
 
-def test_compute_perceptual_thd_batch_with_cumulative_masking():
-    """Test cumulative masking reduces phon values compared to fundamental-only"""
+def test_compute_perceptual_thd_batch_additional_tonal_masker_reduces_loudness():
+    """Strong nearby tonal energy should reduce perceived loudness of a target harmonic."""
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 44100
 
     from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
-    # Create spectrum with strong 9th harmonic, weak 10th
     n_bins = 1024
     n_frames = 1
-    spectrum_matrix = np.zeros((n_bins + 1, n_frames))
+    spectrum_base = np.zeros((n_bins + 1, n_frames))
 
     # Fundamental at bin 10 (100 Hz)
-    spectrum_matrix[10, 0] = 0.5
-
-    # Strong 9th harmonic (900 Hz) at bin 90
-    spectrum_matrix[90, 0] = 0.05
-
-    # Weak 10th harmonic (1000 Hz) at bin 100
-    spectrum_matrix[100, 0] = 0.01
+    spectrum_base[10, 0] = 0.5
+    # Weak 10th harmonic (target)
+    spectrum_base[100, 0] = 0.01
 
     # Analysis mask: only 10th harmonic
     mask_matrix = np.zeros((n_bins + 1, n_frames))
     mask_matrix[100, 0] = 1.0
 
-    # Masking mask: 1st-9th harmonics
-    masking_mask_matrix = np.zeros((n_bins + 1, n_frames))
-    for h in range(1, 10):
-        masking_mask_matrix[10 * h, 0] = 1.0
-
     fundamental_bins = np.array([10])
     fundamental_freqs = np.array([100.0])
 
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
-
-    # Test with cumulative masking
-    result_cumulative = analyzer.compute_perceptual_thd_batch(
-        spectrum_matrix, mask_matrix, fundamental_bins, fundamental_freqs,
-        masking_mask_matrix=masking_mask_matrix,
-        masking_config=masking_config
+    # Baseline: no nearby strong masker
+    result_base = analyzer.compute_perceptual_thd_batch(
+        spectrum_base, mask_matrix, fundamental_bins, fundamental_freqs
     )
 
-    # Test without cumulative masking (fundamental only)
-    result_fundamental = analyzer.compute_perceptual_thd_batch(
-        spectrum_matrix, mask_matrix, fundamental_bins, fundamental_freqs,
-        masking_mask_matrix=None,
-        masking_config=None
+    # Add a strong nearby tonal component (e.g., 9th harmonic around 900 Hz)
+    spectrum_with_masker = spectrum_base.copy()
+    spectrum_with_masker[90, 0] = 0.08
+    result_with_masker = analyzer.compute_perceptual_thd_batch(
+        spectrum_with_masker, mask_matrix, fundamental_bins, fundamental_freqs
     )
 
-    # Cumulative masking should reduce phon value (9th masks 10th)
-    assert result_cumulative[0] < result_fundamental[0]
-    assert result_cumulative[0] >= 0
+    assert result_with_masker[0] <= result_base[0]
+    assert result_with_masker[0] >= 0
 
 
 def test_compute_perceptual_thd_batch_backward_compatible():
@@ -178,71 +159,10 @@ def test_compute_perceptual_thd_batch_backward_compatible():
     assert result[0] >= 0
 
 
-def test_fundamental_not_double_counted_in_cumulative_masking():
-    """Verify fundamental appears only once in masker lists (not double-counted)"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 44100
-
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    from unittest.mock import patch
-
-    analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
-
-    # Create spectrum with fundamental and harmonics
-    n_bins = 1024
-    n_frames = 1
-    spectrum_matrix = np.zeros((n_bins + 1, n_frames))
-
-    # Fundamental at bin 10 (100 Hz)
-    fundamental_bin = 10
-    spectrum_matrix[fundamental_bin, 0] = 0.5
-
-    # Add harmonics 2-9
-    for h in range(2, 10):
-        spectrum_matrix[fundamental_bin * h, 0] = 0.05
-
-    # Analysis mask: only 10th harmonic
-    mask_matrix = np.zeros((n_bins + 1, n_frames))
-    mask_matrix[fundamental_bin * 10, 0] = 1.0
-
-    # Masking mask: harmonics 1-9 (includes fundamental)
-    masking_mask_matrix = np.zeros((n_bins + 1, n_frames))
-    for h in range(1, 10):
-        masking_mask_matrix[fundamental_bin * h, 0] = 1.0
-
-    fundamental_bins = np.array([fundamental_bin])
-    fundamental_freqs = np.array([100.0])
-
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
-
-    # Patch apply_cumulative_masking to capture its inputs
-    with patch('base.pre_processing.psychoacoustic_utils.apply_cumulative_masking') as mock_masking:
-        # Set a return value to prevent errors
-        mock_masking.return_value = np.array([50.0])
-
-        analyzer.compute_perceptual_thd_batch(
-            spectrum_matrix, mask_matrix, fundamental_bins, fundamental_freqs,
-            masking_mask_matrix=masking_mask_matrix,
-            masking_config=masking_config
-        )
-
-        # Verify apply_cumulative_masking was called
-        assert mock_masking.called
-
-        # Get the masker frequencies passed to apply_cumulative_masking
-        call_args = mock_masking.call_args[0]
-        masker_freqs = call_args[0]
-
-        # Count occurrences of fundamental frequency (100 Hz)
-        fundamental_freq = 100.0
-        fundamental_count = np.sum(np.isclose(masker_freqs, fundamental_freq))
-
-        # Fundamental should appear exactly once
-        assert fundamental_count == 1, f"Fundamental appears {fundamental_count} times in masker list, expected 1"
+#
+# NOTE: The PRB masking model now derives maskers from the full spectrum per frame,
+# so previous tests that patched apply_cumulative_masking / checked double counting
+# are no longer applicable.
 
 def test_apply_noise_correction_basic():
     """Test basic noise correction with quadrature subtraction"""

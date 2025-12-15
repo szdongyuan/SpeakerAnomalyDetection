@@ -98,10 +98,8 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         else:
             raise ValueError(f"harmonic_mask must be 4-tuple or 5-tuple, got {len(harmonic_mask)}")
 
-        # If cumulative masking is enabled, ensure masking_mask_matrix is available
-        if masking_config and masking_config.get('enable_cumulative', False):
-            if masking_mask_matrix is None:
-                raise ValueError("enable_cumulative=True requires masking_mask_matrix (4-tuple or 5-tuple harmonic_mask)")
+        # masking_config is accepted for backward compatibility, but the PRB masking model
+        # now derives maskers from the full spectrum per frame (not from a provided masking mask).
 
         # Split into repetitions and average across them (consistent with ChirpSignalHD)
         num_repetitions = stimulus_metadata.get('repeat_times', 1)

@@ -4,13 +4,26 @@ HarmonicDistortionAnalyzer - Base class for Phase 2: THD Calculation
 Computes THD using pre-built masks from Phase 1B.
 """
 import numpy as np
+import os
 from typing import Dict, Optional
 from abc import ABC, abstractmethod
-from base.pre_processing.psychoacoustic_utils import spl_to_phons, apply_masking
+from base.pre_processing.psychoacoustic_utils import (
+    spl_to_phons,
+    absolute_threshold_of_hearing_db,
+    freq_to_bark,
+)
+from base.pre_processing.mpeg_psychoacoustic_masking import (
+    pick_maskers_model1_like,
+    masking_threshold_from_maskers_model1_like,
+)
 try:
     from mosqito.sq_metrics.loudness import loudness_zwst_freq
 except Exception:
     loudness_zwst_freq = None
+else:
+    # Allow disabling mosqito for performance testing / environments without a full audio-range freq axis.
+    if os.environ.get("PRB_DISABLE_MOSQITO") == "1":
+        loudness_zwst_freq = None
 
 
 class HarmonicDistortionAnalyzer(ABC):
@@ -196,10 +209,30 @@ class HarmonicDistortionAnalyzer(ABC):
             )
 
         rfft_freqs = np.fft.rfftfreq(n_fft, d=1.0 / self.sample_rate)
+        rfft_bark_bins = freq_to_bark(rfft_freqs)
+        rfft_band_index = np.clip(np.floor(rfft_bark_bins).astype(int), 0, 24)
+
+        masking_config = masking_config or {}
+        masker_min_over_ath_db = float(masking_config.get("min_over_ath_db", 5.0))
+        tonal_neighbor_merge_bins = int(masking_config.get("tonal_neighbor_merge_bins", 1))
+        max_tonal_per_band = int(masking_config.get("max_tonal_per_band", 1))
+        enable_noise_maskers = bool(masking_config.get("enable_noise_maskers", True))
+        min_noise_over_ath_db = float(masking_config.get("min_noise_over_ath_db", 0.0))
+        max_total_maskers = int(masking_config.get("max_total_maskers", 64))
 
         noise_n_fft = None
         if noise_spectrum is not None:
             noise_n_fft = max(2 * (len(noise_spectrum) - 1), 1)
+
+        # If mosqito is available, we compute loudness in batch using a 2D spectrum
+        # (n_freq_bins, n_frames) to avoid repeating expensive third-octave filter
+        # synthesis for each frame.
+        use_mosqito = loudness_zwst_freq is not None
+        masked_spectra = None
+        fallback_sones = None
+        if use_mosqito:
+            masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)
+            fallback_sones = np.zeros(n_cols, dtype=np.float64)
 
         # Extract fundamental amplitudes
         row_indices = fundamental_bins.astype(int)
@@ -209,9 +242,6 @@ class HarmonicDistortionAnalyzer(ABC):
 
         # Convert amplitude to SPL (dB re 20 μPa) - standard acoustic reference
         reference_pressure = 20e-6
-        fundamental_spl_uncalibrated = 20.0 * np.log10(
-            np.maximum(raw_fundamental_amplitudes / reference_pressure, min_amplitude)
-        )
         fundamental_spl = 20.0 * np.log10(
             np.maximum(fundamental_amplitudes / reference_pressure, min_amplitude)
         )
@@ -221,7 +251,6 @@ class HarmonicDistortionAnalyzer(ABC):
 
         # Process each frame independently
         for frame_idx in range(n_cols):
-
             # Extract harmonic amplitudes for this frame
             harmonic_mask_col = mask_matrix[:, frame_idx]
 
@@ -273,121 +302,178 @@ class HarmonicDistortionAnalyzer(ABC):
                 perceptual_loudness[frame_idx] = 0.0
                 continue
 
-            # Apply masking (cumulative or fundamental-only)
-            if masking_mask_matrix is not None and masking_config and masking_config.get('enable_cumulative'):
-                # Extract masking harmonics
-                masking_mask_col = masking_mask_matrix[:, frame_idx]
-                masking_bin_indices = np.where(masking_mask_col > 0)[0]
-                masking_bin_indices = masking_bin_indices[
-                    (masking_bin_indices > 0) & (masking_bin_indices <= n_rfft_bins)
-                ]
+            # Masking model (PRB):
+            # Build tonal maskers from the *full spectrum* of the current frame, then compute
+            # combined masking thresholds at each selected harmonic frequency.
+            #
+            # This better matches the psychoacoustic notion of "a loud sound masks a quiet one"
+            # than restricting maskers to the harmonic subset only.
+            frame_amplitudes = spectrum_matrix[1:, frame_idx] * calibration_multiplier
+            if noise_spectrum is not None:
+                # Use rFFT-bin positions directly for noise interpolation (0..n_rfft_bins-1).
+                frame_amplitudes = self._apply_noise_correction(
+                    np.arange(n_rfft_bins, dtype=float),
+                    frame_amplitudes,
+                    noise_spectrum
+                )
+            frame_spls = 20.0 * np.log10(np.maximum(frame_amplitudes / reference_pressure, min_amplitude))
+            frame_spls = np.maximum(frame_spls, 0.0)
 
-                # Filter out fundamental bin to avoid double-counting
-                # (fundamental will be prepended explicitly below)
-                fundamental_bin = fundamental_bins[frame_idx]
-                masking_bin_indices = masking_bin_indices[masking_bin_indices != fundamental_bin]
+            maskers = pick_maskers_model1_like(
+                frame_spls,
+                rfft_freqs,
+                bark_bins=rfft_bark_bins,
+                band_index=rfft_band_index,
+                min_over_ath_db=masker_min_over_ath_db,
+                tonal_neighbor_merge_bins=tonal_neighbor_merge_bins,
+                max_tonal_per_band=max_tonal_per_band,
+                enable_noise_maskers=enable_noise_maskers,
+                min_noise_over_ath_db=min_noise_over_ath_db,
+            )
 
-                if len(masking_bin_indices) > 0:
-                    masking_rfft_bins = masking_bin_indices - 1
-                    masking_freqs = rfft_freqs[masking_rfft_bins]
+            tonal_freqs = maskers.tonal_freqs_hz
+            tonal_levels = maskers.tonal_levels_db
+            noise_freqs = maskers.noise_freqs_hz
+            noise_levels = maskers.noise_levels_db
 
-                    # Extract amplitudes
-                    masking_amplitudes = spectrum_matrix[masking_bin_indices, frame_idx] * calibration_multiplier
-                    if noise_spectrum is not None:
-                        noise_bin_positions = masking_freqs * noise_n_fft / self.sample_rate
-                        noise_bin_positions = np.clip(noise_bin_positions, 0.0, len(noise_spectrum) - 1.0)
-                        masking_amplitudes = self._apply_noise_correction(
-                            noise_bin_positions,
-                            masking_amplitudes,
-                            noise_spectrum
-                        )
-
-                    # Convert to SPL (dB re 20 μPa) after calibration
-                    masking_spls = 20.0 * np.log10(
-                        np.maximum(masking_amplitudes / reference_pressure, min_amplitude)
-                    )
-                    masking_spls = np.maximum(masking_spls, 0.0)
-
-                    # Combine fundamental + masking harmonics
-                    all_masker_freqs = np.concatenate([[fundamental_freqs[frame_idx]], masking_freqs])
-                    all_masker_spls = np.concatenate([[fundamental_spl[frame_idx]], masking_spls])
+            # Ensure the fundamental is considered as a tonal masker (robust even with leakage).
+            fundamental_rfft_bin = int(max(row_indices[frame_idx] - 1, 0))
+            if fundamental_rfft_bin < rfft_freqs.size:
+                f0_freq = float(rfft_freqs[fundamental_rfft_bin])
+                f0_spl = float(fundamental_spl[frame_idx])
+                if tonal_freqs.size == 0:
+                    tonal_freqs = np.array([f0_freq], dtype=float)
+                    tonal_levels = np.array([f0_spl], dtype=float)
                 else:
-                    # No masking harmonics found, use fundamental only
-                    all_masker_freqs = np.array([fundamental_freqs[frame_idx]])
-                    all_masker_spls = np.array([fundamental_spl[frame_idx]])
+                    if not np.any(np.isclose(tonal_freqs, f0_freq, rtol=0.0, atol=1e-9)):
+                        tonal_freqs = np.concatenate([tonal_freqs, [f0_freq]])
+                        tonal_levels = np.concatenate([tonal_levels, [f0_spl]])
 
-                # Apply cumulative masking
-                from base.pre_processing.psychoacoustic_utils import apply_cumulative_masking
-                masked_spls = apply_cumulative_masking(
-                    all_masker_freqs,
-                    all_masker_spls,
-                    harmonic_freqs,
-                    harmonic_spls,
-                    masking_config.get('weight_function', 'exponential')
-                )
+            if tonal_freqs.size == 0 and noise_freqs.size == 0:
+                combined_thresholds = np.zeros_like(harmonic_spls)
             else:
-                # Use existing fundamental-only masking
-                masked_spls = apply_masking(
-                    fundamental_freqs[frame_idx],
-                    fundamental_spl[frame_idx],
-                    harmonic_freqs,
-                    harmonic_spls,
+                masker_freqs = (
+                    tonal_freqs
+                    if noise_freqs.size == 0
+                    else (noise_freqs if tonal_freqs.size == 0 else np.concatenate([tonal_freqs, noise_freqs]))
                 )
+                masker_levels = (
+                    tonal_levels
+                    if noise_levels.size == 0
+                    else (noise_levels if tonal_levels.size == 0 else np.concatenate([tonal_levels, noise_levels]))
+                )
+                is_tonal = (
+                    np.ones(tonal_levels.size, dtype=bool)
+                    if noise_levels.size == 0
+                    else (
+                        np.zeros(noise_levels.size, dtype=bool)
+                        if tonal_levels.size == 0
+                        else np.concatenate(
+                            [np.ones(tonal_levels.size, dtype=bool), np.zeros(noise_levels.size, dtype=bool)]
+                        )
+                    )
+                )
+
+                if masker_levels.size > max_total_maskers:
+                    keep = np.argsort(masker_levels)[-max_total_maskers:]
+                    masker_freqs = masker_freqs[keep]
+                    masker_levels = masker_levels[keep]
+                    is_tonal = is_tonal[keep]
+
+                combined_thresholds = masking_threshold_from_maskers_model1_like(
+                    masker_freqs_hz=masker_freqs,
+                    masker_levels_db=masker_levels,
+                    is_tonal=is_tonal,
+                    target_freqs_hz=harmonic_freqs,
+                )
+
+            # Convert masking thresholds into an *effective* SPL by subtracting in the power domain:
+            #   P_eff = max(P_harm - P_thr, 0), SPL_eff = 10*log10(P_eff)
+            masked_spls = harmonic_spls.copy()
+            has_threshold = combined_thresholds > 0.0
+            if np.any(has_threshold):
+                harmonic_power = np.power(10.0, harmonic_spls / 10.0)
+                threshold_power = np.power(10.0, combined_thresholds / 10.0)
+                residual_power = harmonic_power - threshold_power
+                residual_power = np.maximum(residual_power, 0.0)
+                masked = np.zeros_like(harmonic_spls)
+                positive = residual_power > 0.0
+                masked[positive] = 10.0 * np.log10(residual_power[positive])
+                masked_spls[has_threshold] = masked[has_threshold]
+                masked_spls = np.maximum(masked_spls, 0.0)
 
             # Convert masked SPLs into an amplitude-domain attenuation, so masking affects
             # the loudness computation (not only the audibility gating).
             attenuation_db = masked_spls - harmonic_spls
             attenuation_factors = np.power(10.0, attenuation_db / 20.0)
 
-            # Convert masked SPLs to phons
-            audible_indices = masked_spls > 20
+            # Audibility gate: keep only residual components above the absolute threshold of hearing (ATH).
+            audibility_threshold_db = absolute_threshold_of_hearing_db(harmonic_freqs)
+            audible_indices = masked_spls > audibility_threshold_db
             if np.any(audible_indices):
-                # Build calibrated spectrum containing only audible harmonics (fundamental excluded)
+                # Build calibrated spectrum containing only audible harmonics (fundamental excluded).
                 # NOTE: Use the calibrated (and optionally noise-corrected) harmonic amplitudes so
                 # noise correction affects loudness, not only audibility gating.
-                masked_spectrum = np.zeros_like(rfft_freqs)
+                masked_spectrum = None
+                if use_mosqito:
+                    masked_spectrum = masked_spectra[:, frame_idx]
+                else:
+                    masked_spectrum = np.zeros_like(rfft_freqs)
                 audible_bins = harmonic_rfft_bins[audible_indices]
                 masked_spectrum[audible_bins] = (
                     harmonic_amplitudes[audible_indices] * attenuation_factors[audible_indices]
                 )
 
-                total_sones = 0.0
-                if loudness_zwst_freq is not None:
-                    try:
-                        total_sones, _, _ = loudness_zwst_freq(
-                            masked_spectrum,
-                            rfft_freqs,
-                            field_type="free"
-                        )
-                        if isinstance(total_sones, np.ndarray):
-                            total_sones = float(np.mean(total_sones))
-                    except Exception:
-                        total_sones = 0.0
+                # Precompute a lightweight fallback loudness from audible harmonics only.
+                # This is used if mosqito is unavailable or returns 0 unexpectedly.
+                audible_freqs = harmonic_freqs[audible_indices]
+                audible_spls = masked_spls[audible_indices]
+                phons_values = spl_to_phons(audible_freqs, audible_spls)
+                sones_values = np.where(
+                    phons_values < 40.0,
+                    np.power(phons_values / 40.0, 2.5),
+                    np.power(2.0, (phons_values - 40.0) / 10.0),
+                )
+                total_sones_fallback = float(np.sum(sones_values))
 
-                # Fallback: sum sones of audible harmonics only
-                if total_sones == 0.0:
-                    audible_freqs = harmonic_freqs[audible_indices]
-                    audible_spls = masked_spls[audible_indices]
-                    phons_values = spl_to_phons(audible_freqs, audible_spls)
-                    # ISO 532 / Stevens: phons<40 follow a power law; >=40 use doubling per 10 phons.
-                    sones_values = np.where(
-                        phons_values < 40.0,
-                        np.power(phons_values / 40.0, 2.5),
-                        np.power(2.0, (phons_values - 40.0) / 10.0),
-                    )
-                    total_sones = np.sum(sones_values)
-
-                if total_sones > 0:
-                    # Convert sones -> phons with the standard piecewise mapping:
-                    # - N < 1 sone: Ln = 40 * N^0.4
-                    # - N >= 1 sone: Ln = 40 + 10*log2(N)
-                    if total_sones < 1.0:
-                        perceptual_loudness[frame_idx] = 40.0 * np.power(total_sones, 0.4)
-                    else:
-                        perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones)
+                if use_mosqito:
+                    fallback_sones[frame_idx] = total_sones_fallback
                 else:
-                    perceptual_loudness[frame_idx] = 0.0
+                    if total_sones_fallback < 1.0:
+                        perceptual_loudness[frame_idx] = 40.0 * np.power(total_sones_fallback, 0.4)
+                    else:
+                        perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones_fallback)
             else:
                 perceptual_loudness[frame_idx] = 0.0
+
+        if use_mosqito:
+            try:
+                total_sones, _, _ = loudness_zwst_freq(masked_spectra, rfft_freqs, field_type="free")
+                total_sones = np.asarray(total_sones, dtype=np.float64).reshape(-1)
+                if total_sones.size != n_cols:
+                    raise ValueError(
+                        f"mosqito returned {total_sones.size} frames, expected {n_cols}"
+                    )
+
+                # If mosqito returns 0 for a frame but we have a non-zero fallback estimate,
+                # prefer the fallback (robustness when freqs axis is padded/resampled).
+                use_fallback = (total_sones <= 0.0) & (fallback_sones > 0.0)
+                if np.any(use_fallback):
+                    total_sones = total_sones.copy()
+                    total_sones[use_fallback] = fallback_sones[use_fallback]
+
+                # Convert sones -> phons with the standard piecewise mapping:
+                # - N < 1 sone: Ln = 40 * N^0.4
+                # - N >= 1 sone: Ln = 40 + 10*log2(N)
+                phons = np.zeros_like(total_sones)
+                positive = total_sones > 0.0
+                lt1 = positive & (total_sones < 1.0)
+                ge1 = positive & ~lt1
+                phons[lt1] = 40.0 * np.power(total_sones[lt1], 0.4)
+                phons[ge1] = 40.0 + 10.0 * np.log2(total_sones[ge1])
+                perceptual_loudness = phons
+            except Exception:
+                # On any mosqito failure, fall back to the already-computed per-frame estimate.
+                pass
 
         return perceptual_loudness

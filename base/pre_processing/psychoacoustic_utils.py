@@ -41,6 +41,36 @@ def freq_to_bark(f: float) -> float:
     return 13.0 * np.arctan(0.00076 * f) + 3.5 * np.arctan((f / 7500.0) ** 2)
 
 
+def absolute_threshold_of_hearing_db(frequencies_hz: np.ndarray) -> np.ndarray:
+    """
+    Approximate absolute threshold of hearing (ATH) in dB SPL as a function of frequency.
+
+    This is a commonly used analytic approximation of the minimum audible SPL curve
+    (e.g., in psychoacoustic models for perceptual audio coding).
+
+    Args:
+        frequencies_hz: Frequencies in Hz (array-like)
+
+    Returns:
+        ath_db_spl: ATH values in dB SPL, same shape as input.
+    """
+    f = np.asarray(frequencies_hz, dtype=float)
+    f = np.maximum(f, 1.0)  # avoid divide-by-zero at DC
+    f_khz = f / 1000.0
+
+    # Standard ATH approximation:
+    # 3.64*(f/1k)^(-0.8) - 6.5*exp(-0.6*(f/1k - 3.3)^2) + 1e-3*(f/1k)^4
+    ath = (
+        3.64 * np.power(f_khz, -0.8)
+        - 6.5 * np.exp(-0.6 * np.square(f_khz - 3.3))
+        + 1e-3 * np.power(f_khz, 4.0)
+    )
+
+    # We clamp to a reasonable range to avoid pathological values outside the
+    # typical validity region of the approximation.
+    return np.clip(ath, 0.0, 120.0)
+
+
 def spl_to_phons(frequencies: np.ndarray, spl_values: np.ndarray) -> np.ndarray:
     """
     Convert SPL (dB) to phons using ISO 226:2003 equal-loudness contours.

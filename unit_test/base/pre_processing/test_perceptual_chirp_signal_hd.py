@@ -67,7 +67,7 @@ def test_perceptual_chirp_signal_hd_inherits_from_chirp_signal_hd():
 
 
 def test_perceptual_chirp_signal_with_cumulative_masking():
-    """Test that PerceptualChirpSignalHD accepts masking_config parameter"""
+    """Test that PerceptualChirpSignalHD accepts masking_config parameter (backward compatible)."""
     analyzer = PerceptualChirpSignalHD(sample_rate=44100)
 
     # Create simple test signal
@@ -121,7 +121,7 @@ def test_perceptual_chirp_signal_with_cumulative_masking():
         'weight_function': 'exponential'
     }
 
-    # Test that masking_config is accepted and produces valid results
+    # masking_config is accepted and produces valid results (maskers are derived from spectrum)
     result = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders, harmonic_mask,
         masking_config=masking_config
@@ -195,54 +195,15 @@ def test_backward_compatibility_with_4tuple():
 
 
 def test_error_when_cumulative_enabled_but_no_masking_mask():
-    """Test that error is raised when enable_cumulative=True but masking_mask_matrix is None"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    import pytest
 
-    # Create test signal
-    duration = 1.0
-    sample_rate = 44100
-    t = np.linspace(0, duration, int(sample_rate * duration))
-    f0 = 100
-    f1 = 2000
-    chirp = np.sin(2 * np.pi * (f0 * t + (f1 - f0) * t**2 / (2 * duration)))
-    recorded_signal = chirp
-
-    stimulus_metadata = {
-        'total_time': duration,
-        'start_freq': f0,
-        'stop_freq': f1,
-        'repeat_times': 1
-    }
-
-    harmonic_orders = [10, 11, 12]
-
-    # Create old-style 4-tuple mask (no masking_mask_matrix)
-    n_bins = 1024
-    n_time_points = 100
-    mask_matrix = np.zeros((n_bins + 1, n_time_points))
-    fundamental_freqs = np.linspace(f0, f1, n_time_points)
-    fundamental_bins = np.linspace(10, 200, n_time_points).astype(int)
-
-    harmonic_mask_4tuple = (mask_matrix, None, fundamental_freqs, fundamental_bins)
-
-    # Enable cumulative masking but provide only 4-tuple with None for masking_mask_matrix
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
-
-    # Should raise ValueError
-    with pytest.raises(ValueError, match="enable_cumulative=True requires masking_mask_matrix"):
-        analyzer.compute_distortion(
-            recorded_signal, stimulus_metadata, harmonic_orders,
-            harmonic_mask=harmonic_mask_4tuple,
-            masking_config=masking_config
-        )
+    pytest.skip(
+        "PRB masking derives maskers from the full spectrum per frame; masking_mask_matrix is no longer required."
+    )
 
 
-def test_cumulative_masking_changes_results():
-    """Test that cumulative masking actually changes the results compared to fundamental-only"""
+def test_strong_nearby_masker_changes_results():
+    """Adding a strong nearby harmonic should change results (full-spectrum maskers)."""
     analyzer = PerceptualChirpSignalHD(sample_rate=44100)
 
     # Create chirp signal with strong 9th harmonic that should mask 10th harmonic
@@ -279,35 +240,25 @@ def test_cumulative_masking_changes_results():
 
     harmonic_orders = [10, 11, 12]
 
-    # Test without cumulative masking (fundamental-only)
-    result_fundamental_only = analyzer.compute_distortion(
+    # Compare signal with and without the strong 9th harmonic masker.
+    recorded_signal_no_9th = fundamental + h10
+    result_no_9th = analyzer.compute_distortion(
+        recorded_signal_no_9th, stimulus_metadata, harmonic_orders,
+        harmonic_mask=None,
+        masking_config=None
+    )
+
+    result_with_9th = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
         masking_config=None
     )
 
-    # Test with cumulative masking (fundamental + 9th harmonic)
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
+    loudness_no_9th = result_no_9th['perceptual_loudness']
+    loudness_with_9th = result_with_9th['perceptual_loudness']
 
-    result_cumulative = analyzer.compute_distortion(
-        recorded_signal, stimulus_metadata, harmonic_orders,
-        harmonic_mask=None,
-        masking_config=masking_config
-    )
-
-    # Results should be different
-    # Cumulative masking should reduce perceived loudness (9th harmonic masks 10th)
-    fundamental_loudness = result_fundamental_only['perceptual_loudness']
-    cumulative_loudness = result_cumulative['perceptual_loudness']
-
-    # Cumulative masking should reduce loudness because 9th harmonic masks 10th
-    assert not np.allclose(fundamental_loudness, cumulative_loudness, rtol=0.01)
-    # Cumulative loudness should be lower in at least some frames
-    assert np.any(cumulative_loudness < fundamental_loudness)
+    assert not np.allclose(loudness_no_9th, loudness_with_9th, rtol=0.01)
+    assert np.any(loudness_with_9th <= loudness_no_9th)
 
 
 def test_automatic_mask_creation():

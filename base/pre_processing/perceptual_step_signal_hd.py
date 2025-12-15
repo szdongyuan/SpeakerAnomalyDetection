@@ -77,10 +77,8 @@ class PerceptualStepSignalHD(StepSignalHD):
         else:
             raise ValueError(f"harmonic_mask must be 3-tuple or 4-tuple, got {len(harmonic_mask)}")
 
-        # If cumulative masking is enabled, ensure masking_mask_matrix is available
-        if masking_config and masking_config.get('enable_cumulative', False):
-            if masking_mask_matrix is None:
-                raise ValueError("enable_cumulative=True requires masking_mask_matrix (4-tuple harmonic_mask)")
+        # masking_config is accepted for backward compatibility, but the PRB masking model
+        # now derives maskers from the full spectrum per frame (not from a provided masking mask).
 
         num_steps = stimulus_metadata['num_steps']
         repeat_times = stimulus_metadata['repeat_times']

@@ -87,8 +87,8 @@ def test_perceptual_step_signal_hd_inherits_from_step_signal_hd():
     assert hasattr(analyzer, '_compute_stft')
 
 
-def test_perceptual_step_signal_with_cumulative_masking():
-    """Test end-to-end perceptual analysis with cumulative masking"""
+def test_perceptual_step_signal_with_strong_nearby_masker():
+    """Test end-to-end perceptual analysis when a strong nearby harmonic is present."""
     analyzer = PerceptualStepSignalHD(sample_rate=44100)
 
     # Create signal with strong 9th harmonic
@@ -123,21 +123,15 @@ def test_perceptual_step_signal_with_cumulative_masking():
 
     harmonic_orders = [10, 11, 12]
 
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
-
-    # This should work with cumulative masking
+    # This should work (maskers are derived from the full spectrum)
     result = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,  # Let it create mask
-        masking_config=masking_config
+        masking_config=None
     )
 
     assert 'perceptual_loudness' in result
-    # 9th harmonic should mask 10th, reducing phon values
+    # Strong nearby 9th harmonic should reduce perceived loudness of the analyzed harmonics
     assert np.all(result['perceptual_loudness'] < 100)
 
 
@@ -188,60 +182,48 @@ def test_backward_compatibility_with_3tuple():
     assert np.all(result['perceptual_loudness'] >= 0)
 
 
-def test_error_when_cumulative_enabled_but_no_masking_mask():
-    """Test that error is raised when enable_cumulative=True but masking_mask_matrix is None"""
+def test_masking_config_is_accepted_but_not_required():
+    """masking_config is accepted for backward compatibility and should not break analysis."""
     analyzer = PerceptualStepSignalHD(sample_rate=44100)
 
-    # Create test signal
-    duration = 1.0
+    duration = 0.25
     sample_rate = 44100
-    t = np.linspace(0, duration, int(sample_rate * duration))
-    recorded_signal = np.sin(2 * np.pi * 500 * t)
+    t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
 
-    stimulus_metadata = {
-        'num_steps': 4,
-        'repeat_times': 1,
-        'total_time': duration
-    }
+    f0 = 100.0
+    recorded_signal = 0.5 * np.sin(2 * np.pi * f0 * t) + 0.001 * np.sin(2 * np.pi * 10 * f0 * t)
 
-    harmonic_orders = [10, 11, 12]
+    stimulus_metadata = {'num_steps': 1, 'repeat_times': 1, 'total_time': duration}
+    harmonic_orders = [10]
 
-    # Create old-style 3-tuple mask (no masking_mask_matrix)
-    n_bins = 1024
-    n_frames = 4
-    mask_matrix = np.zeros((n_bins + 1, n_frames))
-    fundamental_freqs = np.array([100, 200, 400, 800])
-    fundamental_bins = np.array([10, 20, 40, 80])
-
-    harmonic_mask_3tuple = (mask_matrix, fundamental_freqs, fundamental_bins)
-
-    # Enable cumulative masking but provide only 3-tuple
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
-
-    # Should raise ValueError
-    with pytest.raises(ValueError, match="enable_cumulative=True requires masking_mask_matrix"):
-        analyzer.compute_distortion(
-            recorded_signal, stimulus_metadata, harmonic_orders,
-            harmonic_mask=harmonic_mask_3tuple,
-            masking_config=masking_config
-        )
+    result = analyzer.compute_distortion(
+        recorded_signal,
+        stimulus_metadata,
+        harmonic_orders,
+        harmonic_mask=None,
+        masking_config={'enable_cumulative': True, 'masking_range': (1, 9)},
+    )
+    assert 'perceptual_loudness' in result
+    assert len(result['perceptual_loudness']) == 1
 
 
-def test_cumulative_masking_changes_results():
-    """Test that cumulative masking actually changes the results compared to fundamental-only"""
+#
+# NOTE: The PRB masking model now derives maskers from the full spectrum per frame,
+# so previous tests that enforced masking_mask_matrix requirements are no longer applicable.
+
+
+def test_strong_nearby_masker_changes_results():
+    """Adding a strong nearby harmonic should change results (full-spectrum maskers)."""
     analyzer = PerceptualStepSignalHD(sample_rate=44100)
 
-    # Create signal with strong 9th harmonic that should mask 10th harmonic
+    # Create signals with and without a strong 9th harmonic masker
     duration = 1.0
     sample_rate = 44100
     step_duration = duration / 4
     fundamental_freqs = np.array([100, 200, 400, 800])
 
-    recorded_signal = np.zeros(int(sample_rate * duration))
+    recorded_signal_no_9th = np.zeros(int(sample_rate * duration))
+    recorded_signal_with_9th = np.zeros(int(sample_rate * duration))
     for step_idx, f0 in enumerate(fundamental_freqs):
         start_sample = int(step_idx * step_duration * sample_rate)
         end_sample = int((step_idx + 1) * step_duration * sample_rate)
@@ -251,13 +233,11 @@ def test_cumulative_masking_changes_results():
         # Fundamental
         step_signal = 0.5 * np.sin(2 * np.pi * f0 * t)
 
-        # Strong 9th harmonic (masker)
-        step_signal += 0.05 * np.sin(2 * np.pi * f0 * 9 * t)
-
         # Weak 10th harmonic (target to be masked)
         step_signal += 0.01 * np.sin(2 * np.pi * f0 * 10 * t)
 
-        recorded_signal[start_sample:end_sample] = step_signal
+        recorded_signal_no_9th[start_sample:end_sample] = step_signal
+        recorded_signal_with_9th[start_sample:end_sample] = step_signal + 0.05 * np.sin(2 * np.pi * f0 * 9 * t)
 
     stimulus_metadata = {
         'num_steps': 4,
@@ -270,32 +250,20 @@ def test_cumulative_masking_changes_results():
 
     harmonic_orders = [10, 11, 12]
 
-    # Test without cumulative masking (fundamental-only)
-    result_fundamental_only = analyzer.compute_distortion(
-        recorded_signal, stimulus_metadata, harmonic_orders,
+    result_no_9th = analyzer.compute_distortion(
+        recorded_signal_no_9th, stimulus_metadata, harmonic_orders,
+        harmonic_mask=None,
+        masking_config=None
+    )
+    result_with_9th = analyzer.compute_distortion(
+        recorded_signal_with_9th, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
         masking_config=None
     )
 
-    # Test with cumulative masking (fundamental + 9th harmonic)
-    masking_config = {
-        'masking_range': (1, 9),
-        'enable_cumulative': True,
-        'weight_function': 'exponential'
-    }
+    loudness_no_9th = result_no_9th['perceptual_loudness']
+    loudness_with_9th = result_with_9th['perceptual_loudness']
 
-    result_cumulative = analyzer.compute_distortion(
-        recorded_signal, stimulus_metadata, harmonic_orders,
-        harmonic_mask=None,
-        masking_config=masking_config
-    )
-
-    # Results should be different
-    # Cumulative masking should reduce perceived loudness (9th harmonic masks 10th)
-    fundamental_loudness = result_fundamental_only['perceptual_loudness']
-    cumulative_loudness = result_cumulative['perceptual_loudness']
-
-    # Cumulative masking should reduce loudness because 9th harmonic masks 10th
-    assert not np.allclose(fundamental_loudness, cumulative_loudness, rtol=0.01)
-    # Cumulative loudness should be lower in at least some frames
-    assert np.any(cumulative_loudness < fundamental_loudness)
+    # Expect a measurable reduction on at least one non-silent step.
+    nonzero = loudness_no_9th > 0.0
+    assert np.any((loudness_no_9th[nonzero] - loudness_with_9th[nonzero]) > 0.05)

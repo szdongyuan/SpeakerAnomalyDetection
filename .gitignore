@@ -21,6 +21,7 @@ ui/readme.md
 /.serena
 /.mplconfig/
 /.numba_cache/
+*.pstats
 /doc
 *.md
 /.worktrees/
