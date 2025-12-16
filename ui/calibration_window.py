@@ -558,7 +558,7 @@ class InputCalibration(QWidget):
 
         standard_spl_box = self.create_standard_spl_box()
         recorded_box = self.create_recorded_box()
-        deviation_spl_box = self.create_deviation_spl_box()
+        v2pa_factor_box = self.create_v2pa_factor_box()
 
         v_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
@@ -569,7 +569,7 @@ class InputCalibration(QWidget):
         layout.addItem(v_spacer_1)
         layout.addWidget(recorded_box)
         layout.addItem(v_spacer_2)
-        layout.addWidget(deviation_spl_box)
+        layout.addWidget(v2pa_factor_box)
         layout.addItem(v_spacer_3)
         layout.setContentsMargins(12, 20, 12, 25)
 
@@ -584,31 +584,31 @@ class InputCalibration(QWidget):
                            ui_style_const.qradiobutton_style
                            )
 
-    def create_deviation_spl_box(self):
+    def create_v2pa_factor_box(self):
         """
-            Create a QGroupBox to display the sound pressure deviation.
+            Create a QGroupBox to display the sound pressure v2pa_factor.
 
             This method creates a QGroupBox containing a label and a read-only line edit
-            to show the sound pressure deviation from the calibration results. The layout
+            to show the sound pressure v2pa_factor from the calibration results. The layout
             uses a horizontal box layout to arrange the elements horizontally.
 
             Returns:
-                QGroupBox: A QGroupBox containing the sound pressure deviation label and line edit.
+                QGroupBox: A QGroupBox containing the sound pressure v2pa_factor label and line edit.
         """
-        deviation_spl_box = QGroupBox("校准结果")
-        deviation_label = QLabel("声压偏差：")
-        self.deviation_lineedit = QLineEdit()
-        self.deviation_lineedit.setStyleSheet("background-color: white;")
-        self.deviation_lineedit.setDisabled(True)
+        v2pa_factor_box = QGroupBox("校准结果")
+        v2pa_factor_label = QLabel("校准系数（V/Pa）：")
+        self.v2pa_factor_lineedit = QLineEdit()
+        self.v2pa_factor_lineedit.setStyleSheet("background-color: white;")
+        self.v2pa_factor_lineedit.setDisabled(True)
 
-        standard_deviation_layout = QHBoxLayout()
-        h_spacer_deviation_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        standard_deviation_layout.addWidget(deviation_label)
-        standard_deviation_layout.addItem(h_spacer_deviation_center)
-        standard_deviation_layout.addWidget(self.deviation_lineedit)
-        deviation_spl_box.setLayout(standard_deviation_layout)
+        standard_v2pa_factor_layout = QHBoxLayout()
+        h_spacer_v2pa_factor_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        standard_v2pa_factor_layout.addWidget(v2pa_factor_label)
+        standard_v2pa_factor_layout.addItem(h_spacer_v2pa_factor_center)
+        standard_v2pa_factor_layout.addWidget(self.v2pa_factor_lineedit)
+        v2pa_factor_box.setLayout(standard_v2pa_factor_layout)
 
-        return deviation_spl_box
+        return v2pa_factor_box
 
     def create_recorded_box(self):
         """
@@ -631,9 +631,9 @@ class InputCalibration(QWidget):
                                           "border-radius: 3px;")
 
         recorded_layout = QHBoxLayout()
-        h_spacer_deviation_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        h_spacer_v2pa_factor_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         recorded_layout.addWidget(recorded_label)
-        recorded_layout.addItem(h_spacer_deviation_center)
+        recorded_layout.addItem(h_spacer_v2pa_factor_center)
         recorded_layout.addWidget(self.recorded_label)
         recorded_box.setLayout(recorded_layout)
 
@@ -683,11 +683,11 @@ class InputCalibration(QWidget):
 
     def clicked_calibration(self):
         """
-            Execute calibration process upon clicking the calibration button.
+            Execute the calibration process upon clicking the calibration button.
 
             This function initializes the recording parameters, starts a thread to calculate the average sound pressure
-        level, updates the recording time, and then calculates the deviation value based on the average value.
-            If the deviation value is not 'inf', it indicates successful calibration, and the deviation value is saved.
+        level, updates the recording time, and then calculates the v2pa_factor based on the average value.
+            If the v2pa_factor is not 'inf', it indicates successful calibration, and the v2pa_factor is saved.
         """
         prolong = 1
         recorded_dict = {"channels": 1,
@@ -701,15 +701,15 @@ class InputCalibration(QWidget):
             self.update_recorded_time()
 
         self.average_value = recorded_thread.result()
-        deviation_value = self.calculate_deviation(self.average_value)
-        self.deviation_lineedit.setText(str(deviation_value))
+        v2pa_factor = self.calculate_v2pa_factor(self.average_value)
+        self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=3)))
         if not self.stop_timer:
-            if str(deviation_value) == "inf":
+            if str(v2pa_factor) == "inf":
                 self.calibration_popup(success_flag=False)
             else:
                 self.calibration_popup(success_flag=True)
                 self.default_logger.info("Calibration success.")
-                self.save_deviation_value_to_text(deviation_value)
+                self.save_v2pa_factor_to_text(v2pa_factor)
 
     def calibration_popup(self, success_flag=True):
         """
@@ -776,41 +776,42 @@ class InputCalibration(QWidget):
                                         f"<span style='color: black;'>s</span>")
             QApplication.processEvents()
 
-    def calculate_deviation(self, average_value):
+    def calculate_v2pa_factor(self, average_value):
         """
-            Calculate the deviation from the standard sound pressure level.
+            Calculate the v2pa_factor from the standard sound pressure level.
 
-            This function calculates the deviation based on whether the standard SPL flag is set to True or False.
+            This function calculates the v2pa_factor based on whether the standard SPL flag is set to True or False.
             If the flag is True, it uses 94 dB as the standard value; otherwise, it uses 114 dB.
 
             Args:
-                average_value (float): The average sound pressure level value used to calculate the deviation.
+                average_value (float): The average sound pressure level value used to calculate the v2pa_factor.
 
             Returns:
-                float: The calculated deviation value rounded to three decimal places.
+                float: The calculated v2pa_factor value rounded to three decimal places.
         """
         if self.standard_spl_flag:
             deviation_value = round(94 - average_value, 3)
         else:
             deviation_value = round(114 - average_value, 3)
-        return deviation_value
+        v2pa_factor = 10 ** (deviation_value / 20)
+        return v2pa_factor
 
     @staticmethod
-    def save_deviation_value_to_text(deviation_value):
+    def save_v2pa_factor_to_text(v2pa_factor):
         """
-            Save the deviation value to a text file.
+            Save the v2pa_factor to a text file.
 
-            This method writes the given deviation value to a specified text file, along with the current date.
+            This method writes the given v2pa_factor to a specified text file, along with the current date.
             This is particularly useful for tracking and debugging changes in UI configuration.
 
             Parameters:
-            deviation_value (float): The deviation value to be saved.
+            v2pa_factor (float): The v2pa_factor to be saved.
         """
         dir_path = DEFAULT_DIR + 'ui/ui_config/'
         file_path = dir_path + "mic_calibration.txt"
         current_time = datetime.now().strftime("%Y-%m-%d")
         with open(file_path, 'w') as f:
-            f.write(f"deviation_value: \n{deviation_value}\n")
+            f.write(f"v2pa_factor: \n{v2pa_factor}\n")
             f.write(f"Datetime: \n{current_time}\n")
 
     def reset_btn_clicked(self):
@@ -818,12 +819,12 @@ class InputCalibration(QWidget):
             This method is triggered when the reset button is clicked.
 
             It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
-            Additionally, it clears the deviation line edit.
+            Additionally, it clears the v2pa_factor line edit.
         """
         self.recorded_time = 10
         self.recorded_label.setText(f"<span style='color: red;'>{self.recorded_time} </span>"
                                     f"<span style='color: black;'>s</span>")
-        self.deviation_lineedit.clear()
+        self.v2pa_factor_lineedit.clear()
 
 
 if __name__ == "__main__":

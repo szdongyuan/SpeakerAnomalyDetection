@@ -42,10 +42,10 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
-class audioDataManageDialog(DataManageDialog):
+class AudioDataManageDialog(DataManageDialog):
 
     def __init__(self, logger: LogManager, hide_select_not_label = False):
-        super(audioDataManageDialog, self).__init__()
+        super(AudioDataManageDialog, self).__init__()
 
         self.logger = logger
         self.recording_manager = RecordingManager()
@@ -92,10 +92,10 @@ class audioDataManageDialog(DataManageDialog):
         self.top_layout.addWidget(filter_btn)
 
     def on_all_selected_changed(self):
-        if self.all_select_flag is True:
+        if self.all_select_flag:
             self.set_all_checkboxes_checked([0], False)
             self.all_select_flag = False
-        elif self.all_select_flag is False:
+        elif not self.all_select_flag:
             self.set_all_checkboxes_checked([0], True)
             self.all_select_flag = True
 
@@ -160,9 +160,9 @@ class audioDataManageDialog(DataManageDialog):
 
     def load_audio_data_to_view(self):
         self.select_wave_data.clear()
-        if self.is_filter_flag is True:
+        if self.is_filter_flag:
             self.load_audio_data_to_model(self.filter_audio_data, self.stimulus_name)
-        elif self.is_filter_flag is False:
+        elif not self.is_filter_flag:
             result = self.load_audio_data_to_model(self.all_audio_data, self.stimulus_name)
             self.product_model_set, self.record_date_set = result
 
@@ -195,17 +195,17 @@ class audioDataManageDialog(DataManageDialog):
         self.filter_audio_data = result
 
     def set_select_wave_num_text(self, select_num):
-        if self.is_filter_flag is True:
+        if self.is_filter_flag:
             totle_num = len(self.filter_audio_data)
-        elif self.is_filter_flag is False:
+        elif not self.is_filter_flag:
             totle_num = len(self.all_audio_data)
         text = "已选择 %s 个文件, 共 %s 个文件"
         self.set_select_data_num_text(text, (select_num, totle_num))
 
     def on_row_checkbox_toggled(self, item, is_checked):
-        if self.is_filter_flag is True:
+        if self.is_filter_flag:
             audio_data = self.filter_audio_data
-        elif self.is_filter_flag is False:
+        elif not self.is_filter_flag:
             audio_data = self.all_audio_data
 
         row = item.row()
