@@ -1,5 +1,4 @@
 import sys
-from webbrowser import get
 
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor

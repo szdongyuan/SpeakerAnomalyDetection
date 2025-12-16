@@ -14,13 +14,6 @@ class AudioEqualizer:
         return 10 ** (db_value / 20)
     
     @staticmethod
-    def _linear_to_db(linear_value: float) -> float:
-        """Convert linear gain factor to dB."""
-        if linear_value <= 0:
-            return -np.inf
-        return 20 * np.log10(linear_value)
-    
-    @staticmethod
     def _get_transition_function(transition_type: str = 'cosine') -> Callable:
         """
         Get transition function for smooth band edges.
