@@ -63,6 +63,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Plot phons vs harmonic order for single-tone WAVs.")
     parser.add_argument("--dir", type=str, default="audio_data/out_wav_single", help="Directory of tone WAV files.")
     parser.add_argument("--f0", type=float, default=100.0, help="Fundamental frequency (Hz) used to map order=f/f0.")
+    parser.add_argument("--min-order", type=int, default=2, help="Minimum harmonic order to include.")
+    parser.add_argument("--max-order", type=int, default=None, help="Maximum harmonic order to include.")
     parser.add_argument(
         "--calibration-db",
         type=float,
@@ -100,6 +102,10 @@ def main() -> int:
         order_f = freq_hz / float(args.f0)
         order = int(round(order_f))
         if not np.isclose(order_f, order, rtol=0.0, atol=1e-6):
+            continue
+        if order < int(args.min_order):
+            continue
+        if args.max_order is not None and order > int(args.max_order):
             continue
 
         sr, y = _read_wav_mono(path)
