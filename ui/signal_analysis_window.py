@@ -912,10 +912,7 @@ class PeakDetection(AnalysisGraphWidget):
         self.analysis_plot.clear()
         spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
+            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(recorded_signal, deviation=self.deviation_value)
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
 
@@ -1205,7 +1202,7 @@ class PipelinePdPm(QWidget):
         """
         auto_equal = bool(cfg.get("auto_equal_length", False))
         seg_len, left_point, right_point = 0, 0, 0
-        
+
         if auto_equal:
             rel_path = pm_cfg.get("pattern_save_path")
             pattern_data_path = os.path.join(DEFAULT_DIR, rel_path) if rel_path else None
@@ -1255,10 +1252,7 @@ class PipelinePdPm(QWidget):
         if isinstance(pd_result, dict):
             spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
         if spl_series is None or len(spl_series) == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
+            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(recorded_signal, deviation=self.deviation_value)
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
         self._last_spl_series = np.asarray(spl_series)

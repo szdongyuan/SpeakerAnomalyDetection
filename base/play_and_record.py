@@ -189,4 +189,5 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         # UI will perform alignment after recording completes
         return processor, stimulus_data, sample_rate
     else:
+        print(msg)
         raise RuntimeError(f"Failed to start streaming play+record: {msg}")
