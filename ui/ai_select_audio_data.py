@@ -17,10 +17,10 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QPushButton
 
 from base.log_manager import LogManager
-from ui.custom_ui_widget.audio_data_manage_dialog import audioDataManageDialog
+from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
 
 
-class SelectAudioDataView(audioDataManageDialog):
+class SelectAudioDataView(AudioDataManageDialog):
     def __init__(self, logger: LogManager, select_row_list: list = list(), hide_select_not_label = True):
         super(SelectAudioDataView, self).__init__(logger, hide_select_not_label)
 
