@@ -2,7 +2,8 @@ import os
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, \
+    QMessageBox
 from PyQt5.QtWidgets import QLabel, QRadioButton, QLineEdit, QDoubleSpinBox
 
 from consts import ui_style_const
@@ -187,6 +188,9 @@ class SplConfigWindow(QDialog):
         return default_config
 
     def on_default_btn_clicked(self):
+        if not self.file_path:
+            QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+            return
         config_data = self.get_default_config()
         if check_upper_lower_limit(config_data, self):
             return
@@ -194,6 +198,9 @@ class SplConfigWindow(QDialog):
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
+        if not self.file_path:
+            QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+            return
         config_data = self.get_default_config()
         if check_upper_lower_limit(config_data, self):
             return
