@@ -67,9 +67,7 @@ class AlignmentProcessing:
                 - prolong_frames of silence at end
 
         Returns:
-            tuple: (aligned_data, pre_alignment_data)
-                - aligned_data (np.ndarray): Aligned audio data with length equal to stimulus_signal length
-                - pre_alignment_data (np.ndarray): Data before alignment point (background noise)
+            np.ndarray: Aligned audio data with length equal to stimulus_signal length
         """
         logger = LogManager.set_log_handler("alignment")
 
@@ -77,9 +75,6 @@ class AlignmentProcessing:
         align_frames, _, _ = AlignmentProcessing.gcc_phat(stimulus_signal, recorded_signal)
 
         logger.info(f"GCC-PHAT alignment: offset = {align_frames} samples")
-
-        # Extract pre-alignment data (background noise before stimulus)
-        pre_alignment_data = recorded_signal[:max(0, align_frames)]
 
         # Extract aligned portion (only the stimulus length)
         # This matches the old behavior: rec_data[align_frames: align_frames + len(stimulus)]
@@ -98,7 +93,6 @@ class AlignmentProcessing:
         aligned_data = recorded_signal[align_frames:end_frame]
 
         logger.info(f"Extracted aligned data: {len(aligned_data)} samples (expected {len(stimulus_signal)})")
-        logger.info(f"Extracted pre-alignment data: {len(pre_alignment_data)} samples")
 
         # If extraction is shorter than expected due to clipping, pad with zeros
         if len(aligned_data) < len(stimulus_signal):
@@ -106,4 +100,4 @@ class AlignmentProcessing:
             logger.warning(f"Aligned data is {shortfall} samples short, padding with zeros")
             aligned_data = np.pad(aligned_data, (0, shortfall), mode='constant', constant_values=0)
 
-        return aligned_data.astype(np.float32), pre_alignment_data.astype(np.float32)
+        return aligned_data.astype(np.float32)
