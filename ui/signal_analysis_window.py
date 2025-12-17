@@ -395,7 +395,8 @@ class Frequency(AnalysisGraphWidget):
         - csv_lower_list : Corresponding lower limits (may contain NaN).
         """
         self.analysis_plot.clear()
-        fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
+        # fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
+        fr_disp = fr
         self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77)))
 
         dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
@@ -430,7 +431,7 @@ class Frequency(AnalysisGraphWidget):
 
     def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
-        fr = fr + 94 + self.v2pa_factor  # Todo: modify later
+        # fr = fr + 94 + self.v2pa_factor  # Todo: modify later
         self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77)))
         if lower_limit and upper_limit:
             upper_limit = float(upper_limit)
