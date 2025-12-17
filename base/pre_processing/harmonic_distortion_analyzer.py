@@ -179,7 +179,15 @@ class HarmonicDistortionAnalyzer(ABC):
             perceptual_loudness: (n_frames,) perceived loudness in phons
         """
         n_cols = spectrum_matrix.shape[1]
-        perceptual_loudness = np.zeros(n_cols)
+        # Strict mode: PRB must be computed via mosqito loudness only (no fallback implementation),
+        # otherwise results may differ between environments.
+        if loudness_zwst_freq is None:
+            raise ImportError(
+                "mosqito is required for PRB loudness computation, but it is not available. "
+                "Install mosqito or remove PRB_DISABLE_MOSQITO."
+            )
+
+        perceptual_loudness = np.zeros(n_cols, dtype=float)
         # Convert calibration offset (dB) to linear multiplier so calibration happens
         # in the amplitude domain before the log transform. This prevents very small
         # bins from being artificially lifted by adding a constant dB offset.
@@ -236,15 +244,10 @@ class HarmonicDistortionAnalyzer(ABC):
             # quadrature subtraction, otherwise a negative calibration offset can over-subtract.
             noise_spectrum_calibrated = np.asarray(noise_spectrum, dtype=float) * calibration_multiplier
 
-        # If mosqito is available, we compute loudness in batch using a 2D spectrum
-        # (n_freq_bins, n_frames) to avoid repeating expensive third-octave filter
-        # synthesis for each frame.
-        use_mosqito = loudness_zwst_freq is not None
-        masked_spectra = None
-        fallback_sones = None
-        if use_mosqito:
-            masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)
-            fallback_sones = np.zeros(n_cols, dtype=np.float64)
+        # Compute loudness in batch using a 2D spectrum (n_freq_bins, n_frames).
+        masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)
+        # Track per-frame energy to detect unexpected mosqito zeros.
+        frame_energy = np.zeros(n_cols, dtype=np.float64)
 
         # Extract fundamental amplitudes
         row_indices = fundamental_bins.astype(int)
@@ -398,66 +401,41 @@ class HarmonicDistortionAnalyzer(ABC):
                 # Build calibrated spectrum containing only audible harmonics (fundamental excluded).
                 # NOTE: Use the calibrated (and optionally noise-corrected) harmonic amplitudes so
                 # noise correction affects loudness, not only audibility gating.
-                masked_spectrum = None
-                if use_mosqito:
-                    masked_spectrum = masked_spectra[:, frame_idx]
-                else:
-                    masked_spectrum = np.zeros_like(rfft_freqs)
+                masked_spectrum = masked_spectra[:, frame_idx]
                 audible_bins = harmonic_rfft_bins[audible_indices]
                 masked_spectrum[audible_bins] = (
                     harmonic_amplitudes[audible_indices] * attenuation_factors[audible_indices]
                 )
-
-                # Precompute a lightweight fallback loudness from audible harmonics only.
-                # This is used if mosqito is unavailable or returns 0 unexpectedly.
-                audible_freqs = harmonic_freqs[audible_indices]
-                audible_spls = masked_spls[audible_indices]
-                phons_values = spl_to_phons(audible_freqs, audible_spls)
-                sones_values = np.where(
-                    phons_values < 40.0,
-                    np.power(phons_values / 40.0, 2.5),
-                    np.power(2.0, (phons_values - 40.0) / 10.0),
-                )
-                total_sones_fallback = float(np.sum(sones_values))
-
-                if use_mosqito:
-                    fallback_sones[frame_idx] = total_sones_fallback
-                else:
-                    if total_sones_fallback < 1.0:
-                        perceptual_loudness[frame_idx] = 40.0 * np.power(total_sones_fallback, 0.4)
-                    else:
-                        perceptual_loudness[frame_idx] = 40.0 + 10.0 * np.log2(total_sones_fallback)
+                # Record energy so we can sanity-check mosqito output.
+                frame_energy[frame_idx] = float(np.sum(np.square(masked_spectrum)))
             else:
-                perceptual_loudness[frame_idx] = 0.0
+                frame_energy[frame_idx] = 0.0
 
-        if use_mosqito:
-            try:
-                total_sones, _, _ = loudness_zwst_freq(masked_spectra, rfft_freqs, field_type="free")
-                total_sones = np.asarray(total_sones, dtype=np.float64).reshape(-1)
-                if total_sones.size != n_cols:
-                    raise ValueError(
-                        f"mosqito returned {total_sones.size} frames, expected {n_cols}"
-                    )
+        total_sones, _, _ = loudness_zwst_freq(masked_spectra, rfft_freqs, field_type="free")
+        total_sones = np.asarray(total_sones, dtype=np.float64).reshape(-1)
+        if total_sones.size != n_cols:
+            raise ValueError(f"mosqito returned {total_sones.size} frames, expected {n_cols}")
 
-                # If mosqito returns 0 for a frame but we have a non-zero fallback estimate,
-                # prefer the fallback (robustness when freqs axis is padded/resampled).
-                use_fallback = (total_sones <= 0.0) & (fallback_sones > 0.0)
-                if np.any(use_fallback):
-                    total_sones = total_sones.copy()
-                    total_sones[use_fallback] = fallback_sones[use_fallback]
+        # Strictness: if we provided non-zero energy to mosqito but it returned 0 sones,
+        # treat this as an invalid computation (often caused by an incompatible `freqs` axis).
+        unexpected_zero = (frame_energy > 0.0) & (total_sones <= 0.0)
+        if np.any(unexpected_zero):
+            bad = int(np.flatnonzero(unexpected_zero)[0])
+            raise ValueError(
+                "mosqito returned 0 sones for a non-silent frame. "
+                f"First bad frame index={bad}, energy={frame_energy[bad]:.3e}. "
+                "This indicates an invalid loudness computation (e.g., incomplete frequency coverage)."
+            )
 
-                # Convert sones -> phons with the standard piecewise mapping:
-                # - N < 1 sone: Ln = 40 * N^0.4
-                # - N >= 1 sone: Ln = 40 + 10*log2(N)
-                phons = np.zeros_like(total_sones)
-                positive = total_sones > 0.0
-                lt1 = positive & (total_sones < 1.0)
-                ge1 = positive & ~lt1
-                phons[lt1] = 40.0 * np.power(total_sones[lt1], 0.4)
-                phons[ge1] = 40.0 + 10.0 * np.log2(total_sones[ge1])
-                perceptual_loudness = phons
-            except Exception:
-                # On any mosqito failure, fall back to the already-computed per-frame estimate.
-                pass
+        # Convert sones -> phons with the standard piecewise mapping:
+        # - N < 1 sone: Ln = 40 * N^0.4
+        # - N >= 1 sone: Ln = 40 + 10*log2(N)
+        phons = np.zeros_like(total_sones)
+        positive = total_sones > 0.0
+        lt1 = positive & (total_sones < 1.0)
+        ge1 = positive & ~lt1
+        phons[lt1] = 40.0 * np.power(total_sones[lt1], 0.4)
+        phons[ge1] = 40.0 + 10.0 * np.log2(total_sones[ge1])
+        perceptual_loudness = phons
 
         return perceptual_loudness
