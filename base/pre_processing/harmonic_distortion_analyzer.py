@@ -180,6 +180,7 @@ class HarmonicDistortionAnalyzer(ABC):
         rfft_bark_bins = freq_to_bark(rfft_freqs)
 
         masking_config = masking_config or {}
+        prb_loudness_method = str(masking_config.get("prb_loudness_method", "masked_harmonics")).strip().lower()
         partitions_per_bark = int(masking_config.get("partitions_per_bark", 3))
         rfft_partition_index = np.clip(
             np.floor(rfft_bark_bins * float(partitions_per_bark)).astype(int),
@@ -195,6 +196,81 @@ class HarmonicDistortionAnalyzer(ABC):
         enable_noise_maskers = bool(masking_config.get("enable_noise_maskers", True))
         min_noise_over_ath_db = float(masking_config.get("min_noise_over_ath_db", 0.0))
         max_total_maskers = int(masking_config.get("max_total_maskers", 64))
+
+        if prb_loudness_method in {"delta_specific", "delta_specific_loudness", "delta_specific_loudness_zwicker"}:
+            # Loudness contour difference method:
+            # 1) Compute specific loudness N'(z,t) for the full spectrum (Zwicker spreading/filters inside mosqito)
+            # 2) Compute specific loudness for the fundamental-only spectrum
+            # 3) Subtract contours and integrate: N_dist(t) = ∫ max(N'_total - N'_f0, 0) dz
+            # 4) Convert sones -> phons
+
+            # Build calibrated full spectrum (exclude dummy row), and drop DC to avoid spurious low-frequency bias.
+            full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float32) * float(calibration_multiplier)).copy()
+            if full_spectra.shape[0] > 0:
+                full_spectra[0, :] = 0.0
+
+            # Fundamental-only spectrum: keep the fundamental bin (and optionally a small neighborhood) per frame.
+            fund_neighbor_bins = int(masking_config.get("fundamental_neighbor_bins", 1))
+            fund_spectra = np.zeros_like(full_spectra, dtype=np.float32)
+
+            # spectrum_matrix has dummy row at 0, so FFT bin k maps to row k+1.
+            for frame_idx in range(n_cols):
+                fbin_row = int(fundamental_bins[frame_idx])
+                if fbin_row <= 0:
+                    continue
+                fbin = fbin_row - 1
+                if fbin < 0 or fbin >= n_rfft_bins:
+                    continue
+                lo = max(0, fbin - fund_neighbor_bins)
+                hi = min(n_rfft_bins, fbin + fund_neighbor_bins + 1)
+                fund_spectra[lo:hi, frame_idx] = full_spectra[lo:hi, frame_idx]
+
+            # Compute loudness (sones and specific loudness in sones/bark).
+            n_total, n_spec_total, bark_axis = loudness_zwst_freq(full_spectra, rfft_freqs, field_type="free")
+            n_f0, n_spec_f0, bark_axis_f0 = loudness_zwst_freq(fund_spectra, rfft_freqs, field_type="free")
+
+            n_total = np.asarray(n_total, dtype=np.float64).reshape(-1)
+            n_f0 = np.asarray(n_f0, dtype=np.float64).reshape(-1)
+            n_spec_total = np.asarray(n_spec_total, dtype=np.float64)
+            n_spec_f0 = np.asarray(n_spec_f0, dtype=np.float64)
+            bark_axis = np.asarray(bark_axis, dtype=np.float64).reshape(-1)
+            bark_axis_f0 = np.asarray(bark_axis_f0, dtype=np.float64).reshape(-1)
+
+            if n_total.size != n_cols:
+                raise ValueError(f"mosqito returned {n_total.size} frames for total loudness, expected {n_cols}")
+            if n_f0.size != n_cols:
+                raise ValueError(f"mosqito returned {n_f0.size} frames for f0 loudness, expected {n_cols}")
+            if bark_axis.size != bark_axis_f0.size or not np.allclose(bark_axis, bark_axis_f0, atol=0.0, rtol=0.0):
+                raise ValueError("mosqito returned inconsistent bark axes for total vs f0 loudness")
+            if n_spec_total.shape != n_spec_f0.shape:
+                raise ValueError(
+                    f"mosqito returned inconsistent specific loudness shapes: total={n_spec_total.shape} f0={n_spec_f0.shape}"
+                )
+
+            # Strictness: if we provided non-zero energy but mosqito returned 0 sones for the total spectrum, fail-fast.
+            total_energy = np.sum(np.square(full_spectra), axis=0, dtype=np.float64)
+            unexpected_zero = (total_energy > 0.0) & (n_total <= 0.0)
+            if np.any(unexpected_zero):
+                bad = int(np.flatnonzero(unexpected_zero)[0])
+                raise ValueError(
+                    "mosqito returned 0 sones for a non-silent full-spectrum frame. "
+                    f"First bad frame index={bad}, energy={float(total_energy[bad]):.3e}."
+                )
+
+            # Specific loudness contour difference (clipped to >= 0).
+            n_spec_dist = np.maximum(n_spec_total - n_spec_f0, 0.0)
+            # Integrate over Bark axis to get distortion sones per frame.
+            n_dist = np.trapezoid(n_spec_dist, x=bark_axis, axis=0)
+            n_dist = np.asarray(n_dist, dtype=np.float64).reshape(-1)
+
+            # Convert sones -> phons with the standard piecewise mapping:
+            phons = np.zeros_like(n_dist)
+            positive = n_dist > 0.0
+            lt1 = positive & (n_dist < 1.0)
+            ge1 = positive & ~lt1
+            phons[lt1] = 40.0 * np.power(n_dist[lt1], 0.4)
+            phons[ge1] = 40.0 + 10.0 * np.log2(n_dist[ge1])
+            return phons
 
         # Compute loudness in batch using a 2D spectrum (n_freq_bins, n_frames).
         masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)
