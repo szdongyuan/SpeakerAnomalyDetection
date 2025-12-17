@@ -311,6 +311,8 @@ class MainWindow(QMainWindow):
         dlg = CalibrationWindow()
         dlg.speaker = self.speaker
         dlg.exec()
+        if dlg.input_calibration_flag:
+            self.sequence_window.update_v2pa_factor()
 
     def on_window_close(self):
         # close the window

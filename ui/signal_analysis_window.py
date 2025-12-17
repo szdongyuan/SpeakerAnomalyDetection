@@ -148,7 +148,7 @@ class Spl(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
         self.setWindowTitle(title_name)
@@ -160,7 +160,9 @@ class Spl(AnalysisGraphWidget):
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal, reference_pressure, deviation=self.deviation_value
+            recorded_signal,
+            reference_pressure,
+            v2pa_factor=self.v2pa_factor
         )
         if self.analysis_config["smooth_checked"]:
             signal_spl = smooth(signal_spl, window_size=1102, method="rms")
@@ -265,7 +267,7 @@ class Frequency(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.smooth_flag = False
         self.temp_frequency_list = None
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
         self.setWindowTitle(title_name)
@@ -393,7 +395,8 @@ class Frequency(AnalysisGraphWidget):
         - csv_lower_list : Corresponding lower limits (may contain NaN).
         """
         self.analysis_plot.clear()
-        fr_disp = fr + 94 + self.deviation_value
+        # fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
+        fr_disp = fr
         self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77)))
 
         dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
@@ -428,7 +431,7 @@ class Frequency(AnalysisGraphWidget):
 
     def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
-        fr = fr + 94 + self.deviation_value
+        # fr = fr + 94 + self.v2pa_factor  # Todo: modify later
         self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77)))
         if lower_limit and upper_limit:
             upper_limit = float(upper_limit)
@@ -587,7 +590,7 @@ class Spectrogram(QWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.analysis_config = None
         self.current_plot_widget = None
         self.stft_plot_widget = None
@@ -756,6 +759,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.analysis_config = None
         self.lp_num_label = QLabel("LP 数量: %s" % self.result)
         self.status_label = QLabel()
+        self.v2pa_factor = None
         self.threshould = None
         self.setWindowTitle(title_name)
         self.add_label_to_layout()
@@ -773,7 +777,11 @@ class LooseParticle(AnalysisGraphWidget):
     def calculate_loose_particle(self):
         recorded_signal = self.data_struct.store_wave_data
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
-            recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67
+            recorded_signal,
+            self.analysis_config.get("cutoff_freq"),
+            self.data_struct.sample_rate,
+            67,
+            self.v2pa_factor
         )
         self.plot_graph(filtered_spl, deviation)
         self.lp_num_label.setText("LP 数量: %s" % self.result)
@@ -863,7 +871,7 @@ class PeakDetection(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.setWindowTitle(title_name)
 
         # top status bar
@@ -893,7 +901,9 @@ class PeakDetection(AnalysisGraphWidget):
 
         try:
             self.result = peak_detection(
-                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config, deviation=self.deviation_value
+                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate),
+                self.analysis_config,
+                v2pa_factor=self.v2pa_factor
             )
         except Exception as e:
             self.status_label.setText(f"状态: 异常({e.__class__.__name__})")
@@ -911,10 +921,10 @@ class PeakDetection(AnalysisGraphWidget):
         self.analysis_plot.clear()
         spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
+            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+                recorded_signal,
+                v2pa_factor=self.v2pa_factor
+            )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
 
@@ -1078,7 +1088,7 @@ class PipelinePdPm(QWidget):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.analysis_config = None  # structure: {"head": {...}, "tail": {...}}
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.default_logger = LogManager.set_log_handler("core")
         self._init_ui()
         self.setWindowTitle(title_name)
@@ -1189,7 +1199,7 @@ class PipelinePdPm(QWidget):
     def _execute_pd(self, pd_cls, head_cfg):
         pd_instance = pd_cls(f"{self.windowTitle()}-PD")
         pd_instance.data_struct = self.data_struct
-        pd_instance.deviation_value = self.deviation_value
+        pd_instance.v2pa_factor = self.v2pa_factor
         pd_instance.analysis_config = head_cfg.get("config", {})
         pd_result = pd_instance.calculate_peak_detection()
 
@@ -1204,7 +1214,7 @@ class PipelinePdPm(QWidget):
         """
         auto_equal = bool(cfg.get("auto_equal_length", False))
         seg_len, left_point, right_point = 0, 0, 0
-        
+
         if auto_equal:
             rel_path = pm_cfg.get("pattern_save_path")
             pattern_data_path = os.path.join(DEFAULT_DIR, rel_path) if rel_path else None
@@ -1254,10 +1264,10 @@ class PipelinePdPm(QWidget):
         if isinstance(pd_result, dict):
             spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
         if spl_series is None or len(spl_series) == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
+            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+                recorded_signal,
+                v2pa_factor=self.v2pa_factor
+            )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
         self._last_spl_series = np.asarray(spl_series)

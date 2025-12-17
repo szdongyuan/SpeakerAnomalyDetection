@@ -160,23 +160,6 @@ class AudioFeatureExtraction(object):
         return spectral_flatness
 
     @staticmethod
-    def sound_pressure_level(signal):
-        """
-            Calculates the sound pressure level (SPL) of the given audio signal.
-
-            Args:
-            - signal: array
-                The audio signal data.
-            Returns:
-            - spl: int
-                The sound pressure level of the given audio signal.
-        """
-        rms = np.sqrt(np.mean(signal ** 2))
-        p0 = 20e-6
-        spl = 20 * np.log10(rms / p0)
-        return spl
-
-    @staticmethod
     def data_normalize(signal, sr, **kwargs):
         """To normalize audio raw data to [-1, 1] """
         signal_normalized = librosa.util.normalize(signal)
@@ -352,48 +335,3 @@ class AudioFeatureExtraction(object):
             imd_list.append(imd)
 
         return np.array(imd_list)
-
-    @staticmethod
-    def frequency_response(signal, sr, output_db="db", **kwargs):
-        """
-            Calculates the frequency response of a given audio signal.
-
-            Args:
-            - signal: array
-                The audio signal data.
-            - sr: int
-                The sample rate of the audio signal.
-            - output_db: string
-                Specifies the db output format.
-            - **kwargs: Additional parameters
-                - window_size: int
-                    FFT calculates the size of the window
-                - step_size: int
-                    The step size of the window slide.
-
-            Returns:
-                An array is used to save the frequency response for each window of the given signal.
-        """
-        window_size = kwargs.get("window_size", 2048)
-        step_size = kwargs.get("step_size", 256)
-        num_windows = (len(signal) - window_size) // step_size + 1
-        windows = np.array([signal[i * step_size:i * step_size + window_size] for i in range(num_windows)])
-
-        xf_list = []
-
-        for window in windows:
-
-            N = len(window)
-
-            if output_db == "db":
-
-                yf = np.fft.fft(window)
-                yf = np.abs(yf[:N // 2])
-                yf_db = 20 * np.log10(yf * 2 / N)
-                xf_list.append(yf_db)
-            else:
-                xf = np.fft.fftfreq(N, 1 / sr)
-                xf = xf[:N // 2]
-                xf_list.append(xf)
-
-        return np.array(xf_list)

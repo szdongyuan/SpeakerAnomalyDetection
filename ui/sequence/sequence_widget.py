@@ -22,7 +22,7 @@ from base.play_and_record import (
 )
 from base.recording_management import RecordingManager
 from base.save_data import save_recorded_data_to_json, save_audio_simple
-from base.soundcard_calibration_manager import get_mic_deviation_value
+from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
@@ -50,7 +50,7 @@ class SequenceWindow(QWidget):
         self.add_or_update_wave_flag = True
         self.count_board = None
 
-        self.deviation_value = get_mic_deviation_value()
+        self.v2pa_factor = get_mic_v2pa_factor()
         self.sequence_config = list()
         self.analysis_config = dict()
         self.get_sequence_config_from_json()
@@ -136,6 +136,9 @@ class SequenceWindow(QWidget):
             + ui_style_const.qlabel_style
             + ui_style_const.qcheckbox_style
         )
+
+    def update_v2pa_factor(self):
+        self.v2pa_factor = get_mic_v2pa_factor()
 
     def connect_set_result_file_sign(self, index, label, model_name):
         if self.count_board.mode == "test":
@@ -768,7 +771,7 @@ class SequenceWindow(QWidget):
                 class_instance = cls_map(key)
                 if self.analysis_config["default_ai"] == key:
                     self.default_ai = class_instance
-                class_instance.deviation_value = self.deviation_value
+                class_instance.v2pa_factor = self.v2pa_factor
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
 
