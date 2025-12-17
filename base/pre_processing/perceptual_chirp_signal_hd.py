@@ -34,7 +34,6 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
         stft_window_type: str = 'hann',
         masking_config: Dict = None,
         spl_calibration_db: float = 0.0,
-        noise_spectrum: np.ndarray = None,
         **kwargs
     ) -> Dict:
         """
@@ -57,7 +56,6 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
                 - 'enable_cumulative': bool to enable cumulative masking
                 - 'weight_function': str ('exponential', 'gaussian', etc.)
             spl_calibration_db: Calibration offset in dB (default 0.0)
-            noise_spectrum: Optional (n_fft//2 + 1,) background noise magnitude spectrum
 
         Returns:
             {
@@ -143,7 +141,6 @@ class PerceptualChirpSignalHD(ChirpSignalHD):
                 masking_mask_matrix=masking_mask_trimmed,
                 masking_config=masking_config,
                 spl_calibration_db=spl_calibration_db,
-                noise_spectrum=noise_spectrum,
                 n_fft=stft_window_size
             )
 

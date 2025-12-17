@@ -9,7 +9,7 @@ def test_compute_perceptual_thd_batch():
     """Verify perceptual THD returns phons instead of percentage"""
     # Create mock analyzer (abstract class, so we mock it)
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 44100
+    analyzer.sample_rate = 48000
 
     # Bind the method to the mock
     from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
@@ -40,7 +40,7 @@ def test_compute_perceptual_thd_batch():
     mask_matrix[310, 2] = 1.0
 
     # Fundamental frequencies (derived from bins)
-    fundamental_freqs = fundamental_bins * (44100 / 2) / n_bins
+    fundamental_freqs = fundamental_bins * (analyzer.sample_rate / 2) / n_bins
 
     # Call perceptual THD
     perceptual_loudness = analyzer.compute_perceptual_thd_batch(
@@ -57,7 +57,7 @@ def test_compute_perceptual_thd_batch():
 def test_compute_perceptual_thd_batch_masking_effect():
     """Verify masking reduces perceived loudness"""
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 44100
+    analyzer.sample_rate = 48000
 
     from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
@@ -93,7 +93,7 @@ def test_compute_perceptual_thd_batch_masking_effect():
 def test_compute_perceptual_thd_batch_additional_tonal_masker_reduces_loudness():
     """Strong nearby tonal energy should reduce perceived loudness of a target harmonic."""
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 44100
+    analyzer.sample_rate = 48000
 
     from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
@@ -133,7 +133,7 @@ def test_compute_perceptual_thd_batch_additional_tonal_masker_reduces_loudness()
 def test_compute_perceptual_thd_batch_backward_compatible():
     """Test that masking_config=None uses existing fundamental-only behavior"""
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 44100
+    analyzer.sample_rate = 48000
 
     from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
@@ -159,159 +159,21 @@ def test_compute_perceptual_thd_batch_backward_compatible():
     assert result[0] >= 0
 
 
+def test_compute_perceptual_thd_batch_requires_48khz_or_higher():
+    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
+    analyzer.sample_rate = 44100
+
+    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
+
+    spectrum_matrix = np.zeros((33, 1))
+    mask_matrix = np.zeros_like(spectrum_matrix)
+    fundamental_bins = np.array([1])
+    fundamental_freqs = np.array([100.0])
+    with pytest.raises(ValueError, match=">= 48000"):
+        analyzer.compute_perceptual_thd_batch(spectrum_matrix, mask_matrix, fundamental_bins, fundamental_freqs)
+
+
 #
-# NOTE: The PRB masking model now derives maskers from the full spectrum per frame,
-# so previous tests that patched apply_cumulative_masking / checked double counting
-# are no longer applicable.
-
-def test_apply_noise_correction_basic():
-    """Test basic noise correction with quadrature subtraction"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 48000
-    
-    # Bind the method to the mock
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    analyzer._apply_noise_correction = HDAnalyzer._apply_noise_correction.__get__(analyzer)
-    
-    # Create test data: harmonic at bin 100, amplitude 2.0
-    harmonic_bins = np.array([100])
-    harmonic_amplitudes = np.array([2.0])
-    
-    # Noise spectrum: 1000 bins, noise at bin 100 is 1.0
-    noise_spectrum = np.zeros(1000)
-    noise_spectrum[100] = 1.0
-    
-    corrected = analyzer._apply_noise_correction(
-        harmonic_bins, harmonic_amplitudes, noise_spectrum
-    )
-    
-    # Quadrature subtraction: sqrt(2^2 - 1^2) = sqrt(3) ≈ 1.732
-    expected = np.sqrt(2.0**2 - 1.0**2)
-    assert np.isclose(corrected[0], expected, atol=0.001)
-
-
-def test_apply_noise_correction_noise_exceeds_signal():
-    """Test noise correction when noise exceeds signal (should clip to min threshold)"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 48000
-    
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    analyzer._apply_noise_correction = HDAnalyzer._apply_noise_correction.__get__(analyzer)
-    
-    # Harmonic amplitude: 1.0, Noise: 2.0 (exceeds signal)
-    harmonic_bins = np.array([100])
-    harmonic_amplitudes = np.array([1.0])
-    
-    noise_spectrum = np.zeros(1000)
-    noise_spectrum[100] = 2.0
-    
-    corrected = analyzer._apply_noise_correction(
-        harmonic_bins, harmonic_amplitudes, noise_spectrum
-    )
-    
-    # Should clip to minimum threshold (1e-12) to prevent log(0)
-    assert corrected[0] == 1e-12
-
-
-def test_apply_noise_correction_zero_noise():
-    """Test noise correction with zero noise (should return original amplitude)"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 48000
-    
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    analyzer._apply_noise_correction = HDAnalyzer._apply_noise_correction.__get__(analyzer)
-    
-    # Harmonic amplitude: 2.0, Noise: 0.0
-    harmonic_bins = np.array([100])
-    harmonic_amplitudes = np.array([2.0])
-    
-    noise_spectrum = np.zeros(1000)
-    
-    corrected = analyzer._apply_noise_correction(
-        harmonic_bins, harmonic_amplitudes, noise_spectrum
-    )
-    
-    # With zero noise, should return original amplitude
-    assert np.isclose(corrected[0], 2.0, atol=0.001)
-
-
-def test_apply_noise_correction_interpolation():
-    """Test noise spectrum interpolation for non-integer bin indices"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 48000
-    
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    analyzer._apply_noise_correction = HDAnalyzer._apply_noise_correction.__get__(analyzer)
-    
-    # Harmonic at non-integer bin (requires interpolation)
-    harmonic_bins = np.array([100.5])  # Between bin 100 and 101
-    harmonic_amplitudes = np.array([2.0])
-    
-    # Noise spectrum with values at bins 100 and 101
-    noise_spectrum = np.zeros(1000)
-    noise_spectrum[100] = 1.0
-    noise_spectrum[101] = 1.5
-    
-    corrected = analyzer._apply_noise_correction(
-        harmonic_bins, harmonic_amplitudes, noise_spectrum
-    )
-    
-    # Interpolated noise should be 1.25 (average of 1.0 and 1.5)
-    # Quadrature: sqrt(2^2 - 1.25^2) ≈ 1.601
-    expected = np.sqrt(2.0**2 - 1.25**2)
-    assert np.isclose(corrected[0], expected, atol=0.001)
-
-
-def test_apply_noise_correction_multiple_harmonics():
-    """Test noise correction with multiple harmonics"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 48000
-    
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    analyzer._apply_noise_correction = HDAnalyzer._apply_noise_correction.__get__(analyzer)
-    
-    # Multiple harmonics at different bins
-    harmonic_bins = np.array([100, 200, 300])
-    harmonic_amplitudes = np.array([2.0, 3.0, 4.0])
-    
-    # Noise spectrum
-    noise_spectrum = np.zeros(1000)
-    noise_spectrum[100] = 1.0
-    noise_spectrum[200] = 1.5
-    noise_spectrum[300] = 2.0
-    
-    corrected = analyzer._apply_noise_correction(
-        harmonic_bins, harmonic_amplitudes, noise_spectrum
-    )
-    
-    # Verify each correction
-    assert np.isclose(corrected[0], np.sqrt(2.0**2 - 1.0**2), atol=0.001)
-    assert np.isclose(corrected[1], np.sqrt(3.0**2 - 1.5**2), atol=0.001)
-    assert np.isclose(corrected[2], np.sqrt(4.0**2 - 2.0**2), atol=0.001)
-
-
-def test_apply_noise_correction_minimum_threshold():
-    """Test all corrected values are >= minimum threshold"""
-    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
-    analyzer.sample_rate = 48000
-    
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
-    analyzer._apply_noise_correction = HDAnalyzer._apply_noise_correction.__get__(analyzer)
-    
-    # Mix of cases: some with noise > signal, some normal
-    harmonic_bins = np.array([100, 200, 300])
-    harmonic_amplitudes = np.array([0.5, 2.0, 3.0])
-    
-    noise_spectrum = np.zeros(1000)
-    noise_spectrum[100] = 1.0  # Noise > signal
-    noise_spectrum[200] = 0.5  # Noise < signal
-    noise_spectrum[300] = 3.0  # Noise == signal
-    
-    corrected = analyzer._apply_noise_correction(
-        harmonic_bins, harmonic_amplitudes, noise_spectrum
-    )
-    
-    # All values should be >= 1e-12 (minimum threshold)
-    assert np.all(corrected >= 1e-12)
-    # No NaNs or infinities
-    assert np.all(np.isfinite(corrected))
+# NOTE: Noise spectrum subtraction was removed because it is hard to control and can
+# produce inconsistent results depending on the capture conditions.

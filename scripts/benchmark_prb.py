@@ -134,7 +134,6 @@ def main() -> int:
             stft_hop_size=args.hop,
             masking_config=None,
             spl_calibration_db=0.0,
-            noise_spectrum=None,
         )
 
     t0 = time.perf_counter()

@@ -26,9 +26,7 @@ from base.soundcard_calibration_manager import get_mic_deviation_value
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
-from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
-from base.pre_processing.psychoacoustic_utils import compute_noise_spectrum
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -669,22 +667,15 @@ class SequenceWindow(QWidget):
             stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
 
         # Choose streaming or blocking(Not in use now) mode
-        if self.use_streaming:
-            # Use modern streaming approach with true real-time updates (non-blocking)
-            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                # Start streaming play+record (non-blocking)
-                # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
-                temp_path = self.recorded_path.replace('.wav', '_temp.wav')
-                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
-                self.streaming_temp_path = temp_path
+	        if self.use_streaming:
+	            # Use modern streaming approach with true real-time updates (non-blocking)
+	            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+	                # Start streaming play+record (non-blocking)
+	                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
 
-                # Extract playback offset from config
-                acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
-                playback_offset = acq_detail.get("playback_offset", 0.0)
-
-                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info, playback_offset
-                )
+	                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
+	                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+	                )
                 self.streaming_mode = "play_record"
 
             else:
@@ -930,68 +921,22 @@ class SequenceWindow(QWidget):
             else:
                 self.default_logger.info(f"Recording complete: {actual_samples} samples captured (matches target)")
 
-            # Perform alignment if in play+record mode
-            if self.streaming_mode == "play_record" and self.streaming_stimulus_data is not None:
-                # Finalize temp file first
-                if self.streaming_wav_writer:
-                    self.streaming_wav_writer.finalize()
-                    self.streaming_wav_writer = None
+	            # Store recorded data (no delay compensation / no noise spectrum subtraction).
+	            self.data_struct.store_wave_data = recorded_data
 
-                aligned_data, pre_alignment_data = AlignmentProcessing.align_play_and_rec_data_using_gccphat(
-                    self.streaming_stimulus_data, recorded_data
-                )
+	            # Finalize WAV file (streaming writer wrote directly to the final path).
+	            if self.streaming_wav_writer:
+	                self.streaming_wav_writer.finalize()
+	                self.streaming_wav_writer = None
 
-                # Update plot with aligned data (refresh display)
-                final_time_axis = np.linspace(0, len(aligned_data) / sample_rate, len(aligned_data))
-                if self.streaming_plot_item:
-                    self.streaming_plot_item.setData(final_time_axis, aligned_data)
-                else:
-                    self.streaming_plot_item = self.line_graph.plot(final_time_axis, aligned_data, pen="k")
-
-                # Store aligned data and pre-alignment data
-                self.data_struct.store_wave_data = aligned_data
-                self.data_struct.pre_alignment_data = pre_alignment_data
-
-                # Compute and store noise spectrum from pre-alignment data
-                if pre_alignment_data is not None and len(pre_alignment_data) > 0:
-                    self.data_struct.noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
-                    self.default_logger.info(f"Computed noise spectrum from {len(pre_alignment_data)} samples")
-
-                # Save aligned data to final file
-                save_audio_simple(self.recorded_path, aligned_data, sample_rate)
-
-                # Save to database
-                self.recorded_signal_info["sample_rate"] = sample_rate
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.data_struct.stimulus_info)
-                if save_code == error_code.OK:
-                    self.default_logger.info(f"Database save successful: {save_msg}")
-                else:
-                    self.default_logger.error(f"Database save failed: {save_msg}")
-
-                # Delete temp file AFTER successful save (for data safety)
-                try:
-                    if hasattr(self, 'streaming_temp_path') and os.path.exists(self.streaming_temp_path):
-                        os.remove(self.streaming_temp_path)
-                        self.default_logger.info(f"Deleted temp file: {self.streaming_temp_path}")
-                except Exception as e:
-                    self.default_logger.warning(f"Failed to delete temp file: {e}")
-
-            else:
-                # Record-only mode - no alignment needed
-                self.data_struct.store_wave_data = recorded_data
-
-                # Finalize WAV file (for record-only, this is the final file)
-                if self.streaming_wav_writer:
-                    self.streaming_wav_writer.finalize()
-                    self.streaming_wav_writer = None
-
-                # Save to database
-                self.recorded_signal_info["sample_rate"] = sample_rate
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
-                if save_code == error_code.OK:
-                    self.default_logger.info(f"Database save successful: {save_msg}")
-                else:
-                    self.default_logger.error(f"Database save failed: {save_msg}")
+	            # Save to database (stimulus info only exists for play+record).
+	            self.recorded_signal_info["sample_rate"] = sample_rate
+	            stimulus_info = self.data_struct.stimulus_info if self.streaming_mode == "play_record" else None
+	            save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, stimulus_info)
+	            if save_code == error_code.OK:
+	                self.default_logger.info(f"Database save successful: {save_msg}")
+	            else:
+	                self.default_logger.error(f"Database save failed: {save_msg}")
 
             # Handle repeat signal splitting if needed
             if self.streaming_mode == "play_record":

@@ -18,6 +18,56 @@ from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignal
 
 class AudioThdFrequencyResponseAnalysis(object):
 
+    @staticmethod
+    def _resample_to_min_sr_for_loudness(
+        recorded_signal: np.ndarray,
+        original_sr: int,
+        target_sr: int,
+        expected_len_target: Optional[int],
+    ) -> tuple[np.ndarray, int]:
+        """
+        Resample the time-domain signal to meet loudness model requirements.
+
+        We resample when original_sr < target_sr (e.g., 44.1 kHz -> 48 kHz) so that
+        ISO 532-1 fine-band loudness has valid frequency coverage up to 24 kHz.
+
+        Returns:
+            (resampled_signal, target_sr)
+        """
+        def _maybe_adjust_length(y: np.ndarray, expected: Optional[int]) -> np.ndarray:
+            if expected is None:
+                return y
+            expected_n = int(expected)
+            if expected_n <= 0:
+                return y
+            # Only adjust when the mismatch is small (rounding / resampling artifacts).
+            # If the mismatch is large (e.g., extra pre/post-roll), do not trim.
+            tol = max(128, int(0.001 * expected_n))
+            if abs(int(y.size) - expected_n) > tol:
+                return y
+            if y.size < expected_n:
+                return np.pad(y, (0, expected_n - y.size), mode="constant", constant_values=0.0)
+            if y.size > expected_n:
+                return y[:expected_n]
+            return y
+
+        if int(original_sr) >= int(target_sr):
+            y = np.asarray(recorded_signal, dtype=np.float32)
+            return _maybe_adjust_length(y, expected_len_target), int(original_sr)
+
+        try:
+            from scipy.signal import resample_poly
+        except Exception as e:
+            raise ImportError(
+                "PRB loudness requires resampling to >= 48 kHz when input sample rate < 48 kHz, "
+                "but scipy is not available to perform resampling."
+            ) from e
+
+        y = np.asarray(recorded_signal, dtype=np.float32)
+        y = resample_poly(y, up=int(target_sr), down=int(original_sr)).astype(np.float32, copy=False)
+        y = _maybe_adjust_length(y, expected_len_target)
+        return y, int(target_sr)
+
     def process_calculate(self, reference_signal: np.ndarray, recorded_signal, sr, **kwargs):
         """
             Calculate and plot THD, harmonic, and frequency response figures, and return the result images.
@@ -182,8 +232,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         recorded_signal: np.ndarray,
         sample_rate: int,
         thd_kwargs: dict,
-        spl_calibration_db: float = 0.0,
-        noise_spectrum: np.ndarray = None
+        spl_calibration_db: float = 0.0
     ) -> tuple:
         """
         Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
@@ -201,7 +250,6 @@ class AudioThdFrequencyResponseAnalysis(object):
                 This is the deviation/offset value (e.g., from mic_calibration.txt).
                 Applied in amplitude domain before log transform:
                 calibrated_amp = amp * 10^(calibration_db/20)
-            noise_spectrum: Optional (n_fft//2 + 1,) background noise magnitude spectrum
 
         Returns:
             (freq_value, harmonic, perceptual_loudness):
@@ -212,6 +260,22 @@ class AudioThdFrequencyResponseAnalysis(object):
         stimulus_metadata = thd_kwargs['stimulus_metadata']
         harmonic_orders = thd_kwargs.get('harmonic_orders', [])
 
+        # Loudness (mosqito / ISO 532-1) requires analysis at >= 48 kHz so that
+        # the fine-band spectrum covers up to 24 kHz. For lower-rate recordings
+        # (e.g., 44.1 kHz), resample to 48 kHz as the standard analysis path.
+        analysis_sr = int(sample_rate)
+        if analysis_sr < 48000:
+            expected_len_target = None
+            total_time = stimulus_metadata.get("total_time")
+            if total_time is not None:
+                expected_len_target = int(round(float(total_time) * 48000))
+            recorded_signal, analysis_sr = self._resample_to_min_sr_for_loudness(
+                recorded_signal=recorded_signal,
+                original_sr=analysis_sr,
+                target_sr=48000,
+                expected_len_target=expected_len_target,
+            )
+
         # Phase 1A: Build overall index matrix
         builder = HarmonicIndexBuilder()
 
@@ -221,18 +285,18 @@ class AudioThdFrequencyResponseAnalysis(object):
             # Calculate STFT parameters (full step duration - no trimming)
             single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
             step_duration = single_rep_duration / stimulus_metadata['num_steps']
-            step_samples = int(step_duration * sample_rate)
+            step_samples = int(step_duration * analysis_sr)
             n_fft = step_samples  # STFT window size = step duration
 
             index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-                stimulus_metadata, sr=sample_rate, n_fft=n_fft, max_harmonic_order=35
+                stimulus_metadata, sr=analysis_sr, n_fft=n_fft, max_harmonic_order=35
             )
         elif stimulus_method == 'chirps':
             stft_window_size = thd_kwargs.get('stft_window_size', 2048)
             stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
 
             index_matrix, fund_freqs, time_array, fft_freqs = builder.build_chirp_signal_index_matrix(
-                stimulus_metadata, sr=sample_rate, n_fft=stft_window_size,
+                stimulus_metadata, sr=analysis_sr, n_fft=stft_window_size,
                 hop_length=stft_hop_size, max_harmonic_order=35
             )
         else:
@@ -259,22 +323,20 @@ class AudioThdFrequencyResponseAnalysis(object):
 
         # Phase 2: Compute perceptual loudness using perceptual analyzers
         if stimulus_method == 'steps':
-            analyzer = PerceptualStepSignalHD(sample_rate)
+            analyzer = PerceptualStepSignalHD(analysis_sr)
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
                 spl_calibration_db=spl_calibration_db,
-                masking_config=masking_config,
-                noise_spectrum=noise_spectrum
+                masking_config=masking_config
             )
         else:  # chirps
-            analyzer = PerceptualChirpSignalHD(sample_rate)
+            analyzer = PerceptualChirpSignalHD(analysis_sr)
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, time_array, fundamental_bins),
                 spl_calibration_db=spl_calibration_db,
-                masking_config=masking_config,
-                noise_spectrum=noise_spectrum
+                masking_config=masking_config
             )
 
         # Extract results
@@ -545,4 +607,3 @@ class AudioThdFrequencyResponseAnalysis(object):
         rms_deviation = np.sqrt(sum_squares / len(filtered_spl)) * (np.sqrt(2) / 2)
 
         return filtered_spl, rms_deviation
-

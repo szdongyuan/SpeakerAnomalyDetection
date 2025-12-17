@@ -158,9 +158,16 @@ class StreamingAudioProcessor:
             self.logger.error(f"Error starting streaming recording: {e}")
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
-    def start_streaming_playrec(self, stimulus_dict, sample_rate=44100, target_samples=None,
-                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000,
-                                 playback_offset=0.0):
+    def start_streaming_playrec(
+        self,
+        stimulus_dict,
+        sample_rate=44100,
+        target_samples=None,
+        input_device=None,
+        output_device=None,
+        prepare_frames=1000,
+        prolong_frames=10000,
+    ):
         """
         Start streaming play and record (simultaneous playback and recording).
 
@@ -176,9 +183,6 @@ class StreamingAudioProcessor:
             output_device: Output device (None for default)
             prepare_frames (int): Silent frames before stimulus
             prolong_frames (int): Silent frames after stimulus
-            playback_offset (float): Time offset for playback relative to recording (seconds)
-                - Positive: playback delayed (recording captures background noise first)
-                - Negative: playback advanced (playback starts before recording)
 
         Returns:
             tuple: (error_code, message)
@@ -197,31 +201,14 @@ class StreamingAudioProcessor:
         self.is_recording = True
         self.error_occurred = False
 
-        # Calculate offset in frames
-        offset_frames = int(abs(playback_offset) * sample_rate)
-
-        # For negative offset, skip initial recording samples
-        self.recording_skip_frames = offset_frames if playback_offset < 0 else 0
-        self.recording_skipped_frames = 0
-
         try:
-            # Adjust playback data based on offset
-            if playback_offset > 0:
-                # Positive offset: Prepend silence to playback
-                # Recording captures real background noise while playback outputs silence
-                self.playback_data = np.concatenate([
-                    np.zeros(offset_frames),  # Silence for offset duration
+            self.playback_data = np.concatenate(
+                [
                     np.zeros(prepare_frames),
                     stimulus_data,
-                    np.zeros(prolong_frames)
-                ]).astype(np.float32)
-            else:
-                # Zero or negative offset: Standard playback data
-                self.playback_data = np.concatenate([
-                    np.zeros(prepare_frames),
-                    stimulus_data,
-                    np.zeros(prolong_frames)
-                ]).astype(np.float32)
+                    np.zeros(prolong_frames),
+                ]
+            ).astype(np.float32)
 
             self.playback_index = 0
 
@@ -245,26 +232,6 @@ class StreamingAudioProcessor:
 
                 self.playback_index += frames
 
-            # Create modified recording callback for negative offset
-            def recording_callback_with_offset(indata, frames, time_info, status):
-                if status:
-                    self.logger.warning(f"Recording status: {status}")
-
-                # For negative offset, skip initial frames
-                if self.recording_skip_frames > 0:
-                    frames_to_skip = min(frames, self.recording_skip_frames - self.recording_skipped_frames)
-                    if frames_to_skip > 0:
-                        self.recording_skipped_frames += frames_to_skip
-                        # Only process remaining frames after skip
-                        if frames_to_skip < frames:
-                            remaining_data = indata[frames_to_skip:].copy().flatten()
-                            self._process_audio_chunk(remaining_data)
-                        return
-
-                # Normal recording processing
-                chunk = indata.copy().flatten()
-                self._process_audio_chunk(chunk)
-
             # Create output stream (playback)
             self.output_stream = sd.OutputStream(
                 samplerate=sample_rate,
@@ -275,36 +242,19 @@ class StreamingAudioProcessor:
             )
 
             # Create input stream (recording)
-            if playback_offset < 0:
-                # Use modified callback for negative offset
-                self.stream = sd.InputStream(
-                    samplerate=sample_rate,
-                    channels=1,
-                    callback=recording_callback_with_offset,
-                    blocksize=2048,
-                    device=input_device['index'] if input_device else None
-                )
-            else:
-                # Use standard callback for zero or positive offset
-                self.stream = sd.InputStream(
-                    samplerate=sample_rate,
-                    channels=1,
-                    callback=self._audio_callback,
-                    blocksize=2048,
-                    device=input_device['index'] if input_device else None
-                )
+            self.stream = sd.InputStream(
+                samplerate=sample_rate,
+                channels=1,
+                callback=self._audio_callback,
+                blocksize=2048,
+                device=input_device['index'] if input_device else None
+            )
 
             # Start both streams immediately (no blocking!)
             self.output_stream.start()
             self.stream.start()
 
-            if playback_offset > 0:
-                self.logger.info(f"Started streaming play+record with +{playback_offset}s offset: playback outputs {playback_offset}s silence first, recording captures real background noise")
-            elif playback_offset < 0:
-                self.logger.info(f"Started streaming play+record with {playback_offset}s offset: recording skips first {abs(playback_offset)}s")
-            else:
-                self.logger.info(f"Started streaming play+record with no offset (simultaneous)")
-
+            self.logger.info("Started streaming play+record (simultaneous)")
             self.logger.info(f"Target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz")
 
             # No timer needed - callback handles stopping based on sample count

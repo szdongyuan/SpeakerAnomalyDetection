@@ -97,47 +97,6 @@ class HarmonicDistortionAnalyzer(ABC):
 
         return thd_percentage
 
-    def _apply_noise_correction(
-        self,
-        harmonic_bins: np.ndarray,
-        harmonic_amplitudes: np.ndarray,
-        noise_spectrum: np.ndarray
-    ) -> np.ndarray:
-        """
-        Apply background noise correction to harmonic amplitudes using quadrature subtraction.
-
-        Interpolates noise spectrum to harmonic frequencies and subtracts noise power
-        from signal power in quadrature (sqrt(signal^2 - noise^2)).
-
-        Args:
-            harmonic_bins: (n_harmonics,) bin indices of harmonics in spectrum
-            harmonic_amplitudes: (n_harmonics,) amplitude values at harmonic bins
-            noise_spectrum: (n_fft//2 + 1,) background noise magnitude spectrum
-
-        Returns:
-            corrected_amplitudes: (n_harmonics,) noise-corrected amplitude values
-        """
-        # Interpolate noise spectrum to harmonic bin indices
-        noise_interp = np.interp(
-            harmonic_bins,
-            np.arange(len(noise_spectrum)),
-            noise_spectrum
-        )
-
-        # Quadrature subtraction: corrected = sqrt(signal^2 - noise^2)
-        signal_power = harmonic_amplitudes ** 2
-        noise_power = noise_interp ** 2
-
-        # Clip to prevent negative values (when noise > signal)
-        corrected_power = np.maximum(signal_power - noise_power, 0.0)
-        corrected_amplitudes = np.sqrt(corrected_power)
-
-        # Apply minimum threshold to prevent log(0) later
-        min_amplitude = 1e-12
-        corrected_amplitudes = np.maximum(corrected_amplitudes, min_amplitude)
-
-        return corrected_amplitudes
-
     def compute_perceptual_thd_batch(
         self,
         spectrum_matrix: np.ndarray,
@@ -147,7 +106,6 @@ class HarmonicDistortionAnalyzer(ABC):
         masking_mask_matrix: np.ndarray = None,
         masking_config: dict = None,
         spl_calibration_db: float = 0.0,
-        noise_spectrum: np.ndarray = None,
         n_fft: Optional[int] = None
     ) -> np.ndarray:
         """
@@ -172,8 +130,6 @@ class HarmonicDistortionAnalyzer(ABC):
                     calibrated_pressure_like = raw_voltage_like * 10^(calibration_db/20)
                 After proper SPL calibration, the calibrated amplitude can be treated as being in Pascals
                 up to a constant that depends on the exact FFT/STFT magnitude scaling.
-            noise_spectrum: Optional (n_fft//2 + 1,) background noise magnitude spectrum.
-                If provided, applies background noise correction to harmonics.
 
         Returns:
             perceptual_loudness: (n_frames,) perceived loudness in phons
@@ -185,6 +141,11 @@ class HarmonicDistortionAnalyzer(ABC):
             raise ImportError(
                 "mosqito is required for PRB loudness computation, but it is not available. "
                 "Install mosqito or remove PRB_DISABLE_MOSQITO."
+            )
+        if int(self.sample_rate) < 48000:
+            raise ValueError(
+                "PRB loudness requires analysis sample rate >= 48000 Hz. "
+                "If the recording is 44100 Hz, resample to 48000 Hz before running PRB."
             )
 
         perceptual_loudness = np.zeros(n_cols, dtype=float)
@@ -236,14 +197,6 @@ class HarmonicDistortionAnalyzer(ABC):
         min_noise_over_ath_db = float(masking_config.get("min_noise_over_ath_db", 0.0))
         max_total_maskers = int(masking_config.get("max_total_maskers", 64))
 
-        noise_n_fft = None
-        noise_spectrum_calibrated = None
-        if noise_spectrum is not None:
-            noise_n_fft = max(2 * (len(noise_spectrum) - 1), 1)
-            # Keep noise spectrum in the same calibrated amplitude domain as the signal before
-            # quadrature subtraction, otherwise a negative calibration offset can over-subtract.
-            noise_spectrum_calibrated = np.asarray(noise_spectrum, dtype=float) * calibration_multiplier
-
         # Compute loudness in batch using a 2D spectrum (n_freq_bins, n_frames).
         masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)
         # Track per-frame energy to detect unexpected mosqito zeros.
@@ -292,17 +245,7 @@ class HarmonicDistortionAnalyzer(ABC):
             raw_harmonic_amplitudes = spectrum_matrix[harmonic_bin_indices, frame_idx]
             harmonic_amplitudes = raw_harmonic_amplitudes * calibration_multiplier
 
-            # Apply noise correction if noise spectrum is provided
-            if noise_spectrum is not None:
-                noise_bin_positions = harmonic_freqs * noise_n_fft / self.sample_rate
-                noise_bin_positions = np.clip(noise_bin_positions, 0.0, len(noise_spectrum_calibrated) - 1.0)
-                harmonic_amplitudes = self._apply_noise_correction(
-                    noise_bin_positions,
-                    harmonic_amplitudes,
-                    noise_spectrum_calibrated
-                )
-
-            # Convert to SPL (dB re 20 μPa) after calibration (and optional noise correction)
+            # Convert to SPL (dB re 20 μPa) after calibration
             harmonic_spls = 20.0 * np.log10(
                 np.maximum(harmonic_amplitudes / reference_pressure, min_amplitude)
             )
@@ -324,13 +267,6 @@ class HarmonicDistortionAnalyzer(ABC):
             # This better matches the psychoacoustic notion of "a loud sound masks a quiet one"
             # than restricting maskers to the harmonic subset only.
             frame_amplitudes = spectrum_matrix[1:, frame_idx] * calibration_multiplier
-            if noise_spectrum is not None:
-                # Use rFFT-bin positions directly for noise interpolation (0..n_rfft_bins-1).
-                frame_amplitudes = self._apply_noise_correction(
-                    np.arange(n_rfft_bins, dtype=float),
-                    frame_amplitudes,
-                    noise_spectrum_calibrated
-                )
             frame_spls = 20.0 * np.log10(np.maximum(frame_amplitudes / reference_pressure, min_amplitude))
             frame_spls = np.maximum(frame_spls, 0.0)
 

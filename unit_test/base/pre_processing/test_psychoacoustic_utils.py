@@ -6,8 +6,7 @@ from base.pre_processing.psychoacoustic_utils import (
     compute_simultaneous_masking_threshold,
     apply_masking,
     compute_bark_weight,
-    apply_cumulative_masking,
-    compute_noise_spectrum
+    apply_cumulative_masking
 )
 
 
@@ -274,91 +273,3 @@ def test_cumulative_masking_zero_power_guard():
     # With zero power, maskee should pass through unchanged
     assert result[0] == maskee_spls[0]
 
-
-def test_compute_noise_spectrum_exact_length():
-    """Test compute_noise_spectrum with exact 0.5s data"""
-    sample_rate = 48000
-    n_fft = int(0.5 * sample_rate)  # 24000
-
-    # Create 0.5s of white noise
-    pre_alignment_data = np.random.randn(n_fft)
-
-    noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
-
-    # Should return magnitude spectrum of correct length
-    expected_length = n_fft // 2 + 1  # 12001
-    assert len(noise_spectrum) == expected_length
-    # All magnitudes should be non-negative
-    assert np.all(noise_spectrum >= 0)
-
-
-def test_compute_noise_spectrum_longer_data():
-    """Test compute_noise_spectrum extracts middle 0.5s from longer data"""
-    sample_rate = 48000
-    n_fft = int(0.5 * sample_rate)  # 24000
-
-    # Create 1.0s of data (longer than 0.5s)
-    pre_alignment_data = np.random.randn(sample_rate)
-
-    noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
-
-    # Should still return correct length
-    expected_length = n_fft // 2 + 1
-    assert len(noise_spectrum) == expected_length
-    assert np.all(noise_spectrum >= 0)
-
-
-def test_compute_noise_spectrum_shorter_data():
-    """Test compute_noise_spectrum pads shorter data with zeros"""
-    sample_rate = 48000
-    n_fft = int(0.5 * sample_rate)  # 24000
-
-    # Create 0.1s of data (shorter than 0.5s)
-    pre_alignment_data = np.random.randn(int(0.1 * sample_rate))
-
-    noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
-
-    # Should still return correct length (after padding)
-    expected_length = n_fft // 2 + 1
-    assert len(noise_spectrum) == expected_length
-    assert np.all(noise_spectrum >= 0)
-
-
-def test_compute_noise_spectrum_sine_wave():
-    """Test compute_noise_spectrum with known sine wave"""
-    sample_rate = 48000
-    n_fft = int(0.5 * sample_rate)  # 24000
-
-    # Create 0.5s of 1000 Hz sine wave
-    t = np.arange(n_fft) / sample_rate
-    pre_alignment_data = np.sin(2 * np.pi * 1000 * t)
-
-    noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
-
-    # Should have peak around 1000 Hz
-    freqs = np.fft.rfftfreq(n_fft, 1/sample_rate)
-    peak_idx = np.argmax(noise_spectrum)
-    peak_freq = freqs[peak_idx]
-
-    # Peak should be close to 1000 Hz (within 10 Hz tolerance)
-    assert abs(peak_freq - 1000.0) < 10.0
-    # Peak magnitude should be significant
-    assert noise_spectrum[peak_idx] > 0.1
-
-
-def test_compute_noise_spectrum_dc_component():
-    """Test compute_noise_spectrum DC component is attenuated by Hann window"""
-    sample_rate = 48000
-    n_fft = int(0.5 * sample_rate)
-
-    # Create DC signal (constant value)
-    pre_alignment_data = np.ones(n_fft)
-
-    noise_spectrum = compute_noise_spectrum(pre_alignment_data, sample_rate)
-
-    # Hann window attenuates DC component
-    # DC bin (index 0) should be non-zero but reduced
-    assert noise_spectrum[0] > 0
-    # Hann window spreads energy to nearby bins (bin 1 should be significant)
-    assert noise_spectrum[1] > 0
-    assert noise_spectrum[1] > noise_spectrum[0] * 0.3

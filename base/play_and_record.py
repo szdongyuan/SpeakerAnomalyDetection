@@ -136,7 +136,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         raise RuntimeError(f"Failed to start streaming recording: {msg}")
 
 
-def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info, playback_offset=0.0):
+def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info):
     """
     Start streaming play+record (non-blocking).
 
@@ -155,9 +155,6 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
             - 'output_device': Output device (optional)
         recorded_path (str): Path where WAV file will be saved (managed by UI)
         recorded_signal_info (dict): Recording metadata (saved by UI after completion)
-        playback_offset (float): Time offset for playback relative to recording (seconds)
-            - Positive: playback delayed (recording captures background noise first)
-            - Negative: playback advanced (playback starts before recording)
 
     Returns:
         tuple: (StreamingAudioProcessor instance, stimulus_data, sample_rate)
@@ -167,13 +164,8 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
     prepare_frames = recorded_dict.get("prepare_frames", 1000)
     prolong_frames = recorded_dict.get("prolong_frames", 10000)
 
-    # Calculate exact target samples, accounting for playback offset
-    base_target_samples = prepare_frames + len(stimulus_data) + prolong_frames
-
-    # When offset > 0: recording starts first and runs longer to capture full playback
-    # When offset < 0: playback starts first, recording still needs to capture full stimulus
-    offset_frames = int(abs(playback_offset) * sample_rate)
-    target_samples = base_target_samples + offset_frames
+    # Calculate exact target samples (prepare + stimulus + prolong).
+    target_samples = prepare_frames + len(stimulus_data) + prolong_frames
 
     input_device = recorded_dict.get("input_device")
     output_device = recorded_dict.get("output_device")
@@ -190,7 +182,6 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         output_device=output_device,
         prepare_frames=prepare_frames,
         prolong_frames=prolong_frames,
-        playback_offset=playback_offset
     )
 
     if record_code == error_code.OK:
