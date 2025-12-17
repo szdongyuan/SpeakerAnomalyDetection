@@ -229,8 +229,12 @@ class HarmonicDistortionAnalyzer(ABC):
         max_total_maskers = int(masking_config.get("max_total_maskers", 64))
 
         noise_n_fft = None
+        noise_spectrum_calibrated = None
         if noise_spectrum is not None:
             noise_n_fft = max(2 * (len(noise_spectrum) - 1), 1)
+            # Keep noise spectrum in the same calibrated amplitude domain as the signal before
+            # quadrature subtraction, otherwise a negative calibration offset can over-subtract.
+            noise_spectrum_calibrated = np.asarray(noise_spectrum, dtype=float) * calibration_multiplier
 
         # If mosqito is available, we compute loudness in batch using a 2D spectrum
         # (n_freq_bins, n_frames) to avoid repeating expensive third-octave filter
@@ -288,11 +292,11 @@ class HarmonicDistortionAnalyzer(ABC):
             # Apply noise correction if noise spectrum is provided
             if noise_spectrum is not None:
                 noise_bin_positions = harmonic_freqs * noise_n_fft / self.sample_rate
-                noise_bin_positions = np.clip(noise_bin_positions, 0.0, len(noise_spectrum) - 1.0)
+                noise_bin_positions = np.clip(noise_bin_positions, 0.0, len(noise_spectrum_calibrated) - 1.0)
                 harmonic_amplitudes = self._apply_noise_correction(
                     noise_bin_positions,
                     harmonic_amplitudes,
-                    noise_spectrum
+                    noise_spectrum_calibrated
                 )
 
             # Convert to SPL (dB re 20 μPa) after calibration (and optional noise correction)
@@ -322,7 +326,7 @@ class HarmonicDistortionAnalyzer(ABC):
                 frame_amplitudes = self._apply_noise_correction(
                     np.arange(n_rfft_bins, dtype=float),
                     frame_amplitudes,
-                    noise_spectrum
+                    noise_spectrum_calibrated
                 )
             frame_spls = 20.0 * np.log10(np.maximum(frame_amplitudes / reference_pressure, min_amplitude))
             frame_spls = np.maximum(frame_spls, 0.0)

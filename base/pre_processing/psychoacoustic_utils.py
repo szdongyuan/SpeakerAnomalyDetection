@@ -410,7 +410,13 @@ def compute_noise_spectrum(pre_alignment_data: np.ndarray, sample_rate: int) -> 
     window = np.hanning(n_fft)
     windowed_data = pre_alignment_data * window
 
-    # Compute magnitude spectrum
-    noise_spectrum = np.abs(np.fft.rfft(windowed_data, n=n_fft))
+    # Compute magnitude spectrum.
+    #
+    # IMPORTANT: match SciPy STFT default scaling ('spectrum'), which divides by sum(window).
+    # Otherwise noise correction will be off by ~sum(window) and can zero out PRB/THD results.
+    window_sum = float(np.sum(window))
+    if window_sum <= 0.0:
+        window_sum = 1.0
+    noise_spectrum = np.abs(np.fft.rfft(windowed_data, n=n_fft)) / window_sum
 
     return noise_spectrum
