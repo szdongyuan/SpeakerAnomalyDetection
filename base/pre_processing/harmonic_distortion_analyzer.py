@@ -198,9 +198,8 @@ class HarmonicDistortionAnalyzer(ABC):
 
         # Compute loudness in batch using a 2D spectrum (n_freq_bins, n_frames).
         masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)
-        # Track per-frame energy/level to sanity-check mosqito output.
+        # Track per-frame energy to sanity-check mosqito output.
         frame_energy = np.zeros(n_cols, dtype=np.float64)
-        frame_peak_masked_spl = np.zeros(n_cols, dtype=np.float64)
 
         # Extract fundamental amplitudes
         row_indices = fundamental_bins.astype(int)
@@ -333,7 +332,6 @@ class HarmonicDistortionAnalyzer(ABC):
             # Do not pre-gate by ATH here; mosqito handles inaudible contributions internally.
             # Keep only components with non-zero residual after masking subtraction.
             keep = masked_spls > 0.0
-            frame_peak_masked_spl[frame_idx] = float(np.max(masked_spls)) if masked_spls.size else 0.0
             if np.any(keep):
                 masked_spectrum = masked_spectra[:, frame_idx]
                 kept_bins = harmonic_rfft_bins[keep]
@@ -347,13 +345,9 @@ class HarmonicDistortionAnalyzer(ABC):
         if total_sones.size != n_cols:
             raise ValueError(f"mosqito returned {total_sones.size} frames, expected {n_cols}")
 
-        # Strictness: if we provided clearly non-trivial energy to mosqito but it returned 0 sones,
+        # Strictness: if we provided non-zero energy to mosqito but it returned 0 sones,
         # treat this as an invalid computation (often caused by an incompatible `freqs` axis).
-        #
-        # With ATH gating disabled, it is normal for very low-level frames to map to ~0 sones.
-        # Only fail-fast when the masked harmonic level is well above the near-silence region.
-        min_nontrivial_spl_db = 20.0
-        unexpected_zero = (frame_energy > 0.0) & (total_sones <= 0.0) & (frame_peak_masked_spl >= min_nontrivial_spl_db)
+        unexpected_zero = (frame_energy > 0.0) & (total_sones <= 0.0)
         if np.any(unexpected_zero):
             bad = int(np.flatnonzero(unexpected_zero)[0])
             raise ValueError(
