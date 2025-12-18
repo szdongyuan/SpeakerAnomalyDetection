@@ -64,13 +64,30 @@ def _ear_weighting_db(freqs_hz: np.ndarray) -> np.ndarray:
 
     W(f)/dB = -0.6*3.64*(f/1k)^(-0.8)
               + 6.5*exp(-0.6*(f/1k - 3.3)^2)
-              - 1e-3*(f/1k)^(3.6)
+              + c3*(f/1k)^(p3)        (paper: c3=-1e-3, p3=3.6)
+    """
+    return _ear_weighting_db_parametric(freqs_hz)
+
+
+def _ear_weighting_db_parametric(
+    freqs_hz: np.ndarray,
+    *,
+    term3_coeff: float = -1.0e-3,
+    term3_exponent: float = 3.6,
+) -> np.ndarray:
+    """
+    Parametric form of Eq.1 so we can tweak small coefficient/exponent differences (e.g. SoundCheck vs paper).
+
+    Only the high-frequency roll-off term is parameterized because it dominates above ~10 kHz:
+      term3 = term3_coeff * (f/1k)^(term3_exponent)
+
+    The defaults match the paper (Eq.1).
     """
     f = np.asarray(freqs_hz, dtype=np.float64)
     f_khz = np.maximum(f / 1000.0, 1e-12)
     term1 = -0.6 * 3.64 * np.power(f_khz, -0.8)
     term2 = 6.5 * np.exp(-0.6 * np.square(f_khz - 3.3))
-    term3 = -1.0e-3 * np.power(f_khz, 3.6)
+    term3 = float(term3_coeff) * np.power(f_khz, float(term3_exponent))
     return term1 + term2 + term3
 
 
@@ -78,12 +95,22 @@ def _ear_weighting_db(freqs_hz: np.ndarray) -> np.ndarray:
 class PEAQLoudnessConfig:
     # Paper parameters / defaults.
     z_min_hz: float = 91.7
-    z_max_hz: float = 17700.0
-    n_bands: int = 109
+    # Upper frequency coverage for Bark bands.
+    # - None: derive from the provided rFFT frequency axis (up to Nyquist).
+    # - float: cap at min(z_max_hz, Nyquist).
+    z_max_hz: Optional[float] = None
+
+    # Bark band layout. Paper uses 0.25 Bark and 109 bands (~91.7 Hz to ~17.7 kHz).
+    # If n_bands is None, it is derived from z_min_hz/z_max_hz and res_bark to cover the desired range.
+    n_bands: Optional[int] = None
     res_bark: float = 0.25
     gamma_mix: float = 0.4
     alpha_mask: float = 1.5  # Eq.14
     beta_pow: float = 0.23  # paper: growth exponent for loudness
+
+    # Eq.1 ear weighting. Default matches the paper; can be tweaked to emulate other implementations.
+    ear_weighting_term3_coeff: float = -1.0e-3
+    ear_weighting_term3_exponent: float = 3.6
 
     # SPL reference for converting SPL(dB) <-> Pa.
     reference_pressure_pa: float = 20e-6
@@ -120,21 +147,44 @@ class PEAQLoudnessModel:
             raise ValueError("rfft_freqs_hz must be non-decreasing")
         self.rfft_freqs_hz = freqs
 
-        self._w_db = _ear_weighting_db(self.rfft_freqs_hz)
+        self._w_db = _ear_weighting_db_parametric(
+            self.rfft_freqs_hz,
+            term3_coeff=float(self.config.ear_weighting_term3_coeff),
+            term3_exponent=float(self.config.ear_weighting_term3_exponent),
+        )
 
-        # Bark-domain auditory filter groups (paper 4.5).
+        # Bark-domain auditory filter groups (paper 4.5). The paper uses 109 bands up to ~17.7 kHz,
+        # but we can extend up to Nyquist so tones like 20 kHz are not silently dropped.
         z_min = float(hz_to_bark_peaq(np.array([self.config.z_min_hz], dtype=np.float64))[0])
+        res = float(self.config.res_bark)
+        if res <= 0.0:
+            raise ValueError(f"res_bark must be > 0, got {res}")
+
+        n_bands_cfg = self.config.n_bands
+        if n_bands_cfg is not None:
+            n_bands = int(n_bands_cfg)
+            if n_bands <= 0:
+                raise ValueError(f"n_bands must be > 0, got {n_bands}")
+        else:
+            z_max_hz_cfg = self.config.z_max_hz
+            z_max_hz = float(z_max_hz_cfg) if z_max_hz_cfg is not None else float(self.rfft_freqs_hz[-1])
+            z_max_hz = min(z_max_hz, float(self.rfft_freqs_hz[-1]))
+            z_max_bark = float(hz_to_bark_peaq(np.array([z_max_hz], dtype=np.float64))[0])
+            # Choose band count so that the last band's upper half-step boundary covers z_max_bark:
+            #   z_min + (n_bands - 0.5) * res >= z_max_bark
+            # -> n_bands >= (z_max_bark - z_min)/res + 0.5
+            n_bands = int(np.ceil(((z_max_bark - z_min) / res) + 0.5))
+            n_bands = max(n_bands, 1)
+
         self._band_z0 = z_min
-        self._band_z = z_min + np.arange(int(self.config.n_bands), dtype=np.float64) * float(self.config.res_bark)
+        self._band_z = z_min + np.arange(n_bands, dtype=np.float64) * res
         self._band_fc_hz = bark_to_hz_peaq(self._band_z)
 
         # Map rFFT bins -> Bark groups via 0.25-Bark intervals around the centers.
         bin_bark = hz_to_bark_peaq(self.rfft_freqs_hz)
         # Centers are z0 + i*res; assign bins using half-step boundaries.
-        band_idx = np.floor((bin_bark - (z_min - 0.5 * float(self.config.res_bark))) / float(self.config.res_bark)).astype(
-            int
-        )
-        valid = (band_idx >= 0) & (band_idx < int(self.config.n_bands))
+        band_idx = np.floor((bin_bark - (z_min - 0.5 * res)) / res).astype(int)
+        valid = (band_idx >= 0) & (band_idx < n_bands)
         self._bin_valid = valid
         self._bin_band = band_idx
         self._valid_bin_indices = np.flatnonzero(valid)
@@ -159,10 +209,8 @@ class PEAQLoudnessModel:
         self._gamma = float(self.config.gamma_mix)
         if not (0.0 < self._gamma < 2.0):
             raise ValueError(f"gamma_mix must be in (0,2), got {self._gamma}")
-        self._res = float(self.config.res_bark)
-        if self._res <= 0.0:
-            raise ValueError(f"res_bark must be > 0, got {self._res}")
-        self._z = int(self.config.n_bands)
+        self._res = res
+        self._z = int(n_bands)
 
         k = np.arange(self._z, dtype=np.float64)
         # d_idx[k,j] = res*(k-j) in Bark.
@@ -268,7 +316,8 @@ class PEAQLoudnessModel:
         test_peak = np.max(np.abs(test_pa), axis=0)
         ref_peak = np.max(np.abs(ref_pa), axis=0)
         scale = np.ones_like(test_peak, dtype=np.float64)
-        good = ref_peak > 0.0
+        # If the reference is (near) silence, level adaptation must NOT amplify numerical noise.
+        good = ref_peak > 1e-12
         scale[good] = test_peak[good] / ref_peak[good]
         return ref_pa * scale.reshape(1, -1)
 
@@ -313,7 +362,7 @@ class PEAQLoudnessModel:
         t_frames = int(pp.shape[1])
         acc = np.zeros((self._z, t_frames), dtype=np.float64)
 
-        # Per-source band loop (Z=109). Keeps memory bounded (no ZxZxT tensor).
+        # Per-source band loop (Z bands). Keeps memory bounded (no ZxZxT tensor).
         for j in range(self._z):
             # A[j,t] = sum_k 10^(d*slope/10), lower side uses fixed slope_l, upper uses su[j,t].
             a = np.zeros((t_frames,), dtype=np.float64)
@@ -393,11 +442,18 @@ class PEAQLoudnessModel:
         self,
         test_spectrum_pa: np.ndarray,
         ref_spectrum_pa: np.ndarray,
+        *,
+        apply_level_adaptation: Optional[bool] = None,
     ) -> "PEAQLoudnessResult":
         """
         Compute the paper section 4.9 partial noise loudness (Eq.13-15).
 
         Inputs must be aligned spectra (same frequency axis and number of frames).
+
+        apply_level_adaptation:
+          - None: follow `config.level_adaptation` (default behaviour)
+          - False: do NOT scale the reference spectrum
+          - True: scale reference -> test level (paper 4.3)
         """
         test = self._ensure_2d(test_spectrum_pa)
         ref = self._ensure_2d(ref_spectrum_pa)
@@ -405,7 +461,10 @@ class PEAQLoudnessModel:
             raise ValueError(f"test_spectrum_pa shape {test.shape} != ref_spectrum_pa shape {ref.shape}")
 
         # 4.3 Level Adaptation
-        ref_adapted = self._apply_level_adaptation(test, ref)
+        do_adapt = apply_level_adaptation
+        if do_adapt is None:
+            do_adapt = self.config.level_adaptation != "none"
+        ref_adapted = self._apply_level_adaptation(test, ref) if do_adapt else ref
 
         pp_test = self._to_pitch_patterns_pa2(test)
         pp_ref = self._to_pitch_patterns_pa2(ref_adapted)
@@ -460,3 +519,112 @@ class PEAQLoudnessResult:
     n_specific_sones_per_band: np.ndarray  # (Z, T)
     band_center_hz: np.ndarray  # (Z,)
     band_center_bark: np.ndarray  # (Z,)
+
+    def interpolate_specific_sones(
+        self,
+        target_freqs_hz: np.ndarray,
+        *,
+        out_of_range: Literal["zero", "edge"] = "zero",
+    ) -> np.ndarray:
+        """
+        Interpolate the per-band specific loudness values to target frequencies.
+
+        - Uses linear interpolation on the Bark axis (bands are equally spaced in Bark).
+        - `n_specific_sones_per_band` is a *density-like* quantity (sones/Bark); the paper integrates it via
+          (24/Z) * sum_k to obtain total loudness.
+
+        target_freqs_hz:
+          - shape (M,): same target frequencies for all frames
+          - shape (M, T): per-frame target frequencies (e.g., harmonics of a time-varying f0)
+
+        Returns: shape (M, T)
+        """
+        y = np.asarray(self.n_specific_sones_per_band, dtype=np.float64)
+        x = np.asarray(self.band_center_bark, dtype=np.float64).reshape(-1)
+        if y.ndim != 2 or x.ndim != 1 or y.shape[0] != x.size:
+            raise ValueError(
+                "Invalid loudness result shapes: "
+                f"n_specific_sones_per_band={y.shape}, band_center_bark={x.shape}"
+            )
+
+        target_hz = np.asarray(target_freqs_hz, dtype=np.float64)
+        if not np.all(np.isfinite(target_hz)):
+            raise ValueError("target_freqs_hz must be finite")
+        if np.any(target_hz < 0.0):
+            raise ValueError("target_freqs_hz must be >= 0")
+
+        t_frames = int(y.shape[1])
+        if target_hz.ndim == 0:
+            target_hz = target_hz.reshape(1)
+        if target_hz.ndim == 1:
+            # Broadcast to all frames.
+            target_bark = hz_to_bark_peaq(target_hz).reshape(-1)
+            m = int(target_bark.size)
+            idx = np.searchsorted(x, target_bark, side="left")
+            # Clamp to interior so i0/i1 are valid; we'll mask oob later.
+            i1 = np.clip(idx, 1, x.size - 1)
+            i0 = i1 - 1
+            x0 = x[i0]
+            x1 = x[i1]
+            w = (target_bark - x0) / np.maximum(x1 - x0, 1e-300)
+            y0 = y[i0, :]  # (M, T)
+            y1 = y[i1, :]
+            out = y0 * (1.0 - w.reshape(m, 1)) + y1 * w.reshape(m, 1)
+
+            oob = (target_bark < x[0]) | (target_bark > x[-1])
+            if np.any(oob):
+                if out_of_range == "zero":
+                    out[oob, :] = 0.0
+                elif out_of_range == "edge":
+                    out[target_bark < x[0], :] = y[0:1, :]
+                    out[target_bark > x[-1], :] = y[-1:, :]
+                else:
+                    raise ValueError(f"Unsupported out_of_range={out_of_range!r}")
+            return out
+
+        if target_hz.ndim == 2:
+            if target_hz.shape[1] != t_frames:
+                raise ValueError(
+                    f"target_freqs_hz second dim must be T={t_frames}, got {target_hz.shape}"
+                )
+            m = int(target_hz.shape[0])
+            target_bark = hz_to_bark_peaq(target_hz.reshape(-1)).reshape(-1)
+            idx = np.searchsorted(x, target_bark, side="left")
+            i1 = np.clip(idx, 1, x.size - 1)
+            i0 = i1 - 1
+            x0 = x[i0]
+            x1 = x[i1]
+            w = (target_bark - x0) / np.maximum(x1 - x0, 1e-300)
+
+            # Select y[i0, t] and y[i1, t] for each flattened element.
+            t_idx = np.tile(np.arange(t_frames, dtype=np.int64), m)
+            y0 = y[i0, t_idx]
+            y1 = y[i1, t_idx]
+            out_flat = y0 * (1.0 - w) + y1 * w
+
+            oob = (target_bark < x[0]) | (target_bark > x[-1])
+            if np.any(oob):
+                if out_of_range == "zero":
+                    out_flat[oob] = 0.0
+                elif out_of_range == "edge":
+                    out_flat[target_bark < x[0]] = y[0, t_idx[target_bark < x[0]]]
+                    out_flat[target_bark > x[-1]] = y[-1, t_idx[target_bark > x[-1]]]
+                else:
+                    raise ValueError(f"Unsupported out_of_range={out_of_range!r}")
+
+            return out_flat.reshape(m, t_frames)
+
+        raise ValueError(f"target_freqs_hz must be scalar, 1D, or 2D, got shape {target_hz.shape}")
+
+    def interpolate_specific_phons_equiv(
+        self,
+        target_freqs_hz: np.ndarray,
+        *,
+        out_of_range: Literal["zero", "edge"] = "zero",
+    ) -> np.ndarray:
+        """
+        Convenience wrapper: interpolate in sones-domain, then convert each interpolated value to phons.
+
+        This is a "phon-equivalent" for a *specific* loudness sample and is not ISO 532 loudness level.
+        """
+        return sones_to_phons(self.interpolate_specific_sones(target_freqs_hz, out_of_range=out_of_range))
