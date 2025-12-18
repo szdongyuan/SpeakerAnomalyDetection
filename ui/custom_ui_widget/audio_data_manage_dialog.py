@@ -31,7 +31,7 @@
 import copy
 from re import fullmatch
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
 
@@ -43,7 +43,7 @@ from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
 class AudioDataManageDialog(DataManageDialog):
-
+    filter_signal = pyqtSignal()
     def __init__(self, logger: LogManager, hide_select_not_label = False):
         super(AudioDataManageDialog, self).__init__()
 
@@ -114,8 +114,10 @@ class AudioDataManageDialog(DataManageDialog):
             self.all_selected_checkbox.setChecked(False)
             self.all_select_flag = False
             self.set_select_wave_num_text(0)
+            self.filter_signal.emit()
         elif flag == 2:
             self.show_all_wave()
+            self.filter_signal.emit()
 
     def show_all_wave(self):
         if self.is_filter_flag is False or len(self.all_audio_data) == len(self.filter_audio_data):
@@ -252,7 +254,7 @@ class FilterAudioDialog(QDialog):
         self.filter_label_num = 0
         self.sample_rate_filter_layout = QHBoxLayout()
 
-        self.is_clicked_ok = False
+        self.is_clicked_ok = 0
 
         self.init_ui()
 
