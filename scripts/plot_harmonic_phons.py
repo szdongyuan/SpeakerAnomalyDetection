@@ -16,8 +16,14 @@ if _PROJECT_ROOT not in sys.path:
 
 import matplotlib.pyplot as plt
 
-from base.pre_processing.psychoacoustic_utils import spl_to_phons
 from base.soundcard_calibration_manager import get_mic_deviation_value
+from base.pre_processing.psychoacoustic_utils import freq_to_bark
+
+try:
+    import mosqito
+except Exception as e:  # pragma: no cover
+    mosqito = None
+    _MOSQITO_IMPORT_ERROR = e
 
 
 @dataclass(frozen=True)
@@ -25,7 +31,10 @@ class ToneResult:
     order: int
     freq_hz: float
     spl_db: float
-    phons: float
+    sones_total: float
+    phons_total: float
+    specific_sones_per_bark_at_f: float
+    specific_phon_equiv_at_f: float
     path: str
 
 
@@ -58,9 +67,67 @@ def _rms(x: np.ndarray) -> float:
         return 0.0
     return float(np.sqrt(np.mean(np.square(x))))
 
+def _sones_to_phons(sones: float) -> float:
+    sones = float(sones)
+    if not np.isfinite(sones) or sones <= 0.0:
+        return 0.0
+    if sones < 1.0:
+        return float(40.0 * np.power(sones, 0.4))
+    return float(40.0 + 10.0 * np.log2(sones))
+
+def _sample_specific_loudness_sones_per_bark(
+    n_specific: np.ndarray,
+    bark_axis: np.ndarray,
+    target_bark: float,
+    *,
+    edge_window_bark: float = 0.6,
+) -> float:
+    """
+    Sample the specific loudness N'(z) in sones/bark at a target Bark location.
+
+    For target Bark values outside the returned bark axis range (e.g., > 24 Bark),
+    use a windowed mean near the nearest edge. This avoids a hard clamp to the
+    last bin, which can be exactly zero and produce misleading '0' results.
+    """
+    n_specific = np.asarray(n_specific, dtype=np.float64).reshape(-1)
+    bark_axis = np.asarray(bark_axis, dtype=np.float64).reshape(-1)
+    if n_specific.size == 0 or bark_axis.size == 0 or n_specific.size != bark_axis.size:
+        raise ValueError(f"Invalid specific loudness arrays: {n_specific.shape} vs {bark_axis.shape}")
+
+    z0 = float(target_bark)
+    bark_min = float(bark_axis[0])
+    bark_max = float(bark_axis[-1])
+
+    # Normal in-range sampling.
+    if bark_min <= z0 <= bark_max:
+        return float(np.interp(z0, bark_axis, n_specific))
+
+    # Out-of-range: windowed mean near the closest edge.
+    window = float(max(edge_window_bark, 0.0))
+    if window <= 0.0:
+        return float(n_specific[0] if z0 < bark_min else n_specific[-1])
+
+    half = 0.5 * window
+    if (bark_max - bark_min) <= window:
+        return float(np.mean(n_specific))
+
+    if z0 < bark_min:
+        center = bark_min + half
+    else:
+        center = bark_max - half
+
+    lo = center - half
+    hi = center + half
+    mask = (bark_axis >= lo) & (bark_axis <= hi)
+    if not np.any(mask):
+        return float(n_specific[0] if z0 < bark_min else n_specific[-1])
+    return float(np.mean(n_specific[mask]))
+
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot phons vs harmonic order for single-tone WAVs.")
+    parser = argparse.ArgumentParser(
+        description="Plot phons vs harmonic order for single-tone WAVs (mosqito ISO 532-1 loudness)."
+    )
     parser.add_argument("--dir", type=str, default="audio_data/out_wav_single", help="Directory of tone WAV files.")
     parser.add_argument("--f0", type=float, default=100.0, help="Fundamental frequency (Hz) used to map order=f/f0.")
     parser.add_argument("--min-order", type=int, default=2, help="Minimum harmonic order to include.")
@@ -80,6 +147,12 @@ def main() -> int:
     parser.add_argument("--out", type=str, default=os.path.join("log", "harmonic_phons.png"))
     parser.add_argument("--csv-out", type=str, default=os.path.join("log", "harmonic_phons.csv"))
     args = parser.parse_args()
+
+    if mosqito is None:
+        raise ImportError(
+            "mosqito is required for this script, but it failed to import: "
+            f"{type(_MOSQITO_IMPORT_ERROR).__name__}: {_MOSQITO_IMPORT_ERROR}"
+        )
 
     tones_dir = args.dir
     if not os.path.isdir(tones_dir):
@@ -112,11 +185,38 @@ def main() -> int:
         trim_n = int(max(args.trim, 0.0) * sr)
         if y.size > 2 * trim_n:
             y = y[trim_n:-trim_n]
-        rms_val = _rms(y) * calibration_multiplier
-        spl_db = 20.0 * np.log10(max(rms_val, 1e-30) / reference_pressure)
-        phons = float(spl_to_phons(np.array([freq_hz], dtype=float), np.array([spl_db], dtype=float))[0])
+        y_cal = y * calibration_multiplier
 
-        results.append(ToneResult(order=order, freq_hz=freq_hz, spl_db=float(spl_db), phons=phons, path=path))
+        rms_val = _rms(y_cal)
+        spl_db = 20.0 * np.log10(max(rms_val, 1e-30) / reference_pressure)
+        sones_total, n_spec, bark_axis = mosqito.loudness_zwst(y_cal, float(sr), field_type="free")
+        sones_total = float(sones_total)
+        phons_total = _sones_to_phons(sones_total)
+
+        n_spec = np.asarray(n_spec, dtype=np.float64).reshape(-1)
+        bark_axis = np.asarray(bark_axis, dtype=np.float64).reshape(-1)
+        if n_spec.size != bark_axis.size or n_spec.size == 0:
+            raise ValueError(f"mosqito returned invalid specific loudness for {path}: {n_spec.shape} vs {bark_axis.shape}")
+
+        # "Spreaded loudness at this frequency": sample the specific loudness N'(z) at z=bark(freq).
+        # Note: N' is in sones/bark (a density). For ecosystem reasons, we also provide a 'phon-equivalent'
+        # by applying the standard sones->phons mapping to the sampled density value directly.
+        z0 = float(freq_to_bark(np.array([freq_hz], dtype=np.float64))[0])
+        specific_sones_per_bark_at_f = _sample_specific_loudness_sones_per_bark(n_spec, bark_axis, z0)
+        specific_phon_equiv_at_f = _sones_to_phons(specific_sones_per_bark_at_f)
+
+        results.append(
+            ToneResult(
+                order=order,
+                freq_hz=freq_hz,
+                spl_db=float(spl_db),
+                sones_total=sones_total,
+                phons_total=phons_total,
+                specific_sones_per_bark_at_f=specific_sones_per_bark_at_f,
+                specific_phon_equiv_at_f=specific_phon_equiv_at_f,
+                path=path,
+            )
+        )
 
     if not results:
         raise RuntimeError(f"No WAV files parsed in {tones_dir}")
@@ -124,7 +224,8 @@ def main() -> int:
     results.sort(key=lambda r: r.order)
 
     orders = np.array([r.order for r in results], dtype=int)
-    phons = np.array([r.phons for r in results], dtype=float)
+    phons_total = np.array([r.phons_total for r in results], dtype=float)
+    phons_specific = np.array([r.specific_phon_equiv_at_f for r in results], dtype=float)
 
     out_path = args.out
     out_dir = os.path.dirname(out_path)
@@ -132,11 +233,20 @@ def main() -> int:
         os.makedirs(out_dir, exist_ok=True)
 
     plt.figure(figsize=(14, 6))
-    plt.plot(orders, phons, "-o", markersize=3, linewidth=1)
+    plt.plot(orders, phons_total, "-o", markersize=3, linewidth=1, label="Total loudness (mosqito N → phon)")
+    plt.plot(
+        orders,
+        phons_specific,
+        "-o",
+        markersize=3,
+        linewidth=1,
+        label="Specific loudness at f (mosqito N'(bark(f)) → phon-equiv)",
+    )
     plt.xlabel("Harmonic order (k)")
     plt.ylabel("Perceived loudness (phons)")
     plt.title(f"Single-tone loudness vs harmonic order (f0={args.f0:g} Hz, calibration={calibration_db:g} dB)")
     plt.grid(True, which="both", linestyle="--", alpha=0.4)
+    plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
 
@@ -146,12 +256,20 @@ def main() -> int:
     if csv_dir:
         os.makedirs(csv_dir, exist_ok=True)
     with open(csv_path, "w", encoding="utf-8") as f:
-        f.write("order,freq_hz,spl_db,phons,path\n")
+        f.write(
+            "order,freq_hz,spl_db,sones_total,phons_total,specific_sones_per_bark_at_f,specific_phon_equiv_at_f,path\n"
+        )
         for r in results:
-            f.write(f"{r.order},{r.freq_hz:.6f},{r.spl_db:.6f},{r.phons:.6f},{r.path}\n")
+            f.write(
+                f"{r.order},{r.freq_hz:.6f},{r.spl_db:.6f},"
+                f"{r.sones_total:.6f},{r.phons_total:.6f},"
+                f"{r.specific_sones_per_bark_at_f:.9f},{r.specific_phon_equiv_at_f:.6f},"
+                f"{r.path}\n"
+            )
     print(f"Wrote CSV: {csv_path}")
     print(f"Orders: {orders.min()}..{orders.max()} (n={len(orders)})")
-    print(f"Phons: min={phons.min():.3f} max={phons.max():.3f}")
+    print(f"Total phons: min={phons_total.min():.3f} max={phons_total.max():.3f}")
+    print(f"Specific phon-equiv: min={phons_specific.min():.3f} max={phons_specific.max():.3f}")
     return 0
 
 

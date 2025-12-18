@@ -201,8 +201,9 @@ class HarmonicDistortionAnalyzer(ABC):
             # Loudness contour difference method:
             # 1) Compute specific loudness N'(z,t) for the full spectrum (Zwicker spreading/filters inside mosqito)
             # 2) Compute specific loudness for the fundamental-only spectrum
-            # 3) Subtract contours and integrate: N_dist(t) = ∫ max(N'_total - N'_f0, 0) dz
-            # 4) Convert sones -> phons
+            # 3) Subtract contours: N'_dist(z,t) = max(N'_total - N'_f0, 0)
+            # 4) For ecosystem-compatibility, *sample* the spreaded specific loudness at the harmonic Bark locations
+            #    (rather than integrating over Bark), and convert the resulting pseudo-sones -> phons.
 
             # Build calibrated full spectrum (exclude dummy row), and drop DC to avoid spurious low-frequency bias.
             full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float32) * float(calibration_multiplier)).copy()
@@ -233,6 +234,11 @@ class HarmonicDistortionAnalyzer(ABC):
             n_f0 = np.asarray(n_f0, dtype=np.float64).reshape(-1)
             n_spec_total = np.asarray(n_spec_total, dtype=np.float64)
             n_spec_f0 = np.asarray(n_spec_f0, dtype=np.float64)
+            # mosqito may return 1D specific loudness for a single frame; normalize to (Nbark, Ntime).
+            if n_spec_total.ndim == 1:
+                n_spec_total = n_spec_total.reshape(-1, 1)
+            if n_spec_f0.ndim == 1:
+                n_spec_f0 = n_spec_f0.reshape(-1, 1)
             bark_axis = np.asarray(bark_axis, dtype=np.float64).reshape(-1)
             bark_axis_f0 = np.asarray(bark_axis_f0, dtype=np.float64).reshape(-1)
 
@@ -259,18 +265,97 @@ class HarmonicDistortionAnalyzer(ABC):
 
             # Specific loudness contour difference (clipped to >= 0).
             n_spec_dist = np.maximum(n_spec_total - n_spec_f0, 0.0)
-            # Integrate over Bark axis to get distortion sones per frame.
-            n_dist = np.trapezoid(n_spec_dist, x=bark_axis, axis=0)
-            n_dist = np.asarray(n_dist, dtype=np.float64).reshape(-1)
 
-            # Convert sones -> phons with the standard piecewise mapping:
-            phons = np.zeros_like(n_dist)
-            positive = n_dist > 0.0
-            lt1 = positive & (n_dist < 1.0)
-            ge1 = positive & ~lt1
-            phons[lt1] = 40.0 * np.power(n_dist[lt1], 0.4)
-            phons[ge1] = 40.0 + 10.0 * np.log2(n_dist[ge1])
-            return phons
+            def _sones_to_phons(arr: np.ndarray) -> np.ndarray:
+                arr = np.asarray(arr, dtype=np.float64)
+                ph = np.zeros_like(arr)
+                positive = arr > 0.0
+                lt1 = positive & (arr < 1.0)
+                ge1 = positive & ~lt1
+                ph[lt1] = 40.0 * np.power(arr[lt1], 0.4)
+                ph[ge1] = 40.0 + 10.0 * np.log2(arr[ge1])
+                return ph
+
+            def _sample_specific_loudness_sones_per_bark(
+                n_specific_1d: np.ndarray,
+                bark_axis_1d: np.ndarray,
+                target_bark: float,
+                *,
+                edge_window_bark: float,
+                edge_aggregation: str,
+            ) -> float:
+                n_specific_1d = np.asarray(n_specific_1d, dtype=np.float64).reshape(-1)
+                bark_axis_1d = np.asarray(bark_axis_1d, dtype=np.float64).reshape(-1)
+                if n_specific_1d.size == 0 or bark_axis_1d.size == 0 or n_specific_1d.size != bark_axis_1d.size:
+                    raise ValueError(
+                        f"Invalid specific loudness arrays: {n_specific_1d.shape} vs {bark_axis_1d.shape}"
+                    )
+                z0 = float(target_bark)
+                bark_min = float(bark_axis_1d[0])
+                bark_max = float(bark_axis_1d[-1])
+
+                if bark_min <= z0 <= bark_max:
+                    return float(np.interp(z0, bark_axis_1d, n_specific_1d))
+
+                window = float(max(edge_window_bark, 0.0))
+                if window <= 0.0:
+                    return float(n_specific_1d[0] if z0 < bark_min else n_specific_1d[-1])
+
+                half = 0.5 * window
+                if (bark_max - bark_min) <= window:
+                    return float(np.mean(n_specific_1d))
+
+                if z0 < bark_min:
+                    center = bark_min + half
+                else:
+                    center = bark_max - half
+
+                lo = center - half
+                hi = center + half
+                mask = (bark_axis_1d >= lo) & (bark_axis_1d <= hi)
+                if not np.any(mask):
+                    return float(n_specific_1d[0] if z0 < bark_min else n_specific_1d[-1])
+
+                agg = str(edge_aggregation).strip().lower()
+                if agg in {"max", "maximum"}:
+                    return float(np.max(n_specific_1d[mask]))
+                return float(np.mean(n_specific_1d[mask]))
+
+            # Sample N'_dist at the selected harmonic Bark positions (mask_matrix),
+            # using a windowed mean/max near the Bark axis edges to avoid hard-clamping to 24 Bark.
+            edge_window_bark = float(masking_config.get("specific_edge_window_bark", 0.6))
+            edge_aggregation = str(masking_config.get("specific_edge_aggregation", "mean"))
+
+            pseudo_sones = np.zeros(n_cols, dtype=np.float64)
+            for frame_idx in range(n_cols):
+                harmonic_mask_col = mask_matrix[:, frame_idx].copy()
+                fbin_row = int(fundamental_bins[frame_idx])
+                if 0 <= fbin_row < harmonic_mask_col.size:
+                    harmonic_mask_col[fbin_row] = 0.0
+                harmonic_bin_indices = np.where(harmonic_mask_col > 0)[0]
+                harmonic_bin_indices = harmonic_bin_indices[
+                    (harmonic_bin_indices > 0) & (harmonic_bin_indices <= n_rfft_bins)
+                ]
+                if harmonic_bin_indices.size == 0:
+                    continue
+
+                # Convert to rFFT bin indices and Bark locations.
+                harmonic_rfft_bins = harmonic_bin_indices - 1
+                harmonic_barks = rfft_bark_bins[harmonic_rfft_bins]
+                n_spec_dist_col = n_spec_dist[:, frame_idx]
+
+                s = 0.0
+                for z0 in harmonic_barks:
+                    s += _sample_specific_loudness_sones_per_bark(
+                        n_spec_dist_col,
+                        bark_axis,
+                        float(z0),
+                        edge_window_bark=edge_window_bark,
+                        edge_aggregation=edge_aggregation,
+                    )
+                pseudo_sones[frame_idx] = s
+
+            return _sones_to_phons(pseudo_sones)
 
         # Compute loudness in batch using a 2D spectrum (n_freq_bins, n_frames).
         masked_spectra = np.zeros((n_rfft_bins, n_cols), dtype=np.float32)

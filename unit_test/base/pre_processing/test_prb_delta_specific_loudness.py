@@ -69,6 +69,7 @@ def test_prb_delta_specific_increases_with_harmonic_level():
         spec[fund_bin + 1, 0] = _pa_for_spl(80.0)
         spec[harm_bin + 1, 0] = _pa_for_spl(harm_spl_db)
         mask = np.zeros_like(spec)
+        mask[harm_bin + 1, 0] = 1.0
         return float(
             analyzer.compute_perceptual_thd_batch(
                 spec,
@@ -84,6 +85,39 @@ def test_prb_delta_specific_increases_with_harmonic_level():
     mid = run(50.0)
     high = run(70.0)
     assert 0.0 <= low <= mid <= high
+
+
+def test_prb_delta_specific_edge_window_avoids_hard_zero_at_high_freq():
+    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
+    analyzer.sample_rate = 48000
+    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
+    analyzer.compute_perceptual_thd_batch = HD.compute_perceptual_thd_batch.__get__(analyzer)
+
+    n_fft = 9600
+    spec, _ = _make_spectrum_matrix_for_single_frame(sr=analyzer.sample_rate, n_fft=n_fft)
+    fund_hz = 200.0
+    fund_bin = int(round(fund_hz * n_fft / analyzer.sample_rate))
+    # Put a strong high-frequency component above 15500 Hz so bark(freq) > 24.
+    harm_hz = 20000.0
+    harm_bin = int(round(harm_hz * n_fft / analyzer.sample_rate))
+
+    spec[fund_bin + 1, 0] = _pa_for_spl(80.0)
+    spec[harm_bin + 1, 0] = _pa_for_spl(100.0)
+
+    mask = np.zeros_like(spec)
+    mask[harm_bin + 1, 0] = 1.0
+
+    phons = analyzer.compute_perceptual_thd_batch(
+        spec,
+        mask,
+        np.array([fund_bin + 1]),
+        np.array([fund_hz]),
+        masking_config={"prb_loudness_method": "delta_specific", "fundamental_neighbor_bins": 1},
+        n_fft=n_fft,
+    )
+    assert phons.shape == (1,)
+    assert np.isfinite(phons[0])
+    assert phons[0] > 0.0
 
 
 def test_prb_delta_specific_requires_48khz():
@@ -103,4 +137,3 @@ def test_prb_delta_specific_requires_48khz():
             masking_config={"prb_loudness_method": "delta_specific"},
             n_fft=64,
         )
-
