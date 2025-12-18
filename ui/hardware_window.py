@@ -133,7 +133,6 @@ class HardwareWindow(QDialog):
             self.speaker = None
         else:
             if last_speaker and any(d['name'] == last_speaker['name'] for d in speaker_list):
-                # self.speaker = last_speaker
                 self.speaker = next(
                     (d for d in speaker_list
                     if d['name'] == last_speaker['name'] and d['hostapi'] == last_speaker['hostapi']),
