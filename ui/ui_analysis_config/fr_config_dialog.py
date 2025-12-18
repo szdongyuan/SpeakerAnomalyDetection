@@ -191,20 +191,22 @@ class FrConfigWindow(QDialog):
         return default_config
 
     def on_default_btn_clicked(self):
-        if not self.file_path:
-            QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
-            return
         config_data = self.get_default_config()
+        if self.limit_checkbox.isChecked() and self.radio_button_2.isChecked():
+            if not self.file_path:
+                QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+                return
         if check_upper_lower_limit(config_data, self):
             return
         save_flag = self.config_manager.save_default_config("FR", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
-        if not self.file_path:
-            QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
-            return
         config_data = self.get_default_config()
+        if self.limit_checkbox.isChecked() and self.radio_button_2.isChecked():
+            if not self.file_path:
+                QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+                return
         if check_upper_lower_limit(config_data, self):
             return
         self.accept()
