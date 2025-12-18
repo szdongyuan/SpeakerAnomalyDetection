@@ -19,8 +19,6 @@ from ui.ai_select_audio_data import SelectAudioDataView
 
 default_log = LogManager.set_log_handler("train")
 
-from pprint import pprint
-
 
 class AiWindow(QDialog):
 
