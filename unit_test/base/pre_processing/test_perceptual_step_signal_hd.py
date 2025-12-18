@@ -6,12 +6,12 @@ from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
 
 def test_perceptual_step_signal_hd_computes_phons():
     """Verify perceptual step signal HD returns phons instead of THD percentage"""
-    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+    analyzer = PerceptualStepSignalHD(sample_rate=48000)
 
     # Create test signal with realistic harmonic content
     # Simulate a stepped frequency sweep with harmonics
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     step_duration = duration / 4  # 4 steps
     fundamental_freqs = np.array([100, 200, 400, 800])
 
@@ -80,7 +80,7 @@ def test_perceptual_step_signal_hd_inherits_from_step_signal_hd():
     """Verify PerceptualStepSignalHD extends StepSignalHD"""
     from base.pre_processing.step_signal_hd import StepSignalHD
 
-    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+    analyzer = PerceptualStepSignalHD(sample_rate=48000)
 
     assert isinstance(analyzer, StepSignalHD)
     assert hasattr(analyzer, '_split_repetitions')
@@ -89,11 +89,11 @@ def test_perceptual_step_signal_hd_inherits_from_step_signal_hd():
 
 def test_perceptual_step_signal_with_strong_nearby_masker():
     """Test end-to-end perceptual analysis when a strong nearby harmonic is present."""
-    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+    analyzer = PerceptualStepSignalHD(sample_rate=48000)
 
     # Create signal with strong 9th harmonic
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     step_duration = duration / 4
     fundamental_freqs = np.array([100, 200, 400, 800])
 
@@ -127,7 +127,7 @@ def test_perceptual_step_signal_with_strong_nearby_masker():
     result = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,  # Let it create mask
-        masking_config=None
+        masking_config={"prb_loudness_method": "masked_harmonics"}
     )
 
     assert 'perceptual_loudness' in result
@@ -137,11 +137,11 @@ def test_perceptual_step_signal_with_strong_nearby_masker():
 
 def test_backward_compatibility_with_3tuple():
     """Test backward compatibility with old 3-tuple harmonic_mask"""
-    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+    analyzer = PerceptualStepSignalHD(sample_rate=48000)
 
     # Create test signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     recorded_signal = np.sin(2 * np.pi * 500 * t) + 0.01 * np.sin(2 * np.pi * 5000 * t)
 
@@ -184,10 +184,10 @@ def test_backward_compatibility_with_3tuple():
 
 def test_masking_config_is_accepted_but_not_required():
     """masking_config is accepted for backward compatibility and should not break analysis."""
-    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+    analyzer = PerceptualStepSignalHD(sample_rate=48000)
 
     duration = 0.25
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
 
     f0 = 100.0
@@ -214,11 +214,11 @@ def test_masking_config_is_accepted_but_not_required():
 
 def test_strong_nearby_masker_changes_results():
     """Adding a strong nearby harmonic should change results (full-spectrum maskers)."""
-    analyzer = PerceptualStepSignalHD(sample_rate=44100)
+    analyzer = PerceptualStepSignalHD(sample_rate=48000)
 
     # Create signals with and without a strong 9th harmonic masker
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     step_duration = duration / 4
     fundamental_freqs = np.array([100, 200, 400, 800])
 
@@ -253,12 +253,12 @@ def test_strong_nearby_masker_changes_results():
     result_no_9th = analyzer.compute_distortion(
         recorded_signal_no_9th, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
-        masking_config=None
+        masking_config={"prb_loudness_method": "masked_harmonics"}
     )
     result_with_9th = analyzer.compute_distortion(
         recorded_signal_with_9th, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
-        masking_config=None
+        masking_config={"prb_loudness_method": "masked_harmonics"}
     )
 
     loudness_no_9th = result_no_9th['perceptual_loudness']

@@ -180,7 +180,10 @@ class HarmonicDistortionAnalyzer(ABC):
         rfft_bark_bins = freq_to_bark(rfft_freqs)
 
         masking_config = masking_config or {}
-        prb_loudness_method = str(masking_config.get("prb_loudness_method", "masked_harmonics")).strip().lower()
+        # Default PRB method: use spreaded specific loudness sampled at the selected harmonic locations.
+        # This matches the ecosystem requirement that "per-frequency" loudness is taken from the spreaded
+        # Bark-domain loudness profile at the target harmonic points (rather than a full Bark integration).
+        prb_loudness_method = str(masking_config.get("prb_loudness_method", "delta_specific")).strip().lower()
         partitions_per_bark = int(masking_config.get("partitions_per_bark", 3))
         rfft_partition_index = np.clip(
             np.floor(rfft_bark_bins * float(partitions_per_bark)).astype(int),

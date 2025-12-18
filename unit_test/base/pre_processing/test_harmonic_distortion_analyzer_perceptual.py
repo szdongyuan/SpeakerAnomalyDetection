@@ -82,7 +82,12 @@ def test_compute_perceptual_thd_batch_masking_effect():
     fundamental_freqs = np.array([1000.0, 1000.0])
 
     perceptual_loudness = analyzer.compute_perceptual_thd_batch(
-        spectrum_matrix, mask_matrix, fundamental_bins, fundamental_freqs
+        spectrum_matrix,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_loudness_method": "masked_harmonics"},
+        n_fft=2 * (n_bins - 1),
     )
 
     # Frame 0 should have lower perceived loudness (more masking)
@@ -116,14 +121,24 @@ def test_compute_perceptual_thd_batch_additional_tonal_masker_reduces_loudness()
 
     # Baseline: no nearby strong masker
     result_base = analyzer.compute_perceptual_thd_batch(
-        spectrum_base, mask_matrix, fundamental_bins, fundamental_freqs
+        spectrum_base,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_loudness_method": "masked_harmonics"},
+        n_fft=2 * (n_bins - 1),
     )
 
     # Add a strong nearby tonal component (e.g., 9th harmonic around 900 Hz)
     spectrum_with_masker = spectrum_base.copy()
     spectrum_with_masker[90, 0] = 0.08
     result_with_masker = analyzer.compute_perceptual_thd_batch(
-        spectrum_with_masker, mask_matrix, fundamental_bins, fundamental_freqs
+        spectrum_with_masker,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_loudness_method": "masked_harmonics"},
+        n_fft=2 * (n_bins - 1),
     )
 
     assert result_with_masker[0] <= result_base[0]

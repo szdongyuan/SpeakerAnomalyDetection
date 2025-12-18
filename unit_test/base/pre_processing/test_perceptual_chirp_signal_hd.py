@@ -5,11 +5,11 @@ from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignal
 
 def test_perceptual_chirp_signal_hd_computes_phons():
     """Verify perceptual chirp signal HD returns phons"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create test chirp signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     # Chirp from 100 Hz to 2000 Hz
     f0 = 100
@@ -61,18 +61,18 @@ def test_perceptual_chirp_signal_hd_inherits_from_chirp_signal_hd():
     """Verify PerceptualChirpSignalHD extends ChirpSignalHD"""
     from base.pre_processing.chirp_signal_hd import ChirpSignalHD
 
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     assert isinstance(analyzer, ChirpSignalHD)
 
 
 def test_perceptual_chirp_signal_with_cumulative_masking():
     """Test that PerceptualChirpSignalHD accepts masking_config parameter (backward compatible)."""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create simple test signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     n_samples = int(sample_rate * duration)
     t = np.linspace(0, duration, n_samples, endpoint=False)
 
@@ -118,6 +118,7 @@ def test_perceptual_chirp_signal_with_cumulative_masking():
     masking_config = {
         'masking_range': (1, 9),
         'enable_cumulative': True,
+        "prb_loudness_method": "masked_harmonics",
         'weight_function': 'exponential'
     }
 
@@ -145,11 +146,11 @@ def test_perceptual_chirp_signal_with_cumulative_masking():
 
 def test_backward_compatibility_with_4tuple():
     """Test backward compatibility with old 4-tuple harmonic_mask"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create test signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 2000
@@ -204,11 +205,11 @@ def test_error_when_cumulative_enabled_but_no_masking_mask():
 
 def test_strong_nearby_masker_changes_results():
     """Adding a strong nearby harmonic should change results (full-spectrum maskers)."""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create chirp signal with strong 9th harmonic that should mask 10th harmonic
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
 
     # Linear chirp from 100 to 800 Hz
@@ -245,13 +246,13 @@ def test_strong_nearby_masker_changes_results():
     result_no_9th = analyzer.compute_distortion(
         recorded_signal_no_9th, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
-        masking_config=None,
+        masking_config={"prb_loudness_method": "masked_harmonics"},
     )
 
     result_with_9th = analyzer.compute_distortion(
         recorded_signal, stimulus_metadata, harmonic_orders,
         harmonic_mask=None,
-        masking_config=None,
+        masking_config={"prb_loudness_method": "masked_harmonics"},
     )
 
     loudness_no_9th = result_no_9th['perceptual_loudness']
@@ -264,11 +265,11 @@ def test_strong_nearby_masker_changes_results():
 
 def test_automatic_mask_creation():
     """Test that PerceptualChirpSignalHD can create mask automatically when harmonic_mask=None"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create simple chirp signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 800
@@ -301,11 +302,11 @@ def test_automatic_mask_creation():
 
 def test_automatic_mask_creation_with_minimal_metadata():
     """Test that auto-creation works with minimal metadata (only start/stop/total_time)"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create simple chirp signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 800
@@ -341,11 +342,11 @@ def test_automatic_mask_creation_with_minimal_metadata():
 
 def test_num_repetitions_correctly_returned():
     """Test that num_repetitions is correctly returned from metadata"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     # Create simple chirp signal
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 800
@@ -377,10 +378,10 @@ def test_num_repetitions_correctly_returned():
 
 def test_invalid_repeat_times_zero_raises_error():
     """Test that repeat_times=0 raises ValueError"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 800
@@ -406,10 +407,10 @@ def test_invalid_repeat_times_zero_raises_error():
 
 def test_invalid_repeat_times_negative_raises_error():
     """Test that negative repeat_times raises ValueError"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 800
@@ -435,10 +436,10 @@ def test_invalid_repeat_times_negative_raises_error():
 
 def test_invalid_repeat_times_float_raises_error():
     """Test that float repeat_times raises ValueError"""
-    analyzer = PerceptualChirpSignalHD(sample_rate=44100)
+    analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 
     duration = 1.0
-    sample_rate = 44100
+    sample_rate = 48000
     t = np.linspace(0, duration, int(sample_rate * duration))
     f0 = 100
     f1 = 800
