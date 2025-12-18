@@ -47,14 +47,18 @@ class SelectAudioDataView(AudioDataManageDialog):
             item.setCheckState(Qt.Checked)
 
     def get_select_row_by_init_list(self):
-        for key, value in self.init_select_data_list.items():
-            for row, item in enumerate(self.all_audio_data):
-                # 从文件路径中提取文件名
-                file_path = item[1]
-                # 比较文件名与key是否相同
-                if file_path == key:
-                    self.select_row_list.append(row)
-                    break
+        # 建立文件路径到行号的索引字典，时间复杂度 O(m)
+        file_path_to_row = {}
+        for row, item in enumerate(self.all_audio_data):
+            file_path = item[1]
+            # 如果同一个文件路径出现多次，保留第一个匹配的行号
+            if file_path not in file_path_to_row:
+                file_path_to_row[file_path] = row
+
+        # 根据索引字典查找匹配的行号，时间复杂度 O(n)
+        for key in self.init_select_data_list.keys():
+            if key in file_path_to_row:
+                self.select_row_list.append(file_path_to_row[key])
 
     def refresh_data(self):
         """刷新数据：在筛选后重新设置选中状态"""
