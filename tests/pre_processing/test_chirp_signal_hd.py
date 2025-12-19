@@ -1,8 +1,8 @@
 # tests/pre_processing/test_chirp_signal_hd.py
 import numpy as np
 import pytest
-from base.pre_processing.chirp_signal_hd import ChirpSignalHD
-from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
 
 class TestChirpSignalHD:

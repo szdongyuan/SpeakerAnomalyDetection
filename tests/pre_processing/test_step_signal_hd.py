@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
-from base.pre_processing.step_signal_hd import StepSignalHD
-from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
 
 class TestStepSignalHD:
     def test_compute_distortion_with_prebuilt_mask(self):
         """Test THD computation using pre-built mask (STFT approach)"""
-        from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+        from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
         builder = HarmonicIndexBuilder()
         stimulus_metadata = {
@@ -308,7 +308,7 @@ class TestStepSignalHD:
         Verify that fundamental_bins correctly point to the fundamental frequencies
         in the FFT spectrum with the +1 offset for dummy bin alignment.
         """
-        from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+        from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
         analyzer = StepSignalHD(sample_rate=44100)
         builder = HarmonicIndexBuilder()

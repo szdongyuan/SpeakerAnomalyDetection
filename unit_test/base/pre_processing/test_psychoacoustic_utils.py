@@ -1,7 +1,7 @@
 # unit_test/base/pre_processing/test_psychoacoustic_utils.py
 import pytest
 import numpy as np
-from base.pre_processing.psychoacoustic_utils import (
+from base.core_algorithm.psychoacoustic.psychoacoustic_utils import (
     spl_to_phons,
     compute_simultaneous_masking_threshold,
     apply_masking,
@@ -272,4 +272,3 @@ def test_cumulative_masking_zero_power_guard():
 
     # With zero power, maskee should pass through unchanged
     assert result[0] == maskee_spls[0]
-

@@ -9,11 +9,11 @@ from scipy.signal import savgol_filter, medfilt, bessel, filtfilt
 import librosa
 
 from base.utils.plot_audio_features import PlotManager
-from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
-from base.pre_processing.step_signal_hd import StepSignalHD
-from base.pre_processing.chirp_signal_hd import ChirpSignalHD
-from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
-from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
+from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
 
 
 class AudioThdFrequencyResponseAnalysis(object):

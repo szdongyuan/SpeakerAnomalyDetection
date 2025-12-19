@@ -33,7 +33,7 @@ def test_single_pure_tone_loudness():
     - Use 100th harmonic = 1000 Hz as the actual tone to measure
     - This tests the complete pipeline including masking decision
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     step_duration = 0.5
@@ -121,7 +121,7 @@ def test_multiple_pure_tones_no_masking():
     - These are widely separated, should not mask each other
     - All harmonics at same amplitude
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     step_duration = 0.5
@@ -219,7 +219,7 @@ def test_loudness_scales_with_spl():
     - Test with different harmonic amplitudes → different SPLs
     - Verify loudness scaling
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     step_duration = 0.5

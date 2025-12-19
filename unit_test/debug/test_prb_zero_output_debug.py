@@ -6,7 +6,7 @@ This test instruments each layer to identify where zeros are introduced.
 import numpy as np
 import unittest
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
 
 class TestPrbZeroOutputDebug(unittest.TestCase):

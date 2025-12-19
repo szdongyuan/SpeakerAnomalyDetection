@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
 
 class TestHarmonicIndexBuilder:

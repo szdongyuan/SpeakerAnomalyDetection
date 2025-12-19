@@ -16,7 +16,7 @@ def test_prb_10_35_harmonics_still_works():
 
     This is a regression test to ensure backward compatibility.
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     fundamental_freq = 100.0

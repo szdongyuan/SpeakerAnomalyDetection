@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from unittest.mock import Mock
 
-from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
+from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
 
 
 def _pa_for_spl(spl_db: float) -> float:
@@ -25,7 +25,7 @@ def _make_spectrum_matrix_for_single_frame(*, sr: int, n_fft: int) -> tuple[np.n
 def test_prb_delta_specific_zero_when_only_fundamental():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
     analyzer.compute_perceptual_thd_batch = HD.compute_perceptual_thd_batch.__get__(analyzer)
 
     n_fft = 9600  # 5 Hz resolution
@@ -55,7 +55,7 @@ def test_prb_delta_specific_zero_when_only_fundamental():
 def test_prb_delta_specific_increases_with_harmonic_level():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
     analyzer.compute_perceptual_thd_batch = HD.compute_perceptual_thd_batch.__get__(analyzer)
 
     n_fft = 9600
@@ -90,7 +90,7 @@ def test_prb_delta_specific_increases_with_harmonic_level():
 def test_prb_delta_specific_edge_window_avoids_hard_zero_at_high_freq():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
     analyzer.compute_perceptual_thd_batch = HD.compute_perceptual_thd_batch.__get__(analyzer)
 
     n_fft = 9600
@@ -123,7 +123,7 @@ def test_prb_delta_specific_edge_window_avoids_hard_zero_at_high_freq():
 def test_prb_delta_specific_requires_48khz():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 44100
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HD
     analyzer.compute_perceptual_thd_batch = HD.compute_perceptual_thd_batch.__get__(analyzer)
 
     spec = np.zeros((33, 1))

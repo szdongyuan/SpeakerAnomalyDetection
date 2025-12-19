@@ -17,7 +17,7 @@ def test_chirp_applies_spl_calibration():
     This test ensures that spl_calibration_db parameter is passed through
     from compute_distortion() to compute_perceptual_thd_batch() for chirp signals.
     """
-    from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
 
     sample_rate = 44100
     duration = 1.0
@@ -89,8 +89,8 @@ def test_chirp_calibration_matches_step_signal():
 
     Both should apply calibration the same way for the same harmonic amplitude.
     """
-    from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     fundamental_freq = 100.0

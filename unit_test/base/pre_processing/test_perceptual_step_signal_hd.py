@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from unittest.mock import Mock, patch
-from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
 
 def test_perceptual_step_signal_hd_computes_phons():
@@ -78,7 +78,7 @@ def test_perceptual_step_signal_hd_computes_phons():
 
 def test_perceptual_step_signal_hd_inherits_from_step_signal_hd():
     """Verify PerceptualStepSignalHD extends StepSignalHD"""
-    from base.pre_processing.step_signal_hd import StepSignalHD
+    from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
 
     analyzer = PerceptualStepSignalHD(sample_rate=48000)
 

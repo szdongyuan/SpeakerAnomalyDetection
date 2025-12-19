@@ -17,7 +17,7 @@ if _PROJECT_ROOT not in sys.path:
 import matplotlib.pyplot as plt
 
 from base.soundcard_calibration_manager import get_mic_deviation_value
-from base.pre_processing.psychoacoustic_utils import freq_to_bark
+from base.core_algorithm.psychoacoustic.psychoacoustic_utils import freq_to_bark
 
 try:
     import mosqito

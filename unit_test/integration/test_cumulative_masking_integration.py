@@ -4,7 +4,7 @@ Integration tests for PRB masking.
 Verifies end-to-end behavior: signal → STFT → full-spectrum masking → phons.
 """
 import numpy as np
-from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
 
 def test_9th_harmonic_masks_10th_harmonic():

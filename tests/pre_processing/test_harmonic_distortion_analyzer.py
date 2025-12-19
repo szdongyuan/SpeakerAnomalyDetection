@@ -1,7 +1,7 @@
 # tests/pre_processing/test_harmonic_distortion_analyzer.py
 import numpy as np
 import pytest
-from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
+from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
 
 
 class ConcreteAnalyzer(HarmonicDistortionAnalyzer):

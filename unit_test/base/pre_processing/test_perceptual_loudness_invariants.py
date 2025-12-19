@@ -70,7 +70,7 @@ def test_zero_fundamental_does_not_cause_overflow():
     Current per-frame normalization can cause harmonics to be amplified to >120 dB
     when fundamental is very weak.
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     step_duration = 0.5

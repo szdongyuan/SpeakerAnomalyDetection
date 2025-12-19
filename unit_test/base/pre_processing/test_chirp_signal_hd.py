@@ -1,7 +1,7 @@
 # unit_test/base/pre_processing/test_chirp_signal_hd.py
 import pytest
 import numpy as np
-from base.pre_processing.chirp_signal_hd import ChirpSignalHD
+from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
 
 
 def test_create_harmonic_mask_with_masking_config():

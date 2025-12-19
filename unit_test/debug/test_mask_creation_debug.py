@@ -3,7 +3,7 @@ Deeper diagnostic: Check if mask_matrix is correctly created.
 """
 import numpy as np
 import unittest
-from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
 
 class TestMaskCreation(unittest.TestCase):

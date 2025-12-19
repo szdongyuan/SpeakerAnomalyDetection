@@ -1,5 +1,5 @@
 import numpy as np
-from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
+from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
 
 
 class _DummyAnalyzer(HarmonicDistortionAnalyzer):

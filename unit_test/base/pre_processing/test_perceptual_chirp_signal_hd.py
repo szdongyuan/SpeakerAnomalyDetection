@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from base.pre_processing.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
 
 
 def test_perceptual_chirp_signal_hd_computes_phons():
@@ -59,7 +59,7 @@ def test_perceptual_chirp_signal_hd_computes_phons():
 
 def test_perceptual_chirp_signal_hd_inherits_from_chirp_signal_hd():
     """Verify PerceptualChirpSignalHD extends ChirpSignalHD"""
-    from base.pre_processing.chirp_signal_hd import ChirpSignalHD
+    from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
 
     analyzer = PerceptualChirpSignalHD(sample_rate=48000)
 

@@ -23,7 +23,7 @@ def test_2nd_harmonic_masking_range():
     2nd harmonic should have minimal masking (only fundamental masks it).
     Should produce higher perceptual loudness than higher-order harmonics.
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     fundamental_freq = 100.0  # 100 Hz
@@ -89,7 +89,7 @@ def test_5th_harmonic_masking_range():
     5th harmonic should have more masking than 2nd harmonic.
     Perceptual loudness should be lower due to cumulative masking.
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     fundamental_freq = 100.0
@@ -159,7 +159,7 @@ def test_masking_increases_with_harmonic_order():
     Tests that cumulative masking code path is exercised by using weaker harmonics
     that fall closer to the masking threshold.
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     fundamental_freq = 100.0
@@ -297,7 +297,7 @@ def test_continuous_harmonic_range_3_to_14():
     - Perceptual loudness should be calculated correctly for all harmonics
     - Results should be consistent and reasonable across the range
     """
-    from base.pre_processing.perceptual_step_signal_hd import PerceptualStepSignalHD
+    from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 
     sample_rate = 44100
     fundamental_freq = 100.0

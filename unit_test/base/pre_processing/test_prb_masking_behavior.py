@@ -1,10 +1,10 @@
 import numpy as np
 
-from base.pre_processing.mpeg_psychoacoustic_masking import (
+from base.core_algorithm.psychoacoustic.mpeg_psychoacoustic_masking import (
     pick_maskers_mpeg1_model1,
     masking_threshold_from_maskers_mpeg1_model1,
 )
-from base.pre_processing.psychoacoustic_utils import freq_to_bark, absolute_threshold_of_hearing_db
+from base.core_algorithm.psychoacoustic.psychoacoustic_utils import freq_to_bark, absolute_threshold_of_hearing_db
 
 
 def _pa_for_spl(spl_db: float) -> float:
@@ -178,4 +178,3 @@ def test_prb_masking_boundary_for_200hz_5th_harmonic_reasonable():
 
     assert min_audible is not None
     assert 10 <= min_audible <= 30
-

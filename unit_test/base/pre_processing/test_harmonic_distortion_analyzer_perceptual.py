@@ -2,7 +2,7 @@
 import pytest
 import numpy as np
 from unittest.mock import Mock
-from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
+from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
 
 
 def test_compute_perceptual_thd_batch():
@@ -12,7 +12,7 @@ def test_compute_perceptual_thd_batch():
     analyzer.sample_rate = 48000
 
     # Bind the method to the mock
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
     # Setup test data
@@ -59,7 +59,7 @@ def test_compute_perceptual_thd_batch_masking_effect():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
 
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
     n_bins = 1000
@@ -100,7 +100,7 @@ def test_compute_perceptual_thd_batch_additional_tonal_masker_reduces_loudness()
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
 
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
     n_bins = 1024
@@ -150,7 +150,7 @@ def test_compute_perceptual_thd_batch_backward_compatible():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
 
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
     # Simple test setup
@@ -179,7 +179,7 @@ def test_compute_perceptual_thd_batch_sc_method_basic_sanity():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 48000
 
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
     n_bins = 1024
@@ -224,7 +224,7 @@ def test_compute_perceptual_thd_batch_requires_48khz_or_higher():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 44100
 
-    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
     analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
 
     spectrum_matrix = np.zeros((33, 1))

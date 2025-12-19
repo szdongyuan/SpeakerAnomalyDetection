@@ -1,9 +1,9 @@
 """Integration tests for three-phase HD workflow."""
 import numpy as np
 import pytest
-from base.pre_processing.harmonic_index_builder import HarmonicIndexBuilder
-from base.pre_processing.step_signal_hd import StepSignalHD
-from base.pre_processing.chirp_signal_hd import ChirpSignalHD
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
+from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
 
 
 class TestHDIntegration:
