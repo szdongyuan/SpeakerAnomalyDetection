@@ -210,11 +210,18 @@ class HarmonicDistortionAnalyzer(ABC):
             sc_total_multiplier = float(calibration_multiplier) * sc_post_calibration_multiplier
 
             full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float64) * sc_total_multiplier).copy()
-            if full_spectra.shape[0] > 0:
-                full_spectra[0, :] = 0.0  # drop DC
+            # Drop very low-frequency rFFT bins to avoid bias from drift / rumble.
+            # `low_freq_zero_bins=2` means: set bins [0,1] (DC + first bin) to 0.
+            low_freq_zero_bins = int(masking_config.get("low_freq_zero_bins", 2))
+            if low_freq_zero_bins < 0:
+                raise ValueError(f"low_freq_zero_bins must be >= 0, got {low_freq_zero_bins}")
+            if full_spectra.shape[0] > 0 and low_freq_zero_bins > 0:
+                full_spectra[: min(low_freq_zero_bins, full_spectra.shape[0]), :] = 0.0
 
             # Fundamental-only reference spectrum (optionally include a small neighborhood around the bin).
-            fund_neighbor_bins = int(masking_config.get("fundamental_neighbor_bins", 1))
+            fund_neighbor_bins = int(masking_config.get("fundamental_neighbor_bins", 2))
+            if fund_neighbor_bins < 0:
+                raise ValueError(f"fundamental_neighbor_bins must be >= 0, got {fund_neighbor_bins}")
             fund_spectra = np.zeros_like(full_spectra, dtype=np.float64)
             for frame_idx in range(n_cols):
                 fbin_row = int(fundamental_bins[frame_idx])
@@ -260,11 +267,16 @@ class HarmonicDistortionAnalyzer(ABC):
 
             # Build calibrated full spectrum (exclude dummy row), and drop DC to avoid spurious low-frequency bias.
             full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float32) * float(calibration_multiplier)).copy()
-            if full_spectra.shape[0] > 0:
-                full_spectra[0, :] = 0.0
+            low_freq_zero_bins = int(masking_config.get("low_freq_zero_bins", 2))
+            if low_freq_zero_bins < 0:
+                raise ValueError(f"low_freq_zero_bins must be >= 0, got {low_freq_zero_bins}")
+            if full_spectra.shape[0] > 0 and low_freq_zero_bins > 0:
+                full_spectra[: min(low_freq_zero_bins, full_spectra.shape[0]), :] = 0.0
 
             # Fundamental-only spectrum: keep the fundamental bin (and optionally a small neighborhood) per frame.
-            fund_neighbor_bins = int(masking_config.get("fundamental_neighbor_bins", 1))
+            fund_neighbor_bins = int(masking_config.get("fundamental_neighbor_bins", 2))
+            if fund_neighbor_bins < 0:
+                raise ValueError(f"fundamental_neighbor_bins must be >= 0, got {fund_neighbor_bins}")
             fund_spectra = np.zeros_like(full_spectra, dtype=np.float32)
 
             # spectrum_matrix has dummy row at 0, so FFT bin k maps to row k+1.
