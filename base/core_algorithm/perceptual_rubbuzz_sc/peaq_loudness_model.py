@@ -354,8 +354,10 @@ class PEAQLoudnessModel:
             raise ValueError(f"pp_pa2 first dim must be Z={self._z}, got {pp.shape}")
         pp = np.maximum(pp, 1e-300)
 
-        # L[j,t] in dB, Eq. text before Eq.7.
-        l_db = 10.0 * np.log10(pp)
+        # Paper Eq.5 uses L[k] / dB = 10*log10(Pp[k]), where levels are in dB SPL.
+        # Here pp is in Pa^2, so normalize by the SPL reference pressure (p_ref^2) to obtain dB SPL.
+        p_ref2 = max(float(self.config.reference_pressure_pa) ** 2, 1e-300)
+        l_db = 10.0 * np.log10(pp / p_ref2)
         su = self._compute_slope_u_db_per_bark(l_db, self._band_fc_hz.reshape(-1, 1))  # (Z, T)
 
         gamma = self._gamma
