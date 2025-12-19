@@ -134,13 +134,20 @@ class HarmonicDistortionAnalyzer(ABC):
             perceptual_loudness: (n_frames,) perceived loudness in phons
         """
         n_cols = spectrum_matrix.shape[1]
-        # Strict mode: PRB must be computed via mosqito loudness only (no fallback implementation),
-        # otherwise results may differ between environments.
-        if loudness_zwst_freq is None:
-            raise ImportError(
-                "mosqito is required for PRB loudness computation, but it is not available. "
-                "Install mosqito or remove PRB_DISABLE_MOSQITO."
-            )
+        masking_config = masking_config or {}
+        prb_method = str(masking_config.get("prb_method", "iso")).strip().lower()
+        if prb_method not in {"sc", "iso"}:
+            prb_method = "sc" if "sc" in prb_method else "iso"
+
+        # ISO method requires mosqito; SC method does not.
+        if prb_method == "iso":
+            # Strict mode: PRB must be computed via mosqito loudness only (no fallback implementation),
+            # otherwise results may differ between environments.
+            if loudness_zwst_freq is None:
+                raise ImportError(
+                    "mosqito is required for PRB loudness computation, but it is not available. "
+                    "Install mosqito or remove PRB_DISABLE_MOSQITO."
+                )
         if int(self.sample_rate) < 48000:
             raise ValueError(
                 "PRB loudness requires analysis sample rate >= 48000 Hz. "
@@ -179,7 +186,40 @@ class HarmonicDistortionAnalyzer(ABC):
         rfft_freqs = np.fft.rfftfreq(n_fft, d=1.0 / self.sample_rate)
         rfft_bark_bins = freq_to_bark(rfft_freqs)
 
-        masking_config = masking_config or {}
+        if prb_method == "sc":
+            # "sc" method: Listen/SoundCheck simplified perceptual model (paper PEAQ-SC path).
+            # Compute TotalNL (phons) from the full spectrum vs a fundamental-only reference.
+            from base.core_algorithm.perceptual_rubbuzz_sc.peaq_loudness_model import PEAQLoudnessConfig, PEAQLoudnessModel
+
+            sc_cfg_kwargs = {}
+            if "sc_ear_term3_exponent" in masking_config:
+                sc_cfg_kwargs["ear_weighting_term3_exponent"] = float(masking_config["sc_ear_term3_exponent"])
+            if "sc_ear_term3_coeff" in masking_config:
+                sc_cfg_kwargs["ear_weighting_term3_coeff"] = float(masking_config["sc_ear_term3_coeff"])
+
+            sc_model = PEAQLoudnessModel(rfft_freqs, config=PEAQLoudnessConfig(**sc_cfg_kwargs))
+
+            full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float64) * float(calibration_multiplier)).copy()
+            if full_spectra.shape[0] > 0:
+                full_spectra[0, :] = 0.0  # drop DC
+
+            # Fundamental-only reference spectrum (optionally include a small neighborhood around the bin).
+            fund_neighbor_bins = int(masking_config.get("fundamental_neighbor_bins", 1))
+            fund_spectra = np.zeros_like(full_spectra, dtype=np.float64)
+            for frame_idx in range(n_cols):
+                fbin_row = int(fundamental_bins[frame_idx])
+                if fbin_row <= 0:
+                    continue
+                fbin = fbin_row - 1  # drop dummy row offset
+                if fbin < 0 or fbin >= n_rfft_bins:
+                    continue
+                lo = max(0, fbin - fund_neighbor_bins)
+                hi = min(n_rfft_bins, fbin + fund_neighbor_bins + 1)
+                fund_spectra[lo:hi, frame_idx] = full_spectra[lo:hi, frame_idx]
+
+            out = sc_model.compute_partial_loudness_from_spectra(full_spectra, fund_spectra)
+            return np.asarray(out.n_total_phons, dtype=np.float64).reshape(-1)
+
         # Default PRB method: use spreaded specific loudness sampled at the selected harmonic locations.
         # This matches the ecosystem requirement that "per-frequency" loudness is taken from the spreaded
         # Bark-domain loudness profile at the target harmonic points (rather than a full Bark integration).

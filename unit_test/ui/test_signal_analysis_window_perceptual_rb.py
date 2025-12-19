@@ -33,7 +33,7 @@ def test_perceptual_rub_and_buzz_uses_perceptual_calculation(qapp):
         "repeat_times": 1
     }
     prb.analysis_config = {
-        "selected_labels": [10, 11, 12, 13, 14, 15]
+        "prb_method": "sc"
     }
 
     # Mock the perceptual three-phase THD calculation
@@ -50,6 +50,11 @@ def test_perceptual_rub_and_buzz_uses_perceptual_calculation(qapp):
 
         # Should call perceptual three-phase architecture
         mock_instance._calculate_perceptual_thd_three_phase.assert_called_once()
+        call_args, call_kwargs = mock_instance._calculate_perceptual_thd_three_phase.call_args
+        assert len(call_args) == 3
+        thd_kwargs = call_args[2]
+        assert thd_kwargs["harmonic_orders"] == list(range(2, 36))
+        assert thd_kwargs["masking_config"]["prb_method"] == "sc"
 
         # Should return expected result structure
         assert "freq_value" in result

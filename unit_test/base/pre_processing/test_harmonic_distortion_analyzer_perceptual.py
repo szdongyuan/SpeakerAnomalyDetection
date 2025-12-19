@@ -174,6 +174,52 @@ def test_compute_perceptual_thd_batch_backward_compatible():
     assert result[0] >= 0
 
 
+def test_compute_perceptual_thd_batch_sc_method_basic_sanity():
+    """SC method: fundamental-only should yield ~0, adding a harmonic should increase PRB."""
+    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
+    analyzer.sample_rate = 48000
+
+    from base.pre_processing.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+    analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
+
+    n_bins = 1024
+    n_frames = 1
+    n_fft = 2 * (n_bins - 1)
+
+    spectrum_matrix = np.zeros((n_bins + 1, n_frames), dtype=np.float64)
+    mask_matrix = np.zeros_like(spectrum_matrix)
+
+    # Fundamental at row 10 (dummy row at 0).
+    f0_row = 10
+    spectrum_matrix[f0_row, 0] = 1.0
+    fundamental_bins = np.array([f0_row], dtype=int)
+    fundamental_freqs = np.array([100.0], dtype=float)
+
+    out_f0 = analyzer.compute_perceptual_thd_batch(
+        spectrum_matrix,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_method": "sc"},
+        n_fft=n_fft,
+    )
+    assert out_f0.shape == (1,)
+    assert out_f0[0] == pytest.approx(0.0, abs=1e-12)
+
+    # Add a harmonic.
+    spectrum_matrix2 = spectrum_matrix.copy()
+    spectrum_matrix2[100, 0] = 0.1
+    out_h = analyzer.compute_perceptual_thd_batch(
+        spectrum_matrix2,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_method": "sc"},
+        n_fft=n_fft,
+    )
+    assert out_h[0] > out_f0[0]
+
+
 def test_compute_perceptual_thd_batch_requires_48khz_or_higher():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 44100

@@ -36,7 +36,7 @@ class TestPrbMissingConfig(unittest.TestCase):
         assert result == {"freq_value": [], "harmonic": [], "thd": []}
 
     def test_prb_handles_missing_selected_labels(self):
-        """Verify PRB doesn't crash when selected_labels is missing from config."""
+        """Verify PRB raises when config exists but required data is missing."""
         from ui.signal_analysis_window import PerceptualRubAndBuzz
 
         # Create PRB instance
@@ -46,17 +46,14 @@ class TestPrbMissingConfig(unittest.TestCase):
         prb.data_struct = Mock()
         prb.data_struct.store_wave_data = None
 
-        # Set config without selected_labels key
-        prb.analysis_config = {"type": "PRB", "all_checked": False}
+        # Set config without selected_labels key (PRB no longer relies on harmonic selection).
+        prb.analysis_config = {"type": "PRB", "prb_method": "sc"}
 
-        # Call calculate_thd - should not crash
-        result = prb.calculate_thd()
-
-        # Should return empty result (no harmonics selected)
-        assert result == {"freq_value": [], "harmonic": [], "thd": []}
+        with self.assertRaises(ValueError):
+            prb.calculate_thd()
 
     def test_prb_handles_empty_selected_labels(self):
-        """Verify PRB handles empty selected_labels list."""
+        """Verify legacy selected_labels key does not change PRB behaviour."""
         from ui.signal_analysis_window import PerceptualRubAndBuzz
 
         # Create PRB instance
@@ -66,14 +63,11 @@ class TestPrbMissingConfig(unittest.TestCase):
         prb.data_struct = Mock()
         prb.data_struct.store_wave_data = None
 
-        # Set config with empty selected_labels
-        prb.analysis_config = {"type": "PRB", "selected_labels": [], "all_checked": False}
+        # Set config with legacy selected_labels (should be ignored now).
+        prb.analysis_config = {"type": "PRB", "selected_labels": [], "all_checked": False, "prb_method": "iso"}
 
-        # Call calculate_thd - should not crash
-        result = prb.calculate_thd()
-
-        # Should return empty result
-        assert result == {"freq_value": [], "harmonic": [], "thd": []}
+        with self.assertRaises(ValueError):
+            prb.calculate_thd()
 
 
 if __name__ == '__main__':

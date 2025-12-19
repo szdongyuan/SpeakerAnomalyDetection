@@ -1,9 +1,6 @@
-from functools import partial
-
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QMessageBox, QPushButton
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QScrollArea, QWidget
+from PyQt5.QtWidgets import QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -12,123 +9,54 @@ from ui.custom_ui_widget.popuputils import PopupUtils
 
 class PerceptualRbConfigWindow(QDialog):
     """
-    Configuration dialog for Perceptual Rub & Buzz analysis.
+    Configuration dialog for Perceptual Rub & Buzz analysis (PRB).
 
-    Allows selecting harmonics from 2nd order to 35th order (34 harmonics total).
-    Identical to RbConfigWindow but with "感知 Rub & Buzz" title and "PRB" model type.
+    PRB is now computed with a fixed harmonic range (2nd-35th) to avoid inconsistent results.
+    This dialog only controls which loudness model is used:
+      - "sc": Listen/SoundCheck simplified perceptual model (PEAQ-SC paper path)
+      - "iso226 and iso 532": ISO-based loudness path (mosqito / Zwicker loudness)
     """
-    selected_labels_changed = pyqtSignal()
 
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get(model_type, {})
-        # Filter harmonics to valid range (2-35)
-        loaded_labels = self.load_config.get("selected_labels", [])
-        self.selected_labels = [h for h in loaded_labels if 2 <= h <= 35]
+        self.model_type = model_type
+        self.load_config = self.config_manager.load_config().get(model_type, {}) if self.config_manager else {}
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(300, 350)
-        self.resize(350, 350)
-        layout = QVBoxLayout()
-        harmonic_group_box = QGroupBox("感知 Rub & Buzz")  # "Perceptual Rub & Buzz" in Chinese
-        harmonic_group_box.setObjectName("harmonic_group_box")
-        harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        harmonic_slider_layout = self.create_harmonic_slider_layout()
-        harmonic_slider_layout.setSpacing(12)
-        self.select_all_check = QCheckBox("全选")
-        self.select_all_check.setChecked(self.load_config.get("all_checked", False))
-        self.select_all_check.stateChanged.connect(self.on_select_all_changed)
-        harmonic_slider_layout.addStretch()
-        harmonic_slider_layout.addWidget(self.select_all_check)
-        harmonic_group_box.setLayout(harmonic_slider_layout)
-        btn_layout = self.create_btn()
-        layout.addWidget(harmonic_group_box)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-        )
+        self.setMinimumSize(360, 220)
+        self.resize(420, 240)
 
-    def create_harmonic_slider_layout(self):
-        """Create harmonic selection layout with harmonics 2-35"""
-        harmonic_slider_layout = QVBoxLayout()
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setFixedSize(120, 150)
-        box_container = QWidget()
-        self.box_layout = QVBoxLayout()
-        # Perceptual Rub & Buzz: harmonics 2-35 (34 harmonics total)
-        for i in range(2, 36):
-            label = QLabel("  " + str(i))
-            label.setFixedSize(90, 25)
-            label.setAlignment(Qt.AlignLeft)
-            label.setStyleSheet("QLabel:focus { outline: none; }")
-            label.setAutoFillBackground(True)
-            label.mousePressEvent = partial(self.on_label_click, label)
-            label.enterEvent = partial(self.on_label_enter, label)
-            label.leaveEvent = partial(self.on_label_leave, label)
-            if i in self.selected_labels:
-                label.setText("\u2713" + label.text().strip())
-            self.box_layout.addWidget(label)
-        if self.load_config.get("all_checked"):
-            self.scroll_area.setDisabled(True)
-        box_container.setLayout(self.box_layout)
-        self.scroll_area.setWidget(box_container)
-        harmonic_slider_layout.addWidget(self.scroll_area)
-        harmonic_slider_layout.addStretch()
-        return harmonic_slider_layout
+        root_layout = QVBoxLayout()
 
-    def on_select_all_changed(self, state):
-        self.get_default_config()
-        if state == Qt.Checked:
-            self.scroll_area.setDisabled(True)
-            self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
-            # Select all perceptual rub&buzz harmonics (2-35)
-            self.selected_labels = list(range(2, 36))
-            for i in range(self.box_layout.count()):
-                label = self.box_layout.itemAt(i).widget()
-                text = label.text().strip()
-                if not text.startswith("\u2713"):
-                    label.setText("\u2713" + text)
+        group = QGroupBox("PRB")
+        group.setObjectName("prb_group_box")
+        group_layout = QVBoxLayout()
+
+        desc = QLabel("选择 PRB 的响度模型：")
+        desc.setAlignment(Qt.AlignLeft)
+
+        self.method_combo = QComboBox()
+        # Display text follows the user's requested naming; stored value is the normalized key used in code.
+        self.method_combo.addItem("sc", "sc")
+        self.method_combo.addItem("iso226 and iso 532", "iso")
+
+        saved = str(self.load_config.get("prb_method", "iso")).strip().lower()
+        if saved in {"sc", "soundcheck", "peaq_sc", "peaq-sc"}:
+            idx = self.method_combo.findData("sc")
         else:
-            self.scroll_area.setDisabled(False)
-            self.scroll_area.setStyleSheet("color: rgb(0, 0, 0);")
-            self.selected_labels = []
-            for i in range(self.box_layout.count()):
-                label = self.box_layout.itemAt(i).widget()
-                text = label.text().strip()
-                if text.startswith("\u2713"):
-                    label.setText("  " + text[1:])
-        self.selected_labels_changed.emit()
+            idx = self.method_combo.findData("iso")
+        if idx >= 0:
+            self.method_combo.setCurrentIndex(idx)
 
-    def on_label_click(self, label, event):
-        checked_box = "\u2713"
-        cleaned_label = "".join(filter(str.isdigit, label.text()))
-        label_value = int(cleaned_label)
-        if label_value in self.selected_labels:
-            self.selected_labels.remove(label_value)
-            self.selected_labels.sort()
-            label.setText("  " + label.text().replace(checked_box, "").strip())
-        else:
-            self.selected_labels.append(label_value)
-            label.setText(checked_box + label.text().strip())
-        self.selected_labels_changed.emit()
+        group_layout.addWidget(desc)
+        group_layout.addWidget(self.method_combo)
+        group.setLayout(group_layout)
 
-    def on_label_enter(self, label, event):
-        label.setStyleSheet("background-color: #5099ccff;")
-
-    def on_label_leave(self, label, event):
-        label.setStyleSheet("background-color: transparent;")
-
-    def create_btn(self):
         btn_layout = QHBoxLayout()
         default_btn = QPushButton(" 设为默认 ")
         default_btn.clicked.connect(self.on_default_btn_clicked)
@@ -137,14 +65,24 @@ class PerceptualRbConfigWindow(QDialog):
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
-        return btn_layout
+
+        root_layout.addWidget(group)
+        root_layout.addStretch()
+        root_layout.addLayout(btn_layout)
+        self.setLayout(root_layout)
+
+        self.setStyleSheet(
+            ui_style_const.qgroupbox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qcombobox_style
+        )
 
     def get_default_config(self):
-        default_config = {
-            "selected_labels": self.selected_labels,
-            "all_checked": self.select_all_check.isChecked(),
-        }
-        return default_config
+        method = self.method_combo.currentData()
+        if method not in {"sc", "iso"}:
+            method = "iso"
+        return {"prb_method": method}
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
@@ -152,9 +90,7 @@ class PerceptualRbConfigWindow(QDialog):
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
-        if not self.selected_labels:
-            QMessageBox.warning(self, "设置警告", "请选择感知 Rub & Buzz 阶数")
-        else:
-            config_data = self.get_default_config()
-            self.accept()
-            return config_data
+        config_data = self.get_default_config()
+        self.accept()
+        return config_data
+

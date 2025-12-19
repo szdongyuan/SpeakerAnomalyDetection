@@ -15,31 +15,27 @@ def qapp():
 
 
 def test_perceptual_rb_config_window_harmonic_range(qapp):
-    """Verify perceptual rub&buzz allows harmonics 2-35"""
+    """Verify PRB config exposes loudness method selection."""
     config_manager = Mock()
-    config_manager.load_config.return_value = {"PRB": {"selected_labels": [10, 15, 20], "all_checked": False}}
+    config_manager.load_config.return_value = {"PRB": {"prb_method": "sc"}}
 
     window = PerceptualRbConfigWindow(config_manager, "PRB")
 
-    # Should have 34 labels (harmonics 2-35 inclusive)
-    assert window.box_layout.count() == 34
+    assert window.method_combo.count() == 2
+    assert window.method_combo.itemText(0) == "sc"
+    assert window.method_combo.itemText(1) == "iso226 and iso 532"
 
-    # First label should be harmonic 2
-    first_label = window.box_layout.itemAt(0).widget()
-    assert "2" in first_label.text()
-
-    # Last label should be harmonic 35
-    last_label = window.box_layout.itemAt(33).widget()
-    assert "35" in last_label.text()
+    # Should select the saved method.
+    assert window.method_combo.currentData() == "sc"
 
 
 def test_perceptual_rb_config_window_title(qapp):
-    """Verify window displays perceptual rub&buzz title"""
+    """Verify window displays PRB title."""
     config_manager = Mock()
     config_manager.load_config.return_value = {"PRB": {}}
 
     window = PerceptualRbConfigWindow(config_manager, "PRB")
 
-    # Group box should say "Perceptual Rub & Buzz"
-    group_box = window.findChild(object, name="harmonic_group_box")
-    assert "Perceptual" in group_box.title() or "感知" in group_box.title()
+    group_box = window.findChild(object, name="prb_group_box")
+    assert group_box is not None
+    assert "PRB" in group_box.title()

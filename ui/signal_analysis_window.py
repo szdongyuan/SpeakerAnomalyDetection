@@ -277,13 +277,15 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             self.result = {"freq_value": [], "harmonic": [], "thd": []}
             return self.result
 
-        self.selected_harmonics = self.analysis_config.get("selected_labels", [])
+        # PRB uses a fixed harmonic range (2nd-35th). The config dialog no longer exposes harmonic selection.
+        self.selected_harmonics = list(range(2, 36))
 
-        if not self.selected_harmonics:
-            # No harmonics selected, nothing to calculate
-            self.plot_graph([], [])
-            self.result = {"freq_value": [], "harmonic": [], "thd": []}
-            return self.result
+        # PRB loudness model selection:
+        #   - "sc": Listen/SoundCheck simplified model (paper path)
+        #   - "iso": ISO 532 (mosqito) path
+        prb_method = str(self.analysis_config.get("prb_method", "iso")).strip().lower()
+        if prb_method not in {"sc", "iso"}:
+            prb_method = "sc" if "sc" in prb_method else "iso"
 
         # Get signals and metadata from data_struct
         recorded_signal = self.data_struct.store_wave_data
@@ -317,9 +319,15 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         mic_deviation_db = get_mic_deviation_value()
 
         atfra = AudioThdFrequencyResponseAnalysis()
+        masking_config = {}
+        cfg_masking = self.analysis_config.get("masking_config")
+        if isinstance(cfg_masking, dict):
+            masking_config.update(cfg_masking)
+        masking_config["prb_method"] = prb_method
         thd_kwargs = {
             'stimulus_metadata': stimulus_metadata,
-            'harmonic_orders': self.selected_harmonics
+            'harmonic_orders': self.selected_harmonics,
+            'masking_config': masking_config,
         }
 
         freq_value, harmonic, perceptual_loudness = atfra._calculate_perceptual_thd_three_phase(
