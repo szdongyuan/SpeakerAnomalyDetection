@@ -199,7 +199,17 @@ class HarmonicDistortionAnalyzer(ABC):
 
             sc_model = PEAQLoudnessModel(rfft_freqs, config=PEAQLoudnessConfig(**sc_cfg_kwargs))
 
-            full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float64) * float(calibration_multiplier)).copy()
+            # SoundCheck/Listen ecosystem compatibility:
+            # apply an additional fixed amplitude scaling after SPL calibration.
+            sc_post_calibration_multiplier = float(masking_config.get("sc_post_calibration_multiplier", 0.075))
+            if not np.isfinite(sc_post_calibration_multiplier) or sc_post_calibration_multiplier <= 0.0:
+                raise ValueError(
+                    "sc_post_calibration_multiplier must be a finite positive number, "
+                    f"got {sc_post_calibration_multiplier}"
+                )
+            sc_total_multiplier = float(calibration_multiplier) * sc_post_calibration_multiplier
+
+            full_spectra = (np.asarray(spectrum_matrix[1:, :], dtype=np.float64) * sc_total_multiplier).copy()
             if full_spectra.shape[0] > 0:
                 full_spectra[0, :] = 0.0  # drop DC
 
