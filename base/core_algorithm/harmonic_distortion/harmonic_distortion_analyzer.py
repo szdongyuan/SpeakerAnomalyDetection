@@ -235,7 +235,34 @@ class HarmonicDistortionAnalyzer(ABC):
                 fund_spectra[lo:hi, frame_idx] = full_spectra[lo:hi, frame_idx]
 
             out = sc_model.compute_partial_loudness_from_spectra(full_spectra, fund_spectra)
-            return np.asarray(out.n_total_phons, dtype=np.float64).reshape(-1)
+            totalnl_phons = np.asarray(out.n_total_phons, dtype=np.float64).reshape(-1)
+
+            # Optional paper section 4.10: Error Harmonic Structure (EHS) based on cepstrum peak at 1/f0.
+            # This helps separate "harmonic family" buzz from low-order harmonics and noise.
+            sc_metric = str(masking_config.get("sc_metric", "totalnl")).strip().lower()
+            if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
+                sc_metric = "totalnl"
+
+            if sc_metric in {"ehs", "totalnl_x_ehs"}:
+                f0 = np.asarray(fundamental_freqs, dtype=np.float64).reshape(-1)
+                if f0.size != n_cols:
+                    raise ValueError(f"fundamental_freqs must have length n_frames={n_cols}, got {f0.shape}")
+
+                ehs = sc_model.compute_error_harmonic_structure(
+                    full_spectra,
+                    f0,
+                    f_min_hz=float(masking_config.get("sc_ehs_min_freq_hz", 20.0)),
+                    f_max_hz=masking_config.get("sc_ehs_max_freq_hz"),
+                    peak_search_width_bins=int(masking_config.get("sc_ehs_peak_width_bins", 1)),
+                    remove_dc=bool(masking_config.get("sc_ehs_remove_dc", False)),
+                )
+
+                if sc_metric == "ehs":
+                    return np.asarray(ehs, dtype=np.float64).reshape(-1)
+                # totalnl_x_ehs: paper later multiplies "Partial Loudness overall level" by "Harmonic Structure overall level".
+                return np.asarray(totalnl_phons * ehs, dtype=np.float64).reshape(-1)
+
+            return totalnl_phons
 
         # Default PRB method: use spreaded specific loudness sampled at the selected harmonic locations.
         # This matches the ecosystem requirement that "per-frequency" loudness is taken from the spreaded

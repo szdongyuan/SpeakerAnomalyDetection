@@ -151,3 +151,33 @@ def test_peaq_ear_weighting_term3_exponent_affects_high_freq_loudness(peaq_model
         test_20k, ref_silence, apply_level_adaptation=False
     )
     assert out_less.n_total_sones[0] > out_default.n_total_sones[0]
+
+
+def test_peaq_ehs_increases_with_harmonic_structure(peaq_model):
+    freqs = peaq_model.rfft_freqs_hz
+    f0 = 100.0
+
+    # Fundamental-only spectrum.
+    spec_f0 = _tone_spectrum_pa(freqs, tone_hz=f0, spl_db=80.0)
+
+    # Add a dense harmonic series (stronger harmonic structure).
+    spec_h = spec_f0.copy()
+    for h in range(2, 40):
+        spec_h += _tone_spectrum_pa(freqs, tone_hz=h * f0, spl_db=65.0)
+
+    ehs_f0 = peaq_model.compute_error_harmonic_structure(spec_f0, np.array([f0], dtype=np.float64))[0]
+    ehs_h = peaq_model.compute_error_harmonic_structure(spec_h, np.array([f0], dtype=np.float64))[0]
+    assert ehs_h > ehs_f0
+
+
+def test_peaq_ehs_is_scale_invariant(peaq_model):
+    freqs = peaq_model.rfft_freqs_hz
+    f0 = 200.0
+
+    spec = _tone_spectrum_pa(freqs, tone_hz=f0, spl_db=80.0)
+    for h in range(2, 20):
+        spec += _tone_spectrum_pa(freqs, tone_hz=h * f0, spl_db=60.0)
+
+    ehs_1 = peaq_model.compute_error_harmonic_structure(spec, f0)[0]
+    ehs_2 = peaq_model.compute_error_harmonic_structure(spec * 10.0, f0)[0]
+    assert ehs_1 == pytest.approx(ehs_2, abs=1e-12)

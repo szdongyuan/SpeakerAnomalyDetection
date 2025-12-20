@@ -147,6 +147,10 @@ class PEAQLoudnessModel:
             raise ValueError("rfft_freqs_hz must be non-decreasing")
         self.rfft_freqs_hz = freqs
 
+        # SPL reference used to convert Pa <-> dB SPL. Internally we work in *power ratio* units (p^2/p_ref^2).
+        self._p_ref = float(self.config.reference_pressure_pa)
+        self._p_ref2 = max(self._p_ref**2, 1e-300)
+
         self._w_db = _ear_weighting_db_parametric(
             self.rfft_freqs_hz,
             term3_coeff=float(self.config.ear_weighting_term3_coeff),
@@ -190,14 +194,14 @@ class PEAQLoudnessModel:
         self._valid_bin_indices = np.flatnonzero(valid)
         self._valid_band_indices = self._bin_band[self._valid_bin_indices].astype(np.int64, copy=False)
 
-        # Internal noise (paper Eq.4), interpreted as dB SPL and converted to Pa^2.
+        # Internal noise (paper Eq.4), interpreted as dB SPL and converted to linear power ratio (p^2/p_ref^2).
         fc_khz = np.maximum(self._band_fc_hz / 1000.0, 1e-12)
         p_thres_db = 0.4 * 3.64 * np.power(fc_khz, -0.8)
-        self._p_thres_pa2 = (float(self.config.reference_pressure_pa) ** 2) * np.power(10.0, p_thres_db / 10.0)
+        self._p_thres_ratio = np.power(10.0, p_thres_db / 10.0)
 
-        # Loudness threshold terms (Eq.10 / Eq.11), interpreted as dB SPL and converted to linear.
+        # Loudness threshold terms (Eq.10 / Eq.11), interpreted as dB SPL and converted to linear power ratio.
         e_thres_db = 0.364 * np.power(fc_khz, -0.8)
-        self._e_thres_pa2 = (float(self.config.reference_pressure_pa) ** 2) * np.power(10.0, e_thres_db / 10.0)
+        self._e_thres_ratio = np.power(10.0, e_thres_db / 10.0)
 
         f = np.maximum(self._band_fc_hz, 1e-12)
         s_db = -2.0 - 2.05 * np.arctan(f / 4000.0) - 0.75 * np.arctan(np.square(f / 1600.0))
@@ -321,16 +325,21 @@ class PEAQLoudnessModel:
         scale[good] = test_peak[good] / ref_peak[good]
         return ref_pa * scale.reshape(1, -1)
 
-    def _weighted_bin_energy_pa2(self, spectrum_pa: np.ndarray) -> np.ndarray:
-        # Apply ear weighting in amplitude domain (Eq.2) and return per-bin energy (Pa^2).
+    def _weighted_bin_power_ratio(self, spectrum_pa: np.ndarray) -> np.ndarray:
+        """
+        Apply ear weighting in amplitude domain (Eq.2) and return per-bin *power ratio* (p^2/p_ref^2).
+
+        The public API accepts spectra in Pa RMS per bin; internal processing uses power ratios to match
+        the paper's dB SPL conventions.
+        """
         spectrum_pa = np.asarray(spectrum_pa, dtype=np.float64)
         weight = np.power(10.0, self._w_db / 20.0).reshape(-1, 1)
         weighted = spectrum_pa * weight
-        return np.square(np.abs(weighted))
+        return np.square(np.abs(weighted)) / self._p_ref2
 
-    def _to_pitch_patterns_pa2(self, spectrum_pa: np.ndarray) -> np.ndarray:
-        # Energy mapping to Bark bands + internal noise (Eq.4).
-        e_bin = self._weighted_bin_energy_pa2(spectrum_pa)
+    def _to_pitch_patterns_power_ratio(self, spectrum_pa: np.ndarray) -> np.ndarray:
+        # Energy mapping to Bark bands + internal noise (Eq.4), all in power ratio units.
+        e_bin = self._weighted_bin_power_ratio(spectrum_pa)
         t_frames = int(e_bin.shape[1])
         pe = np.zeros((self._z, t_frames), dtype=np.float64)
         if self._valid_bin_indices.size > 0:
@@ -341,23 +350,21 @@ class PEAQLoudnessModel:
                     weights=weights[:, t],
                     minlength=self._z,
                 )
-        return pe + self._p_thres_pa2.reshape(-1, 1)
+        return pe + self._p_thres_ratio.reshape(-1, 1)
 
-    def _excitation_from_pitch_patterns(self, pp_pa2: np.ndarray) -> np.ndarray:
+    def _excitation_from_pitch_patterns(self, pp_ratio: np.ndarray) -> np.ndarray:
         """
         Frequency spreading (Eq.5-8) to compute excitation patterns E[k,t].
 
-        pp_pa2: (Z, T) pitch patterns in Pa^2 (must be > 0).
+        pp_ratio: (Z, T) pitch patterns in power ratio (p^2/p_ref^2, must be > 0).
         """
-        pp = np.asarray(pp_pa2, dtype=np.float64)
+        pp = np.asarray(pp_ratio, dtype=np.float64)
         if pp.shape[0] != self._z:
-            raise ValueError(f"pp_pa2 first dim must be Z={self._z}, got {pp.shape}")
+            raise ValueError(f"pp_ratio first dim must be Z={self._z}, got {pp.shape}")
         pp = np.maximum(pp, 1e-300)
 
-        # Paper Eq.5 uses L[k] / dB = 10*log10(Pp[k]), where levels are in dB SPL.
-        # Here pp is in Pa^2, so normalize by the SPL reference pressure (p_ref^2) to obtain dB SPL.
-        p_ref2 = max(float(self.config.reference_pressure_pa) ** 2, 1e-300)
-        l_db = 10.0 * np.log10(pp / p_ref2)
+        # Paper Eq.5 uses L[k]/dB = 10*log10(Pp[k]) where Pp is a linear power ratio (dB SPL).
+        l_db = 10.0 * np.log10(pp)
         su = self._compute_slope_u_db_per_bark(l_db, self._band_fc_hz.reshape(-1, 1))  # (Z, T)
 
         gamma = self._gamma
@@ -413,11 +420,11 @@ class PEAQLoudnessModel:
             if apply_level_adaptation:
                 test = self._apply_level_adaptation(test, ref)
 
-        pp = self._to_pitch_patterns_pa2(test)
+        pp = self._to_pitch_patterns_power_ratio(test)
         e = self._excitation_from_pitch_patterns(pp)
 
         beta_pow = float(self.config.beta_pow)
-        e_thres = self._e_thres_pa2.reshape(-1, 1)
+        e_thres = self._e_thres_ratio.reshape(-1, 1)
         s = self._s_lin.reshape(-1, 1)
 
         # Eq.9 (const handled later via scaling_const)
@@ -468,8 +475,8 @@ class PEAQLoudnessModel:
             do_adapt = self.config.level_adaptation != "none"
         ref_adapted = self._apply_level_adaptation(test, ref) if do_adapt else ref
 
-        pp_test = self._to_pitch_patterns_pa2(test)
-        pp_ref = self._to_pitch_patterns_pa2(ref_adapted)
+        pp_test = self._to_pitch_patterns_power_ratio(test)
+        pp_ref = self._to_pitch_patterns_power_ratio(ref_adapted)
 
         e_test = self._excitation_from_pitch_patterns(pp_test)
         e_ref = self._excitation_from_pitch_patterns(pp_ref)
@@ -483,7 +490,7 @@ class PEAQLoudnessModel:
 
         # Eq.13 (partial loudness)
         # Paper note under Eq.13: E_thres is the internal noise function P_thres[k] (section 4.6).
-        e_thres = self._p_thres_pa2.reshape(-1, 1)
+        e_thres = self._p_thres_ratio.reshape(-1, 1)
         beta_pow = float(self.config.beta_pow)
         num = diff_pos
         denom = e_thres + e_ref * beta_mask
@@ -504,6 +511,137 @@ class PEAQLoudnessModel:
             band_center_hz=self._band_fc_hz,
             band_center_bark=self._band_z,
         )
+
+    def compute_error_harmonic_structure(
+        self,
+        test_spectrum_pa: np.ndarray,
+        fundamental_freqs_hz: np.ndarray,
+        *,
+        f_min_hz: float = 20.0,
+        f_max_hz: Optional[float] = None,
+        peak_search_width_bins: int = 1,
+        remove_dc: bool = False,
+        eps: float = 1e-12,
+    ) -> np.ndarray:
+        """
+        Compute the Error Harmonic Structure (EHS) described in paper section 4.10.
+
+        The paper defines EHS via the (power) cepstrum of the test spectrum:
+          1) Apply the ear weighting (Eq.1/Eq.2) to the spectrum magnitude
+          2) Normalize the weighted magnitude spectrum
+          3) Take the log magnitude spectrum
+          4) Compute the FFT across frequency bins (cepstrum)
+          5) Take the magnitude at quefrency ~= 1/f0
+
+        This implementation returns a dimensionless per-frame scalar (shape (T,)).
+        """
+        test = self._ensure_2d(test_spectrum_pa)
+        if test.shape[0] != self.rfft_freqs_hz.size:
+            raise ValueError(
+                f"test_spectrum_pa first dim must match rfft_freqs_hz ({self.rfft_freqs_hz.size}), got {test.shape}"
+            )
+
+        f_min = float(f_min_hz)
+        if not np.isfinite(f_min) or f_min < 0.0:
+            raise ValueError(f"f_min_hz must be finite and >= 0, got {f_min_hz}")
+
+        f_max = float(f_max_hz) if f_max_hz is not None else float(self.rfft_freqs_hz[-1])
+        if not np.isfinite(f_max) or f_max <= 0.0:
+            raise ValueError(f"f_max_hz must be finite and > 0, got {f_max_hz}")
+
+        # Choose a contiguous frequency slice to preserve a uniform dF for quefrency mapping.
+        start = int(np.searchsorted(self.rfft_freqs_hz, f_min, side="left"))
+        start = max(start, 1)  # avoid DC
+        end = int(np.searchsorted(self.rfft_freqs_hz, f_max, side="right")) - 1
+        end = min(end, int(self.rfft_freqs_hz.size - 1))
+        if end <= start:
+            raise ValueError(f"Invalid EHS frequency slice: start={start}, end={end}")
+
+        freqs = self.rfft_freqs_hz[start : end + 1]
+        df = np.diff(freqs)
+        d_f = float(np.median(df)) if df.size > 0 else 0.0
+        if not np.isfinite(d_f) or d_f <= 0.0:
+            raise ValueError("Unable to infer frequency resolution dF for EHS computation")
+        # EHS assumes a linear frequency grid (FFT bins).
+        if df.size > 1 and not np.allclose(df, d_f, rtol=1e-6, atol=1e-12):
+            raise ValueError("EHS requires uniformly spaced rFFT frequency bins")
+
+        n = int(freqs.size)
+        if n < 4:
+            raise ValueError(f"EHS requires at least 4 frequency bins, got {n}")
+
+        t_frames = int(test.shape[1])
+        f0 = np.asarray(fundamental_freqs_hz, dtype=np.float64)
+        if f0.ndim == 0:
+            f0 = np.full((t_frames,), float(f0), dtype=np.float64)
+        else:
+            f0 = f0.reshape(-1)
+        if f0.size != t_frames:
+            raise ValueError(
+                f"fundamental_freqs_hz must have length T={t_frames}, got shape {np.asarray(fundamental_freqs_hz).shape}"
+            )
+
+        if peak_search_width_bins < 0:
+            raise ValueError(f"peak_search_width_bins must be >= 0, got {peak_search_width_bins}")
+        w_bins = int(peak_search_width_bins)
+
+        eps_val = float(eps)
+        if not np.isfinite(eps_val) or eps_val <= 0.0:
+            raise ValueError(f"eps must be finite and > 0, got {eps}")
+
+        # 1) Ear weighting (Eq.2) applied to magnitude spectrum.
+        weight = np.power(10.0, self._w_db[start : end + 1] / 20.0).reshape(-1, 1)
+        mag = np.abs(test[start : end + 1, :]) * weight
+
+        # 2) Normalize per frame (paper says "normalized" but does not specify; max-normalization is scale-invariant).
+        max_mag = np.max(mag, axis=0)
+        valid_frame = np.isfinite(max_mag) & (max_mag > 0.0) & np.isfinite(f0) & (f0 > 0.0)
+        denom = np.where(valid_frame, max_mag, 1.0).reshape(1, -1)
+        norm_mag = mag / denom
+        norm_mag = np.maximum(norm_mag, eps_val)
+
+        # 3) Log magnitude spectrum.
+        log_mag = np.log(norm_mag)
+        if bool(remove_dc):
+            log_mag = log_mag - np.mean(log_mag, axis=0, keepdims=True)
+
+        # 4) Cepstrum via FFT across frequency bins.
+        cep = np.fft.rfft(log_mag, axis=0)
+        cep_mag = np.abs(cep) / float(n)
+
+        # 5) Peak at quefrency ~= 1/f0.
+        q_axis = np.fft.rfftfreq(n, d=d_f)
+        target_q = np.zeros((t_frames,), dtype=np.float64)
+        target_q[valid_frame] = 1.0 / f0[valid_frame]
+
+        # Nearest index on the quefrency axis for each frame.
+        idx_right = np.searchsorted(q_axis, target_q, side="left")
+        idx_left = np.clip(idx_right - 1, 0, q_axis.size - 1)
+        idx_right = np.clip(idx_right, 0, q_axis.size - 1)
+        dist_left = np.abs(q_axis[idx_left] - target_q)
+        dist_right = np.abs(q_axis[idx_right] - target_q)
+        use_right = dist_right < dist_left
+        idx = np.where(use_right, idx_right, idx_left).astype(np.int64, copy=False)
+
+        # If the target quefrency is outside representable range, drop the frame.
+        valid_frame &= target_q <= float(q_axis[-1])
+
+        # Peak search around the target bin.
+        t_idx = np.arange(t_frames, dtype=np.int64)
+        if w_bins <= 0:
+            ehs = cep_mag[idx, t_idx]
+        else:
+            offsets = np.arange(-w_bins, w_bins + 1, dtype=np.int64)
+            max_idx = int(cep_mag.shape[0] - 1)
+            # Exclude DC bin (0) by clamping to [1, max_idx].
+            vals = np.stack(
+                [cep_mag[np.clip(idx + off, 1, max_idx), t_idx] for off in offsets],
+                axis=0,
+            )
+            ehs = np.max(vals, axis=0)
+
+        ehs = np.where(valid_frame, ehs, 0.0)
+        return np.asarray(ehs, dtype=np.float64).reshape(-1)
 
 
 @dataclass(frozen=True)

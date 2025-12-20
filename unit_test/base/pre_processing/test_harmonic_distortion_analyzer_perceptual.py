@@ -220,6 +220,58 @@ def test_compute_perceptual_thd_batch_sc_method_basic_sanity():
     assert out_h[0] > out_f0[0]
 
 
+def test_compute_perceptual_thd_batch_sc_metric_ehs_detects_harmonic_family():
+    """SC method: EHS should increase when a dense harmonic series is present."""
+    analyzer = Mock(spec=HarmonicDistortionAnalyzer)
+    analyzer.sample_rate = 48000
+
+    from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer as HDAnalyzer
+
+    analyzer.compute_perceptual_thd_batch = HDAnalyzer.compute_perceptual_thd_batch.__get__(analyzer)
+
+    n_bins = 1024
+    n_frames = 1
+    n_fft = 2 * (n_bins - 1)
+    rfft_freqs = np.fft.rfftfreq(n_fft, d=1.0 / analyzer.sample_rate)
+
+    # Pick an f0 aligned with an FFT bin so the harmonic pattern is clean in frequency domain.
+    k0 = 20  # rFFT bin index (excluding dummy row offset)
+    f0_hz = float(rfft_freqs[k0])
+    f0_row = k0 + 1  # spectrum_matrix has dummy row at 0
+
+    spectrum_f0 = np.zeros((n_bins + 1, n_frames), dtype=np.float64)
+    spectrum_f0[f0_row, 0] = 1.0
+
+    spectrum_h = spectrum_f0.copy()
+    for h in range(2, 30):
+        k = h * k0
+        if k >= n_bins:
+            break
+        spectrum_h[k + 1, 0] = 0.3
+
+    mask_matrix = np.zeros_like(spectrum_f0)
+    fundamental_bins = np.array([f0_row], dtype=int)
+    fundamental_freqs = np.array([f0_hz], dtype=float)
+
+    out_ehs_f0 = analyzer.compute_perceptual_thd_batch(
+        spectrum_f0,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_method": "sc", "sc_metric": "ehs"},
+        n_fft=n_fft,
+    )
+    out_ehs_h = analyzer.compute_perceptual_thd_batch(
+        spectrum_h,
+        mask_matrix,
+        fundamental_bins,
+        fundamental_freqs,
+        masking_config={"prb_method": "sc", "sc_metric": "ehs"},
+        n_fft=n_fft,
+    )
+    assert out_ehs_h[0] > out_ehs_f0[0]
+
+
 def test_compute_perceptual_thd_batch_requires_48khz_or_higher():
     analyzer = Mock(spec=HarmonicDistortionAnalyzer)
     analyzer.sample_rate = 44100
