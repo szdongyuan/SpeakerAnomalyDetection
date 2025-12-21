@@ -236,9 +236,10 @@ class HarmonicDistortionAnalyzer(ABC):
 
             # Optional paper section 4.10: Error Harmonic Structure (EHS) based on cepstrum peak at 1/f0.
             # This helps separate "harmonic family" buzz from low-order harmonics and noise.
-            sc_metric = str(masking_config.get("sc_metric", "ehs")).strip().lower()
+            # Paper-aligned default: use the combined indicator TotalNL×EHS unless explicitly overridden.
+            sc_metric = str(masking_config.get("sc_metric", "totalnl_x_ehs")).strip().lower()
             if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
-                sc_metric = "ehs"
+                sc_metric = "totalnl_x_ehs"
 
             totalnl_phons: np.ndarray | None = None
             if sc_metric in {"totalnl", "totalnl_phons", "totalnl_x_ehs"}:
@@ -250,8 +251,57 @@ class HarmonicDistortionAnalyzer(ABC):
                 if f0.size != n_cols:
                     raise ValueError(f"fundamental_freqs must have length n_frames={n_cols}, got {f0.shape}")
 
+                # Compute EHS on a harmonic-line spectrum (yellow curve in cepstrum plots) by default.
+                # This suppresses the broadband spectral envelope / cepstrum low-quefrency ramp that makes
+                # absolute cepstrum magnitudes hard to compare across different f0 values.
+                use_harmonic_line = bool(masking_config.get("sc_ehs_use_harmonic_line_spectrum", True))
+                ehs_input_spectra = full_spectra
+                if use_harmonic_line:
+                    max_order = int(masking_config.get("sc_ehs_max_harmonic_order", 200))
+                    if max_order <= 0:
+                        raise ValueError(f"sc_ehs_max_harmonic_order must be > 0, got {max_order}")
+                    min_order = int(masking_config.get("sc_ehs_min_harmonic_order", 1))
+                    if min_order <= 0:
+                        raise ValueError(f"sc_ehs_min_harmonic_order must be > 0, got {min_order}")
+                    if min_order > max_order:
+                        raise ValueError(
+                            "sc_ehs_min_harmonic_order must be <= sc_ehs_max_harmonic_order, "
+                            f"got min={min_order} max={max_order}"
+                        )
+                    neighbor_bins = int(masking_config.get("sc_ehs_harmonic_neighbor_bins", 1))
+                    if neighbor_bins < 0:
+                        raise ValueError(f"sc_ehs_harmonic_neighbor_bins must be >= 0, got {neighbor_bins}")
+
+                    bin_hz = float(self.sample_rate) / float(n_fft)
+                    if not np.isfinite(bin_hz) or bin_hz <= 0.0:
+                        raise ValueError(f"Unable to infer FFT bin spacing from sample_rate={self.sample_rate}, n_fft={n_fft}")
+
+                    nyquist_hz = float(self.sample_rate) / 2.0
+                    offsets = np.arange(-neighbor_bins, neighbor_bins + 1, dtype=np.int64)
+                    max_bin = int(n_rfft_bins - 1)
+                    harmonic_line = np.zeros_like(full_spectra, dtype=np.float64)
+                    for frame_idx in range(n_cols):
+                        f0_i = float(f0[frame_idx])
+                        if not np.isfinite(f0_i) or f0_i <= 0.0:
+                            continue
+                        max_order_frame = min(max_order, int(np.floor(nyquist_hz / f0_i)))
+                        if max_order_frame < min_order:
+                            continue
+                        orders = np.arange(min_order, max_order_frame + 1, dtype=np.float64)
+                        harmonic_bins = np.rint((orders * f0_i) / bin_hz).astype(np.int64, copy=False)
+                        harmonic_bins = np.clip(harmonic_bins, 1, max_bin)
+                        if harmonic_bins.size == 0:
+                            continue
+                        if offsets.size == 1:
+                            bins = np.unique(harmonic_bins)
+                        else:
+                            bins = np.unique(np.clip(harmonic_bins.reshape(-1, 1) + offsets.reshape(1, -1), 1, max_bin))
+                            bins = bins.reshape(-1)
+                        harmonic_line[bins, frame_idx] = full_spectra[bins, frame_idx]
+                    ehs_input_spectra = harmonic_line
+
                 ehs = sc_model.compute_error_harmonic_structure(
-                    full_spectra,
+                    ehs_input_spectra,
                     f0,
                     f_min_hz=float(masking_config.get("sc_ehs_min_freq_hz", 20.0)),
                     f_max_hz=masking_config.get("sc_ehs_max_freq_hz"),

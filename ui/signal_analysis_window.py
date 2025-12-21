@@ -328,9 +328,11 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         masking_config["prb_method"] = prb_method
 
         if prb_method == "sc":
-            sc_metric = str(masking_config.get("sc_metric", "ehs")).strip().lower()
+            # Paper-aligned default: plot the combined indicator TotalNL×EHS unless explicitly overridden.
+            sc_metric = str(masking_config.get("sc_metric", "totalnl_x_ehs")).strip().lower()
             if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
-                sc_metric = "ehs"
+                sc_metric = "totalnl_x_ehs"
+            masking_config["sc_metric"] = sc_metric
             if sc_metric == "ehs":
                 self._prb_curve_label = "EHS"
                 self._prb_y_label = "EHS"

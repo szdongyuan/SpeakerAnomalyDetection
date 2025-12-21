@@ -55,6 +55,31 @@ class PerceptualRbConfigWindow(QDialog):
 
         group_layout.addWidget(desc)
         group_layout.addWidget(self.method_combo)
+
+        self.sc_metric_desc = QLabel("SC 指标：")
+        self.sc_metric_desc.setAlignment(Qt.AlignLeft)
+        self.sc_metric_combo = QComboBox()
+        self.sc_metric_combo.addItem("TotalNL×EHS（默认）", "totalnl_x_ehs")
+        self.sc_metric_combo.addItem("TotalNL（关闭 EHS）", "totalnl")
+        self.sc_metric_combo.addItem("EHS（仅调试）", "ehs")
+
+        saved_masking = self.load_config.get("masking_config", {})
+        if not isinstance(saved_masking, dict):
+            saved_masking = {}
+        saved_metric = str(saved_masking.get("sc_metric", "totalnl_x_ehs")).strip().lower()
+        if saved_metric == "totalnl_phons":
+            saved_metric = "totalnl"
+        if saved_metric not in {"totalnl_x_ehs", "totalnl", "ehs"}:
+            saved_metric = "totalnl_x_ehs"
+        idx_metric = self.sc_metric_combo.findData(saved_metric)
+        if idx_metric >= 0:
+            self.sc_metric_combo.setCurrentIndex(idx_metric)
+
+        group_layout.addWidget(self.sc_metric_desc)
+        group_layout.addWidget(self.sc_metric_combo)
+
+        self.method_combo.currentIndexChanged.connect(self._sync_sc_metric_visibility)
+        self._sync_sc_metric_visibility()
         group.setLayout(group_layout)
 
         btn_layout = QHBoxLayout()
@@ -82,7 +107,19 @@ class PerceptualRbConfigWindow(QDialog):
         method = self.method_combo.currentData()
         if method not in {"sc", "iso"}:
             method = "iso"
-        return {"prb_method": method}
+
+        metric = self.sc_metric_combo.currentData()
+        if metric == "totalnl_phons":
+            metric = "totalnl"
+        if metric not in {"totalnl_x_ehs", "totalnl", "ehs"}:
+            metric = "totalnl_x_ehs"
+
+        masking_config = {}
+        saved_masking = self.load_config.get("masking_config", {})
+        if isinstance(saved_masking, dict):
+            masking_config.update(saved_masking)
+        masking_config["sc_metric"] = metric
+        return {"prb_method": method, "masking_config": masking_config}
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
@@ -94,3 +131,7 @@ class PerceptualRbConfigWindow(QDialog):
         self.accept()
         return config_data
 
+    def _sync_sc_metric_visibility(self):
+        is_sc = self.method_combo.currentData() == "sc"
+        self.sc_metric_desc.setVisible(is_sc)
+        self.sc_metric_combo.setVisible(is_sc)
