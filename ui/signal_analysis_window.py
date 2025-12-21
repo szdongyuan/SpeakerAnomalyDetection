@@ -262,6 +262,8 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
     def __init__(self, title_name):
         super().__init__(title_name)
+        self._prb_curve_label = "Perceived Loudness"
+        self._prb_y_label = "Perceived Loudness (phons)"
 
     def calculate_thd(self):
         """
@@ -324,6 +326,23 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         if isinstance(cfg_masking, dict):
             masking_config.update(cfg_masking)
         masking_config["prb_method"] = prb_method
+
+        if prb_method == "sc":
+            sc_metric = str(masking_config.get("sc_metric", "ehs")).strip().lower()
+            if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
+                sc_metric = "ehs"
+            if sc_metric == "ehs":
+                self._prb_curve_label = "EHS"
+                self._prb_y_label = "EHS"
+            elif sc_metric == "totalnl_x_ehs":
+                self._prb_curve_label = "TotalNL×EHS"
+                self._prb_y_label = "TotalNL×EHS"
+            else:
+                self._prb_curve_label = "TotalNL"
+                self._prb_y_label = "TotalNL (phons)"
+        else:
+            self._prb_curve_label = "Perceived Loudness"
+            self._prb_y_label = "Perceived Loudness (phons)"
         thd_kwargs = {
             'stimulus_metadata': stimulus_metadata,
             'harmonic_orders': self.selected_harmonics,
@@ -370,10 +389,10 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         """Plot perceptual loudness with correct phons label."""
         self.analysis_plot.clear()
         if self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness):
-            self.analysis_plot.plot(freq_value, perceptual_loudness, pen="b", name="Perceived Loudness")
+            self.analysis_plot.plot(freq_value, perceptual_loudness, pen="b", name=self._prb_curve_label)
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"Perceived Loudness of {self.selected_label.text()} order")
-        self.analysis_plot.setLabel("left", "Perceived Loudness (phons)")
+        self.analysis_plot.setLabel("left", self._prb_y_label)
         self.analysis_plot.setLabel("bottom", "Frequency")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)

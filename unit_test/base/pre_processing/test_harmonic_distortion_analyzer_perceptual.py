@@ -200,7 +200,7 @@ def test_compute_perceptual_thd_batch_sc_method_basic_sanity():
         mask_matrix,
         fundamental_bins,
         fundamental_freqs,
-        masking_config={"prb_method": "sc"},
+        masking_config={"prb_method": "sc", "sc_metric": "totalnl"},
         n_fft=n_fft,
     )
     assert out_f0.shape == (1,)
@@ -214,7 +214,7 @@ def test_compute_perceptual_thd_batch_sc_method_basic_sanity():
         mask_matrix,
         fundamental_bins,
         fundamental_freqs,
-        masking_config={"prb_method": "sc"},
+        masking_config={"prb_method": "sc", "sc_metric": "totalnl"},
         n_fft=n_fft,
     )
     assert out_h[0] > out_f0[0]

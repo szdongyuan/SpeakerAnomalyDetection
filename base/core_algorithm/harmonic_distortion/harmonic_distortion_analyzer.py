@@ -234,14 +234,16 @@ class HarmonicDistortionAnalyzer(ABC):
                 hi = min(n_rfft_bins, fbin + fund_neighbor_bins + 1)
                 fund_spectra[lo:hi, frame_idx] = full_spectra[lo:hi, frame_idx]
 
-            out = sc_model.compute_partial_loudness_from_spectra(full_spectra, fund_spectra)
-            totalnl_phons = np.asarray(out.n_total_phons, dtype=np.float64).reshape(-1)
-
             # Optional paper section 4.10: Error Harmonic Structure (EHS) based on cepstrum peak at 1/f0.
             # This helps separate "harmonic family" buzz from low-order harmonics and noise.
-            sc_metric = str(masking_config.get("sc_metric", "totalnl")).strip().lower()
+            sc_metric = str(masking_config.get("sc_metric", "ehs")).strip().lower()
             if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
-                sc_metric = "totalnl"
+                sc_metric = "ehs"
+
+            totalnl_phons: np.ndarray | None = None
+            if sc_metric in {"totalnl", "totalnl_phons", "totalnl_x_ehs"}:
+                out = sc_model.compute_partial_loudness_from_spectra(full_spectra, fund_spectra)
+                totalnl_phons = np.asarray(out.n_total_phons, dtype=np.float64).reshape(-1)
 
             if sc_metric in {"ehs", "totalnl_x_ehs"}:
                 f0 = np.asarray(fundamental_freqs, dtype=np.float64).reshape(-1)
@@ -260,8 +262,12 @@ class HarmonicDistortionAnalyzer(ABC):
                 if sc_metric == "ehs":
                     return np.asarray(ehs, dtype=np.float64).reshape(-1)
                 # totalnl_x_ehs: paper later multiplies "Partial Loudness overall level" by "Harmonic Structure overall level".
+                if totalnl_phons is None:
+                    raise ValueError("Internal error: totalnl_phons was not computed for sc_metric='totalnl_x_ehs'")
                 return np.asarray(totalnl_phons * ehs, dtype=np.float64).reshape(-1)
 
+            if totalnl_phons is None:
+                raise ValueError("Internal error: totalnl_phons was not computed for sc_metric='totalnl'")
             return totalnl_phons
 
         # Default PRB method: use spreaded specific loudness sampled at the selected harmonic locations.
