@@ -486,10 +486,13 @@ class OptionList(QListView):
         if name == self.config[0].name:
             if "播放与录制" in self.config[0].name:
                 model = PlayRecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
+                model.setWindowTitle("播放与录制")
             elif "录制音频" in self.config[0].name:
                 model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
+                model.setWindowTitle("录制音频")
             elif "导入音频" in self.config[0].name:
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
+                model.setWindowTitle("导入音频")
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
