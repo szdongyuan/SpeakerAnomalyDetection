@@ -144,21 +144,6 @@ class LoadUiConfig(object):
         return None, None
 
     @staticmethod
-    def load_scanner_hid_params(logger):
-        file_path = DEFAULT_DIR + "configs/scanner_barcode_config/scanner_hid_config.txt"
-        if not os.path.exists(file_path):
-            return None, None
-        try:
-            with open(file_path, "r") as f:
-                lines = f.readlines()
-                vendor_id = lines[1].strip()
-                product_id = lines[3].strip()
-                return vendor_id, product_id
-        except Exception as e:
-            logger.error(f"Failed to read the config params of the scanner hid. {str(e)[:50]}")
-            return None, None
-
-    @staticmethod
     def get_rec_and_play_dict_base_sequence_dict(data_struct, total_time=None):
         """
         Generate dictionaries containing stimulus signal data and recording parameters.

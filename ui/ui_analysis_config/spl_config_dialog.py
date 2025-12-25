@@ -2,12 +2,14 @@ import os
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QCheckBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, \
+    QMessageBox
 from PyQt5.QtWidgets import QLabel, QRadioButton, QLineEdit, QDoubleSpinBox
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils, check_upper_lower_limit
+from ui.signal_analysis_window import Frequency
 
 
 class SplConfigWindow(QDialog):
@@ -124,7 +126,7 @@ class SplConfigWindow(QDialog):
         if not self.radio_button_2.isChecked():
             self.config_dir_box.setDisabled(True)
         self.config_dir_box.textChanged.connect(self.get_default_config)
-        icon_path = DEFAULT_DIR + "ui/ui_pic/ai_window_pic/folder-s.png"
+        icon_path = DEFAULT_DIR + "ui/ui_pic/folder/folder-s.png"
         config_dir_icon = QIcon(icon_path)
         config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
@@ -149,9 +151,15 @@ class SplConfigWindow(QDialog):
 
     def config_dir_btn_clicked(self):
         self.file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="All Files (*);;"
+            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="CSV 文件 (*.csv)"
         )
         if self.file_path:
+            result = Frequency.load_excel_limit(self.file_path)
+            if not result:
+                self.file_path = None
+                self.config_dir = None
+                self.config_dir_box.setText("")
+                return
             self.config_dir = self.file_path
             config_dir_name = os.path.basename(self.file_path)
             self.config_dir_box.setText(config_dir_name)
@@ -181,6 +189,10 @@ class SplConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
+        if self.limit_checkbox.isChecked() and self.radio_button_2.isChecked():
+            if not self.file_path:
+                QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+                return
         if check_upper_lower_limit(config_data, self):
             return
         save_flag = self.config_manager.save_default_config("SPL", config_data)
@@ -188,6 +200,10 @@ class SplConfigWindow(QDialog):
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
+        if self.limit_checkbox.isChecked() and self.radio_button_2.isChecked():
+            if not self.file_path:
+                QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+                return
         if check_upper_lower_limit(config_data, self):
             return
         self.accept()

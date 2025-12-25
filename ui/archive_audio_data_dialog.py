@@ -9,10 +9,10 @@ from base.file_ops import FileOps
 from base.log_manager import LogManager
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.audio_data_manage_dialog import audioDataManageDialog
+from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
 
 
-class ArchiveAudioDataDialog(audioDataManageDialog):
+class ArchiveAudioDataDialog(AudioDataManageDialog):
 
     def __init__(self, logger: LogManager):
         super(ArchiveAudioDataDialog, self).__init__(logger)

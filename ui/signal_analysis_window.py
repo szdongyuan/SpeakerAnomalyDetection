@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import re
@@ -404,7 +405,7 @@ class Spl(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
         self.setWindowTitle(title_name)
@@ -416,7 +417,9 @@ class Spl(AnalysisGraphWidget):
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal, reference_pressure, deviation=self.deviation_value
+            recorded_signal,
+            reference_pressure,
+            v2pa_factor=self.v2pa_factor
         )
         if self.analysis_config["smooth_checked"]:
             signal_spl = smooth(signal_spl, window_size=1102, method="rms")
@@ -428,7 +431,12 @@ class Spl(AnalysisGraphWidget):
                 lower_limit = self.analysis_config.get("lower_limit")
                 self.plot_spl(signal_duration, signal_spl, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
-                self.plot_spl(signal_duration, signal_spl)
+                excel_path = self.analysis_config.get("config_dir")
+                result = Frequency.load_excel_limit(excel_path)
+                if not result:
+                    return False
+                csv_time_list, csv_upper_list, csv_lower_list = result
+                self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
         self.result = {
@@ -437,6 +445,44 @@ class Spl(AnalysisGraphWidget):
             "signal_spl": signal_spl.tolist(),
         }
         return self.result
+
+    def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
+        self.analysis_plot.clear()
+        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
+
+        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+
+        self.analysis_plot.plot(csv_time_list, csv_upper_list, pen=dashed_pen)
+        self.analysis_plot.plot(csv_time_list, csv_lower_list, pen=dashed_pen)
+
+        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("bottom", "Time (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+        out_range_points = []
+        current_out_range = []
+        max_time_diff = 0.01  # 10 ms
+
+        for index, i in enumerate(signal_duration):
+            table_index = int(np.argmin(np.abs(csv_time_list - i)))
+            nearest_time = csv_time_list[table_index]
+            if abs(nearest_time - i) > max_time_diff:
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+                continue
+            if signal_spl[index] >= csv_upper_list[table_index] or signal_spl[index] <= csv_lower_list[table_index]:
+                current_out_range.append((signal_duration[index], signal_spl[index]))
+            else:
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+        if current_out_range:
+            out_range_points.append(current_out_range)
+        for points in out_range_points:
+            x = [point[0] for point in points]
+            y = [point[1] for point in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            self.analysis_plot.addItem(out_range_plot)
 
     def plot_spl(self, signal_duration, signal_spl, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
@@ -478,7 +524,7 @@ class Frequency(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.smooth_flag = False
         self.temp_frequency_list = None
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
         self.setWindowTitle(title_name)
@@ -498,15 +544,151 @@ class Frequency(AnalysisGraphWidget):
                 lower_limit = self.analysis_config.get("lower_limit")
                 self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
             else:
-                self.plot_fr(frequency_list, fr)
+                excel_path = self.analysis_config.get("config_dir")
+                result = self.load_excel_limit(excel_path)
+                if not result:
+                    return False
+                csv_freq_list, csv_upper_list, csv_lower_list = result
+                self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_fr(frequency_list, fr)
         self.result = {"fr": fr.tolist(), "frequency_list": frequency_list.tolist()}
         return self.result
 
+    @staticmethod
+    def load_excel_limit(excel_path):
+        if not excel_path:
+            QMessageBox.warning(None, "提示", f"Excel路径为空, 请选择一个Excel文件路径！")
+            return None
+        ext = os.path.splitext(excel_path)[1].lower()
+        if ext == ".csv":
+            with open(excel_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+        else:
+            QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
+            return None
+
+        csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
+        lenth = len(rows[0])
+        if lenth == 3 and rows[0][1] == "upperbound":
+            upperbound = True
+        elif lenth == 3 and rows[0][1] == "lowerbound":
+            upperbound = False
+        elif lenth == 2 and rows[0][1] == "upperbound":
+            upperbound = True
+        elif lenth == 2 and rows[0][1] == "lowerbound":
+            upperbound = False
+        else:
+            QMessageBox.warning(None,"提示","Excel/CSV 格式不符合要求!")
+            return None
+        for index, row in enumerate(rows[1:], start=2):
+            csv_line_no = index
+            if lenth == 3 and upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[1])
+                    lval = float(row[2])
+                except ValueError:
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_freq_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(lval)
+            elif lenth == 3 and not upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[2])
+                    lval = float(row[1])
+                except ValueError:
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_freq_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(lval)
+            elif lenth == 2 and upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[1])
+                except ValueError:
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_freq_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(np.nan)
+            elif lenth == 2 and not upperbound:
+                try:
+                    fval = float(row[0])
+                    lval = float(row[1])
+                except ValueError:
+                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_freq_list.append(fval)
+                csv_upper_list.append(np.nan)
+                csv_lower_list.append(lval)
+        for i, (x, u, l) in enumerate(zip(csv_freq_list, csv_upper_list, csv_lower_list)):
+            if (u is not None) and (l is not None) and (not np.isnan(u)) and (not np.isnan(l)):
+                if l > u:
+                    QMessageBox.warning(
+                        None,
+                        "提示",
+                        f"CSV 上下限配置错误：下限不能大于上限。\n"
+                        f"位置: 第{i+2}条数据, X={x}\n"
+                        f"lower={l}, upper={u}\n"
+                        f"文件: {excel_path}"
+                    )
+                    return None
+        return (np.asarray(csv_freq_list, dtype=float),
+            np.asarray(csv_upper_list, dtype=float),
+            np.asarray(csv_lower_list, dtype=float))
+
+    def plot_fr_with_limits(self, frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list):
+        """
+        Parameters:
+        - frequency_list : Array of test frequencies (X-axis).
+        - fr             : Raw FR data (Y-axis).
+        - csv_freq_list  : Frequency list defined in the CSV file.
+        - csv_upper_list : Corresponding upper limits (may contain NaN).
+        - csv_lower_list : Corresponding lower limits (may contain NaN).
+        """
+        self.analysis_plot.clear()
+        # fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
+        fr_disp = fr
+        self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77)))
+
+        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+
+        self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
+        self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
+
+        self.analysis_plot.setLabel("left", "Amplitude (dB)")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.showGrid(x=True, y=True)
+        out_range_points = []
+        current_out_range = []
+
+        for i in frequency_list:
+            if i in csv_freq_list:
+                index = np.where(frequency_list == i)[0][0]
+                table_index = np.where(csv_freq_list == i)[0][0]
+                if fr_disp[index] >= csv_upper_list[table_index] or fr_disp[index] <= csv_lower_list[table_index]:
+                    current_out_range.append((frequency_list[index], fr_disp[index]))
+                else:
+                    if current_out_range:
+                        out_range_points.append(current_out_range)
+                    current_out_range = []
+        if current_out_range:
+            out_range_points.append(current_out_range)
+
+        for points in out_range_points:
+            x = [point[0] for point in points]
+            y = [point[1] for point in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            self.analysis_plot.addItem(out_range_plot)
+
     def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
-        fr = fr + 94 + self.deviation_value
+        # fr = fr + 94 + self.v2pa_factor  # Todo: modify later
         self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77)))
         if lower_limit and upper_limit:
             upper_limit = float(upper_limit)
@@ -588,8 +770,20 @@ class AI(QWidget):
             first_match = matches[0]
             first_match.mergeCharFormat(format)
 
-    def calculate_ai_scores(self, mode, analysis_config):
+    def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
+        if acq_mode == "IMPORT_AUDIO":
+            query_code, query_result = TrainingModelManagement().get_input_dim_info_by_name(model_name)
+            if query_code == error_code.OK:
+                input_dim = str(query_result).split("x")[0].strip()
+                if input_dim != str(len(self.data_struct.store_wave_data)):
+                    self.ai_analyse_score_textedit.setPlainText("模型与音频时长不匹配")
+                    return
+                else:
+                    self.default_logger.info("The model matches the audio duration. Starting analysis...")
+            else:
+                self.ai_analyse_score_textedit.setPlainText("查询数据库模型时长失败")
+                return
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
             self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
@@ -653,7 +847,7 @@ class Spectrogram(QWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.analysis_config = None
         self.current_plot_widget = None
         self.stft_plot_widget = None
@@ -822,6 +1016,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.analysis_config = None
         self.lp_num_label = QLabel("LP 数量: %s" % self.result)
         self.status_label = QLabel()
+        self.v2pa_factor = None
         self.threshould = None
         self.setWindowTitle(title_name)
         self.add_label_to_layout()
@@ -839,7 +1034,11 @@ class LooseParticle(AnalysisGraphWidget):
     def calculate_loose_particle(self):
         recorded_signal = self.data_struct.store_wave_data
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
-            recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67
+            recorded_signal,
+            self.analysis_config.get("cutoff_freq"),
+            self.data_struct.sample_rate,
+            67,
+            self.v2pa_factor
         )
         self.plot_graph(filtered_spl, deviation)
         self.lp_num_label.setText("LP 数量: %s" % self.result)
@@ -929,7 +1128,7 @@ class PeakDetection(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.setWindowTitle(title_name)
 
         # top status bar
@@ -959,7 +1158,9 @@ class PeakDetection(AnalysisGraphWidget):
 
         try:
             self.result = peak_detection(
-                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate), self.analysis_config, deviation=self.deviation_value
+                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate),
+                self.analysis_config,
+                v2pa_factor=self.v2pa_factor
             )
         except Exception as e:
             self.status_label.setText(f"状态: 异常({e.__class__.__name__})")
@@ -977,10 +1178,10 @@ class PeakDetection(AnalysisGraphWidget):
         self.analysis_plot.clear()
         spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
+            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+                recorded_signal,
+                v2pa_factor=self.v2pa_factor
+            )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
 
@@ -1144,7 +1345,7 @@ class PipelinePdPm(QWidget):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.analysis_config = None  # structure: {"head": {...}, "tail": {...}}
-        self.deviation_value = None
+        self.v2pa_factor = None
         self.default_logger = LogManager.set_log_handler("core")
         self._init_ui()
         self.setWindowTitle(title_name)
@@ -1255,7 +1456,7 @@ class PipelinePdPm(QWidget):
     def _execute_pd(self, pd_cls, head_cfg):
         pd_instance = pd_cls(f"{self.windowTitle()}-PD")
         pd_instance.data_struct = self.data_struct
-        pd_instance.deviation_value = self.deviation_value
+        pd_instance.v2pa_factor = self.v2pa_factor
         pd_instance.analysis_config = head_cfg.get("config", {})
         pd_result = pd_instance.calculate_peak_detection()
 
@@ -1270,7 +1471,7 @@ class PipelinePdPm(QWidget):
         """
         auto_equal = bool(cfg.get("auto_equal_length", False))
         seg_len, left_point, right_point = 0, 0, 0
-        
+
         if auto_equal:
             rel_path = pm_cfg.get("pattern_save_path")
             pattern_data_path = os.path.join(DEFAULT_DIR, rel_path) if rel_path else None
@@ -1320,10 +1521,10 @@ class PipelinePdPm(QWidget):
         if isinstance(pd_result, dict):
             spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
         if spl_series is None or len(spl_series) == 0:
-            ref_p = 20e-6
-            spl_series = 20.0 * np.log10(np.maximum(np.abs(recorded_signal), 1e-30) / ref_p)
-            if self.deviation_value is not None:
-                spl_series = spl_series + float(self.deviation_value)
+            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+                recorded_signal,
+                v2pa_factor=self.v2pa_factor
+            )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
         self._last_spl_series = np.asarray(spl_series)

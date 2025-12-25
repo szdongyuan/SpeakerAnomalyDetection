@@ -166,3 +166,23 @@ class TrainingModelManagement(object):
         except Exception as e:
             err_msg = "Failed to query the all model name. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
+
+    def get_input_dim_info_by_name(self, model_name: str):
+        if not model_name or not isinstance(model_name, str):
+            return error_code.INVALID_QUERY, "The model name is empty or invalid."
+        try:
+            with DataSave(self.db_path) as database:
+                query_code, query_result = database.query(
+                    "training_model_table",
+                    ["input_dim"],
+                    {"model_name": model_name},
+                )
+
+                if query_code == error_code.OK and query_result:
+                    input_dim = query_result[0][0]
+                    return error_code.OK, input_dim
+                else:
+                    return error_code.INVALID_QUERY, "Failed to query input_dim by model name."
+        except Exception as e:
+            err_msg = "Failed to query input_dim by model name. %s" % (str(e)[:40])
+            return error_code.INVALID_QUERY, err_msg

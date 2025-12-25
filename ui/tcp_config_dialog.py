@@ -17,6 +17,8 @@ class TcpConfigDialog(QDialog):
         self.port = port
         self.is_tcp_flag = is_tcp_flag
         self.clicked_ok_flag = False
+        self.ip_format = False
+        self.port_format = False
         self.groupbox_list = list()
 
         self.ip_lineedit = QLineEdit()
@@ -121,43 +123,45 @@ class TcpConfigDialog(QDialog):
         self.swap_able_status()
 
     def on_ip_lineedit_editingfinshed(self):
-        if getattr(self, "_editing_ip", False):
+        if self.ip_format:
             return
-
+        self.ip_format = True
         self._editing_ip = True
         ip = self.ip_lineedit.text()
         pattern = r"^((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)$"
         if not re.match(pattern, ip):
-            self.ip_format = False
-            QMessageBox.warning(self, "无效 IP", "每个段的值必须在 0 到 255 之间。")
+            QMessageBox.warning(self, "警告", "无效IP格式。")
             self.ip_lineedit.setFocus()
             self.ip_lineedit.setText(self.ip)
             self._editing_ip = False
+            self.ip_format = False
             return
         self.ip = ip
         self._editing_ip = False
+        self.ip_format = False
 
     def on_port_lineedit_editingfinshed(self):
-        if getattr(self, "_editing_port", False):
+        if self.port_format:
             return
-
+        self.port_format = True
         self._editing_port = True
         port_text = self.port_lineedit.text()
         if not port_text.isdigit():
-            self.port_format = False
             QMessageBox.warning(self, "无效端口", "端口号必须是数字")
             self.port_lineedit.setFocus()
             self.port_lineedit.setText(str(self.port))
+            self.port_format = False
             return
         port = int(port_text)
         if not (0 < port < 65536):
-            self.port_format = False
             QMessageBox.warning(self, "无效端口", "请输入 1 到 65535 之间的端口号")
             self.port_lineedit.setFocus()
             self.port_lineedit.setText(str(self.port))
+            self.port_format = False
             return
         self.port = port_text
         self._editing_port = False
+        self.port_format = False
 
     def on_ok_btn_clicked(self):
         self.clicked_ok_flag = True

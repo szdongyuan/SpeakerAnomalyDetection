@@ -133,7 +133,11 @@ class HardwareWindow(QDialog):
             self.speaker = None
         else:
             if last_speaker and any(d['name'] == last_speaker['name'] for d in speaker_list):
-                self.speaker = last_speaker
+                self.speaker = next(
+                    (d for d in speaker_list
+                    if d['name'] == last_speaker['name'] and d['hostapi'] == last_speaker['hostapi']),
+                    default_speaker
+                )
             else:
                 self.speaker = default_speaker
 
@@ -141,7 +145,11 @@ class HardwareWindow(QDialog):
             self.mic = None
         else:
             if last_mic and any(d['name'] == last_mic['name'] for d in mic_list):
-                self.mic = last_mic
+                self.mic = next(
+                    (d for d in mic_list
+                    if d['name'] == last_mic['name'] and d['hostapi'] == last_mic['hostapi']),
+                    default_mic
+                )
             else:
                 self.mic = default_mic
 

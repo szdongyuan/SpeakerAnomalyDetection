@@ -37,8 +37,6 @@ class AiWindow(QDialog):
         self.train_model_with_dir: bool = True
         self.evaluate_audio_data = dict()
         self.evaluate_model_with_dir: bool = True
-        self.train_select_row_list = list()
-        self.test_select_row_list = list()
         self.train_select_data_label = QLabel()
         self.test_select_data_label = QLabel()
         self.train_select_num = (0, 0)
@@ -177,17 +175,17 @@ class AiWindow(QDialog):
 
     def select_audio_data_btn_clicked(self, label):
         if "train" == label:
-            audio_data_view = SelectAudioDataView(LogManager().set_log_handler("core"), self.train_select_row_list, True)
+            audio_data_view = SelectAudioDataView(LogManager().set_log_handler("core"), self.train_audio_data, True)
             ret = audio_data_view.exec()
             if ret:
-                self.train_audio_data, self.train_select_num, self.train_select_row_list = ret
+                self.train_audio_data, self.train_select_num = ret
             self.set_label_text(self.train_select_data_label, self.train_select_num[0], self.train_select_num[1])
 
         elif "evaluate" == label:
-            audio_data_view = SelectAudioDataView(LogManager().set_log_handler("core"), self.test_select_row_list, True)
+            audio_data_view = SelectAudioDataView(LogManager().set_log_handler("core"), self.evaluate_audio_data, True)
             ret = audio_data_view.exec()
             if ret:
-                self.evaluate_audio_data, self.test_select_num, self.test_select_row_list = ret
+                self.evaluate_audio_data, self.test_select_num = ret
             self.set_label_text(self.test_select_data_label, self.test_select_num[0], self.test_select_num[1])
 
     def create_evaluate_group_box(self):

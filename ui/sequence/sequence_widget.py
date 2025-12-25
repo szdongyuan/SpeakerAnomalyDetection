@@ -1,18 +1,18 @@
 import json
 import os
 import re
-import threading
 from datetime import datetime
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog
 
-from base.barcode_scanning_processor import BarcodeScanner
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
+from base.load_audio import load_audio_simple
+from base.unified_hid_device_manager import UnifiedHardwareManager
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
@@ -22,7 +22,7 @@ from base.play_and_record import (
 )
 from base.recording_management import RecordingManager
 from base.save_data import save_recorded_data_to_json, save_audio_simple
-from base.soundcard_calibration_manager import get_mic_deviation_value
+from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
@@ -50,7 +50,7 @@ class SequenceWindow(QWidget):
         self.add_or_update_wave_flag = True
         self.count_board = None
 
-        self.deviation_value = get_mic_deviation_value()
+        self.v2pa_factor = get_mic_v2pa_factor()
         self.sequence_config = list()
         self.analysis_config = dict()
         self.get_sequence_config_from_json()
@@ -65,10 +65,6 @@ class SequenceWindow(QWidget):
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
         self.player_status_flag = False
-        self.scanner_barcode_thread = None
-        self.barcode_scanner = BarcodeScanner()
-        self.vendor_id = None
-        self.product_id = None
         self.recorded_signal_info = {}
         self.ip_format = True
         self.port_format = True
@@ -91,11 +87,13 @@ class SequenceWindow(QWidget):
         self.streaming_mode = None  # "play_record" or "record_only"
         self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
 
+        self.hw_manager = UnifiedHardwareManager()
         # Create QTimer in Qt main thread for queue polling
         self.streaming_poll_timer = QTimer(self)
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
 
         self.set_member_connect()
+        self.bind_hw_signals()
         self.init_lineedit_text()
         self.init_ui()
 
@@ -138,6 +136,9 @@ class SequenceWindow(QWidget):
             + ui_style_const.qlabel_style
             + ui_style_const.qcheckbox_style
         )
+
+    def update_v2pa_factor(self):
+        self.v2pa_factor = get_mic_v2pa_factor()
 
     def connect_set_result_file_sign(self, index, label, model_name):
         if self.count_board.mode == "test":
@@ -286,7 +287,70 @@ class SequenceWindow(QWidget):
         current_date = datetime.now().strftime("%Y-%m-%d")
         if data["datatime"] != current_date:
             with open(mark_result_path, "w") as f:
-                json.dump(mark_result_template, f, indent=4) 
+                json.dump(mark_result_template, f, indent=4)
+
+    def bind_hw_signals(self):
+        """绑定 hardware manager 的信号, 避免重复连接"""
+        try:
+            self.hw_manager.sig_barcode.disconnect()
+            self.hw_manager.sig_trigger.disconnect()
+        except TypeError:
+            pass
+        self.hw_manager.sig_barcode.connect(self.on_barcode_received)
+        self.hw_manager.sig_trigger.connect(self.on_sensor_triggered)
+
+    def clicked_scanner(self):
+        """Checkbox 状态改变时的回调"""
+        if self.barcode_scanner_box.isChecked():
+            if not self.hw_manager.ensure_config_loaded():
+                self.barcode_scanner_box.setChecked(False)
+                QMessageBox.warning(
+                    self,
+                    "硬件初始化失败",
+                    "无法加载扫码枪/光电开关配置，请检查配置文件。"
+                )
+                return
+
+            self.lineedit_s_or_n.setEnabled(True)
+            if self.hw_manager.start():
+                self.default_logger.info("硬件监听已启动")
+            else:
+                self.barcode_scanner_box.setChecked(False)
+                QMessageBox.warning(
+                    self,
+                    "硬件参数缺失",
+                    "HID 配置缺少有效的 VID/PID，已恢复到未勾选状态。"
+                )
+        else:
+            self.lineedit_s_or_n.clear()
+            self.lineedit_s_or_n.setDisabled(True)
+            self.hw_manager.stop()
+            self.default_logger.info("硬件监听已停止")
+
+    def on_barcode_received(self, barcode):
+        """处理扫码枪信号"""
+        if not barcode:
+            return
+
+        self.lineedit_s_or_n.setText(barcode)
+
+        if self.barcode_scanner_box.isChecked():
+            if not self.player_status_flag:
+                self.start_this_play("not_labeled")
+
+    def on_sensor_triggered(self):
+        """处理光电开关触发信号"""
+        if not self.player_status_flag:
+            self.default_logger.info("光电触发响应: 开始测试")
+            self.start_this_play("not_labeled")
+        else:
+            self.default_logger.info("正在测试中，忽略光电触发")
+
+    def closeEvent(self, event):
+        """窗口关闭时释放硬件资源"""
+        if hasattr(self, 'hw_manager'):
+            self.hw_manager.stop()
+        super().closeEvent(event)
 
     def reset_test_reord(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -359,14 +423,6 @@ class SequenceWindow(QWidget):
             else:
                 lineedit.setText(str(result_scanner_barcode))
 
-    def scanner_barcode_process(self):
-        device = self.get_match_hid_device()
-        if device:
-            if self.scanner_barcode_thread is None or not self.scanner_barcode_thread.is_alive():
-                self.scanner_barcode_thread = threading.Thread(target=self.scan_barcode, args=(device,))
-                sign.signal_emitter.connect(self.on_barcode_received)
-                self.scanner_barcode_thread.start()
-
     def swap_tcp_status(self):
         if self.tcp_flag:
             self.barcode_scanner_box.setEnabled(False)
@@ -414,11 +470,6 @@ class SequenceWindow(QWidget):
             sign.run_test_sign.emit(label)
         return "ok"
 
-    def scan_barcode(self, device):
-        barcode = self.barcode_scanner.read_raw_data(device)
-        if barcode:
-            sign.signal_emitter.emit(barcode)
-
     def on_tcp_btn_clicked(self):
         tcp_config_dialog = TcpConfigDialog(self.tcp_flag, self.tcp_ip, self.tcp_port)
         result = tcp_config_dialog.exec()
@@ -426,51 +477,6 @@ class SequenceWindow(QWidget):
             self.tcp_flag, self.tcp_ip, self.tcp_port = result
             LoadUiConfig.write_tcp_config(self.tcp_ip, self.tcp_port, self.default_logger)
             self.swap_tcp_status()
-
-    def on_barcode_received(self, barcode):
-        if barcode:
-            self.lineedit_s_or_n.setText(barcode)
-            try:
-                self.start_this_play()
-            except Exception as e:
-                self.scanner_popup()
-                self.default_logger.error(f"An error message occurred in the analysis window. {e}")
-            sign.signal_emitter.disconnect(self.on_barcode_received)
-            if self.scanner_barcode_thread and self.scanner_barcode_thread.is_alive():
-                self.scanner_barcode_thread.join()
-            self.scanner_barcode_thread = None
-
-    def clicked_scanner(self):
-        if self.barcode_scanner_box.isChecked():
-            self.lineedit_s_or_n.setEnabled(True)
-            self.scanner_barcode_process()
-        else:
-            self.lineedit_s_or_n.clear()
-            self.lineedit_s_or_n.setDisabled(True)
-            self.barcode_scanner.stop_scanning()
-            self.scanner_barcode_thread = None
-            try:
-                sign.signal_emitter.disconnect(self.on_barcode_received)
-            except Exception as e:
-                self.default_logger.error(e)
-
-    def get_match_hid_device(self):
-        hid_params = LoadUiConfig.load_scanner_hid_params(self.default_logger)
-        if hid_params:
-            vendor_id, product_id = hid_params
-            self.vendor_id = int(vendor_id, 16)
-            self.product_id = int(product_id, 16)
-            device = self.barcode_scanner.find_scanner(self.vendor_id, self.product_id)
-            return device
-        return None
-
-    def scanner_popup(self):
-        error_msg = QMessageBox(self)
-        error_msg.setIcon(QMessageBox.Warning)
-        error_msg.setText("分析报错，详情请查看日志！")
-        error_msg.setWindowTitle("分析报错")
-        error_msg.setStandardButtons(QMessageBox.Ok)
-        error_msg.exec_()
 
     def clicked_ok_or_ng(self, manual=True):
         """
@@ -491,6 +497,9 @@ class SequenceWindow(QWidget):
         """
         if not hasattr(self.data_struct, 'store_wave_data') or self.data_struct.store_wave_data is None or len(self.data_struct.store_wave_data) == 0:
             QMessageBox.warning(self, "警告", "请先录制声音！")
+            return
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
+            QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
             return
 
         self.update_audio_label_info()
@@ -558,12 +567,39 @@ class SequenceWindow(QWidget):
         self.clicked_scanner()
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+        if acq_mode == "IMPORT_AUDIO":
+            self.import_audio_and_analyze()
+            return
         self.clicked_player_flag = True
         self.start_this_play(label)
 
+    def import_audio_and_analyze(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择音频文件",
+            DEFAULT_DIR + "audio_data/stored_data",
+            "WAV Files (*.wav);;All Files (*)",
+        )
+        if not file_path:
+            return
+        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        sample_rate = acq_detail.get("sample_rate", 44100)
+        y, _ = load_audio_simple(file_path, sample_rate)
+
+        self.data_struct.store_wave_data = y
+        self.data_struct.sample_rate = sample_rate
+
+        self.line_graph.clear()
+        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
+
+        self.data_btn.setEnabled(True)
+        if self.analysis_config.get("auto_analysis"):
+            self.run()
+
     def start_this_play(self, label="not_labeled"):
         if self.clicked_player_flag is False:
-            if SequenceWindow.tcp_server.client_address is None:
+            if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
 
@@ -735,7 +771,7 @@ class SequenceWindow(QWidget):
                 class_instance = cls_map(key)
                 if self.analysis_config["default_ai"] == key:
                     self.default_ai = class_instance
-                class_instance.deviation_value = self.deviation_value
+                class_instance.v2pa_factor = self.v2pa_factor
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
 
@@ -764,16 +800,21 @@ class SequenceWindow(QWidget):
                     if instance is self.default_ai:
                         continue
                 if hasattr(instance, "calculate_spl"):
-                    instance.calculate_spl()
+                    result = instance.calculate_spl()
+                    if not result:
+                        continue
                     instance.show()
                 elif hasattr(instance, "calculate_fr"):
-                    instance.calculate_fr()
+                    result = instance.calculate_fr()
+                    if not result:
+                        continue
                     instance.show()
                 elif hasattr(instance, "calculate_thd"):
                     instance.calculate_thd()
                     instance.show()
                 elif hasattr(instance, "calculate_ai_scores"):
-                    instance.calculate_ai_scores(self.count_board.mode, self.analysis_config)
+                    instance.calculate_ai_scores(self.count_board.mode, self.analysis_config,
+                                                 self.sequence_config[0]["seq1"]["acq"]["mode"])
                     instance.show()
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()

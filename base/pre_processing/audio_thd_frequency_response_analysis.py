@@ -520,7 +520,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                         method: str = "rms", 
                         padding_mode: str = "zero", 
                         padding_cval: Optional[float] = 0.0,
-                        deviation: Optional[float] = None):
+                        v2pa_factor: Optional[float] = None):
         """
             Compute SPL (dB) with a sliding window.
 
@@ -554,10 +554,10 @@ class AudioThdFrequencyResponseAnalysis(object):
 
         signal_float = np.asarray(recorded_signal, dtype=float)
         if method == "envelope":
-            amplitude_list = maximum_filter(np.abs(signal_float), size=window_size, mode=mode, cval=cval)
+            v_amp_list = maximum_filter(np.abs(signal_float), size=window_size, mode=mode, cval=cval)
         elif method == "hilbert":
             amplitude_envelope = np.abs(hilbert(signal_float))
-            amplitude_list = uniform_filter1d(
+            v_amp_list = uniform_filter1d(
                 amplitude_envelope,
                 size=window_size,
                 axis=0,
@@ -565,19 +565,19 @@ class AudioThdFrequencyResponseAnalysis(object):
                 cval=cval
             )
         else: 
-            amplitude_list = np.sqrt(
+            v_amp_list = np.sqrt(
                 uniform_filter1d(signal_float ** 2, size=window_size, axis=0, mode=mode, cval=cval)
             )
 
-        # Avoid log of zero or negative due to numerical issues
-        amplitude_list = np.maximum(np.asarray(amplitude_list, dtype=float), 1.0e-10)    
-        spl = 20 * np.log10(amplitude_list / float(reference_pressure))
-        if(deviation is not None):
-            spl = spl + deviation
+        if not v2pa_factor:
+            v2pa_factor = 1
+        pa_amp_list = np.asarray(v_amp_list, dtype=float) * v2pa_factor
+        pa_amp_list = np.maximum(pa_amp_list, 1.0e-10)    # Avoid log of zero or negative due to numerical issues
+        spl = 20 * np.log10(pa_amp_list / float(reference_pressure))
         return spl
 
-    @staticmethod    
-    def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size):
+    @staticmethod
+    def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size, v2pa_factor):
         """
             Calculate the sound pressure level of loose particles.
 
@@ -588,7 +588,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                 -kernel_size (int): The size of the median filter kernel, must be an odd number.
 
             Returns:
-                -filtered_spl:np.array 
+                -filtered_spl:np.array
                     The sound pressure level array after median filtering.
                 -rms_deviation: float
                     The root mean square deviation of the sound pressure level.
@@ -597,12 +597,10 @@ class AudioThdFrequencyResponseAnalysis(object):
         normal_cutoff = cutoff / nyquist
         b, a = bessel(4, normal_cutoff, btype='high', analog=False)
         analytic_signal = filtfilt(b, a, recorded_signal)
-        amplitude = np.abs(analytic_signal)
-        reference_pressure = 20e-6
-        signal_spl = 20 * np.log10(amplitude / reference_pressure)
+        signal_spl = AudioThdFrequencyResponseAnalysis.spl_calculation(analytic_signal, v2pa_factor=float(v2pa_factor))
         filtered_spl = medfilt(signal_spl, kernel_size)
         sum_squares = float()
-        for i in range(len(filtered_spl)): 
+        for i in range(len(filtered_spl)):
             sum_squares += filtered_spl[i] ** 2
         rms_deviation = np.sqrt(sum_squares / len(filtered_spl)) * (np.sqrt(2) / 2)
 

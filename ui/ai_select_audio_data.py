@@ -17,31 +17,54 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QPushButton
 
 from base.log_manager import LogManager
-from ui.custom_ui_widget.audio_data_manage_dialog import audioDataManageDialog
+from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
 
 
-class SelectAudioDataView(audioDataManageDialog):
-    def __init__(self, logger: LogManager, select_row_list: list = list(), hide_select_not_label = True):
+class SelectAudioDataView(AudioDataManageDialog):
+    def __init__(self, logger: LogManager, select_data_list: list = list(), hide_select_not_label = True):
         super(SelectAudioDataView, self).__init__(logger, hide_select_not_label)
 
         self.logger = logger
         self.clicked_ok_flag = False
-        self.init_select_row_list = select_row_list
+        self.init_select_data_list = select_data_list
         self.select_row_list = list()
         self.select_ng_num = int()
         self.select_ok_num = int()
+
+        self.filter_signal.connect(self.refresh_data)
 
         self.init_ui()
 
     def init_ui(self):
 
         self.set_bottom_layout()
-        self.set_checkacle_of_row(row_num=self.init_select_row_list)
+        self.get_select_row_by_init_list()
+        self.set_checkacle_of_row(row_num=self.select_row_list)
 
     def set_checkacle_of_row(self, row_num: list[int]):
         for row in row_num:
             item = self.model().item(row, 0)
             item.setCheckState(Qt.Checked)
+
+    def get_select_row_by_init_list(self):
+        # 建立文件路径到行号的索引字典，时间复杂度 O(m)
+        file_path_to_row = {}
+        for row, item in enumerate(self.all_audio_data):
+            file_path = item[1]
+            # 如果同一个文件路径出现多次，保留第一个匹配的行号
+            if file_path not in file_path_to_row:
+                file_path_to_row[file_path] = row
+
+        # 根据索引字典查找匹配的行号，时间复杂度 O(n)
+        for key in self.init_select_data_list.keys():
+            if key in file_path_to_row:
+                self.select_row_list.append(file_path_to_row[key])
+
+    def refresh_data(self):
+        """刷新数据：在筛选后重新设置选中状态"""
+        self.select_row_list.clear()
+        self.select_ok_num = 0
+        self.select_ng_num = 0
 
     def load_audio_data_to_view(self):
         self.all_audio_data = [i for i in self.all_audio_data if any(v in i for v in ["OK", "NG"])]
@@ -104,7 +127,7 @@ class SelectAudioDataView(audioDataManageDialog):
         if self.clicked_ok_flag:
             for i in self.select_wave_data.values():
                 data[i[1]] = [i[3], i[5]]
-            return (data, (self.select_ok_num, self.select_ng_num), self.select_row_list)
+            return (data, (self.select_ok_num, self.select_ng_num))
         return None
 
 

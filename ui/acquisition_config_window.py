@@ -217,6 +217,42 @@ class RecordConfigWindow(BaseConfigWindow):
         }
         self.accept()
 
+class ImportAudioConfigWindow(BaseConfigWindow):
+    def __init__(self, input_data, mic=None):
+        super().__init__(mic=mic)
+        self.input_data = input_data or {}
+        self.init_ui()
+
+    def init_ui(self):
+        in_group_box = self.create_in_group()
+        btn_layout = self.create_cancel_ok_buttons()
+        self.main_layout.addWidget(in_group_box)
+        self.main_layout.addStretch()
+        self.main_layout.addLayout(btn_layout)
+
+    def create_in_group(self):
+        in_group_box = QGroupBox("导入音频设置")
+        grid_layout = QGridLayout()
+        grid_layout.setHorizontalSpacing(20)
+        grid_layout.setVerticalSpacing(15)
+
+        label_samplerate = QLabel("采样率:")
+        self.samplerate_combo = QComboBox()
+        self.samplerate_combo.addItems(["44100", "48000"])
+        default_sr = self.input_data.get("sample_rate", 44100)
+        self.samplerate_combo.setCurrentText(str(default_sr))
+
+        grid_layout.addWidget(label_samplerate, 0, 0)
+        grid_layout.addWidget(self.samplerate_combo, 0, 1)
+
+        in_group_box.setLayout(grid_layout)
+        return in_group_box
+
+    def on_click_ok_btn(self):
+        self.final_data = {
+            "sample_rate": int(self.samplerate_combo.currentText()),
+        }
+        self.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

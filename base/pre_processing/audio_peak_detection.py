@@ -133,7 +133,7 @@ def _compute_rms_spl_series(
     window_time_sec: float,
     window_points: int,
     ref_pressure: float = 20e-6,
-    deviation: float = None
+    v2pa_factor: float = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     if window_unit == "time":
         win = max(1, int(round(window_time_sec * sample_rate)))
@@ -158,7 +158,7 @@ def _compute_rms_spl_series(
         method="rms",
         padding_mode="constant",
         padding_cval=0.0,
-        deviation=deviation
+        v2pa_factor=v2pa_factor
     )
     return rms_envelope, np.asarray(spl_db_series, dtype=float)
 
@@ -245,7 +245,7 @@ def peak_detection(
     audio_signal: np.ndarray,
     sample_rate: int,
     config: Dict[str, Any],
-    deviation: float = None,
+    v2pa_factor: float = None,
 ) -> Dict[str, Any]:
     """
     peak detection (PD) based on configurable parameters.
@@ -273,7 +273,7 @@ def peak_detection(
         window_time_sec=float(config.get("spl_window_time_sec", 0.050)),
         window_points=int(config.get("spl_window_points", 0)),
         ref_pressure=20e-6,
-        deviation=deviation
+        v2pa_factor=v2pa_factor
     )
 
     # 3) normalization and smoothing (consistent pre-processing for dB and RMS series)
