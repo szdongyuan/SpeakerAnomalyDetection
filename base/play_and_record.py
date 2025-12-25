@@ -8,7 +8,6 @@ from base.recording_management import RecordingManager
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.streaming_audio_processor import StreamingAudioProcessor
-from base.streaming_file_writer import StreamingWavWriter
 from consts import error_code, model_consts
 
 data_struct = DataDealStruct()
