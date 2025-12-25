@@ -1,19 +1,27 @@
 import sys
 import threading
-import time
 from datetime import datetime
-from concurrent import futures
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QDialog, QDoubleSpinBox, QGroupBox, QGridLayout, QHBoxLayout, QLineEdit, QLabel
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDoubleSpinBox,
+    QGroupBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QLabel,
+)
 from PyQt5.QtWidgets import QMessageBox, QTabWidget, QVBoxLayout, QPushButton, QSpacerItem
 from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QWidget, QRadioButton
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.swept_sine_chirps import StimulusSignal
+from base.play_and_record import stream_record_without_play
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from consts import ui_style_const, error_code
@@ -28,9 +36,9 @@ class CalibrationWindow(QDialog):
 
     def init_ui(self):
         """
-            Initialize the user interface for the calibration window.
-            This function sets up the window icon, title, size, and layout, 
-            and creates tabs for output and input calibration.
+        Initialize the user interface for the calibration window.
+        This function sets up the window icon, title, size, and layout,
+        and creates tabs for output and input calibration.
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("校准窗口")
@@ -53,15 +61,14 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout.addWidget(self.tabwidget)
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style +
-                           ui_style_const.qtabwidget_style)
+        self.setStyleSheet(ui_style_const.qpushbutton_style + ui_style_const.qtabwidget_style)
 
     def create_btn_box(self):
         """
-            Create a button box
+        Create a button box
 
-            This method creates a horizontal layout containing calibration, reset, and cancel buttons.
-            Spacers are used to adjust the spacing between the buttons in the layout.
+        This method creates a horizontal layout containing calibration, reset, and cancel buttons.
+        Spacers are used to adjust the spacing between the buttons in the layout.
         """
         btn_layout = QHBoxLayout()
         self.cal_btn = QPushButton(" 校  准 ")
@@ -151,12 +158,12 @@ class OutputCalibration(QWidget):
 
     def init_ui(self):
         """
-            Initialize the CalibrationWindow class instance.
+        Initialize the CalibrationWindow class instance.
 
-            This function initializes various attributes of the class, including the output voltage value list,
-            default logger, calibration parameters, current count, countdown timer, play flag, and a QTimer.
-            It also connects the QTimer's timeout signal to the update_countdown method and calls methods
-            to initialize the user interface and retrieve calibration parameters.
+        This function initializes various attributes of the class, including the output voltage value list,
+        default logger, calibration parameters, current count, countdown timer, play flag, and a QTimer.
+        It also connects the QTimer's timeout signal to the update_countdown method and calls methods
+        to initialize the user interface and retrieve calibration parameters.
         """
         self.setMinimumSize(305, 373)
         self.setMaximumSize(520, 500)
@@ -178,12 +185,14 @@ class OutputCalibration(QWidget):
         layout.addItem(v_spacer_3)
         layout.setContentsMargins(12, 20, 12, 25)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcombobox_style +
-                           ui_style_const.qpushbutton_style +
-                           ui_style_const.qspinbox_style +
-                           ui_style_const.qdoublespinbox_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qlabel_style)
+        self.setStyleSheet(
+            ui_style_const.qcombobox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qspinbox_style
+            + ui_style_const.qdoublespinbox_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+        )
 
     def create_calibration_param_box(self):
         """
@@ -214,24 +223,26 @@ class OutputCalibration(QWidget):
 
     def create_output_voltage_box(self):
         """
-            Create the output voltage settings box.
+        Create the output voltage settings box.
 
-            This function is responsible for generating a group box containing controls related to output voltage settings.
-            It includes a play button, countdown display, output voltage adjustment spin box, and save button.
-            Return:
-                the created output voltage group box
+        This function is responsible for generating a group box containing controls related to output voltage settings.
+        It includes a play button, countdown display, output voltage adjustment spin box, and save button.
+        Return:
+            the created output voltage group box
         """
         output_box = QGroupBox("输出电压")
         output_layout = QGridLayout()
         self.play_label = QLabel(f"第 {self.current_count} 次 ")
         self.play_btn = QPushButton(" 播  放 ")
         self.play_btn.clicked.connect(self.play_btn_clicked)
-        self.countdown_label = QLabel(f"<span style='color: black;'>倒计时：</span>"
-                                      f"<span style='color: red;'>{self.countdown} </span>"
-                                      f"<span style='color: black;'>s</span>")
-        self.countdown_label.setStyleSheet("background-color: white;"
-                                           "border: 1px solid rgb(122, 122, 122);"
-                                           "border-radius: 3px;")
+        self.countdown_label = QLabel(
+            f"<span style='color: black;'>倒计时：</span>"
+            f"<span style='color: red;'>{self.countdown} </span>"
+            f"<span style='color: black;'>s</span>"
+        )
+        self.countdown_label.setStyleSheet(
+            "background-color: white;" "border: 1px solid rgb(122, 122, 122);" "border-radius: 3px;"
+        )
         h_spacer_play_label_left = QSpacerItem(0, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_play_label_right = QSpacerItem(0, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         output_layout.addWidget(self.play_label, 0, 0)
@@ -289,21 +300,23 @@ class OutputCalibration(QWidget):
 
     def save_btn_clicked(self):
         """
-            This function is triggered when the save button is clicked.
+        This function is triggered when the save button is clicked.
 
-            It performs the following actions:
-            1. Appends the current output voltage value to the output voltage value list.
-            2. Resets the value of the output voltage input box to 0.
-            3. Updates the current count.
-            4. Updates the text of the play label and countdown label to reflect the current count and countdown.
+        It performs the following actions:
+        1. Appends the current output voltage value to the output voltage value list.
+        2. Resets the value of the output voltage input box to 0.
+        3. Updates the current count.
+        4. Updates the text of the play label and countdown label to reflect the current count and countdown.
         """
         self.output_voltage_value.append(self.output_voltage_box.value())
         self.output_voltage_box.setValue(0)
         self.create_current_count()
         self.play_label.setText(f"第 {self.current_count} 次 ")
-        self.countdown_label.setText(f"<span style='color: black;'>倒计时：</span>"
-                                     f"<span style='color: red;'>{self.countdown} </span>"
-                                     f"<span style='color: black;'>s</span>")
+        self.countdown_label.setText(
+            f"<span style='color: black;'>倒计时：</span>"
+            f"<span style='color: red;'>{self.countdown} </span>"
+            f"<span style='color: black;'>s</span>"
+        )
 
     def update_countdown(self):
         """
@@ -316,9 +329,11 @@ class OutputCalibration(QWidget):
         """
         if self.countdown > 0:
             self.countdown -= 1
-            self.countdown_label.setText(f"<span style='color: black;'>倒计时：</span>"
-                                         f"<span style='color: red;'>{self.countdown} </span>"
-                                         f"<span style='color: black;'>s</span>")
+            self.countdown_label.setText(
+                f"<span style='color: black;'>倒计时：</span>"
+                f"<span style='color: red;'>{self.countdown} </span>"
+                f"<span style='color: black;'>s</span>"
+            )
         else:
             self.timer.stop()
             self.play_btn.setText(" 停  止 ")
@@ -329,10 +344,10 @@ class OutputCalibration(QWidget):
 
     def play_btn_clicked(self):
         """
-            Handle the play button click event.
+        Handle the play button click event.
 
-            This function controls the audio playback and stop based on the current playback state,
-            and updates the countdown display during playback.
+        This function controls the audio playback and stop based on the current playback state,
+        and updates the countdown display during playback.
         """
         stimulus_dict = self.create_signal()
         sap = SoundcardAudioProcessor()
@@ -340,9 +355,11 @@ class OutputCalibration(QWidget):
             self.play_flag = True
             self.play_btn.setDisabled(True)
             self.save_btn.setDisabled(True)
-            self.countdown_label.setText(f"<span style='color: black;'>倒计时：</span>"
-                                         f"<span style='color: red;'>{self.countdown} </span>"
-                                         f"<span style='color: black;'>s</span>")
+            self.countdown_label.setText(
+                f"<span style='color: black;'>倒计时：</span>"
+                f"<span style='color: red;'>{self.countdown} </span>"
+                f"<span style='color: black;'>s</span>"
+            )
             self.timer.start(1000)
             threading.Thread(target=sap.sd_play, args=(stimulus_dict,)).start()
         else:
@@ -354,12 +371,12 @@ class OutputCalibration(QWidget):
 
     def create_current_count(self):
         """
-            Update the UI state based on the current count.
+        Update the UI state based on the current count.
 
-            This method checks if the current count has reached the calibration number.
-            If it has, it disables the play and save buttons and updates the save button text to " 完  成 ".
-            If the current count has not reached the calibration number, it increments the current count,
-            updates the play button text to " 播  放 ", enables the play button, and disables the save button.
+        This method checks if the current count has reached the calibration number.
+        If it has, it disables the play and save buttons and updates the save button text to " 完  成 ".
+        If the current count has not reached the calibration number, it increments the current count,
+        updates the play button text to " 播  放 ", enables the play button, and disables the save button.
         """
         if self.current_count >= self.calibration_param["calibration_nums"]:
             self.save_btn.setText(" 完  成 ")
@@ -391,16 +408,18 @@ class OutputCalibration(QWidget):
         self.calibration_param = {
             "calibration_nums": calibration_nums,
             "output_voltage": output_voltage,
-            "amplitude_list": amplitude_list
+            "amplitude_list": amplitude_list,
         }
 
     def create_signal(self):
-        data, sr = StimulusSignal().generate_chirps(start_freq=800, stop_freq=800, total_time=10, sample_rate=44100,
-                                                    stimulus_type='linear')
-        stimulus_dict = {"data": data,
-                         "sr": sr,
-                         "amplitude": self.calibration_param["amplitude_list"][self.current_count - 1],
-                         }
+        data, sr = StimulusSignal().generate_chirps(
+            start_freq=800, stop_freq=800, total_time=10, sample_rate=44100, stimulus_type="linear"
+        )
+        stimulus_dict = {
+            "data": data,
+            "sr": sr,
+            "amplitude": self.calibration_param["amplitude_list"][self.current_count - 1],
+        }
         return stimulus_dict
 
     def test_calibration(self):
@@ -428,8 +447,9 @@ class OutputCalibration(QWidget):
         if target_voltage > max_voltage:
             if self.test_calibration_popup():
                 return
-        data, sr = StimulusSignal().generate_chirps(start_freq=800, stop_freq=800, total_time=10, sample_rate=44100,
-                                                    stimulus_type='linear')
+        data, sr = StimulusSignal().generate_chirps(
+            start_freq=800, stop_freq=800, total_time=10, sample_rate=44100, stimulus_type="linear"
+        )
         test_stimulus_dict = {"data": data, "sr": sr, "amplitude": amplitude}
         sap = SoundcardAudioProcessor()
         speaker_code, msg = sap.sd_play(test_stimulus_dict)
@@ -438,14 +458,14 @@ class OutputCalibration(QWidget):
 
     def test_calibration_popup(self):
         """
-            Display a calibration test popup message.
+        Display a calibration test popup message.
 
-            This function creates a QMessageBox instance, sets its icon, text, title, and buttons,
-            then displays the message box and waits for user interaction.
-            It returns whether the user clicked the OK button.
+        This function creates a QMessageBox instance, sets its icon, text, title, and buttons,
+        then displays the message box and waits for user interaction.
+        It returns whether the user clicked the OK button.
 
-            Returns:
-                bool: True if the user clicked OK, False otherwise.
+        Returns:
+            bool: True if the user clicked OK, False otherwise.
         """
         test_msg = QMessageBox(self)
         test_msg.setIcon(QMessageBox.Warning)
@@ -457,10 +477,10 @@ class OutputCalibration(QWidget):
 
     def reset_btn_clicked(self):
         """
-            Handles the reset button click event.
+        Handles the reset button click event.
 
-            This function resets various settings and displays in the user interface to their default or initial states. 
-            It clears output voltage values, resets voltage settings, restores calibration counts, stops the timer, etc.
+        This function resets various settings and displays in the user interface to their default or initial states.
+        It clears output voltage values, resets voltage settings, restores calibration counts, stops the timer, etc.
         """
         self.output_voltage_value.clear()
         self.output_voltage_box.setValue(0)
@@ -470,9 +490,11 @@ class OutputCalibration(QWidget):
         self.current_count = 1
         self.countdown = 10
         self.play_label.setText(f"第 {self.current_count} 次 ")
-        self.countdown_label.setText(f"<span style='color: black;'>倒计时：</span>"
-                                     f"<span style='color: red;'>{self.countdown} </span>"
-                                     f"<span style='color: black;'>s</span>")
+        self.countdown_label.setText(
+            f"<span style='color: black;'>倒计时：</span>"
+            f"<span style='color: red;'>{self.countdown} </span>"
+            f"<span style='color: black;'>s</span>"
+        )
         self.save_btn.setText(" 保  存 ")
         self.play_btn.setText(" 播  放 ")
         self.play_flag = False
@@ -508,14 +530,14 @@ class OutputCalibration(QWidget):
 
     def calibration_popup(self, success_flag=True):
         """
-            Displays a calibration result popup.
+        Displays a calibration result popup.
 
-            Depending on whether the calibration was successful, it shows different icons and message texts.
-            If the calibration is successful, it displays an information icon and a success message;
-            if the calibration fails, it displays a critical icon and a failure message.
+        Depending on whether the calibration was successful, it shows different icons and message texts.
+        If the calibration is successful, it displays an information icon and a success message;
+        if the calibration fails, it displays a critical icon and a failure message.
 
-            Parameters:
-            - success_flag: Boolean indicating whether the calibration was successful. Default value is True.
+        Parameters:
+        - success_flag: Boolean indicating whether the calibration was successful. Default value is True.
         """
         cal_msg = QMessageBox(self)
         if success_flag:
@@ -540,16 +562,25 @@ class InputCalibration(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.default_logger = LogManager.set_log_handler("core")     # Configures and retrieves the logger
-        self.stop_timer = False      # Initializes the stop timer flag to False
+        self.default_logger = LogManager.set_log_handler("core")  # Configures and retrieves the logger
+        self.stop_timer = False  # Initializes the stop timer flag to False
+        self.update_ui_timer = QTimer()
+        self.update_ui_timer.setInterval(1000)
+        self.update_ui_timer.timeout.connect(self.update_recorded_time)
+
+        # Streaming recording state (no waveform display needed)
+        self.streaming_processor = None
+        self.streaming_poll_timer = QTimer(self)
+        self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
+
         self.init_ui()
 
     def init_ui(self):
         """
-            Initializes the user interface.
+        Initializes the user interface.
 
-            This method sets up the window title, window properties, and size constraints. 
-            It also initializes the UI layout and applies custom stylesheets to various widgets.
+        This method sets up the window title, window properties, and size constraints.
+        It also initializes the UI layout and applies custom stylesheets to various widgets.
         """
         self.setMinimumSize(305, 373)
         self.setMaximumSize(520, 500)
@@ -574,26 +605,27 @@ class InputCalibration(QWidget):
         layout.setContentsMargins(12, 20, 12, 25)
 
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qcombobox_style +
-                           ui_style_const.qpushbutton_style +
-                           ui_style_const.qspinbox_style +
-                           ui_style_const.qdoublespinbox_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qlabel_style +
-                           ui_style_const.qlineedit_style +
-                           ui_style_const.qradiobutton_style
-                           )
+        self.setStyleSheet(
+            ui_style_const.qcombobox_style
+            + ui_style_const.qpushbutton_style
+            + ui_style_const.qspinbox_style
+            + ui_style_const.qdoublespinbox_style
+            + ui_style_const.qgroupbox_style
+            + ui_style_const.qlabel_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qradiobutton_style
+        )
 
     def create_v2pa_factor_box(self):
         """
-            Create a QGroupBox to display the sound pressure v2pa_factor.
+        Create a QGroupBox to display the sound pressure v2pa_factor.
 
-            This method creates a QGroupBox containing a label and a read-only line edit
-            to show the sound pressure v2pa_factor from the calibration results. The layout
-            uses a horizontal box layout to arrange the elements horizontally.
+        This method creates a QGroupBox containing a label and a read-only line edit
+        to show the sound pressure v2pa_factor from the calibration results. The layout
+        uses a horizontal box layout to arrange the elements horizontally.
 
-            Returns:
-                QGroupBox: A QGroupBox containing the sound pressure v2pa_factor label and line edit.
+        Returns:
+            QGroupBox: A QGroupBox containing the sound pressure v2pa_factor label and line edit.
         """
         v2pa_factor_box = QGroupBox("校准结果")
         v2pa_factor_label = QLabel("校准系数（V/Pa）：")
@@ -612,10 +644,10 @@ class InputCalibration(QWidget):
 
     def create_recorded_box(self):
         """
-            Create a QGroupBox to display recorded audio information.
+        Create a QGroupBox to display recorded audio information.
 
-            Returns:
-                QGroupBox: A QGroupBox containing the recorded time information.
+        Returns:
+            QGroupBox: A QGroupBox containing the recorded time information.
         """
         recorded_box = QGroupBox("录制音频")
         recorded_label = QLabel("录制时间：")
@@ -623,12 +655,13 @@ class InputCalibration(QWidget):
         self.recorded_label.setFixedSize(70, 30)
         self.recorded_label.setAlignment(Qt.AlignCenter)
         self.recorded_time = 10
-        self.recorded_label.setText(f"<span style='color: red;'>{self.recorded_time} </span>"
-                                    f"<span style='color: black;'>s</span>")
+        self.recorded_label.setText(
+            f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
+        )
 
-        self.recorded_label.setStyleSheet("background-color: white;"
-                                          "border: 1px solid rgb(122, 122, 122);"
-                                          "border-radius: 3px;")
+        self.recorded_label.setStyleSheet(
+            "background-color: white;" "border: 1px solid rgb(122, 122, 122);" "border-radius: 3px;"
+        )
 
         recorded_layout = QHBoxLayout()
         h_spacer_v2pa_factor_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -641,14 +674,14 @@ class InputCalibration(QWidget):
 
     def create_standard_spl_box(self):
         """
-            Create a group box containing standard sound pressure options.
+        Create a group box containing standard sound pressure options.
 
-            This method generates a QGroupBox widget that includes two QRadioButton options,
-            representing 94 dB and 114 dB standard sound pressure levels. When a different sound
-            pressure level is selected, the set_standard_spl method is triggered to handle the logic.
+        This method generates a QGroupBox widget that includes two QRadioButton options,
+        representing 94 dB and 114 dB standard sound pressure levels. When a different sound
+        pressure level is selected, the set_standard_spl method is triggered to handle the logic.
 
-            Returns:
-                QGroupBox: Group box containing standard sound pressure options.
+        Returns:
+            QGroupBox: Group box containing standard sound pressure options.
         """
         standard_spl_box = QGroupBox("标准声压")
 
@@ -671,10 +704,10 @@ class InputCalibration(QWidget):
 
     def set_standard_spl(self):
         """
-            Sets the value of standard_spl_flag based on the selected SPL standard.
+        Sets the value of standard_spl_flag based on the selected SPL standard.
 
-            If self.standard_spl_i is checked, sets self.standard_spl_flag to True.
-            If self.standard_spl_ii is checked, sets self.standard_spl_flag to False.
+        If self.standard_spl_i is checked, sets self.standard_spl_flag to True.
+        If self.standard_spl_ii is checked, sets self.standard_spl_flag to False.
         """
         if self.standard_spl_i.isChecked():
             self.standard_spl_flag = True
@@ -683,44 +716,122 @@ class InputCalibration(QWidget):
 
     def clicked_calibration(self):
         """
-            Execute the calibration process upon clicking the calibration button.
+        Execute the calibration process upon clicking the calibration button using streaming approach.
 
-            This function initializes the recording parameters, starts a thread to calculate the average sound pressure
-        level, updates the recording time, and then calculates the v2pa_factor based on the average value.
-            If the v2pa_factor is not 'inf', it indicates successful calibration, and the v2pa_factor is saved.
+        This function initializes the recording parameters and starts streaming recording in a non-blocking way,
+        allowing the UI timer to update the countdown in real-time. No waveform display is needed.
         """
+
+        # Reset state
+        self.recorded_time = 10
+
         prolong = 1
-        recorded_dict = {"channels": 1,
-                         "sample_rate": 44100,
-                         "num_frames": 10 * 44100,
-                         "prolong_frames": int(prolong * 44100)
-                         }
+        recorded_dict = {
+            "channels": 1,
+            "sample_rate": 44100,
+            "num_frames": 10 * 44100,
+            "prolong_frames": int(prolong * 44100),
+            "device": None,  # Use default input device
+        }
 
-        with futures.ThreadPoolExecutor(max_workers=1) as executor:
-            recorded_thread = executor.submit(self.calculate_average_spl, recorded_dict)
-            self.update_recorded_time()
+        # Start UI countdown timer
+        self.update_ui_timer.start()
 
-        self.average_value = recorded_thread.result()
-        v2pa_factor = self.calculate_v2pa_factor(self.average_value)
-        self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=3)))
-        if not self.stop_timer:
-            if str(v2pa_factor) == "inf":
-                self.calibration_popup(success_flag=False)
-            else:
-                self.calibration_popup(success_flag=True)
-                self.default_logger.info("Calibration success.")
-                self.save_v2pa_factor_to_text(v2pa_factor)
+        # Start streaming recording (non-blocking, no signal connection needed for waveform)
+        self.streaming_processor, _ = stream_record_without_play(
+            recorded_dict, None, None  # file_path - we don't need to save file  # signal_info
+        )
+
+        # Start polling timer to check completion
+        self.streaming_poll_timer.start(50)  # Poll every 50ms
+
+    def _poll_streaming_queue(self):
+        """
+        Poll streaming queue and check for completion.
+
+        Called by QTimer every 50ms from Qt main thread.
+        Process audio chunks WITHOUT emitting signals (no waveform display needed).
+        """
+        if self.streaming_processor is None:
+            return
+
+        # Process all available chunks from queue (non-blocking)
+        try:
+            while True:
+                chunk = self.streaming_processor.audio_queue.get_nowait()
+                self.streaming_processor.accumulated_chunks.append(chunk)
+        except Exception:
+            pass
+
+        # Check if recording is complete
+        if not self.streaming_processor.is_recording:
+            self.streaming_poll_timer.stop()
+            self._on_streaming_complete()
+
+    def _on_streaming_complete(self):
+        """
+        Handle streaming recording completion and calculate calibration result.
+        """
+        try:
+            # Stop UI timer
+            self.update_ui_timer.stop()
+
+            # Get complete recorded data from processor
+            recorded_data = self.streaming_processor.get_recorded_data()
+
+            # Calculate average SPL from recorded data
+            self.average_value = self._calculate_spl_from_data(recorded_data)
+
+            # Calculate v2pa_factor
+            v2pa_factor = self.calculate_v2pa_factor(self.average_value)
+            self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=3)))
+
+            # Clean up
+            self.streaming_processor = None
+
+            # Show result
+            if not self.stop_timer:
+                if str(v2pa_factor) == "inf":
+                    self.calibration_popup(success_flag=False)
+                else:
+                    self.calibration_popup(success_flag=True)
+                    self.default_logger.info("Calibration success.")
+                    self.save_v2pa_factor_to_text(v2pa_factor)
+
+        except Exception as e:
+            self.default_logger.error(f"Error in streaming calibration completion: {e}")
+            self.update_ui_timer.stop()
+            self.streaming_processor = None
+            self.calibration_popup(success_flag=False)
+
+    def _calculate_spl_from_data(self, recorded_data):
+        """
+        Calculate average SPL from recorded data (extracted from calculate_average_spl).
+
+        Args:
+            recorded_data (np.ndarray): Recorded audio data
+
+        Returns:
+            float: Average SPL value
+        """
+        step = len(recorded_data) // 3
+        spl_smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_data, method="rms", window_size=1201)
+        spl_smooth_mid = len(spl_smooth) // 2
+        spl_smooth_start = spl_smooth_mid - step
+        spl_smooth_end = spl_smooth_mid + step
+        spl_sample = spl_smooth[spl_smooth_start:spl_smooth_end]
+        return np.mean(spl_sample)
 
     def calibration_popup(self, success_flag=True):
         """
-            Display a calibration result popup.
+        Display a calibration result popup.
 
-            Shows different icons and message texts based on whether the calibration was successful.
-            If calibration is successful, displays an information icon and success message;
-            if calibration fails, displays a critical icon and failure message.
+        Shows different icons and message texts based on whether the calibration was successful.
+        If calibration is successful, displays an information icon and success message;
+        if calibration fails, displays a critical icon and failure message.
 
-            Parameters:
-            - success_flag: Boolean indicating whether the calibration was successful. Default is True.
+        Parameters:
+        - success_flag: Boolean indicating whether the calibration was successful. Default is True.
         """
         cal_msg = QMessageBox(self)
         if success_flag:
@@ -736,23 +847,21 @@ class InputCalibration(QWidget):
 
     def calculate_average_spl(self, recorded_dict):
         """
-            Calculate the average sound pressure level (SPL).
+        Calculate the average sound pressure level (SPL).
 
-            This method records audio data, computes the SPL curve, and then calculates the average value from a selected range.
+        This method records audio data, computes the SPL curve, and then calculates the average value from a selected range.
 
-            Parameters:
-            recorded_dict - Dictionary containing information for recording.
+        Parameters:
+        recorded_dict - Dictionary containing information for recording.
 
-            Returns:
-            Average SPL value.
+        Returns:
+        Average SPL value.
         """
         rec_code, recorded_data = SoundcardAudioProcessor().sd_rec(recorded_dict)
         step = len(recorded_data) // 3
         if rec_code == error_code.OK:
             spl_smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(
-                recorded_data,
-                method="rms",
-                window_size=1201
+                recorded_data, method="rms", window_size=1201
             )
             spl_smooth_mid = len(spl_smooth) // 2
             spl_smooth_start = spl_smooth_mid - step
@@ -763,31 +872,34 @@ class InputCalibration(QWidget):
 
     def update_recorded_time(self):
         """
-            Update the recorded time.
+        Update the recorded time countdown.
 
-            This function uses a loop to decrement the recorded time and update the time display on the interface.
-            The loop continues as long as the recorded time is greater than 0 and the stop timer flag is not set.
+        This function decrements the recorded time and updates the time display on the interface.
+        The timer will stop automatically when time reaches 0 or stop_timer flag is set.
         """
-        while self.recorded_time > 0 and not self.stop_timer:
-            time.sleep(1)
+        if self.recorded_time > 0 and not self.stop_timer:
             self.recorded_time -= 1
             # Update the time display on the interface, showing the remaining time in red and the unit "s" in black.
-            self.recorded_label.setText(f"<span style='color: red;'>{self.recorded_time} </span>"
-                                        f"<span style='color: black;'>s</span>")
-            QApplication.processEvents()
+            self.recorded_label.setText(
+                f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
+            )
+        else:
+            self.update_ui_timer.stop()
+            # Reset time for next calibration
+            self.recorded_time = 10
 
     def calculate_v2pa_factor(self, average_value):
         """
-            Calculate the v2pa_factor from the standard sound pressure level.
+        Calculate the v2pa_factor from the standard sound pressure level.
 
-            This function calculates the v2pa_factor based on whether the standard SPL flag is set to True or False.
-            If the flag is True, it uses 94 dB as the standard value; otherwise, it uses 114 dB.
+        This function calculates the v2pa_factor based on whether the standard SPL flag is set to True or False.
+        If the flag is True, it uses 94 dB as the standard value; otherwise, it uses 114 dB.
 
-            Args:
-                average_value (float): The average sound pressure level value used to calculate the v2pa_factor.
+        Args:
+            average_value (float): The average sound pressure level value used to calculate the v2pa_factor.
 
-            Returns:
-                float: The calculated v2pa_factor value rounded to three decimal places.
+        Returns:
+            float: The calculated v2pa_factor value rounded to three decimal places.
         """
         if self.standard_spl_flag:
             deviation_value = round(94 - average_value, 3)
@@ -799,31 +911,47 @@ class InputCalibration(QWidget):
     @staticmethod
     def save_v2pa_factor_to_text(v2pa_factor):
         """
-            Save the v2pa_factor to a text file.
+        Save the v2pa_factor to a text file.
 
-            This method writes the given v2pa_factor to a specified text file, along with the current date.
-            This is particularly useful for tracking and debugging changes in UI configuration.
+        This method writes the given v2pa_factor to a specified text file, along with the current date.
+        This is particularly useful for tracking and debugging changes in UI configuration.
 
-            Parameters:
-            v2pa_factor (float): The v2pa_factor to be saved.
+        Parameters:
+        v2pa_factor (float): The v2pa_factor to be saved.
         """
-        dir_path = DEFAULT_DIR + 'ui/ui_config/'
+        dir_path = DEFAULT_DIR + "ui/ui_config/"
         file_path = dir_path + "mic_calibration.txt"
         current_time = datetime.now().strftime("%Y-%m-%d")
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             f.write(f"v2pa_factor: \n{v2pa_factor}\n")
             f.write(f"Datetime: \n{current_time}\n")
 
     def reset_btn_clicked(self):
         """
-            This method is triggered when the reset button is clicked.
+        This method is triggered when the reset button is clicked.
 
-            It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
-            Additionally, it clears the v2pa_factor line edit.
+        It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
+        Additionally, it clears the v2pa_factor line edit and stops any ongoing streaming recording.
         """
+        # Stop timers
+        self.update_ui_timer.stop()
+        self.streaming_poll_timer.stop()
+
+        # Clean up streaming resources
+        if self.streaming_processor is not None:
+            try:
+                self.streaming_processor.stop_streaming()
+            except Exception as e:
+                self.default_logger.error(f"Error stopping streaming processor: {e}")
+            self.streaming_processor = None
+
+        self.stop_timer = False
+
+        # Reset UI
         self.recorded_time = 10
-        self.recorded_label.setText(f"<span style='color: red;'>{self.recorded_time} </span>"
-                                    f"<span style='color: black;'>s</span>")
+        self.recorded_label.setText(
+            f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
+        )
         self.v2pa_factor_lineedit.clear()
 
 
@@ -832,4 +960,3 @@ if __name__ == "__main__":
     window = CalibrationWindow()
     window.show()
     window.exec()
-
