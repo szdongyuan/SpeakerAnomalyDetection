@@ -11,6 +11,8 @@ from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
 from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
 from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
+from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
+from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
@@ -166,6 +168,10 @@ class PipelineConfigWindow(QDialog):
             return FrConfigWindow(self.config_manager, model_name)
         elif a_type == "HD":
             return HdConfigWindow(self.config_manager, model_name)
+        elif a_type == "RB":
+            return RbConfigWindow(self.config_manager, model_name)
+        elif a_type == "PRB":
+            return PerceptualRbConfigWindow(self.config_manager, model_name)
         elif a_type == "AI":
             return AIConfigWindow(self.config_manager, model_name, 0)
         elif a_type == "Spec":

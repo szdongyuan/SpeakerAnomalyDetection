@@ -30,7 +30,9 @@ from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
 from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
 from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
+from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
 from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
+from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
@@ -143,6 +145,8 @@ class AnalysisModelSelect(QDialog):
             "频谱分析 (Spec) ",
             "频响 (FR) ",
             "谐波失真 (HD) ",
+            "高阶谐波失真 (RB) ",
+            "感知失真 (PRB) ",
             "松散颗粒 (LP) ",
             "峰值检测 (PD) ",
             "模式匹配(PM)",
@@ -486,13 +490,10 @@ class OptionList(QListView):
         if name == self.config[0].name:
             if "播放与录制" in self.config[0].name:
                 model = PlayRecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
-                model.setWindowTitle("播放与录制")
             elif "录制音频" in self.config[0].name:
                 model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
-                model.setWindowTitle("录制音频")
             elif "导入音频" in self.config[0].name:
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
-                model.setWindowTitle("导入音频")
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
@@ -535,6 +536,10 @@ class OptionList(QListView):
             model = FrConfigWindow(config_manager, name)
         elif type == "HD":
             model = HdConfigWindow(config_manager, name)
+        elif type == "RB":
+            model = RbConfigWindow(config_manager, name)
+        elif type == "PRB":
+            model = PerceptualRbConfigWindow(config_manager, name)
         elif type == "AI":
             model = AIConfigWindow(config_manager, name, signal_len)
         elif type == "Spec":
