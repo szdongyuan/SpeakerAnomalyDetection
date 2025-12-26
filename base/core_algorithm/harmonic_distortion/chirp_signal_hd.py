@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, Tuple
 from scipy import signal as scipy_signal
 from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
 
 class ChirpSignalHD(HarmonicDistortionAnalyzer):
@@ -43,6 +44,13 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
                 'times': time_array,
                 'num_repetitions': repeat_times
             }
+
+        Note:
+            For octave-band smoothing, use smooth_to_octave_grid() on the output:
+                from base.utils.octave_smoothing import smooth_to_octave_grid
+                smooth_freqs, smooth_thd = smooth_to_octave_grid(
+                    result['frequencies'], result['thd'], fraction=6
+                )
         """
         mask_matrix, masking_mask_matrix, fundamental_freqs, time_array, fundamental_bins = harmonic_mask
         repeat_times = stimulus_metadata['repeat_times']
@@ -141,8 +149,6 @@ class ChirpSignalHD(HarmonicDistortionAnalyzer):
                 - time_array: Time values for each frame
                 - fundamental_bins: Fundamental bin indices
         """
-        from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
-
         builder = HarmonicIndexBuilder()
 
         # Determine max harmonic order needed

@@ -116,7 +116,11 @@ class AudioThdFrequencyResponseAnalysis(object):
                     recorded_signal[i], sr[i], thd_kwargs
                 )
 
-                pm.plot_thd(ax_thd, x, thd)
+                # Apply 1/6 octave smoothing for chirp signals only
+                stimulus_metadata = thd_kwargs['stimulus_metadata']
+                octave_smoothing = 6 if stimulus_metadata['stimulus_method'] == 'chirps' else None
+
+                pm.plot_thd(ax_thd, x, thd, octave_smoothing=octave_smoothing)
                 pm.plot_harmonic(ax_harmonic, x, h)
             if kwargs.get("frequency_response", True):
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i])
@@ -232,7 +236,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         recorded_signal: np.ndarray,
         sample_rate: int,
         thd_kwargs: dict,
-        spl_calibration_db: float = 0.0
+        v2pa_factor: float = 1.0
     ) -> tuple:
         """
         Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
@@ -246,10 +250,9 @@ class AudioThdFrequencyResponseAnalysis(object):
                 'stimulus_metadata': dict with stimulus configuration,
                 'harmonic_orders': list of harmonic orders (e.g., [10, 11, 12])
             }
-            spl_calibration_db: Microphone calibration deviation in dB (default 0.0).
-                This is the deviation/offset value (e.g., from mic_calibration.txt).
+            v2pa_factor: Microphone calibration multiplier (V -> Pa), default 1.0.
                 Applied in amplitude domain before log transform:
-                calibrated_amp = amp * 10^(calibration_db/20)
+                calibrated_amp = amp * v2pa_factor
 
         Returns:
             (freq_value, harmonic, perceptual_loudness):
@@ -327,7 +330,7 @@ class AudioThdFrequencyResponseAnalysis(object):
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
-                spl_calibration_db=spl_calibration_db,
+                v2pa_factor=v2pa_factor,
                 masking_config=masking_config
             )
         else:  # chirps
@@ -335,7 +338,7 @@ class AudioThdFrequencyResponseAnalysis(object):
             result = analyzer.compute_distortion(
                 recorded_signal, stimulus_metadata, harmonic_orders,
                 harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, time_array, fundamental_bins),
-                spl_calibration_db=spl_calibration_db,
+                v2pa_factor=v2pa_factor,
                 masking_config=masking_config
             )
 

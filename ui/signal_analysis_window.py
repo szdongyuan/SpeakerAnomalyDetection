@@ -176,15 +176,24 @@ class Distortion(AnalysisGraphWidget):
             thd_forward = thd[mid_point:]
             freq_backward = freq_value[:mid_point]
             freq_forward = freq_value[mid_point:]
-            
+
             # Reverse backward sweep to align frequencies with forward sweep
             thd_backward_reversed = thd_backward[::-1]
-            
+
             # Average the two sweeps (handle potential length mismatch from odd/even split)
             min_len = min(len(thd_forward), len(thd_backward_reversed))
             thd = (thd_forward[:min_len] + thd_backward_reversed[:min_len]) / 2.0
             freq_value = freq_forward[:min_len]  # Use forward frequencies (ascending order)
-        
+
+        # Apply 1/6 octave smoothing for chirp signals only
+        if stimulus_method == 'chirps':
+            from base.utils.octave_smoothing import smooth_to_octave_grid
+            freq_value, thd = smooth_to_octave_grid(
+                freq_value, thd,
+                fraction=6,
+                method="log"
+            )
+
         # Plot the results
         self.plot_graph(freq_value, thd)
         
@@ -254,11 +263,11 @@ class RubAndBuzz(Distortion):
 
 class PerceptualRubAndBuzz(RubAndBuzz):
     """
-    Perceptual Rub & Buzz analysis widget - displays perceived loudness (phons) of harmonics (2nd-35th).
+    Perceptual Rub & Buzz analysis widget - displays SC-based perceptual indicator of harmonics (2nd-35th).
 
-    Inherits from RubAndBuzz but uses psychoacoustic models (ISO 226 equal-loudness + masking).
-    Y-axis shows phons instead of THD percentage. Unlike standard RB (10th-35th), PRB analyzes
-    the full harmonic range (2nd-35th).
+    Inherits from RubAndBuzz but uses the SoundCheck/Listen (SC) perceptual model.
+    Y-axis shows TotalNL / EHS / TotalNL×EHS (PRB Index or PRB Loudness). Unlike standard RB (10th-35th),
+    PRB analyzes the full harmonic range (2nd-35th).
     """
 
     def __init__(self, title_name):
@@ -283,12 +292,8 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         # PRB uses a fixed harmonic range (2nd-35th). The config dialog no longer exposes harmonic selection.
         self.selected_harmonics = list(range(2, 36))
 
-        # PRB loudness model selection:
-        #   - "sc": Listen/SoundCheck simplified model (paper path)
-        #   - "iso": ISO 532 (mosqito) path
-        prb_method = str(self.analysis_config.get("prb_method", "iso")).strip().lower()
-        if prb_method not in {"sc", "iso"}:
-            prb_method = "sc" if "sc" in prb_method else "iso"
+        # PRB supports only the SoundCheck/Listen ("sc") method.
+        prb_method = "sc"
 
         # Get signals and metadata from data_struct
         recorded_signal = self.data_struct.store_wave_data
@@ -317,9 +322,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         }
 
         # Call the PERCEPTUAL three-phase architecture
-        # Get microphone calibration deviation
-        from base.soundcard_calibration_manager import get_mic_deviation_value
-        mic_deviation_db = get_mic_deviation_value()
+        v2pa_factor = self.v2pa_factor
 
         atfra = AudioThdFrequencyResponseAnalysis()
         masking_config = {}
@@ -328,24 +331,20 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             masking_config.update(cfg_masking)
         masking_config["prb_method"] = prb_method
 
-        if prb_method == "sc":
-            # Paper-aligned default: plot the combined indicator TotalNL×EHS unless explicitly overridden.
-            sc_metric = str(masking_config.get("sc_metric", "totalnl_x_ehs")).strip().lower()
-            if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
-                sc_metric = "totalnl_x_ehs"
-            masking_config["sc_metric"] = sc_metric
-            if sc_metric == "ehs":
-                self._prb_curve_label = "EHS"
-                self._prb_y_label = "EHS"
-            elif sc_metric == "totalnl_x_ehs":
-                self._prb_curve_label = "TotalNL×EHS"
-                self._prb_y_label = "TotalNL×EHS"
-            else:
-                self._prb_curve_label = "TotalNL"
-                self._prb_y_label = "TotalNL (phons)"
+        # Paper-aligned default: plot the combined indicator TotalNL×EHS unless explicitly overridden.
+        sc_metric = str(masking_config.get("sc_metric", "totalnl_x_ehs")).strip().lower()
+        if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
+            sc_metric = "totalnl_x_ehs"
+        masking_config["sc_metric"] = sc_metric
+        if sc_metric == "ehs":
+            self._prb_curve_label = "EHS"
+            self._prb_y_label = "EHS"
+        elif sc_metric == "totalnl_x_ehs":
+            self._prb_curve_label = "TotalNL×EHS"
+            self._prb_y_label = "TotalNL×EHS"
         else:
-            self._prb_curve_label = "Perceived Loudness"
-            self._prb_y_label = "Perceived Loudness (phons)"
+            self._prb_curve_label = "TotalNL"
+            self._prb_y_label = "TotalNL (phons)"
         thd_kwargs = {
             'stimulus_metadata': stimulus_metadata,
             'harmonic_orders': self.selected_harmonics,
@@ -353,7 +352,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         }
 
         freq_value, harmonic, perceptual_loudness = atfra._calculate_perceptual_thd_three_phase(
-            recorded_signal, sample_rate, thd_kwargs, spl_calibration_db=mic_deviation_db
+            recorded_signal, sample_rate, thd_kwargs, v2pa_factor=v2pa_factor
         )
 
         # Handle mirror chirps: average forward and backward sweeps
@@ -372,6 +371,15 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             min_len = min(len(loudness_forward), len(loudness_backward_reversed))
             perceptual_loudness = (loudness_forward[:min_len] + loudness_backward_reversed[:min_len]) / 2.0
             freq_value = freq_forward[:min_len]
+
+        # Apply 1/6 octave smoothing for chirp signals only
+        if stimulus_metadata['stimulus_method'] == 'chirps':
+            from base.utils.octave_smoothing import smooth_to_octave_grid
+            freq_value, perceptual_loudness = smooth_to_octave_grid(
+                freq_value, perceptual_loudness,
+                fraction=6,
+                method="log"
+            )
 
         # Plot the results (Y-axis will be in phons)
         self.plot_graph(freq_value, perceptual_loudness)
