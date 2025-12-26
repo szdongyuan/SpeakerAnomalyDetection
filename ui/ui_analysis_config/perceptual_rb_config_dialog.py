@@ -1,6 +1,14 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -11,10 +19,8 @@ class PerceptualRbConfigWindow(QDialog):
     """
     Configuration dialog for Perceptual Rub & Buzz analysis (PRB).
 
-    PRB is now computed with a fixed harmonic range (2nd-35th) to avoid inconsistent results.
-    This dialog only controls which loudness model is used:
-      - "sc": Listen/SoundCheck simplified perceptual model (PEAQ-SC paper path)
-      - "iso226 and iso 532": ISO-based loudness path (mosqito / Zwicker loudness)
+    PRB is computed with a fixed harmonic range (2nd-35th) using the SoundCheck/Listen (SC) model.
+    This dialog allows users to select the output metric: PRB Index (TotalNL×EHS) or PRB Loudness (TotalNL).
     """
 
     def __init__(self, config_manager, model_type):
@@ -28,8 +34,8 @@ class PerceptualRbConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(360, 220)
-        self.resize(420, 240)
+        self.setMinimumSize(320, 160)
+        self.resize(360, 180)
 
         root_layout = QVBoxLayout()
 
@@ -37,31 +43,12 @@ class PerceptualRbConfigWindow(QDialog):
         group.setObjectName("prb_group_box")
         group_layout = QVBoxLayout()
 
-        desc = QLabel("选择 PRB 的响度模型：")
-        desc.setAlignment(Qt.AlignLeft)
-
-        self.method_combo = QComboBox()
-        # Display text follows the user's requested naming; stored value is the normalized key used in code.
-        self.method_combo.addItem("sc", "sc")
-        self.method_combo.addItem("iso226 and iso 532", "iso")
-
-        saved = str(self.load_config.get("prb_method", "iso")).strip().lower()
-        if saved in {"sc", "soundcheck", "peaq_sc", "peaq-sc"}:
-            idx = self.method_combo.findData("sc")
-        else:
-            idx = self.method_combo.findData("iso")
-        if idx >= 0:
-            self.method_combo.setCurrentIndex(idx)
-
-        group_layout.addWidget(desc)
-        group_layout.addWidget(self.method_combo)
-
-        self.sc_metric_desc = QLabel("SC 指标：")
+        # 输出结果选择
+        self.sc_metric_desc = QLabel("选择输出结果：")
         self.sc_metric_desc.setAlignment(Qt.AlignLeft)
         self.sc_metric_combo = QComboBox()
-        self.sc_metric_combo.addItem("TotalNL×EHS（默认）", "totalnl_x_ehs")
-        self.sc_metric_combo.addItem("TotalNL（关闭 EHS）", "totalnl")
-        self.sc_metric_combo.addItem("EHS（仅调试）", "ehs")
+        self.sc_metric_combo.addItem("PRB 指数（默认）", "totalnl_x_ehs")
+        self.sc_metric_combo.addItem("PRB 响度", "totalnl")
 
         saved_masking = self.load_config.get("masking_config", {})
         if not isinstance(saved_masking, dict):
@@ -69,7 +56,8 @@ class PerceptualRbConfigWindow(QDialog):
         saved_metric = str(saved_masking.get("sc_metric", "totalnl_x_ehs")).strip().lower()
         if saved_metric == "totalnl_phons":
             saved_metric = "totalnl"
-        if saved_metric not in {"totalnl_x_ehs", "totalnl", "ehs"}:
+        # Map old "ehs" option to default
+        if saved_metric not in {"totalnl_x_ehs", "totalnl"}:
             saved_metric = "totalnl_x_ehs"
         idx_metric = self.sc_metric_combo.findData(saved_metric)
         if idx_metric >= 0:
@@ -77,9 +65,6 @@ class PerceptualRbConfigWindow(QDialog):
 
         group_layout.addWidget(self.sc_metric_desc)
         group_layout.addWidget(self.sc_metric_combo)
-
-        self.method_combo.currentIndexChanged.connect(self._sync_sc_metric_visibility)
-        self._sync_sc_metric_visibility()
         group.setLayout(group_layout)
 
         btn_layout = QHBoxLayout()
@@ -104,14 +89,10 @@ class PerceptualRbConfigWindow(QDialog):
         )
 
     def get_default_config(self):
-        method = self.method_combo.currentData()
-        if method not in {"sc", "iso"}:
-            method = "iso"
-
         metric = self.sc_metric_combo.currentData()
         if metric == "totalnl_phons":
             metric = "totalnl"
-        if metric not in {"totalnl_x_ehs", "totalnl", "ehs"}:
+        if metric not in {"totalnl_x_ehs", "totalnl"}:
             metric = "totalnl_x_ehs"
 
         masking_config = {}
@@ -119,7 +100,7 @@ class PerceptualRbConfigWindow(QDialog):
         if isinstance(saved_masking, dict):
             masking_config.update(saved_masking)
         masking_config["sc_metric"] = metric
-        return {"prb_method": method, "masking_config": masking_config}
+        return {"prb_method": "sc", "masking_config": masking_config}
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
@@ -130,8 +111,3 @@ class PerceptualRbConfigWindow(QDialog):
         config_data = self.get_default_config()
         self.accept()
         return config_data
-
-    def _sync_sc_metric_visibility(self):
-        is_sc = self.method_combo.currentData() == "sc"
-        self.sc_metric_desc.setVisible(is_sc)
-        self.sc_metric_combo.setVisible(is_sc)

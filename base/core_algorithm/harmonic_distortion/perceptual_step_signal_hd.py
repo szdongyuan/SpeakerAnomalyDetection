@@ -31,7 +31,7 @@ class PerceptualStepSignalHD(StepSignalHD):
         harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray] = None,
         stft_window_type: str = 'hann',
         masking_config: Dict = None,
-        spl_calibration_db: float = 0.0,
+        v2pa_factor: float = 1.0,
         **kwargs
     ) -> Dict:
         """
@@ -50,7 +50,7 @@ class PerceptualStepSignalHD(StepSignalHD):
                 - 'masking_range': (start, end) harmonic orders for masking
                 - 'enable_cumulative': bool to enable cumulative masking
                 - 'weight_function': str ('exponential', 'gaussian', etc.)
-            spl_calibration_db: Calibration offset in dB (default 0.0)
+            v2pa_factor: Microphone calibration multiplier (V -> Pa), default 1.0
 
         Returns:
             {
@@ -134,7 +134,7 @@ class PerceptualStepSignalHD(StepSignalHD):
                 fund_freqs_trimmed,
                 masking_mask_matrix=masking_mask_trimmed,
                 masking_config=masking_config,
-                spl_calibration_db=spl_calibration_db,
+                v2pa_factor=v2pa_factor,
                 n_fft=stft_window_size
             )
 

@@ -1,6 +1,8 @@
 """
 Listen / AES 127th (2009) simplified PEAQ loudness model (FFT version).
 
+Used by perceptual harmonic distortion (PRB-SC) analysis (SC-only).
+
 Source (paper in this repo):
 `docs/paper/perceptualRub&Buzz.md`
   "Practical Measurement of Loudspeaker Distortion Using a Simplified Auditory Perceptual Model"
@@ -27,68 +29,13 @@ from typing import Literal, Optional
 
 import numpy as np
 
-
-def hz_to_bark_peaq(freq_hz: np.ndarray) -> np.ndarray:
-    """PEAQ pitch scale approximation (paper Eq.3): z = 7 * asinh(f/650)."""
-    f = np.asarray(freq_hz, dtype=np.float64)
-    f = np.maximum(f, 0.0)
-    return 7.0 * np.arcsinh(f / 650.0)
-
-
-def bark_to_hz_peaq(bark: np.ndarray) -> np.ndarray:
-    """Inverse of hz_to_bark_peaq: f = 650 * sinh(z/7)."""
-    z = np.asarray(bark, dtype=np.float64)
-    return 650.0 * np.sinh(z / 7.0)
-
-
-def sones_to_phons(sones: np.ndarray) -> np.ndarray:
-    """
-    Standard sones -> phons mapping (Zwicker-style piecewise, used in the rest of this codebase).
-
-    - N < 1: phon = 40 * N^0.4
-    - N >= 1: phon = 40 + 10*log2(N)
-    """
-    n = np.asarray(sones, dtype=np.float64)
-    ph = np.zeros_like(n)
-    positive = n > 0.0
-    lt1 = positive & (n < 1.0)
-    ge1 = positive & ~lt1
-    ph[lt1] = 40.0 * np.power(n[lt1], 0.4)
-    ph[ge1] = 40.0 + 10.0 * np.log2(n[ge1])
-    return ph
-
-
-def _ear_weighting_db(freqs_hz: np.ndarray) -> np.ndarray:
-    """
-    Outer/middle ear frequency weighting from the paper (Eq.1).
-
-    W(f)/dB = -0.6*3.64*(f/1k)^(-0.8)
-              + 6.5*exp(-0.6*(f/1k - 3.3)^2)
-              + c3*(f/1k)^(p3)        (paper: c3=-1e-3, p3=3.6)
-    """
-    return _ear_weighting_db_parametric(freqs_hz)
-
-
-def _ear_weighting_db_parametric(
-    freqs_hz: np.ndarray,
-    *,
-    term3_coeff: float = -1.0e-3,
-    term3_exponent: float = 3.6,
-) -> np.ndarray:
-    """
-    Parametric form of Eq.1 so we can tweak small coefficient/exponent differences (e.g. SoundCheck vs paper).
-
-    Only the high-frequency roll-off term is parameterized because it dominates above ~10 kHz:
-      term3 = term3_coeff * (f/1k)^(term3_exponent)
-
-    The defaults match the paper (Eq.1).
-    """
-    f = np.asarray(freqs_hz, dtype=np.float64)
-    f_khz = np.maximum(f / 1000.0, 1e-12)
-    term1 = -0.6 * 3.64 * np.power(f_khz, -0.8)
-    term2 = 6.5 * np.exp(-0.6 * np.square(f_khz - 3.3))
-    term3 = float(term3_coeff) * np.power(f_khz, float(term3_exponent))
-    return term1 + term2 + term3
+from base.core_algorithm.harmonic_distortion.peaq_sc_loudness_result import PEAQLoudnessResult
+from base.core_algorithm.harmonic_distortion.peaq_sc_utils import (
+    bark_to_hz_peaq,
+    hz_to_bark_peaq,
+    sones_to_phons,
+    _ear_weighting_db_parametric,
+)
 
 
 @dataclass(frozen=True)
@@ -517,10 +464,13 @@ class PEAQLoudnessModel:
         test_spectrum_pa: np.ndarray,
         fundamental_freqs_hz: np.ndarray,
         *,
-        f_min_hz: float = 20.0,
+        normalize_to_n_fft: int = 2048,
+        f_min_hz: Optional[float] = None,
+        f_min_f0_ratio: float = 0.8,
         f_max_hz: Optional[float] = None,
         peak_search_width_bins: int = 1,
         remove_dc: bool = False,
+        subtract_f0_masking: bool = True,
         eps: float = 1e-12,
     ) -> np.ndarray:
         """
@@ -528,10 +478,23 @@ class PEAQLoudnessModel:
 
         The paper defines EHS via the (power) cepstrum of the test spectrum:
           1) Apply the ear weighting (Eq.1/Eq.2) to the spectrum magnitude
-          2) Normalize the weighted magnitude spectrum
-          3) Take the log magnitude spectrum
-          4) Compute the FFT across frequency bins (cepstrum)
-          5) Take the magnitude at quefrency ~= 1/f0
+          2) Optionally subtract the fundamental's frequency spreading masking (Eq.5-8):
+             For each frequency bin, compute the masking from f0 using the spreading slopes
+             (Sl=27 dB/Bark for lower side, Su for upper side), then compute the excess
+             above masking in dB SPL. The lower bound is set to 0 dB SPL (audible threshold).
+          3) Normalize per frame
+          4) Take the log magnitude spectrum (using natural log)
+          5) Compute the FFT across frequency bins (cepstrum)
+          6) Select the EHS peak near q0 = 1/f0:
+             - pick the nearest quefrency bin to q0
+             - if peak_search_width_bins > 0, take the max magnitude within +/- that many bins around it
+
+        Args:
+            f_min_hz: Low-frequency cutoff in Hz. If None, automatically computed as
+                      max(40.0, min(fundamental_freqs_hz) * f_min_f0_ratio) to robustly
+                      filter sub-fundamental noise.
+            f_min_f0_ratio: Ratio for automatic f_min computation (default 0.8 means f_min = 0.8 * f0_min).
+                           Only used when f_min_hz is None.
 
         This implementation returns a dimensionless per-frame scalar (shape (T,)).
         """
@@ -541,9 +504,19 @@ class PEAQLoudnessModel:
                 f"test_spectrum_pa first dim must match rfft_freqs_hz ({self.rfft_freqs_hz.size}), got {test.shape}"
             )
 
-        f_min = float(f_min_hz)
-        if not np.isfinite(f_min) or f_min < 0.0:
-            raise ValueError(f"f_min_hz must be finite and >= 0, got {f_min_hz}")
+        # Auto-determine f_min based on minimum fundamental frequency (if not explicitly provided)
+        if f_min_hz is None:
+            f0_array = np.asarray(fundamental_freqs_hz, dtype=np.float64).reshape(-1)
+            valid_f0 = f0_array[np.isfinite(f0_array) & (f0_array > 0.0)]
+            if valid_f0.size == 0:
+                f_min = 40.0  # fallback to default
+            else:
+                f0_min = float(np.min(valid_f0))
+                f_min = max(40.0, f0_min * float(f_min_f0_ratio))
+        else:
+            f_min = float(f_min_hz)
+            if not np.isfinite(f_min) or f_min < 0.0:
+                raise ValueError(f"f_min_hz must be finite and >= 0, got {f_min_hz}")
 
         f_max = float(f_max_hz) if f_max_hz is not None else float(self.rfft_freqs_hz[-1])
         if not np.isfinite(f_max) or f_max <= 0.0:
@@ -581,6 +554,8 @@ class PEAQLoudnessModel:
                 f"fundamental_freqs_hz must have length T={t_frames}, got shape {np.asarray(fundamental_freqs_hz).shape}"
             )
 
+        valid_frame = np.isfinite(f0) & (f0 > 0.0)
+
         if peak_search_width_bins < 0:
             raise ValueError(f"peak_search_width_bins must be >= 0, got {peak_search_width_bins}")
         w_bins = int(peak_search_width_bins)
@@ -589,27 +564,123 @@ class PEAQLoudnessModel:
         if not np.isfinite(eps_val) or eps_val <= 0.0:
             raise ValueError(f"eps must be finite and > 0, got {eps}")
 
+        do_masking = bool(subtract_f0_masking)
+
+        # Reference pressure for 0 dB SPL.
+        p0_pa = 2.0e-5
+
         # 1) Ear weighting (Eq.2) applied to magnitude spectrum.
         weight = np.power(10.0, self._w_db[start : end + 1] / 20.0).reshape(-1, 1)
-        mag = np.abs(test[start : end + 1, :]) * weight
+        mag_w = np.abs(test[start : end + 1, :]) * weight  # (n, T) in Pa
 
-        # 2) Normalize per frame (paper says "normalized" but does not specify; max-normalization is scale-invariant).
-        max_mag = np.max(mag, axis=0)
-        valid_frame = np.isfinite(max_mag) & (max_mag > 0.0) & np.isfinite(f0) & (f0 > 0.0)
-        denom = np.where(valid_frame, max_mag, 1.0).reshape(1, -1)
-        norm_mag = mag / denom
+        # Convert to dB SPL for masking computation.
+        mag_db = 20.0 * np.log10(np.maximum(mag_w, eps_val) / p0_pa)  # (n, T)
+
+        # 2) Optional f0 frequency spreading masking subtraction.
+        #    Use the paper's spreading slopes (Eq.5-8) to compute the fundamental's masking
+        #    at each frequency bin. For harmonics only, compute excess above masking.
+        #    The fundamental itself is preserved (no masking applied to f0).
+        if do_masking:
+            df_full = float(self.rfft_freqs_hz[1] - self.rfft_freqs_hz[0]) if self.rfft_freqs_hz.size > 1 else 0.0
+            if not np.isfinite(df_full) or df_full <= 0.0:
+                raise ValueError("Unable to infer FFT bin spacing for f0 masking computation")
+
+            # Find fundamental bin index in the full spectrum.
+            k0 = np.zeros((t_frames,), dtype=np.int64)
+            k0[valid_frame] = np.rint(f0[valid_frame] / df_full).astype(np.int64, copy=False)
+
+            valid_k0 = (k0 >= start) & (k0 <= end)
+            valid_frame &= valid_k0
+
+            k0_clamped = np.clip(k0, start, end)
+            idx0 = (k0_clamped - start).astype(np.int64, copy=False)
+            idx0 = np.clip(idx0, 0, n - 1)
+
+            # Get fundamental level L0 (dB SPL) using a small neighborhood max.
+            idxs = np.stack(
+                [
+                    np.clip(idx0 - 1, 0, n - 1),
+                    idx0,
+                    np.clip(idx0 + 1, 0, n - 1),
+                ],
+                axis=0,
+            )  # (3, T)
+            l0_db = np.max(np.take_along_axis(mag_db, idxs, axis=0), axis=0)  # (T,)
+            l0_db = np.where(valid_k0, l0_db, 0.0)
+
+            # Compute Bark positions for all bins in the slice and for f0.
+            z_bins = hz_to_bark_peaq(freqs).reshape(-1, 1)  # (n, 1)
+            z_f0 = hz_to_bark_peaq(f0).reshape(1, -1)  # (1, T)
+            dz = z_bins - z_f0  # (n, T), positive means bin is above f0
+
+            # Identify fundamental region (|dz| < 0.5 Bark) - these bins keep original level.
+            near_f0 = np.abs(dz) < 0.5
+
+            # Spreading slopes (Eq.5-6):
+            #   Lower side (f < f0, dz < 0): Sl = 27 dB/Bark
+            #   Upper side (f > f0, dz >= 0): Su = min(0, -24 - 230/f0 + 0.2*L0)
+            slope_l = 27.0  # dB/Bark
+            f0_safe = np.maximum(f0, 1e-12).reshape(1, -1)
+            slope_u = np.minimum(0.0, -24.0 - 230.0 / f0_safe + 0.2 * l0_db.reshape(1, -1))  # (1, T)
+
+            # Masking level at each bin: M = L0 + slope * dz
+            # For lower side (dz < 0): masking decreases as we go lower
+            # For upper side (dz >= 0): masking decreases as we go higher
+            lower_mask = dz < 0.0
+            masking_db = np.where(
+                lower_mask,
+                l0_db.reshape(1, -1) + slope_l * dz,  # dz is negative, so masking decreases
+                l0_db.reshape(1, -1) + slope_u * dz,  # slope_u is negative, dz positive, masking decreases
+            )  # (n, T)
+
+            # For invalid frames, set masking to -inf so residual equals original.
+            masking_db = np.where(valid_frame.reshape(1, -1), masking_db, -np.inf)
+
+            # Only consider masking >= 0 dB. Negative masking does not enhance harmonics.
+            # effective_masking = max(masking_db, 0)
+            effective_masking_db = np.maximum(masking_db, 0.0)  # (n, T)
+
+            # Compute excess above effective masking in dB for harmonics only.
+            # residual = mag_db - max(masking, 0)
+            harmonic_residual_db = mag_db - effective_masking_db  # (n, T)
+
+            # Final result: fundamental keeps original level, harmonics use excess above masking.
+            result_db = np.where(near_f0, mag_db, harmonic_residual_db)
+
+            # Apply 0 dB SPL floor to all bins (audible threshold).
+            result_db = np.maximum(result_db, 0.0)
+
+        else:
+            # No masking subtraction: use original dB values, clamped to 0 dB floor.
+            result_db = np.maximum(mag_db, 0.0)
+
+        # 3) Normalize per frame using the maximum value (typically the fundamental).
+        #    Convert dB to linear for normalization.
+        result_linear = np.power(10.0, result_db / 20.0)  # (n, T)
+        max_linear = np.max(result_linear, axis=0, keepdims=True)
+        max_linear = np.maximum(max_linear, eps_val)
+        valid_frame &= (max_linear.reshape(-1) > eps_val)
+        norm_mag = result_linear / max_linear
         norm_mag = np.maximum(norm_mag, eps_val)
 
-        # 3) Log magnitude spectrum.
+        # 4) Log magnitude spectrum (natural log for cepstrum).
         log_mag = np.log(norm_mag)
+
+        # Apply log-domain floor corresponding to 0 dB SPL after normalization.
+        # 0 dB SPL -> linear = 10^(0/20) = 1.0
+        # After normalization: 1.0 / max_linear
+        # After log: ln(1.0 / max_linear) = -ln(max_linear)
+        log_floor = -np.log(max_linear)  # (1, T)
+        log_mag = np.maximum(log_mag, log_floor)
+
         if bool(remove_dc):
             log_mag = log_mag - np.mean(log_mag, axis=0, keepdims=True)
 
-        # 4) Cepstrum via FFT across frequency bins.
+        # 5) Cepstrum via FFT across frequency bins.
         cep = np.fft.rfft(log_mag, axis=0)
         cep_mag = np.abs(cep) / float(n)
 
-        # 5) Peak at quefrency ~= 1/f0.
+        # 6) Peak at quefrency ~= 1/f0.
         q_axis = np.fft.rfftfreq(n, d=d_f)
         target_q = np.zeros((t_frames,), dtype=np.float64)
         target_q[valid_frame] = 1.0 / f0[valid_frame]
@@ -641,130 +712,24 @@ class PEAQLoudnessModel:
             ehs = np.max(vals, axis=0)
 
         ehs = np.where(valid_frame, ehs, 0.0)
+
+        # Empirical normalization: EHS magnitude scales approximately inversely with the number of FFT bins.
+        # To reduce window-length dependence (especially for step signals where n_fft varies per step),
+        # scale EHS to a fixed reference FFT size (default 2048).
+        ref_n_fft = int(normalize_to_n_fft)
+        if ref_n_fft <= 0:
+            raise ValueError(f"normalize_to_n_fft must be a positive integer, got {normalize_to_n_fft!r}")
+
+        # Best-effort inference from the rFFT frequency axis length.
+        # For even n_fft: len(rfft) = n_fft/2 + 1 -> n_fft = 2*(len-1).
+        # For odd  n_fft: this underestimates by 1; the scaling error is negligible for our use case.
+        n_fft_full = 2 * int(self.rfft_freqs_hz.size - 1)
+        if n_fft_full <= 0:
+            raise ValueError(f"Invalid rfft_freqs_hz axis length: {self.rfft_freqs_hz.size}")
+
+        ehs *= float(n_fft_full) / float(ref_n_fft)
+
+        # Hard calibration factor: scale final EHS by 0.7
+        ehs *= 0.7
+
         return np.asarray(ehs, dtype=np.float64).reshape(-1)
-
-
-@dataclass(frozen=True)
-class PEAQLoudnessResult:
-    """
-    Result container used for both "loudness" (Eq.9-12) and "partial loudness" (Eq.13-15).
-
-    The paper's naming:
-      - N_total / TotalNL correspond to `n_total_sones`
-      - N[k] / NL[k] correspond to `n_specific_sones_per_band` (per band index k)
-    """
-
-    n_total_sones: np.ndarray  # (T,)
-    n_total_phons: np.ndarray  # (T,)
-    n_specific_sones_per_band: np.ndarray  # (Z, T)
-    band_center_hz: np.ndarray  # (Z,)
-    band_center_bark: np.ndarray  # (Z,)
-
-    def interpolate_specific_sones(
-        self,
-        target_freqs_hz: np.ndarray,
-        *,
-        out_of_range: Literal["zero", "edge"] = "zero",
-    ) -> np.ndarray:
-        """
-        Interpolate the per-band specific loudness values to target frequencies.
-
-        - Uses linear interpolation on the Bark axis (bands are equally spaced in Bark).
-        - `n_specific_sones_per_band` is a *density-like* quantity (sones/Bark); the paper integrates it via
-          (24/Z) * sum_k to obtain total loudness.
-
-        target_freqs_hz:
-          - shape (M,): same target frequencies for all frames
-          - shape (M, T): per-frame target frequencies (e.g., harmonics of a time-varying f0)
-
-        Returns: shape (M, T)
-        """
-        y = np.asarray(self.n_specific_sones_per_band, dtype=np.float64)
-        x = np.asarray(self.band_center_bark, dtype=np.float64).reshape(-1)
-        if y.ndim != 2 or x.ndim != 1 or y.shape[0] != x.size:
-            raise ValueError(
-                "Invalid loudness result shapes: "
-                f"n_specific_sones_per_band={y.shape}, band_center_bark={x.shape}"
-            )
-
-        target_hz = np.asarray(target_freqs_hz, dtype=np.float64)
-        if not np.all(np.isfinite(target_hz)):
-            raise ValueError("target_freqs_hz must be finite")
-        if np.any(target_hz < 0.0):
-            raise ValueError("target_freqs_hz must be >= 0")
-
-        t_frames = int(y.shape[1])
-        if target_hz.ndim == 0:
-            target_hz = target_hz.reshape(1)
-        if target_hz.ndim == 1:
-            # Broadcast to all frames.
-            target_bark = hz_to_bark_peaq(target_hz).reshape(-1)
-            m = int(target_bark.size)
-            idx = np.searchsorted(x, target_bark, side="left")
-            # Clamp to interior so i0/i1 are valid; we'll mask oob later.
-            i1 = np.clip(idx, 1, x.size - 1)
-            i0 = i1 - 1
-            x0 = x[i0]
-            x1 = x[i1]
-            w = (target_bark - x0) / np.maximum(x1 - x0, 1e-300)
-            y0 = y[i0, :]  # (M, T)
-            y1 = y[i1, :]
-            out = y0 * (1.0 - w.reshape(m, 1)) + y1 * w.reshape(m, 1)
-
-            oob = (target_bark < x[0]) | (target_bark > x[-1])
-            if np.any(oob):
-                if out_of_range == "zero":
-                    out[oob, :] = 0.0
-                elif out_of_range == "edge":
-                    out[target_bark < x[0], :] = y[0:1, :]
-                    out[target_bark > x[-1], :] = y[-1:, :]
-                else:
-                    raise ValueError(f"Unsupported out_of_range={out_of_range!r}")
-            return out
-
-        if target_hz.ndim == 2:
-            if target_hz.shape[1] != t_frames:
-                raise ValueError(
-                    f"target_freqs_hz second dim must be T={t_frames}, got {target_hz.shape}"
-                )
-            m = int(target_hz.shape[0])
-            target_bark = hz_to_bark_peaq(target_hz.reshape(-1)).reshape(-1)
-            idx = np.searchsorted(x, target_bark, side="left")
-            i1 = np.clip(idx, 1, x.size - 1)
-            i0 = i1 - 1
-            x0 = x[i0]
-            x1 = x[i1]
-            w = (target_bark - x0) / np.maximum(x1 - x0, 1e-300)
-
-            # Select y[i0, t] and y[i1, t] for each flattened element.
-            t_idx = np.tile(np.arange(t_frames, dtype=np.int64), m)
-            y0 = y[i0, t_idx]
-            y1 = y[i1, t_idx]
-            out_flat = y0 * (1.0 - w) + y1 * w
-
-            oob = (target_bark < x[0]) | (target_bark > x[-1])
-            if np.any(oob):
-                if out_of_range == "zero":
-                    out_flat[oob] = 0.0
-                elif out_of_range == "edge":
-                    out_flat[target_bark < x[0]] = y[0, t_idx[target_bark < x[0]]]
-                    out_flat[target_bark > x[-1]] = y[-1, t_idx[target_bark > x[-1]]]
-                else:
-                    raise ValueError(f"Unsupported out_of_range={out_of_range!r}")
-
-            return out_flat.reshape(m, t_frames)
-
-        raise ValueError(f"target_freqs_hz must be scalar, 1D, or 2D, got shape {target_hz.shape}")
-
-    def interpolate_specific_phons_equiv(
-        self,
-        target_freqs_hz: np.ndarray,
-        *,
-        out_of_range: Literal["zero", "edge"] = "zero",
-    ) -> np.ndarray:
-        """
-        Convenience wrapper: interpolate in sones-domain, then convert each interpolated value to phons.
-
-        This is a "phon-equivalent" for a *specific* loudness sample and is not ISO 532 loudness level.
-        """
-        return sones_to_phons(self.interpolate_specific_sones(target_freqs_hz, out_of_range=out_of_range))

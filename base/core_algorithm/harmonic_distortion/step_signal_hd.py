@@ -7,6 +7,7 @@ import numpy as np
 from typing import Dict, Tuple
 from scipy import signal as scipy_signal
 from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 
 
 class StepSignalHD(HarmonicDistortionAnalyzer):
@@ -152,8 +153,6 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
                 - fundamental_freqs: Fundamental frequencies
                 - fundamental_bins: Fundamental bin indices
         """
-        from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
-
         num_steps = stimulus_metadata['num_steps']
         total_time = stimulus_metadata['total_time']
         repeat_times = stimulus_metadata.get('repeat_times', 1)
