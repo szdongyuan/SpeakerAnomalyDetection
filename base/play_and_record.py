@@ -8,6 +8,7 @@ from base.recording_management import RecordingManager
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.streaming_audio_processor import StreamingAudioProcessor
+from base.streaming_file_writer import StreamingWavWriter
 from consts import error_code, model_consts
 
 data_struct = DataDealStruct()
@@ -163,7 +164,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
     prepare_frames = recorded_dict.get("prepare_frames", 1000)
     prolong_frames = recorded_dict.get("prolong_frames", 10000)
 
-    # Calculate exact target samples
+    # Calculate exact target samples (prepare + stimulus + prolong).
     target_samples = prepare_frames + len(stimulus_data) + prolong_frames
 
     input_device = recorded_dict.get("input_device")
@@ -180,7 +181,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         input_device=input_device,
         output_device=output_device,
         prepare_frames=prepare_frames,
-        prolong_frames=prolong_frames
+        prolong_frames=prolong_frames,
     )
 
     if record_code == error_code.OK:

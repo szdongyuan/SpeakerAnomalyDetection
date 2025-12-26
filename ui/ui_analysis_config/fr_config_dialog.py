@@ -84,11 +84,11 @@ class FrConfigWindow(QDialog):
         self.label_upper = QLabel("上限：", self)
         self.label_lower = QLabel("下限：", self)
         self.sinbox_upper = QDoubleSpinBox(self)
-        self.sinbox_upper.setRange(-200, 200)
+        self.sinbox_upper.setRange(0, 500)
         self.sinbox_upper.setValue(float(self.load_config.get("upper_limit")))
         self.sinbox_upper.textChanged.connect(self.get_default_config)
         self.spinbox_lower = QDoubleSpinBox(self)
-        self.spinbox_lower.setRange(-200, 200)
+        self.spinbox_lower.setRange(0, 500)
         self.spinbox_lower.setValue(float(self.load_config.get("lower_limit")))
         self.spinbox_lower.textChanged.connect(self.get_default_config)
         if not self.radio_button_1.isChecked():

@@ -1,7 +1,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QCheckBox, QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
-from PyQt5.QtWidgets import QLabel, QComboBox, QSpinBox, QMessageBox
+from PyQt5.QtWidgets import QLabel, QComboBox, QSpinBox
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -167,21 +167,14 @@ class SpecConfigWindow(QDialog):
             "bottom_limit": self.bottom_limit_spinbox.value(),
             "custom_limit": self.custom_limit_checkbox.isChecked(),
         }
-        if default_config["custom_limit"] and default_config["top_limit"] <= default_config["bottom_limit"]:
-            QMessageBox.warning(self, "设置警告", "上下限配置数据错误，请检查配置!")
-            return
         return default_config
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        if not config_data:
-            return
         save_flag = self.config_manager.save_default_config("Spec", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
-        if not config_data:
-            return
         self.accept()
         return config_data

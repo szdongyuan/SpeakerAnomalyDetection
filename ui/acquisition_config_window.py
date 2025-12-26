@@ -130,7 +130,6 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.config_button.clicked.connect(self.open_stimulus_window)
 
         grid_layout.addWidget(label_output_device, 0, 0)
-
         grid_layout.addWidget(self.output_device_display, 0, 1)
         grid_layout.addWidget(self.config_button, 1, 1)
         out_group_box.setLayout(grid_layout)

@@ -1,4 +1,5 @@
 from typing import Optional
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
@@ -8,23 +9,74 @@ from scipy.signal import savgol_filter, medfilt, bessel, filtfilt
 import librosa
 
 from base.utils.plot_audio_features import PlotManager
+from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
+from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
+from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
 
 
 class AudioThdFrequencyResponseAnalysis(object):
+
+    @staticmethod
+    def _resample_to_min_sr_for_loudness(
+        recorded_signal: np.ndarray,
+        original_sr: int,
+        target_sr: int,
+        expected_len_target: Optional[int],
+    ) -> tuple[np.ndarray, int]:
+        """
+        Resample the time-domain signal to meet loudness model requirements.
+
+        We resample when original_sr < target_sr (e.g., 44.1 kHz -> 48 kHz) so that
+        ISO 532-1 fine-band loudness has valid frequency coverage up to 24 kHz.
+
+        Returns:
+            (resampled_signal, target_sr)
+        """
+        def _maybe_adjust_length(y: np.ndarray, expected: Optional[int]) -> np.ndarray:
+            if expected is None:
+                return y
+            expected_n = int(expected)
+            if expected_n <= 0:
+                return y
+            # Only adjust when the mismatch is small (rounding / resampling artifacts).
+            # If the mismatch is large (e.g., extra pre/post-roll), do not trim.
+            tol = max(128, int(0.001 * expected_n))
+            if abs(int(y.size) - expected_n) > tol:
+                return y
+            if y.size < expected_n:
+                return np.pad(y, (0, expected_n - y.size), mode="constant", constant_values=0.0)
+            if y.size > expected_n:
+                return y[:expected_n]
+            return y
+
+        if int(original_sr) >= int(target_sr):
+            y = np.asarray(recorded_signal, dtype=np.float32)
+            return _maybe_adjust_length(y, expected_len_target), int(original_sr)
+
+        from scipy.signal import resample_poly
+
+        y = np.asarray(recorded_signal, dtype=np.float32)
+        y = resample_poly(y, up=int(target_sr), down=int(original_sr)).astype(np.float32, copy=False)
+        y = _maybe_adjust_length(y, expected_len_target)
+        return y, int(target_sr)
 
     def process_calculate(self, reference_signal: np.ndarray, recorded_signal, sr, **kwargs):
         """
             Calculate and plot THD, harmonic, and frequency response figures, and return the result images.
 
+            Uses three-phase architecture. Requires thd_kwargs['stimulus_metadata'].
+
             Args:
                 - reference_signal: ndarray
-                    The input reference signal.
+                    The input reference signal (not used in three-phase architecture, kept for API compatibility).
                 - recorded_signal: list
                     A list of recorded signals
                 - sr: list
                     A list consisting of the sample rate of the signal
                 - kwargs : dict
-                    Additional optional parameters
+                    Required: thd_kwargs with 'stimulus_metadata' key
 
             Returns:
                 - results: dict
@@ -45,112 +97,251 @@ class AudioThdFrequencyResponseAnalysis(object):
             pm = PlotManager()
             if kwargs.get("thd", True):
                 thd_kwargs = kwargs.get("thd_kwargs", {})
-                freq_dict, base_freq_list = self.calculate_spectrum(reference_signal, sr[i])
-                x, h, thd = self.calculate_thd(freq_dict, base_freq_list, recorded_signal[i], sr[i], **thd_kwargs)
-                pm.plot_thd(ax_thd, x, thd)
+
+                # Three-phase architecture (required)
+                if 'stimulus_metadata' not in thd_kwargs:
+                    raise ValueError(
+                        "thd_kwargs must contain 'stimulus_metadata'. "
+                        "Legacy methods have been removed. "
+                        "See docs/hd_refactoring_guide.md for migration instructions."
+                    )
+
+                x, h, thd = self._calculate_thd_three_phase(
+                    recorded_signal[i], sr[i], thd_kwargs
+                )
+
+                # Apply 1/6 octave smoothing for chirp signals only
+                stimulus_metadata = thd_kwargs['stimulus_metadata']
+                octave_smoothing = 6 if stimulus_metadata['stimulus_method'] == 'chirps' else None
+
+                pm.plot_thd(ax_thd, x, thd, octave_smoothing=octave_smoothing)
                 pm.plot_harmonic(ax_harmonic, x, h)
             if kwargs.get("frequency_response", True):
                 fr, frequency_list = self.calculate_fr(reference_signal, recorded_signal[i], sr[i])
                 pm.plot_frequency_response(ax_fr, frequency_list, fr)
         return results
 
-    def calculate_thd(self, freq_dict, base_freq_list, recorded_signal, sr, **kwargs):
+    def _calculate_thd_three_phase(self, recorded_signal, sr, thd_kwargs):
         """
-            Calculate the Total Harmonic Distortion (THD).
+        NEW METHOD: Calculate THD using three-phase architecture.
 
-            Args:
-                - freq_dict: dict
-                    The input reference signal.
-                - base_freq_list: list
+        Step signals use STFT exclusively. Chirp signals use STFT exclusively.
 
-                - recorded_signal: ndarray
-                    The input recorded signal
-                - sr: int
-                    The sample rate of the signals.
-                - kwargs : optional
-                    - gap_len : int, default 10
-                        The length of each gap between frequency points.
-                    - delay_frames : int, default 0
-                        The number of frames to delay.
-                    - harmonics : list, default [1, 2, 3, 4, 5]
-                        The list of harmonics to be calculated.
-            Returns:
-                - plot_x: list
-                    the base frequency at different time points.
-                - plot_h : ndarray
-                    The harmonic amplitudes at each time point.
-                - plot_thd : list
-                    The Total Harmonic Distortion (THD) at each time point.
+        Returns: (x, h, thd) for plotting (backward compatible with existing plots)
         """
-        plot_x, plot_h, plot_thd = [], [], []
-        gap_len = kwargs.get("gap_len", 10)
-        delay_frames = kwargs.get("delay_frames", 0)
-        harmonics_list = kwargs.get("harmonics", list(range(1, 6)))
-        freq = self.get_harmonic(recorded_signal, freq_dict, sr, harmonics_list, gap_len, delay_frames)
-        n_harmonics = len(harmonics_list)
-        for i in range(int(min(base_freq_list)), gap_len * (len(freq) + 1), gap_len):
-            plot_x.append(i)
-            harmonic = freq[i]["harmonic"]
-            f = freq[i]["harmonic_base"]
-            h = harmonic
-            td = (sum([i ** 2 for i in h])) ** 0.5
-            plot_h.append([f] + harmonic + [0] * (n_harmonics - len(harmonic)))
-            plot_thd.append((td / (f ** 2 + td ** 2) ** 0.5) * 100)
-        plot_h = np.array(plot_h).T
-        return plot_x, plot_h, plot_thd
+        stimulus_metadata = thd_kwargs['stimulus_metadata']
+        harmonic_orders = thd_kwargs.get('harmonic_orders', [2, 3, 4, 5])
 
-    @staticmethod
-    def calculate_spectrum(reference_signal, sr, gap_len=10, hop_length = 16, window = 'boxcar'):
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 1A: Build Overall Index Matrix
+        # ═══════════════════════════════════════════════════════════════════
+        builder = HarmonicIndexBuilder()
+
+        if stimulus_metadata['stimulus_method'] == 'steps':
+            # STFT window type for step signals
+            stft_window_type = thd_kwargs.get('stft_window_type', 'hann')
+
+            # Calculate STFT parameters (full step duration - no trimming)
+            single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+            step_duration = single_rep_duration / stimulus_metadata['num_steps']
+            step_samples = int(step_duration * sr)
+            n_fft = step_samples  # STFT window size = step duration
+
+            index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+                stimulus_metadata, sr=sr, n_fft=n_fft, max_harmonic_order=35
+            )
+        elif stimulus_metadata['stimulus_method'] == 'chirps':
+            stft_window_size = thd_kwargs.get('stft_window_size', 2048)
+            stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
+
+            index_matrix, fund_freqs, time_array, fft_freqs = builder.build_chirp_signal_index_matrix(
+                stimulus_metadata, sr=sr, n_fft=stft_window_size,
+                hop_length=stft_hop_size, max_harmonic_order=35
+            )
+        else:
+            raise ValueError(f"Unsupported stimulus_method: {stimulus_metadata['stimulus_method']}")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 1B: Select User Configuration
+        # ═══════════════════════════════════════════════════════════════════
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, len(fft_freqs)
+        )
+        fundamental_bins = index_matrix[:, 1]
+
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE 2: Calculate THD
+        # ═══════════════════════════════════════════════════════════════════
+        if stimulus_metadata['stimulus_method'] == 'steps':
+            analyzer = StepSignalHD(sample_rate=sr)
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
+                stft_window_type=stft_window_type
+            )
+
+            # Format for plotting (backward compatible)
+            x = result['frequencies']
+            thd = result['thd']
+            # h needs to be (6, n_steps) for plotting - 6 harmonics expected by plot_harmonic
+            # Row 0: fundamental, Rows 1-5: harmonics 1-5
+            h = np.zeros((6, len(x)))
+            h[0, :] = x  # First row is fundamental frequencies (used as placeholder)
+
+            # Extract harmonic amplitudes from STFT spectrum using index matrix
+            spectrum = result['spectrum_matrix']  # Shape: (n_bins+1, n_steps) with dummy bin
+            for step_idx in range(len(x)):
+                # Extract harmonics 1-5 using index matrix
+                for harmonic_order in range(1, 6):
+                    bin_idx = index_matrix[step_idx, harmonic_order]
+                    if bin_idx > 0:  # Not sentinel/dummy bin
+                        h[harmonic_order, step_idx] = spectrum[bin_idx, step_idx]
+
+
+        elif stimulus_metadata['stimulus_method'] == 'chirps':
+            analyzer = ChirpSignalHD(sample_rate=sr)
+            stft_window_size = thd_kwargs.get('stft_window_size', 2048)
+            stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
+
+            if 'time_array' not in locals():
+                # Rebuild time_array if needed
+                single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+                num_samples = int(single_rep_duration * sr)
+                num_frames = 1 + (num_samples - stft_window_size) // stft_hop_size
+                time_array = (np.arange(num_frames) * stft_hop_size + stft_window_size / 2) / sr
+
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, None, fund_freqs, time_array, fundamental_bins),
+                stft_window_size=stft_window_size,
+                stft_hop_size=stft_hop_size
+            )
+
+            x = result['frequencies']
+            thd = result['thd']
+            # h needs to be (6, n_frames) for plotting
+            h = np.zeros((6, len(x)))
+            h[0, :] = x
+
+        return x, h, thd
+
+    def _calculate_perceptual_thd_three_phase(
+        self,
+        recorded_signal: np.ndarray,
+        sample_rate: int,
+        thd_kwargs: dict,
+        v2pa_factor: float = 1.0
+    ) -> tuple:
         """
-            Calculate the spectrum of the reference signal, returning the base frequency
-            and its maximum amplitude for each time window.
+        Calculate perceptual loudness (phons) using three-phase architecture with psychoacoustic models.
 
-            Args:
-                - reference_signal : ndarray
-                    The input reference signal.
-                - sr: int
-                    The sample rate of the signals.
-                - gap_len : int, optional (default is 10)
-                    The length of each time window used to calculate.
-                - delay_frames : int, default 0
-                    The number of frames to delay.
+        Similar to _calculate_thd_three_phase but returns perceived loudness instead of THD percentage.
 
-            Returns:
-                - freq_dict: dict
-                    A dictionary with the base frequency as the key, storing the maximum amplitude,
-                    position, and index information.
-                - base_freq_list: list
-                    A list containing the base frequency for each time window.
+        Args:
+            recorded_signal: Recorded audio signal
+            sample_rate: Sample rate
+            thd_kwargs: {
+                'stimulus_metadata': dict with stimulus configuration,
+                'harmonic_orders': list of harmonic orders (e.g., [10, 11, 12])
+            }
+            v2pa_factor: Microphone calibration multiplier (V -> Pa), default 1.0.
+                Applied in amplitude domain before log transform:
+                calibrated_amp = amp * v2pa_factor
+
+        Returns:
+            (freq_value, harmonic, perceptual_loudness):
+                - freq_value: Fundamental frequencies
+                - harmonic: Harmonic orders array
+                - perceptual_loudness: Perceived loudness in phons
         """
-        win_len = sr // gap_len
-        noverlap = win_len - hop_length
-        if noverlap < 0:
-             noverlap = 0 
+        stimulus_metadata = thd_kwargs['stimulus_metadata']
+        harmonic_orders = thd_kwargs.get('harmonic_orders', [])
 
-        f, t, xf = signal.stft(reference_signal, fs=sr, nperseg=win_len, noverlap=noverlap,
-                                nfft=win_len, return_onesided=True, boundary=None, padded=False, window=window)
+        # Loudness (mosqito / ISO 532-1) requires analysis at >= 48 kHz so that
+        # the fine-band spectrum covers up to 24 kHz. For lower-rate recordings
+        # (e.g., 44.1 kHz), resample to 48 kHz as the standard analysis path.
+        analysis_sr = int(sample_rate)
+        if analysis_sr < 48000:
+            expected_len_target = None
+            total_time = stimulus_metadata.get("total_time")
+            if total_time is not None:
+                expected_len_target = int(round(float(total_time) * 48000))
+            recorded_signal, analysis_sr = self._resample_to_min_sr_for_loudness(
+                recorded_signal=recorded_signal,
+                original_sr=analysis_sr,
+                target_sr=48000,
+                expected_len_target=expected_len_target,
+            )
 
-        abs_xf = np.abs(xf)
-        argmax_indices = np.argmax(abs_xf, axis=0)
-        all_base_freqs = f[argmax_indices] 
-        max_amplitudes = np.max(abs_xf, axis=0) 
+        # Phase 1A: Build overall index matrix
+        builder = HarmonicIndexBuilder()
 
-        freq_dict = {}
-        num_windows = abs_xf.shape[1]
+        stimulus_method = stimulus_metadata['stimulus_method']
 
-        for j in range(num_windows):
-            base_freq = all_base_freqs[j]
-            amplitude = max_amplitudes[j]
-            i = j * hop_length
-            argmax = argmax_indices[j]
+        if stimulus_method == 'steps':
+            # Calculate STFT parameters (full step duration - no trimming)
+            single_rep_duration = stimulus_metadata['total_time'] / stimulus_metadata['repeat_times']
+            step_duration = single_rep_duration / stimulus_metadata['num_steps']
+            step_samples = int(step_duration * analysis_sr)
+            n_fft = step_samples  # STFT window size = step duration
 
-            # Update dict if this window has a higher amplitude for this base_freq
-            if amplitude > freq_dict.get(base_freq, {'bf_v': -1.0}).get("bf_v"):
-                 freq_dict[base_freq] = {"bf_v": amplitude, "i": i, "argmax": argmax}
+            index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+                stimulus_metadata, sr=analysis_sr, n_fft=n_fft, max_harmonic_order=35
+            )
+        elif stimulus_method == 'chirps':
+            stft_window_size = thd_kwargs.get('stft_window_size', 2048)
+            stft_hop_size = thd_kwargs.get('stft_hop_size', 1024)
 
-        base_freq_list = list(all_base_freqs)
+            index_matrix, fund_freqs, time_array, fft_freqs = builder.build_chirp_signal_index_matrix(
+                stimulus_metadata, sr=analysis_sr, n_fft=stft_window_size,
+                hop_length=stft_hop_size, max_harmonic_order=35
+            )
+        else:
+            raise ValueError(f"Unsupported stimulus_method: {stimulus_method}")
 
-        return freq_dict, base_freq_list
+        # Phase 1B: Create mask from selected harmonics
+        mask_matrix = builder.create_mask_from_indices(
+            index_matrix, harmonic_orders, len(fft_freqs)
+        )
+        fundamental_bins = index_matrix[:, 1]
+
+        # Build masking_mask_matrix for cumulative masking
+        masking_mask_matrix = None
+        masking_config = thd_kwargs.get('masking_config')
+        if masking_config and masking_config.get('enable_cumulative'):
+            # For cumulative masking, include all lower-order harmonics up to max analyzed harmonic
+            max_harmonic = max(harmonic_orders)
+            masking_orders = list(range(1, max_harmonic))  # Fundamental to (max - 1)
+
+            if masking_orders:  # Only create if there are masking harmonics
+                masking_mask_matrix = builder.create_mask_from_indices(
+                    index_matrix, masking_orders, len(fft_freqs)
+                )
+
+        # Phase 2: Compute perceptual loudness using perceptual analyzers
+        if stimulus_method == 'steps':
+            analyzer = PerceptualStepSignalHD(analysis_sr)
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, fundamental_bins),
+                v2pa_factor=v2pa_factor,
+                masking_config=masking_config
+            )
+        else:  # chirps
+            analyzer = PerceptualChirpSignalHD(analysis_sr)
+            result = analyzer.compute_distortion(
+                recorded_signal, stimulus_metadata, harmonic_orders,
+                harmonic_mask=(mask_matrix, masking_mask_matrix, fund_freqs, time_array, fundamental_bins),
+                v2pa_factor=v2pa_factor,
+                masking_config=masking_config
+            )
+
+        # Extract results
+        freq_value = result['frequencies']
+        perceptual_loudness = result['perceptual_loudness']
+        harmonic = np.array(harmonic_orders)
+
+        return freq_value, harmonic, perceptual_loudness
 
     @staticmethod
     def calculate_fundamental_freq(reference_signal, sr, **kwargs):
@@ -281,44 +472,6 @@ class AudioThdFrequencyResponseAnalysis(object):
         times = librosa.times_like(C, sr=sr, hop_length=hop_length)
         return C, freqs, times
 
-    @staticmethod
-    def get_harmonic(recorded_signal, freq_dict, sr, harmonics, gap_len=10, delay_frames=0):
-        """
-            Extract harmonic information from the recorded signal and update the frequency dictionary.
-
-            Args:
-                - recorded_signal : ndarray
-                    The input recorded signal.
-                - freq_dict: dict
-                    A dictionary with the base frequency as the key, storing the maximum amplitude,
-                    position, and index information.
-                - sr: int
-                    The sample rate of the signals.
-                - harmonics: list
-                    A list specifying the harmonics to extract, e.g., [1, 2, 3, 4, 5] for 1st to 5th harmonics.
-                - gap_len : int, optional (default is 10)
-                    The length of each time window used to calculate.
-                - delay_frames : int, default 0
-                    The number of frames to delay.
-
-            Returns:
-                - freq_dict: dict
-                    The updated frequency dictionary with harmonic amplitude lists and the base frequency amplitude.
-
-        """
-        win_len = sr // gap_len
-        for base_freq in freq_dict:
-            i_with_delay = freq_dict[base_freq]["i"] + delay_frames
-            argmax = freq_dict[base_freq]["argmax"]
-            data_fft = np.abs(np.fft.fft(recorded_signal[i_with_delay: i_with_delay + win_len])[: win_len // 2])
-            harmonics_base = data_fft[argmax]
-            harmonic_list = []
-            for j in harmonics:
-                if argmax * (j + 1) < win_len // 2:
-                    harmonic_list.append(data_fft[argmax * (j + 1)])
-            freq_dict[base_freq]["harmonic"] = harmonic_list
-            freq_dict[base_freq]["harmonic_base"] = harmonics_base
-        return freq_dict
 
     @staticmethod
     def calculate_fr(reference_signal, recorded_signal, sr, is_smooth=True):
@@ -449,4 +602,3 @@ class AudioThdFrequencyResponseAnalysis(object):
         rms_deviation = np.sqrt(sum_squares / len(filtered_spl)) * (np.sqrt(2) / 2)
 
         return filtered_spl, rms_deviation
-

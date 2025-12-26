@@ -5,6 +5,7 @@ Enables non-blocking audio capture with real-time chunk processing.
 
 import queue
 import threading
+import time
 import numpy as np
 
 from base.log_manager import LogManager
@@ -50,7 +51,15 @@ class StreamingAudioProcessor:
 
         # Copy data to avoid issues with buffer reuse
         chunk = indata.copy().flatten()
+        self._process_audio_chunk(chunk)
 
+    def _process_audio_chunk(self, chunk):
+        """
+        Process an audio chunk - track samples, trim if needed, queue for UI.
+
+        Args:
+            chunk (np.ndarray): Audio chunk to process (already flattened)
+        """
         # Track samples captured
         samples_before = self.samples_captured
         self.samples_captured += len(chunk)
@@ -149,8 +158,16 @@ class StreamingAudioProcessor:
             self.logger.error(f"Error starting streaming recording: {e}")
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
-    def start_streaming_playrec(self, stimulus_dict, sample_rate=44100, target_samples=None,
-                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000):
+    def start_streaming_playrec(
+        self,
+        stimulus_dict,
+        sample_rate=44100,
+        target_samples=None,
+        input_device=None,
+        output_device=None,
+        prepare_frames=1000,
+        prolong_frames=10000,
+    ):
         """
         Start streaming play and record (simultaneous playback and recording).
 
@@ -185,11 +202,13 @@ class StreamingAudioProcessor:
         self.error_occurred = False
 
         try:
-            self.playback_data = np.concatenate([
-                np.zeros(prepare_frames),
-                stimulus_data,
-                np.zeros(prolong_frames)
-            ]).astype(np.float32)
+            self.playback_data = np.concatenate(
+                [
+                    np.zeros(prepare_frames),
+                    stimulus_data,
+                    np.zeros(prolong_frames),
+                ]
+            ).astype(np.float32)
 
             self.playback_index = 0
 
@@ -222,7 +241,7 @@ class StreamingAudioProcessor:
                 device=output_device['index'] if output_device else None
             )
 
-            # Create input stream (recording) - reuse existing _audio_callback
+            # Create input stream (recording)
             self.stream = sd.InputStream(
                 samplerate=sample_rate,
                 channels=1,
@@ -231,11 +250,12 @@ class StreamingAudioProcessor:
                 device=input_device['index'] if input_device else None
             )
 
-            # Start both streams simultaneously
+            # Start both streams immediately (no blocking!)
             self.output_stream.start()
             self.stream.start()
 
-            self.logger.info(f"Started streaming play+record: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz")
+            self.logger.info("Started streaming play+record (simultaneous)")
+            self.logger.info(f"Target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz")
 
             # No timer needed - callback handles stopping based on sample count
             # Note: QTimer for queue polling is managed by UI layer

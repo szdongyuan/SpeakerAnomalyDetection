@@ -992,7 +992,9 @@ class SequenceWindow(QWidget):
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.data_struct.stimulus_info)
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(
+                    self.recorded_signal_info, self.data_struct.stimulus_info
+                )
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
@@ -1000,7 +1002,7 @@ class SequenceWindow(QWidget):
 
                 # Delete temp file AFTER successful save (for data safety)
                 try:
-                    if hasattr(self, 'streaming_temp_path') and os.path.exists(self.streaming_temp_path):
+                    if hasattr(self, "streaming_temp_path") and os.path.exists(self.streaming_temp_path):
                         os.remove(self.streaming_temp_path)
                         self.default_logger.info(f"Deleted temp file: {self.streaming_temp_path}")
                 except Exception as e:
