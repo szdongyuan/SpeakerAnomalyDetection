@@ -10,14 +10,22 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
 
-class HdConfigWindow(QDialog):
+class RbConfigWindow(QDialog):
+    """
+    Configuration dialog for Rub & Buzz analysis (high-order harmonic distortion).
+
+    Allows selecting harmonics from 10th order to 35th order.
+    Identical to HdConfigWindow except for harmonic range (10-35 instead of 2-35).
+    """
     selected_labels_changed = pyqtSignal()
 
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.selected_labels = self.load_config.get("selected_labels", [])
+        # Filter harmonics to valid range (10-35)
+        loaded_labels = self.load_config.get("selected_labels", [])
+        self.selected_labels = [h for h in loaded_labels if 10 <= h <= 35]
         self.init_ui()
 
     def init_ui(self):
@@ -27,7 +35,8 @@ class HdConfigWindow(QDialog):
         self.setMinimumSize(300, 350)
         self.resize(350, 350)
         layout = QVBoxLayout()
-        harmonic_group_box = QGroupBox("谐波失真")
+        harmonic_group_box = QGroupBox("Rub & Buzz")
+        harmonic_group_box.setObjectName("harmonic_group_box")
         harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         harmonic_slider_layout = self.create_harmonic_slider_layout()
         harmonic_slider_layout.setSpacing(12)
@@ -50,12 +59,14 @@ class HdConfigWindow(QDialog):
         )
 
     def create_harmonic_slider_layout(self):
+        """Create harmonic selection layout with harmonics 10-35"""
         harmonic_slider_layout = QVBoxLayout()
         self.scroll_area = QScrollArea()
         self.scroll_area.setFixedSize(120, 150)
         box_container = QWidget()
         self.box_layout = QVBoxLayout()
-        for i in range(2, 36):
+        # Rub & Buzz: harmonics 10-35 (26 harmonics total)
+        for i in range(10, 36):
             label = QLabel("  " + str(i))
             label.setFixedSize(90, 25)
             label.setAlignment(Qt.AlignLeft)
@@ -80,7 +91,8 @@ class HdConfigWindow(QDialog):
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
             self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
-            self.selected_labels = list(range(2, 36))
+            # Select all rub&buzz harmonics (10-35)
+            self.selected_labels = list(range(10, 36))
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
                 text = label.text().strip()
@@ -104,8 +116,7 @@ class HdConfigWindow(QDialog):
         if label_value in self.selected_labels:
             self.selected_labels.remove(label_value)
             self.selected_labels.sort()
-            label.setText(label.text().replace(checked_box, "").lstrip())
-            label.setText("  " + label.text().replace(checked_box, ""))
+            label.setText("  " + label.text().replace(checked_box, "").strip())
         else:
             self.selected_labels.append(label_value)
             label.setText(checked_box + label.text().strip())
@@ -137,12 +148,12 @@ class HdConfigWindow(QDialog):
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
-        save_flag = self.config_manager.save_default_config("HD", config_data)
+        save_flag = self.config_manager.save_default_config("RB", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         if not self.selected_labels:
-            QMessageBox.warning(self, "设置警告", "请选择谐波失真阶数")
+            QMessageBox.warning(self, "设置警告", "请选择Rub & Buzz阶数")
         else:
             config_data = self.get_default_config()
             self.accept()

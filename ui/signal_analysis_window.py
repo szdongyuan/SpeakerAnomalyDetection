@@ -45,6 +45,8 @@ def get_class_mapping():
         "SPL": Spl,
         "FR": Frequency,
         "HD": Distortion,
+        "RB": RubAndBuzz,  # Rub & Buzz (high-order 10th-35th harmonic distortion)
+        "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (2nd-35th harmonics, psychoacoustic loudness in phons)
         "AI": AI,
         "Spec": Spectrogram,
         "LP": LooseParticle,
@@ -106,24 +108,103 @@ class Distortion(AnalysisGraphWidget):
         self.setWindowTitle(title_name)
 
     def calculate_thd(self):
-        freq_value, harmonic, thd = [], [], []
-        self.selected_harmonics = self.analysis_config["selected_labels"]
-        self.selected_harmonics = [i - 1 for i in self.selected_harmonics]
-        if self.selected_harmonics:
-            kwargs = {"harmonics": self.selected_harmonics}
-            stimulus_signal = self.data_struct.stimulus_data
-            recorded_signal = self.data_struct.store_wave_data
-            sample_rate = self.data_struct.sample_rate
-            atfra = AudioThdFrequencyResponseAnalysis()
-            if self.refresh_stimulus_flag or (self.freq_dict is None or self.base_freq_list is None):
-                self.freq_dict, self.base_freq_list = atfra.calculate_spectrum(stimulus_signal, sample_rate)
-                self.refresh_stimulus_flag = False
-            freq_value, harmonic, thd = atfra.calculate_thd(
-                self.freq_dict, self.base_freq_list, recorded_signal, sample_rate, **kwargs
+        """
+        Calculate THD using the new three-phase architecture.
+
+        Retrieves stimulus metadata from data_struct and calls the modern THD calculation pipeline.
+        For mirror chirps, averages the forward and backward sweeps into a single curve.
+        """
+        # Get selected harmonics from analysis config
+        # UI config stores harmonic orders directly (2, 3, 4, 10, 15, etc.)
+        # Handle case where config might not have selected_labels (e.g., during initialization)
+        if self.analysis_config is None:
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+
+        self.selected_harmonics = self.analysis_config.get("selected_labels", [])
+
+        if not self.selected_harmonics:
+            # No harmonics selected, nothing to calculate
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+        
+        # Get signals and metadata from data_struct
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        stimulus_info = self.data_struct.stimulus_info
+        
+        if recorded_signal is None or sample_rate is None or stimulus_info is None:
+            raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
+        
+        # Convert stimulus_info to stimulus_metadata format
+        # Handle naming differences: "chirp" -> "chirps", normalize method names
+        stimulus_method = stimulus_info.get("stimulus_method", "steps")
+        if stimulus_method == "chirp":
+            stimulus_method = "chirps"
+        elif stimulus_method == "step":
+            stimulus_method = "steps"
+        
+        stimulus_metadata = {
+            'stimulus_method': stimulus_method,
+            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
+            'start_freq': stimulus_info.get("start_freq"),
+            'stop_freq': stimulus_info.get("stop_freq"),
+            'num_steps': stimulus_info.get("num_steps"),
+            'total_time': stimulus_info.get("total_time"),
+            'repeat_times': stimulus_info.get("repeat_times"),
+            'sample_rate': sample_rate
+        }
+        
+        # Call the new three-phase architecture
+        atfra = AudioThdFrequencyResponseAnalysis()
+        thd_kwargs = {
+            'stimulus_metadata': stimulus_metadata,
+            'harmonic_orders': self.selected_harmonics
+        }
+        
+        freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
+            recorded_signal, sample_rate, thd_kwargs
+        )
+        
+        # Handle mirror chirps: average forward and backward sweeps
+        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
+            # Split data in half (first half = backward sweep, second half = forward sweep)
+            mid_point = len(thd) // 2
+            thd_backward = thd[:mid_point]
+            thd_forward = thd[mid_point:]
+            freq_backward = freq_value[:mid_point]
+            freq_forward = freq_value[mid_point:]
+
+            # Reverse backward sweep to align frequencies with forward sweep
+            thd_backward_reversed = thd_backward[::-1]
+
+            # Average the two sweeps (handle potential length mismatch from odd/even split)
+            min_len = min(len(thd_forward), len(thd_backward_reversed))
+            thd = (thd_forward[:min_len] + thd_backward_reversed[:min_len]) / 2.0
+            freq_value = freq_forward[:min_len]  # Use forward frequencies (ascending order)
+
+        # Apply 1/6 octave smoothing for chirp signals only
+        if stimulus_method == 'chirps':
+            from base.utils.octave_smoothing import smooth_to_octave_grid
+            freq_value, thd = smooth_to_octave_grid(
+                freq_value, thd,
+                fraction=6,
+                method="log"
             )
+
+        # Plot the results
         self.plot_graph(freq_value, thd)
-        if isinstance("harmonic", np.ndarray):
+        
+        # Convert to list format for result storage
+        if isinstance(harmonic, np.ndarray):
             harmonic = harmonic.tolist()
+        if isinstance(freq_value, np.ndarray):
+            freq_value = freq_value.tolist()
+        if isinstance(thd, np.ndarray):
+            thd = thd.tolist()
+        
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
         return self.result
 
@@ -142,6 +223,168 @@ class Distortion(AnalysisGraphWidget):
     @staticmethod
     def check_valid_data(data):
         return isinstance(data, (list, np.ndarray)) and len(data) > 0
+
+
+class RubAndBuzz(Distortion):
+    """
+    Rub & Buzz analysis widget - displays high-order harmonic distortion (10th+ harmonics).
+
+    Inherits from Distortion and reuses all calculation methods.
+    The only difference is the harmonic range enforced by RbConfigWindow (10-35 instead of 2-35).
+    """
+
+    def __init__(self, title_name):
+        super().__init__(title_name)
+        # Inherits all attributes and methods from Distortion
+        # No additional state or overrides needed - harmonic range is controlled by config dialog
+
+
+class PerceptualRubAndBuzz(RubAndBuzz):
+    """
+    Perceptual Rub & Buzz analysis widget - displays SC-based perceptual indicator of harmonics (2nd-35th).
+
+    Inherits from RubAndBuzz but uses the SoundCheck/Listen (SC) perceptual model.
+    Y-axis shows TotalNL / EHS / TotalNL×EHS (PRB Index or PRB Loudness). Unlike standard RB (10th-35th),
+    PRB analyzes the full harmonic range (2nd-35th).
+    """
+
+    def __init__(self, title_name):
+        super().__init__(title_name)
+        self._prb_curve_label = "Perceived Loudness"
+        self._prb_y_label = "Perceived Loudness (phons)"
+
+    def calculate_thd(self):
+        """
+        Calculate perceptual loudness using three-phase architecture with psychoacoustic models.
+
+        Overrides parent method to use _calculate_perceptual_thd_three_phase instead of
+        _calculate_thd_three_phase.
+        """
+        # Get selected harmonics from analysis config
+        # Handle case where config might not have selected_labels (e.g., during initialization)
+        if self.analysis_config is None:
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            return self.result
+
+        # PRB uses a fixed harmonic range (2nd-35th). The config dialog no longer exposes harmonic selection.
+        self.selected_harmonics = list(range(2, 36))
+
+        # PRB supports only the SoundCheck/Listen ("sc") method.
+        prb_method = "sc"
+
+        # Get signals and metadata from data_struct
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        stimulus_info = self.data_struct.stimulus_info
+
+        if recorded_signal is None or sample_rate is None or stimulus_info is None:
+            raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
+
+        # Convert stimulus_info to stimulus_metadata format
+        stimulus_method = stimulus_info.get("stimulus_method", "steps")
+        if stimulus_method == "chirp":
+            stimulus_method = "chirps"
+        elif stimulus_method == "step":
+            stimulus_method = "steps"
+
+        stimulus_metadata = {
+            'stimulus_method': stimulus_method,
+            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
+            'start_freq': stimulus_info.get("start_freq"),
+            'stop_freq': stimulus_info.get("stop_freq"),
+            'num_steps': stimulus_info.get("num_steps"),
+            'total_time': stimulus_info.get("total_time"),
+            'repeat_times': stimulus_info.get("repeat_times"),
+            'sample_rate': sample_rate
+        }
+
+        # Call the PERCEPTUAL three-phase architecture
+        v2pa_factor = self.v2pa_factor
+
+        atfra = AudioThdFrequencyResponseAnalysis()
+        masking_config = {}
+        cfg_masking = self.analysis_config.get("masking_config")
+        if isinstance(cfg_masking, dict):
+            masking_config.update(cfg_masking)
+        masking_config["prb_method"] = prb_method
+
+        # Paper-aligned default: plot the combined indicator TotalNL×EHS unless explicitly overridden.
+        sc_metric = str(masking_config.get("sc_metric", "totalnl_x_ehs")).strip().lower()
+        if sc_metric not in {"totalnl", "totalnl_phons", "ehs", "totalnl_x_ehs"}:
+            sc_metric = "totalnl_x_ehs"
+        masking_config["sc_metric"] = sc_metric
+        if sc_metric == "ehs":
+            self._prb_curve_label = "EHS"
+            self._prb_y_label = "EHS"
+        elif sc_metric == "totalnl_x_ehs":
+            self._prb_curve_label = "TotalNL×EHS"
+            self._prb_y_label = "TotalNL×EHS"
+        else:
+            self._prb_curve_label = "TotalNL"
+            self._prb_y_label = "TotalNL (phons)"
+        thd_kwargs = {
+            'stimulus_metadata': stimulus_metadata,
+            'harmonic_orders': self.selected_harmonics,
+            'masking_config': masking_config,
+        }
+
+        freq_value, harmonic, perceptual_loudness = atfra._calculate_perceptual_thd_three_phase(
+            recorded_signal, sample_rate, thd_kwargs, v2pa_factor=v2pa_factor
+        )
+
+        # Handle mirror chirps: average forward and backward sweeps
+        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
+            # Split data in half
+            mid_point = len(perceptual_loudness) // 2
+            loudness_backward = perceptual_loudness[:mid_point]
+            loudness_forward = perceptual_loudness[mid_point:]
+            freq_backward = freq_value[:mid_point]
+            freq_forward = freq_value[mid_point:]
+
+            # Reverse backward sweep
+            loudness_backward_reversed = loudness_backward[::-1]
+
+            # Average the two sweeps
+            min_len = min(len(loudness_forward), len(loudness_backward_reversed))
+            perceptual_loudness = (loudness_forward[:min_len] + loudness_backward_reversed[:min_len]) / 2.0
+            freq_value = freq_forward[:min_len]
+
+        # Apply 1/6 octave smoothing for chirp signals only
+        if stimulus_metadata['stimulus_method'] == 'chirps':
+            from base.utils.octave_smoothing import smooth_to_octave_grid
+            freq_value, perceptual_loudness = smooth_to_octave_grid(
+                freq_value, perceptual_loudness,
+                fraction=6,
+                method="log"
+            )
+
+        # Plot the results (Y-axis will be in phons)
+        self.plot_graph(freq_value, perceptual_loudness)
+
+        # Convert to list format for result storage
+        if isinstance(harmonic, np.ndarray):
+            harmonic = harmonic.tolist()
+        if isinstance(freq_value, np.ndarray):
+            freq_value = freq_value.tolist()
+        if isinstance(perceptual_loudness, np.ndarray):
+            perceptual_loudness = perceptual_loudness.tolist()
+
+        # Note: "thd" key name kept for backward compatibility, but contains phons
+        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": perceptual_loudness}
+        return self.result
+
+    def plot_graph(self, freq_value, perceptual_loudness):
+        """Plot perceptual loudness with correct phons label."""
+        self.analysis_plot.clear()
+        if self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness):
+            self.analysis_plot.plot(freq_value, perceptual_loudness, pen="b", name=self._prb_curve_label)
+        if self.selected_label is not None:
+            self.analysis_plot.setTitle(f"Perceived Loudness of {self.selected_label.text()} order")
+        self.analysis_plot.setLabel("left", self._prb_y_label)
+        self.analysis_plot.setLabel("bottom", "Frequency")
+        self.analysis_plot.setLogMode(x=True, y=False)
+        self.analysis_plot.showGrid(x=True, y=True)
 
 
 class Spl(AnalysisGraphWidget):
