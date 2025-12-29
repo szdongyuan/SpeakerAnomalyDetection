@@ -555,8 +555,13 @@ class Frequency(AnalysisGraphWidget):
             QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
             return None
 
+        if not rows or len(rows) == 0:
+            QMessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
+            return None
+
         csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
         lenth = len(rows[0])
+        print(lenth)
         if lenth == 3 and rows[0][1] == "upperbound":
             upperbound = True
         elif lenth == 3 and rows[0][1] == "lowerbound":
