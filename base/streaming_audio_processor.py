@@ -149,8 +149,16 @@ class StreamingAudioProcessor:
             self.logger.error(f"Error starting streaming recording: {e}")
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
-    def start_streaming_playrec(self, stimulus_dict, sample_rate=44100, target_samples=None,
-                                 input_device=None, output_device=None, prepare_frames=1000, prolong_frames=10000):
+    def start_streaming_playrec(
+        self,
+        stimulus_dict,
+        sample_rate=44100,
+        target_samples=None,
+        input_device=None,
+        output_device=None,
+        prepare_frames=1000,
+        prolong_frames=10000
+    ):
         """
         Start streaming play and record (simultaneous playback and recording).
 
@@ -170,10 +178,8 @@ class StreamingAudioProcessor:
         Returns:
             tuple: (error_code, message)
         """
-        # Prepare stimulus with padding
-        stimulus_data = stimulus_dict.get('data') * stimulus_dict.get('amplitude')
+        stimulus_data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
 
-        # Calculate target samples if not provided
         if target_samples is None:
             target_samples = prepare_frames + len(stimulus_data) + prolong_frames
 
@@ -185,67 +191,92 @@ class StreamingAudioProcessor:
         self.error_occurred = False
 
         try:
-            self.playback_data = np.concatenate([
-                np.zeros(prepare_frames),
-                stimulus_data,
-                np.zeros(prolong_frames)
-            ]).astype(np.float32)
-
+            self.playback_data = np.concatenate(
+                [np.zeros(prepare_frames), stimulus_data, np.zeros(prolong_frames)]
+            ).astype(np.float32)
             self.playback_index = 0
 
-            # Create playback callback
-            def playback_callback(outdata, frames, time_info, status):
-                if status:
-                    self.logger.warning(f"Playback status: {status}")
+            # Build duplex device selector:
+            # - If both provided: (input_index, output_index)
+            # - Else: None (use defaults)
+            device = None
+            if input_device and output_device:
+                in_idx = input_device["index"]
+                out_idx = output_device["index"]
+                device = in_idx if in_idx == out_idx else (in_idx, out_idx)
+            elif input_device:
+                device = (input_device["index"], None)
+            elif output_device:
+                device = (None, output_device["index"])
 
-                # Copy stimulus data to output buffer
+            def duplex_callback(indata, outdata, frames, time_info, status):
+                if status:
+                    self.logger.warning(f"Duplex status: {status}")
+
+                # ---- playback (write to outdata) ----
                 chunk_end = self.playback_index + frames
                 if chunk_end <= len(self.playback_data):
                     outdata[:, 0] = self.playback_data[self.playback_index:chunk_end]
                 else:
-                    # Pad with zeros if we're at the end
                     remaining = len(self.playback_data) - self.playback_index
                     if remaining > 0:
                         outdata[:remaining, 0] = self.playback_data[self.playback_index:]
                         outdata[remaining:, 0] = 0
                     else:
                         outdata[:, 0] = 0
-
                 self.playback_index += frames
 
-            # Create output stream (playback)
-            self.output_stream = sd.OutputStream(
+                # ---- record (read from indata) ----
+                chunk = indata.copy().flatten()
+
+                samples_before = self.samples_captured
+                self.samples_captured += len(chunk)
+
+                reached_target = (
+                    samples_before < self.target_samples
+                    and self.samples_captured >= self.target_samples
+                )
+
+                if reached_target:
+                    excess = self.samples_captured - self.target_samples
+                    if excess > 0:
+                        chunk = chunk[:-excess]
+                        self.samples_captured = self.target_samples
+                        self.logger.info(
+                            f"Reached target samples: {self.target_samples}, trimmed {excess} samples"
+                        )
+
+                # Queue FIRST, then stop (avoid dropping final chunk)
+                try:
+                    self.audio_queue.put_nowait(chunk)
+                except queue.Full:
+                    self.logger.warning("Audio queue full, dropping chunk")
+
+                if reached_target:
+                    threading.Thread(target=self.stop_streaming, daemon=True).start()
+
+            # ONE duplex stream instead of OutputStream + InputStream
+            self.stream = sd.Stream(
                 samplerate=sample_rate,
-                channels=1,
-                callback=playback_callback,
+                channels=(1, 1),          # (in_channels, out_channels)
+                callback=duplex_callback,
                 blocksize=2048,
-                device=output_device['index'] if output_device else None
+                device=device,
             )
 
-            # Create input stream (recording) - reuse existing _audio_callback
-            self.stream = sd.InputStream(
-                samplerate=sample_rate,
-                channels=1,
-                callback=self._audio_callback,
-                blocksize=2048,
-                device=input_device['index'] if input_device else None
-            )
-
-            # Start both streams simultaneously
-            self.output_stream.start()
             self.stream.start()
-
-            self.logger.info(f"Started streaming play+record: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz")
-
-            # No timer needed - callback handles stopping based on sample count
-            # Note: QTimer for queue polling is managed by UI layer
+            self.logger.info(
+                f"Started duplex play+record: target={target_samples} samples "
+                f"({target_samples/sample_rate:.2f}s) at {sample_rate}Hz, device={device}"
+            )
             return error_code.OK, "Streaming play+record started successfully"
 
         except Exception as e:
             self.error_occurred = True
             self.error_message = str(e)
-            self.logger.error(f"Error starting streaming play+record: {e}")
+            self.logger.error(f"Error starting duplex play+record: {e}")
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
+
 
     def stop_streaming(self):
         """
