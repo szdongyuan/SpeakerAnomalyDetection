@@ -19,11 +19,6 @@ from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow, ImportAudioConfigWindow
 
-# from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow, \
-#     PatternMatchConfigWindow
-# from ui.analysis_config_window import LPConfigWindow
-# from ui.analysis_config_window import PDConfigWindow
-# from ui.analysis_config_window import PipelinePdPmConfigWindow
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
 from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow

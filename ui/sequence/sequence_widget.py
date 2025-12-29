@@ -49,6 +49,7 @@ class SequenceWindow(QWidget):
         self.refresh_stimulus_flag = None
         self.add_or_update_wave_flag = True
         self.count_board = None
+        self.toolsbar = SequenceToolsBar()
 
         self.v2pa_factor = get_mic_v2pa_factor()
         self.sequence_config = list()
@@ -60,8 +61,7 @@ class SequenceWindow(QWidget):
         self.analysis_window = []
         self.default_ai = None
         self.default_ai_result = None
-        
-        self.toolsbar = SequenceToolsBar()
+
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
         self.player_status_flag = False
@@ -862,6 +862,9 @@ class SequenceWindow(QWidget):
             self.sequence_config = result
             seq = self.sequence_config[0]["seq1"]
             self.analysis_config = seq.get("analysis_list", {})
+            mode = seq["acq"]["mode"]
+            if mode == "IMPORT_AUDIO":
+                self.replayer_btn.setDisabled(True)
             if self.count_board:
                 self.count_board.analysis_config = seq.get("analysis_list", {})
         else:
