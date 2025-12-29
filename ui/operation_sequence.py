@@ -575,6 +575,10 @@ class OptionList(QListView):
 
                 sequence_config.analysis_list.update(i_analysis_list)
                 self.config.append(sequence_config)
+                if sequence_config.mode != "IMPORT_AUDIO":
+                    self.signal_len = sequence_config.detail.get("total_time", 4.0) * sequence_config.detail.get("sample_rate", 44100)
+                else:
+                    self.signal_len = 0
 
     def clear_option_list(self):
         self.config = list()
@@ -881,15 +885,18 @@ class OptionList(QListView):
             if flag:
                 seq_item.mode = "PLAY_AND_RECORD"
                 seq_item.detail = config
+                self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
             else:
                 QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
             seq_item.detail = {"total_time": 4.0, "sample_rate": 44100}
+            self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
         elif item_text == "导入音频":
             seq_item.mode = "IMPORT_AUDIO"
             seq_item.detail = {"sample_rate": 44100}
+            self.signal_len = 0
         self.config.append(seq_item)
 
         self.model().insertRow(0, list_item)
