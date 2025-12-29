@@ -561,7 +561,6 @@ class Frequency(AnalysisGraphWidget):
 
         csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
         lenth = len(rows[0])
-        print(lenth)
         if lenth == 3 and rows[0][1] == "upperbound":
             upperbound = True
         elif lenth == 3 and rows[0][1] == "lowerbound":
