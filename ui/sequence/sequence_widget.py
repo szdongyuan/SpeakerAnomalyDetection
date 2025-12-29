@@ -159,7 +159,7 @@ class SequenceWindow(QWidget):
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
         self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
-        self.barcode_scanner_box.stateChanged.connect(self.clicked_scanner)
+        self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
@@ -661,7 +661,23 @@ class SequenceWindow(QWidget):
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
         recorded_dict["input_device"] = self.mic
-        recorded_dict["output_device"] = self.speaker
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "PLAY_AND_RECORD":
+            recorded_dict["output_device"] = self.speaker
+        else:
+            recorded_dict["output_device"] = None
+
+        in_dev = recorded_dict.get("input_device")
+        out_dev = recorded_dict.get("output_device")
+        if in_dev and out_dev:
+            if in_dev.get("hostapi") != out_dev.get("hostapi"):
+                QMessageBox.warning(
+                    self,
+                    "设备组合不支持",
+                    "播放+录制需要选择同一驱动类型（Host API）的输入/输出设备。\n"
+                    f"当前输入: {in_dev.get('name')} (hostapi={in_dev.get('hostapi')})\n"
+                    f"当前输出: {out_dev.get('name')} (hostapi={out_dev.get('hostapi')})"
+                )
+                return None, None, None
 
         return stimulus_dict, recorded_dict, sample_rate
 
@@ -702,6 +718,15 @@ class SequenceWindow(QWidget):
             stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
         else:
             stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
+
+        if stimulus_dict is None:
+            if not is_replay:
+                # rollback the increment done in start_this_play()
+                self.current_recorded_count -= 1
+                self.lineedit_count.setText(str(self.current_recorded_count))
+            self.player_status_flag = False
+            self.update_player_btn_is_paused()
+            return
 
         # Choose streaming or blocking(Not in use now) mode
         if self.use_streaming:
