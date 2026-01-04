@@ -17,8 +17,11 @@ from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
 from base.play_and_record import (
-    play_last_stimulus_wave, record_without_play, get_recorded_info,
-    stream_play_and_record, stream_record_without_play
+    play_last_stimulus_wave,
+    record_without_play,
+    get_recorded_info,
+    stream_play_and_record,
+    stream_record_without_play,
 )
 from base.recording_management import RecordingManager
 from base.save_data import save_recorded_data_to_json, save_audio_simple
@@ -304,11 +307,7 @@ class SequenceWindow(QWidget):
         if self.barcode_scanner_box.isChecked():
             if not self.hw_manager.ensure_config_loaded():
                 self.barcode_scanner_box.setChecked(False)
-                QMessageBox.warning(
-                    self,
-                    "硬件初始化失败",
-                    "无法加载扫码枪/光电开关配置，请检查配置文件。"
-                )
+                QMessageBox.warning(self, "硬件初始化失败", "无法加载扫码枪/光电开关配置，请检查配置文件。")
                 return
 
             self.lineedit_s_or_n.setEnabled(True)
@@ -316,11 +315,7 @@ class SequenceWindow(QWidget):
                 self.default_logger.info("硬件监听已启动")
             else:
                 self.barcode_scanner_box.setChecked(False)
-                QMessageBox.warning(
-                    self,
-                    "硬件参数缺失",
-                    "HID 配置缺少有效的 VID/PID，已恢复到未勾选状态。"
-                )
+                QMessageBox.warning(self, "硬件参数缺失", "HID 配置缺少有效的 VID/PID，已恢复到未勾选状态。")
         else:
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
@@ -348,7 +343,7 @@ class SequenceWindow(QWidget):
 
     def closeEvent(self, event):
         """窗口关闭时释放硬件资源"""
-        if hasattr(self, 'hw_manager'):
+        if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
         super().closeEvent(event)
 
@@ -495,7 +490,11 @@ class SequenceWindow(QWidget):
             manual: If True (default), this is a manual user click; if False, this is an auto-triggered call.
                     Only manual calls will disable the replay and data buttons.
         """
-        if not hasattr(self.data_struct, 'store_wave_data') or self.data_struct.store_wave_data is None or len(self.data_struct.store_wave_data) == 0:
+        if (
+            not hasattr(self.data_struct, "store_wave_data")
+            or self.data_struct.store_wave_data is None
+            or len(self.data_struct.store_wave_data) == 0
+        ):
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
@@ -506,6 +505,8 @@ class SequenceWindow(QWidget):
         self.update_recorded_signal_info_to_db()
 
         self.mark_result()
+        self.data_struct.store_wave_data = None
+        self.replayer_btn.setEnabled(False)
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
@@ -675,7 +676,7 @@ class SequenceWindow(QWidget):
                     "设备组合不支持",
                     "播放+录制需要选择同一驱动类型（Host API）的输入/输出设备。\n"
                     f"当前输入: {in_dev.get('name')} (hostapi={in_dev.get('hostapi')})\n"
-                    f"当前输出: {out_dev.get('name')} (hostapi={out_dev.get('hostapi')})"
+                    f"当前输出: {out_dev.get('name')} (hostapi={out_dev.get('hostapi')})",
                 )
                 return None, None, None
 
@@ -734,7 +735,7 @@ class SequenceWindow(QWidget):
             if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
                 # Start streaming play+record (non-blocking)
                 # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
-                temp_path = self.recorded_path.replace('.wav', '_temp.wav')
+                temp_path = self.recorded_path.replace(".wav", "_temp.wav")
                 self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
                 self.streaming_temp_path = temp_path
 
@@ -838,8 +839,9 @@ class SequenceWindow(QWidget):
                     instance.calculate_thd()
                     instance.show()
                 elif hasattr(instance, "calculate_ai_scores"):
-                    instance.calculate_ai_scores(self.count_board.mode, self.analysis_config,
-                                                 self.sequence_config[0]["seq1"]["acq"]["mode"])
+                    instance.calculate_ai_scores(
+                        self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
+                    )
                     instance.show()
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
@@ -939,7 +941,7 @@ class SequenceWindow(QWidget):
             self.streaming_plot_item = self.line_graph.plot(time_axis, accumulated_audio, pen="k")
         else:
             # Subsequent chunks - update existing item (preserves zoom/pan) incrementally
-            self.streaming_plot_item.setData(time_axis, accumulated_audio)    
+            self.streaming_plot_item.setData(time_axis, accumulated_audio)
 
         # Write chunk to file (if wav_writer is connected)
         if self.streaming_wav_writer:
@@ -1020,7 +1022,9 @@ class SequenceWindow(QWidget):
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, self.data_struct.stimulus_info)
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(
+                    self.recorded_signal_info, self.data_struct.stimulus_info
+                )
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
@@ -1028,7 +1032,7 @@ class SequenceWindow(QWidget):
 
                 # Delete temp file AFTER successful save (for data safety)
                 try:
-                    if hasattr(self, 'streaming_temp_path') and os.path.exists(self.streaming_temp_path):
+                    if hasattr(self, "streaming_temp_path") and os.path.exists(self.streaming_temp_path):
                         os.remove(self.streaming_temp_path)
                         self.default_logger.info(f"Deleted temp file: {self.streaming_temp_path}")
                 except Exception as e:
@@ -1097,7 +1101,7 @@ class SequenceWindow(QWidget):
     def _cleanup_streaming_resources(self):
         """
         Clean up all streaming resources (timer, processor, wav_writer).
-        
+
         Called before starting a new recording to prevent resource conflicts.
         Safe to call multiple times (idempotent).
         """
@@ -1108,7 +1112,7 @@ class SequenceWindow(QWidget):
                 self.default_logger.debug("Stopped streaming poll timer")
         except Exception as e:
             self.default_logger.error(f"Error stopping timer: {e}")
-        
+
         # 2. Stop processor (stops audio streams - CRITICAL for preventing device conflicts)
         try:
             if self.streaming_processor is not None:
@@ -1117,7 +1121,7 @@ class SequenceWindow(QWidget):
                 self.default_logger.debug("Stopped streaming processor")
         except Exception as e:
             self.default_logger.error(f"Error stopping processor: {e}")
-        
+
         # 3. Finalize wav writer
         try:
             if self.streaming_wav_writer is not None:
@@ -1126,7 +1130,7 @@ class SequenceWindow(QWidget):
                 self.default_logger.debug("Finalized wav writer")
         except Exception as e:
             self.default_logger.error(f"Error finalizing wav writer: {e}")
-        
+
         # 4. Clean up other state
         self.streaming_stimulus_data = None
         self.streaming_mode = None
