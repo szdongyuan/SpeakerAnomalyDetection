@@ -250,8 +250,8 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
     def __init__(self, title_name):
         super().__init__(title_name)
-        self._prb_curve_label = "Perceived Loudness"
-        self._prb_y_label = "Perceived Loudness (phons)"
+        self._prb_curve_label = "感知失真指数"
+        self._prb_y_label = "感知失真指数 (phon)"
 
     def calculate_thd(self):
         """
@@ -318,11 +318,11 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             self._prb_curve_label = "EHS"
             self._prb_y_label = "EHS"
         elif sc_metric == "totalnl_x_ehs":
-            self._prb_curve_label = "TotalNL×EHS"
-            self._prb_y_label = "TotalNL×EHS"
+            self._prb_curve_label = "感知失真指数"
+            self._prb_y_label = "感知失真指数 (phon)"
         else:
-            self._prb_curve_label = "TotalNL"
-            self._prb_y_label = "TotalNL (phons)"
+            self._prb_curve_label = "感知失真响度"
+            self._prb_y_label = "感知失真响度 (phon)"
         thd_kwargs = {
             'stimulus_metadata': stimulus_metadata,
             'harmonic_orders': self.selected_harmonics,

@@ -47,8 +47,8 @@ class PerceptualRbConfigWindow(QDialog):
         self.sc_metric_desc = QLabel("选择输出结果：")
         self.sc_metric_desc.setAlignment(Qt.AlignLeft)
         self.sc_metric_combo = QComboBox()
-        self.sc_metric_combo.addItem("PRB 指数（默认）", "totalnl_x_ehs")
-        self.sc_metric_combo.addItem("PRB 响度", "totalnl")
+        self.sc_metric_combo.addItem("感知失真指数", "totalnl_x_ehs")
+        # self.sc_metric_combo.addItem("感知失真响度", "totalnl")  # 功能尚未完善，暂时禁用
 
         saved_masking = self.load_config.get("masking_config", {})
         if not isinstance(saved_masking, dict):
@@ -57,7 +57,8 @@ class PerceptualRbConfigWindow(QDialog):
         if saved_metric == "totalnl_phons":
             saved_metric = "totalnl"
         # Map old "ehs" option to default
-        if saved_metric not in {"totalnl_x_ehs", "totalnl"}:
+        # 由于"感知失真响度"选项已禁用，强制使用默认选项
+        if saved_metric not in {"totalnl_x_ehs"}:
             saved_metric = "totalnl_x_ehs"
         idx_metric = self.sc_metric_combo.findData(saved_metric)
         if idx_metric >= 0:
