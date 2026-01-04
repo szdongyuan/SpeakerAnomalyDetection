@@ -507,6 +507,7 @@ class SequenceWindow(QWidget):
         self.mark_result()
         self.data_struct.store_wave_data = None
         self.replayer_btn.setEnabled(False)
+        self.data_btn.setEnabled(False)
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
@@ -568,6 +569,9 @@ class SequenceWindow(QWidget):
         self.clicked_scanner()
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        if not self.sequence_config:
+            QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
+            return
         acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
         if acq_mode == "IMPORT_AUDIO":
             self.import_audio_and_analyze()
