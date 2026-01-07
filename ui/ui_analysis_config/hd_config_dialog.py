@@ -1,16 +1,24 @@
+"""
+HD (Harmonic Distortion / THD) 分析配置对话框
+"""
 from functools import partial
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QMessageBox, QPushButton
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QScrollArea, QWidget
+from PyQt5.QtWidgets import (
+    QCheckBox, QDialog, QGroupBox, QHBoxLayout, QVBoxLayout,
+    QMessageBox, QPushButton, QLabel, QSizePolicy, QScrollArea, QWidget
+)
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.popuputils import PopupUtils, check_upper_lower_limit
+from ui.signal_analysis_window import Frequency
+from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
 
 class HdConfigWindow(QDialog):
+    """谐波失真 (THD) 分析配置对话框"""
     selected_labels_changed = pyqtSignal()
 
     def __init__(self, config_manager, model_type):
@@ -24,9 +32,12 @@ class HdConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(300, 350)
-        self.resize(350, 350)
+        self.setMinimumSize(320, 480)
+        self.resize(380, 520)
+
         layout = QVBoxLayout()
+
+        # 谐波选择组
         harmonic_group_box = QGroupBox("谐波失真")
         harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         harmonic_slider_layout = self.create_harmonic_slider_layout()
@@ -37,16 +48,34 @@ class HdConfigWindow(QDialog):
         harmonic_slider_layout.addStretch()
         harmonic_slider_layout.addWidget(self.select_all_check)
         harmonic_group_box.setLayout(harmonic_slider_layout)
+
+        # 阈值配置组件
+        self.threshold_widget = ThresholdConfigWidget(
+            parent=self,
+            upper_range=(0, 100),      # THD 阈值范围 0-100%
+            lower_range=(0, 100),
+            default_upper=self.load_config.get("upper_limit", 10.0),
+            default_lower=self.load_config.get("lower_limit", 0.0),
+            load_config=self.load_config,
+            csv_validator=Frequency.load_excel_limit
+        )
+
         btn_layout = self.create_btn()
+
         layout.addWidget(harmonic_group_box)
+        layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+
         self.setStyleSheet(
             ui_style_const.qgroupbox_style
             + ui_style_const.qcheckbox_style
             + ui_style_const.qpushbutton_style
             + ui_style_const.qlabel_style
+            + ui_style_const.qlineedit_style
+            + ui_style_const.qradiobutton_style
+            + ui_style_const.qdoublespinbox_style
         )
 
     def create_harmonic_slider_layout(self):
@@ -129,14 +158,20 @@ class HdConfigWindow(QDialog):
         return btn_layout
 
     def get_default_config(self):
-        default_config = {
+        """获取配置数据"""
+        config = {
             "selected_labels": self.selected_labels,
             "all_checked": self.select_all_check.isChecked(),
         }
-        return default_config
+        config.update(self.threshold_widget.get_config())
+        return config
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
+        if not self.threshold_widget.validate():
+            return
+        if config_data.get("limit_checked") and check_upper_lower_limit(config_data, self):
+            return
         save_flag = self.config_manager.save_default_config("HD", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
@@ -145,5 +180,9 @@ class HdConfigWindow(QDialog):
             QMessageBox.warning(self, "设置警告", "请选择谐波失真阶数")
         else:
             config_data = self.get_default_config()
+            if not self.threshold_widget.validate():
+                return
+            if config_data.get("limit_checked") and check_upper_lower_limit(config_data, self):
+                return
             self.accept()
             return config_data
