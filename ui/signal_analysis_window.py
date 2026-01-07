@@ -104,6 +104,7 @@ class Distortion(AnalysisGraphWidget):
         self.analysis_config = None
         self.selected_harmonics = []
         self.result = {}
+        self.v2pa_factor = None
 
         self.setWindowTitle(title_name)
 
@@ -194,8 +195,8 @@ class Distortion(AnalysisGraphWidget):
                 method="log"
             )
 
-        # Plot the results
-        self.plot_graph(freq_value, thd)
+        # Plot the results with threshold support
+        self.plot_graph(freq_value, thd, self.analysis_config)
         
         # Convert to list format for result storage
         if isinstance(harmonic, np.ndarray):
@@ -208,8 +209,8 @@ class Distortion(AnalysisGraphWidget):
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
         return self.result
 
-    def plot_graph(self, freq_value, thd):
-        # Draw a graph based on the calculated thd
+    def plot_graph(self, freq_value, thd, analysis_config=None):
+        """Draw a graph based on the calculated THD with optional threshold limits."""
         self.analysis_plot.clear()
         if self.check_valid_data(freq_value) and self.check_valid_data(thd):
             self.analysis_plot.plot(freq_value, thd, pen="b", name="THD")
@@ -219,6 +220,105 @@ class Distortion(AnalysisGraphWidget):
         self.analysis_plot.setLabel("bottom", "Frequency")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
+
+        # Apply threshold limits if configured
+        if analysis_config and analysis_config.get("limit_checked"):
+            self._apply_threshold_limits(freq_value, thd, analysis_config)
+
+    def _apply_threshold_limits(self, freq_value, y_data, analysis_config):
+        """Apply and plot threshold limits based on configuration."""
+        if not self.check_valid_data(freq_value) or not self.check_valid_data(y_data):
+            return
+
+        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+
+        if analysis_config.get("self_defined"):
+            # Use fixed upper/lower limits (horizontal lines)
+            upper_limit = analysis_config.get("upper_limit")
+            lower_limit = analysis_config.get("lower_limit")
+            if upper_limit is not None:
+                upper_line = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
+                self.analysis_plot.addItem(upper_line)
+            if lower_limit is not None:
+                lower_line = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
+                self.analysis_plot.addItem(lower_line)
+            # Highlight out-of-range points
+            self._highlight_out_of_range_fixed(freq_value, y_data, upper_limit, lower_limit)
+        else:
+            # Use CSV curve limits
+            csv_path = analysis_config.get("config_dir")
+            result = Frequency.load_excel_limit(csv_path)
+            if result:
+                csv_freq_list, csv_upper_list, csv_lower_list = result
+                self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
+                self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
+                # Highlight out-of-range points
+                self._highlight_out_of_range_curve(freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list)
+
+    def _highlight_out_of_range_fixed(self, freq_value, y_data, upper_limit, lower_limit):
+        """Highlight data points that exceed fixed threshold limits."""
+        out_range_points = []
+        current_out_range = []
+
+        freq_arr = np.asarray(freq_value)
+        y_arr = np.asarray(y_data)
+
+        for i in range(len(y_arr)):
+            is_out = False
+            if upper_limit is not None and y_arr[i] >= upper_limit:
+                is_out = True
+            if lower_limit is not None and y_arr[i] <= lower_limit:
+                is_out = True
+            if is_out:
+                current_out_range.append((freq_arr[i], y_arr[i]))
+            else:
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+        if current_out_range:
+            out_range_points.append(current_out_range)
+
+        for points in out_range_points:
+            x = [p[0] for p in points]
+            y = [p[1] for p in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            self.analysis_plot.addItem(out_range_plot)
+
+    def _highlight_out_of_range_curve(self, freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list):
+        """Highlight data points that exceed curve threshold limits."""
+        out_range_points = []
+        current_out_range = []
+
+        freq_arr = np.asarray(freq_value)
+        y_arr = np.asarray(y_data)
+        csv_freq_arr = np.asarray(csv_freq_list)
+
+        for i, f in enumerate(freq_arr):
+            # Find nearest CSV frequency
+            table_index = int(np.argmin(np.abs(csv_freq_arr - f)))
+            upper_val = csv_upper_list[table_index]
+            lower_val = csv_lower_list[table_index]
+
+            is_out = False
+            if not np.isnan(upper_val) and y_arr[i] >= upper_val:
+                is_out = True
+            if not np.isnan(lower_val) and y_arr[i] <= lower_val:
+                is_out = True
+
+            if is_out:
+                current_out_range.append((freq_arr[i], y_arr[i]))
+            else:
+                if current_out_range:
+                    out_range_points.append(current_out_range)
+                    current_out_range = []
+        if current_out_range:
+            out_range_points.append(current_out_range)
+
+        for points in out_range_points:
+            x = [p[0] for p in points]
+            y = [p[1] for p in points]
+            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            self.analysis_plot.addItem(out_range_plot)
 
     @staticmethod
     def check_valid_data(data):
@@ -359,8 +459,8 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 method="log"
             )
 
-        # Plot the results (Y-axis will be in phons)
-        self.plot_graph(freq_value, perceptual_loudness)
+        # Plot the results with threshold support (Y-axis will be in phons)
+        self.plot_graph(freq_value, perceptual_loudness, self.analysis_config)
 
         # Convert to list format for result storage
         if isinstance(harmonic, np.ndarray):
@@ -374,8 +474,8 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": perceptual_loudness}
         return self.result
 
-    def plot_graph(self, freq_value, perceptual_loudness):
-        """Plot perceptual loudness with correct phons label."""
+    def plot_graph(self, freq_value, perceptual_loudness, analysis_config=None):
+        """Plot perceptual loudness with correct phons label and optional threshold limits."""
         self.analysis_plot.clear()
         if self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness):
             self.analysis_plot.plot(freq_value, perceptual_loudness, pen="b", name=self._prb_curve_label)
@@ -385,6 +485,10 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         self.analysis_plot.setLabel("bottom", "Frequency")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
+
+        # Apply threshold limits if configured (inherited from Distortion)
+        if analysis_config and analysis_config.get("limit_checked"):
+            self._apply_threshold_limits(freq_value, perceptual_loudness, analysis_config)
 
 
 class Spl(AnalysisGraphWidget):
