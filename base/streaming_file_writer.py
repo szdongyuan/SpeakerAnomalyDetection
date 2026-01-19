@@ -3,6 +3,7 @@ Streaming WAV file writer for real-time audio saving.
 Writes audio chunks to disk as they arrive, enabling progressive saving during recording.
 """
 
+import os
 import numpy as np
 import wave
 from base.log_manager import LogManager
@@ -36,14 +37,14 @@ class StreamingWavWriter:
         try:
             # Try using soundfile for better performance (if available)
             import soundfile as sf
+
             self.use_soundfile = True
+
+            # Ensure directory exists before creating file
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
             self.sf_file = sf.SoundFile(
-                file_path,
-                mode='w',
-                samplerate=sample_rate,
-                channels=channels,
-                format='WAV',
-                subtype='FLOAT'
+                file_path, mode="w", samplerate=sample_rate, channels=channels, format="WAV", subtype="FLOAT"
             )
             self.wave_file = None
             self.logger.info(f"StreamingWavWriter initialized with soundfile: {file_path}")
@@ -51,7 +52,7 @@ class StreamingWavWriter:
             # Fallback to wave module (Python standard library)
             self.use_soundfile = False
             self.sf_file = None
-            self.wave_file = wave.open(file_path, 'wb')
+            self.wave_file = wave.open(file_path, "wb")
             self.wave_file.setnchannels(channels)
             self.wave_file.setsampwidth(4)  # 4 bytes for float32
             self.wave_file.setframerate(sample_rate)
