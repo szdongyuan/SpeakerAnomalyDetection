@@ -1,11 +1,12 @@
 import json
 import os
 import re
+import weakref
 from datetime import datetime
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog
 
@@ -90,6 +91,17 @@ class SequenceWindow(QWidget):
         self.streaming_mode = None  # "play_record" or "record_only"
         self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
 
+        # Analysis window geometry persistence (per analysis item key)
+        self._analysis_window_key_by_obj = weakref.WeakKeyDictionary()
+        self._analysis_window_geometry_path = os.path.join(
+            DEFAULT_DIR, "ui", "ui_config", "analysis_window_geometry.json"
+        )
+        self._analysis_window_geometry = self._load_analysis_window_geometry()
+        self._analysis_window_geometry_flush_timer = QTimer(self)
+        self._analysis_window_geometry_flush_timer.setSingleShot(True)
+        self._analysis_window_geometry_flush_timer.timeout.connect(self._flush_analysis_window_geometry)
+        self._analysis_window_geometry_dirty = False
+
         self.hw_manager = UnifiedHardwareManager()
         # Create QTimer in Qt main thread for queue polling
         self.streaming_poll_timer = QTimer(self)
@@ -124,6 +136,7 @@ class SequenceWindow(QWidget):
         sign.get_result_file_sign.connect(self.connect_get_result_file_sign, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.connect_set_result_file_sign, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.get_sequence_config_from_json, Qt.AutoConnection)
+        sign.update_mode_display_sign.connect(self.del_geometry_config, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         # sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.count_board.on_test_btn_clicked, Qt.AutoConnection)
@@ -782,29 +795,6 @@ class SequenceWindow(QWidget):
             self.run()
         self.update_player_btn_is_paused()
 
-    def instance_analysis_class(self, key, type, params):
-        """
-        Instantiates and configures an analysis class based on the given type and parameters,
-        and adds it to the analysis window list.
-
-        Args:
-            type (str): The type identifier of the analysis class, used to retrieve the corresponding class from the class mapping.
-            params (dict): Configuration parameters for the analysis class, which will be passed to the instantiated class object.
-
-        Returns:
-            None: This function does not return a value but adds the instantiated class object to the self.analysis_window list.
-        """
-        class_mapping = get_class_mapping()
-        if type in class_mapping.keys():
-            cls_map = class_mapping.get(type)
-            if cls_map:
-                class_instance = cls_map(key)
-                if self.analysis_config["default_ai"] == key:
-                    self.default_ai = class_instance
-                class_instance.v2pa_factor = self.v2pa_factor
-                class_instance.analysis_config = params
-                self.analysis_window.append(class_instance)
-
     def run(self):
         """
         Executes the analysis tasks and displays the analysis windows.
@@ -826,6 +816,8 @@ class SequenceWindow(QWidget):
                 item_type = key_config.get("type")
                 self.instance_analysis_class(key, item_type, key_config)
             for instance in self.analysis_window:
+                # Bind this instance to its analysis item key (used for geometry restore/persist)
+                instance_key = getattr(instance, "_sequence_analysis_key", None)
                 if self.count_board.mode == "test":
                     if instance is self.default_ai:
                         continue
@@ -862,14 +854,41 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, "calculate_pipeline_pd_pm"):
                     instance.calculate_pipeline_pd_pm()
                     instance.show()
-                instance.setGeometry(width, height, 600, 500)
-                instance.setMinimumSize(QSize(600, 500))
+
+                # Restore last geometry if available; otherwise fallback to default cascade
+                default_geo = {"x": width, "y": height, "w": 600, "h": 500}
+                geo = self._get_analysis_window_geometry(instance_key) if instance_key else None
+                if geo is None:
+                    geo = default_geo
+                    # Persist the default once so next run restores from the same place
+                    if instance_key:
+                        self._set_analysis_window_geometry(instance_key, geo)
+                instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+                instance.setMinimumSize(QSize(300, 255))
+
+                # Install event filter to capture move/resize and persist geometry (no close listener)
+                if instance_key:
+                    self._analysis_window_key_by_obj[instance] = instance_key
+                    instance.installEventFilter(self)
+
                 width += 20
                 height += 20
             if self.count_board.mode == "test":
                 self.default_ai.calculate_ai_scores(self.count_board.mode, self.analysis_config)
                 self.default_ai.show()
-                self.default_ai.setGeometry(width, height, 600, 500)
+                # Restore geometry for default_ai as well (if present)
+                default_ai_key = getattr(self.default_ai, "_sequence_analysis_key", None)
+                default_geo = {"x": width, "y": height, "w": 600, "h": 500}
+                geo = self._get_analysis_window_geometry(default_ai_key) if default_ai_key else None
+                if geo is None:
+                    geo = default_geo
+                    if default_ai_key:
+                        self._set_analysis_window_geometry(default_ai_key, geo)
+                self.default_ai.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+                self.default_ai.setMinimumSize(QSize(300, 255))
+                if default_ai_key:
+                    self._analysis_window_key_by_obj[self.default_ai] = default_ai_key
+                    self.default_ai.installEventFilter(self)
                 self.test_insert_data_into_db()
             elif self.default_ai:
                 if self.default_ai.result == "OK":
@@ -877,6 +896,150 @@ class SequenceWindow(QWidget):
                         instance.close()
                     self.default_ai_result = True
                     self.clicked_ok_or_ng(manual=False)
+
+    def instance_analysis_class(self, key, type, params):
+        """
+        Instantiates and configures an analysis class based on the given type and parameters,
+        and adds it to the analysis window list.
+        """
+        class_mapping = get_class_mapping()
+        if type in class_mapping.keys():
+            cls_map = class_mapping.get(type)
+            if cls_map:
+                class_instance = cls_map(key)
+                # Bind analysis key for geometry restore/persist
+                setattr(class_instance, "_sequence_analysis_key", key)
+                if self.analysis_config["default_ai"] == key:
+                    self.default_ai = class_instance
+                class_instance.v2pa_factor = self.v2pa_factor
+                class_instance.analysis_config = params
+                self.analysis_window.append(class_instance)
+
+    def eventFilter(self, obj, event):
+        """
+        Persist analysis window geometry on move/resize (no close handling).
+        """
+        try:
+            if obj in self._analysis_window_key_by_obj:
+                et = event.type()
+                if et in (QEvent.Move, QEvent.Resize):
+                    key = self._analysis_window_key_by_obj.get(obj)
+                    if key:
+                        rect = obj.geometry()
+                        geo = {"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()}
+                        self._set_analysis_window_geometry(key, geo)
+        except Exception as e:
+            # Never break Qt event loop
+            self.default_logger.error(f"eventFilter geometry persist error: {e}")
+        return super().eventFilter(obj, event)
+
+    def _load_analysis_window_geometry(self):
+        """
+        Load persisted analysis window geometries.
+        """
+        try:
+            if not os.path.exists(self._analysis_window_geometry_path):
+                os.makedirs(os.path.dirname(self._analysis_window_geometry_path), exist_ok=True)
+                with open(self._analysis_window_geometry_path, "w", encoding="utf-8") as f:
+                    json.dump({}, f, indent=2, ensure_ascii=False)
+                return {}
+            with open(self._analysis_window_geometry_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            self.default_logger.warning(f"Failed to load analysis window geometry: {e}")
+            return {}
+
+    def _flush_analysis_window_geometry(self):
+        """
+        Flush geometry cache to disk (atomic write).
+        """
+        if not self._analysis_window_geometry_dirty:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._analysis_window_geometry_path), exist_ok=True)
+            tmp_path = self._analysis_window_geometry_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._analysis_window_geometry, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, self._analysis_window_geometry_path)
+            self._analysis_window_geometry_dirty = False
+        except Exception as e:
+            self.default_logger.warning(f"Failed to save analysis window geometry: {e}")
+
+    def _set_analysis_window_geometry(self, key: str, geo: dict):
+        """
+        Update in-memory geometry and schedule a debounced flush.
+        """
+        if not key or not isinstance(geo, dict):
+            return
+        norm = self._normalize_geometry(geo)
+        if norm is None:
+            return
+        self._analysis_window_geometry[key] = norm
+        self._analysis_window_geometry_dirty = True
+        # Debounce writes to avoid heavy IO while dragging
+        if not self._analysis_window_geometry_flush_timer.isActive():
+            self._analysis_window_geometry_flush_timer.start(200)
+
+    def _get_analysis_window_geometry(self, key: str):
+        """
+        Get persisted geometry if valid and on-screen; otherwise None.
+        """
+        if not key:
+            return None
+        geo = self._analysis_window_geometry.get(key)
+        geo = self._normalize_geometry(geo) if isinstance(geo, dict) else None
+        if geo is None:
+            return None
+        if not self._is_geometry_on_any_screen(geo):
+            return None
+        return geo
+
+    @staticmethod
+    def _normalize_geometry(geo: dict):
+        """
+        Ensure geometry has x/y/w/h ints with sane bounds.
+        """
+        if not isinstance(geo, dict):
+            return None
+        try:
+            x = int(geo.get("x"))
+            y = int(geo.get("y"))
+            w = int(geo.get("w"))
+            h = int(geo.get("h"))
+            # basic sanity
+            if w < 200 or h < 150:
+                return None
+            return {"x": x, "y": y, "w": w, "h": h}
+        except Exception:
+            return None
+
+    @staticmethod
+    def _is_geometry_on_any_screen(geo: dict) -> bool:
+        """
+        Check whether the saved top-left point is within any screen's available geometry.
+        """
+        try:
+            x, y = int(geo["x"]), int(geo["y"])
+            for screen in QApplication.screens():
+                ag = screen.availableGeometry()
+                if ag.contains(x, y):
+                    return True
+            return True if QApplication.primaryScreen() is None else False
+        except Exception:
+            return False
+
+    def del_geometry_config(self):
+        print("del_geometry_config")
+        if hasattr(self, "_analysis_window_geometry_flush_timer") and self._analysis_window_geometry_flush_timer.isActive():
+            self._analysis_window_geometry_flush_timer.stop()
+
+        self._analysis_window_geometry = {}
+        self._analysis_window_geometry_dirty = False
+
+        file_path = self._analysis_window_geometry_path
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
     def get_sequence_config_from_json(self):
         """
