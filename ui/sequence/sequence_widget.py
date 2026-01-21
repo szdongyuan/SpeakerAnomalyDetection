@@ -37,7 +37,7 @@ from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
-from ui.signal_analysis_window import get_class_mapping
+from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
 
@@ -65,6 +65,7 @@ class SequenceWindow(QWidget):
         self.analysis_window = []
         self.default_ai = None
         self.default_ai_result = None
+        self._analysis_result_summary_window = None
 
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
@@ -804,6 +805,9 @@ class SequenceWindow(QWidget):
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
+        # Only reflect THIS run(): clear previous summary results first
+        self.data_struct.analysis_result_dict.clear()
+
         self.analysis_window = []
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
@@ -896,6 +900,50 @@ class SequenceWindow(QWidget):
                         instance.close()
                     self.default_ai_result = True
                     self.clicked_ok_or_ng(manual=False)
+
+        # Show summary window at the end (also in test mode), only if dict is not empty
+        self._maybe_show_analysis_result_summary(width, height)
+
+    def _maybe_show_analysis_result_summary(self, width: int, height: int):
+        result_dict = getattr(self.data_struct, "analysis_result_dict", None)
+        if not isinstance(result_dict, dict) or len(result_dict) == 0:
+            return
+
+        # Create or reuse summary window
+        if self._analysis_result_summary_window is None:
+            self._analysis_result_summary_window = AnalysisResultSummaryWindow(result_dict)
+        else:
+            try:
+                self._analysis_result_summary_window.set_results(result_dict)
+            except Exception:
+                # fallback: recreate if something went wrong
+                self._analysis_result_summary_window = AnalysisResultSummaryWindow(result_dict)
+
+        summary = self._analysis_result_summary_window
+        summary_key = "__analysis_result_summary__"
+        setattr(summary, "_sequence_analysis_key", summary_key)
+
+        # Restore geometry if available; otherwise cascade default near the other windows
+        default_geo = {"x": width, "y": height, "w": 520, "h": 360}
+        geo = self._get_analysis_window_geometry(summary_key)
+        if geo is None:
+            geo = default_geo
+            self._set_analysis_window_geometry(summary_key, geo)
+        summary.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+        summary.setMinimumSize(QSize(360, 220))
+
+        # Ensure eventFilter is installed once for persistence
+        if summary_key:
+            if summary not in self._analysis_window_key_by_obj:
+                self._analysis_window_key_by_obj[summary] = summary_key
+                summary.installEventFilter(self)
+
+        summary.show()
+        summary.raise_()
+        try:
+            summary.activateWindow()
+        except Exception:
+            pass
 
     def instance_analysis_class(self, key, type, params):
         """
