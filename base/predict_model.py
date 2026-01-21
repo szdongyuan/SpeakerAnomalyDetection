@@ -16,7 +16,7 @@ def predict(predict_dir,
                            "ret_msg": ret,
                            "result": [[ret]]})
     signals, file_names, fs, _ = ret
-    ret_str = predict_from_audio(signals, file_names, fs, load_model_path=load_model_path, model=model, **kwargs)
+    ret_str, _ = predict_from_audio(signals, file_names, fs, load_model_path=load_model_path, model=model, **kwargs)
 
     return ret_str
 
@@ -44,4 +44,4 @@ def predict_from_audio(signals,
     ret_str = json.dumps({"ret_code": error_code.OK,
                           "ret_msg": "finish predicting",
                           "result": result})
-    return ret_str
+    return ret_str, model.pred_config
