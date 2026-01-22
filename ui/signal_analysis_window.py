@@ -14,7 +14,18 @@ from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt, QModelIndex
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
-from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt5.QtWidgets import (
+    QApplication,
+    QTextEdit,
+    QHBoxLayout,
+    QVBoxLayout,
+    QWidget,
+    QLabel,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+)
 from scipy.signal import find_peaks
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -76,10 +87,11 @@ class AnalysisResultSummaryWindow(QWidget):
         self._table.setFont(font)
         self._table.horizontalHeader().setFont(font)
         self._table.verticalHeader().setFont(font)
-        self._table.setColumnCount(2)
-        self._table.setHorizontalHeaderLabels(["分析项", "结果"])
+        self._table.setColumnCount(3)
+        self._table.setHorizontalHeaderLabels(["分析项", "偏差值", "结果"])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -96,27 +108,38 @@ class AnalysisResultSummaryWindow(QWidget):
         self._table.clearSelection()
         self._table.setCurrentIndex(QModelIndex())
 
-    def set_results(self, result_dict: dict[str, bool]):
+    def set_results(self, result_dict: dict[str, (bool, float)]):
         items = list(result_dict.items())
         # Stable order (alphabetical by name) for readability
         items.sort(key=lambda kv: kv[0])
 
         self._table.setRowCount(len(items))
-        for row, (name, ok) in enumerate(items):
+        for row, (name, (ok, deviation)) in enumerate(items):
             name_item = QTableWidgetItem(str(name))
+            if "SPL" in name:
+                deviation = f"{deviation:.2f} dB"
+            elif "FR" in name:
+                deviation = f"{deviation:.2f} dB"
+            elif "PRB" in name:
+                deviation = f"{deviation:.2f} phon"
+            elif "HD" in name or "RB" in name:
+                deviation = f"{deviation:.2f} %"
+            deviation_item = QTableWidgetItem(str(deviation))
             result_text = "OK" if ok else "NG"
             result_item = QTableWidgetItem(result_text)
             result_item.setTextAlignment(Qt.AlignCenter)
 
             # color hint
             if ok:
+                deviation_item.setForeground(QColor(0, 128, 0))
                 result_item.setForeground(QColor(0, 128, 0))
             else:
+                deviation_item.setForeground(QColor(200, 0, 0))
                 result_item.setForeground(QColor(200, 0, 0))
 
             self._table.setItem(row, 0, name_item)
-            self._table.setItem(row, 1, result_item)
-
+            self._table.setItem(row, 1, deviation_item)
+            self._table.setItem(row, 2, result_item)
         # Ensure no default selected cell/row after refreshing data
         self._table.clearSelection()
         self._table.setCurrentIndex(QModelIndex())
@@ -214,29 +237,24 @@ class Distortion(AnalysisGraphWidget):
             stimulus_method = "steps"
 
         stimulus_metadata = {
-            'stimulus_method': stimulus_method,
-            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
-            'start_freq': stimulus_info.get("start_freq"),
-            'stop_freq': stimulus_info.get("stop_freq"),
-            'num_steps': stimulus_info.get("num_steps"),
-            'total_time': stimulus_info.get("total_time"),
-            'repeat_times': stimulus_info.get("repeat_times"),
-            'sample_rate': sample_rate
+            "stimulus_method": stimulus_method,
+            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
+            "start_freq": stimulus_info.get("start_freq"),
+            "stop_freq": stimulus_info.get("stop_freq"),
+            "num_steps": stimulus_info.get("num_steps"),
+            "total_time": stimulus_info.get("total_time"),
+            "repeat_times": stimulus_info.get("repeat_times"),
+            "sample_rate": sample_rate,
         }
 
         # Call the new three-phase architecture
         atfra = AudioThdFrequencyResponseAnalysis()
-        thd_kwargs = {
-            'stimulus_metadata': stimulus_metadata,
-            'harmonic_orders': self.selected_harmonics
-        }
+        thd_kwargs = {"stimulus_metadata": stimulus_metadata, "harmonic_orders": self.selected_harmonics}
 
-        freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
-            recorded_signal, sample_rate, thd_kwargs
-        )
+        freq_value, harmonic, thd = atfra._calculate_thd_three_phase(recorded_signal, sample_rate, thd_kwargs)
 
         # Handle mirror chirps: average forward and backward sweeps
-        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
+        if stimulus_method == "chirps" and "mirror" in stimulus_metadata["stimulus_type"]:
             # Split data in half (first half = backward sweep, second half = forward sweep)
             mid_point = len(thd) // 2
             thd_backward = thd[:mid_point]
@@ -253,13 +271,10 @@ class Distortion(AnalysisGraphWidget):
             freq_value = freq_forward[:min_len]  # Use forward frequencies (ascending order)
 
         # Apply 1/6 octave smoothing for chirp signals only
-        if stimulus_method == 'chirps':
+        if stimulus_method == "chirps":
             from base.utils.octave_smoothing import smooth_to_octave_grid
-            freq_value, thd = smooth_to_octave_grid(
-                freq_value, thd,
-                fraction=6,
-                method="log"
-            )
+
+            freq_value, thd = smooth_to_octave_grid(freq_value, thd, fraction=6, method="log")
 
         # Plot the results with threshold support
         self.plot_graph(freq_value, thd, self.analysis_config)
@@ -331,9 +346,9 @@ class Distortion(AnalysisGraphWidget):
 
         for i in range(len(y_arr)):
             is_out = False
-            if upper_limit is not None and y_arr[i] >= upper_limit:
+            if upper_limit is not None and y_arr[i] > upper_limit:
                 is_out = True
-            if lower_limit is not None and y_arr[i] <= lower_limit:
+            if lower_limit is not None and y_arr[i] < lower_limit:
                 is_out = True
             if is_out:
                 current_out_range.append((freq_arr[i], y_arr[i]))
@@ -344,9 +359,13 @@ class Distortion(AnalysisGraphWidget):
         if current_out_range:
             out_range_points.append(current_out_range)
         if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = False
+            deviation = max(max(y_arr - upper_limit), max(lower_limit - y_arr))
+            deviation = round(deviation, 2)
+            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
         else:
-            self.data_struct.analysis_result_dict[self.title_name] = True
+            deviation = min(min(np.abs(y_arr - upper_limit)), min(np.abs(y_arr - lower_limit)))
+            deviation = round(deviation, 2)
+            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
 
         for points in out_range_points:
             x = [p[0] for p in points]
@@ -367,16 +386,15 @@ class Distortion(AnalysisGraphWidget):
         min_csv_freq = min(csv_freq_list)
         freq_arr_capacity = freq_arr.size
 
-        not_is_end_freq = False
+        deviation: float = 0.0
+        no_deviation_flag = True
 
         for i, f in enumerate(freq_arr):
             # Find nearest CSV frequency
             table_index = int(np.argmin(np.abs(csv_freq_arr - f)))
-            if (i+1) != freq_arr_capacity:
-                not_is_end_freq = True
-                next_table_index = int(np.argmin(np.abs(csv_freq_arr - freq_arr[i+1])))
+            if (i + 1) != freq_arr_capacity:
+                next_table_index = int(np.argmin(np.abs(csv_freq_arr - freq_arr[i + 1])))
             else:
-                not_is_end_freq = False
                 next_table_index = table_index
 
             if f < min_csv_freq and table_index == next_table_index:
@@ -386,13 +404,20 @@ class Distortion(AnalysisGraphWidget):
 
             upper_val = csv_upper_list[table_index]
             lower_val = csv_lower_list[table_index]
-            next_upper_val = csv_upper_list[next_table_index]
-            next_lower_val = csv_lower_list[next_table_index]
 
             is_out = False
-            if not np.isnan(upper_val) and y_arr[i] >= upper_val:
+            if not np.isnan(upper_val) and y_arr[i] > upper_val:
+                if no_deviation_flag:
+                    deviation = 0.0
+                    no_deviation_flag = False
+                deviation = max(deviation, abs(y_arr[i] - upper_val))
                 is_out = True
-            if not np.isnan(lower_val) and y_arr[i] <= lower_val:
+
+            if not np.isnan(lower_val) and y_arr[i] < lower_val:
+                if no_deviation_flag:
+                    deviation = 0.0
+                    no_deviation_flag = False
+                deviation = max(deviation, abs(y_arr[i] - lower_val))
                 is_out = True
 
             if is_out:
@@ -401,13 +426,16 @@ class Distortion(AnalysisGraphWidget):
                 if current_out_range:
                     out_range_points.append(current_out_range)
                     current_out_range = []
+                if no_deviation_flag:
+                    deviation_value = min(min(np.abs(y_arr - upper_val)), min(np.abs(y_arr - lower_val)))
+                    deviation = min(deviation, deviation_value)
         if current_out_range:
             out_range_points.append(current_out_range)
-
+        deviation = round(deviation, 2)
         if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = False
+            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
         else:
-            self.data_struct.analysis_result_dict[self.title_name] = True
+            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
 
         for points in out_range_points:
             x = [p[0] for p in points]
@@ -484,14 +512,14 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             stimulus_method = "steps"
 
         stimulus_metadata = {
-            'stimulus_method': stimulus_method,
-            'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
-            'start_freq': stimulus_info.get("start_freq"),
-            'stop_freq': stimulus_info.get("stop_freq"),
-            'num_steps': stimulus_info.get("num_steps"),
-            'total_time': stimulus_info.get("total_time"),
-            'repeat_times': stimulus_info.get("repeat_times"),
-            'sample_rate': sample_rate
+            "stimulus_method": stimulus_method,
+            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
+            "start_freq": stimulus_info.get("start_freq"),
+            "stop_freq": stimulus_info.get("stop_freq"),
+            "num_steps": stimulus_info.get("num_steps"),
+            "total_time": stimulus_info.get("total_time"),
+            "repeat_times": stimulus_info.get("repeat_times"),
+            "sample_rate": sample_rate,
         }
 
         # Call the PERCEPTUAL three-phase architecture
@@ -519,9 +547,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             self._prb_curve_label = "感知失真响度"
             self._prb_y_label = "感知失真响度 (phon)"
         thd_kwargs = {
-            'stimulus_metadata': stimulus_metadata,
-            'harmonic_orders': self.selected_harmonics,
-            'masking_config': masking_config,
+            "stimulus_metadata": stimulus_metadata,
+            "harmonic_orders": self.selected_harmonics,
+            "masking_config": masking_config,
         }
 
         freq_value, harmonic, perceptual_loudness = atfra._calculate_perceptual_thd_three_phase(
@@ -529,7 +557,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         )
 
         # Handle mirror chirps: average forward and backward sweeps
-        if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
+        if stimulus_method == "chirps" and "mirror" in stimulus_metadata["stimulus_type"]:
             # Split data in half
             mid_point = len(perceptual_loudness) // 2
             loudness_backward = perceptual_loudness[:mid_point]
@@ -546,12 +574,11 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             freq_value = freq_forward[:min_len]
 
         # Apply 1/6 octave smoothing for chirp signals only
-        if stimulus_metadata['stimulus_method'] == 'chirps':
+        if stimulus_metadata["stimulus_method"] == "chirps":
             from base.utils.octave_smoothing import smooth_to_octave_grid
+
             freq_value, perceptual_loudness = smooth_to_octave_grid(
-                freq_value, perceptual_loudness,
-                fraction=6,
-                method="log"
+                freq_value, perceptual_loudness, fraction=6, method="log"
             )
 
         # Plot the results with threshold support (Y-axis will be in phons)
@@ -604,9 +631,7 @@ class Spl(AnalysisGraphWidget):
         signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal,
-            reference_pressure,
-            v2pa_factor=self.v2pa_factor
+            recorded_signal, reference_pressure, v2pa_factor=self.v2pa_factor
         )
         if self.analysis_config["smooth_checked"]:
             signal_spl = smooth(signal_spl, window_size=1102, method="rms")
@@ -649,6 +674,9 @@ class Spl(AnalysisGraphWidget):
         current_out_range = []
         max_time_diff = 0.01  # 10 ms
 
+        deviation: float = 0.0
+        no_deviation_flag = True
+
         for index, i in enumerate(signal_duration):
             table_index = int(np.argmin(np.abs(csv_time_list - i)))
             nearest_time = csv_time_list[table_index]
@@ -657,19 +685,34 @@ class Spl(AnalysisGraphWidget):
                     out_range_points.append(current_out_range)
                     current_out_range = []
                 continue
-            if signal_spl[index] >= csv_upper_list[table_index] or signal_spl[index] <= csv_lower_list[table_index]:
+            if signal_spl[index] > csv_upper_list[table_index] or signal_spl[index] < csv_lower_list[table_index]:
                 current_out_range.append((signal_duration[index], signal_spl[index]))
+                if no_deviation_flag:
+                    deviation = 0.0
+                    no_deviation_flag = False
+                deviation = max(
+                    deviation,
+                    signal_spl[index] - csv_upper_list[table_index],
+                    csv_lower_list[table_index] - signal_spl[index],
+                )
             else:
                 if current_out_range:
                     out_range_points.append(current_out_range)
                     current_out_range = []
+                if no_deviation_flag:
+                    deviation = min(
+                        deviation,
+                        csv_upper_list[table_index] - signal_spl[index],
+                        signal_spl[index] - csv_lower_list[table_index],
+                    )
         if current_out_range:
             out_range_points.append(current_out_range)
 
+        deviation = round(deviation, 2)
         if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = False
+            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
         else:
-            self.data_struct.analysis_result_dict[self.title_name] = True
+            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
 
         for points in out_range_points:
             x = [point[0] for point in points]
@@ -686,7 +729,7 @@ class Spl(AnalysisGraphWidget):
             out_range_points = []
             current_out_range = []
             for i in range(len(signal_spl)):
-                if signal_spl[i] <= lower_limit or signal_spl[i] >= upper_limit:
+                if signal_spl[i] < lower_limit or signal_spl[i] > upper_limit:
                     current_out_range.append((signal_duration[i], signal_spl[i]))
                 else:
                     if current_out_range:
@@ -696,9 +739,13 @@ class Spl(AnalysisGraphWidget):
                 out_range_points.append(current_out_range)
 
             if out_range_points:
-                self.data_struct.analysis_result_dict[self.title_name] = False
+                deviation = max(max(signal_spl - upper_limit), max(lower_limit - signal_spl))
+                deviation = round(deviation, 2)
+                self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
             else:
-                self.data_struct.analysis_result_dict[self.title_name] = True
+                deviation = min(min(np.abs(signal_spl - upper_limit)), min(np.abs(signal_spl - lower_limit)))
+                deviation = round(deviation, 2)
+                self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
 
             for points in out_range_points:
                 x = [point[0] for point in points]
@@ -784,7 +831,7 @@ class Frequency(AnalysisGraphWidget):
         elif lenth == 2 and rows[0][1] == "lowerbound":
             upperbound = False
         else:
-            QMessageBox.warning(None,"提示","Excel/CSV 格式不符合要求!")
+            QMessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
             return None
         for index, row in enumerate(rows[1:], start=2):
             csv_line_no = index
@@ -794,7 +841,7 @@ class Frequency(AnalysisGraphWidget):
                     uval = float(row[1])
                     lval = float(row[2])
                 except ValueError:
-                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
@@ -805,7 +852,7 @@ class Frequency(AnalysisGraphWidget):
                     uval = float(row[2])
                     lval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
@@ -815,7 +862,7 @@ class Frequency(AnalysisGraphWidget):
                     fval = float(row[0])
                     uval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
@@ -825,7 +872,7 @@ class Frequency(AnalysisGraphWidget):
                     fval = float(row[0])
                     lval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None,"提示",f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(np.nan)
@@ -839,12 +886,14 @@ class Frequency(AnalysisGraphWidget):
                         f"CSV 上下限配置错误：下限不能大于上限。\n"
                         f"位置: 第{i+2}条数据, X={x}\n"
                         f"lower={l}, upper={u}\n"
-                        f"文件: {excel_path}"
+                        f"文件: {excel_path}",
                     )
                     return None
-        return (np.asarray(csv_freq_list, dtype=float),
+        return (
+            np.asarray(csv_freq_list, dtype=float),
             np.asarray(csv_upper_list, dtype=float),
-            np.asarray(csv_lower_list, dtype=float))
+            np.asarray(csv_lower_list, dtype=float),
+        )
 
     def plot_fr_with_limits(self, frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list):
         """
@@ -871,23 +920,41 @@ class Frequency(AnalysisGraphWidget):
         out_range_points = []
         current_out_range = []
 
+        deviation: float = 0.0
+        no_deviation_flag = True
+
         for i in frequency_list:
             if i in csv_freq_list:
                 index = np.where(frequency_list == i)[0][0]
                 table_index = np.where(csv_freq_list == i)[0][0]
-                if fr_disp[index] >= csv_upper_list[table_index] or fr_disp[index] <= csv_lower_list[table_index]:
+                if fr_disp[index] > csv_upper_list[table_index] or fr_disp[index] < csv_lower_list[table_index]:
                     current_out_range.append((frequency_list[index], fr_disp[index]))
+                    if no_deviation_flag:
+                        deviation = 0.0
+                        no_deviation_flag = False
+                    deviation = max(
+                        deviation,
+                        fr_disp[index] - csv_upper_list[table_index],
+                        csv_lower_list[table_index] - fr_disp[index],
+                    )
                 else:
                     if current_out_range:
                         out_range_points.append(current_out_range)
                     current_out_range = []
+                    if no_deviation_flag:
+                        deviation = min(
+                            deviation,
+                            csv_upper_list[table_index] - fr_disp[index],
+                            fr_disp[index] - csv_lower_list[table_index],
+                        )
         if current_out_range:
             out_range_points.append(current_out_range)
 
+        deviation = round(deviation, 2)
         if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = False
+            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
         else:
-            self.data_struct.analysis_result_dict[self.title_name] = True
+            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
 
         for points in out_range_points:
             x = [point[0] for point in points]
@@ -905,7 +972,7 @@ class Frequency(AnalysisGraphWidget):
             out_range_points = []
             current_out_range = []
             for i in range(len(fr)):
-                if fr[i] <= lower_limit or fr[i] >= upper_limit:
+                if fr[i] < lower_limit or fr[i] > upper_limit:
                     current_out_range.append((frequency_list[i], fr[i]))
                 else:
                     if current_out_range:
@@ -915,9 +982,13 @@ class Frequency(AnalysisGraphWidget):
                 out_range_points.append(current_out_range)
 
             if out_range_points:
-                self.data_struct.analysis_result_dict[self.title_name] = False
+                deviation = max(max(fr - upper_limit), max(lower_limit - fr))
+                deviation = round(deviation, 2)
+                self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
             else:
-                self.data_struct.analysis_result_dict[self.title_name] = True
+                deviation = min(min(np.abs(fr - upper_limit)), min(np.abs(fr - lower_limit)))
+                deviation = round(deviation, 2)
+                self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
 
             for points in out_range_points:
                 x = [point[0] for point in points]
@@ -988,7 +1059,7 @@ class AI(QWidget):
 
     def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
-        if acq_mode in ["IMPORT_AUDIO","IMPORT_STIMULUS_AUDIO"]:
+        if acq_mode in ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"]:
             query_code, query_result = TrainingModelManagement().get_input_dim_info_by_name(model_name)
             if query_code == error_code.OK:
                 input_dim = str(query_result).split("x")[0].strip()
@@ -1007,8 +1078,6 @@ class AI(QWidget):
             model_path, config_path = result
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
-            temp_result = re.search(r"评分结果:\s*(\S+)", result_text).group(1)
-            self.data_struct.analysis_result_dict[self.title_name] = True if temp_result == "OK" else False
             default_ai_model = analysis_config["default_ai"]
             if mode == "test" and default_ai_model:
                 analyse_model_name = analysis_config.get(default_ai_model, None).get("analyse_model_name", None)
@@ -1039,6 +1108,9 @@ class AI(QWidget):
         predict_label = predict_result[0][1]
         ok_scores = float(predict_result[0][2]) * 100
         ng_scores = 100 - ok_scores
+        deviation = round(abs(float(predict_result[0][2]) - float(pred_config.get("acc_req", 0.5))), 2)
+        is_passed_bool = True if predict_label == "OK" else False
+        self.data_struct.analysis_result_dict[self.title_name] = (is_passed_bool, deviation)
         self.result = predict_label
         result_text = (
             f"评分结果: {predict_label} \n \n"
@@ -1129,7 +1201,7 @@ class Spectrogram(QWidget):
         top_limit = self.analysis_config.get("top_limit", 70)
         bottom_limit = self.analysis_config.get("bottom_limit", 50)
         custom_limit_flag = self.analysis_config.get("custom_limit", False)
-        
+
         mid_value = (top_limit - bottom_limit) / 2
         max_value = top_limit + mid_value
         min_value = bottom_limit - mid_value
@@ -1219,7 +1291,7 @@ class Spectrogram(QWidget):
                 self.stft_colorbar = None
             self.plot_container_layout.addWidget(self.stft_plot_widget)
             self.current_plot_widget = self.stft_plot_widget
-            
+
         if custom_limit_flag:
             self.stft_colorbar.setLevels((min_value, max_value))
 
@@ -1252,11 +1324,7 @@ class LooseParticle(AnalysisGraphWidget):
     def calculate_loose_particle(self):
         recorded_signal = self.data_struct.store_wave_data
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
-            recorded_signal,
-            self.analysis_config.get("cutoff_freq"),
-            self.data_struct.sample_rate,
-            67,
-            self.v2pa_factor
+            recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67, self.v2pa_factor
         )
         self.plot_graph(filtered_spl, deviation)
         self.lp_num_label.setText("LP 数量: %s" % self.result)
@@ -1266,9 +1334,7 @@ class LooseParticle(AnalysisGraphWidget):
             self.status_label.setText("状态: 正常")
 
     def plot_graph(self, amplitude, deviation):
-        signal_duration = np.linspace(
-            0, len(amplitude) / (self.data_struct.sample_rate), len(amplitude)
-        )
+        signal_duration = np.linspace(0, len(amplitude) / (self.data_struct.sample_rate), len(amplitude))
         self.result = self.detect_peaks(
             amplitude,
             self.analysis_config.get("trigger_threshold"),
@@ -1367,7 +1433,7 @@ class PeakDetection(AnalysisGraphWidget):
 
     def calculate_peak_detection(self):
         """
-        calculate and plot PD analysis: the upper plot is SPL time series with peak annotation; 
+        calculate and plot PD analysis: the upper plot is SPL time series with peak annotation;
         """
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
@@ -1376,9 +1442,10 @@ class PeakDetection(AnalysisGraphWidget):
 
         try:
             self.result = peak_detection(
-                np.asarray(recorded_signal, dtype=np.float64), int(sample_rate),
+                np.asarray(recorded_signal, dtype=np.float64),
+                int(sample_rate),
                 self.analysis_config,
-                v2pa_factor=self.v2pa_factor
+                v2pa_factor=self.v2pa_factor,
             )
         except Exception as e:
             self.status_label.setText(f"状态: 异常({e.__class__.__name__})")
@@ -1397,8 +1464,7 @@ class PeakDetection(AnalysisGraphWidget):
         spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
             spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
-                recorded_signal,
-                v2pa_factor=self.v2pa_factor
+                recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
@@ -1407,7 +1473,9 @@ class PeakDetection(AnalysisGraphWidget):
         if peak_times:
             peak_indices = np.clip((np.array(peak_times) * sample_rate).astype(int), 0, len(spl_series) - 1)
             peak_values = spl_series[peak_indices]
-            scatter = pg.ScatterPlotItem(x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8)
+            scatter = pg.ScatterPlotItem(
+                x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+            )
             self.analysis_plot.addItem(scatter)
 
         self.analysis_plot.setLabel("left", "SPL (dB)")
@@ -1421,7 +1489,6 @@ class PeakDetection(AnalysisGraphWidget):
 
         self._update_fonts()
         return self.result
-
 
 
 class PatternMatch(QWidget):
@@ -1444,9 +1511,7 @@ class PatternMatch(QWidget):
         self.main_layout.addWidget(self.result_display)
         self.setLayout(self.main_layout)
         self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qtextedit_style
+            ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
         )
 
     def calculate_pattern_match(self, target_data=None, analysis_config=None):
@@ -1474,22 +1539,28 @@ class PatternMatch(QWidget):
         if apply_filter:
             filter_range_hz = self.analysis_config.get("filter_range_hz")
             start_freq, end_freq = filter_range_hz
-            self.target_data = AudioEqualizer.apply_equalizer(self.target_data, self.sample_rate, start_freq=start_freq,
-                                                              end_freq=end_freq)
-            self.pattern_data = AudioEqualizer.apply_equalizer(self.pattern_data, self.sample_rate,
-                                                               start_freq=start_freq, end_freq=end_freq)
+            self.target_data = AudioEqualizer.apply_equalizer(
+                self.target_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
+            )
+            self.pattern_data = AudioEqualizer.apply_equalizer(
+                self.pattern_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
+            )
         feature_type = self.analysis_config.get("feature_type", "mfcc")
-        target_features, pattern_features = self.feature_extraction_handle(self.target_data, self.pattern_data,
-                                                                           feature_type)
+        target_features, pattern_features = self.feature_extraction_handle(
+            self.target_data, self.pattern_data, feature_type
+        )
 
-        result_dict = self.algorithm_handle(algorithm_name, target_features, pattern_features,
-                                            distance_measure_method=similarity_metric,
-                                            threshold=threshold
-                                            )
+        result_dict = self.algorithm_handle(
+            algorithm_name,
+            target_features,
+            pattern_features,
+            distance_measure_method=similarity_metric,
+            threshold=threshold,
+        )
         if result_dict:
-            is_match = result_dict['is_match']
-            score = result_dict['score']
-            used_threshold = result_dict['threshold']
+            is_match = result_dict["is_match"]
+            score = result_dict["score"]
+            used_threshold = result_dict["threshold"]
 
             if is_match:
                 match_status = "匹配成功"
@@ -1522,11 +1593,7 @@ class PatternMatch(QWidget):
             similarity = 1 / (1 + distance)
             is_match = similarity >= threshold
 
-            return {
-                "is_match": is_match,
-                "score": similarity,
-                "threshold": threshold
-            }
+            return {"is_match": is_match, "score": similarity, "threshold": threshold}
         return None
 
     def feature_extraction_handle(self, target_data, pattern_data, feature_type):
@@ -1541,8 +1608,8 @@ class PatternMatch(QWidget):
             elif feature_params == "fft":
                 target_len = len(target_data)
                 pattern_len = len(pattern_data)
-                target_data = np.abs(np.fft.fft(target_data) / target_len)[:target_len // 2]
-                pattern_data = np.abs(np.fft.fft(pattern_data) / pattern_len)[:pattern_len // 2]
+                target_data = np.abs(np.fft.fft(target_data) / target_len)[: target_len // 2]
+                pattern_data = np.abs(np.fft.fft(pattern_data) / pattern_len)[: pattern_len // 2]
         return target_data, pattern_data
 
     def load_pattern_data(self):
@@ -1555,7 +1622,6 @@ class PatternMatch(QWidget):
             return
         pattern_data, _ = load_audio_simple(pattern_data_path)
         return pattern_data
-
 
 
 class PipelinePdPm(QWidget):
@@ -1619,9 +1685,7 @@ class PipelinePdPm(QWidget):
         self.main_layout.addLayout(content_layout)
         self.setLayout(self.main_layout)
         self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qtextedit_style
+            ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
         )
 
         self.result_display.setStyleSheet("font-size:20px;")
@@ -1633,8 +1697,8 @@ class PipelinePdPm(QWidget):
         if self._right_view is not None:
             return
         plot_item = self.plot_widget.getPlotItem()
-        plot_item.showAxis('right')
-        right_axis = plot_item.getAxis('right')
+        plot_item.showAxis("right")
+        right_axis = plot_item.getAxis("right")
         right_axis.setLabel("相似度")
         self._right_view = pg.ViewBox()
         self._right_view.setXLink(plot_item.vb)
@@ -1740,8 +1804,7 @@ class PipelinePdPm(QWidget):
             spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
         if spl_series is None or len(spl_series) == 0:
             spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
-                recorded_signal,
-                v2pa_factor=self.v2pa_factor
+                recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
         plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
@@ -1751,8 +1814,9 @@ class PipelinePdPm(QWidget):
             peak_indices_arr = np.clip(np.asarray(peak_indices, dtype=int), 0, len(spl_series) - 1)
             peak_times = peak_indices_arr / float(sample_rate)
             peak_values = np.asarray(spl_series)[peak_indices_arr]
-            scatter = pg.ScatterPlotItem(x=peak_times, y=peak_values, pen=pg.mkPen(None),
-                                         brush=pg.mkBrush(200, 0, 0, 200), size=8)
+            scatter = pg.ScatterPlotItem(
+                x=peak_times, y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+            )
             plot_item.addItem(scatter)
 
         self._setup_dual_axis_if_needed()
@@ -1766,8 +1830,13 @@ class PipelinePdPm(QWidget):
             if times.size > 0:
                 duration = max(time_axis[-1] - time_axis[0], 1e-6)
                 bar_width = max(duration * 0.002, duration / 1000.0)
-                bars = pg.BarGraphItem(x=times, height=scores, width=bar_width,
-                                       brush=pg.mkBrush(100, 149, 237, 180), pen=pg.mkPen(100, 149, 237, 220))
+                bars = pg.BarGraphItem(
+                    x=times,
+                    height=scores,
+                    width=bar_width,
+                    brush=pg.mkBrush(100, 149, 237, 180),
+                    pen=pg.mkPen(100, 149, 237, 220),
+                )
                 self._right_view.addItem(bars)
                 self._bars_item = bars
                 self._right_view.setYRange(0.0, np.max(scores), padding=0.05)
@@ -1864,6 +1933,7 @@ class PipelinePdPm(QWidget):
         self._update_table(sample_rate, results)
 
         return self._summarize_and_notify(results, cfg.get("pass_condition", {}))
+
 
 if __name__ == "__main__":
     stimulus, sr = librosa.load("../audio_data/analysis_samples/stimulus.wav", sr=44100)

@@ -817,11 +817,15 @@ class SequenceWindow(QWidget):
         self.data_struct.analysis_result_dict.clear()
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
             stimulus_length = round(
-                self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate"))
+                self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate")
+            )
             if self.data_struct.audio_lenth != stimulus_length:
-                QMessageBox.warning(self, "音频长度校验失败",
-                                    f"导入音频长度({self.data_struct.audio_lenth})\n"
-                                    f"与激励信号长度({stimulus_length})不一致！无法分析！")
+                QMessageBox.warning(
+                    self,
+                    "音频长度校验失败",
+                    f"导入音频长度({self.data_struct.audio_lenth})\n"
+                    f"与激励信号长度({stimulus_length})不一致！无法分析！",
+                )
                 return
 
         self.analysis_window = []
@@ -1094,7 +1098,10 @@ class SequenceWindow(QWidget):
             return False
 
     def del_geometry_config(self):
-        if hasattr(self, "_analysis_window_geometry_flush_timer") and self._analysis_window_geometry_flush_timer.isActive():
+        if (
+            hasattr(self, "_analysis_window_geometry_flush_timer")
+            and self._analysis_window_geometry_flush_timer.isActive()
+        ):
             self._analysis_window_geometry_flush_timer.stop()
 
         self._analysis_window_geometry = {}
