@@ -988,7 +988,7 @@ class AI(QWidget):
 
     def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
-        if acq_mode == "IMPORT_AUDIO":
+        if acq_mode in ["IMPORT_AUDIO","IMPORT_STIMULUS_AUDIO"]:
             query_code, query_result = TrainingModelManagement().get_input_dim_info_by_name(model_name)
             if query_code == error_code.OK:
                 input_dim = str(query_result).split("x")[0].strip()
