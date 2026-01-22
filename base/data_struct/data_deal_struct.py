@@ -17,6 +17,7 @@ class DataDealStruct(object):
             self.stimulus_data = None
             self.stimulus_info = None
             self.sample_rate = None
+            self.audio_lenth = None
 
             self.stft_flag = 0
             self.fft_flag = 0

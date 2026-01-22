@@ -17,7 +17,8 @@ from base.log_manager import LogManager
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow, ImportAudioConfigWindow
+from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow, ImportAudioConfigWindow, \
+    ImportStimulusAudioConfigWindow
 
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
@@ -127,7 +128,7 @@ class AnalysisModelSelect(QDialog):
 
         self.analysis_model = AnalysisModel()
         sound_item = QStandardItem("音频设置")
-        sound_items = ["播放与录制", "录制音频", "导入音频"]
+        sound_items = ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]
         for item in sound_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
@@ -283,7 +284,7 @@ class AnalysisModelSelect(QDialog):
         if self.select_list.config:
             data_struct = DataDealStruct()
             detail = self.select_list.config[0].detail
-            if self.select_list.config[0].mode == "PLAY_AND_RECORD":
+            if self.select_list.config[0].mode in ("PLAY_AND_RECORD", "IMPORT_STIMULUS_AUDIO"):
                 self.set_data_struct_stimulus_signal(data_struct, detail)
             else:
                 data_struct.sample_rate = detail["sample_rate"]
@@ -489,10 +490,12 @@ class OptionList(QListView):
                 model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
             elif "导入音频" in self.config[0].name:
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
+            elif "导入激励与音频" in self.config[0].name:
+                model = ImportStimulusAudioConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
-                if "播放与录制" in name:
+                if "播放与录制" in name or "导入激励与音频" in name:
                     self.signal_len = int(
                         result["stimulus_info"]["total_time"] * result["stimulus_info"]["sample_rate"]
                     )
@@ -817,7 +820,7 @@ class OptionList(QListView):
     def dragenterevent(self, event):
         if event.mimeData().hasText():
             text = event.mimeData().text()
-            if text in ["播放与录制", "录制音频", "导入音频"]:
+            if text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
                 if self.sound_item_type:
                     self.drop_is_accept = False
             elif self.sound_item_type in ["录制音频", "导入音频"]:
@@ -839,7 +842,7 @@ class OptionList(QListView):
         if event.mimeData().hasText():
             text = event.mimeData().text().lstrip()
             if self.drop_is_accept is False:
-                if text in ["播放与录制", "录制音频", "导入音频"]:
+                if text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
                     QMessageBox.warning(self, "警告", "已选择测试模式")
                 elif not self.config:
                     QMessageBox.warning(self, "警告", "请选择测试模式")
@@ -847,7 +850,7 @@ class OptionList(QListView):
                     QMessageBox.warning(self, "警告", "当前模式不支持此功能")
                 self.drop_is_accept = True
                 return
-            elif text in ["播放与录制", "录制音频", "导入音频"]:
+            elif text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
                 self.set_sound_item(text)
                 self.sound_item_type = text
             else:
@@ -892,6 +895,15 @@ class OptionList(QListView):
             seq_item.mode = "IMPORT_AUDIO"
             seq_item.detail = {"sample_rate": 44100}
             self.signal_len = 0
+        elif item_text == "导入激励与音频":
+            flag, config = self.load_stimulus_config()
+            if flag:
+                seq_item.mode = "IMPORT_STIMULUS_AUDIO"
+                seq_item.detail = config
+                self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
+            else:
+                QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
+                return
         self.config.append(seq_item)
 
         self.model().insertRow(0, list_item)

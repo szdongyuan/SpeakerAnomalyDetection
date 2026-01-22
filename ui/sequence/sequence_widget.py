@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime
 
+import librosa
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QTimer
@@ -219,7 +220,7 @@ class SequenceWindow(QWidget):
         if not self.sequence_config:
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
-        if acq_config["mode"] == "PLAY_AND_RECORD":
+        if acq_config["mode"] in ("PLAY_AND_RECORD", "IMPORT_STIMULUS_AUDIO"):
             AnalysisModelSelect.set_data_struct_stimulus_signal(self.data_struct, acq_config["detail"])
         else:
             self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
@@ -501,6 +502,10 @@ class SequenceWindow(QWidget):
             QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
             return
 
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
+            QMessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
+            return
+
         self.update_audio_label_info()
         self.update_recorded_signal_info_to_db()
 
@@ -576,6 +581,9 @@ class SequenceWindow(QWidget):
         if acq_mode == "IMPORT_AUDIO":
             self.import_audio_and_analyze()
             return
+        if acq_mode == "IMPORT_STIMULUS_AUDIO":
+            self.import_audio_and_analyze()
+            return
         self.clicked_player_flag = True
         self.start_this_play(label)
 
@@ -594,7 +602,8 @@ class SequenceWindow(QWidget):
 
         self.data_struct.store_wave_data = y
         self.data_struct.sample_rate = sample_rate
-
+        audio_y, _ = librosa.load(file_path, sr=None)
+        self.data_struct.audio_lenth = len(audio_y)
         self.line_graph.clear()
         self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
 
@@ -814,6 +823,13 @@ class SequenceWindow(QWidget):
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
+            stimulus_length = round(
+                self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate"))
+            if self.data_struct.audio_lenth != stimulus_length:
+                QMessageBox.warning(self, "音频长度校验失败",
+                                    f"导入音频长度({self.data_struct.audio_lenth})与激励信号长度 ({stimulus_length})不一致！无法分析！")
+                return False
         self.analysis_window = []
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)

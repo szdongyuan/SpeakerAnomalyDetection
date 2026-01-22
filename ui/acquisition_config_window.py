@@ -3,7 +3,8 @@ from copy import deepcopy
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit, \
+    QSizePolicy
 from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication, QComboBox
 
 
@@ -254,6 +255,62 @@ class ImportAudioConfigWindow(BaseConfigWindow):
             "sample_rate": int(self.samplerate_combo.currentText()),
         }
         self.accept()
+
+class ImportStimulusAudioConfigWindow(BaseConfigWindow):
+    def __init__(self, stimulus_config_data, mic=None, speaker=None):
+        super().__init__(mic=mic)
+        self.setMinimumSize(220, 150)
+        self.resize(220, 150)
+        self.stimulus_config_data = deepcopy(stimulus_config_data or {})
+        self.clicked_stimulus_btn_flag = False
+        self.stimulus_signal = None
+
+        if speaker is not None:
+            self.speaker = speaker
+        else:
+            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
+
+        self.init_ui()
+
+    def init_ui(self):
+        out_group_box = self.create_out_group()
+        btn_layout = self.create_cancel_ok_buttons()
+        self.main_layout.addWidget(out_group_box)
+        self.main_layout.addStretch()
+        self.main_layout.addLayout(btn_layout)
+
+    def create_out_group(self):
+        out_group_box = QGroupBox("导入激励与音频设置")
+        grid_layout = QGridLayout()
+        grid_layout.setHorizontalSpacing(20)
+        grid_layout.setVerticalSpacing(15)
+
+        self.config_button = QPushButton("激励信号配置")
+        self.config_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # 放这里
+        self.config_button.setMinimumHeight(35)
+
+        self.config_button.clicked.connect(self.open_stimulus_window)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self.config_button)
+        btn_row.addStretch()
+
+        grid_layout.addLayout(btn_row, 0, 0)
+        out_group_box.setLayout(grid_layout)
+        return out_group_box
+
+    def on_click_ok_btn(self):
+        self.final_data = self.stimulus_config_data
+        self.accept()
+
+    def open_stimulus_window(self):
+        self.clicked_stimulus_btn_flag = True
+        self.stimulus_window = StimulusWindow(stimulus_config_data=self.stimulus_config_data, speaker=self.speaker)
+        self.refresh_stimulus_flag = self.stimulus_window.on_exec()
+        if self.refresh_stimulus_flag:
+            self.stimulus_config_data = self.stimulus_window.final_save_data
+            self.stimulus_signal = self.stimulus_window.stimulus_data
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
