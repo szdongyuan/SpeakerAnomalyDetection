@@ -5,13 +5,14 @@ import re
 import sys
 
 import librosa
+from matplotlib import table
 import numpy as np
 import pyqtgraph as pg
 from librosa.core import spectrum
 from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QModelIndex
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import QApplication, QTextEdit, QHBoxLayout, QVBoxLayout, QWidget, QLabel, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView
 from scipy.signal import find_peaks
@@ -55,6 +56,70 @@ def get_class_mapping():
         "ED": PipelinePdPm,
     }
     return class_mapping
+
+
+class AnalysisResultSummaryWindow(QWidget):
+    """
+    Summary window for DataDealStruct.analysis_result_dict.
+
+    Displays a simple table: Analysis Item / Result(OK/NG).
+    """
+
+    def __init__(self, result_dict: dict[str, bool], title: str = "分析结果汇总"):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+
+        self._table = QTableWidget(self)
+        font = QFont()
+        font.setPixelSize(20)
+        self._table.setFont(font)
+        self._table.horizontalHeader().setFont(font)
+        self._table.verticalHeader().setFont(font)
+        self._table.setColumnCount(2)
+        self._table.setHorizontalHeaderLabels(["分析项", "结果"])
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        # Avoid default focus/selection highlight on show
+        # self._table.setFocusPolicy(Qt.NoFocus)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self._table)
+        self.setLayout(layout)
+
+        self.set_results(result_dict)
+        # Ensure no default selected cell/row
+        self._table.clearSelection()
+        self._table.setCurrentIndex(QModelIndex())
+
+    def set_results(self, result_dict: dict[str, bool]):
+        items = list(result_dict.items())
+        # Stable order (alphabetical by name) for readability
+        items.sort(key=lambda kv: kv[0])
+
+        self._table.setRowCount(len(items))
+        for row, (name, ok) in enumerate(items):
+            name_item = QTableWidgetItem(str(name))
+            result_text = "OK" if ok else "NG"
+            result_item = QTableWidgetItem(result_text)
+            result_item.setTextAlignment(Qt.AlignCenter)
+
+            # color hint
+            if ok:
+                result_item.setForeground(QColor(0, 128, 0))
+            else:
+                result_item.setForeground(QColor(200, 0, 0))
+
+            self._table.setItem(row, 0, name_item)
+            self._table.setItem(row, 1, result_item)
+
+        # Ensure no default selected cell/row after refreshing data
+        self._table.clearSelection()
+        self._table.setCurrentIndex(QModelIndex())
 
 
 class AnalysisGraphWidget(QWidget):
@@ -105,6 +170,7 @@ class Distortion(AnalysisGraphWidget):
         self.selected_harmonics = []
         self.result = {}
         self.v2pa_factor = None
+        self.title_name = title_name
 
         self.setWindowTitle(title_name)
 
@@ -130,15 +196,15 @@ class Distortion(AnalysisGraphWidget):
             self.plot_graph([], [])
             self.result = {"freq_value": [], "harmonic": [], "thd": []}
             return self.result
-        
+
         # Get signals and metadata from data_struct
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
         stimulus_info = self.data_struct.stimulus_info
-        
+
         if recorded_signal is None or sample_rate is None or stimulus_info is None:
             raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
-        
+
         # Convert stimulus_info to stimulus_metadata format
         # Handle naming differences: "chirp" -> "chirps", normalize method names
         stimulus_method = stimulus_info.get("stimulus_method", "steps")
@@ -146,7 +212,7 @@ class Distortion(AnalysisGraphWidget):
             stimulus_method = "chirps"
         elif stimulus_method == "step":
             stimulus_method = "steps"
-        
+
         stimulus_metadata = {
             'stimulus_method': stimulus_method,
             'stimulus_type': stimulus_info.get("stimulus_type", "linear"),
@@ -157,18 +223,18 @@ class Distortion(AnalysisGraphWidget):
             'repeat_times': stimulus_info.get("repeat_times"),
             'sample_rate': sample_rate
         }
-        
+
         # Call the new three-phase architecture
         atfra = AudioThdFrequencyResponseAnalysis()
         thd_kwargs = {
             'stimulus_metadata': stimulus_metadata,
             'harmonic_orders': self.selected_harmonics
         }
-        
+
         freq_value, harmonic, thd = atfra._calculate_thd_three_phase(
             recorded_signal, sample_rate, thd_kwargs
         )
-        
+
         # Handle mirror chirps: average forward and backward sweeps
         if stimulus_method == "chirps" and "mirror" in stimulus_metadata['stimulus_type']:
             # Split data in half (first half = backward sweep, second half = forward sweep)
@@ -197,7 +263,7 @@ class Distortion(AnalysisGraphWidget):
 
         # Plot the results with threshold support
         self.plot_graph(freq_value, thd, self.analysis_config)
-        
+
         # Convert to list format for result storage
         if isinstance(harmonic, np.ndarray):
             harmonic = harmonic.tolist()
@@ -205,7 +271,7 @@ class Distortion(AnalysisGraphWidget):
             freq_value = freq_value.tolist()
         if isinstance(thd, np.ndarray):
             thd = thd.tolist()
-        
+
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
         return self.result
 
@@ -277,6 +343,10 @@ class Distortion(AnalysisGraphWidget):
                     current_out_range = []
         if current_out_range:
             out_range_points.append(current_out_range)
+        if out_range_points:
+            self.data_struct.analysis_result_dict[self.title_name] = False
+        else:
+            self.data_struct.analysis_result_dict[self.title_name] = True
 
         for points in out_range_points:
             x = [p[0] for p in points]
@@ -293,11 +363,31 @@ class Distortion(AnalysisGraphWidget):
         y_arr = np.asarray(y_data)
         csv_freq_arr = np.asarray(csv_freq_list)
 
+        max_csv_freq = max(csv_freq_list)
+        min_csv_freq = min(csv_freq_list)
+        freq_arr_capacity = freq_arr.size
+
+        not_is_end_freq = False
+
         for i, f in enumerate(freq_arr):
             # Find nearest CSV frequency
             table_index = int(np.argmin(np.abs(csv_freq_arr - f)))
+            if (i+1) != freq_arr_capacity:
+                not_is_end_freq = True
+                next_table_index = int(np.argmin(np.abs(csv_freq_arr - freq_arr[i+1])))
+            else:
+                not_is_end_freq = False
+                next_table_index = table_index
+
+            if f < min_csv_freq and table_index == next_table_index:
+                continue
+            if f > max_csv_freq and table_index == next_table_index:
+                continue
+
             upper_val = csv_upper_list[table_index]
             lower_val = csv_lower_list[table_index]
+            next_upper_val = csv_upper_list[next_table_index]
+            next_lower_val = csv_lower_list[next_table_index]
 
             is_out = False
             if not np.isnan(upper_val) and y_arr[i] >= upper_val:
@@ -313,6 +403,11 @@ class Distortion(AnalysisGraphWidget):
                     current_out_range = []
         if current_out_range:
             out_range_points.append(current_out_range)
+
+        if out_range_points:
+            self.data_struct.analysis_result_dict[self.title_name] = False
+        else:
+            self.data_struct.analysis_result_dict[self.title_name] = True
 
         for points in out_range_points:
             x = [p[0] for p in points]
@@ -498,6 +593,8 @@ class Spl(AnalysisGraphWidget):
         self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
+        self.title_name = title_name
+
         self.setWindowTitle(title_name)
 
     def calculate_spl(self):
@@ -568,6 +665,12 @@ class Spl(AnalysisGraphWidget):
                     current_out_range = []
         if current_out_range:
             out_range_points.append(current_out_range)
+
+        if out_range_points:
+            self.data_struct.analysis_result_dict[self.title_name] = False
+        else:
+            self.data_struct.analysis_result_dict[self.title_name] = True
+
         for points in out_range_points:
             x = [point[0] for point in points]
             y = [point[1] for point in points]
@@ -591,6 +694,11 @@ class Spl(AnalysisGraphWidget):
                         current_out_range = []
             if current_out_range:
                 out_range_points.append(current_out_range)
+
+            if out_range_points:
+                self.data_struct.analysis_result_dict[self.title_name] = False
+            else:
+                self.data_struct.analysis_result_dict[self.title_name] = True
 
             for points in out_range_points:
                 x = [point[0] for point in points]
@@ -617,6 +725,8 @@ class Frequency(AnalysisGraphWidget):
         self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
+        self.title_name = title_name
+
         self.setWindowTitle(title_name)
 
     def calculate_fr(self):
@@ -774,6 +884,11 @@ class Frequency(AnalysisGraphWidget):
         if current_out_range:
             out_range_points.append(current_out_range)
 
+        if out_range_points:
+            self.data_struct.analysis_result_dict[self.title_name] = False
+        else:
+            self.data_struct.analysis_result_dict[self.title_name] = True
+
         for points in out_range_points:
             x = [point[0] for point in points]
             y = [point[1] for point in points]
@@ -798,6 +913,11 @@ class Frequency(AnalysisGraphWidget):
                         current_out_range = []
             if current_out_range:
                 out_range_points.append(current_out_range)
+
+            if out_range_points:
+                self.data_struct.analysis_result_dict[self.title_name] = False
+            else:
+                self.data_struct.analysis_result_dict[self.title_name] = True
 
             for points in out_range_points:
                 x = [point[0] for point in points]
@@ -824,6 +944,8 @@ class AI(QWidget):
         self.analysis_config = None
         self.result = None
         self.default_logger = LogManager.set_log_handler("core")
+        self.title_name = title_name
+
         self.init_ui()
         self.setWindowTitle(title_name)
 
@@ -885,6 +1007,8 @@ class AI(QWidget):
             model_path, config_path = result
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
+            temp_result = re.search(r"评分结果:\s*(\S+)", result_text).group(1)
+            self.data_struct.analysis_result_dict[self.title_name] = True if temp_result == "OK" else False
             default_ai_model = analysis_config["default_ai"]
             if mode == "test" and default_ai_model:
                 analyse_model_name = analysis_config.get(default_ai_model, None).get("analyse_model_name", None)
@@ -903,7 +1027,7 @@ class AI(QWidget):
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
     def model_predict(self, model_path, model_name, **kwargs):
-        ret_str = predict_from_audio(
+        ret_str, pred_config = predict_from_audio(
             signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
             file_names=["modelpredict.wav"],
             fs=[self.data_struct.sample_rate],

@@ -1,3 +1,6 @@
+from typing import Any
+
+
 class DataDealStruct(object):
     _instance = None
 
@@ -21,9 +24,11 @@ class DataDealStruct(object):
 
             self.stft_flag = 0
             self.fft_flag = 0
-            
+
             # multiple PD instances result mapping: { analysis_key(str): [idx1, idx2, ...] }
-            self.pd_peak_grid_points_map = {} 
+            self.pd_peak_grid_points_map = {}
+
+            self.analysis_result_dict = dict[str, bool]()
 
             self._initialized = True
 
