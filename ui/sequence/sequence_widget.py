@@ -822,8 +822,9 @@ class SequenceWindow(QWidget):
                 self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate"))
             if self.data_struct.audio_lenth != stimulus_length:
                 QMessageBox.warning(self, "音频长度校验失败",
-                                    f"导入音频长度({self.data_struct.audio_lenth})与激励信号长度 ({stimulus_length})不一致！无法分析！")
-                return False
+                                    f"导入音频长度({self.data_struct.audio_lenth})\n"
+                                    f"与激励信号长度({stimulus_length})不一致！无法分析！")
+                return
         self.analysis_window = []
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
