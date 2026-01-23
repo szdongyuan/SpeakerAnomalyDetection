@@ -3,7 +3,7 @@ FR (Frequency Response) 分析配置对话框
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout, QPushButton
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -14,6 +14,16 @@ from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
 class FrConfigWindow(QDialog):
     """FR 频率响应分析配置对话框"""
+
+    OCTAVE_SMOOTHING_LABELS = {
+        "不平滑": 0,
+        "1/1 Oct": 1,
+        "1/3 Oct": 3,
+        "1/6 Oct": 6,
+        "1/12 Oct": 12,
+        "1/24 Oct": 24,
+        "1/48 Oct": 48,
+    }
 
     def __init__(self, config_manager, model_type):
         super().__init__()
@@ -30,10 +40,20 @@ class FrConfigWindow(QDialog):
 
         layout = QVBoxLayout()
 
-        # 平滑选项
-        self.smooth_chk_box = QCheckBox("是否平滑")
-        self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
-        self.smooth_chk_box.stateChanged.connect(self.get_default_config)
+        # Octave smoothing
+        self.smooth_combo_box = QComboBox()
+        self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
+
+        selected_oct = self.load_config.get("octave_smoothing", None)
+        if selected_oct is None:
+            # Backward-compatible: legacy boolean smooth_checked -> default to 1/6 Oct
+            selected_oct = 6 if self.load_config.get("smooth_checked", False) else 0
+        selected_oct = int(selected_oct)
+        selected_label = next(
+            (k for k, v in self.OCTAVE_SMOOTHING_LABELS.items() if v == selected_oct),
+            "不平滑",
+        )
+        self.smooth_combo_box.setCurrentText(selected_label)
 
         # 使用通用阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
@@ -48,8 +68,8 @@ class FrConfigWindow(QDialog):
 
         btn_layout = self.create_btn()
 
-        layout.addWidget(self.smooth_chk_box)
-        layout.addStretch()
+        layout.addWidget(QLabel("平滑"))
+        layout.addWidget(self.smooth_combo_box)
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -63,6 +83,7 @@ class FrConfigWindow(QDialog):
             + ui_style_const.qlabel_style
             + ui_style_const.qradiobutton_style
             + ui_style_const.qdoublespinbox_style
+            + ui_style_const.qcombobox_style
         )
 
     def create_btn(self):
@@ -78,7 +99,10 @@ class FrConfigWindow(QDialog):
 
     def get_default_config(self):
         """获取配置数据"""
-        config = {"smooth_checked": self.smooth_chk_box.isChecked()}
+        smooth_label = self.smooth_combo_box.currentText()
+        config = {
+            "octave_smoothing": int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0)),
+        }
         config.update(self.threshold_widget.get_config())
         return config
 

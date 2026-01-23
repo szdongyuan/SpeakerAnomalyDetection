@@ -35,6 +35,7 @@ from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
@@ -55,6 +56,7 @@ def get_class_mapping():
     """
     class_mapping = {
         "SPL": Spl,
+        "SPLF": SplFrequency,
         "FR": Frequency,
         "HD": Distortion,
         "RB": RubAndBuzz,  # Rub & Buzz (high-order 10th-35th harmonic distortion)
@@ -628,13 +630,21 @@ class Spl(AnalysisGraphWidget):
         # calculate Sound Pressure Level according to recorded_signal
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
-        signal_duration = np.linspace(0, len(recorded_signal) / sample_rate, len(recorded_signal))
         reference_pressure = 20e-6
+        window_size = 1201
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal, reference_pressure, v2pa_factor=self.v2pa_factor
+            recorded_signal,
+            reference_pressure,
+            window_size=window_size,
+            v2pa_factor=self.v2pa_factor,
+            trim_edges=True,
         )
-        if self.analysis_config["smooth_checked"]:
-            signal_spl = smooth(signal_spl, window_size=1102, method="rms")
+        start_index = 0 if len(signal_spl) == len(recorded_signal) else window_size // 2
+        signal_duration = (np.arange(len(signal_spl), dtype=float) + float(start_index)) / float(sample_rate)
+
+        if self.analysis_config and self.analysis_config.get("smooth_checked"):
+            # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
+            signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
         limit_checked = self.analysis_config.get("limit_checked")
         self_defined = self.analysis_config.get("self_defined")
         if limit_checked:
@@ -762,6 +772,241 @@ class Spl(AnalysisGraphWidget):
         self.analysis_plot.showGrid(x=True, y=True)
 
 
+class SplFrequency(AnalysisGraphWidget):
+    """
+    SPL vs Frequency analysis (output level curve for the current drive level).
+
+    Requires stimulus_info (step/chirp) to map each segment/frame to a frequency.
+    """
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.result = {}
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_spl(self):
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        stimulus_info = self.data_struct.stimulus_info or {}
+        analysis_config = self.analysis_config or {}
+
+        if recorded_signal is None or sample_rate is None or not stimulus_info:
+            self.plot_spl_frequency([], [])
+            self.result = {"frequency_list": [], "spl_db": []}
+            return self.result
+
+        stimulus_method = stimulus_info.get("stimulus_method", "steps")
+        if stimulus_method == "chirp":
+            stimulus_method = "chirps"
+        elif stimulus_method == "step":
+            stimulus_method = "steps"
+
+        stimulus_metadata = {
+            "stimulus_method": stimulus_method,
+            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
+            "start_freq": stimulus_info.get("start_freq"),
+            "stop_freq": stimulus_info.get("stop_freq"),
+            "num_steps": stimulus_info.get("num_steps"),
+            "total_time": stimulus_info.get("total_time"),
+            "repeat_times": stimulus_info.get("repeat_times"),
+            "sample_rate": sample_rate,
+        }
+
+        try:
+            analyzer = SplFrequencyAnalyzer(sample_rate=int(sample_rate))
+            result = analyzer.compute(
+                recorded_signal,
+                stimulus_metadata=stimulus_metadata,
+                v2pa_factor=self.v2pa_factor,
+                splf_calc_mode=analysis_config.get("splf_calc_mode", "fundamental"),
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"声压级-频率计算失败: {str(e)[:200]}")
+            self.plot_spl_frequency([], [])
+            self.result = {"frequency_list": [], "spl_db": []}
+            return self.result
+
+        frequency_list = np.asarray(result.frequencies_hz, dtype=float)
+        spl_db = np.asarray(result.spl_db, dtype=float)
+
+        # Optional octave smoothing (frequency-domain).
+        octave_smoothing = analysis_config.get("octave_smoothing", None)
+        if octave_smoothing is None and analysis_config.get("smooth_checked"):
+            octave_smoothing = 6
+        try:
+            octave_smoothing = int(octave_smoothing) if octave_smoothing is not None else 0
+        except Exception:
+            octave_smoothing = 0
+
+        if octave_smoothing in {1, 3, 6, 12, 24, 48} and spl_db.size > 1:
+            try:
+                from base.utils.octave_smoothing import smooth_to_octave_grid
+
+                freq = np.asarray(frequency_list, dtype=float)
+                val = np.asarray(spl_db, dtype=float)
+                mask = np.isfinite(freq) & np.isfinite(val) & (freq > 0.0)
+                freq = freq[mask]
+                val = val[mask]
+                if freq.size > 1:
+                    sort_idx = np.argsort(freq)
+                    freq = freq[sort_idx]
+                    val = val[sort_idx]
+                    freq, unique_idx = np.unique(freq, return_index=True)
+                    val = val[unique_idx]
+
+                    frequency_list, spl_db = smooth_to_octave_grid(freq, val, fraction=octave_smoothing, method="log")
+            except Exception:
+                pass
+
+        limit_checked = analysis_config.get("limit_checked")
+        self_defined = analysis_config.get("self_defined")
+        if limit_checked:
+            if self_defined:
+                upper_limit = analysis_config.get("upper_limit")
+                lower_limit = analysis_config.get("lower_limit")
+                self.plot_spl_frequency(frequency_list, spl_db, upper_limit=upper_limit, lower_limit=lower_limit)
+            else:
+                excel_path = analysis_config.get("config_dir")
+                result = Frequency.load_excel_limit(excel_path)
+                if not result:
+                    return False
+                csv_freq_list, csv_upper_list, csv_lower_list = result
+                self.plot_spl_frequency_with_limits(
+                    frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list
+                )
+        else:
+            self.plot_spl_frequency(frequency_list, spl_db)
+
+        self.result = {"frequency_list": frequency_list.tolist(), "spl_db": spl_db.tolist()}
+        return self.result
+
+    def plot_spl_frequency_with_limits(self, frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list):
+        self.analysis_plot.clear()
+        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77)))
+
+        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+        self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
+        self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
+
+        # Mark out-of-range points on the CSV frequency grid (interpolated from measured curve).
+        is_ok = True
+        deviation = 0.0
+        try:
+            freq = np.asarray(frequency_list, dtype=float)
+            spl = np.asarray(spl_db, dtype=float)
+            mask = np.isfinite(freq) & np.isfinite(spl) & (freq > 0.0)
+            freq = freq[mask]
+            spl = spl[mask]
+            sort_idx = np.argsort(freq)
+            freq = freq[sort_idx]
+            spl = spl[sort_idx]
+            freq, unique_idx = np.unique(freq, return_index=True)
+            spl = spl[unique_idx]
+
+            csv_f = np.asarray(csv_freq_list, dtype=float)
+            csv_u = np.asarray(csv_upper_list, dtype=float)
+            csv_l = np.asarray(csv_lower_list, dtype=float)
+            if freq.size > 1 and csv_f.size > 0:
+                in_band = (csv_f >= float(np.min(freq))) & (csv_f <= float(np.max(freq)))
+                interp = np.full(csv_f.shape, np.nan, dtype=np.float64)
+                if np.any(in_band):
+                    interp[in_band] = np.interp(csv_f[in_band], freq, spl)
+                u_ok = np.isfinite(csv_u)
+                l_ok = np.isfinite(csv_l)
+                out = in_band & ((u_ok & (interp > csv_u)) | (l_ok & (interp < csv_l)))
+                if np.any(out):
+                    start = None
+                    for idx, is_out in enumerate(out):
+                        if is_out and start is None:
+                            start = idx
+                        elif (not is_out) and start is not None:
+                            self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:idx], interp[start:idx], pen="r"))
+                            start = None
+                    if start is not None:
+                        self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:], interp[start:], pen="r"))
+
+                    dev_upper = np.where(out & u_ok, interp - csv_u, 0.0)
+                    dev_lower = np.where(out & l_ok, csv_l - interp, 0.0)
+                    deviation = float(np.nanmax(np.maximum(dev_upper, dev_lower)))
+                    is_ok = False
+                else:
+                    margins = []
+                    if np.any(in_band & u_ok):
+                        margins.append(csv_u[in_band & u_ok] - interp[in_band & u_ok])
+                    if np.any(in_band & l_ok):
+                        margins.append(interp[in_band & l_ok] - csv_l[in_band & l_ok])
+                    if margins:
+                        deviation = float(np.nanmin(np.concatenate(margins)))
+                    is_ok = True
+        except Exception:
+            is_ok = False
+            deviation = 0.0
+
+        deviation = round(float(deviation), 2)
+        self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+
+        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.setLogMode(x=True, y=False)
+        self.analysis_plot.showGrid(x=True, y=True)
+
+    def plot_spl_frequency(self, frequency_list, spl_db, upper_limit="", lower_limit=""):
+        self.analysis_plot.clear()
+        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77)))
+        if lower_limit and upper_limit:
+            upper_limit = float(upper_limit)
+            lower_limit = float(lower_limit)
+            out_range_points = []
+            current_out_range = []
+            for i in range(len(spl_db)):
+                if spl_db[i] <= lower_limit or spl_db[i] >= upper_limit:
+                    current_out_range.append((frequency_list[i], spl_db[i]))
+                else:
+                    if current_out_range:
+                        out_range_points.append(current_out_range)
+                        current_out_range = []
+            if current_out_range:
+                out_range_points.append(current_out_range)
+
+            try:
+                spl_arr = np.asarray(spl_db, dtype=float)
+                if out_range_points:
+                    deviation = max(
+                        float(np.nanmax(spl_arr - upper_limit)),
+                        float(np.nanmax(lower_limit - spl_arr)),
+                    )
+                    is_ok = False
+                else:
+                    deviation = min(
+                        float(np.nanmin(np.abs(spl_arr - upper_limit))),
+                        float(np.nanmin(np.abs(spl_arr - lower_limit))),
+                    )
+                    is_ok = True
+                deviation = round(float(deviation), 2)
+                self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+            except Exception:
+                self.data_struct.analysis_result_dict[self.title_name] = (False, 0.0)
+
+            for points in out_range_points:
+                x = [point[0] for point in points]
+                y = [point[1] for point in points]
+                out_range_plot = pg.PlotDataItem(x, y, pen="r")
+                self.analysis_plot.addItem(out_range_plot)
+            dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+            lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
+            self.analysis_plot.addItem(lower_limit1)
+            upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
+            self.analysis_plot.addItem(upper_limit1)
+        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.setLogMode(x=True, y=False)
+        self.analysis_plot.showGrid(x=True, y=True)
+
+
 class Frequency(AnalysisGraphWidget):
 
     def __init__(self, title_name):
@@ -780,11 +1025,79 @@ class Frequency(AnalysisGraphWidget):
         stimulus_signal = self.data_struct.stimulus_data
         recorded_signal = self.data_struct.store_wave_data
         sr = self.data_struct.sample_rate
-        fr, frequency_list = AudioThdFrequencyResponseAnalysis().calculate_fr(
-            stimulus_signal, recorded_signal, sr, is_smooth=self.analysis_config["smooth_checked"]
-        )
-        limit_checked = self.analysis_config.get("limit_checked")
-        self_defined = self.analysis_config.get("self_defined")
+        stimulus_info = self.data_struct.stimulus_info or {}
+        analysis_config = self.analysis_config or {}
+
+        if stimulus_signal is None or recorded_signal is None or sr is None:
+            self.plot_fr([], [])
+            self.result = {"fr": [], "frequency_list": []}
+            return self.result
+
+        # Convert stimulus_info to metadata (shared convention with harmonic distortion pipeline).
+        stimulus_method = stimulus_info.get("stimulus_method", "steps")
+        if stimulus_method == "chirp":
+            stimulus_method = "chirps"
+        elif stimulus_method == "step":
+            stimulus_method = "steps"
+
+        stimulus_metadata = {
+            "stimulus_method": stimulus_method,
+            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
+            "start_freq": stimulus_info.get("start_freq"),
+            "stop_freq": stimulus_info.get("stop_freq"),
+            "num_steps": stimulus_info.get("num_steps"),
+            "total_time": stimulus_info.get("total_time"),
+            "repeat_times": stimulus_info.get("repeat_times"),
+            "sample_rate": sr,
+        }
+        
+        try:
+            analyzer = FrequencyResponseAnalyzer(sample_rate=int(sr))
+            fr_result = analyzer.compute(
+                stimulus_signal,
+                recorded_signal,
+                stimulus_metadata=stimulus_metadata,
+                method="sweep_wiener",
+            )
+
+            frequency_list = np.asarray(fr_result.frequencies_hz, dtype=float)
+            fr = np.asarray(fr_result.magnitude_db, dtype=float)
+
+            # Optional octave smoothing (frequency-domain).
+            octave_smoothing = analysis_config.get("octave_smoothing", None)
+            if octave_smoothing is None and analysis_config.get("smooth_checked"):
+                octave_smoothing = 6
+            try:
+                octave_smoothing = int(octave_smoothing) if octave_smoothing is not None else 0
+            except Exception:
+                octave_smoothing = 0
+
+            if octave_smoothing in {1, 3, 6, 12, 24, 48} and fr.size > 1:
+                try:
+                    from base.utils.octave_smoothing import smooth_to_octave_grid
+
+                    freq = np.asarray(frequency_list, dtype=float)
+                    val = np.asarray(fr, dtype=float)
+                    mask = np.isfinite(freq) & np.isfinite(val) & (freq > 0.0)
+                    freq = freq[mask]
+                    val = val[mask]
+                    if freq.size > 1:
+                        sort_idx = np.argsort(freq)
+                        freq = freq[sort_idx]
+                        val = val[sort_idx]
+                        freq, unique_idx = np.unique(freq, return_index=True)
+                        val = val[unique_idx]
+
+                        frequency_list, fr = smooth_to_octave_grid(freq, val, fraction=octave_smoothing, method="log")
+                except Exception:
+                    pass
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"频响计算失败: {str(e)[:200]}")
+            self.plot_fr([], [])
+            self.result = {"fr": [], "frequency_list": []}
+            return self.result
+        limit_checked = analysis_config.get("limit_checked")
+        self_defined = analysis_config.get("self_defined")
         if limit_checked:
             if self_defined:
                 upper_limit = self.analysis_config.get("upper_limit")
@@ -916,51 +1229,65 @@ class Frequency(AnalysisGraphWidget):
 
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
-        out_range_points = []
-        current_out_range = []
 
-        deviation: float = 0.0
-        no_deviation_flag = True
+        # Mark out-of-range points on the CSV frequency grid (interpolated from measured curve).
+        is_ok = True
+        deviation = 0.0
+        try:
+            freq = np.asarray(frequency_list, dtype=float)
+            mag = np.asarray(fr_disp, dtype=float)
+            mask = np.isfinite(freq) & np.isfinite(mag) & (freq > 0.0)
+            freq = freq[mask]
+            mag = mag[mask]
+            sort_idx = np.argsort(freq)
+            freq = freq[sort_idx]
+            mag = mag[sort_idx]
+            freq, unique_idx = np.unique(freq, return_index=True)
+            mag = mag[unique_idx]
 
-        for i in frequency_list:
-            if i in csv_freq_list:
-                index = np.where(frequency_list == i)[0][0]
-                table_index = np.where(csv_freq_list == i)[0][0]
-                if fr_disp[index] > csv_upper_list[table_index] or fr_disp[index] < csv_lower_list[table_index]:
-                    current_out_range.append((frequency_list[index], fr_disp[index]))
-                    if no_deviation_flag:
-                        deviation = 0.0
-                        no_deviation_flag = False
-                    deviation = max(
-                        deviation,
-                        fr_disp[index] - csv_upper_list[table_index],
-                        csv_lower_list[table_index] - fr_disp[index],
-                    )
+            csv_f = np.asarray(csv_freq_list, dtype=float)
+            csv_u = np.asarray(csv_upper_list, dtype=float)
+            csv_l = np.asarray(csv_lower_list, dtype=float)
+            if freq.size > 1 and csv_f.size > 0:
+                in_band = (csv_f >= float(np.min(freq))) & (csv_f <= float(np.max(freq)))
+                interp = np.full(csv_f.shape, np.nan, dtype=np.float64)
+                if np.any(in_band):
+                    interp[in_band] = np.interp(csv_f[in_band], freq, mag)
+                u_ok = np.isfinite(csv_u)
+                l_ok = np.isfinite(csv_l)
+                out = in_band & ((u_ok & (interp > csv_u)) | (l_ok & (interp < csv_l)))
+                if np.any(out):
+                    start = None
+                    for idx, is_out in enumerate(out):
+                        if is_out and start is None:
+                            start = idx
+                        elif (not is_out) and start is not None:
+                            self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:idx], interp[start:idx], pen="r"))
+                            start = None
+                    if start is not None:
+                        self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:], interp[start:], pen="r"))
+
+                    dev_upper = np.where(out & u_ok, interp - csv_u, 0.0)
+                    dev_lower = np.where(out & l_ok, csv_l - interp, 0.0)
+                    deviation = float(np.nanmax(np.maximum(dev_upper, dev_lower)))
+                    is_ok = False
                 else:
-                    if current_out_range:
-                        out_range_points.append(current_out_range)
-                    current_out_range = []
-                    if no_deviation_flag:
-                        deviation = min(
-                            deviation,
-                            csv_upper_list[table_index] - fr_disp[index],
-                            fr_disp[index] - csv_lower_list[table_index],
-                        )
-        if current_out_range:
-            out_range_points.append(current_out_range)
+                    margins = []
+                    if np.any(in_band & u_ok):
+                        margins.append(csv_u[in_band & u_ok] - interp[in_band & u_ok])
+                    if np.any(in_band & l_ok):
+                        margins.append(interp[in_band & l_ok] - csv_l[in_band & l_ok])
+                    if margins:
+                        deviation = float(np.nanmin(np.concatenate(margins)))
+                    is_ok = True
+        except Exception:
+            is_ok = False
+            deviation = 0.0
 
-        deviation = round(deviation, 2)
-        if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
-        else:
-            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
-
-        for points in out_range_points:
-            x = [point[0] for point in points]
-            y = [point[1] for point in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen="r")
-            self.analysis_plot.addItem(out_range_plot)
+        deviation = round(float(deviation), 2)
+        self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
 
     def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
         self.analysis_plot.clear()
@@ -1005,6 +1332,7 @@ class Frequency(AnalysisGraphWidget):
             self.analysis_plot.addItem(upper_limit1)
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
 
 
