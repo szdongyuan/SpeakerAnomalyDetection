@@ -138,6 +138,7 @@ class AnalysisModelSelect(QDialog):
         analysis_item_item = QStandardItem("音频分析")
         analysis_items = [
             "声压级 (SPL) ",
+            "声压级-频率 (SPLF) ",
             "频谱分析 (Spec) ",
             "频响 (FR) ",
             "谐波失真 (HD) ",
@@ -530,6 +531,8 @@ class OptionList(QListView):
     def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type, signal_len):
         if type == "SPL":
             model = SplConfigWindow(config_manager, name)
+        elif type == "SPLF":
+            model = SplConfigWindow(config_manager, name)
         elif type == "FR":
             model = FrConfigWindow(config_manager, name)
         elif type == "HD":
@@ -824,7 +827,7 @@ class OptionList(QListView):
                 if self.sound_item_type:
                     self.drop_is_accept = False
             elif self.sound_item_type in ["录制音频", "导入音频"]:
-                if text in ["频响 (FR) ", "谐波失真 (HD) ", "高阶谐波失真 (RB) ", "感知失真 (PRB) "]:
+                if text in ["声压级-频率 (SPLF) ", "频响 (FR) ", "谐波失真 (HD) ", "高阶谐波失真 (RB) ", "感知失真 (PRB) "]:
                     self.drop_is_accept = False
             elif not self.sound_item_type:
                 self.drop_is_accept = False
@@ -846,7 +849,7 @@ class OptionList(QListView):
                     QMessageBox.warning(self, "警告", "已选择测试模式")
                 elif not self.config:
                     QMessageBox.warning(self, "警告", "请选择测试模式")
-                elif text in ["频响 (FR) ", "谐波失真 (HD) ", "高阶谐波失真 (RB) ", "感知失真 (PRB) "]:
+                elif text in ["声压级-频率 (SPLF) ", "频响 (FR) ", "谐波失真 (HD) ", "高阶谐波失真 (RB) ", "感知失真 (PRB) "]:
                     QMessageBox.warning(self, "警告", "当前模式不支持此功能")
                 self.drop_is_accept = True
                 return

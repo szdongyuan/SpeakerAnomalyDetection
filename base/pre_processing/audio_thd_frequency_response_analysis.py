@@ -523,7 +523,8 @@ class AudioThdFrequencyResponseAnalysis(object):
                         method: str = "rms", 
                         padding_mode: str = "zero", 
                         padding_cval: Optional[float] = 0.0,
-                        v2pa_factor: Optional[float] = None):
+                        v2pa_factor: Optional[float] = None,
+                        trim_edges: bool = False):
         """
             Compute SPL (dB) with a sliding window.
 
@@ -577,7 +578,18 @@ class AudioThdFrequencyResponseAnalysis(object):
         pa_amp_list = np.asarray(v_amp_list, dtype=float) * v2pa_factor
         pa_amp_list = np.maximum(pa_amp_list, 1.0e-10)    # Avoid log of zero or negative due to numerical issues
         spl = 20 * np.log10(pa_amp_list / float(reference_pressure))
-        return spl
+
+        if not trim_edges:
+            return spl
+
+        n = int(signal_float.size)
+        w = int(window_size)
+        if w <= 1 or w > n:
+            return spl
+        out_len = n - w + 1
+        start = w // 2
+        end = start + out_len
+        return spl[start:end]
 
     @staticmethod
     def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size, v2pa_factor):

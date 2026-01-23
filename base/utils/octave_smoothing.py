@@ -8,7 +8,7 @@ import numpy as np
 from typing import Optional, Tuple
 
 
-def hz_to_octave(freq_hz: np.ndarray, ref_freq: float = 1000.0) -> np.ndarray:
+def hz_to_octave(freq_hz: np.ndarray | float, ref_freq: float = 1000.0) -> np.ndarray:
     """
     Convert frequency in Hz to octave units relative to reference frequency.
 
@@ -22,7 +22,7 @@ def hz_to_octave(freq_hz: np.ndarray, ref_freq: float = 1000.0) -> np.ndarray:
     return np.log2(np.asarray(freq_hz, dtype=np.float64) / float(ref_freq))
 
 
-def octave_to_hz(octave: np.ndarray, ref_freq: float = 1000.0) -> np.ndarray:
+def octave_to_hz(octave: np.ndarray | float, ref_freq: float = 1000.0) -> np.ndarray:
     """
     Convert octave units to frequency in Hz.
 
@@ -148,11 +148,37 @@ def smooth_to_octave_grid(
     if len(frequencies) == 0:
         return np.array([]), np.array([])
 
+    # Clean/prepare for interpolation:
+    # - octave grid requires positive frequencies
+    # - interpolation (np.interp) requires strictly increasing x values
+    mask = np.isfinite(frequencies) & np.isfinite(values) & (frequencies > 0.0)
+    frequencies = frequencies[mask]
+    values = values[mask]
+    if frequencies.size == 0:
+        return np.array([]), np.array([])
+
+    sort_idx = np.argsort(frequencies)
+    frequencies = frequencies[sort_idx]
+    values = values[sort_idx]
+
+    # Average duplicate frequencies to keep a strictly increasing axis.
+    unique_freqs, inverse = np.unique(frequencies, return_inverse=True)
+    if unique_freqs.size != frequencies.size:
+        sums = np.zeros(unique_freqs.shape, dtype=np.float64)
+        counts = np.zeros(unique_freqs.shape, dtype=np.int64)
+        np.add.at(sums, inverse, values)
+        np.add.at(counts, inverse, 1)
+        frequencies = unique_freqs
+        values = sums / np.maximum(counts, 1)
+
     # Determine frequency range
     if f_min is None:
-        f_min = np.min(frequencies)
+        f_min = float(np.min(frequencies))
     if f_max is None:
-        f_max = np.max(frequencies)
+        f_max = float(np.max(frequencies))
+
+    if f_min <= 0.0 or f_max <= 0.0:
+        raise ValueError(f"f_min and f_max must be positive, got f_min={f_min}, f_max={f_max}")
 
     # Generate octave grid (include endpoints to ensure f_min and f_max are covered)
     freq_grid = generate_octave_grid(f_min, f_max, fraction, ref_freq, include_endpoints=True)

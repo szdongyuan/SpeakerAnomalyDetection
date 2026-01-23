@@ -68,6 +68,7 @@ class BaseConfigWindow(QDialog):
 class PlayRecordConfigWindow(BaseConfigWindow):
     def __init__(self, stimulus_config_data, mic=None, speaker=None):
         super().__init__(mic=mic)
+        self.setWindowTitle("播放与录制")
         self.stimulus_config_data = deepcopy(stimulus_config_data)
         self.clicked_stimulus_btn_flag = False
         self.stimulus_signal = None
@@ -163,6 +164,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 class RecordConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None):
         super().__init__()
+        self.setWindowTitle("录制音频")
         self.input_data = input_data
         self.init_ui()
 
@@ -222,6 +224,7 @@ class RecordConfigWindow(BaseConfigWindow):
 class ImportAudioConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None):
         super().__init__(mic=mic)
+        self.setWindowTitle("导入音频")
         self.input_data = input_data or {}
         self.init_ui()
 
@@ -259,6 +262,7 @@ class ImportAudioConfigWindow(BaseConfigWindow):
 class ImportStimulusAudioConfigWindow(BaseConfigWindow):
     def __init__(self, stimulus_config_data, mic=None, speaker=None):
         super().__init__(mic=mic)
+        self.setWindowTitle("导入激励与音频")
         self.setMinimumSize(220, 150)
         self.resize(220, 150)
         self.stimulus_config_data = deepcopy(stimulus_config_data or {})
