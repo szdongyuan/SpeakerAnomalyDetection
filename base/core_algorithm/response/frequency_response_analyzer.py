@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Dict, Optional
 
 import numpy as np
+from scipy import signal as sp_signal
 
 
 class FrequencyResponseMethod(str, Enum):
@@ -115,11 +116,6 @@ class FrequencyResponseAnalyzer:
 
         Returns amplitude magnitude in dB: 20*log10(|H1|).
         """
-        try:
-            from scipy import signal as sp_signal
-        except Exception as e:
-            raise ImportError("scipy is required for Welch/CSD frequency response estimation") from e
-
         x = _as_1d_float_array(reference_signal)
         y = _as_1d_float_array(recorded_signal)
         n = int(min(x.size, y.size))

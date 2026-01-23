@@ -42,6 +42,14 @@ qcombobox_style = """
                 border-radius: 3px;
                 padding: 3px;
             }
+            QComboBox QAbstractItemView {
+                font-family: 'SimSun';
+                font-size: 18px;
+            }
+            QComboBox QAbstractItemView::item {
+                font-family: 'SimSun';
+                font-size: 18px;
+            }
         """
 qgroupbox_style = """
             QGroupBox {
