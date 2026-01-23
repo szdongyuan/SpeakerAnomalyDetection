@@ -1,9 +1,11 @@
 """
 SPL (Sound Pressure Level) 分析配置对话框
 """
+import re
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QRadioButton, QVBoxLayout, QPushButton
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -15,25 +17,70 @@ from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 class SplConfigWindow(QDialog):
     """SPL 分析配置对话框"""
 
+    OCTAVE_SMOOTHING_LABELS = {
+        "不平滑": 0,
+        "1/1 Oct": 1,
+        "1/3 Oct": 3,
+        "1/6 Oct": 6,
+        "1/12 Oct": 12,
+        "1/24 Oct": 24,
+        "1/48 Oct": 48,
+    }
+
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.analysis_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(380, 350)
-        self.resize(380, 350)
+        height = 470 if self.analysis_type == "SPLF" else 350
+        self.setMinimumSize(380, height)
+        self.resize(380, height)
 
         layout = QVBoxLayout()
 
-        # 平滑选项
-        self.smooth_chk_box = QCheckBox("是否平滑")
-        self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
-        self.smooth_chk_box.stateChanged.connect(self.get_default_config)
+        # SPL: time-domain smoothing checkbox
+        self.smooth_chk_box = None
+        if self.analysis_type != "SPLF":
+            self.smooth_chk_box = QCheckBox("平滑")
+            self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
+            self.smooth_chk_box.stateChanged.connect(self.get_default_config)
+
+        # SPLF: calculation mode (fundamental-only vs total RMS SPL)
+        self.splf_mode_group_box = None
+        if self.analysis_type == "SPLF":
+            self.splf_mode_group_box = QGroupBox("SPLF 计算方式")
+            self.radio_fundamental = QRadioButton("仅基频")
+            self.radio_total = QRadioButton("总SPL")
+
+            mode = str(self.load_config.get("splf_calc_mode", "fundamental") or "fundamental").lower()
+            if mode == "total":
+                self.radio_total.setChecked(True)
+            else:
+                self.radio_fundamental.setChecked(True)
+
+            mode_layout = QVBoxLayout()
+            mode_layout.addWidget(self.radio_fundamental)
+            mode_layout.addWidget(self.radio_total)
+            self.splf_mode_group_box.setLayout(mode_layout)
+
+            # SPLF: octave smoothing dropdown (frequency-domain)
+            self.smooth_combo_box = QComboBox()
+            self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
+            selected_oct = self.load_config.get("octave_smoothing", None)
+            if selected_oct is None:
+                selected_oct = 6 if self.load_config.get("smooth_checked", False) else 0
+            selected_oct = int(selected_oct)
+            selected_label = next(
+                (k for k, v in self.OCTAVE_SMOOTHING_LABELS.items() if v == selected_oct),
+                "不平滑",
+            )
+            self.smooth_combo_box.setCurrentText(selected_label)
 
         # 使用通用阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
@@ -48,8 +95,16 @@ class SplConfigWindow(QDialog):
 
         btn_layout = self.create_btn()
 
-        layout.addWidget(self.smooth_chk_box)
-        layout.addStretch()
+        if self.splf_mode_group_box is not None:
+            layout.addWidget(self.splf_mode_group_box)
+
+            smooth_layout = QHBoxLayout()
+            smooth_layout.addWidget(QLabel("平滑"))
+            smooth_layout.addWidget(self.smooth_combo_box)
+            layout.addLayout(smooth_layout)
+        elif self.smooth_chk_box is not None:
+            layout.addWidget(self.smooth_chk_box)
+
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -64,6 +119,7 @@ class SplConfigWindow(QDialog):
             + ui_style_const.qradiobutton_style
             + ui_style_const.qpushbutton_style
             + ui_style_const.qdoublespinbox_style
+            + ui_style_const.qcombobox_style
         )
 
     def create_btn(self):
@@ -79,7 +135,16 @@ class SplConfigWindow(QDialog):
 
     def get_default_config(self):
         """获取配置数据"""
-        config = {"smooth_checked": self.smooth_chk_box.isChecked()}
+        config = {}
+        if self.analysis_type != "SPLF" and self.smooth_chk_box is not None:
+            config["smooth_checked"] = self.smooth_chk_box.isChecked()
+        if self.analysis_type == "SPLF":
+            calc_mode = "fundamental"
+            if hasattr(self, "radio_total") and self.radio_total.isChecked():
+                calc_mode = "total"
+            config["splf_calc_mode"] = calc_mode
+            smooth_label = self.smooth_combo_box.currentText()
+            config["octave_smoothing"] = int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0))
         config.update(self.threshold_widget.get_config())
         return config
 
@@ -89,7 +154,7 @@ class SplConfigWindow(QDialog):
             return
         if check_upper_lower_limit(config_data, self):
             return
-        save_flag = self.config_manager.save_default_config("SPL", config_data)
+        save_flag = self.config_manager.save_default_config(self.analysis_type, config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
