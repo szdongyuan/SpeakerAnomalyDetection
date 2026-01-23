@@ -35,6 +35,7 @@ from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.training_model_management import TrainingModelManagement
 from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
@@ -816,8 +817,6 @@ class SplFrequency(AnalysisGraphWidget):
         }
 
         try:
-            from base.core_algorithm.response import SplFrequencyAnalyzer
-
             analyzer = SplFrequencyAnalyzer(sample_rate=int(sample_rate))
             result = analyzer.compute(
                 recorded_signal,
@@ -1051,10 +1050,8 @@ class Frequency(AnalysisGraphWidget):
             "repeat_times": stimulus_info.get("repeat_times"),
             "sample_rate": sr,
         }
-
+        
         try:
-            from base.core_algorithm.response import FrequencyResponseAnalyzer
-
             analyzer = FrequencyResponseAnalyzer(sample_rate=int(sr))
             fr_result = analyzer.compute(
                 stimulus_signal,
