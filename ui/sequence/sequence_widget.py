@@ -60,7 +60,7 @@ class SequenceWindow(QWidget):
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
-        self.get_sequence_config_from_json()  ###########################################################################################
+        self.get_sequence_config_from_json()
         self.init_data_struct_stimulus_config()
         self.init_fft_and_stft_flag()
         self.signal_info = {}
