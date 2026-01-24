@@ -82,7 +82,6 @@ class SplConfigWindow(QDialog):
             )
             self.smooth_combo_box.setCurrentText(selected_label)
 
-        # 使用通用阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
             upper_range=(0, 500),
@@ -93,8 +92,26 @@ class SplConfigWindow(QDialog):
             csv_validator=Frequency.load_excel_limit
         )
 
+        weighting_label = QLabel("计权方式:")
+        self.weighting_combo = QComboBox()
+        self.weighting_combo.addItems(["Z（None）", "A", "B", "C", "D"])
+        weighting_value = self.load_config.get("weighting", "Z（None）")
+        if weighting_value in ["None", "Z"]:
+            weighting_value = "Z（None）"
+        index = self.weighting_combo.findText(weighting_value)
+        if index >= 0:
+            self.weighting_combo.setCurrentIndex(index)
+        else:
+            self.weighting_combo.setCurrentIndex(0)
+
+        threshold_weighting_layout = QHBoxLayout()
+        threshold_weighting_layout.addWidget(weighting_label)
+        threshold_weighting_layout.addWidget(self.weighting_combo)
+        threshold_weighting_layout.addStretch()
+
         btn_layout = self.create_btn()
 
+        layout.addLayout(threshold_weighting_layout)
         if self.splf_mode_group_box is not None:
             layout.addWidget(self.splf_mode_group_box)
 
@@ -104,7 +121,6 @@ class SplConfigWindow(QDialog):
             layout.addLayout(smooth_layout)
         elif self.smooth_chk_box is not None:
             layout.addWidget(self.smooth_chk_box)
-
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -146,6 +162,11 @@ class SplConfigWindow(QDialog):
             smooth_label = self.smooth_combo_box.currentText()
             config["octave_smoothing"] = int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0))
         config.update(self.threshold_widget.get_config())
+        weighting_value = self.weighting_combo.currentText()
+        if weighting_value == "Z（None）":
+            config["weighting"] = "Z"
+        else:
+            config["weighting"] = weighting_value
         return config
 
     def on_default_btn_clicked(self):
@@ -165,3 +186,15 @@ class SplConfigWindow(QDialog):
             return
         self.accept()
         return config_data
+
+
+if __name__ == "__main__":
+    import sys
+    from PyQt5.QtWidgets import QApplication
+    from base.load_config import ConfigManager, LoadUiConfig
+    prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+    app = QApplication(sys.argv)
+    config_manager = ConfigManager(prev_config_file)
+    window = SplConfigWindow(config_manager, "SPL")
+    window.show()
+    sys.exit(app.exec_())

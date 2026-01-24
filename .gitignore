@@ -13,4 +13,5 @@ ui/readme.md
 /.serena
 /doc
 .vscode/*
+.idea/
 requirements.txt

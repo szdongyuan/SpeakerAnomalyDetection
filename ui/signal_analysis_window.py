@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
 )
 from scipy.signal import find_peaks
 
+from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_filter
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -626,12 +627,30 @@ class Spl(AnalysisGraphWidget):
 
         self.setWindowTitle(title_name)
 
+    def _get_spl_label(self):
+        """Get SPL y-axis label based on weighting type."""
+        weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
+        weighting = weighting.upper()
+        if weighting == "A":
+            return "SPL (dBA)"
+        elif weighting == "B":
+            return "SPL (dBB)"
+        elif weighting == "C":
+            return "SPL (dBC)"
+        elif weighting == "D":
+            return "SPL (dBD)"
+        else:  # Z or None
+            return "SPL (dB)"
+
     def calculate_spl(self):
         # calculate Sound Pressure Level according to recorded_signal
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
         reference_pressure = 20e-6
         window_size = 1201
+        weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
+        if weighting and weighting.upper() not in ["NONE", "Z"]:
+            recorded_signal = apply_weighting_filter(recorded_signal, sample_rate, weighting=weighting, zero_phase=False)
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             recorded_signal,
             reference_pressure,
@@ -677,7 +696,7 @@ class Spl(AnalysisGraphWidget):
         self.analysis_plot.plot(csv_time_list, csv_upper_list, pen=dashed_pen)
         self.analysis_plot.plot(csv_time_list, csv_lower_list, pen=dashed_pen)
 
-        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("left", self._get_spl_label())
         self.analysis_plot.setLabel("bottom", "Time (s)")
         self.analysis_plot.showGrid(x=True, y=True)
         out_range_points = []
@@ -767,7 +786,7 @@ class Spl(AnalysisGraphWidget):
             self.analysis_plot.addItem(lower_limit1)
             upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
             self.analysis_plot.addItem(upper_limit1)
-        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("left", self._get_spl_label())
         self.analysis_plot.setLabel("bottom", "Time (s)")
         self.analysis_plot.showGrid(x=True, y=True)
 
