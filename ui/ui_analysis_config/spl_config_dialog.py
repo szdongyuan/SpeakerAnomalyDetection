@@ -82,7 +82,6 @@ class SplConfigWindow(QDialog):
             )
             self.smooth_combo_box.setCurrentText(selected_label)
 
-        # 使用通用阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
             upper_range=(0, 500),
