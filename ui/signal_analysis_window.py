@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
 )
 from scipy.signal import find_peaks
 
+from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_filter
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -632,6 +633,9 @@ class Spl(AnalysisGraphWidget):
         sample_rate = self.data_struct.sample_rate
         reference_pressure = 20e-6
         window_size = 1201
+        weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
+        if weighting and weighting.upper() not in ["NONE", "Z"]:
+            recorded_signal = apply_weighting_filter(recorded_signal, sample_rate, weighting=weighting, zero_phase=False)
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             recorded_signal,
             reference_pressure,
