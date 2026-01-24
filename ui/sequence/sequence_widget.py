@@ -3,14 +3,14 @@ import os
 import re
 import weakref
 from datetime import datetime
+import time
 
 import librosa
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QSize, Qt, QTimer
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog
-
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog, QLineEdit
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
@@ -83,6 +83,29 @@ class SequenceWindow(QWidget):
         self.last_play_count = None  # Cache last play count for replay
 
         self.default_logger = LogManager.set_log_handler("core")
+
+        self._barcode_debounce_ms = 120
+        self._barcode_fast_input_max_seconds = 0.6  # 首字符到末字符的总耗时，小于该值更像扫码
+        self._barcode_min_length_for_auto_commit = 6  # 太短容易误触发（可按你们条码规则调整）
+
+        self._barcode_debounce_timer = QTimer(self)
+        self._barcode_debounce_timer.setSingleShot(True)
+        self._barcode_debounce_timer.setInterval(self._barcode_debounce_ms)
+        self._barcode_debounce_timer.timeout.connect(self._on_barcode_debounce_timeout)
+        self._barcode_first_char_ts = None
+        self._barcode_last_char_ts = None
+        # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免“必须点到输入框才生效”）
+        self._barcode_capture_buffer = ""
+        self._barcode_capture_first_ts = None
+        self._barcode_capture_last_ts = None
+        self._barcode_capture_target_lineedit = None
+        self._barcode_capture_target_text = None
+        self._barcode_capture_target_cursor_pos = None
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
 
         # Streaming state variables
         self.streaming_buffer = []
@@ -180,6 +203,10 @@ class SequenceWindow(QWidget):
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
         self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
+
+        self.lineedit_s_or_n.returnPressed.connect(self._on_barcode_return_pressed)
+        self.lineedit_s_or_n.textChanged.connect(self._on_barcode_text_changed)
+
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
@@ -328,17 +355,23 @@ class SequenceWindow(QWidget):
     def clicked_scanner(self):
         """Checkbox 状态改变时的回调"""
         if self.barcode_scanner_box.isChecked():
+            # 配置文件加载失败不再致命：扫码枪可进入自动识别模式（支持热插拔）。
+            # 注意：光电开关仍依赖 hotkey 配置。
             if not self.hw_manager.ensure_config_loaded():
-                self.barcode_scanner_box.setChecked(False)
-                QMessageBox.warning(self, "硬件初始化失败", "无法加载扫码枪/光电开关配置，请检查配置文件。")
-                return
+                self.default_logger.warning("无法加载扫码枪/光电开关配置，将进入扫码枪自动识别模式（光电开关可能不可用）。")
 
             self.lineedit_s_or_n.setEnabled(True)
+            # 键盘楔入模式依赖“输入框有焦点”，开启后把焦点给 S/N 输入框
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
+            except Exception:
+                pass
             if self.hw_manager.start():
                 self.default_logger.info("硬件监听已启动")
             else:
                 self.barcode_scanner_box.setChecked(False)
-                QMessageBox.warning(self, "硬件参数缺失", "HID 配置缺少有效的 VID/PID，已恢复到未勾选状态。")
+                QMessageBox.warning(self, "硬件初始化失败", "硬件监听启动失败，请检查环境/权限或日志输出。")
         else:
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
@@ -347,14 +380,164 @@ class SequenceWindow(QWidget):
 
     def on_barcode_received(self, barcode):
         """处理扫码枪信号"""
+        self._commit_barcode(barcode, source="hid")
+
+    def _normalize_barcode(self, text: str) -> str:
+        if text is None:
+            return ""
+        return str(text).strip()
+
+    def _should_auto_commit_barcode(self, text: str, first_ts: float, last_ts: float) -> bool:
+        """判断一段输入是否更像“扫码枪快速输入”，用于防抖自动提交。"""
+        text = self._normalize_barcode(text)
+        if not text:
+            return False
+        if len(text) < self._barcode_min_length_for_auto_commit:
+            return False
+        duration = max(0.0, last_ts - first_ts)
+        return duration <= self._barcode_fast_input_max_seconds
+
+    # Windows 文件名中不允许的特殊字符
+    _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
+
+    def _barcode_has_invalid_chars(self, barcode: str) -> tuple:
+        """检查条形码是否包含无法用于文件名的特殊字符，返回 (是否有, 特殊字符列表)"""
+        found = [ch for ch in barcode if ch in self._INVALID_FILENAME_CHARS]
+        return (bool(found), found)
+
+    def _commit_barcode(self, barcode: str, source: str = "wedge"):
+        """
+        统一条码提交入口：
+        - source="hid": 来自 pywinusb HID raw handler 解析
+        - source="wedge": 来自"键盘楔入模式"（扫码枪当键盘输入）
+        """
+        barcode = self._normalize_barcode(barcode)
         if not barcode:
             return
 
-        self.lineedit_s_or_n.setText(barcode)
+        # 只在开启扫码枪功能时自动处理，避免影响用户正常输入
+        if not self.barcode_scanner_box.isChecked():
+            return
 
-        if self.barcode_scanner_box.isChecked():
-            if not self.player_status_flag:
-                self.start_this_play("not_labeled")
+        try:
+            fw = QApplication.focusWidget()
+            fw_name = fw.__class__.__name__ if fw is not None else None
+        except Exception:
+            fw_name = None
+
+        # 检查条形码是否包含特殊字符（会导致文件名无效）
+        has_invalid, invalid_chars = self._barcode_has_invalid_chars(barcode)
+        if has_invalid:
+            unique_chars = sorted(set(invalid_chars))
+            chars_display = "  ".join(repr(ch) for ch in unique_chars)
+            QMessageBox.warning(
+                self,
+                "条形码包含特殊字符",
+                f"扫描到的内容包含无法用于文件名的特殊字符：\n\n"
+                f"    {chars_display}\n\n"
+                f"条形码内容：{barcode}\n\n"
+                f"请检查条形码内容，或使用不含特殊字符的条形码。\n"
+                f"关闭此窗口后可重新扫码。",
+            )
+            # 清空输入框，让用户可以重新扫码
+            try:
+                with QSignalBlocker(self.lineedit_s_or_n):
+                    self.lineedit_s_or_n.clear()
+            except Exception:
+                self.lineedit_s_or_n.clear()
+            # 重置状态
+            self._barcode_first_char_ts = None
+            self._barcode_last_char_ts = None
+            self._barcode_capture_buffer = ""
+            self._barcode_capture_first_ts = None
+            self._barcode_capture_last_ts = None
+            return  # 不开始录音
+
+        # 写回输入框（避免触发 textChanged 的二次提交）
+        try:
+            with QSignalBlocker(self.lineedit_s_or_n):
+                self.lineedit_s_or_n.setText(barcode)
+        except Exception:
+            self.lineedit_s_or_n.setText(barcode)
+
+        # 重置键盘楔入模式的输入统计
+        self._barcode_first_char_ts = None
+        self._barcode_last_char_ts = None
+        self._barcode_capture_buffer = ""
+        self._barcode_capture_first_ts = None
+        self._barcode_capture_last_ts = None
+        self._barcode_capture_target_lineedit = None
+        self._barcode_capture_target_text = None
+        self._barcode_capture_target_cursor_pos = None
+
+        # 自动开始测试
+        if not self.player_status_flag:
+            self.default_logger.info(f"S/N 收到({source}): {barcode}，自动开始测试")
+            # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
+            self._close_analysis_windows()
+            self.start_this_play("not_labeled")
+
+    def _on_barcode_return_pressed(self):
+        """键盘楔入模式：扫码枪通常会发送 Enter，触发此信号"""
+        if not self.barcode_scanner_box.isChecked():
+            return
+        self._barcode_debounce_timer.stop()
+        self._commit_barcode(self.lineedit_s_or_n.text(), source="wedge_enter")
+
+    def _on_barcode_text_changed(self, _text: str):
+        """
+        键盘楔入模式：部分扫码枪不会发送 Enter，只会快速“敲”一串字符。
+        用防抖：输入停止一小段时间后认为扫码结束。
+        """
+        if not self.barcode_scanner_box.isChecked():
+            return
+        if not self.lineedit_s_or_n.isEnabled():
+            return
+        now = time.monotonic()
+        if self._barcode_first_char_ts is None:
+            self._barcode_first_char_ts = now
+        self._barcode_last_char_ts = now
+        self._barcode_debounce_timer.start()
+
+    def _on_barcode_debounce_timeout(self):
+        """输入停顿后自动提交（无 Enter 扫码枪）"""
+        if not self.barcode_scanner_box.isChecked():
+            return
+        # 1) 优先处理“非 S/N 输入框焦点”下的全局捕获 buffer
+        if self._barcode_capture_buffer and self._barcode_capture_first_ts is not None and self._barcode_capture_last_ts is not None:
+            text = self._normalize_barcode(self._barcode_capture_buffer)
+            if self._should_auto_commit_barcode(text, self._barcode_capture_first_ts, self._barcode_capture_last_ts):
+                # 如果之前焦点在其它输入框，让字符先进入了那个输入框，这里把它恢复，避免污染
+                try:
+                    le = self._barcode_capture_target_lineedit
+                    if le is not None and self._barcode_capture_target_text is not None:
+                        with QSignalBlocker(le):
+                            le.setText(self._barcode_capture_target_text)
+                        if self._barcode_capture_target_cursor_pos is not None:
+                            le.setCursorPosition(self._barcode_capture_target_cursor_pos)
+                except Exception:
+                    pass
+                self._commit_barcode(text, source="wedge_global_debounce")
+            else:
+                # 不符合扫码特征则丢弃，避免误触发
+                self._barcode_capture_buffer = ""
+                self._barcode_capture_first_ts = None
+                self._barcode_capture_last_ts = None
+                self._barcode_capture_target_lineedit = None
+                self._barcode_capture_target_text = None
+                self._barcode_capture_target_cursor_pos = None
+            return
+
+        # 2) 处理 S/N 输入框自身的 textChanged 防抖
+        text = self._normalize_barcode(self.lineedit_s_or_n.text())
+        if not text:
+            self._barcode_first_char_ts = None
+            self._barcode_last_char_ts = None
+            return
+        if self._barcode_first_char_ts is None or self._barcode_last_char_ts is None:
+            return
+        if self._should_auto_commit_barcode(text, self._barcode_first_char_ts, self._barcode_last_char_ts):
+            self._commit_barcode(text, source="wedge_debounce")
 
     def on_sensor_triggered(self):
         """处理光电开关触发信号"""
@@ -538,6 +721,8 @@ class SequenceWindow(QWidget):
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
         self.line_graph.clear()
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
 
         # Only disable buttons when manually clicking OK/NG
         # Auto-triggered calls should keep buttons enabled for user verification
@@ -592,6 +777,8 @@ class SequenceWindow(QWidget):
         self.data_btn.setEnabled(False)
         self.default_ai_result = None
         self.default_ai = None
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
         self.clicked_scanner()
 
     def on_clicked_player_btn(self, label="not_labeled"):
@@ -808,6 +995,16 @@ class SequenceWindow(QWidget):
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
 
+        self._awaiting_ok_ng = True
+        self._sn_clear_on_next_scan = True
+        # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
+        if self.barcode_scanner_box.isChecked():
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
+            except Exception:
+                pass
+
         if self.analysis_config["auto_analysis"]:
             self.run()
         self.update_player_btn_is_paused()
@@ -1007,6 +1204,85 @@ class SequenceWindow(QWidget):
         except Exception as e:
             # Never break Qt event loop
             self.default_logger.error(f"eventFilter geometry persist error: {e}")
+
+        # 键盘事件捕获（扫码枪键盘楔入模式）
+        try:
+            if event.type() == QEvent.KeyPress and self.barcode_scanner_box.isChecked():
+                fw = QApplication.focusWidget()
+                # 焦点在 S/N 输入框：在“待确认”状态下，下一次扫码先清空旧内容，避免拼接
+                if fw is self.lineedit_s_or_n:
+                    ch = event.text()
+                    if (
+                            self._sn_clear_on_next_scan
+                            and not self.player_status_flag
+                            and ch
+                            and ch.isprintable()
+                            and not ch.isspace()
+                    ):
+                        try:
+                            with QSignalBlocker(self.lineedit_s_or_n):
+                                self.lineedit_s_or_n.clear()
+                            self._barcode_first_char_ts = None
+                            self._barcode_last_char_ts = None
+                            self._barcode_debounce_timer.stop()
+                            self._sn_clear_on_next_scan = False
+                        except Exception:
+                            pass
+                    return super().eventFilter(obj, event)
+
+                key = event.key()
+                now = time.monotonic()
+
+                # Enter：提交
+                if key in (Qt.Key_Return, Qt.Key_Enter):
+                    self._barcode_debounce_timer.stop()
+                    if self._barcode_capture_buffer and self._barcode_capture_first_ts is not None and self._barcode_capture_last_ts is not None:
+                        text = self._normalize_barcode(self._barcode_capture_buffer)
+                        if self._should_auto_commit_barcode(text, self._barcode_capture_first_ts,
+                                                            self._barcode_capture_last_ts):
+                            # 恢复被输入框接收到的内容（若有）
+                            try:
+                                le = self._barcode_capture_target_lineedit
+                                if le is not None and self._barcode_capture_target_text is not None:
+                                    with QSignalBlocker(le):
+                                        le.setText(self._barcode_capture_target_text)
+                                    if self._barcode_capture_target_cursor_pos is not None:
+                                        le.setCursorPosition(self._barcode_capture_target_cursor_pos)
+                            except Exception:
+                                pass
+                            self._commit_barcode(text, source="wedge_global_enter")
+                            return True  # 吞掉回车，避免触发按钮默认行为/输入框提交
+                    # 不像扫码则不拦截 Enter
+                    return super().eventFilter(obj, event)
+
+                # 可打印字符：收集到 buffer
+                ch = event.text()
+                if ch and ch.isprintable() and not ch.isspace():
+                    # 若焦点在其它输入框上，先记录其原内容，之后若判定为扫码则恢复
+                    if self._barcode_capture_first_ts is None and fw is not None and isinstance(fw, QLineEdit):
+                        self._barcode_capture_target_lineedit = fw
+                        try:
+                            self._barcode_capture_target_text = fw.text()
+                            self._barcode_capture_target_cursor_pos = fw.cursorPosition()
+                        except Exception:
+                            self._barcode_capture_target_text = None
+                            self._barcode_capture_target_cursor_pos = None
+
+                    if self._barcode_capture_first_ts is None:
+                        self._barcode_capture_first_ts = now
+                    self._barcode_capture_last_ts = now
+                    self._barcode_capture_buffer += ch
+                    self._barcode_debounce_timer.start()
+                    # 若焦点不在输入框（按钮/图表等），吞掉字符避免影响控件
+                    if fw is None or not isinstance(fw, QLineEdit):
+                        return True
+                    # 焦点在其它输入框：先让字符进入输入框，后续若判定为扫码再恢复
+                    return super().eventFilter(obj, event)
+
+        except Exception:
+            # 出异常时不影响主流程
+            return super().eventFilter(obj, event)
+
         return super().eventFilter(obj, event)
 
     def _load_analysis_window_geometry(self):
@@ -1373,6 +1649,16 @@ class SequenceWindow(QWidget):
             self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)
 
+            self._awaiting_ok_ng = True
+            self._sn_clear_on_next_scan = True
+            # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
+            if self.barcode_scanner_box.isChecked():
+                try:
+                    self.lineedit_s_or_n.setFocus()
+                    self.lineedit_s_or_n.selectAll()
+                except Exception:
+                    pass
+
             # Run auto-analysis if enabled
             if self.analysis_config.get("auto_analysis", False):
                 self.run()
@@ -1396,6 +1682,8 @@ class SequenceWindow(QWidget):
             self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)
             self.update_player_btn_is_paused()
+            self._awaiting_ok_ng = False
+            self._sn_clear_on_next_scan = False
 
     def _cleanup_streaming_resources(self):
         """
@@ -1443,3 +1731,33 @@ class SequenceWindow(QWidget):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.setDisabled(False)
+
+    def _close_analysis_windows(self):
+        """
+        关闭上一轮弹出的分析窗口/汇总窗口。
+        目的：产线连续扫码时无需手工关闭弹窗。
+        """
+        # 关闭各分析窗口（self.analysis_window 里缓存的是窗口对象）
+        try:
+            if hasattr(self, "analysis_window") and self.analysis_window:
+                for w in list(self.analysis_window):
+                    try:
+                        if w is not None:
+                            w.close()
+                    except Exception:
+                        pass
+                self.analysis_window = []
+        except Exception:
+            pass
+
+        # 关闭汇总窗口
+        try:
+            if getattr(self, "_analysis_result_summary_window", None) is not None:
+                try:
+                    self._analysis_result_summary_window.close()
+                except Exception:
+                    pass
+                self._analysis_result_summary_window = None
+        except Exception:
+            pass
+
