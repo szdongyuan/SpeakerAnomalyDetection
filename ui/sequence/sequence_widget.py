@@ -57,9 +57,10 @@ class SequenceWindow(QWidget):
         self.toolsbar = SequenceToolsBar()
 
         self.v2pa_factor = get_mic_v2pa_factor()
+        self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
-        self.get_sequence_config_from_json()
+        self.get_sequence_config_from_json()  ###########################################################################################
         self.init_data_struct_stimulus_config()
         self.init_fft_and_stft_flag()
         self.signal_info = {}
@@ -132,6 +133,8 @@ class SequenceWindow(QWidget):
         sequence_layout.setAlignment(Qt.AlignCenter)
         sequence_layout.setContentsMargins(1, 0, 1, 0)
 
+        self.add_file_to_using_file_combobox()
+
         self.setLayout(sequence_layout)
 
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
@@ -181,6 +184,7 @@ class SequenceWindow(QWidget):
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
 
     def init_lineedit_text(self):
         last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
@@ -209,6 +213,10 @@ class SequenceWindow(QWidget):
     @property
     def data_btn(self):
         return self.toolsbar.data_btn
+
+    @property
+    def using_file_combobox(self):
+        return self.toolsbar.using_file_combobox
 
     @property
     def lineedit_type(self):
@@ -1111,6 +1119,60 @@ class SequenceWindow(QWidget):
         if os.path.exists(file_path):
             os.remove(file_path)
 
+    def get_sequence_config_from_registry(self):
+        """
+        Retrieves the sequence configuration from the registry.
+        """
+        LoadUiConfig.ensure_sequence_config_registry_field("默认配置", DEFAULT_DIR + "ui/ui_config/sequence_config.json")
+        registry = LoadUiConfig._load_sequence_config_registry()
+        using_config_path = registry.get("using_config_path", None)
+        if not using_config_path:
+            using_config_path = registry.get("默认配置")
+            LoadUiConfig.update_using_config_path(using_config_path)
+        return using_config_path, registry
+
+    def update_using_file_combobox(self):
+        """
+        Updates the using file combobox.
+        """
+        self.using_config_path, self.registry = self.get_sequence_config_from_registry()
+        self.using_file_combobox.clear()
+        self.add_file_to_using_file_combobox()
+
+    def add_file_to_using_file_combobox(self):
+        """
+        Adds file to the using file combobox.
+        """
+        selected_key = None
+        for key, value in self.registry.items():
+            if key != "using_config_path":
+                self.using_file_combobox.addItem(key, value)
+            else:
+                # Find the registry key whose value equals using_config_path
+                using_path = value
+                for k, v in self.registry.items():
+                    if k != "using_config_path" and v == using_path:
+                        selected_key = k
+                        break
+
+        # Select the item matching the current using_config_path (if any)
+        if selected_key:
+            idx = self.using_file_combobox.findText(selected_key)
+            if idx >= 0:
+                self.using_file_combobox.setCurrentIndex(idx)
+
+    def on_using_file_combobox_changed(self, text):
+        """
+        Handles the change of the using file combobox.
+        """
+        self.using_config_path = self.registry.get(text)
+        LoadUiConfig.update_using_config_path(self.using_config_path)
+        self.get_sequence_config_from_json()
+        self.init_data_struct_stimulus_config()
+        self.player_btn.setDisabled(False)
+        self.replayer_btn.setDisabled(True)
+        self.data_btn.setDisabled(True)
+
     def get_sequence_config_from_json(self):
         """
         Retrieves the sequence configuration from a JSON file.
@@ -1121,7 +1183,7 @@ class SequenceWindow(QWidget):
         Returns:
             dict: The sequence configuration if loading is successful and the result is valid; otherwise, an empty dictionary.
         """
-        load_code, result = LoadUiConfig().load_sequence_config_from_json()
+        load_code, result = LoadUiConfig().load_sequence_config_from_json(self.using_config_path)
         if load_code == error_code.OK and result:
             self.sequence_config = result
             seq = self.sequence_config[0]["seq1"]
@@ -1148,7 +1210,7 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         # Use np.arange for correct sample time stamps (0, 1/fs, 2/fs, ..., (N-1)/fs)
         signal_duration = np.arange(len(recorded_signal)) / sample_rate
-        line_graph.plot(signal_duration, recorded_signal, pen="k")
+        line_graph.plot(signal_duration, recorded_signal, pen=pg.mkPen("k", width=2))
 
     def on_audio_chunk_received(self, chunk):
         """

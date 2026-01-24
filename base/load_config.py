@@ -5,7 +5,7 @@ import yaml
 from datetime import datetime
 
 from consts import error_code
-from consts.running_consts import DEFAULT_DIR
+from consts.running_consts import DEFAULT_DIR, SEQUENCE_CONFIG_REGISTRY_PATH
 from base.log_manager import LogManager
 
 
@@ -36,9 +36,10 @@ def load_config(config_path, module_name=None):
 
 
 class LoadUiConfig(object):
+    # Sequence config registry (used by ui.operation_sequence)
 
     @staticmethod
-    def load_sequence_config_from_json():
+    def load_sequence_config_from_json(json_file_path):
         """
         Loads analysis sequence configuration data using the **new list-based format**.
 
@@ -97,6 +98,87 @@ class LoadUiConfig(object):
             return True
         except Exception as e:
             return False
+
+    @staticmethod
+    def _load_sequence_config_registry(registry_path: str = None) -> dict:
+        """
+        Load the sequence config registry JSON.
+
+        Returns an empty dict if:
+        - file doesn't exist
+        - file content is invalid / not a dict
+        """
+        registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        try:
+            if not os.path.exists(registry_path):
+                return {}
+            with open(registry_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            # Treat as empty registry on any parse/read error
+            return {}
+
+    @staticmethod
+    def _save_sequence_config_registry(registry: dict, registry_path: str = None) -> bool:
+        """Write registry JSON to disk (creates parent dir)."""
+        registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        try:
+            os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+            with open(registry_path, "w", encoding="utf-8") as f:
+                json.dump(registry or {}, f, indent=6, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def append_sequence_config_registry_entry(file_path: str, registry_path: str = None) -> bool:
+        """
+        Append/update one entry to registry using filename (without extension) as key,
+        and full file path as value.
+        """
+        if not file_path:
+            return False
+        registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        try:
+            key = os.path.splitext(os.path.basename(file_path))[0]
+            if not key:
+                return False
+            registry = LoadUiConfig._load_sequence_config_registry(registry_path)
+            registry[key] = file_path
+            return LoadUiConfig._save_sequence_config_registry(registry, registry_path)
+        except Exception:
+            return False
+
+    @staticmethod
+    def ensure_sequence_config_registry_field(field_key: str, field_value: str, registry_path: str = None) -> bool:
+        """
+        Ensure registry contains the given field_key.
+        If missing, write field_key -> field_value.
+        """
+        if not field_key:
+            return False
+        registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        try:
+            registry = LoadUiConfig._load_sequence_config_registry(registry_path)
+            if field_key in registry:
+                return True
+            registry[field_key] = field_value
+            return LoadUiConfig._save_sequence_config_registry(registry, registry_path)
+        except Exception:
+            return False
+
+    @staticmethod
+    def update_using_config_path(using_config_path, registry_path: str = None) -> bool:
+        """
+        Update the using config path in the registry.
+        """
+        if not using_config_path:
+            return False
+        registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        registry = LoadUiConfig._load_sequence_config_registry()
+        registry["using_config_path"] = using_config_path
+        return LoadUiConfig._save_sequence_config_registry(registry)
 
     @staticmethod
     def load_last_recorded_info(logger):

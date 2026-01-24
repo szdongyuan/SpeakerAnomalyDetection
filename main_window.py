@@ -1,3 +1,4 @@
+from re import S
 import sys
 
 from PyQt5.QtCore import Qt, QPoint
@@ -223,8 +224,9 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
-        analysis_model_select_dialog = AnalysisModelSelect(mic=self.mic, speaker=self.speaker)
+        analysis_model_select_dialog = AnalysisModelSelect(self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker)
         analysis_model_select_dialog.exec()
+        self.sequence_window.update_using_file_combobox()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size

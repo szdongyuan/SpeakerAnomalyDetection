@@ -15,14 +15,3 @@ class PopupUtils(object):
             save_msg.setText("设置失败，请重试")
             save_msg.setWindowTitle("设置失败")
         save_msg.exec_()
-
-
-def check_upper_lower_limit(config_data: dict, parent):
-    if config_data["limit_checked"] is False:
-        return False
-
-    if int(config_data["upper_limit"]) <= int(config_data["lower_limit"]):
-        QMessageBox.warning(parent, "设置警告", "上下限配置数据错误，请检查配置!")
-        return True
-    else:
-        return False
