@@ -5,14 +5,14 @@ from scipy.signal import bilinear, lfilter, filtfilt, freqz, firwin2, butter, so
 
 def _calibrate_1khz(b: np.ndarray, a: np.ndarray, fs: float) -> Tuple[np.ndarray, np.ndarray]:
     """
-    将滤波器在 1 kHz 处归一化为 0 dB（幅度 1）。
+    Normalize the filter to 0 dB (magnitude 1) at 1 kHz.
 
-    参数:
-    - b, a: IIR/FIR 滤波器系数
-    - fs: 采样率 (Hz)
+    Parameters:
+    - b, a: IIR/FIR filter coefficients
+    - fs: Sample rate (Hz)
 
-    返回:
-    - (b_cal, a): 归一化后的分子系数与原分母系数
+    Returns:
+    - (b_cal, a): Normalized numerator coefficients and original denominator coefficients
     """
     _, h1k = freqz(b, a, worN=[1000], fs=fs)
     gain = abs(h1k[0])
@@ -20,8 +20,8 @@ def _calibrate_1khz(b: np.ndarray, a: np.ndarray, fs: float) -> Tuple[np.ndarray
 
 
 def A_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
-    """生成 A 计权滤波器的离散系数 (b, a)，在 1 kHz 处校准为 0 dB。"""
-    "参考：https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
+    """Generate discrete coefficients (b, a) for A-weighting filter, calibrated to 0 dB at 1 kHz."""
+    "Reference: https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
     f1, f2, f3, f4 = 20.6, 107.7, 737.9, 12194.0
     A1000 = 2.0
     NUM = [(2*np.pi*f4)**2 * (10**(A1000/20.0)), 0, 0, 0, 0]
@@ -33,8 +33,8 @@ def A_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def B_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
-    """生成 B 计权滤波器的离散系数 (b, a)，在 1 kHz 处校准为 0 dB。"""
-    "参考：https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
+    """Generate discrete coefficients (b, a) for B-weighting filter, calibrated to 0 dB at 1 kHz."""
+    "Reference: https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
     f1, f2, f4 = 20.6, 158.5, 12194.0
     B1000 = 0.17
     NUM = [(2*np.pi*f4)**2 * (10**(B1000/20.0)), 0, 0, 0]
@@ -45,8 +45,8 @@ def B_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def C_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
-    """生成 C 计权滤波器的离散系数 (b, a)，在 1 kHz 处校准为 0 dB。"""
-    "参考：https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
+    """Generate discrete coefficients (b, a) for C-weighting filter, calibrated to 0 dB at 1 kHz."""
+    "Reference: https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
     f1, f4 = 20.6, 12194.0
     C1000 = 0.06
     NUM = [(2*np.pi*f4)**2 * (10**(C1000/20.0)), 0, 0]
@@ -57,9 +57,9 @@ def C_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
 
 def _d_weighting_wikipedia_mag(freqs_hz: np.ndarray) -> np.ndarray:
     """
-    依据维基百科 D 计权幅频公式计算目标幅度曲线（未考虑相位），并在 1 kHz 处归一化。
-    返回最小值限定为 1e-12 以避免数值问题。
-    "参考：https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
+    Calculate target magnitude curve (phase not considered) based on Wikipedia D-weighting formula, normalized at 1 kHz.
+    Returns minimum value limited to 1e-12 to avoid numerical issues.
+    "Reference: https://en.wikipedia.org/wiki/A-weighting?utm_source=chatgpt.com"
     """
     f = np.asarray(freqs_hz, dtype=float)
     f2 = f * f
@@ -76,8 +76,8 @@ def _d_weighting_wikipedia_mag(freqs_hz: np.ndarray) -> np.ndarray:
 
 def D_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
     """
-    生成 D 计权的等效 FIR 滤波器 (b, a)。
-    说明: 使用 `firwin2` 拟合目标幅度曲线；零相位由 `filtfilt` 保证。
+    Generate equivalent FIR filter (b, a) for D-weighting.
+    Note: Uses `firwin2` to fit the target magnitude curve; zero phase is ensured by `filtfilt`.
     """
     numtaps = 2049
     f = np.linspace(0.0, fs/2, numtaps)
@@ -86,43 +86,33 @@ def D_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
     a = np.array([1.0])
     return _calibrate_1khz(b, a, fs)
 
-
-def Z_weighting_filter(fs: float) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    生成 Z 计权滤波器的离散系数 (b, a)。
-    
-    注意: Z 计权（零计权/平坦响应）滤波器目前尚未实现。
-    此函数为占位符，返回单位滤波器（不改变信号）。
-    
-    待实现: 请根据 Z 计权的标准规范实现此函数。
-    """
-    # TODO: 实现 Z 计权滤波器
-    # 目前返回单位滤波器（b=1, a=1），即不改变信号
-    b = np.array([1.0])
-    a = np.array([1.0])
-    return b, a
-
-
 def apply_weighting_filter(
     signal: np.ndarray,
     fs: float,
     weighting: Literal['A', 'B', 'C', 'D', 'Z', 'a', 'b', 'c', 'd', 'z'] = 'A',
-    zero_phase: bool = True,
+    zero_phase: bool = False,
 ) -> np.ndarray:
     """
-    对时域信号施加 A/B/C/D/Z 计权滤波。
+    Apply A/B/C/D/Z weighting filter to time-domain signal.
 
-    参数:
-    - signal: 输入一维或二维数组；二维时按列为通道
-    - fs: 采样率 (Hz)
-    - weighting: 计权类型（不区分大小写），包括 A/B/C/D/Z
-    - zero_phase: True 使用 `filtfilt` 零相位；False 使用 `lfilter`（可实时）
+    Parameters:
+    - signal: Input 1D or 2D array; for 2D arrays, channels are along columns
+    - fs: Sample rate (Hz)
+    - weighting: Weighting type (case-insensitive), including A/B/C/D/Z
+    - zero_phase: True uses `filtfilt` zero-phase (causes magnitude squared, dB doubled, not suitable for SPL/Leq/dBA calculation);
+                  False uses `lfilter` (correct for SPL/Leq/dBA calculation)
 
-    返回:
-    - 计权后的信号（与输入形状一致）
+    Returns:
+    - Weighted signal (same shape as input)
+
+    Note:
+    - For SPL / Leq / dBA calculation, must use zero_phase=False (default)
+    - filtfilt causes magnitude squared, doubling dB values, which is incorrect
     """
     w = str(weighting).upper()
-    if w == 'A':
+    if w == 'Z':
+        return signal
+    elif w == 'A':
         b, a = A_weighting_filter(fs)
     elif w == 'B':
         b, a = B_weighting_filter(fs)
@@ -130,8 +120,6 @@ def apply_weighting_filter(
         b, a = C_weighting_filter(fs)
     elif w == 'D':
         b, a = D_weighting_filter(fs)
-    elif w == 'Z':
-        b, a = Z_weighting_filter(fs)
     else:
         return signal
 
