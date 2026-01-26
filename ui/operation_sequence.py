@@ -14,6 +14,7 @@ from base.data_struct.sequence_data import SequenceData
 from base.load_audio import load_audio_simple
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.stimulus_resolver import set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -37,6 +38,10 @@ class AnalysisModelSelect(QDialog):
 
     def __init__(self, using_config_path, mic=None, speaker=None):
         super().__init__()
+        # When main window has no active config selected ("无配置"), using_config_path can be None.
+        # Fall back to the built-in default sequence config so the test-queue window can still open.
+        if not using_config_path:
+            using_config_path = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
         self.using_config_path = using_config_path
 
         self.analysis_list = QTreeView()
@@ -286,11 +291,24 @@ class AnalysisModelSelect(QDialog):
             self.close()
             return
 
+        # If registry contains only using_config_path (no saved/imported entries),
+        # add the built-in default config mapping on confirm.
+        try:
+            registry = LoadUiConfig._load_sequence_config_registry()
+            other_keys = [k for k in (registry or {}).keys() if k != "using_config_path"]
+            if len(other_keys) == 0:
+                LoadUiConfig.ensure_sequence_config_registry_field(
+                    "默认配置",
+                    DEFAULT_DIR + "ui/ui_config/sequence_config.json",
+                )
+        except Exception as e:
+            self.default_logger.warning(f"Failed to ensure default config registry field: {e}")
+
         if self.select_list.config:
             data_struct = DataDealStruct()
             detail = self.select_list.config[0].detail
             if self.select_list.config[0].mode in ["PLAY_AND_RECORD", "IMPORT_STIMULUS_AUDIO"]:
-                self.set_data_struct_stimulus_signal(data_struct, detail)
+                self.set_data_struct_stimulus_signal(data_struct, detail, using_config_path=self.using_config_path)
             else:
                 data_struct.sample_rate = detail["sample_rate"]
                 data_struct.stimulus_info = None
@@ -300,13 +318,13 @@ class AnalysisModelSelect(QDialog):
         self.close()
 
     @staticmethod
-    def set_data_struct_stimulus_signal(data_struct, detail):
-        stimulus_info = detail.get("stimulus_info")
-        path = os.path.join(DEFAULT_DIR, detail.get("stimulus_signal_path", ""))
-        stimulus_signal, _ = load_audio_simple(path, stimulus_info["sample_rate"])
-        data_struct.stimulus_info = stimulus_info
-        data_struct.stimulus_data = stimulus_signal
-        data_struct.sample_rate = stimulus_info["sample_rate"]
+    def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str = None, logger=None):
+        return _safe_set_data_struct_stimulus_signal(
+            data_struct,
+            detail,
+            using_config_path=using_config_path,
+            logger=logger,
+        )
 
     def update_test_file_current_model(self):
         if self.select_list.config:
@@ -595,10 +613,17 @@ class OptionList(QListView):
         self.drop_is_accept = True
 
     def load_model_config(self, config_path):
+        if not config_path or not isinstance(config_path, (str, bytes, os.PathLike)):
+            # Keep the dialog usable even when no config is currently selected in main window.
+            self.default_logger.warning(f"Invalid config_path for OptionList.load_model_config: {config_path!r}")
+            self.clear_option_list()
+            return
         if os.path.exists(config_path):
             self.clear_option_list()
             self.init_config_info(config_path)
         else:
+            self.default_logger.warning(f"Config file does not exist: {config_path!r}")
+            self.clear_option_list()
             return
         for config in self.config:
             if config.mode:
