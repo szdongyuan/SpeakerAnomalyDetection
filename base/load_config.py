@@ -48,6 +48,8 @@ class LoadUiConfig(object):
         function extracts and returns that inner ``analysis_list`` so that the rest
         of the code can keep working with the same dict structure as before.
         """
+        if not json_file_path or not isinstance(json_file_path, (str, bytes, os.PathLike)):
+            return error_code.INVALID_DATA_LOADING, "Invalid json file path."
         if not os.path.exists(json_file_path):
             return error_code.INVALID_DATA_LOADING, "This json file does not exist."
         try:

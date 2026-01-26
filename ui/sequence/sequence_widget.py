@@ -83,6 +83,9 @@ class SequenceWindow(QWidget):
         self.last_play_count = None  # Cache last play count for replay
 
         self.default_logger = LogManager.set_log_handler("core")
+        self._missing_config_prompted = False
+        # Only show missing-config prompt after the window is shown (i.e. after login success).
+        self._missing_config_prompt_enabled = False
 
         self._barcode_debounce_ms = 120
         self._barcode_fast_input_max_seconds = 0.6  # 首字符到末字符的总耗时，小于该值更像扫码
@@ -138,6 +141,23 @@ class SequenceWindow(QWidget):
         self.init_lineedit_text()
         self.init_ui()
 
+    def showEvent(self, event):
+        """
+        MainWindow shows SequenceWindow only after login success.
+        Defer the missing-config prompt until the first showEvent.
+        """
+        super().showEvent(event)
+        self._missing_config_prompt_enabled = True
+        if not self.sequence_config and not self._missing_config_prompted:
+            QMessageBox.warning(
+                self,
+                "提示",
+                "当前未找到可用配置文件。\n"
+                "请在上方【使用配置】下拉框中选择配置；\n"
+                "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+            )
+            self._missing_config_prompted = True
+
     def init_ui(self):
         """
         Initializes the user interface of the SequenceWindow.
@@ -163,7 +183,8 @@ class SequenceWindow(QWidget):
         sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
         sign.get_result_file_sign.connect(self.connect_get_result_file_sign, Qt.AutoConnection)
         sign.set_result_file_sign.connect(self.connect_set_result_file_sign, Qt.AutoConnection)
-        sign.update_mode_display_sign.connect(self.get_sequence_config_from_json, Qt.AutoConnection)
+        # When test-queue config is confirmed, refresh combobox + reload config first.
+        sign.update_mode_display_sign.connect(self.on_sequence_config_updated, Qt.AutoConnection)
         sign.update_mode_display_sign.connect(self.del_geometry_config, Qt.AutoConnection)
         sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
         # sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
@@ -180,6 +201,23 @@ class SequenceWindow(QWidget):
             + ui_style_const.qlabel_style
             + ui_style_const.qcheckbox_style
         )
+
+    def on_sequence_config_updated(self, *_):
+        """
+        Called when the test-queue window confirms config changes.
+
+        Refresh the combobox items from registry, then reload the active config so the
+        main window immediately reflects newly saved/imported entries.
+        """
+        try:
+            self.update_using_file_combobox()
+            self.get_sequence_config_from_json()
+            self.init_data_struct_stimulus_config()
+            self.init_fft_and_stft_flag()
+            if self.count_board:
+                self.count_board.analysis_config = self.analysis_config
+        except Exception as e:
+            self.default_logger.warning(f"Failed to refresh sequence config after update: {e}")
 
     def update_v2pa_factor(self):
         self.v2pa_factor = get_mic_v2pa_factor()
@@ -270,7 +308,23 @@ class SequenceWindow(QWidget):
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
         if acq_config["mode"] in ["PLAY_AND_RECORD", "IMPORT_STIMULUS_AUDIO"]:
-            AnalysisModelSelect.set_data_struct_stimulus_signal(self.data_struct, acq_config["detail"])
+            modified = AnalysisModelSelect.set_data_struct_stimulus_signal(
+                self.data_struct,
+                acq_config["detail"],
+                using_config_path=self.using_config_path,
+            )
+            # If stimulus wav was missing and we regenerated it, write back config to avoid future failures.
+            if modified:
+                try:
+                    ok = LoadUiConfig.save_sequence_config_to_json(self.sequence_config, self.using_config_path)
+                    if not ok:
+                        LogManager.set_log_handler("core").warning(
+                            f"Failed to write back regenerated stimulus path to config: {self.using_config_path}"
+                        )
+                except Exception as e:
+                    LogManager.set_log_handler("core").warning(
+                        f"Failed to write back regenerated stimulus path to config: {self.using_config_path}. {e}"
+                    )
         else:
             self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
 
@@ -783,7 +837,13 @@ class SequenceWindow(QWidget):
 
     def on_clicked_player_btn(self, label="not_labeled"):
         if not self.sequence_config:
-            QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
+            QMessageBox.warning(
+                self,
+                "提示",
+                "未找到可用配置。\n"
+                "请先在上方【使用配置】下拉框中选择配置；\n"
+                "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+            )
             return
         acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
         if acq_mode == "IMPORT_AUDIO":
@@ -852,7 +912,13 @@ class SequenceWindow(QWidget):
 
     def checked_work_status_message(self):
         if not self.sequence_config:
-            QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
+            QMessageBox.warning(
+                self,
+                "提示",
+                "未找到可用配置。\n"
+                "请先在上方【使用配置】下拉框中选择配置；\n"
+                "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+            )
             return True
 
         if not self.mic:
@@ -1399,12 +1465,28 @@ class SequenceWindow(QWidget):
         """
         Retrieves the sequence configuration from the registry.
         """
-        LoadUiConfig.ensure_sequence_config_registry_field("默认配置", DEFAULT_DIR + "ui/ui_config/sequence_config.json")
         registry = LoadUiConfig._load_sequence_config_registry()
+        # IMPORTANT: Do not auto-add "默认配置" into registry.
+        # The combobox should either never show it, or always show it if it already exists in registry.
+        user_keys = [k for k in (registry or {}).keys() if k not in ("using_config_path", "默认配置")]
         using_config_path = registry.get("using_config_path", None)
-        if not using_config_path:
-            using_config_path = registry.get("默认配置")
-            LoadUiConfig.update_using_config_path(using_config_path)
+        default_path = registry.get("默认配置")
+        # Fallback when using_config_path missing or points to a non-existent file.
+        if (not using_config_path) or (isinstance(using_config_path, str) and not os.path.exists(using_config_path)):
+            fallback_path = None
+            # Prefer user saved/imported entries (if any), otherwise fallback to built-in default.
+            if user_keys:
+                for k in sorted(user_keys):
+                    p = registry.get(k)
+                    if isinstance(p, str) and os.path.exists(p):
+                        fallback_path = p
+                        break
+            if not fallback_path and isinstance(default_path, str) and os.path.exists(default_path):
+                fallback_path = default_path
+
+            using_config_path = fallback_path
+            if using_config_path:
+                LoadUiConfig.update_using_config_path(using_config_path)
         return using_config_path, registry
 
     def update_using_file_combobox(self):
@@ -1412,24 +1494,46 @@ class SequenceWindow(QWidget):
         Updates the using file combobox.
         """
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
-        self.using_file_combobox.clear()
-        self.add_file_to_using_file_combobox()
+        # Updating items will trigger currentTextChanged multiple times (clear/add/setIndex).
+        # Block signals to avoid re-entrant loads and transient empty-text callbacks.
+        self.using_file_combobox.blockSignals(True)
+        try:
+            self.using_file_combobox.clear()
+            self.add_file_to_using_file_combobox()
+        finally:
+            self.using_file_combobox.blockSignals(False)
 
     def add_file_to_using_file_combobox(self):
         """
         Adds file to the using file combobox.
         """
         selected_key = None
-        for key, value in self.registry.items():
-            if key != "using_config_path":
-                self.using_file_combobox.addItem(key, value)
-            else:
-                # Find the registry key whose value equals using_config_path
-                using_path = value
-                for k, v in self.registry.items():
-                    if k != "using_config_path" and v == using_path:
-                        selected_key = k
-                        break
+        using_path = self.registry.get("using_config_path")
+
+        keys = [k for k in (self.registry or {}).keys() if k != "using_config_path"]
+        # Do NOT filter "默认配置" by business logic here:
+        # - If registry contains "默认配置", it must appear in combobox (always pinned on top).
+        # - If registry does not contain it, it won't appear.
+        ordered_keys = []
+        if "默认配置" in keys:
+            ordered_keys.append("默认配置")
+            keys.remove("默认配置")
+        ordered_keys.extend(sorted(keys))
+
+        # Only show entries whose file path exists. If none exist, show "无配置".
+        visible_count = 0
+        for key in ordered_keys:
+            value = self.registry.get(key)
+            if not isinstance(value, str) or (value and not os.path.exists(value)):
+                continue
+            self.using_file_combobox.addItem(key, value)
+            visible_count += 1
+            if using_path and value == using_path:
+                selected_key = key
+
+        if visible_count == 0:
+            self.using_file_combobox.addItem("无配置", None)
+            selected_key = "无配置"
 
         # Select the item matching the current using_config_path (if any)
         if selected_key:
@@ -1441,7 +1545,21 @@ class SequenceWindow(QWidget):
         """
         Handles the change of the using file combobox.
         """
-        self.using_config_path = self.registry.get(text)
+        # Prefer the item's userData (full file path). During combobox refresh,
+        # `text` may temporarily be empty which would otherwise resolve to None.
+        path = None
+        try:
+            path = self.using_file_combobox.currentData()
+        except Exception:
+            path = None
+        if not path:
+            path = self.registry.get(text)
+        if not path:
+            # Ignore transient/invalid changes (e.g., during refresh/clear)
+            self.default_logger.warning(f"Invalid sequence config selection: text={text!r}, resolved_path=None")
+            return
+
+        self.using_config_path = path
         LoadUiConfig.update_using_config_path(self.using_config_path)
         self.get_sequence_config_from_json()
         self.init_data_struct_stimulus_config()
@@ -1459,6 +1577,8 @@ class SequenceWindow(QWidget):
         Returns:
             dict: The sequence configuration if loading is successful and the result is valid; otherwise, an empty dictionary.
         """
+        # Avoid noisy stdout prints; use logger if needed for debugging.
+        # self.default_logger.debug(f"Loading sequence config: {self.using_config_path}")
         load_code, result = LoadUiConfig().load_sequence_config_from_json(self.using_config_path)
         if load_code == error_code.OK and result:
             self.sequence_config = result
@@ -1469,9 +1589,41 @@ class SequenceWindow(QWidget):
                 self.replayer_btn.setDisabled(True)
             if self.count_board:
                 self.count_board.analysis_config = seq.get("analysis_list", {})
+            self._set_sequence_config_available_state(True)
+            self._missing_config_prompted = False
         else:
             self.sequence_config = []
             self.analysis_config = dict()
+            self._set_sequence_config_available_state(False)
+            # Only show prompt after login success (window shown).
+            if (
+                getattr(self, "_missing_config_prompt_enabled", False)
+                and not getattr(self, "_missing_config_prompted", False)
+            ):
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "当前未找到可用配置文件。\n"
+                    "请在上方【使用配置】下拉框中选择配置；\n"
+                    "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+                )
+                self._missing_config_prompted = True
+
+    def _set_sequence_config_available_state(self, available: bool):
+        """
+        Enable/disable key actions based on whether a valid sequence config is loaded.
+        """
+        try:
+            if available:
+                self.player_btn.setDisabled(False)
+                # replay/data depend on runtime state; keep conservative defaults here
+            else:
+                self.player_btn.setDisabled(True)
+                self.replayer_btn.setDisabled(True)
+                self.data_btn.setDisabled(True)
+        except Exception:
+            # During early init some widgets may not be ready; ignore safely.
+            pass
 
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):

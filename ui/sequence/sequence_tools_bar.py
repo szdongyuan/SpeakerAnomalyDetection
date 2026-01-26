@@ -127,6 +127,7 @@ class SequenceToolsBar(QWidget):
         type_label = QLabel(" 使用配置：")
         type_label.setFixedHeight(40)
         self.using_file_combobox.setFixedHeight(35)
+        self.using_file_combobox.setMinimumWidth(100)
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
 
