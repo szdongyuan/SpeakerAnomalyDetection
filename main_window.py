@@ -1,4 +1,3 @@
-from re import S
 import sys
 
 from PyQt5.QtCore import Qt, QPoint
