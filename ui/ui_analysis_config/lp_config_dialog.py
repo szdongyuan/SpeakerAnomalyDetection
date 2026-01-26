@@ -1,7 +1,9 @@
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpinBox
 
 from consts import ui_style_const
+from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
 
@@ -15,6 +17,7 @@ class LPConfigWindow(QDialog):
 
     def init_ui(self):
         self.setMinimumSize(350, 350)
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         layout = QVBoxLayout()
         lp_config_box = self.create_lp_config_box()
         btn_layout = self.create_btn_layout()

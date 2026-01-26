@@ -35,13 +35,14 @@ from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
 class AnalysisModelSelect(QDialog):
 
-    def __init__(self, mic=None, speaker=None):
+    def __init__(self, using_config_path, mic=None, speaker=None):
         super().__init__()
+        self.using_config_path = using_config_path
 
         self.analysis_list = QTreeView()
         self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
-        self.select_list = OptionList(self.default_logger, mic=mic, speaker=speaker)
+        self.select_list = OptionList(self.default_logger, using_config_path, mic=mic, speaker=speaker)
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
         self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
 
@@ -252,6 +253,7 @@ class AnalysisModelSelect(QDialog):
         if file_path:
             try:
                 self.select_list.load_model_config(file_path)
+                LoadUiConfig.append_sequence_config_registry_entry(file_path)
             except Exception as e:
                 self.default_logger.error(f"Unable to parse JSON data in {file_path}. {e}")
 
@@ -274,14 +276,16 @@ class AnalysisModelSelect(QDialog):
                 QMessageBox.warning(self, "警告", "保存配置文件失败")
                 self.close()
                 return
+            # Append the saved config path into registry json (filename as key)
+            LoadUiConfig.append_sequence_config_registry_entry(file_path)
 
     def ok_btn_clicked(self):
         save_config = self.format_config_data(self.select_list.config)
-        json_file_path = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-        if not LoadUiConfig.save_sequence_config_to_json(save_config, json_file_path):
+        if not LoadUiConfig.save_sequence_config_to_json(save_config, self.using_config_path):
             QMessageBox.warning(self, "警告", "保存配置文件失败")
             self.close()
             return
+
         if self.select_list.config:
             data_struct = DataDealStruct()
             detail = self.select_list.config[0].detail
@@ -324,7 +328,7 @@ class AnalysisModelSelect(QDialog):
 
 class OptionList(QListView):
 
-    def __init__(self, logger, mic=None, speaker=None):
+    def __init__(self, logger, using_config_path, mic=None, speaker=None):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.select_analysis_model = QStandardItemModel()
@@ -349,7 +353,7 @@ class OptionList(QListView):
         self.config = list()
         self.drop_is_accept = True
         self.signal_len = 0
-        self.load_model_config(DEFAULT_DIR + "ui/ui_config/sequence_config.json")
+        self.load_model_config(using_config_path)
 
         self.mousePressEvent = self.mousepressevent
         self.mouseReleaseEvent = self.mousereleaseevent
