@@ -6,15 +6,15 @@
 1. 自定义上下限 (水平线阈值)
 2. 导入 CSV 配置文件 (曲线阈值)
 """
+
 import os
+import csv
+import numpy as np
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QWidget, QCheckBox, QGroupBox, QRadioButton,
-    QDoubleSpinBox, QLineEdit, QLabel, QFileDialog,
-    QHBoxLayout, QVBoxLayout, QMessageBox
-)
+from PyQt5.QtWidgets import QWidget, QCheckBox, QGroupBox, QLineEdit, QFileDialog, QVBoxLayout, QMessageBox
+from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
 
@@ -26,38 +26,30 @@ class ThresholdConfigWidget(QWidget):
     Attributes:
         config_changed: 配置变更信号
     """
+
     config_changed = pyqtSignal()
 
     def __init__(
         self,
         parent=None,
-        upper_range: tuple = (-200, 200),
-        lower_range: tuple = (-200, 200),
-        default_upper: float = 0.0,
-        default_lower: float = 0.0,
         load_config: dict = None,
-        csv_validator=None
+        csv_validator=None,
+        model_type: str = None,
     ):
         """
         初始化阈值配置组件
 
         Args:
             parent: 父组件
-            upper_range: 上限值范围 (min, max)
-            lower_range: 下限值范围 (min, max)
-            default_upper: 默认上限值
-            default_lower: 默认下限值
             load_config: 已保存的配置字典
             csv_validator: CSV 文件验证函数，接收文件路径，返回验证结果或 None
+            model_type: 模型类型,用于阈值曲线的展示
         """
         super().__init__(parent)
-        self.upper_range = upper_range
-        self.lower_range = lower_range
-        self.default_upper = default_upper
-        self.default_lower = default_lower
         self.load_config = load_config or {}
         self.csv_validator = csv_validator
-        self.file_path = self.load_config.get("config_dir", None)
+        self.limit_data = self.load_config.get("limit_data", None)
+        self.model_type = model_type
 
         self._init_ui()
 
@@ -75,28 +67,20 @@ class ThresholdConfigWidget(QWidget):
             self.limit_group_box.setDisabled(True)
             self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
-        # 自定义模式
-        self.radio_self_defined = QRadioButton("自定义")
-        self.radio_self_defined.setChecked(self.load_config.get("self_defined", True))
-        self.radio_self_defined.toggled.connect(self._on_radio_toggled)
-
-        # 上下限输入
-        upper_lower_layout = self._create_upper_lower_layout()
-
-        # 导入配置模式
-        self.radio_import_config = QRadioButton("导入配置文件")
-        self.radio_import_config.setChecked(self.load_config.get("import_config", False))
-        self.radio_import_config.toggled.connect(self._on_radio_toggled)
+        # 配置数据展示
+        self.limit_graph = PlotWidget()
+        self.limit_graph.showGrid(True, True, 0.7)
+        self.set_graph_label_until(self.model_type)
+        self.draw_limit_curve(self.limit_data)
+        self.limit_graph.setMinimumSize(180, 180)
 
         # 文件选择
-        config_dir_layout = self._create_config_dir_layout()
+        self._create_config_dir()
 
         # 组合布局
         group_layout = QVBoxLayout()
-        group_layout.addWidget(self.radio_self_defined)
-        group_layout.addLayout(upper_lower_layout)
-        group_layout.addWidget(self.radio_import_config)
-        group_layout.addLayout(config_dir_layout)
+        group_layout.addWidget(self.config_dir_box)
+        group_layout.addWidget(self.limit_graph)
         self.limit_group_box.setLayout(group_layout)
 
         main_layout = QVBoxLayout()
@@ -107,39 +91,11 @@ class ThresholdConfigWidget(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(main_layout)
 
-    def _create_upper_lower_layout(self) -> QHBoxLayout:
-        """创建上下限输入布局"""
-        self.label_upper = QLabel("上限：", self)
-        self.label_lower = QLabel("下限：", self)
-
-        self.spinbox_upper = QDoubleSpinBox(self)
-        self.spinbox_upper.setRange(*self.upper_range)
-        self.spinbox_upper.setValue(float(self.load_config.get("upper_limit", self.default_upper)))
-        self.spinbox_upper.textChanged.connect(self.config_changed.emit)
-
-        self.spinbox_lower = QDoubleSpinBox(self)
-        self.spinbox_lower.setRange(*self.lower_range)
-        self.spinbox_lower.setValue(float(self.load_config.get("lower_limit", self.default_lower)))
-        self.spinbox_lower.textChanged.connect(self.config_changed.emit)
-
-        if not self.radio_self_defined.isChecked():
-            self.spinbox_upper.setDisabled(True)
-            self.spinbox_lower.setDisabled(True)
-            self.label_upper.setStyleSheet("color: rgb(162, 162, 162);")
-            self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
-
-        layout = QHBoxLayout()
-        layout.addSpacing(19)
-        layout.addWidget(self.label_upper)
-        layout.addWidget(self.spinbox_upper)
-        layout.addWidget(self.label_lower)
-        layout.addWidget(self.spinbox_lower)
-        return layout
-
-    def _create_config_dir_layout(self) -> QHBoxLayout:
+    def _create_config_dir(self) -> None:
         """创建配置文件选择布局"""
         self.config_dir_box = QLineEdit()
-        if not self.radio_import_config.isChecked():
+        self.config_dir_box.setReadOnly(True)
+        if not self.limit_checkbox.isChecked():
             self.config_dir_box.setDisabled(True)
         self.config_dir_box.textChanged.connect(self.config_changed.emit)
 
@@ -149,41 +105,20 @@ class ThresholdConfigWidget(QWidget):
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self._on_config_dir_btn_clicked)
 
-        if self.load_config.get("config_dir"):
-            config_dir_name = os.path.basename(self.load_config.get("config_dir"))
-            self.config_dir_box.setText(config_dir_name)
-
-        layout = QHBoxLayout()
-        layout.addSpacing(10)
-        layout.addWidget(self.config_dir_box)
-        return layout
+        if self.load_config.get("limit_data", None):
+            self.config_dir_box.setText("已加载")
 
     def _on_limit_checkbox_changed(self, state):
         """阈值复选框状态变更处理"""
         self.config_changed.emit()
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
+            self.config_dir_box.setDisabled(False)
             self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
-            self._on_radio_toggled()
         else:
             self.limit_group_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
-
-    def _on_radio_toggled(self):
-        """单选按钮切换处理"""
-        self.config_changed.emit()
-        if self.radio_self_defined.isChecked():
             self.config_dir_box.setDisabled(True)
-            self.spinbox_upper.setDisabled(False)
-            self.spinbox_lower.setDisabled(False)
-            self.label_upper.setStyleSheet("color: rgb(0, 0, 0);")
-            self.label_lower.setStyleSheet("color: rgb(0, 0, 0);")
-        elif self.radio_import_config.isChecked():
-            self.config_dir_box.setDisabled(False)
-            self.spinbox_upper.setDisabled(True)
-            self.spinbox_lower.setDisabled(True)
-            self.label_upper.setStyleSheet("color: rgb(162, 162, 162);")
-            self.label_lower.setStyleSheet("color: rgb(162, 162, 162);")
+            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -194,13 +129,56 @@ class ThresholdConfigWidget(QWidget):
             # 如果提供了验证函数，则进行验证
             if self.csv_validator is not None:
                 result = self.csv_validator(file_path)
-                if not result:
-                    self.file_path = None
-                    self.config_dir_box.setText("")
-                    return
-            self.file_path = file_path
-            config_dir_name = os.path.basename(file_path)
-            self.config_dir_box.setText(config_dir_name)
+            else:
+                result = ThresholdConfigWidget.load_excel_limit(file_path)
+            if result:
+                self.limit_data = result
+                self.draw_limit_curve(self.limit_data)
+            else:
+                self.config_dir_box.setText("未加载")
+            self.config_dir_box.setText("已加载")
+
+    def set_graph_label_until(self, model_type: str):
+        """
+        设置阈值曲线图的标签
+
+        Args:
+            model_type: 模型类型
+        """
+        print("set_graph_label_until", model_type)
+        self.model_type = model_type
+        # 此处可根据 model_type 设置不同的图表标签
+        if "SPLF" in model_type:
+            self.limit_graph.setLabel("left", "SPLF (dB)")
+            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+        if "SPL" in model_type:
+            self.limit_graph.setLabel("left", "SPL (dB)")
+            self.limit_graph.setLabel("bottom", "Time (s)")
+        elif "FR" in model_type:
+            self.limit_graph.setLabel("left", "Amplitude (dB)")
+            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+        elif "PRB" in model_type:
+            self.limit_graph.setLabel("left", "phon")
+            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+        elif "RB" in model_type or "HD" in model_type:
+            self.limit_graph.setLabel("left", "Distortion (%)")
+            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+
+    def draw_limit_curve(self, result_data: tuple):
+        """
+        绘制阈值曲线
+
+        Args:
+            result_data: 包含横坐标、上限和下限数据的元组
+        """
+        if not result_data:
+            return
+        duration, upper_limit, lower_limit = result_data
+        self.limit_graph.clear()
+        if upper_limit is not None and not np.all(np.isnan(upper_limit)):
+            self.limit_graph.plot(duration, upper_limit, pen=mkPen(color="r", width=2), name="Upper Limit")
+        if lower_limit is not None and not np.all(np.isnan(lower_limit)):
+            self.limit_graph.plot(duration, lower_limit, pen=mkPen(color="b", width=2), name="Lower Limit")
 
     def get_config(self) -> dict:
         """
@@ -211,11 +189,7 @@ class ThresholdConfigWidget(QWidget):
         """
         return {
             "limit_checked": self.limit_checkbox.isChecked(),
-            "self_defined": self.radio_self_defined.isChecked(),
-            "import_config": self.radio_import_config.isChecked(),
-            "upper_limit": self.spinbox_upper.value(),
-            "lower_limit": self.spinbox_lower.value(),
-            "config_dir": self.file_path,
+            "limit_data": self.limit_data,
         }
 
     def validate(self) -> bool:
@@ -225,14 +199,9 @@ class ThresholdConfigWidget(QWidget):
         Returns:
             bool: 配置是否有效
         """
-        if self.limit_checkbox.isChecked() and self.radio_import_config.isChecked():
-            if not self.file_path:
+        if self.limit_checkbox.isChecked():
+            if not self.limit_data:
                 QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
-                return False
-        # 验证上下限关系
-        if self.limit_checkbox.isChecked() and self.radio_self_defined.isChecked():
-            if self.spinbox_lower.value() > self.spinbox_upper.value():
-                QMessageBox.warning(self, "提示", "下限不能大于上限！")
                 return False
         return True
 
@@ -245,3 +214,96 @@ class ThresholdConfigWidget(QWidget):
         """
         self.csv_validator = validator
 
+    @staticmethod
+    def load_excel_limit(excel_path):
+        if not excel_path:
+            QMessageBox.warning(None, "提示", f"未选择配置文件，请选择一个配置文件！")
+            return None
+        ext = os.path.splitext(excel_path)[1].lower()
+        if ext == ".csv":
+            with open(excel_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+        else:
+            QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
+            return None
+
+        if not rows or len(rows) == 0:
+            QMessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
+            return None
+
+        csv_duration_list, csv_upper_list, csv_lower_list = [], [], []
+        lenth = len(rows[0])
+        if lenth == 3 and rows[0][1] == "upperbound":
+            upperbound = True
+        elif lenth == 3 and rows[0][1] == "lowerbound":
+            upperbound = False
+        elif lenth == 2 and rows[0][1] == "upperbound":
+            upperbound = True
+        elif lenth == 2 and rows[0][1] == "lowerbound":
+            upperbound = False
+        else:
+            QMessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
+            return None
+        for index, row in enumerate(rows[1:], start=2):
+            csv_line_no = index
+            if lenth == 3 and upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[1])
+                    lval = float(row[2])
+                except ValueError:
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_duration_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(lval)
+            elif lenth == 3 and not upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[2])
+                    lval = float(row[1])
+                except ValueError:
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_duration_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(lval)
+            elif lenth == 2 and upperbound:
+                try:
+                    fval = float(row[0])
+                    uval = float(row[1])
+                except ValueError:
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_duration_list.append(fval)
+                csv_upper_list.append(uval)
+                csv_lower_list.append(np.nan)
+            elif lenth == 2 and not upperbound:
+                try:
+                    fval = float(row[0])
+                    lval = float(row[1])
+                except ValueError:
+                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    return None
+                csv_duration_list.append(fval)
+                csv_upper_list.append(np.nan)
+                csv_lower_list.append(lval)
+        for i, (x, u, l) in enumerate(zip(csv_duration_list, csv_upper_list, csv_lower_list)):
+            if (u is not None) and (l is not None) and (not np.isnan(u)) and (not np.isnan(l)):
+                if l > u:
+                    QMessageBox.warning(
+                        None,
+                        "提示",
+                        f"CSV 上下限配置错误：下限不能大于上限。\n"
+                        f"位置: 第{i+2}条数据, X={x}\n"
+                        f"lower={l}, upper={u}\n"
+                        f"文件: {excel_path}",
+                    )
+                    return None
+
+        return (
+            csv_duration_list,
+            csv_upper_list,
+            csv_lower_list,
+        )

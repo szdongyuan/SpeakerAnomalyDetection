@@ -5,7 +5,6 @@ import re
 import sys
 
 import librosa
-from matplotlib import table
 import numpy as np
 import pyqtgraph as pg
 from librosa.core import spectrum
@@ -100,7 +99,6 @@ class AnalysisResultSummaryWindow(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.SingleSelection)
         # Avoid default focus/selection highlight on show
-        # self._table.setFocusPolicy(Qt.NoFocus)
 
         layout = QVBoxLayout()
         layout.addWidget(self._table)
@@ -297,11 +295,11 @@ class Distortion(AnalysisGraphWidget):
         """Draw a graph based on the calculated THD with optional threshold limits."""
         self.analysis_plot.clear()
         if self.check_valid_data(freq_value) and self.check_valid_data(thd):
-            self.analysis_plot.plot(freq_value, thd, pen="b", name="THD")
+            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color="b", width=2), name="THD")
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
-        self.analysis_plot.setLabel("bottom", "Frequency")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
 
@@ -314,67 +312,15 @@ class Distortion(AnalysisGraphWidget):
         if not self.check_valid_data(freq_value) or not self.check_valid_data(y_data):
             return
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
 
-        if analysis_config.get("self_defined"):
-            # Use fixed upper/lower limits (horizontal lines)
-            upper_limit = analysis_config.get("upper_limit")
-            lower_limit = analysis_config.get("lower_limit")
-            if upper_limit is not None:
-                upper_line = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-                self.analysis_plot.addItem(upper_line)
-            if lower_limit is not None:
-                lower_line = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-                self.analysis_plot.addItem(lower_line)
+        result = analysis_config.get("limit_data")
+        if result:
+            csv_freq_list, csv_upper_list, csv_lower_list = result
+            self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
+            self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
             # Highlight out-of-range points
-            self._highlight_out_of_range_fixed(freq_value, y_data, upper_limit, lower_limit)
-        else:
-            # Use CSV curve limits
-            csv_path = analysis_config.get("config_dir")
-            result = Frequency.load_excel_limit(csv_path)
-            if result:
-                csv_freq_list, csv_upper_list, csv_lower_list = result
-                self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
-                self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
-                # Highlight out-of-range points
-                self._highlight_out_of_range_curve(freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list)
-
-    def _highlight_out_of_range_fixed(self, freq_value, y_data, upper_limit, lower_limit):
-        """Highlight data points that exceed fixed threshold limits."""
-        out_range_points = []
-        current_out_range = []
-
-        freq_arr = np.asarray(freq_value)
-        y_arr = np.asarray(y_data)
-
-        for i in range(len(y_arr)):
-            is_out = False
-            if upper_limit is not None and y_arr[i] > upper_limit:
-                is_out = True
-            if lower_limit is not None and y_arr[i] < lower_limit:
-                is_out = True
-            if is_out:
-                current_out_range.append((freq_arr[i], y_arr[i]))
-            else:
-                if current_out_range:
-                    out_range_points.append(current_out_range)
-                    current_out_range = []
-        if current_out_range:
-            out_range_points.append(current_out_range)
-        if out_range_points:
-            deviation = max(max(y_arr - upper_limit), max(lower_limit - y_arr))
-            deviation = round(deviation, 2)
-            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
-        else:
-            deviation = min(min(np.abs(y_arr - upper_limit)), min(np.abs(y_arr - lower_limit)))
-            deviation = round(deviation, 2)
-            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
-
-        for points in out_range_points:
-            x = [p[0] for p in points]
-            y = [p[1] for p in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen="r")
-            self.analysis_plot.addItem(out_range_plot)
+            self._highlight_out_of_range_curve(freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list)
 
     def _highlight_out_of_range_curve(self, freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list):
         """Highlight data points that exceed curve threshold limits."""
@@ -443,7 +389,7 @@ class Distortion(AnalysisGraphWidget):
         for points in out_range_points:
             x = [p[0] for p in points]
             y = [p[1] for p in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            out_range_plot = pg.PlotDataItem(x, y, pen=mkPen(color="r", width=2))
             self.analysis_plot.addItem(out_range_plot)
 
     @staticmethod
@@ -603,11 +549,16 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         """Plot perceptual loudness with correct phons label and optional threshold limits."""
         self.analysis_plot.clear()
         if self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness):
-            self.analysis_plot.plot(freq_value, perceptual_loudness, pen="b", name=self._prb_curve_label)
+            self.analysis_plot.plot(
+                freq_value,
+                perceptual_loudness,
+                pen=mkPen(color="b", width=2),
+                name=self._prb_curve_label,
+            )
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"Perceived Loudness of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", self._prb_y_label)
-        self.analysis_plot.setLabel("bottom", "Frequency")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
 
@@ -665,19 +616,12 @@ class Spl(AnalysisGraphWidget):
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
         limit_checked = self.analysis_config.get("limit_checked")
-        self_defined = self.analysis_config.get("self_defined")
         if limit_checked:
-            if self_defined:
-                upper_limit = self.analysis_config.get("upper_limit")
-                lower_limit = self.analysis_config.get("lower_limit")
-                self.plot_spl(signal_duration, signal_spl, upper_limit=upper_limit, lower_limit=lower_limit)
-            else:
-                excel_path = self.analysis_config.get("config_dir")
-                result = Frequency.load_excel_limit(excel_path)
-                if not result:
-                    return False
-                csv_time_list, csv_upper_list, csv_lower_list = result
-                self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
+            result = self.analysis_config.get("limit_data")
+            if not result:
+                return False
+            csv_time_list, csv_upper_list, csv_lower_list = result
+            self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
         self.result = {
@@ -689,9 +633,9 @@ class Spl(AnalysisGraphWidget):
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
 
         self.analysis_plot.plot(csv_time_list, csv_upper_list, pen=dashed_pen)
         self.analysis_plot.plot(csv_time_list, csv_lower_list, pen=dashed_pen)
@@ -746,47 +690,13 @@ class Spl(AnalysisGraphWidget):
         for points in out_range_points:
             x = [point[0] for point in points]
             y = [point[1] for point in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen="r")
+            out_range_plot = pg.PlotDataItem(x, y, pen=mkPen(color="r", width=2))
             self.analysis_plot.addItem(out_range_plot)
 
-    def plot_spl(self, signal_duration, signal_spl, upper_limit="", lower_limit=""):
+    def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77)))
-        if lower_limit and upper_limit:
-            upper_limit = float(upper_limit)
-            lower_limit = float(lower_limit)
-            out_range_points = []
-            current_out_range = []
-            for i in range(len(signal_spl)):
-                if signal_spl[i] < lower_limit or signal_spl[i] > upper_limit:
-                    current_out_range.append((signal_duration[i], signal_spl[i]))
-                else:
-                    if current_out_range:
-                        out_range_points.append(current_out_range)
-                        current_out_range = []
-            if current_out_range:
-                out_range_points.append(current_out_range)
-
-            if out_range_points:
-                deviation = max(max(signal_spl - upper_limit), max(lower_limit - signal_spl))
-                deviation = round(deviation, 2)
-                self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
-            else:
-                deviation = min(min(np.abs(signal_spl - upper_limit)), min(np.abs(signal_spl - lower_limit)))
-                deviation = round(deviation, 2)
-                self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
-
-            for points in out_range_points:
-                x = [point[0] for point in points]
-                y = [point[1] for point in points]
-                out_range_plot = pg.PlotDataItem(x, y, pen="r")
-                self.analysis_plot.addItem(out_range_plot)
-            dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
-            lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(lower_limit1)
-            upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(upper_limit1)
-        self.analysis_plot.setLabel("left", self._get_spl_label())
+        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
+        self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Time (s)")
         self.analysis_plot.showGrid(x=True, y=True)
 
@@ -882,21 +792,12 @@ class SplFrequency(AnalysisGraphWidget):
                 pass
 
         limit_checked = analysis_config.get("limit_checked")
-        self_defined = analysis_config.get("self_defined")
         if limit_checked:
-            if self_defined:
-                upper_limit = analysis_config.get("upper_limit")
-                lower_limit = analysis_config.get("lower_limit")
-                self.plot_spl_frequency(frequency_list, spl_db, upper_limit=upper_limit, lower_limit=lower_limit)
-            else:
-                excel_path = analysis_config.get("config_dir")
-                result = Frequency.load_excel_limit(excel_path)
-                if not result:
-                    return False
-                csv_freq_list, csv_upper_list, csv_lower_list = result
-                self.plot_spl_frequency_with_limits(
-                    frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list
-                )
+            result = analysis_config.get("limit_data")
+            if not result:
+                return False
+            csv_freq_list, csv_upper_list, csv_lower_list = result
+            self.plot_spl_frequency_with_limits(frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl_frequency(frequency_list, spl_db)
 
@@ -905,9 +806,9 @@ class SplFrequency(AnalysisGraphWidget):
 
     def plot_spl_frequency_with_limits(self, frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77), width=2))
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
         self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
         self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
 
@@ -943,10 +844,22 @@ class SplFrequency(AnalysisGraphWidget):
                         if is_out and start is None:
                             start = idx
                         elif (not is_out) and start is not None:
-                            self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:idx], interp[start:idx], pen="r"))
+                            self.analysis_plot.addItem(
+                                pg.PlotDataItem(
+                                    csv_f[start:idx],
+                                    interp[start:idx],
+                                    pen=mkPen(color="r", width=2),
+                                )
+                            )
                             start = None
                     if start is not None:
-                        self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:], interp[start:], pen="r"))
+                        self.analysis_plot.addItem(
+                            pg.PlotDataItem(
+                                csv_f[start:],
+                                interp[start:],
+                                pen=mkPen(color="r", width=2),
+                            )
+                        )
 
                     dev_upper = np.where(out & u_ok, interp - csv_u, 0.0)
                     dev_lower = np.where(out & l_ok, csv_l - interp, 0.0)
@@ -973,53 +886,9 @@ class SplFrequency(AnalysisGraphWidget):
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
 
-    def plot_spl_frequency(self, frequency_list, spl_db, upper_limit="", lower_limit=""):
+    def plot_spl_frequency(self, frequency_list, spl_db):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77)))
-        if lower_limit and upper_limit:
-            upper_limit = float(upper_limit)
-            lower_limit = float(lower_limit)
-            out_range_points = []
-            current_out_range = []
-            for i in range(len(spl_db)):
-                if spl_db[i] <= lower_limit or spl_db[i] >= upper_limit:
-                    current_out_range.append((frequency_list[i], spl_db[i]))
-                else:
-                    if current_out_range:
-                        out_range_points.append(current_out_range)
-                        current_out_range = []
-            if current_out_range:
-                out_range_points.append(current_out_range)
-
-            try:
-                spl_arr = np.asarray(spl_db, dtype=float)
-                if out_range_points:
-                    deviation = max(
-                        float(np.nanmax(spl_arr - upper_limit)),
-                        float(np.nanmax(lower_limit - spl_arr)),
-                    )
-                    is_ok = False
-                else:
-                    deviation = min(
-                        float(np.nanmin(np.abs(spl_arr - upper_limit))),
-                        float(np.nanmin(np.abs(spl_arr - lower_limit))),
-                    )
-                    is_ok = True
-                deviation = round(float(deviation), 2)
-                self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
-            except Exception:
-                self.data_struct.analysis_result_dict[self.title_name] = (False, 0.0)
-
-            for points in out_range_points:
-                x = [point[0] for point in points]
-                y = [point[1] for point in points]
-                out_range_plot = pg.PlotDataItem(x, y, pen="r")
-                self.analysis_plot.addItem(out_range_plot)
-            dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
-            lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(lower_limit1)
-            upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(upper_limit1)
+        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77), width=2))
         self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
@@ -1069,7 +938,7 @@ class Frequency(AnalysisGraphWidget):
             "repeat_times": stimulus_info.get("repeat_times"),
             "sample_rate": sr,
         }
-        
+
         try:
             analyzer = FrequencyResponseAnalyzer(sample_rate=int(sr))
             fr_result = analyzer.compute(
@@ -1116,19 +985,12 @@ class Frequency(AnalysisGraphWidget):
             self.result = {"fr": [], "frequency_list": []}
             return self.result
         limit_checked = analysis_config.get("limit_checked")
-        self_defined = analysis_config.get("self_defined")
         if limit_checked:
-            if self_defined:
-                upper_limit = self.analysis_config.get("upper_limit")
-                lower_limit = self.analysis_config.get("lower_limit")
-                self.plot_fr(frequency_list, fr, upper_limit=upper_limit, lower_limit=lower_limit)
-            else:
-                excel_path = self.analysis_config.get("config_dir")
-                result = self.load_excel_limit(excel_path)
-                if not result:
-                    return False
-                csv_freq_list, csv_upper_list, csv_lower_list = result
-                self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
+            result = self.analysis_config.get("limit_data")
+            if not result:
+                return False
+            csv_freq_list, csv_upper_list, csv_lower_list = result
+            self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_fr(frequency_list, fr)
         self.result = {"fr": fr.tolist(), "frequency_list": frequency_list.tolist()}
@@ -1239,9 +1101,9 @@ class Frequency(AnalysisGraphWidget):
         self.analysis_plot.clear()
         # fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
         fr_disp = fr
-        self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77), width=2))
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
 
         self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
         self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
@@ -1283,10 +1145,22 @@ class Frequency(AnalysisGraphWidget):
                         if is_out and start is None:
                             start = idx
                         elif (not is_out) and start is not None:
-                            self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:idx], interp[start:idx], pen="r"))
+                            self.analysis_plot.addItem(
+                                pg.PlotDataItem(
+                                    csv_f[start:idx],
+                                    interp[start:idx],
+                                    pen=mkPen(color="r", width=2),
+                                )
+                            )
                             start = None
                     if start is not None:
-                        self.analysis_plot.addItem(pg.PlotDataItem(csv_f[start:], interp[start:], pen="r"))
+                        self.analysis_plot.addItem(
+                            pg.PlotDataItem(
+                                csv_f[start:],
+                                interp[start:],
+                                pen=mkPen(color="r", width=2),
+                            )
+                        )
 
                     dev_upper = np.where(out & u_ok, interp - csv_u, 0.0)
                     dev_lower = np.where(out & l_ok, csv_l - interp, 0.0)
@@ -1308,47 +1182,10 @@ class Frequency(AnalysisGraphWidget):
         deviation = round(float(deviation), 2)
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
 
-    def plot_fr(self, frequency_list, fr, upper_limit="", lower_limit=""):
+    def plot_fr(self, frequency_list, fr):
         self.analysis_plot.clear()
         # fr = fr + 94 + self.v2pa_factor  # Todo: modify later
-        self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77)))
-        if lower_limit and upper_limit:
-            upper_limit = float(upper_limit)
-            lower_limit = float(lower_limit)
-            out_range_points = []
-            current_out_range = []
-            for i in range(len(fr)):
-                if fr[i] < lower_limit or fr[i] > upper_limit:
-                    current_out_range.append((frequency_list[i], fr[i]))
-                else:
-                    if current_out_range:
-                        out_range_points.append(current_out_range)
-                        current_out_range = []
-            if current_out_range:
-                out_range_points.append(current_out_range)
-
-            if out_range_points:
-                deviation = max(max(fr - upper_limit), max(lower_limit - fr))
-                deviation = round(deviation, 2)
-                self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
-            else:
-                deviation = min(min(np.abs(fr - upper_limit)), min(np.abs(fr - lower_limit)))
-                deviation = round(deviation, 2)
-                self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
-
-            for points in out_range_points:
-                x = [point[0] for point in points]
-                y = [point[1] for point in points]
-                x_min, x_max = min(x), max(x)
-                padding_x = (x_max - x_min) * 0.05
-                self.analysis_plot.setXRange(x_min - padding_x, x_max + padding_x)
-                out_range_plot = pg.PlotDataItem(x, y, pen="r")
-                self.analysis_plot.addItem(out_range_plot)
-            dashed_pen = mkPen(color=(128, 0, 128), width=1, style=Qt.DashLine)
-            lower_limit1 = pg.InfiniteLine(angle=0, pos=lower_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(lower_limit1)
-            upper_limit1 = pg.InfiniteLine(angle=0, pos=upper_limit, pen=dashed_pen)
-            self.analysis_plot.addItem(upper_limit1)
+        self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77), width=2))
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
@@ -1691,7 +1528,7 @@ class LooseParticle(AnalysisGraphWidget):
             self.data_struct.sample_rate,
         )
         amplitude = amplitude - deviation
-        self.analysis_plot.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77), width=2))
         self.plot_loose_particle_waveform(self.threshould, signal_duration, deviation)
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Time (s)")
@@ -1747,7 +1584,7 @@ class LooseParticle(AnalysisGraphWidget):
                 self.threshould[key] = value
 
     def plot_loose_particle_waveform(self, out_range_points, signal_duration, deviation):
-        pen = pg.mkPen(color="orange", width=3)
+        pen = pg.mkPen(color="orange", width=2)
         out_range_points = np.array(out_range_points) - deviation
         out_range_plot = pg.PlotDataItem(signal_duration, out_range_points, pen=pen)
         self.analysis_plot.addItem(out_range_plot)
@@ -1814,7 +1651,7 @@ class PeakDetection(AnalysisGraphWidget):
                 recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
-        self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
+        self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77), width=2))
 
         peak_times = self.result.get("peaks_time_sec", [])
         if peak_times:
@@ -2154,7 +1991,7 @@ class PipelinePdPm(QWidget):
                 recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
-        plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77)))
+        plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77), width=2))
         self._last_spl_series = np.asarray(spl_series)
 
         if peak_indices:
