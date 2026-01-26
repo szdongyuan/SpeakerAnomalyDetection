@@ -134,9 +134,9 @@ class ThresholdConfigWidget(QWidget):
             if result:
                 self.limit_data = result
                 self.draw_limit_curve(self.limit_data)
+                self.config_dir_box.setText("已加载")
             else:
                 self.config_dir_box.setText("未加载")
-            self.config_dir_box.setText("已加载")
 
     def set_graph_label_until(self, model_type: str):
         """
