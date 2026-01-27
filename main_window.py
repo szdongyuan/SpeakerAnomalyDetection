@@ -323,6 +323,13 @@ class MainWindow(QMainWindow):
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None
+
+        # Best-effort: rebuild daily Excel from CSV spool before exit (fast_mode).
+        try:
+            if hasattr(self, "sequence_window") and self.sequence_window is not None:
+                self.sequence_window.flush_excel_spool_build(on_close=False)
+        except Exception:
+            pass
         event.accept()
 
     def mousepressevent(self, event):

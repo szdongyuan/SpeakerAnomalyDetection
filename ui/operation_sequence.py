@@ -15,6 +15,7 @@ from base.load_audio import load_audio_simple
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.stimulus_resolver import set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal
+from base.save_data import ensure_test_result_file
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -32,6 +33,7 @@ from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
 from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
 
 class AnalysisModelSelect(QDialog):
@@ -155,6 +157,7 @@ class AnalysisModelSelect(QDialog):
             "模式匹配(PM)",
             "AI 分析 ",
             "事件检测 (ED) ",
+            "结果导出 (Excel) ",
         ]
         for item in analysis_items:
             list_item = QStandardItem(item.lstrip())
@@ -337,10 +340,40 @@ class AnalysisModelSelect(QDialog):
             )
             current_time = datetime.now().strftime("%Y-%m-%d")
             test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            with open(test_result_path, "r") as r:
-                lines = r.readlines()
+            try:
+                ensure_test_result_file(self.select_list.config[0].analysis_list)
+            except Exception as e:
+                # Never block "保存配置" due to log file errors
+                self.default_logger.warning(f"ensure_test_result_file_failed: {e}")
+
+            try:
+                with open(test_result_path, "r", encoding="utf-8") as r:
+                    lines = r.readlines()
+            except FileNotFoundError:
+                # Fallback: create a minimal template to avoid cross-day crash
+                os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
+                lines = [
+                    "total: 0\n",
+                    "ok: 0\n",
+                    "ng: 0\n",
+                    "ok_percent: 0\n",
+                    f"current_model: {analyse_model_name}\n",
+                    f"datatime: {current_time}\n",
+                ]
+
+            # Update current_model line robustly (do not assume fixed line indices)
+            updated = False
+            for i, line in enumerate(lines):
+                if str(line).startswith("current_model:"):
+                    lines[i] = f"current_model: {analyse_model_name}\n"
+                    updated = True
+                    break
+            if not updated:
+                while len(lines) < 5:
+                    lines.append("\n")
                 lines[4] = f"current_model: {analyse_model_name}\n"
-            with open(test_result_path, "w") as w:
+
+            with open(test_result_path, "w", encoding="utf-8") as w:
                 w.writelines(lines)
 
 
@@ -575,6 +608,8 @@ class OptionList(QListView):
             model = PipelinePdPmConfigWindow(config_manager, name)
         elif type == "PM":
             model = PatternMatchConfigWindow(config_manager, name)
+        elif type == "Excel":
+            model = ExcelConfigWindow(config_manager, name)
         return model
 
     def init_config_info(self, config_file):
@@ -682,6 +717,18 @@ class OptionList(QListView):
     def delete_item_config(self, name):
         if not name:
             return
+        # Remove deleted items from any Excel export selection list to avoid stale references
+        try:
+            for _, cfg in self.config[0].analysis_list.items():
+                if not isinstance(cfg, dict):
+                    continue
+                if cfg.get("type") != "Excel":
+                    continue
+                save_items = cfg.get("save_items")
+                if isinstance(save_items, list) and name in save_items:
+                    cfg["save_items"] = [x for x in save_items if x != name]
+        except Exception:
+            pass
         if name in self.config[0].analysis_list:
             del self.config[0].analysis_list[name]
 
@@ -748,6 +795,19 @@ class OptionList(QListView):
             if not new_name in self.all_ai_item:
                 ai_index = self.all_ai_item.index(old_name)
                 self.all_ai_item[ai_index] = new_name
+        # Keep Excel export item's selection in sync when other items are renamed
+        try:
+            for _, cfg in self.config[0].analysis_list.items():
+                if not isinstance(cfg, dict):
+                    continue
+                if cfg.get("type") != "Excel":
+                    continue
+                save_items = cfg.get("save_items")
+                if isinstance(save_items, list) and old_name in save_items:
+                    cfg["save_items"] = [new_name if x == old_name else x for x in save_items]
+        except Exception:
+            # Never block rename flow
+            pass
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
         if Qt.EditRole in roles:

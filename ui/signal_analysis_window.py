@@ -1198,6 +1198,7 @@ class AI(QWidget):
         self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
+        self.export_detail = None
         self.default_logger = LogManager.set_log_handler("core")
         self.title_name = title_name
 
@@ -1296,6 +1297,12 @@ class AI(QWidget):
         is_passed_bool = True if predict_label == "OK" else False
         self.data_struct.analysis_result_dict[self.title_name] = (is_passed_bool, deviation)
         self.result = predict_label
+        self.export_detail = {
+            "label": predict_label,
+            "ok_score": round(ok_scores, 2),
+            "ng_score": round(ng_scores, 2),
+            "model_name": model_name,
+        }
         result_text = (
             f"评分结果: {predict_label} \n \n"
             f"\xa0\xa0评分模型: {model_name}\n"
