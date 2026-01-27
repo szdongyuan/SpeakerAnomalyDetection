@@ -7,7 +7,7 @@ PRB 使用固定谐波范围 (2阶-35阶) 结合 SoundCheck/Listen (SC) 心理�
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -68,6 +68,10 @@ class PerceptualRbConfigWindow(QDialog):
         group_layout.addWidget(self.sc_metric_combo)
         group.setLayout(group_layout)
 
+        # Golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         # 阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
@@ -86,6 +90,7 @@ class PerceptualRbConfigWindow(QDialog):
         btn_layout.addWidget(ok_btn)
 
         root_layout.addWidget(group)
+        root_layout.addWidget(self.golden_chk_box)
         root_layout.addWidget(self.threshold_widget)
         root_layout.addStretch()
         root_layout.addLayout(btn_layout)
@@ -117,6 +122,7 @@ class PerceptualRbConfigWindow(QDialog):
         masking_config["sc_metric"] = metric
 
         config = {"prb_method": "sc", "masking_config": masking_config}
+        config["golden_sample_checked"] = self.golden_chk_box.isChecked()
         config.update(self.threshold_widget.get_config())
         return config
 

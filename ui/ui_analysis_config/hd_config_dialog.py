@@ -60,6 +60,10 @@ class HdConfigWindow(QDialog):
         harmonic_slider_layout.addWidget(self.select_all_check)
         harmonic_group_box.setLayout(harmonic_slider_layout)
 
+        # Golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         # 阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
@@ -70,6 +74,7 @@ class HdConfigWindow(QDialog):
         btn_layout = self.create_btn()
 
         layout.addWidget(harmonic_group_box)
+        layout.addWidget(self.golden_chk_box)
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -169,6 +174,7 @@ class HdConfigWindow(QDialog):
         config = {
             "selected_labels": self.selected_labels,
             "all_checked": self.select_all_check.isChecked(),
+            "golden_sample_checked": self.golden_chk_box.isChecked(),
         }
         config.update(self.threshold_widget.get_config())
         return config

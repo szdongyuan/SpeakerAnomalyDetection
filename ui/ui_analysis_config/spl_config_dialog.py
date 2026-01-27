@@ -93,6 +93,12 @@ class SplConfigWindow(QDialog):
             )
             self.smooth_combo_box.setCurrentText(selected_label)
 
+        # SPLF only: golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = None
+        if self.analysis_type == "SPLF":
+            self.golden_chk_box = QCheckBox("使用黄金样本")
+            self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
             load_config=self.load_config,
@@ -128,6 +134,8 @@ class SplConfigWindow(QDialog):
             layout.addLayout(smooth_layout)
         elif self.smooth_chk_box is not None:
             layout.addWidget(self.smooth_chk_box)
+        if self.golden_chk_box is not None:
+            layout.addWidget(self.golden_chk_box)
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -168,6 +176,8 @@ class SplConfigWindow(QDialog):
             config["splf_calc_mode"] = calc_mode
             smooth_label = self.smooth_combo_box.currentText()
             config["octave_smoothing"] = int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0))
+            if self.golden_chk_box is not None:
+                config["golden_sample_checked"] = self.golden_chk_box.isChecked()
         config.update(self.threshold_widget.get_config())
         weighting_value = self.weighting_combo.currentText()
         if weighting_value == "Z（None）":
@@ -189,15 +199,3 @@ class SplConfigWindow(QDialog):
             return
         self.accept()
         return config_data
-
-
-if __name__ == "__main__":
-    import sys
-    from PyQt5.QtWidgets import QApplication
-    from base.load_config import ConfigManager, LoadUiConfig
-    prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-    app = QApplication(sys.argv)
-    config_manager = ConfigManager(prev_config_file)
-    window = SplConfigWindow(config_manager, "SPL")
-    window.show()
-    sys.exit(app.exec_())

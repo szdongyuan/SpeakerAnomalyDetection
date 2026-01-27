@@ -4,7 +4,7 @@ FR (Frequency Response) 分析配置对话框
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout, QPushButton
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -56,6 +56,10 @@ class FrConfigWindow(QDialog):
         )
         self.smooth_combo_box.setCurrentText(selected_label)
 
+        # Golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         # 使用通用阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
@@ -67,6 +71,7 @@ class FrConfigWindow(QDialog):
 
         layout.addWidget(QLabel("平滑"))
         layout.addWidget(self.smooth_combo_box)
+        layout.addWidget(self.golden_chk_box)
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -99,6 +104,7 @@ class FrConfigWindow(QDialog):
         smooth_label = self.smooth_combo_box.currentText()
         config = {
             "octave_smoothing": int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0)),
+            "golden_sample_checked": self.golden_chk_box.isChecked(),
         }
         config.update(self.threshold_widget.get_config())
         return config
