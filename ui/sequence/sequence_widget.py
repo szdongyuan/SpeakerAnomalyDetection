@@ -1517,6 +1517,11 @@ class SequenceWindow(QWidget):
                 if self.analysis_config["default_ai"] == key:
                     self.default_ai = class_instance
                 class_instance.v2pa_factor = self.v2pa_factor
+                # Inject sequence-level golden baseline path into per-item params
+                if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
+                    golden_path = self.analysis_config.get("golden_sample_result_path")
+                    if golden_path:
+                        params["golden_sample_result_path"] = golden_path
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
 

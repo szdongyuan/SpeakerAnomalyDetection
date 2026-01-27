@@ -145,7 +145,6 @@ class ThresholdConfigWidget(QWidget):
         Args:
             model_type: 模型类型
         """
-        print("set_graph_label_until", model_type)
         self.model_type = model_type
         # 此处可根据 model_type 设置不同的图表标签
         if "SPLF" in model_type:

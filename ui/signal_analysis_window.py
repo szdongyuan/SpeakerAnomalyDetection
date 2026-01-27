@@ -71,6 +71,80 @@ def get_class_mapping():
     return class_mapping
 
 
+def _resolve_golden_baseline_path(path: str):
+    if not path or not isinstance(path, str):
+        return None
+    p = path.replace("\\", "/").strip()
+    if not p:
+        return None
+    if os.path.isabs(p):
+        return p
+    return os.path.join(DEFAULT_DIR, p).replace("\\", "/")
+
+
+def _load_golden_baseline_result(analysis_config: dict, title_name: str):
+    """
+    Load baseline result for a specific analysis item from golden baseline JSON.
+
+    Expected JSON schema:
+      {"items": {"<title_name>": {"type": "...", "result": {...}}}}
+    """
+    if not isinstance(analysis_config, dict):
+        return None
+    path = analysis_config.get("golden_sample_result_path")
+    resolved = _resolve_golden_baseline_path(path)
+    if not resolved or (not os.path.exists(resolved)):
+        return None
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("items")
+    if not isinstance(items, dict):
+        return None
+    item = items.get(title_name)
+    if not isinstance(item, dict):
+        return None
+    result = item.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _abs_deviation_curve(x_current, y_current, x_base, y_base):
+    """
+    Compute absolute deviation curve: abs(current - interp(base->current_x)).
+    Points outside baseline x-range are set to NaN.
+    """
+    x_c = np.asarray(x_current, dtype=float)
+    y_c = np.asarray(y_current, dtype=float)
+    x_b = np.asarray(x_base, dtype=float)
+    y_b = np.asarray(y_base, dtype=float)
+
+    if x_c.size == 0 or y_c.size == 0 or x_b.size == 0 or y_b.size == 0:
+        return y_c
+
+    m = np.isfinite(x_b) & np.isfinite(y_b)
+    x_b = x_b[m]
+    y_b = y_b[m]
+    if x_b.size < 2:
+        return y_c
+
+    sort_idx = np.argsort(x_b)
+    x_b = x_b[sort_idx]
+    y_b = y_b[sort_idx]
+    x_b, uniq_idx = np.unique(x_b, return_index=True)
+    y_b = y_b[uniq_idx]
+    if x_b.size < 2:
+        return y_c
+
+    interp = np.interp(x_c, x_b, y_b)
+    in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
+    interp = np.where(in_range, interp, np.nan)
+    return (y_c - interp)
+
+
 class AnalysisResultSummaryWindow(QWidget):
     """
     Summary window for DataDealStruct.analysis_result_dict.
@@ -276,6 +350,20 @@ class Distortion(AnalysisGraphWidget):
             from base.utils.octave_smoothing import smooth_to_octave_grid
 
             freq_value, thd = smooth_to_octave_grid(freq_value, thd, fraction=6, method="log")
+
+        # Golden sample baseline: use abs(current - golden) deviation curve
+        if isinstance(self.analysis_config, dict) and self.analysis_config.get("golden_sample_checked"):
+            baseline = _load_golden_baseline_result(self.analysis_config, self.title_name)
+            if baseline:
+                base_freq = baseline.get("freq_value")
+                base_thd = baseline.get("thd")
+                if base_freq is not None and base_thd is not None:
+                    try:
+                        thd = _abs_deviation_curve(freq_value, thd, base_freq, base_thd)
+                    except Exception:
+                        pass
+            else:
+                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
         # Plot the results with threshold support
         self.plot_graph(freq_value, thd, self.analysis_config)
@@ -529,6 +617,20 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             freq_value, perceptual_loudness = smooth_to_octave_grid(
                 freq_value, perceptual_loudness, fraction=6, method="log"
             )
+
+        # Golden sample baseline: use abs(current - golden) deviation curve
+        if isinstance(self.analysis_config, dict) and self.analysis_config.get("golden_sample_checked"):
+            baseline = _load_golden_baseline_result(self.analysis_config, self.title_name)
+            if baseline:
+                base_freq = baseline.get("freq_value")
+                base_y = baseline.get("thd")  # stored under 'thd' for backward compatibility
+                if base_freq is not None and base_y is not None:
+                    try:
+                        perceptual_loudness = _abs_deviation_curve(freq_value, perceptual_loudness, base_freq, base_y)
+                    except Exception:
+                        pass
+            else:
+                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
         # Plot the results with threshold support (Y-axis will be in phons)
         self.plot_graph(freq_value, perceptual_loudness, self.analysis_config)
@@ -791,6 +893,20 @@ class SplFrequency(AnalysisGraphWidget):
             except Exception:
                 pass
 
+        # Golden sample baseline: use abs(current - golden) deviation curve
+        if analysis_config.get("golden_sample_checked"):
+            baseline = _load_golden_baseline_result(analysis_config, self.title_name)
+            if baseline:
+                base_freq = baseline.get("frequency_list")
+                base_spl = baseline.get("spl_db")
+                if base_freq is not None and base_spl is not None:
+                    try:
+                        spl_db = _abs_deviation_curve(frequency_list, spl_db, base_freq, base_spl)
+                    except Exception:
+                        pass
+            else:
+                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
+
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
             result = analysis_config.get("limit_data")
@@ -984,6 +1100,20 @@ class Frequency(AnalysisGraphWidget):
             self.plot_fr([], [])
             self.result = {"fr": [], "frequency_list": []}
             return self.result
+
+        # Golden sample baseline: use abs(current - golden) deviation curve
+        if analysis_config.get("golden_sample_checked"):
+            baseline = _load_golden_baseline_result(analysis_config, self.title_name)
+            if baseline:
+                base_freq = baseline.get("frequency_list")
+                base_fr = baseline.get("fr")
+                if base_freq is not None and base_fr is not None:
+                    try:
+                        fr = _abs_deviation_curve(frequency_list, fr, base_freq, base_fr)
+                    except Exception:
+                        pass
+            else:
+                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
             result = self.analysis_config.get("limit_data")
