@@ -11,7 +11,8 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog, QLineEdit
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog, QLineEdit, \
+    QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
@@ -1692,8 +1693,9 @@ class SequenceWindow(QWidget):
                     self._barcode_capture_last_ts = now
                     self._barcode_capture_buffer += ch
                     self._barcode_debounce_timer.start()
-                    # 若焦点不在输入框（按钮/图表等），吞掉字符避免影响控件
-                    if fw is None or not isinstance(fw, QLineEdit):
+                    # 定义允许键盘输入的白名单：文本框、数字框、下拉框, 否则吞掉字符避免影响控件
+                    allowed_types = (QLineEdit, QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit)
+                    if fw is not None and not isinstance(fw, allowed_types):
                         return True
                     # 焦点在其它输入框：先让字符进入输入框，后续若判定为扫码再恢复
                     return super().eventFilter(obj, event)
