@@ -9,7 +9,6 @@ from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QMessageBox, QSizePolicy
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QLineEdit, QSpinBox, QVBoxLayout
 
-from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -44,7 +43,6 @@ class StimulusWindow(QDialog):
         """Initialize stimulus window with default configurations"""
         super().__init__()
         # initialize stimulus signal type， and create variable to store stimulus signal data
-        self.data_struct = DataDealStruct()
         self.speaker = speaker
         self.load_wav_path = ""
         self.load_stimulus_signal_path = None
@@ -641,7 +639,7 @@ class StimulusWindow(QDialog):
         sample_rate = self.stimulus_info["sample_rate"]
         if self.stimulus_data is not None:
             signal_duration = np.linspace(0, len(self.stimulus_data) - 1, len(self.stimulus_data)) / sample_rate
-            self.plot_stimulus.plot(signal_duration, self.stimulus_data, pen="b")
+            self.plot_stimulus.plot(signal_duration, self.stimulus_data, pen=pyqtgraph.mkPen("b", width=2))
             self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
             self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "20px"})
             font = QFont()

@@ -4,17 +4,14 @@ PRB (Perceptual Rub & Buzz) 分析配置对话框
 PRB 使用固定谐波范围 (2阶-35阶) 结合 SoundCheck/Listen (SC) 心理声学模型，
 计算感知失真响度。
 """
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel,
-    QPushButton, QVBoxLayout
-)
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.popuputils import PopupUtils, check_upper_lower_limit
-from ui.signal_analysis_window import Frequency
+from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
 
@@ -71,15 +68,15 @@ class PerceptualRbConfigWindow(QDialog):
         group_layout.addWidget(self.sc_metric_combo)
         group.setLayout(group_layout)
 
+        # Golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         # 阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
-            upper_range=(0, 1000),     # PRB 指数阈值范围
-            lower_range=(0, 1000),
-            default_upper=self.load_config.get("upper_limit", 100.0),
-            default_lower=self.load_config.get("lower_limit", 0.0),
             load_config=self.load_config,
-            csv_validator=Frequency.load_excel_limit
+            model_type=self.model_type,
         )
 
         # 按钮布局
@@ -93,6 +90,7 @@ class PerceptualRbConfigWindow(QDialog):
         btn_layout.addWidget(ok_btn)
 
         root_layout.addWidget(group)
+        root_layout.addWidget(self.golden_chk_box)
         root_layout.addWidget(self.threshold_widget)
         root_layout.addStretch()
         root_layout.addLayout(btn_layout)
@@ -123,10 +121,8 @@ class PerceptualRbConfigWindow(QDialog):
             masking_config.update(saved_masking)
         masking_config["sc_metric"] = metric
 
-        config = {
-            "prb_method": "sc",
-            "masking_config": masking_config
-        }
+        config = {"prb_method": "sc", "masking_config": masking_config}
+        config["golden_sample_checked"] = self.golden_chk_box.isChecked()
         config.update(self.threshold_widget.get_config())
         return config
 
@@ -134,16 +130,12 @@ class PerceptualRbConfigWindow(QDialog):
         config_data = self.get_default_config()
         if not self.threshold_widget.validate():
             return
-        if config_data.get("limit_checked") and check_upper_lower_limit(config_data, self):
-            return
         save_flag = self.config_manager.save_default_config("PRB", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
         if not self.threshold_widget.validate():
-            return
-        if config_data.get("limit_checked") and check_upper_lower_limit(config_data, self):
             return
         self.accept()
         return config_data

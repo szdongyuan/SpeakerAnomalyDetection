@@ -1,29 +1,40 @@
 """
 HD (Harmonic Distortion / THD) 分析配置对话框
 """
+
 from functools import partial
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
-    QCheckBox, QDialog, QGroupBox, QHBoxLayout, QVBoxLayout,
-    QMessageBox, QPushButton, QLabel, QSizePolicy, QScrollArea, QWidget
+    QCheckBox,
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QVBoxLayout,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QSizePolicy,
+    QScrollArea,
+    QWidget,
 )
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.popuputils import PopupUtils, check_upper_lower_limit
-from ui.signal_analysis_window import Frequency
+from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
 
 class HdConfigWindow(QDialog):
     """谐波失真 (THD) 分析配置对话框"""
+
     selected_labels_changed = pyqtSignal()
 
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
+        self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
         self.selected_labels = self.load_config.get("selected_labels", [])
         self.init_ui()
@@ -49,20 +60,21 @@ class HdConfigWindow(QDialog):
         harmonic_slider_layout.addWidget(self.select_all_check)
         harmonic_group_box.setLayout(harmonic_slider_layout)
 
+        # Golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         # 阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
-            upper_range=(0, 100),      # THD 阈值范围 0-100%
-            lower_range=(0, 100),
-            default_upper=self.load_config.get("upper_limit", 10.0),
-            default_lower=self.load_config.get("lower_limit", 0.0),
             load_config=self.load_config,
-            csv_validator=Frequency.load_excel_limit
+            model_type=self.model_type,
         )
 
         btn_layout = self.create_btn()
 
         layout.addWidget(harmonic_group_box)
+        layout.addWidget(self.golden_chk_box)
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -162,6 +174,7 @@ class HdConfigWindow(QDialog):
         config = {
             "selected_labels": self.selected_labels,
             "all_checked": self.select_all_check.isChecked(),
+            "golden_sample_checked": self.golden_chk_box.isChecked(),
         }
         config.update(self.threshold_widget.get_config())
         return config
@@ -169,8 +182,6 @@ class HdConfigWindow(QDialog):
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
         if not self.threshold_widget.validate():
-            return
-        if config_data.get("limit_checked") and check_upper_lower_limit(config_data, self):
             return
         save_flag = self.config_manager.save_default_config("HD", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
@@ -181,8 +192,6 @@ class HdConfigWindow(QDialog):
         else:
             config_data = self.get_default_config()
             if not self.threshold_widget.validate():
-                return
-            if config_data.get("limit_checked") and check_upper_lower_limit(config_data, self):
                 return
             self.accept()
             return config_data

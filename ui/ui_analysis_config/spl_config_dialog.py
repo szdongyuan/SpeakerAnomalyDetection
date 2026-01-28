@@ -1,16 +1,26 @@
 """
 SPL (Sound Pressure Level) 分析配置对话框
 """
+
 import re
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QRadioButton, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QRadioButton,
+    QVBoxLayout,
+    QPushButton,
+)
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.popuputils import PopupUtils, check_upper_lower_limit
-from ui.signal_analysis_window import Frequency
+from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
 
@@ -30,6 +40,7 @@ class SplConfigWindow(QDialog):
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
+        self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
         self.analysis_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
         self.init_ui()
@@ -82,14 +93,16 @@ class SplConfigWindow(QDialog):
             )
             self.smooth_combo_box.setCurrentText(selected_label)
 
+        # SPLF only: golden sample checkbox (placed above threshold widget)
+        self.golden_chk_box = None
+        if self.analysis_type == "SPLF":
+            self.golden_chk_box = QCheckBox("使用黄金样本")
+            self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
-            upper_range=(0, 500),
-            lower_range=(0, 500),
-            default_upper=self.load_config.get("upper_limit", 100.0),
-            default_lower=self.load_config.get("lower_limit", 0.0),
             load_config=self.load_config,
-            csv_validator=Frequency.load_excel_limit
+            model_type=self.model_type,
         )
 
         weighting_label = QLabel("计权方式:")
@@ -121,6 +134,8 @@ class SplConfigWindow(QDialog):
             layout.addLayout(smooth_layout)
         elif self.smooth_chk_box is not None:
             layout.addWidget(self.smooth_chk_box)
+        if self.golden_chk_box is not None:
+            layout.addWidget(self.golden_chk_box)
         layout.addWidget(self.threshold_widget)
         layout.addStretch()
         layout.addLayout(btn_layout)
@@ -161,6 +176,8 @@ class SplConfigWindow(QDialog):
             config["splf_calc_mode"] = calc_mode
             smooth_label = self.smooth_combo_box.currentText()
             config["octave_smoothing"] = int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0))
+            if self.golden_chk_box is not None:
+                config["golden_sample_checked"] = self.golden_chk_box.isChecked()
         config.update(self.threshold_widget.get_config())
         weighting_value = self.weighting_combo.currentText()
         if weighting_value == "Z（None）":
@@ -173,16 +190,12 @@ class SplConfigWindow(QDialog):
         config_data = self.get_default_config()
         if not self.threshold_widget.validate():
             return
-        if check_upper_lower_limit(config_data, self):
-            return
         save_flag = self.config_manager.save_default_config(self.analysis_type, config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
         if not self.threshold_widget.validate():
-            return
-        if check_upper_lower_limit(config_data, self):
             return
         self.accept()
         return config_data

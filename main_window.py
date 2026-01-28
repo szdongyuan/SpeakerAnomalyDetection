@@ -223,8 +223,10 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
-        analysis_model_select_dialog = AnalysisModelSelect(mic=self.mic, speaker=self.speaker)
+        analysis_model_select_dialog = AnalysisModelSelect(self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker)
         analysis_model_select_dialog.exec()
+        # Refresh active sequence config without forcing mode switch
+        self.sequence_window.on_sequence_config_updated()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
@@ -322,6 +324,13 @@ class MainWindow(QMainWindow):
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None
+
+        # Best-effort: rebuild daily Excel from CSV spool before exit (fast_mode).
+        try:
+            if hasattr(self, "sequence_window") and self.sequence_window is not None:
+                self.sequence_window.flush_excel_spool_build(on_close=False)
+        except Exception:
+            pass
         event.accept()
 
     def mousepressevent(self, event):

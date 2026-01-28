@@ -1,6 +1,6 @@
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QColor
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -16,6 +16,7 @@ class SequenceToolsBar(QWidget):
         self.replayer_btn = QPushButton()
         self.tcp_btn = QPushButton()
         self.data_btn = QPushButton()
+        self.using_file_combobox = QComboBox()
         self.lineedit_type = QLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = QLineEdit()
@@ -70,6 +71,7 @@ class SequenceToolsBar(QWidget):
         mode_type_layout = self.create_mode_type_layout()
         mode_count_layout = self.create_mode_count_layout()
         barcode_scanner_layout = self.create_barcode_scanner_layout()
+        using_file_combobox_layout = self.create_using_file_combobox()
 
         layout = QHBoxLayout()
         layout.addWidget(self.player_btn)
@@ -80,6 +82,7 @@ class SequenceToolsBar(QWidget):
         layout.addWidget(vertical_line_3)
         layout.addWidget(self.tcp_btn)
         layout.addWidget(vertical_line_4)
+        layout.addLayout(using_file_combobox_layout)
         layout.addLayout(mode_type_layout)
         layout.addLayout(mode_count_layout)
         layout.addLayout(barcode_scanner_layout)
@@ -119,6 +122,22 @@ class SequenceToolsBar(QWidget):
         self.tcp_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.tcp_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/network.png"))
         self.tcp_btn.setIconSize(QSize(35, 35))
+
+    def create_using_file_combobox(self):
+        type_label = QLabel(" 使用配置：")
+        type_label.setFixedHeight(40)
+        self.using_file_combobox.setFixedHeight(35)
+        self.using_file_combobox.setMinimumWidth(100)
+        vertical_line = QFrame()
+        vertical_line.setFrameShape(QFrame.VLine)
+
+        using_file_combobox_layout = self.create_part_layout()
+        using_file_combobox_layout.addWidget(type_label)
+        using_file_combobox_layout.addWidget(self.using_file_combobox)
+        using_file_combobox_layout.addSpacing(10)
+        using_file_combobox_layout.addWidget(vertical_line)
+
+        return using_file_combobox_layout
 
     def create_mode_type_layout(self):
         type_label = QLabel(" 型 号：")
