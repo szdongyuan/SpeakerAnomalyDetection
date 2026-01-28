@@ -432,8 +432,7 @@ class Distortion(AnalysisGraphWidget):
                     x_label="Frequency (Hz)",
                     y_label="Distortion(%)",
                     log_x=True,
-                    curve_color="b",      # THD uses blue color
-                    curve_name="THD",     # THD specific curve name
+                    curve_name="THD",
                 )
                 # THD specific title
                 if self.selected_label is not None:
@@ -445,7 +444,7 @@ class Distortion(AnalysisGraphWidget):
         # === Without limit config: original logic ===
         self.analysis_plot.clear()
         if valid_data:
-            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color="b", width=2), name="THD")
+            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color=(51, 196, 77), width=2), name="THD")
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
@@ -710,13 +709,53 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         return self.result
 
     def plot_graph(self, freq_value, perceptual_loudness, analysis_config=None):
-        """Plot perceptual loudness with correct phons label and optional threshold limits."""
+        """
+        Plot perceptual loudness (phons) and optionally apply limit curves.
+
+        Note:
+        - PRB inherits from Distortion, so it uses the same limit logic as THD:
+          setup_limit_plot() + _highlight_out_of_range_curve() (nearest-neighbor matching).
+        - This differs from SPLF/FR which use interpolation (check_interp_limits).
+        """
+        valid_data = self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness)
+
+        # === With limit config: use THD-style limit handling (nearest-neighbor) ===
+        if analysis_config and analysis_config.get("limit_checked"):
+            result = analysis_config.get("limit_data")
+            if result and valid_data:
+                csv_freq_list, csv_upper_list, csv_lower_list = result
+
+                # 1) Plot main curve + limit curves (same as THD)
+                LimitPlotUtils.setup_limit_plot(
+                    self.analysis_plot,
+                    freq_value, perceptual_loudness,
+                    csv_freq_list, csv_upper_list, csv_lower_list,
+                    x_label="Frequency (Hz)",
+                    y_label=self._prb_y_label,
+                    log_x=True,
+                    curve_name=self._prb_curve_label,
+                )
+
+                if self.selected_label is not None:
+                    self.analysis_plot.setTitle(
+                        f"Perceived Loudness of {self.selected_label.text()} order"
+                    )
+
+                # 2) Use parent's _highlight_out_of_range_curve() for limit check + highlight
+                #    This uses nearest-neighbor matching and highlights on original data points
+                self._highlight_out_of_range_curve(
+                    freq_value, perceptual_loudness,
+                    csv_freq_list, csv_upper_list, csv_lower_list
+                )
+                return
+
+        # === Without limit config (or missing limit_data): original plot logic ===
         self.analysis_plot.clear()
-        if self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness):
+        if valid_data:
             self.analysis_plot.plot(
                 freq_value,
                 perceptual_loudness,
-                pen=mkPen(color="b", width=2),
+                pen=mkPen(color=(51, 196, 77), width=2),
                 name=self._prb_curve_label,
             )
         if self.selected_label is not None:
@@ -725,10 +764,6 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
-
-        # Apply threshold limits if configured (inherited from Distortion)
-        if analysis_config and analysis_config.get("limit_checked"):
-            self._apply_threshold_limits(freq_value, perceptual_loudness, analysis_config)
 
 
 class Spl(AnalysisGraphWidget):
