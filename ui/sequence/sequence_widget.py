@@ -248,7 +248,6 @@ class SequenceWindow(QWidget):
         """
         try:
             can_output, reason = self._can_output_ok_ng()
-            print(f"can_output: {can_output}, reason: {reason}")
             if self.count_board:
                 # Keep UX consistent: disable test if not eligible
                 self.count_board.set_test_available(bool(can_output), reason or "")
