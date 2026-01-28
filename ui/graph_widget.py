@@ -1,9 +1,9 @@
 import sys
 import numpy as np
 import pyqtgraph as pg
+from pyqtgraph import mkPen
 from pyqtgraph.Qt import QtCore
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
 from PyQt5.QtWidgets import QHBoxLayout
 
@@ -281,6 +281,229 @@ class DraggablePlotWidget(pg.PlotWidget):
             event.accept()
         else:
             super().mouseReleaseEvent(event)
+
+
+class LimitPlotUtils:
+    """
+    Limit Check and Plot Utility Class
+
+    Contains 4 static methods for unified limit comparison, out-of-limit segment plotting,
+    plot setup, and interpolation check.
+    Used by all plotting functions (THD, SPL time-domain, SPLF, FR).
+    """
+
+    @staticmethod
+    def compare_with_limits(
+        plot_y: np.ndarray,
+        upper_limits: np.ndarray,
+        lower_limits: np.ndarray,
+        valid_mask: np.ndarray = None,
+    ) -> tuple:
+        """
+        Common limit comparison (used by SPL time-domain, SPLF, FR).
+
+        Args:
+            plot_y: Y values to compare
+            upper_limits: Upper limits for each point (same length as plot_y)
+            lower_limits: Lower limits for each point (same length as plot_y)
+            valid_mask: Validity mask (optional, defaults to all valid)
+
+        Returns:
+            out_mask: Out-of-limit mask (True = out of limit)
+            deviation: Deviation value (max exceedance if out, min margin if ok)
+            is_ok: Whether all points are within limits
+        """
+        n = len(plot_y)
+        if valid_mask is None:
+            valid_mask = np.ones(n, dtype=bool)
+
+        u_ok = np.isfinite(upper_limits)
+        l_ok = np.isfinite(lower_limits)
+
+        # Check out-of-limit
+        out_mask = valid_mask & (
+            (u_ok & (plot_y > upper_limits)) |
+            (l_ok & (plot_y < lower_limits))
+        )
+
+        # Calculate deviation
+        deviation = 0.0
+        is_ok = True
+        if np.any(out_mask):
+            is_ok = False
+            dev_upper = np.where(out_mask & u_ok, plot_y - upper_limits, 0.0)
+            dev_lower = np.where(out_mask & l_ok, lower_limits - plot_y, 0.0)
+            deviation = float(np.nanmax(np.maximum(dev_upper, dev_lower)))
+        else:
+            # Calculate minimum margin when within limits
+            in_range = valid_mask & np.isfinite(plot_y)
+            if np.any(in_range):
+                margin_u = np.where(u_ok[in_range], upper_limits[in_range] - plot_y[in_range], np.inf)
+                margin_l = np.where(l_ok[in_range], plot_y[in_range] - lower_limits[in_range], np.inf)
+                margins = np.minimum(margin_u, margin_l)
+                margins = margins[np.isfinite(margins)]
+                if margins.size > 0:
+                    deviation = float(np.min(margins))
+
+        return out_mask, round(deviation, 2), is_ok
+
+    @staticmethod
+    def plot_out_segments(
+        plot_widget,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        out_mask: np.ndarray,
+        pen_color: str = "r",
+        pen_width: int = 2,
+    ):
+        """
+        Plot out-of-limit segments (used by all 4 functions).
+
+        Uses NaN separation + single plot call for performance.
+
+        Args:
+            plot_widget: pyqtgraph plot widget
+            x_data: X coordinate array
+            y_data: Y coordinate array
+            out_mask: Out-of-limit mask (True = out of limit)
+            pen_color: Pen color
+            pen_width: Pen width
+        """
+        if not np.any(out_mask):
+            return
+
+        # Vectorized find start/end indices of out-of-limit segments
+        out_int = out_mask.astype(np.int8)
+        diff = np.diff(np.concatenate([[0], out_int, [0]]))
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+
+        # Use NaN to separate segments
+        out_x_all, out_y_all = [], []
+        for s, e in zip(starts, ends):
+            out_x_all.extend(x_data[s:e].tolist())
+            out_x_all.append(np.nan)
+            out_y_all.extend(y_data[s:e].tolist())
+            out_y_all.append(np.nan)
+
+        if out_x_all:
+            plot_widget.plot(
+                np.array(out_x_all[:-1]),
+                np.array(out_y_all[:-1]),
+                pen=mkPen(color=pen_color, width=pen_width),
+                connect="finite",
+            )
+
+    @staticmethod
+    def setup_limit_plot(
+        plot_widget,
+        data_x: np.ndarray,
+        data_y: np.ndarray,
+        csv_x: np.ndarray,
+        csv_upper: np.ndarray,
+        csv_lower: np.ndarray,
+        x_label: str = "X",
+        y_label: str = "Y",
+        log_x: bool = False,
+        curve_color: tuple = (51, 196, 77),
+        curve_width: int = 2,
+        curve_name: str = None,
+    ):
+        """
+        Common plot setup function (used by all 4 functions).
+
+        Includes: clear canvas, draw main curve, draw limit curves, set axes, show grid.
+
+        Args:
+            plot_widget: pyqtgraph plot widget
+            data_x: Main curve X coordinates
+            data_y: Main curve Y coordinates
+            csv_x: Limit curve X coordinates
+            csv_upper: Upper limit values
+            csv_lower: Lower limit values
+            x_label: X axis label
+            y_label: Y axis label
+            log_x: Whether to use logarithmic X axis
+            curve_color: Main curve color, default green (51, 196, 77)
+            curve_width: Main curve width
+            curve_name: Main curve name (optional, THD uses "THD")
+        """
+        plot_widget.clear()
+
+        # 1. Draw main curve (supports name parameter for legend)
+        plot_widget.plot(data_x, data_y, pen=mkPen(color=curve_color, width=curve_width), name=curve_name)
+
+        # 2. Draw limit curves (purple dashed)
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
+        plot_widget.plot(csv_x, csv_upper, pen=dashed_pen)
+        plot_widget.plot(csv_x, csv_lower, pen=dashed_pen)
+
+        # 3. Set axis labels
+        plot_widget.setLabel("left", y_label)
+        plot_widget.setLabel("bottom", x_label)
+
+        # 4. Set log scale (frequency domain uses it, time domain does not)
+        plot_widget.setLogMode(x=log_x, y=False)
+
+        # 5. Show grid
+        plot_widget.showGrid(x=True, y=True)
+
+    @staticmethod
+    def check_interp_limits(
+        data_x: np.ndarray,
+        data_y: np.ndarray,
+        csv_x: np.ndarray,
+        csv_upper: np.ndarray,
+        csv_lower: np.ndarray,
+    ) -> tuple:
+        """
+        Complete interpolation limit check (used by SPLF and FR).
+
+        Args:
+            data_x: Original data X (frequency)
+            data_y: Original data Y (SPL/FR values)
+            csv_x: CSV frequency list
+            csv_upper: CSV upper limit list
+            csv_lower: CSV lower limit list
+
+        Returns:
+            out_mask: Out-of-limit mask
+            plot_x: X for plotting (= csv_x)
+            plot_y: Y for plotting (= interpolated values)
+            deviation: Deviation value
+            is_ok: Whether all points are within limits
+        """
+        # === 1. Preprocessing ===
+        mask = np.isfinite(data_x) & np.isfinite(data_y) & (data_x > 0)
+        freq = data_x[mask]
+        mag = data_y[mask]
+
+        if freq.size < 2:
+            return (
+                np.zeros(len(csv_x), dtype=bool),
+                csv_x,
+                np.full(len(csv_x), np.nan),
+                0.0,
+                True,
+            )
+
+        sort_idx = np.argsort(freq)
+        freq, mag = freq[sort_idx], mag[sort_idx]
+        freq, unique_idx = np.unique(freq, return_index=True)
+        mag = mag[unique_idx]
+
+        # === 2. Interpolation ===
+        in_band = (csv_x >= freq.min()) & (csv_x <= freq.max())
+        interp = np.full(csv_x.shape, np.nan)
+        if np.any(in_band):
+            interp[in_band] = np.interp(csv_x[in_band], freq, mag)
+
+        # === 3. Compare using common function ===
+        out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+            interp, csv_upper, csv_lower, valid_mask=in_band
+        )
+
+        return out_mask, csv_x, interp, deviation, is_ok
 
 
 if __name__ == "__main__":

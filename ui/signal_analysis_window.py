@@ -41,7 +41,7 @@ from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.graph_widget import plot_2d_image, custom_log_tick_strings
+from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
 
 
 def get_class_mapping():
@@ -380,9 +380,48 @@ class Distortion(AnalysisGraphWidget):
         return self.result
 
     def plot_graph(self, freq_value, thd, analysis_config=None):
-        """Draw a graph based on the calculated THD with optional threshold limits."""
+        """
+        绑制 THD 曲线，支持可选的阈值限制。
+
+        重构说明：
+        - 有限制配置时：使用公共函数 setup_limit_plot() 统一绑图设置
+        - 无限制配置时：保持原有逻辑（只绘制主曲线）
+        - 超限段绘制：使用公共函数 plot_out_segments()
+
+        Args:
+            freq_value: 频率数组
+            thd: THD 值数组
+            analysis_config: 分析配置（可选，包含限制数据）
+        """
+        # Validate data
+        valid_data = self.check_valid_data(freq_value) and self.check_valid_data(thd)
+
+        # === With limit config: use setup_limit_plot() ===
+        if analysis_config and analysis_config.get("limit_checked"):
+            result = analysis_config.get("limit_data")
+            if result and valid_data:
+                csv_freq_list, csv_upper_list, csv_lower_list = result
+                # Use common function for plot setup
+                LimitPlotUtils.setup_limit_plot(
+                    self.analysis_plot,
+                    freq_value, thd,
+                    csv_freq_list, csv_upper_list, csv_lower_list,
+                    x_label="Frequency (Hz)",
+                    y_label="Distortion(%)",
+                    log_x=True,
+                    curve_color="b",      # THD uses blue color
+                    curve_name="THD",     # THD specific curve name
+                )
+                # THD specific title
+                if self.selected_label is not None:
+                    self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
+                # Highlight out-of-limit segments
+                self._highlight_out_of_range_curve(freq_value, thd, csv_freq_list, csv_upper_list, csv_lower_list)
+                return
+
+        # === Without limit config: original logic ===
         self.analysis_plot.clear()
-        if self.check_valid_data(freq_value) and self.check_valid_data(thd):
+        if valid_data:
             self.analysis_plot.plot(freq_value, thd, pen=mkPen(color="b", width=2), name="THD")
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
@@ -391,30 +430,22 @@ class Distortion(AnalysisGraphWidget):
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
 
-        # Apply threshold limits if configured
-        if analysis_config and analysis_config.get("limit_checked"):
-            self._apply_threshold_limits(freq_value, thd, analysis_config)
-
-    def _apply_threshold_limits(self, freq_value, y_data, analysis_config):
-        """Apply and plot threshold limits based on configuration."""
-        if not self.check_valid_data(freq_value) or not self.check_valid_data(y_data):
-            return
-
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
-
-        result = analysis_config.get("limit_data")
-        if result:
-            csv_freq_list, csv_upper_list, csv_lower_list = result
-            self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
-            self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
-            # Highlight out-of-range points
-            self._highlight_out_of_range_curve(freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list)
-
     def _highlight_out_of_range_curve(self, freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list):
-        """Highlight data points that exceed curve threshold limits."""
-        out_range_points = []
-        current_out_range = []
+        """
+        Highlight out-of-limit segments in THD curve.
 
+        Note:
+        - Matching logic: kept here (nearest neighbor + index boundary filter)
+        - Deviation calculation: kept here (THD has special logic for compatibility)
+        - Out-of-limit plotting: uses LimitPlotUtils.plot_out_segments()
+
+        Args:
+            freq_value: Frequency array
+            y_data: THD value array
+            csv_freq_list: CSV frequency list
+            csv_upper_list: Upper limit list
+            csv_lower_list: Lower limit list
+        """
         freq_arr = np.asarray(freq_value)
         y_arr = np.asarray(y_data)
         csv_freq_arr = np.asarray(csv_freq_list)
@@ -423,17 +454,21 @@ class Distortion(AnalysisGraphWidget):
         min_csv_freq = min(csv_freq_list)
         freq_arr_capacity = freq_arr.size
 
+        # === 1. THD specific matching and deviation calculation ===
+        # Note: original logic retained due to THD's special deviation requirements
         deviation: float = 0.0
         no_deviation_flag = True
+        out_mask = np.zeros(freq_arr_capacity, dtype=bool)
 
         for i, f in enumerate(freq_arr):
-            # Find nearest CSV frequency
+            # Find nearest CSV frequency point
             table_index = int(np.argmin(np.abs(csv_freq_arr - f)))
             if (i + 1) != freq_arr_capacity:
                 next_table_index = int(np.argmin(np.abs(csv_freq_arr - freq_arr[i + 1])))
             else:
                 next_table_index = table_index
 
+            # Index boundary filter: skip if current and next point map to same boundary index
             if f < min_csv_freq and table_index == next_table_index:
                 continue
             if f > max_csv_freq and table_index == next_table_index:
@@ -457,28 +492,20 @@ class Distortion(AnalysisGraphWidget):
                 deviation = max(deviation, abs(y_arr[i] - lower_val))
                 is_out = True
 
-            if is_out:
-                current_out_range.append((freq_arr[i], y_arr[i]))
-            else:
-                if current_out_range:
-                    out_range_points.append(current_out_range)
-                    current_out_range = []
-                if no_deviation_flag:
-                    deviation_value = min(min(np.abs(y_arr - upper_val)), min(np.abs(y_arr - lower_val)))
-                    deviation = min(deviation, deviation_value)
-        if current_out_range:
-            out_range_points.append(current_out_range)
-        deviation = round(deviation, 2)
-        if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
-        else:
-            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
+            out_mask[i] = is_out
 
-        for points in out_range_points:
-            x = [p[0] for p in points]
-            y = [p[1] for p in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen=mkPen(color="r", width=2))
-            self.analysis_plot.addItem(out_range_plot)
+            if not is_out and no_deviation_flag:
+                # THD special logic: calculate distance using current point's limits
+                deviation_value = min(min(np.abs(y_arr - upper_val)), min(np.abs(y_arr - lower_val)))
+                deviation = min(deviation, deviation_value) if deviation > 0 else deviation_value
+
+        # === 2. Save result ===
+        deviation = round(deviation, 2)
+        is_ok = not np.any(out_mask)
+        self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+
+        # === 3. Plot out-of-limit segments using LimitPlotUtils ===
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, freq_arr, y_arr, out_mask)
 
     @staticmethod
     def check_valid_data(data):
@@ -734,66 +761,65 @@ class Spl(AnalysisGraphWidget):
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
-        self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
+        """
+        Plot SPL time-domain curve and highlight out-of-limit segments.
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
+        Note:
+        - Uses LimitPlotUtils.setup_limit_plot() for canvas, curves, and axis setup
+        - Matching logic: kept here (nearest neighbor + time threshold, SPL specific)
+        - Limit comparison: uses LimitPlotUtils.compare_with_limits()
+        - Out-of-limit plotting: uses LimitPlotUtils.plot_out_segments()
 
-        self.analysis_plot.plot(csv_time_list, csv_upper_list, pen=dashed_pen)
-        self.analysis_plot.plot(csv_time_list, csv_lower_list, pen=dashed_pen)
+        Args:
+            signal_duration: Time axis array
+            signal_spl: SPL value array
+            csv_time_list: CSV time point list
+            csv_upper_list: Upper limit list
+            csv_lower_list: Lower limit list
+        """
+        # === 1. Common plot setup (clear, draw main curve and limit curves, set axes) ===
+        # Note: SPL time-domain uses linear scale (log_x=False), Y label is dynamic
+        LimitPlotUtils.setup_limit_plot(
+            self.analysis_plot,
+            signal_duration, signal_spl,
+            csv_time_list, csv_upper_list, csv_lower_list,
+            x_label="Time (s)",
+            y_label=self._get_spl_label(),
+            log_x=False,
+        )
 
-        self.analysis_plot.setLabel("left", self._get_spl_label())
-        self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
-        out_range_points = []
-        current_out_range = []
-        max_time_diff = 0.01  # 10 ms
+        # === 2. Matching: nearest neighbor + time threshold filter (SPL specific) ===
+        max_time_diff = 0.01  # 10 ms threshold
+        sig_t = np.asarray(signal_duration, dtype=float)
+        sig_spl = np.asarray(signal_spl, dtype=float)
+        csv_t = np.asarray(csv_time_list, dtype=float)
+        csv_u = np.asarray(csv_upper_list, dtype=float)
+        csv_l = np.asarray(csv_lower_list, dtype=float)
 
-        deviation: float = 0.0
-        no_deviation_flag = True
+        # Use searchsorted for vectorized nearest index lookup (O(N*logM) instead of O(N*M))
+        insert_idx = np.searchsorted(csv_t, sig_t)
+        insert_idx = np.clip(insert_idx, 0, len(csv_t) - 1)
+        left_idx = np.clip(insert_idx - 1, 0, len(csv_t) - 1)
+        dist_right = np.abs(csv_t[insert_idx] - sig_t)
+        dist_left = np.abs(csv_t[left_idx] - sig_t)
+        nearest_idx = np.where(dist_left < dist_right, left_idx, insert_idx)
 
-        for index, i in enumerate(signal_duration):
-            table_index = int(np.argmin(np.abs(csv_time_list - i)))
-            nearest_time = csv_time_list[table_index]
-            if abs(nearest_time - i) > max_time_diff:
-                if current_out_range:
-                    out_range_points.append(current_out_range)
-                    current_out_range = []
-                continue
-            if signal_spl[index] > csv_upper_list[table_index] or signal_spl[index] < csv_lower_list[table_index]:
-                current_out_range.append((signal_duration[index], signal_spl[index]))
-                if no_deviation_flag:
-                    deviation = 0.0
-                    no_deviation_flag = False
-                deviation = max(
-                    deviation,
-                    signal_spl[index] - csv_upper_list[table_index],
-                    csv_lower_list[table_index] - signal_spl[index],
-                )
-            else:
-                if current_out_range:
-                    out_range_points.append(current_out_range)
-                    current_out_range = []
-                if no_deviation_flag:
-                    deviation = min(
-                        deviation,
-                        csv_upper_list[table_index] - signal_spl[index],
-                        signal_spl[index] - csv_lower_list[table_index],
-                    )
-        if current_out_range:
-            out_range_points.append(current_out_range)
+        # Time threshold filter: points exceeding threshold are invalid
+        nearest_time = csv_t[nearest_idx]
+        valid_mask = np.abs(nearest_time - sig_t) <= max_time_diff
 
-        deviation = round(deviation, 2)
-        if out_range_points:
-            self.data_struct.analysis_result_dict[self.title_name] = (False, deviation)
-        else:
-            self.data_struct.analysis_result_dict[self.title_name] = (True, deviation)
+        # Get upper/lower limits for each signal point
+        upper_at = csv_u[nearest_idx]
+        lower_at = csv_l[nearest_idx]
 
-        for points in out_range_points:
-            x = [point[0] for point in points]
-            y = [point[1] for point in points]
-            out_range_plot = pg.PlotDataItem(x, y, pen=mkPen(color="r", width=2))
-            self.analysis_plot.addItem(out_range_plot)
+        # === 5. Limit comparison using LimitPlotUtils ===
+        out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(sig_spl, upper_at, lower_at, valid_mask)
+
+        # === 6. Save result ===
+        self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+
+        # === 7. Plot out-of-limit segments using LimitPlotUtils ===
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, sig_t, sig_spl, out_mask)
 
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
@@ -921,86 +947,48 @@ class SplFrequency(AnalysisGraphWidget):
         return self.result
 
     def plot_spl_frequency_with_limits(self, frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list):
-        self.analysis_plot.clear()
-        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77), width=2))
+        """
+        Plot SPLF (SPL-Frequency) curve and highlight out-of-limit segments.
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
-        self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
-        self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
+        Note:
+        - Uses LimitPlotUtils.setup_limit_plot() for canvas, curves, and axis setup
+        - Uses LimitPlotUtils.check_interp_limits() for interpolation and limit check
+        - Uses LimitPlotUtils.plot_out_segments() for out-of-limit plotting
 
-        # Mark out-of-range points on the CSV frequency grid (interpolated from measured curve).
-        is_ok = True
-        deviation = 0.0
+        Args:
+            frequency_list: Frequency array
+            spl_db: SPL value array
+            csv_freq_list: CSV frequency list
+            csv_upper_list: Upper limit list
+            csv_lower_list: Lower limit list
+        """
+        # === 1. Common plot setup (clear, draw main curve and limit curves, set axes) ===
+        LimitPlotUtils.setup_limit_plot(
+            self.analysis_plot,
+            frequency_list, spl_db,
+            csv_freq_list, csv_upper_list, csv_lower_list,
+            x_label="Frequency (Hz)",
+            y_label="SPL (dB)",
+            log_x=True,
+        )
+
+        # === 2. Limit check using LimitPlotUtils ===
         try:
-            freq = np.asarray(frequency_list, dtype=float)
-            spl = np.asarray(spl_db, dtype=float)
-            mask = np.isfinite(freq) & np.isfinite(spl) & (freq > 0.0)
-            freq = freq[mask]
-            spl = spl[mask]
-            sort_idx = np.argsort(freq)
-            freq = freq[sort_idx]
-            spl = spl[sort_idx]
-            freq, unique_idx = np.unique(freq, return_index=True)
-            spl = spl[unique_idx]
-
-            csv_f = np.asarray(csv_freq_list, dtype=float)
-            csv_u = np.asarray(csv_upper_list, dtype=float)
-            csv_l = np.asarray(csv_lower_list, dtype=float)
-            if freq.size > 1 and csv_f.size > 0:
-                in_band = (csv_f >= float(np.min(freq))) & (csv_f <= float(np.max(freq)))
-                interp = np.full(csv_f.shape, np.nan, dtype=np.float64)
-                if np.any(in_band):
-                    interp[in_band] = np.interp(csv_f[in_band], freq, spl)
-                u_ok = np.isfinite(csv_u)
-                l_ok = np.isfinite(csv_l)
-                out = in_band & ((u_ok & (interp > csv_u)) | (l_ok & (interp < csv_l)))
-                if np.any(out):
-                    start = None
-                    for idx, is_out in enumerate(out):
-                        if is_out and start is None:
-                            start = idx
-                        elif (not is_out) and start is not None:
-                            self.analysis_plot.addItem(
-                                pg.PlotDataItem(
-                                    csv_f[start:idx],
-                                    interp[start:idx],
-                                    pen=mkPen(color="r", width=2),
-                                )
-                            )
-                            start = None
-                    if start is not None:
-                        self.analysis_plot.addItem(
-                            pg.PlotDataItem(
-                                csv_f[start:],
-                                interp[start:],
-                                pen=mkPen(color="r", width=2),
-                            )
-                        )
-
-                    dev_upper = np.where(out & u_ok, interp - csv_u, 0.0)
-                    dev_lower = np.where(out & l_ok, csv_l - interp, 0.0)
-                    deviation = float(np.nanmax(np.maximum(dev_upper, dev_lower)))
-                    is_ok = False
-                else:
-                    margins = []
-                    if np.any(in_band & u_ok):
-                        margins.append(csv_u[in_band & u_ok] - interp[in_band & u_ok])
-                    if np.any(in_band & l_ok):
-                        margins.append(interp[in_band & l_ok] - csv_l[in_band & l_ok])
-                    if margins:
-                        deviation = float(np.nanmin(np.concatenate(margins)))
-                    is_ok = True
+            out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
+                np.asarray(frequency_list, dtype=float),
+                np.asarray(spl_db, dtype=float),
+                np.asarray(csv_freq_list, dtype=float),
+                np.asarray(csv_upper_list, dtype=float),
+                np.asarray(csv_lower_list, dtype=float),
+            )
         except Exception:
-            is_ok = False
-            deviation = 0.0
+            is_ok, deviation = False, 0.0
+            out_mask = np.zeros(len(csv_freq_list), dtype=bool)
+            plot_x, plot_y = np.asarray(csv_freq_list), np.full(len(csv_freq_list), np.nan)
 
-        deviation = round(float(deviation), 2)
+        # === 3. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
-
-        self.analysis_plot.setLabel("left", "SPL (dB)")
-        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
-        self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
     def plot_spl_frequency(self, frequency_list, spl_db):
         self.analysis_plot.clear()
@@ -1221,96 +1209,50 @@ class Frequency(AnalysisGraphWidget):
 
     def plot_fr_with_limits(self, frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list):
         """
-        Parameters:
-        - frequency_list : Array of test frequencies (X-axis).
-        - fr             : Raw FR data (Y-axis).
-        - csv_freq_list  : Frequency list defined in the CSV file.
-        - csv_upper_list : Corresponding upper limits (may contain NaN).
-        - csv_lower_list : Corresponding lower limits (may contain NaN).
+        Plot Frequency Response (FR) curve and highlight out-of-limit segments.
+
+        Note:
+        - Uses LimitPlotUtils.setup_limit_plot() for canvas, curves, and axis setup
+        - Uses LimitPlotUtils.check_interp_limits() for interpolation and limit check
+        - Uses LimitPlotUtils.plot_out_segments() for out-of-limit plotting
+
+        Args:
+            frequency_list: Frequency array
+            fr: Frequency response value array
+            csv_freq_list: CSV frequency list
+            csv_upper_list: Upper limit list
+            csv_lower_list: Lower limit list
         """
-        self.analysis_plot.clear()
         # fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
         fr_disp = fr
-        self.analysis_plot.plot(frequency_list, fr_disp, pen=mkPen(color=(51, 196, 77), width=2))
 
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
+        # === 1. Common plot setup (clear, draw main curve and limit curves, set axes) ===
+        LimitPlotUtils.setup_limit_plot(
+            self.analysis_plot,
+            frequency_list, fr_disp,
+            csv_freq_list, csv_upper_list, csv_lower_list,
+            x_label="Frequency (Hz)",
+            y_label="Amplitude (dB)",
+            log_x=True,
+        )
 
-        self.analysis_plot.plot(csv_freq_list, csv_upper_list, pen=dashed_pen)
-        self.analysis_plot.plot(csv_freq_list, csv_lower_list, pen=dashed_pen)
-
-        self.analysis_plot.setLabel("left", "Amplitude (dB)")
-        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
-        self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
-
-        # Mark out-of-range points on the CSV frequency grid (interpolated from measured curve).
-        is_ok = True
-        deviation = 0.0
+        # === 2. Limit check using LimitPlotUtils ===
         try:
-            freq = np.asarray(frequency_list, dtype=float)
-            mag = np.asarray(fr_disp, dtype=float)
-            mask = np.isfinite(freq) & np.isfinite(mag) & (freq > 0.0)
-            freq = freq[mask]
-            mag = mag[mask]
-            sort_idx = np.argsort(freq)
-            freq = freq[sort_idx]
-            mag = mag[sort_idx]
-            freq, unique_idx = np.unique(freq, return_index=True)
-            mag = mag[unique_idx]
-
-            csv_f = np.asarray(csv_freq_list, dtype=float)
-            csv_u = np.asarray(csv_upper_list, dtype=float)
-            csv_l = np.asarray(csv_lower_list, dtype=float)
-            if freq.size > 1 and csv_f.size > 0:
-                in_band = (csv_f >= float(np.min(freq))) & (csv_f <= float(np.max(freq)))
-                interp = np.full(csv_f.shape, np.nan, dtype=np.float64)
-                if np.any(in_band):
-                    interp[in_band] = np.interp(csv_f[in_band], freq, mag)
-                u_ok = np.isfinite(csv_u)
-                l_ok = np.isfinite(csv_l)
-                out = in_band & ((u_ok & (interp > csv_u)) | (l_ok & (interp < csv_l)))
-                if np.any(out):
-                    start = None
-                    for idx, is_out in enumerate(out):
-                        if is_out and start is None:
-                            start = idx
-                        elif (not is_out) and start is not None:
-                            self.analysis_plot.addItem(
-                                pg.PlotDataItem(
-                                    csv_f[start:idx],
-                                    interp[start:idx],
-                                    pen=mkPen(color="r", width=2),
-                                )
-                            )
-                            start = None
-                    if start is not None:
-                        self.analysis_plot.addItem(
-                            pg.PlotDataItem(
-                                csv_f[start:],
-                                interp[start:],
-                                pen=mkPen(color="r", width=2),
-                            )
-                        )
-
-                    dev_upper = np.where(out & u_ok, interp - csv_u, 0.0)
-                    dev_lower = np.where(out & l_ok, csv_l - interp, 0.0)
-                    deviation = float(np.nanmax(np.maximum(dev_upper, dev_lower)))
-                    is_ok = False
-                else:
-                    margins = []
-                    if np.any(in_band & u_ok):
-                        margins.append(csv_u[in_band & u_ok] - interp[in_band & u_ok])
-                    if np.any(in_band & l_ok):
-                        margins.append(interp[in_band & l_ok] - csv_l[in_band & l_ok])
-                    if margins:
-                        deviation = float(np.nanmin(np.concatenate(margins)))
-                    is_ok = True
+            out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
+                np.asarray(frequency_list, dtype=float),
+                np.asarray(fr_disp, dtype=float),
+                np.asarray(csv_freq_list, dtype=float),
+                np.asarray(csv_upper_list, dtype=float),
+                np.asarray(csv_lower_list, dtype=float),
+            )
         except Exception:
-            is_ok = False
-            deviation = 0.0
+            is_ok, deviation = False, 0.0
+            out_mask = np.zeros(len(csv_freq_list), dtype=bool)
+            plot_x, plot_y = np.asarray(csv_freq_list), np.full(len(csv_freq_list), np.nan)
 
-        deviation = round(float(deviation), 2)
+        # === 3. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
     def plot_fr(self, frequency_list, fr):
         self.analysis_plot.clear()
