@@ -298,6 +298,28 @@ class AnalysisModelSelect(QDialog):
         detail = getattr(seq, "detail", None) or {}
         data_struct = self.select_list.data_struct
 
+        # 录音前预检查：未勾选“使用黄金样本”的分析项则直接提示，避免白录一遍
+        analysis_cfg = getattr(seq, "analysis_list", {}) or {}
+        item_sort_list = analysis_cfg.get("display_sequence", [])
+        if not item_sort_list:
+            QMessageBox.warning(self, "提示", "当前序列没有可分析项目")
+            return
+        has_any_golden_checked = False
+        for key in item_sort_list:
+            key_config = analysis_cfg.get(key)
+            if not isinstance(key_config, dict):
+                continue
+            if not key_config.get("golden_sample_checked", False):
+                continue
+            item_type = key_config.get("type")
+            if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
+                continue
+            has_any_golden_checked = True
+            break
+        if not has_any_golden_checked:
+            QMessageBox.warning(self, "提示", "没有勾选任何“使用黄金样本”的分析项")
+            return
+
         try:
             # Ensure stimulus data is loaded/generated into DataDealStruct
             self.set_data_struct_stimulus_signal(
@@ -342,12 +364,6 @@ class AnalysisModelSelect(QDialog):
             data_struct.store_wave_data = aligned_data
         except Exception as e:
             QMessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
-            return
-
-        analysis_cfg = getattr(seq, "analysis_list", {}) or {}
-        item_sort_list = analysis_cfg.get("display_sequence", [])
-        if not item_sort_list:
-            QMessageBox.warning(self, "提示", "当前序列没有可分析项目")
             return
 
         # Collect only checked items
@@ -397,10 +413,6 @@ class AnalysisModelSelect(QDialog):
                 )
                 continue
 
-        if not items_out:
-            QMessageBox.warning(self, "提示", "没有勾选任何“使用黄金样本”的分析项")
-            return
-
         default_json_path = os.path.join(
             golden_dir, f"golden_baseline_{ts}.json"
         ).replace("\\", "/")
@@ -430,9 +442,6 @@ class AnalysisModelSelect(QDialog):
 
         # Store path into sequence analysis config; persisted when user clicks 保存/确定
         analysis_cfg["golden_sample_result_path"] = json_path.replace("\\", "/")
-        QMessageBox.information(
-            self, "提示", "黄金样本录制与分析完成（请点击“确定”保存到配置文件）"
-        )
 
     def load_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(
