@@ -24,6 +24,7 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.stimulus_resolver import (
     set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal,
 )
@@ -376,6 +377,7 @@ class AnalysisModelSelect(QDialog):
 
                 instance = cls_map(key)
                 instance.analysis_config = params
+                instance.v2pa_factor = get_mic_v2pa_factor()
 
                 result = None
                 if hasattr(instance, "calculate_spl"):
