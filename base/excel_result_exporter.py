@@ -642,15 +642,21 @@ def _extract_curve_xy(result: dict[str, Any]) -> tuple[list[Any], list[Any]] | N
         return None
 
     candidates = [
+        ("frequency_list", "fr_raw"),
         ("frequency_list", "fr"),
+        ("frequency_list", "spl_db_raw"),
         ("frequency_list", "spl_db"),
+        ("freq_value", "thd_raw"),
         ("freq_value", "thd"),
+        ("signal_duration", "signal_spl_raw"),
         ("signal_duration", "signal_spl"),
     ]
     for xk, yk in candidates:
         if xk in result and yk in result:
-            x = result.get(xk) or []
-            y = result.get(yk) or []
+            x = result.get(xk)
+            y = result.get(yk)
+            if x is None or y is None:
+                continue
             if isinstance(x, np.ndarray):
                 x = x.tolist()
             if isinstance(y, np.ndarray):
