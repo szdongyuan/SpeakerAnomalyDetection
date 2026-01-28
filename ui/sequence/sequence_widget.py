@@ -10,7 +10,7 @@ import librosa
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog, QLineEdit
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
@@ -23,6 +23,7 @@ from base.excel_result_exporter import (
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.unified_hid_device_manager import UnifiedHardwareManager
+from PyQt5.QtCore import QMetaObject
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
@@ -34,7 +35,7 @@ from base.play_and_record import (
     stream_record_without_play,
 )
 from base.recording_management import RecordingManager
-from base.save_data import save_recorded_data_to_json, save_audio_simple
+from base.save_data import ensure_test_result_file, save_recorded_data_to_json, save_audio_simple
 from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
@@ -53,6 +54,7 @@ from ui.tcp_config_dialog import TcpConfigDialog
 
 class SequenceWindow(QWidget):
     tcp_server = None
+    _active_instance_ref = None
 
     def __init__(self):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
@@ -89,6 +91,7 @@ class SequenceWindow(QWidget):
 
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
+        self._refresh_test_mode_availability()
         self.player_status_flag = False
         self.recorded_signal_info = {}
         self.ip_format = True
@@ -198,19 +201,12 @@ class SequenceWindow(QWidget):
 
         self.setLayout(sequence_layout)
 
-        sign.run_test_sign.connect(self.start_this_play, Qt.AutoConnection)
-        sign.get_result_file_sign.connect(self.connect_get_result_file_sign, Qt.AutoConnection)
-        sign.set_result_file_sign.connect(self.connect_set_result_file_sign, Qt.AutoConnection)
         # When test-queue config is confirmed, refresh combobox + reload config first.
-        sign.update_mode_display_sign.connect(self.on_sequence_config_updated, Qt.AutoConnection)
-        sign.update_mode_display_sign.connect(self.del_geometry_config, Qt.AutoConnection)
-        sign.test_insert_data_into_db_sign.connect(self.update_recorded_label_in_test_mode, Qt.AutoConnection)
-        # sign.update_mode_display_sign.connect(self.update_mode_display, Qt.AutoConnection)
-        sign.update_mode_display_sign.connect(self.count_board.on_test_btn_clicked, Qt.AutoConnection)
+        # (No global signal dependency; MainWindow calls on_sequence_config_updated after dialog closes.)
         # Streaming audio chunk signal for real-time waveform updates
         sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
-        # self.update_mode_display(0)
-        self.count_board.on_test_btn_clicked
+        # Register this instance as current target for TCP callbacks
+        SequenceWindow._active_instance_ref = weakref.ref(self)
         self.setStyleSheet(
             ui_style_const.qcombobox_style
             + ui_style_const.qpushbutton_style
@@ -219,6 +215,14 @@ class SequenceWindow(QWidget):
             + ui_style_const.qlabel_style
             + ui_style_const.qcheckbox_style
         )
+
+    @pyqtSlot(str)
+    def _tcp_run_test(self, label: str = "not_labeled"):
+        """
+        TCP 回调线程通过 QueuedConnection 投递到 Qt 主线程的入口。
+        直接调用 start_this_play 可能发生跨线程 UI 操作风险，因此统一走这里。
+        """
+        self.start_this_play(label)
 
     def on_sequence_config_updated(self, *_):
         """
@@ -234,23 +238,76 @@ class SequenceWindow(QWidget):
             self.init_fft_and_stft_flag()
             if self.count_board:
                 self.count_board.analysis_config = self.analysis_config
+                self._refresh_test_mode_availability()
         except Exception as e:
             self.default_logger.warning(f"Failed to refresh sequence config after update: {e}")
+
+    def _refresh_test_mode_availability(self):
+        """
+        Enable/disable test mode based on whether current config can output OK/NG.
+        """
+        try:
+            can_output, reason = self._can_output_ok_ng()
+            print(f"can_output: {can_output}, reason: {reason}")
+            if self.count_board:
+                # Keep UX consistent: disable test if not eligible
+                self.count_board.set_test_available(bool(can_output), reason or "")
+        except Exception:
+            if self.count_board:
+                self.count_board.set_test_available(False, "无法判定是否具备OK/NG输出能力")
 
     def update_v2pa_factor(self):
         self.v2pa_factor = get_mic_v2pa_factor()
 
-    def connect_set_result_file_sign(self, index, label, model_name):
-        if self.count_board.mode == "test":
-            self.count_board.set_test_result_file(label, model_name)
-        else:
-            self.count_board.set_mark_result_file(label)
+    def _summarize_ok_ng(self):
+        """
+        Summarize DataDealStruct.analysis_result_dict into overall OK/NG.
+        Rule: all items OK -> OK; otherwise NG.
+        """
+        result_dict = getattr(self.data_struct, "analysis_result_dict", None)
+        if not isinstance(result_dict, dict) or len(result_dict) == 0:
+            return False, "NG"
+        passed = True
+        for _, v in result_dict.items():
+            try:
+                ok = bool(v[0])
+            except Exception:
+                ok = False
+            if not ok:
+                passed = False
+                break
+        return passed, ("OK" if passed else "NG")
 
-    def connect_get_result_file_sign(self):
-        if self.count_board.mode == "test":
-            self.count_board.set_test_text()
-        else:
-            self.count_board.set_mark_text()
+    def _can_output_ok_ng(self):
+        """
+        Decide whether current analysis_config is expected to produce OK/NG output.
+
+        We rely on analysis_result_dict being written by a subset of analysis widgets:
+        - AI always writes (label + deviation)
+        - SPL/SPLF/FR/HD/RB/PRB write only when threshold/compare (limit or golden) is enabled.
+        """
+        cfg = self.analysis_config or {}
+        seq = cfg.get("display_sequence") or []
+        if not isinstance(seq, list) or len(seq) == 0:
+            return False, "当前配置未选择任何分析项"
+
+        candidates = []
+        for key in seq:
+            item_cfg = cfg.get(key)
+            if not isinstance(item_cfg, dict):
+                continue
+            t = item_cfg.get("type")
+            if t == "AI":
+                candidates.append(key)
+                continue
+            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB"):
+                if item_cfg.get("limit_checked"):
+                    candidates.append(key)
+
+        if candidates:
+            return True, ""
+        return False, "当前配置未启用阈值对比，无法产出OK/NG"
+
 
     def set_member_connect(self):
         self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
@@ -388,14 +445,21 @@ class SequenceWindow(QWidget):
 
     def init_result_files(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
-        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        test_result_template = (
-            f"total: 0\n" f"ok: 0\n" f"ng: 0\n" f"ok_percent: 0\n" f"current_model: xxx\n" f"datatime: {current_time}\n"
-        )
-        if not os.path.exists(test_result_path):
-            os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
-            with open(test_result_path, "w") as f:
-                f.write(test_result_template)
+        # Ensure daily test result file exists (no model field).
+        try:
+            ensure_test_result_file(self.analysis_config or {})
+        except Exception:
+            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
+            if not os.path.exists(test_result_path):
+                os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
+                with open(test_result_path, "w") as f:
+                    f.write(
+                        f"total: 0\n"
+                        f"ok: 0\n"
+                        f"ng: 0\n"
+                        f"ok_percent: 0%\n"
+                        f"datatime: {current_time}\n"
+                    )
 
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
         mark_result_template = {"total": 0, "ok": 0, "ng": 0, "not_labels": 0, "datatime": current_time}
@@ -790,8 +854,38 @@ class SequenceWindow(QWidget):
             SequenceWindow.tcp_server.request_id = request_id
         # allocating task
         if request_type == RequestTypeEnum.RUN_TEST.value:
-            label = request_content.get("Label", "not_labeled")
-            sign.run_test_sign.emit(label)
+            # 兼容多种客户端字段命名：
+            # - 老客户端: Label
+            # - 示例文档: label
+            # - 现场常见: Action(例如 ScanBarcode)
+            label = (
+                request_content.get("Label")
+                or request_content.get("label")
+                or request_content.get("Action")
+                or "not_labeled"
+            )
+            # Dispatch to current SequenceWindow instance in Qt main thread
+            try:
+                ref = getattr(SequenceWindow, "_active_instance_ref", None)
+                inst = ref() if callable(ref) else None
+            except Exception:
+                inst = None
+            if inst is None:
+                try:
+                    LogManager.set_log_handler("core").warning(
+                        "TCP RUN_TEST received, but no active SequenceWindow instance is available."
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    # 必须用 QueuedConnection 投递到 inst 所在线程（Qt 主线程），避免跨线程 UI 调用
+                    QMetaObject.invokeMethod(inst, "_tcp_run_test", Qt.QueuedConnection, Q_ARG(str, str(label)))
+                except Exception as e:
+                    try:
+                        LogManager.set_log_handler("core").error(f"TCP dispatch RUN_TEST failed: {e}")
+                    except Exception:
+                        pass
         return "ok"
 
     def on_tcp_btn_clicked(self):
@@ -872,27 +966,32 @@ class SequenceWindow(QWidget):
 
     def update_audio_label_info(self):
         button = self.sender()
-        if button == self.count_board.ok_btn or self.default_ai_result:
+        if button == self.count_board.ok_btn:
             self.recorded_signal_info["labels"] = "OK"
         elif button == self.count_board.ng_btn:
             self.recorded_signal_info["labels"] = "NG"
 
     def mark_result(self):
         button = self.sender()
-        if button == self.count_board.ok_btn or self.default_ai_result:
+        if button == self.count_board.ok_btn:
             self.count_board.set_mark_result_file("OK")
             self.count_board.set_mark_text()
         elif button == self.count_board.ng_btn:
             self.count_board.set_mark_result_file("NG")
             self.count_board.set_mark_text()
 
-    def update_recorded_label_in_test_mode(self, label: str):
-        if label == "OK":
-            self.recorded_signal_info["labels"] = "OK"
-        elif label == "NG":
-            self.recorded_signal_info["labels"] = "NG"
+    def _finalize_test_run(self, label: str):
+        """
+        Finalize a test-mode run by applying the summarized OK/NG label,
+        exporting results, updating DB label, and resetting UI state.
+        """
+        if label not in ("OK", "NG"):
+            return
+        try:
+            self.recorded_signal_info["labels"] = label
+        except Exception:
+            return
 
-    def test_insert_data_into_db(self):
         self._maybe_export_excel_results(show_message=False)
         self.update_recorded_signal_info_to_db()
         self.player_status_flag = False
@@ -1186,9 +1285,6 @@ class SequenceWindow(QWidget):
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
-                if self.count_board.mode == "test":
-                    if instance is self.default_ai:
-                        continue
                 if hasattr(instance, "calculate_spl"):
                     result = instance.calculate_spl()
                     if not result:
@@ -1245,29 +1341,18 @@ class SequenceWindow(QWidget):
             # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
             self._capture_excel_export_cache()
             if self.count_board.mode == "test":
-                self.default_ai.calculate_ai_scores(self.count_board.mode, self.analysis_config)
-                self.default_ai.show()
-                self._capture_excel_export_cache()
-                # Restore geometry for default_ai as well (if present)
-                default_ai_key = getattr(self.default_ai, "_sequence_analysis_key", None)
-                default_geo = {"x": width, "y": height, "w": 600, "h": 500}
-                geo = self._get_analysis_window_geometry(default_ai_key) if default_ai_key else None
-                if geo is None:
-                    geo = default_geo
-                    if default_ai_key:
-                        self._set_analysis_window_geometry(default_ai_key, geo)
-                self.default_ai.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
-                self.default_ai.setMinimumSize(QSize(300, 255))
-                if default_ai_key:
-                    self._analysis_window_key_by_obj[self.default_ai] = default_ai_key
-                    self.default_ai.installEventFilter(self)
-                self.test_insert_data_into_db()
-            elif self.default_ai:
-                if self.default_ai.result == "OK":
-                    for instance in self.analysis_window:
-                        instance.close()
-                    self.default_ai_result = True
-                    self.clicked_ok_or_ng(manual=False)
+                # Test mode: decide label from analysis_result_dict summary and auto-finalize.
+                can_output, _reason = self._can_output_ok_ng()
+                if not can_output:
+                    QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
+                else:
+                    _passed, label = self._summarize_ok_ng()
+                    try:
+                        self.count_board.set_test_result_file(label)
+                        self.count_board.set_test_text()
+                    except Exception:
+                        pass
+                    self._finalize_test_run(label)
 
         # Show summary window at the end (also in test mode), only if dict is not empty
         self._maybe_show_analysis_result_summary(width, height)
@@ -1514,8 +1599,6 @@ class SequenceWindow(QWidget):
                 class_instance = cls_map(key)
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
-                if self.analysis_config["default_ai"] == key:
-                    self.default_ai = class_instance
                 class_instance.v2pa_factor = self.v2pa_factor
                 # Inject sequence-level golden baseline path into per-item params
                 if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
@@ -1860,6 +1943,7 @@ class SequenceWindow(QWidget):
                 self.replayer_btn.setDisabled(True)
             if self.count_board:
                 self.count_board.analysis_config = seq.get("analysis_list", {})
+                self._refresh_test_mode_availability()
             self._set_sequence_config_available_state(True)
             self._missing_config_prompted = False
         else:

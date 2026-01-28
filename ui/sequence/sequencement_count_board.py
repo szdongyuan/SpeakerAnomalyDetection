@@ -3,7 +3,7 @@ from datetime import datetime
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QWidget, QStackedWidget
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QWidget, QStackedWidget, QMessageBox
 
 from base.save_data import ensure_test_result_file
 from consts import ui_style_const
@@ -17,6 +17,8 @@ class SequenceCountBoard(QWidget):
 
         self.analysis_config = analysis_config
         self.mode = str()
+        self._test_available = True
+        self._test_unavailable_reason = ""
 
         self.test_btn = QPushButton("测试")
         self.mark_btn = QPushButton("标记")
@@ -24,7 +26,6 @@ class SequenceCountBoard(QWidget):
         self.ok_line_edit = QLineEdit()
         self.ng_line_edit = QLineEdit()
         self.yield_line_edit = QLineEdit()
-        self.model_line_edit = QLineEdit()
         self.datatime_line_edit = QLineEdit()
         self.mark_total_edit = QLineEdit("0")
         self.mark_ok_edit = QLineEdit("0")
@@ -39,7 +40,7 @@ class SequenceCountBoard(QWidget):
         self.init_ui()
 
         self.on_mark_btn_clicked()
-        self.on_test_btn_clicked()
+        # Do NOT force switch to test mode during init.
 
     def init_ui(self):
         mode_btn_layout = self.create_mode_btn_layout()
@@ -82,7 +83,6 @@ class SequenceCountBoard(QWidget):
         self.ok_line_edit.setAlignment(Qt.AlignCenter)
         self.ng_line_edit.setAlignment(Qt.AlignCenter)
         self.yield_line_edit.setAlignment(Qt.AlignCenter)
-        self.model_line_edit.setAlignment(Qt.AlignCenter)
         self.datatime_line_edit.setAlignment(Qt.AlignCenter)
         self.mark_total_edit.setAlignment(Qt.AlignCenter)
         self.mark_ok_edit.setAlignment(Qt.AlignCenter)
@@ -92,7 +92,6 @@ class SequenceCountBoard(QWidget):
         self.ok_line_edit.setDisabled(True)
         self.ng_line_edit.setDisabled(True)
         self.yield_line_edit.setDisabled(True)
-        self.model_line_edit.setDisabled(True)
         self.datatime_line_edit.setDisabled(True)
         self.mark_total_edit.setDisabled(True)
         self.mark_ok_edit.setDisabled(True)
@@ -102,7 +101,6 @@ class SequenceCountBoard(QWidget):
         self.ok_line_edit.setFixedSize(130, 35)
         self.ng_line_edit.setFixedSize(130, 35)
         self.yield_line_edit.setFixedSize(130, 35)
-        self.model_line_edit.setFixedSize(130, 35)
         self.datatime_line_edit.setFixedSize(130, 35)
         self.mark_total_edit.setFixedSize(130, 35)
         self.mark_ok_edit.setFixedSize(130, 35)
@@ -140,7 +138,6 @@ class SequenceCountBoard(QWidget):
         ok_layout = self.create_horizontal_layout("OK    数：", self.ok_line_edit)
         ng_layout = self.create_horizontal_layout("NG    数：", self.ng_line_edit)
         yield_layout = self.create_horizontal_layout("合 格 率：", self.yield_line_edit)
-        model_layout = self.create_horizontal_layout("当前模型：", self.model_line_edit)
         datatime_layout = self.create_horizontal_layout("录制日期：", self.datatime_line_edit)
         reset_btn_layout = QHBoxLayout()
         reset_btn_layout.addStretch()
@@ -152,7 +149,6 @@ class SequenceCountBoard(QWidget):
         test_layout.addLayout(ok_layout, stretch=1)
         test_layout.addLayout(ng_layout, stretch=1)
         test_layout.addLayout(yield_layout, stretch=1)
-        test_layout.addLayout(model_layout, stretch=1)
         test_layout.addLayout(datatime_layout, stretch=1)
         test_layout.addLayout(reset_btn_layout, stretch=1)
 
@@ -188,18 +184,14 @@ class SequenceCountBoard(QWidget):
         return mark_widget
     
     def on_test_btn_clicked(self):
-        default_ai_model = self.analysis_config.get("default_ai")
-        if default_ai_model:
-            analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
-            self.model_line_edit.setText(analyse_model_name)
-            self.model_line_edit.setCursorPosition(0)
-            self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-            self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-            self.test_btn.setEnabled(False)
-            self.mark_btn.setEnabled(True)
-        else:
+        if not self._test_available:
+            QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
             self.on_mark_btn_clicked()
             return
+        self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+        self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+        self.test_btn.setEnabled(False)
+        self.mark_btn.setEnabled(True)
         self.stacked_widget.setCurrentIndex(0)
         self.mode = "test"
 
@@ -209,7 +201,31 @@ class SequenceCountBoard(QWidget):
         self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
         self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
         self.mark_btn.setEnabled(False)
-        self.test_btn.setEnabled(True)
+        self.test_btn.setEnabled(bool(self._test_available))
+
+    def set_test_available(self, available: bool, reason: str = ""):
+        """
+        Control whether test mode can be entered.
+        """
+        self._test_available = bool(available)
+        self._test_unavailable_reason = str(reason or "")
+        try:
+            self.test_btn.setEnabled(bool(self._test_available) and self.mode != "test")
+            self.test_btn.setToolTip(self._test_unavailable_reason if not self._test_available else "")
+        except Exception:
+            pass
+        if (not self._test_available) and self.mode == "test":
+            self.on_mark_btn_clicked()
+
+    @staticmethod
+    def _parse_test_log(lines):
+        kv = {}
+        for line in lines or []:
+            if ":" not in str(line):
+                continue
+            k, v = str(line).split(":", 1)
+            kv[k.strip().lower()] = v.strip()
+        return kv
 
     def set_test_text(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -217,19 +233,19 @@ class SequenceCountBoard(QWidget):
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
         with open(test_result_path, "r") as f:
             lines = f.readlines()
-            total = lines[0].split(":")[1].strip()
-            ok = lines[1].split(":")[1].strip()
-            ng = lines[2].split(":")[1].strip()
-            ok_percent = lines[3].split(":")[1].strip()
-            current_model = lines[4].split(":")[1].strip()
-            datatime = lines[5].split(":")[1].strip()
-            self.total_line_edit.setText(total)
-            self.ok_line_edit.setText(ok)
-            self.ng_line_edit.setText(ng)
-            self.yield_line_edit.setText(ok_percent)
-            self.model_line_edit.setText(current_model)
-            self.model_line_edit.setCursorPosition(0)
-            self.datatime_line_edit.setText(datatime)
+            kv = self._parse_test_log(lines)
+            total = kv.get("total", "0")
+            ok = kv.get("ok", "0")
+            ng = kv.get("ng", "0")
+            ok_percent = kv.get("ok_percent", "0%")
+            if ok_percent and (not ok_percent.endswith("%")):
+                ok_percent = f"{ok_percent}%"
+            datatime = kv.get("datatime", current_time)
+            self.total_line_edit.setText(str(total))
+            self.ok_line_edit.setText(str(ok))
+            self.ng_line_edit.setText(str(ng))
+            self.yield_line_edit.setText(str(ok_percent))
+            self.datatime_line_edit.setText(str(datatime))
 
     def set_mark_text(self):
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
@@ -239,7 +255,7 @@ class SequenceCountBoard(QWidget):
             self.mark_ok_edit.setText(str(data["ok"]))
             self.mark_ng_edit.setText(str(data["ng"]))
 
-    def set_test_result_file(self, params, analyse_model_name):
+    def set_test_result_file(self, params):
         current_time = datetime.now().strftime("%Y-%m-%d")
         ensure_test_result_file(self.analysis_config)
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
@@ -258,9 +274,7 @@ class SequenceCountBoard(QWidget):
         lines.append(f"ng: {ng}\n")
         ok_percent = round(ok / total * 100, 2) if total > 0 else 0
         lines.append(f"ok_percent: {ok_percent}%\n")
-        if analyse_model_name:
-            lines.append(f"current_model: {analyse_model_name}\n")
-        lines.append(f"current_time: {current_time}\n")
+        lines.append(f"datatime: {current_time}\n")
         with open(test_result_path, "w") as f:
             f.writelines(lines)
 

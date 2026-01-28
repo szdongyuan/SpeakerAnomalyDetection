@@ -225,7 +225,8 @@ class MainWindow(QMainWindow):
         # Test items for configuring speakers
         analysis_model_select_dialog = AnalysisModelSelect(self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker)
         analysis_model_select_dialog.exec()
-        self.sequence_window.update_using_file_combobox()
+        # Refresh active sequence config without forcing mode switch
+        self.sequence_window.on_sequence_config_updated()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
