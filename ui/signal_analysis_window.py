@@ -302,7 +302,7 @@ class Distortion(AnalysisGraphWidget):
         # Handle case where config might not have selected_labels (e.g., during initialization)
         if self.analysis_config is None:
             self.plot_graph([], [])
-            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            self.result = {"freq_value": [], "harmonic": [], "thd": [], "thd_raw": []}
             return self.result
 
         self.selected_harmonics = self.analysis_config.get("selected_labels", [])
@@ -310,7 +310,7 @@ class Distortion(AnalysisGraphWidget):
         if not self.selected_harmonics:
             # No harmonics selected, nothing to calculate
             self.plot_graph([], [])
-            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            self.result = {"freq_value": [], "harmonic": [], "thd": [], "thd_raw": []}
             return self.result
 
         # Get signals and metadata from data_struct
@@ -369,6 +369,9 @@ class Distortion(AnalysisGraphWidget):
 
             freq_value, thd = smooth_to_octave_grid(freq_value, thd, fraction=6, method="log")
 
+        # Keep the absolute curve for export/saving (do not subtract golden baseline).
+        thd_raw = thd
+
         # Golden sample baseline: use abs(current - golden) deviation curve
         if isinstance(self.analysis_config, dict) and self.analysis_config.get("golden_sample_checked"):
             baseline = _load_golden_baseline_result(self.analysis_config, self.title_name)
@@ -377,7 +380,7 @@ class Distortion(AnalysisGraphWidget):
                 base_thd = baseline.get("thd")
                 if base_freq is not None and base_thd is not None:
                     try:
-                        thd = _abs_deviation_curve(freq_value, thd, base_freq, base_thd)
+                        thd = _abs_deviation_curve(freq_value, thd_raw, base_freq, base_thd)
                     except Exception:
                         pass
             else:
@@ -393,8 +396,10 @@ class Distortion(AnalysisGraphWidget):
             freq_value = freq_value.tolist()
         if isinstance(thd, np.ndarray):
             thd = thd.tolist()
+        if isinstance(thd_raw, np.ndarray):
+            thd_raw = thd_raw.tolist()
 
-        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd}
+        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd, "thd_raw": thd_raw}
         return self.result
 
     def plot_graph(self, freq_value, thd, analysis_config=None):
@@ -569,7 +574,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         # Handle case where config might not have selected_labels (e.g., during initialization)
         if self.analysis_config is None:
             self.plot_graph([], [])
-            self.result = {"freq_value": [], "harmonic": [], "thd": []}
+            self.result = {"freq_value": [], "harmonic": [], "thd": [], "thd_raw": []}
             return self.result
 
         # PRB uses a fixed harmonic range (2nd-35th). The config dialog no longer exposes harmonic selection.
@@ -663,6 +668,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 freq_value, perceptual_loudness, fraction=6, method="log"
             )
 
+        # Keep the absolute curve for export/saving (do not subtract golden baseline).
+        perceptual_loudness_raw = perceptual_loudness
+
         # Golden sample baseline: use abs(current - golden) deviation curve
         if isinstance(self.analysis_config, dict) and self.analysis_config.get("golden_sample_checked"):
             baseline = _load_golden_baseline_result(self.analysis_config, self.title_name)
@@ -671,7 +679,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 base_y = baseline.get("thd")  # stored under 'thd' for backward compatibility
                 if base_freq is not None and base_y is not None:
                     try:
-                        perceptual_loudness = _abs_deviation_curve(freq_value, perceptual_loudness, base_freq, base_y)
+                        perceptual_loudness = _abs_deviation_curve(
+                            freq_value, perceptual_loudness_raw, base_freq, base_y
+                        )
                     except Exception:
                         pass
             else:
@@ -687,9 +697,16 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             freq_value = freq_value.tolist()
         if isinstance(perceptual_loudness, np.ndarray):
             perceptual_loudness = perceptual_loudness.tolist()
+        if isinstance(perceptual_loudness_raw, np.ndarray):
+            perceptual_loudness_raw = perceptual_loudness_raw.tolist()
 
         # Note: "thd" key name kept for backward compatibility, but contains phons
-        self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": perceptual_loudness}
+        self.result = {
+            "freq_value": freq_value,
+            "harmonic": harmonic,
+            "thd": perceptual_loudness,
+            "thd_raw": perceptual_loudness_raw,
+        }
         return self.result
 
     def plot_graph(self, freq_value, perceptual_loudness, analysis_config=None):
@@ -871,7 +888,7 @@ class SplFrequency(AnalysisGraphWidget):
 
         if recorded_signal is None or sample_rate is None or not stimulus_info:
             self.plot_spl_frequency([], [])
-            self.result = {"frequency_list": [], "spl_db": []}
+            self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
             return self.result
 
         stimulus_method = stimulus_info.get("stimulus_method", "steps")
@@ -902,7 +919,7 @@ class SplFrequency(AnalysisGraphWidget):
         except Exception as e:
             QMessageBox.warning(self, "提示", f"声压级-频率计算失败: {str(e)[:200]}")
             self.plot_spl_frequency([], [])
-            self.result = {"frequency_list": [], "spl_db": []}
+            self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
             return self.result
 
         frequency_list = np.asarray(result.frequencies_hz, dtype=float)
@@ -937,6 +954,9 @@ class SplFrequency(AnalysisGraphWidget):
             except Exception:
                 pass
 
+        # Keep the absolute curve for export/saving (do not subtract golden baseline).
+        spl_db_raw = spl_db
+
         # Golden sample baseline: use abs(current - golden) deviation curve
         if analysis_config.get("golden_sample_checked"):
             baseline = _load_golden_baseline_result(analysis_config, self.title_name)
@@ -945,7 +965,7 @@ class SplFrequency(AnalysisGraphWidget):
                 base_spl = baseline.get("spl_db")
                 if base_freq is not None and base_spl is not None:
                     try:
-                        spl_db = _abs_deviation_curve(frequency_list, spl_db, base_freq, base_spl)
+                        spl_db = _abs_deviation_curve(frequency_list, spl_db_raw, base_freq, base_spl)
                     except Exception:
                         pass
             else:
@@ -961,7 +981,11 @@ class SplFrequency(AnalysisGraphWidget):
         else:
             self.plot_spl_frequency(frequency_list, spl_db)
 
-        self.result = {"frequency_list": frequency_list.tolist(), "spl_db": spl_db.tolist()}
+        self.result = {
+            "frequency_list": frequency_list.tolist(),
+            "spl_db": spl_db.tolist(),
+            "spl_db_raw": spl_db_raw.tolist() if isinstance(spl_db_raw, np.ndarray) else spl_db_raw,
+        }
         return self.result
 
     def plot_spl_frequency_with_limits(self, frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list):
@@ -1040,7 +1064,7 @@ class Frequency(AnalysisGraphWidget):
 
         if stimulus_signal is None or recorded_signal is None or sr is None:
             self.plot_fr([], [])
-            self.result = {"fr": [], "frequency_list": []}
+            self.result = {"fr": [], "frequency_list": [], "fr_raw": []}
             return self.result
 
         # Convert stimulus_info to metadata (shared convention with harmonic distortion pipeline).
@@ -1104,8 +1128,11 @@ class Frequency(AnalysisGraphWidget):
         except Exception as e:
             QMessageBox.warning(self, "提示", f"频响计算失败: {str(e)[:200]}")
             self.plot_fr([], [])
-            self.result = {"fr": [], "frequency_list": []}
+            self.result = {"fr": [], "frequency_list": [], "fr_raw": []}
             return self.result
+
+        # Keep the absolute curve for export/saving (do not subtract golden baseline).
+        fr_raw = fr
 
         # Golden sample baseline: use abs(current - golden) deviation curve
         if analysis_config.get("golden_sample_checked"):
@@ -1115,7 +1142,7 @@ class Frequency(AnalysisGraphWidget):
                 base_fr = baseline.get("fr")
                 if base_freq is not None and base_fr is not None:
                     try:
-                        fr = _abs_deviation_curve(frequency_list, fr, base_freq, base_fr)
+                        fr = _abs_deviation_curve(frequency_list, fr_raw, base_freq, base_fr)
                     except Exception:
                         pass
             else:
@@ -1129,7 +1156,11 @@ class Frequency(AnalysisGraphWidget):
             self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_fr(frequency_list, fr)
-        self.result = {"fr": fr.tolist(), "frequency_list": frequency_list.tolist()}
+        self.result = {
+            "fr": fr.tolist(),
+            "frequency_list": frequency_list.tolist(),
+            "fr_raw": fr_raw.tolist() if isinstance(fr_raw, np.ndarray) else fr_raw,
+        }
         return self.result
 
     @staticmethod
