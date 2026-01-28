@@ -27,8 +27,6 @@ from base.log_manager import LogManager
 from base.stimulus_resolver import (
     set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal,
 )
-from base.save_data import ensure_test_result_file
-from base.utils.custom_signals import sign
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -519,8 +517,8 @@ class AnalysisModelSelect(QDialog):
                 data_struct.sample_rate = detail["sample_rate"]
                 data_struct.stimulus_info = None
                 data_struct.stimulus_data = None
-        self.update_test_file_current_model()
-        sign.update_mode_display_sign.emit(0)
+        # No forced mode switch / model sync here.
+        # Main window will refresh the active config after this dialog closes.
         self.close()
 
     @staticmethod
@@ -534,54 +532,7 @@ class AnalysisModelSelect(QDialog):
             logger=logger,
         )
 
-    def update_test_file_current_model(self):
-        if self.select_list.config:
-            default_ai_model = self.select_list.config[0].default_ai
-        else:
-            default_ai_model = None
-        if default_ai_model:
-            analyse_model_name = (
-                self.select_list.config[0]
-                .analysis_list.get(default_ai_model, {})
-                .get("analyse_model_name", None)
-            )
-            current_time = datetime.now().strftime("%Y-%m-%d")
-            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            try:
-                ensure_test_result_file(self.select_list.config[0].analysis_list)
-            except Exception as e:
-                # Never block "保存配置" due to log file errors
-                self.default_logger.warning(f"ensure_test_result_file_failed: {e}")
-
-            try:
-                with open(test_result_path, "r", encoding="utf-8") as r:
-                    lines = r.readlines()
-            except FileNotFoundError:
-                # Fallback: create a minimal template to avoid cross-day crash
-                os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
-                lines = [
-                    "total: 0\n",
-                    "ok: 0\n",
-                    "ng: 0\n",
-                    "ok_percent: 0\n",
-                    f"current_model: {analyse_model_name}\n",
-                    f"datatime: {current_time}\n",
-                ]
-
-            # Update current_model line robustly (do not assume fixed line indices)
-            updated = False
-            for i, line in enumerate(lines):
-                if str(line).startswith("current_model:"):
-                    lines[i] = f"current_model: {analyse_model_name}\n"
-                    updated = True
-                    break
-            if not updated:
-                while len(lines) < 5:
-                    lines.append("\n")
-                lines[4] = f"current_model: {analyse_model_name}\n"
-
-            with open(test_result_path, "w", encoding="utf-8") as w:
-                w.writelines(lines)
+    # NOTE: removed update_test_file_current_model (no current model field in test log anymore)
 
 
 class OptionList(QListView):
@@ -700,15 +651,11 @@ class OptionList(QListView):
             delete_action.triggered.connect(lambda: self.delete_item(index))
             rename_action = QAction("重命名", self)
             rename_action.triggered.connect(lambda: self.rename_item(index))
-            self.select_ai_action = QAction("设为评判模型", self)
-            self.select_ai_action.triggered.connect(lambda: self.select_ai(index))
 
             self.old_name = index.data()
-            self.rename_select_ai_action(index)
             self.disabled_rename_action(index, rename_action)
 
             menu.addAction(open_action)
-            menu.addAction(self.select_ai_action)
             menu.addAction(delete_action)
             menu.addAction(rename_action)
             menu.exec_(self.mapToGlobal(pos))
@@ -719,42 +666,7 @@ class OptionList(QListView):
         else:
             action.setEnabled(True)
 
-    def rename_select_ai_action(self, index: QModelIndex):
-        if self.check_item_isai(index.data()):
-            self.select_ai_action.setEnabled(True)
-            if self.config[0].default_ai == index.data():
-                self.select_ai_action.setText("取消设定")
-            else:
-                self.select_ai_action.setText("设为评判模型")
-        else:
-            self.select_ai_action.setEnabled(False)
-
-    def select_ai(self, index):
-        is_ai = self.check_item_isai(index.data())
-        if is_ai is False:
-            return
-        item = self.model().itemFromIndex(index)
-        if self.config[0].default_ai == index.data():
-            item.setIcon(
-                QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png")
-            )
-            self.config[0].default_ai = None
-            self.prev_select_ai = None
-        else:
-            if self.prev_select_ai is None:
-                self.prev_select_ai = index
-            else:
-                prev_ai_item = self.model().itemFromIndex(self.prev_select_ai)
-                prev_ai_item.setIcon(
-                    QIcon(
-                        DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"
-                    )
-                )
-                self.prev_select_ai = index
-            self.config[0].default_ai = index.data()
-            item.setIcon(
-                QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/star.png")
-            )
+    # NOTE: removed “设为评判模型”逻辑（default_ai 不再作为测试模式依赖源）
 
     def store_ai_item(self, ai_list: list, name):
         if not name or name in ai_list:
@@ -870,7 +782,9 @@ class OptionList(QListView):
                 sequence_config.detail = value.get("acq", {}).get("detail", {})
 
                 i_analysis_list = value.get("analysis_list", {})
-                sequence_config.default_ai = i_analysis_list.pop("default_ai", None)
+                # default_ai is deprecated for business logic (no longer used as test-mode dependency)
+                i_analysis_list.pop("default_ai", None)
+                sequence_config.default_ai = None
                 sequence_config.display_sequence = i_analysis_list.pop(
                     "display_sequence", []
                 )

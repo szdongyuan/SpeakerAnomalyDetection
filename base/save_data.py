@@ -35,11 +35,6 @@ def save_recorded_data_to_json(product_model, current_recorded_count, scanner_ba
 
 
 def ensure_test_result_file(analysis_config):
-    default_ai_model = analysis_config.get("default_ai")
-    if default_ai_model:
-        analyse_model_name = analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
-    else:
-        analyse_model_name = "null"
     current_time = datetime.now().strftime("%Y-%m-%d")
     test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
     if not os.path.exists(test_result_path):
@@ -49,7 +44,6 @@ def ensure_test_result_file(analysis_config):
                 f"total: 0\n"
                 f"ok: 0\n"
                 f"ng: 0\n"
-                f"ok_percent: 0\n"
-                f"current_model: {analyse_model_name}\n"
+                f"ok_percent: 0%\n"
                 f"datatime: {current_time}\n"
             )

@@ -37,7 +37,6 @@ from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.training_model_management import TrainingModelManagement
-from base.utils.custom_signals import sign
 from base.utils.smooth import smooth
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -157,6 +156,12 @@ class AnalysisResultSummaryWindow(QWidget):
         self.setWindowTitle(title)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
 
+        self._overall_label = QLabel(self)
+        overall_font = QFont()
+        overall_font.setPixelSize(22)
+        self._overall_label.setFont(overall_font)
+        self._overall_label.setAlignment(Qt.AlignCenter)
+
         self._table = QTableWidget(self)
         font = QFont()
         font.setPixelSize(20)
@@ -175,6 +180,7 @@ class AnalysisResultSummaryWindow(QWidget):
         # Avoid default focus/selection highlight on show
 
         layout = QVBoxLayout()
+        layout.addWidget(self._overall_label)
         layout.addWidget(self._table)
         self.setLayout(layout)
 
@@ -187,6 +193,18 @@ class AnalysisResultSummaryWindow(QWidget):
         items = list(result_dict.items())
         # Stable order (alphabetical by name) for readability
         items.sort(key=lambda kv: kv[0])
+
+        # Overall judgment: all OK -> OK else NG
+        overall_ok = True
+        for _, (ok, _dev) in items:
+            if not bool(ok):
+                overall_ok = False
+                break
+        overall_text = "OK" if overall_ok else "NG"
+        self._overall_label.setText(f"最终结果：{overall_text}")
+        self._overall_label.setStyleSheet(
+            "color: rgb(0, 128, 0);" if overall_ok else "color: rgb(200, 0, 0);"
+        )
 
         self._table.setRowCount(len(items))
         for row, (name, (ok, deviation)) in enumerate(items):
@@ -1335,20 +1353,6 @@ class AI(QWidget):
             model_path, config_path = result
             kwargs = {"config_path": config_path}
             result_text = self.model_predict(model_path, model_name, **kwargs)
-            default_ai_model = analysis_config["default_ai"]
-            if mode == "test" and default_ai_model:
-                analyse_model_name = analysis_config.get(default_ai_model, None).get("analyse_model_name", None)
-                match_object = re.search(r"评分结果:\s*(\S+)", result_text)
-                if match_object:
-                    match_result = match_object.group(1)
-                    if match_result == "OK":
-                        sign.set_result_file_sign.emit(0, "OK", analyse_model_name)
-                        sign.get_result_file_sign.emit(0)
-                        sign.test_insert_data_into_db_sign.emit("OK")
-                    elif match_result == "NG":
-                        sign.set_result_file_sign.emit(0, "NG", analyse_model_name)
-                        sign.get_result_file_sign.emit(0)
-                        sign.test_insert_data_into_db_sign.emit("NG")
             self.ai_analyse_score_textedit.setPlainText(result_text)
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
