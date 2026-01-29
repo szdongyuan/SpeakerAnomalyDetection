@@ -1138,6 +1138,11 @@ class SequenceWindow(QWidget):
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
 
+        if self.analysis_window:
+            self.analysis_window = []
+        if self._analysis_result_summary_window:
+            self._analysis_result_summary_window = None
+
         # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
@@ -1232,6 +1237,11 @@ class SequenceWindow(QWidget):
         if is_replay and self.last_play_count is None:
             QMessageBox.warning(self, "提示", "请先进行录音")
             return
+
+        if self.analysis_window:
+            self.analysis_window = []
+        if self._analysis_result_summary_window:
+            self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
 
@@ -1388,8 +1398,8 @@ class SequenceWindow(QWidget):
                     f"与激励信号长度({stimulus_length})不一致！无法分析！",
                 )
                 return
-
-        self.analysis_window = []
+        if self.analysis_window:
+            self.analysis_window = []
         if self._analysis_result_summary_window:
             self._analysis_result_summary_window = None
 
