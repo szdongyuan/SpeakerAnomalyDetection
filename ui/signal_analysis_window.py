@@ -1039,31 +1039,42 @@ class SplFrequency(AnalysisGraphWidget):
             csv_upper_list: Upper limit list
             csv_lower_list: Lower limit list
         """
-        # === 1. Common plot setup (clear, draw main curve and limit curves, set axes) ===
+        # === 1. Preprocess: sort data by frequency ===
+        freq_arr = np.asarray(frequency_list, dtype=float)
+        spl_arr = np.asarray(spl_db, dtype=float)
+        mask = np.isfinite(freq_arr) & np.isfinite(spl_arr) & (freq_arr > 0)
+        freq_valid = freq_arr[mask]
+        spl_valid = spl_arr[mask]
+        if freq_valid.size > 1:
+            sort_idx = np.argsort(freq_valid)
+            freq_valid = freq_valid[sort_idx]
+            spl_valid = spl_valid[sort_idx]
+
+        # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            frequency_list, spl_db,
+            freq_valid, spl_valid,
             csv_freq_list, csv_upper_list, csv_lower_list,
             x_label="Frequency (Hz)",
             y_label="SPL (dB)",
             log_x=True,
         )
 
-        # === 2. Limit check using LimitPlotUtils ===
+        # === 3. Limit check using LimitPlotUtils ===
         try:
             out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
-                np.asarray(frequency_list, dtype=float),
-                np.asarray(spl_db, dtype=float),
+                freq_valid,
+                spl_valid,
                 np.asarray(csv_freq_list, dtype=float),
                 np.asarray(csv_upper_list, dtype=float),
                 np.asarray(csv_lower_list, dtype=float),
             )
         except Exception:
             is_ok, deviation = False, 0.0
-            out_mask = np.zeros(len(csv_freq_list), dtype=bool)
-            plot_x, plot_y = np.asarray(csv_freq_list), np.full(len(csv_freq_list), np.nan)
+            out_mask = np.zeros(len(freq_valid), dtype=bool)
+            plot_x, plot_y = freq_valid, spl_valid
 
-        # === 3. Save result and plot out-of-limit segments ===
+        # === 4. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
         LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
@@ -1310,31 +1321,42 @@ class Frequency(AnalysisGraphWidget):
         # fr_disp = fr + 94 + self.v2pa_factor  # Todo: modify later
         fr_disp = fr
 
-        # === 1. Common plot setup (clear, draw main curve and limit curves, set axes) ===
+        # === 1. Preprocess: sort data by frequency ===
+        freq_arr = np.asarray(frequency_list, dtype=float)
+        fr_arr = np.asarray(fr_disp, dtype=float)
+        mask = np.isfinite(freq_arr) & np.isfinite(fr_arr) & (freq_arr > 0)
+        freq_valid = freq_arr[mask]
+        fr_valid = fr_arr[mask]
+        if freq_valid.size > 1:
+            sort_idx = np.argsort(freq_valid)
+            freq_valid = freq_valid[sort_idx]
+            fr_valid = fr_valid[sort_idx]
+
+        # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            frequency_list, fr_disp,
+            freq_valid, fr_valid,
             csv_freq_list, csv_upper_list, csv_lower_list,
             x_label="Frequency (Hz)",
             y_label="Amplitude (dB)",
             log_x=True,
         )
 
-        # === 2. Limit check using LimitPlotUtils ===
+        # === 3. Limit check using LimitPlotUtils ===
         try:
             out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
-                np.asarray(frequency_list, dtype=float),
-                np.asarray(fr_disp, dtype=float),
+                freq_valid,
+                fr_valid,
                 np.asarray(csv_freq_list, dtype=float),
                 np.asarray(csv_upper_list, dtype=float),
                 np.asarray(csv_lower_list, dtype=float),
             )
         except Exception:
             is_ok, deviation = False, 0.0
-            out_mask = np.zeros(len(csv_freq_list), dtype=bool)
-            plot_x, plot_y = np.asarray(csv_freq_list), np.full(len(csv_freq_list), np.nan)
+            out_mask = np.zeros(len(freq_valid), dtype=bool)
+            plot_x, plot_y = freq_valid, fr_valid
 
-        # === 3. Save result and plot out-of-limit segments ===
+        # === 4. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
         LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
