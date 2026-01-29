@@ -459,6 +459,9 @@ class LimitPlotUtils:
         """
         Complete interpolation limit check (used by SPLF and FR).
 
+        Interpolates CSV limits to original data points, so out-of-limit segments
+        are plotted on the original curve (not on CSV frequency grid).
+
         Args:
             data_x: Original data X (frequency)
             data_y: Original data Y (SPL/FR values)
@@ -467,43 +470,47 @@ class LimitPlotUtils:
             csv_lower: CSV lower limit list
 
         Returns:
-            out_mask: Out-of-limit mask
-            plot_x: X for plotting (= csv_x)
-            plot_y: Y for plotting (= interpolated values)
+            out_mask: Out-of-limit mask (on original data points)
+            plot_x: X for plotting (= original data_x, filtered)
+            plot_y: Y for plotting (= original data_y, filtered)
             deviation: Deviation value
             is_ok: Whether all points are within limits
         """
-        # === 1. Preprocessing ===
+        # === 1. Preprocessing original data ===
         mask = np.isfinite(data_x) & np.isfinite(data_y) & (data_x > 0)
         freq = data_x[mask]
         mag = data_y[mask]
 
         if freq.size < 2:
             return (
-                np.zeros(len(csv_x), dtype=bool),
-                csv_x,
-                np.full(len(csv_x), np.nan),
+                np.zeros(len(data_x), dtype=bool),
+                data_x,
+                data_y,
                 0.0,
                 True,
             )
 
         sort_idx = np.argsort(freq)
         freq, mag = freq[sort_idx], mag[sort_idx]
-        freq, unique_idx = np.unique(freq, return_index=True)
-        mag = mag[unique_idx]
 
-        # === 2. Interpolation ===
-        in_band = (csv_x >= freq.min()) & (csv_x <= freq.max())
-        interp = np.full(csv_x.shape, np.nan)
+        # === 2. Interpolate CSV limits to original data points ===
+        # Only compare within CSV frequency range
+        csv_min, csv_max = csv_x.min(), csv_x.max()
+        in_band = (freq >= csv_min) & (freq <= csv_max)
+
+        # Interpolate upper/lower limits to original frequency points
+        upper_at_freq = np.full(freq.shape, np.nan)
+        lower_at_freq = np.full(freq.shape, np.nan)
         if np.any(in_band):
-            interp[in_band] = np.interp(csv_x[in_band], freq, mag)
+            upper_at_freq[in_band] = np.interp(freq[in_band], csv_x, csv_upper)
+            lower_at_freq[in_band] = np.interp(freq[in_band], csv_x, csv_lower)
 
         # === 3. Compare using common function ===
         out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
-            interp, csv_upper, csv_lower, valid_mask=in_band
+            mag, upper_at_freq, lower_at_freq, valid_mask=in_band
         )
 
-        return out_mask, csv_x, interp, deviation, is_ok
+        return out_mask, freq, mag, deviation, is_ok
 
 
 if __name__ == "__main__":
