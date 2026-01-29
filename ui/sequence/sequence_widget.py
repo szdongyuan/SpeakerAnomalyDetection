@@ -1135,8 +1135,6 @@ class SequenceWindow(QWidget):
             if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
-        # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
-        self._close_analysis_windows()
 
         # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
@@ -1232,6 +1230,10 @@ class SequenceWindow(QWidget):
         if is_replay and self.last_play_count is None:
             QMessageBox.warning(self, "提示", "请先进行录音")
             return
+
+        # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
+        self._close_analysis_windows()
+
         self._record_workflow_busy = True
 
         self.line_graph.clear()
