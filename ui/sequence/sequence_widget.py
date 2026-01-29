@@ -616,6 +616,8 @@ class SequenceWindow(QWidget):
         # 自动开始测试
         if not getattr(self, "_record_workflow_busy", False):
             self.default_logger.info(f"S/N 收到({source}): {barcode}，自动开始测试")
+            # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
+            self._close_analysis_windows()
             self.start_this_play("not_labeled")
 
     def _on_barcode_return_pressed(self):
@@ -1135,8 +1137,11 @@ class SequenceWindow(QWidget):
             if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
-        # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
-        self._close_analysis_windows()
+
+        if self.analysis_window:
+            self.analysis_window = []
+        if self._analysis_result_summary_window:
+            self._analysis_result_summary_window = None
 
         # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
@@ -1232,6 +1237,12 @@ class SequenceWindow(QWidget):
         if is_replay and self.last_play_count is None:
             QMessageBox.warning(self, "提示", "请先进行录音")
             return
+
+        if self.analysis_window:
+            self.analysis_window = []
+        if self._analysis_result_summary_window:
+            self._analysis_result_summary_window = None
+
         self._record_workflow_busy = True
 
         self.line_graph.clear()
@@ -1387,6 +1398,10 @@ class SequenceWindow(QWidget):
                     f"与激励信号长度({stimulus_length})不一致！无法分析！",
                 )
                 return
+        if self.analysis_window:
+            self.analysis_window = []
+        if self._analysis_result_summary_window:
+            self._analysis_result_summary_window = None
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)

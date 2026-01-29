@@ -49,7 +49,8 @@ class SplConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        height = 470 if self.analysis_type == "SPLF" else 350
+        # 默认高度偏小会把阈值绘图区域压缩得很矮，导致“显示不完整”的观感
+        height = 570 if self.analysis_type == "SPLF" else 430
         self.setMinimumSize(380, height)
         self.resize(380, height)
 
