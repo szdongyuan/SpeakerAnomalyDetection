@@ -11,8 +11,19 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget, QFileDialog, QLineEdit, \
-    QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+    QFileDialog,
+    QLineEdit,
+    QAbstractSpinBox,
+    QComboBox,
+    QTextEdit,
+    QPlainTextEdit,
+)
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
@@ -36,7 +47,11 @@ from base.play_and_record import (
     stream_record_without_play,
 )
 from base.recording_management import RecordingManager
-from base.save_data import ensure_test_result_file, save_recorded_data_to_json, save_audio_simple
+from base.save_data import (
+    ensure_test_result_file,
+    save_recorded_data_to_json,
+    save_audio_simple,
+)
 from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
@@ -84,7 +99,9 @@ class SequenceWindow(QWidget):
         self._excel_spool_build_delay_ms = 30_000
         self._excel_spool_build_timer = QTimer(self)
         self._excel_spool_build_timer.setSingleShot(True)
-        self._excel_spool_build_timer.timeout.connect(self._on_excel_spool_build_timeout)
+        self._excel_spool_build_timer.timeout.connect(
+            self._on_excel_spool_build_timeout
+        )
         self._excel_spool_build_in_progress = False
         self._excel_spool_build_pending_cfgs = []
         self._excel_spool_build_lock = threading.Lock()
@@ -110,8 +127,12 @@ class SequenceWindow(QWidget):
         self._missing_config_prompt_enabled = False
 
         self._barcode_debounce_ms = 120
-        self._barcode_fast_input_max_seconds = 0.6  # 首字符到末字符的总耗时，小于该值更像扫码
-        self._barcode_min_length_for_auto_commit = 6  # 太短容易误触发（可按你们条码规则调整）
+        self._barcode_fast_input_max_seconds = (
+            0.6  # 首字符到末字符的总耗时，小于该值更像扫码
+        )
+        self._barcode_min_length_for_auto_commit = (
+            6  # 太短容易误触发（可按你们条码规则调整）
+        )
 
         self._barcode_debounce_timer = QTimer(self)
         self._barcode_debounce_timer.setSingleShot(True)
@@ -138,9 +159,13 @@ class SequenceWindow(QWidget):
         self.streaming_plot_item = None  # Persistent plot item for zoom preservation
         self.streaming_wav_writer = None  # WAV file writer for incremental saving
         self.streaming_processor = None  # StreamingAudioProcessor instance
-        self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
+        self.streaming_stimulus_data = (
+            None  # Stimulus data for alignment (play+record mode)
+        )
         self.streaming_mode = None  # "play_record" or "record_only"
-        self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
+        self.use_streaming = (
+            True  # Set to True to use streaming, False for legacy blocking mode
+        )
 
         # Analysis window geometry persistence (per analysis item key)
         self._analysis_window_key_by_obj = weakref.WeakKeyDictionary()
@@ -150,7 +175,9 @@ class SequenceWindow(QWidget):
         self._analysis_window_geometry = self._load_analysis_window_geometry()
         self._analysis_window_geometry_flush_timer = QTimer(self)
         self._analysis_window_geometry_flush_timer.setSingleShot(True)
-        self._analysis_window_geometry_flush_timer.timeout.connect(self._flush_analysis_window_geometry)
+        self._analysis_window_geometry_flush_timer.timeout.connect(
+            self._flush_analysis_window_geometry
+        )
         self._analysis_window_geometry_dirty = False
 
         self.hw_manager = UnifiedHardwareManager()
@@ -205,7 +232,9 @@ class SequenceWindow(QWidget):
         # When test-queue config is confirmed, refresh combobox + reload config first.
         # (No global signal dependency; MainWindow calls on_sequence_config_updated after dialog closes.)
         # Streaming audio chunk signal for real-time waveform updates
-        sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
+        sign.stream_audio_chunk_signal.connect(
+            self.on_audio_chunk_received, Qt.AutoConnection
+        )
         # Register this instance as current target for TCP callbacks
         SequenceWindow._active_instance_ref = weakref.ref(self)
         self.setStyleSheet(
@@ -241,7 +270,9 @@ class SequenceWindow(QWidget):
                 self.count_board.analysis_config = self.analysis_config
                 self._refresh_test_mode_availability()
         except Exception as e:
-            self.default_logger.warning(f"Failed to refresh sequence config after update: {e}")
+            self.default_logger.warning(
+                f"Failed to refresh sequence config after update: {e}"
+            )
 
     def _refresh_test_mode_availability(self):
         """
@@ -254,7 +285,9 @@ class SequenceWindow(QWidget):
                 self.count_board.set_test_available(bool(can_output), reason or "")
         except Exception:
             if self.count_board:
-                self.count_board.set_test_available(False, "无法判定是否具备OK/NG输出能力")
+                self.count_board.set_test_available(
+                    False, "无法判定是否具备OK/NG输出能力"
+                )
 
     def update_v2pa_factor(self):
         self.v2pa_factor = get_mic_v2pa_factor()
@@ -308,14 +341,21 @@ class SequenceWindow(QWidget):
             return True, ""
         return False, "当前配置未启用阈值对比，无法产出OK/NG"
 
-
     def set_member_connect(self):
         self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
-        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record(is_replay=True))
+        self.replayer_btn.clicked.connect(
+            lambda: self.judge_play_and_record(is_replay=True)
+        )
         self.data_btn.clicked.connect(self.run)
-        self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
-        self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
-        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
+        self.lineedit_type.editingFinished.connect(
+            lambda: self.lineedit_type_lose_focus(self.lineedit_type)
+        )
+        self.lineedit_count.editingFinished.connect(
+            lambda: self.lineedit_count_lose_focus(self.lineedit_count)
+        )
+        self.lineedit_count.returnPressed.connect(
+            lambda: self.validate_count(self.lineedit_count, True)
+        )
 
         self.lineedit_s_or_n.returnPressed.connect(self._on_barcode_return_pressed)
         self.lineedit_s_or_n.textChanged.connect(self._on_barcode_text_changed)
@@ -324,7 +364,9 @@ class SequenceWindow(QWidget):
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
+        self.using_file_combobox.currentTextChanged.connect(
+            self.on_using_file_combobox_changed
+        )
 
     def init_lineedit_text(self):
         last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
@@ -391,7 +433,9 @@ class SequenceWindow(QWidget):
             # If stimulus wav was missing and we regenerated it, write back config to avoid future failures.
             if modified:
                 try:
-                    ok = LoadUiConfig.save_sequence_config_to_json(self.sequence_config, self.using_config_path)
+                    ok = LoadUiConfig.save_sequence_config_to_json(
+                        self.sequence_config, self.using_config_path
+                    )
                     if not ok:
                         LogManager.set_log_handler("core").warning(
                             f"Failed to write back regenerated stimulus path to config: {self.using_config_path}"
@@ -441,7 +485,9 @@ class SequenceWindow(QWidget):
     def init_fft_and_stft_flag(self):
         model_item_list = self.analysis_config.get("display_sequence", "")
         for item_name in model_item_list:
-            self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"])
+            self.data_struct.add_stft_or_fft_count(
+                self.analysis_config[item_name]["type"]
+            )
 
     def init_result_files(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
@@ -462,7 +508,13 @@ class SequenceWindow(QWidget):
                     )
 
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        mark_result_template = {"total": 0, "ok": 0, "ng": 0, "not_labels": 0, "datatime": current_time}
+        mark_result_template = {
+            "total": 0,
+            "ok": 0,
+            "ng": 0,
+            "not_labels": 0,
+            "datatime": current_time,
+        }
         if not os.path.exists(mark_result_path):
             os.makedirs(os.path.dirname(mark_result_path), exist_ok=True)
             with open(mark_result_path, "w") as f:
@@ -494,7 +546,9 @@ class SequenceWindow(QWidget):
             # 配置文件加载失败不再致命：扫码枪可进入自动识别模式（支持热插拔）。
             # 注意：光电开关仍依赖 hotkey 配置。
             if not self.hw_manager.ensure_config_loaded():
-                self.default_logger.warning("无法加载扫码枪/光电开关配置，将进入扫码枪自动识别模式（光电开关可能不可用）。")
+                self.default_logger.warning(
+                    "无法加载扫码枪/光电开关配置，将进入扫码枪自动识别模式（光电开关可能不可用）。"
+                )
 
             self.lineedit_s_or_n.setEnabled(True)
             # 键盘楔入模式依赖“输入框有焦点”，开启后把焦点给 S/N 输入框
@@ -507,7 +561,11 @@ class SequenceWindow(QWidget):
                 self.default_logger.info("硬件监听已启动")
             else:
                 self.barcode_scanner_box.setChecked(False)
-                QMessageBox.warning(self, "硬件初始化失败", "硬件监听启动失败，请检查环境/权限或日志输出。")
+                QMessageBox.warning(
+                    self,
+                    "硬件初始化失败",
+                    "硬件监听启动失败，请检查环境/权限或日志输出。",
+                )
         else:
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
@@ -523,7 +581,9 @@ class SequenceWindow(QWidget):
             return ""
         return str(text).strip()
 
-    def _should_auto_commit_barcode(self, text: str, first_ts: float, last_ts: float) -> bool:
+    def _should_auto_commit_barcode(
+        self, text: str, first_ts: float, last_ts: float
+    ) -> bool:
         """判断一段输入是否更像“扫码枪快速输入”，用于防抖自动提交。"""
         text = self._normalize_barcode(text)
         if not text:
@@ -640,9 +700,15 @@ class SequenceWindow(QWidget):
         if not self.barcode_scanner_box.isChecked():
             return
         # 1) 优先处理“非 S/N 输入框焦点”下的全局捕获 buffer
-        if self._barcode_capture_buffer and self._barcode_capture_first_ts is not None and self._barcode_capture_last_ts is not None:
+        if (
+            self._barcode_capture_buffer
+            and self._barcode_capture_first_ts is not None
+            and self._barcode_capture_last_ts is not None
+        ):
             text = self._normalize_barcode(self._barcode_capture_buffer)
-            if self._should_auto_commit_barcode(text, self._barcode_capture_first_ts, self._barcode_capture_last_ts):
+            if self._should_auto_commit_barcode(
+                text, self._barcode_capture_first_ts, self._barcode_capture_last_ts
+            ):
                 # 如果之前焦点在其它输入框，让字符先进入了那个输入框，这里把它恢复，避免污染
                 try:
                     le = self._barcode_capture_target_lineedit
@@ -650,7 +716,9 @@ class SequenceWindow(QWidget):
                         with QSignalBlocker(le):
                             le.setText(self._barcode_capture_target_text)
                         if self._barcode_capture_target_cursor_pos is not None:
-                            le.setCursorPosition(self._barcode_capture_target_cursor_pos)
+                            le.setCursorPosition(
+                                self._barcode_capture_target_cursor_pos
+                            )
                 except Exception:
                     pass
                 self._commit_barcode(text, source="wedge_global_debounce")
@@ -672,7 +740,9 @@ class SequenceWindow(QWidget):
             return
         if self._barcode_first_char_ts is None or self._barcode_last_char_ts is None:
             return
-        if self._should_auto_commit_barcode(text, self._barcode_first_char_ts, self._barcode_last_char_ts):
+        if self._should_auto_commit_barcode(
+            text, self._barcode_first_char_ts, self._barcode_last_char_ts
+        ):
             self._commit_barcode(text, source="wedge_debounce")
 
     def on_sensor_triggered(self):
@@ -705,7 +775,9 @@ class SequenceWindow(QWidget):
             t = getattr(self, "_excel_spool_build_thread", None)
             if t is not None and getattr(t, "is_alive", None) and t.is_alive():
                 try:
-                    self.default_logger.info("excel_spool_build_wait_on_exit: waiting for background build thread...")
+                    self.default_logger.info(
+                        "excel_spool_build_wait_on_exit: waiting for background build thread..."
+                    )
                 except Exception:
                     pass
                 try:
@@ -720,7 +792,9 @@ class SequenceWindow(QWidget):
             if not pending:
                 return
             for cfg_name, excel_cfg, file_path, spool_dir in pending:
-                ret = build_excel_from_csv_spool(excel_cfg, file_path=file_path, spool_dir=spool_dir)
+                ret = build_excel_from_csv_spool(
+                    excel_cfg, file_path=file_path, spool_dir=spool_dir
+                )
                 if ret.ok:
                     self.default_logger.info(
                         f"excel_spool_build_on_exit_ok[{cfg_name}]: {ret.message}"
@@ -735,7 +809,11 @@ class SequenceWindow(QWidget):
                     )
         except Exception as e:
             try:
-                tag = "excel_spool_build_on_close_error" if on_close else "excel_spool_build_on_exit_error"
+                tag = (
+                    "excel_spool_build_on_close_error"
+                    if on_close
+                    else "excel_spool_build_on_exit_error"
+                )
                 self.default_logger.error(f"{tag}: {e}")
             except Exception:
                 pass
@@ -763,7 +841,9 @@ class SequenceWindow(QWidget):
         )
         lineedit.clearFocus()
         if lineedit.text() == "":
-            result_count, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
+            result_count, _ = LoadUiConfig.load_recorded_num_from_json(
+                self.default_logger
+            )
             lineedit.setText(str(result_count))
 
     def lineedit_type_lose_focus(self, lineedit):
@@ -775,7 +855,9 @@ class SequenceWindow(QWidget):
         )
         lineedit.clearFocus()
         if lineedit.text() == "":
-            last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
+            last_recorded_info = LoadUiConfig().load_last_recorded_info(
+                self.default_logger
+            )
             lineedit.setText(str(last_recorded_info.get("product_model", "S004-1")))
 
     def validate_count(self, lineedit, is_s_or_n: bool):
@@ -790,7 +872,9 @@ class SequenceWindow(QWidget):
             lineedit (QLineEdit): The QLineEdit object containing the user's count input.
         """
         s_or_n_count = lineedit.text()
-        result_count, result_scanner_barcode = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
+        result_count, result_scanner_barcode = LoadUiConfig.load_recorded_num_from_json(
+            self.default_logger
+        )
         reg = None
         if is_s_or_n:
             reg = r"^[0-9]*$"
@@ -818,7 +902,9 @@ class SequenceWindow(QWidget):
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
-            SequenceWindow.tcp_server = TcpServer(host=self.tcp_ip, port=self.tcp_port, callback=self.deal_package)
+            SequenceWindow.tcp_server = TcpServer(
+                host=self.tcp_ip, port=self.tcp_port, callback=self.deal_package
+            )
             SequenceWindow.tcp_server.start()
         else:
             self.barcode_scanner_box.setEnabled(True)
@@ -880,10 +966,17 @@ class SequenceWindow(QWidget):
             else:
                 try:
                     # 必须用 QueuedConnection 投递到 inst 所在线程（Qt 主线程），避免跨线程 UI 调用
-                    QMetaObject.invokeMethod(inst, "_tcp_run_test", Qt.QueuedConnection, Q_ARG(str, str(label)))
+                    QMetaObject.invokeMethod(
+                        inst,
+                        "_tcp_run_test",
+                        Qt.QueuedConnection,
+                        Q_ARG(str, str(label)),
+                    )
                 except Exception as e:
                     try:
-                        LogManager.set_log_handler("core").error(f"TCP dispatch RUN_TEST failed: {e}")
+                        LogManager.set_log_handler("core").error(
+                            f"TCP dispatch RUN_TEST failed: {e}"
+                        )
                     except Exception:
                         pass
         return "ok"
@@ -893,7 +986,9 @@ class SequenceWindow(QWidget):
         result = tcp_config_dialog.exec()
         if result:
             self.tcp_flag, self.tcp_ip, self.tcp_port = result
-            LoadUiConfig.write_tcp_config(self.tcp_ip, self.tcp_port, self.default_logger)
+            LoadUiConfig.write_tcp_config(
+                self.tcp_ip, self.tcp_port, self.default_logger
+            )
             self.swap_tcp_status()
 
     def clicked_ok_or_ng(self, manual=True):
@@ -921,11 +1016,15 @@ class SequenceWindow(QWidget):
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
-            QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
+            QMessageBox.warning(
+                self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。"
+            )
             return
 
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
-            QMessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
+            QMessageBox.warning(
+                self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。"
+            )
             return
         self.update_audio_label_info()
         self._maybe_export_excel_results(show_message=manual)
@@ -955,10 +1054,14 @@ class SequenceWindow(QWidget):
     def update_recorded_signal_info_to_db(self):
         if self.recorded_signal_info["labels"] == "not_labeled":
             return
-        new_file_path = FileOps.move_wav_to_dir(self.recorded_path, self.recorded_signal_info["labels"])
+        new_file_path = FileOps.move_wav_to_dir(
+            self.recorded_path, self.recorded_signal_info["labels"]
+        )
         old_file_path = self.recorded_signal_info["file_path"]
         self.recorded_signal_info["file_path"] = new_file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().update_audio_label(self.recorded_signal_info, old_file_path)
+        save_code, msg = RecordingManager().update_audio_label(
+            self.recorded_signal_info, old_file_path
+        )
         if save_code == error_code.OK:
             self.default_logger.info("Recorded signal successfully updated.")
         else:
@@ -1043,7 +1146,11 @@ class SequenceWindow(QWidget):
         audio_y, _ = librosa.load(file_path, sr=None)
         self.data_struct.audio_lenth = len(audio_y)
         self.line_graph.clear()
-        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
+        self.plot_line_graph(
+            self.data_struct.store_wave_data,
+            self.line_graph,
+            self.data_struct.sample_rate,
+        )
 
         self.data_btn.setEnabled(True)
         if self.analysis_config.get("auto_analysis"):
@@ -1077,7 +1184,9 @@ class SequenceWindow(QWidget):
         elif self.clicked_player_flag is False:
             if self.tcp_flag:
                 TempTcpClient(
-                    SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
+                    SequenceWindow.tcp_server.client_address[0],
+                    SequenceWindow.tcp_server.client_address[1],
+                    "finish",
                 )
 
     def checked_work_status_message(self):
@@ -1114,8 +1223,10 @@ class SequenceWindow(QWidget):
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
         sample_rate = self.data_struct.sample_rate
-        stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
-            self.data_struct, total_time
+        stimulus_dict, recorded_dict = (
+            LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
+                self.data_struct, total_time
+            )
         )
 
         # Add device information for streaming mode
@@ -1175,7 +1286,9 @@ class SequenceWindow(QWidget):
             if self.last_play_count is None:
                 QMessageBox.warning(self, "提示", "请先进行录音")
                 return
-            stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
+            stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(
+                label, count=self.last_play_count
+            )
         else:
             stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
 
@@ -1198,15 +1311,22 @@ class SequenceWindow(QWidget):
                 self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
                 self.streaming_temp_path = temp_path
 
-                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+                self.streaming_processor, self.streaming_stimulus_data, _ = (
+                    stream_play_and_record(
+                        stimulus_dict,
+                        recorded_dict,
+                        self.recorded_path,
+                        self.recorded_signal_info,
+                    )
                 )
                 self.streaming_mode = "play_record"
 
             else:
                 # Start streaming record-only (non-blocking)
                 # Create WAV file writer for streaming saves (useful for long recordings)
-                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
+                self.streaming_wav_writer = StreamingWavWriter(
+                    self.recorded_path, sample_rate
+                )
 
                 self.streaming_processor, _ = stream_record_without_play(
                     recorded_dict, self.recorded_path, self.recorded_signal_info
@@ -1224,10 +1344,19 @@ class SequenceWindow(QWidget):
         else:
             # Use legacy blocking approach
             if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
+                play_last_stimulus_wave(
+                    stimulus_dict,
+                    recorded_dict,
+                    self.recorded_path,
+                    self.recorded_signal_info,
+                )
             else:
-                record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+                record_without_play(
+                    recorded_dict, self.recorded_path, self.recorded_signal_info
+                )
+            self.plot_line_graph(
+                self.data_struct.store_wave_data, self.line_graph, sample_rate
+            )
 
         self.player_status_flag = False  # Recording complete, allow hardware access
         self.data_btn.setEnabled(True)
@@ -1260,7 +1389,8 @@ class SequenceWindow(QWidget):
         self.data_struct.analysis_result_dict.clear()
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
             stimulus_length = round(
-                self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate")
+                self.data_struct.stimulus_info.get("total_time")
+                * self.data_struct.stimulus_info.get("sample_rate")
             )
             if self.data_struct.audio_lenth != stimulus_length:
                 QMessageBox.warning(
@@ -1272,6 +1402,8 @@ class SequenceWindow(QWidget):
                 return
 
         self.analysis_window = []
+        if self._analysis_result_summary_window:
+            self._analysis_result_summary_window = None
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
         if self.analysis_config:
@@ -1300,7 +1432,9 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, "calculate_ai_scores"):
                     instance.calculate_ai_scores(
-                        self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
+                        self.count_board.mode,
+                        self.analysis_config,
+                        self.sequence_config[0]["seq1"]["acq"]["mode"],
                     )
                     instance.show()
                 elif hasattr(instance, "calculate_spec"):
@@ -1321,13 +1455,19 @@ class SequenceWindow(QWidget):
 
                 # Restore last geometry if available; otherwise fallback to default cascade
                 default_geo = {"x": width, "y": height, "w": 600, "h": 500}
-                geo = self._get_analysis_window_geometry(instance_key) if instance_key else None
+                geo = (
+                    self._get_analysis_window_geometry(instance_key)
+                    if instance_key
+                    else None
+                )
                 if geo is None:
                     geo = default_geo
                     # Persist the default once so next run restores from the same place
                     if instance_key:
                         self._set_analysis_window_geometry(instance_key, geo)
-                instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+                instance.setGeometry(
+                    int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"])
+                )
                 instance.setMinimumSize(QSize(300, 255))
 
                 # Install event filter to capture move/resize and persist geometry (no close listener)
@@ -1344,7 +1484,11 @@ class SequenceWindow(QWidget):
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 can_output, _reason = self._can_output_ok_ng()
                 if not can_output:
-                    QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
+                    QMessageBox.warning(
+                        self,
+                        "提示",
+                        "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。",
+                    )
                 else:
                     _passed, label = self._summarize_ok_ng()
                     try:
@@ -1364,13 +1508,17 @@ class SequenceWindow(QWidget):
 
         # Create or reuse summary window
         if self._analysis_result_summary_window is None:
-            self._analysis_result_summary_window = AnalysisResultSummaryWindow(result_dict)
+            self._analysis_result_summary_window = AnalysisResultSummaryWindow(
+                result_dict
+            )
         else:
             try:
                 self._analysis_result_summary_window.set_results(result_dict)
             except Exception:
                 # fallback: recreate if something went wrong
-                self._analysis_result_summary_window = AnalysisResultSummaryWindow(result_dict)
+                self._analysis_result_summary_window = AnalysisResultSummaryWindow(
+                    result_dict
+                )
 
         summary = self._analysis_result_summary_window
         summary_key = "__analysis_result_summary__"
@@ -1441,7 +1589,9 @@ class SequenceWindow(QWidget):
                 "sn": sn,
                 "date_text": date_text,
                 "analysis_items_data": analysis_items_data,
-                "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+                "analysis_result_dict": dict(
+                    getattr(self.data_struct, "analysis_result_dict", {}) or {}
+                ),
             }
         except Exception as e:
             self.default_logger.error(f"capture_excel_export_cache_error: {e}")
@@ -1462,7 +1612,9 @@ class SequenceWindow(QWidget):
                     spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
                     pending.append((cfg_name, excel_cfg, file_path, spool_dir))
                 except Exception as e:
-                    self.default_logger.error(f"excel_spool_schedule_path_error[{cfg_name}]: {e}")
+                    self.default_logger.error(
+                        f"excel_spool_schedule_path_error[{cfg_name}]: {e}"
+                    )
             self._excel_spool_build_pending_cfgs = pending
             self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
         except Exception as e:
@@ -1480,7 +1632,9 @@ class SequenceWindow(QWidget):
 
             with self._excel_spool_build_lock:
                 if self._excel_spool_build_in_progress:
-                    self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
+                    self._excel_spool_build_timer.start(
+                        self._excel_spool_build_delay_ms
+                    )
                     return
                 pending = list(self._excel_spool_build_pending_cfgs or [])
                 if not pending:
@@ -1490,11 +1644,17 @@ class SequenceWindow(QWidget):
             def _worker(cfgs):
                 try:
                     for cfg_name, excel_cfg, file_path, spool_dir in cfgs:
-                        ret = build_excel_from_csv_spool(excel_cfg, file_path=file_path, spool_dir=spool_dir)
+                        ret = build_excel_from_csv_spool(
+                            excel_cfg, file_path=file_path, spool_dir=spool_dir
+                        )
                         if ret.ok:
-                            self.default_logger.info(f"excel_spool_build_ok[{cfg_name}]: {ret.message}")
+                            self.default_logger.info(
+                                f"excel_spool_build_ok[{cfg_name}]: {ret.message}"
+                            )
                         else:
-                            self.default_logger.warning(f"excel_spool_build_fail[{cfg_name}]: {ret.message}")
+                            self.default_logger.warning(
+                                f"excel_spool_build_fail[{cfg_name}]: {ret.message}"
+                            )
                 except Exception as e:
                     self.default_logger.error(f"excel_spool_build_error: {e}")
                 finally:
@@ -1536,12 +1696,16 @@ class SequenceWindow(QWidget):
 
         cache = self._excel_export_cache
         if not isinstance(cache, dict) or cache.get("record_id") != record_id:
-            self.default_logger.warning("excel_export_skip: no matching cached analysis results for current record")
+            self.default_logger.warning(
+                "excel_export_skip: no matching cached analysis results for current record"
+            )
             return
 
         sn = cache.get("sn") or ""
         now_dt = datetime.now()
-        date_text = f"{now_dt.year}/{now_dt.month}/{now_dt.day} {now_dt.strftime('%H:%M:%S')}"
+        date_text = (
+            f"{now_dt.year}/{now_dt.month}/{now_dt.day} {now_dt.strftime('%H:%M:%S')}"
+        )
         analysis_items_data = cache.get("analysis_items_data") or {}
         analysis_result_dict = cache.get("analysis_result_dict") or {}
 
@@ -1570,15 +1734,23 @@ class SequenceWindow(QWidget):
                 )
             if ret.ok:
                 if use_spool:
-                    self.default_logger.info(f"excel_spool_ok[{cfg_name}]: {ret.message}")
+                    self.default_logger.info(
+                        f"excel_spool_ok[{cfg_name}]: {ret.message}"
+                    )
                 else:
-                    self.default_logger.info(f"excel_export_ok[{cfg_name}]: {ret.message}")
+                    self.default_logger.info(
+                        f"excel_export_ok[{cfg_name}]: {ret.message}"
+                    )
             else:
                 all_ok = False
                 if use_spool:
-                    self.default_logger.error(f"excel_spool_fail[{cfg_name}]: {ret.message}")
+                    self.default_logger.error(
+                        f"excel_spool_fail[{cfg_name}]: {ret.message}"
+                    )
                 else:
-                    self.default_logger.error(f"excel_export_fail[{cfg_name}]: {ret.message}")
+                    self.default_logger.error(
+                        f"excel_export_fail[{cfg_name}]: {ret.message}"
+                    )
                 if show_message:
                     QMessageBox.warning(self, "Excel保存失败", ret.message)
 
@@ -1601,7 +1773,9 @@ class SequenceWindow(QWidget):
                 setattr(class_instance, "_sequence_analysis_key", key)
                 class_instance.v2pa_factor = self.v2pa_factor
                 # Inject sequence-level golden baseline path into per-item params
-                if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
+                if isinstance(params, dict) and isinstance(
+                    getattr(self, "analysis_config", None), dict
+                ):
                     golden_path = self.analysis_config.get("golden_sample_result_path")
                     if golden_path:
                         params["golden_sample_result_path"] = golden_path
@@ -1619,7 +1793,12 @@ class SequenceWindow(QWidget):
                     key = self._analysis_window_key_by_obj.get(obj)
                     if key:
                         rect = obj.geometry()
-                        geo = {"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()}
+                        geo = {
+                            "x": rect.x(),
+                            "y": rect.y(),
+                            "w": rect.width(),
+                            "h": rect.height(),
+                        }
                         self._set_analysis_window_geometry(key, geo)
         except Exception as e:
             # Never break Qt event loop
@@ -1633,11 +1812,11 @@ class SequenceWindow(QWidget):
                 if fw is self.lineedit_s_or_n:
                     ch = event.text()
                     if (
-                            self._sn_clear_on_next_scan
-                            and not self.player_status_flag
-                            and ch
-                            and ch.isprintable()
-                            and not ch.isspace()
+                        self._sn_clear_on_next_scan
+                        and not self.player_status_flag
+                        and ch
+                        and ch.isprintable()
+                        and not ch.isspace()
                     ):
                         try:
                             with QSignalBlocker(self.lineedit_s_or_n):
@@ -1656,18 +1835,33 @@ class SequenceWindow(QWidget):
                 # Enter：提交
                 if key in (Qt.Key_Return, Qt.Key_Enter):
                     self._barcode_debounce_timer.stop()
-                    if self._barcode_capture_buffer and self._barcode_capture_first_ts is not None and self._barcode_capture_last_ts is not None:
+                    if (
+                        self._barcode_capture_buffer
+                        and self._barcode_capture_first_ts is not None
+                        and self._barcode_capture_last_ts is not None
+                    ):
                         text = self._normalize_barcode(self._barcode_capture_buffer)
-                        if self._should_auto_commit_barcode(text, self._barcode_capture_first_ts,
-                                                            self._barcode_capture_last_ts):
+                        if self._should_auto_commit_barcode(
+                            text,
+                            self._barcode_capture_first_ts,
+                            self._barcode_capture_last_ts,
+                        ):
                             # 恢复被输入框接收到的内容（若有）
                             try:
                                 le = self._barcode_capture_target_lineedit
-                                if le is not None and self._barcode_capture_target_text is not None:
+                                if (
+                                    le is not None
+                                    and self._barcode_capture_target_text is not None
+                                ):
                                     with QSignalBlocker(le):
                                         le.setText(self._barcode_capture_target_text)
-                                    if self._barcode_capture_target_cursor_pos is not None:
-                                        le.setCursorPosition(self._barcode_capture_target_cursor_pos)
+                                    if (
+                                        self._barcode_capture_target_cursor_pos
+                                        is not None
+                                    ):
+                                        le.setCursorPosition(
+                                            self._barcode_capture_target_cursor_pos
+                                        )
                             except Exception:
                                 pass
                             self._commit_barcode(text, source="wedge_global_enter")
@@ -1679,11 +1873,17 @@ class SequenceWindow(QWidget):
                 ch = event.text()
                 if ch and ch.isprintable() and not ch.isspace():
                     # 若焦点在其它输入框上，先记录其原内容，之后若判定为扫码则恢复
-                    if self._barcode_capture_first_ts is None and fw is not None and isinstance(fw, QLineEdit):
+                    if (
+                        self._barcode_capture_first_ts is None
+                        and fw is not None
+                        and isinstance(fw, QLineEdit)
+                    ):
                         self._barcode_capture_target_lineedit = fw
                         try:
                             self._barcode_capture_target_text = fw.text()
-                            self._barcode_capture_target_cursor_pos = fw.cursorPosition()
+                            self._barcode_capture_target_cursor_pos = (
+                                fw.cursorPosition()
+                            )
                         except Exception:
                             self._barcode_capture_target_text = None
                             self._barcode_capture_target_cursor_pos = None
@@ -1694,7 +1894,13 @@ class SequenceWindow(QWidget):
                     self._barcode_capture_buffer += ch
                     self._barcode_debounce_timer.start()
                     # 定义允许键盘输入的白名单：文本框、数字框、下拉框, 否则吞掉字符避免影响控件
-                    allowed_types = (QLineEdit, QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit)
+                    allowed_types = (
+                        QLineEdit,
+                        QAbstractSpinBox,
+                        QComboBox,
+                        QTextEdit,
+                        QPlainTextEdit,
+                    )
                     if fw is not None and not isinstance(fw, allowed_types):
                         return True
                     # 焦点在其它输入框：先让字符进入输入框，后续若判定为扫码再恢复
@@ -1712,8 +1918,12 @@ class SequenceWindow(QWidget):
         """
         try:
             if not os.path.exists(self._analysis_window_geometry_path):
-                os.makedirs(os.path.dirname(self._analysis_window_geometry_path), exist_ok=True)
-                with open(self._analysis_window_geometry_path, "w", encoding="utf-8") as f:
+                os.makedirs(
+                    os.path.dirname(self._analysis_window_geometry_path), exist_ok=True
+                )
+                with open(
+                    self._analysis_window_geometry_path, "w", encoding="utf-8"
+                ) as f:
                     json.dump({}, f, indent=2, ensure_ascii=False)
                 return {}
             with open(self._analysis_window_geometry_path, "r", encoding="utf-8") as f:
@@ -1730,10 +1940,14 @@ class SequenceWindow(QWidget):
         if not self._analysis_window_geometry_dirty:
             return
         try:
-            os.makedirs(os.path.dirname(self._analysis_window_geometry_path), exist_ok=True)
+            os.makedirs(
+                os.path.dirname(self._analysis_window_geometry_path), exist_ok=True
+            )
             tmp_path = self._analysis_window_geometry_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(self._analysis_window_geometry, f, indent=2, ensure_ascii=False)
+                json.dump(
+                    self._analysis_window_geometry, f, indent=2, ensure_ascii=False
+                )
             os.replace(tmp_path, self._analysis_window_geometry_path)
             self._analysis_window_geometry_dirty = False
         except Exception as e:
@@ -1823,11 +2037,17 @@ class SequenceWindow(QWidget):
         registry = LoadUiConfig._load_sequence_config_registry()
         # IMPORTANT: Do not auto-add "默认配置" into registry.
         # The combobox should either never show it, or always show it if it already exists in registry.
-        user_keys = [k for k in (registry or {}).keys() if k not in ("using_config_path", "默认配置")]
+        user_keys = [
+            k
+            for k in (registry or {}).keys()
+            if k not in ("using_config_path", "默认配置")
+        ]
         using_config_path = registry.get("using_config_path", None)
         default_path = registry.get("默认配置")
         # Fallback when using_config_path missing or points to a non-existent file.
-        if (not using_config_path) or (isinstance(using_config_path, str) and not os.path.exists(using_config_path)):
+        if (not using_config_path) or (
+            isinstance(using_config_path, str) and not os.path.exists(using_config_path)
+        ):
             fallback_path = None
             # Prefer user saved/imported entries (if any), otherwise fallback to built-in default.
             if user_keys:
@@ -1836,7 +2056,11 @@ class SequenceWindow(QWidget):
                     if isinstance(p, str) and os.path.exists(p):
                         fallback_path = p
                         break
-            if not fallback_path and isinstance(default_path, str) and os.path.exists(default_path):
+            if (
+                not fallback_path
+                and isinstance(default_path, str)
+                and os.path.exists(default_path)
+            ):
                 fallback_path = default_path
 
             using_config_path = fallback_path
@@ -1911,7 +2135,9 @@ class SequenceWindow(QWidget):
             path = self.registry.get(text)
         if not path:
             # Ignore transient/invalid changes (e.g., during refresh/clear)
-            self.default_logger.warning(f"Invalid sequence config selection: text={text!r}, resolved_path=None")
+            self.default_logger.warning(
+                f"Invalid sequence config selection: text={text!r}, resolved_path=None"
+            )
             return
 
         self.using_config_path = path
@@ -1934,7 +2160,9 @@ class SequenceWindow(QWidget):
         """
         # Avoid noisy stdout prints; use logger if needed for debugging.
         # self.default_logger.debug(f"Loading sequence config: {self.using_config_path}")
-        load_code, result = LoadUiConfig().load_sequence_config_from_json(self.using_config_path)
+        load_code, result = LoadUiConfig().load_sequence_config_from_json(
+            self.using_config_path
+        )
         if load_code == error_code.OK and result:
             self.sequence_config = result
             seq = self.sequence_config[0]["seq1"]
@@ -1952,9 +2180,8 @@ class SequenceWindow(QWidget):
             self.analysis_config = dict()
             self._set_sequence_config_available_state(False)
             # Only show prompt after login success (window shown).
-            if (
-                getattr(self, "_missing_config_prompt_enabled", False)
-                and not getattr(self, "_missing_config_prompted", False)
+            if getattr(self, "_missing_config_prompt_enabled", False) and not getattr(
+                self, "_missing_config_prompted", False
             ):
                 QMessageBox.warning(
                     self,
@@ -2021,7 +2248,9 @@ class SequenceWindow(QWidget):
         # Update plot - preserve zoom/pan by updating existing PlotDataItem
         if self.streaming_plot_item is None:
             # First chunk - create new plot item
-            self.streaming_plot_item = self.line_graph.plot(time_axis, accumulated_audio, pen="k")
+            self.streaming_plot_item = self.line_graph.plot(
+                time_axis, accumulated_audio, pen="k"
+            )
         else:
             # Subsequent chunks - update existing item (preserves zoom/pan) incrementally
             self.streaming_plot_item.setData(time_axis, accumulated_audio)
@@ -2077,25 +2306,36 @@ class SequenceWindow(QWidget):
                     f"Missing: {expected_samples - actual_samples} samples ({(expected_samples - actual_samples) / sample_rate * 1000:.1f}ms)"
                 )
             else:
-                self.default_logger.info(f"Recording complete: {actual_samples} samples captured (matches target)")
+                self.default_logger.info(
+                    f"Recording complete: {actual_samples} samples captured (matches target)"
+                )
 
             # Perform alignment if in play+record mode
-            if self.streaming_mode == "play_record" and self.streaming_stimulus_data is not None:
+            if (
+                self.streaming_mode == "play_record"
+                and self.streaming_stimulus_data is not None
+            ):
                 # Finalize temp file first
                 if self.streaming_wav_writer:
                     self.streaming_wav_writer.finalize()
                     self.streaming_wav_writer = None
 
-                aligned_data = AlignmentProcessing.align_play_and_rec_data_using_gccphat(
-                    self.streaming_stimulus_data, recorded_data
+                aligned_data = (
+                    AlignmentProcessing.align_play_and_rec_data_using_gccphat(
+                        self.streaming_stimulus_data, recorded_data
+                    )
                 )
 
                 # Update plot with aligned data (refresh display)
-                final_time_axis = np.linspace(0, len(aligned_data) / sample_rate, len(aligned_data))
+                final_time_axis = np.linspace(
+                    0, len(aligned_data) / sample_rate, len(aligned_data)
+                )
                 if self.streaming_plot_item:
                     self.streaming_plot_item.setData(final_time_axis, aligned_data)
                 else:
-                    self.streaming_plot_item = self.line_graph.plot(final_time_axis, aligned_data, pen="k")
+                    self.streaming_plot_item = self.line_graph.plot(
+                        final_time_axis, aligned_data, pen="k"
+                    )
 
                 # Store aligned data
                 self.data_struct.store_wave_data = aligned_data
@@ -2115,9 +2355,13 @@ class SequenceWindow(QWidget):
 
                 # Delete temp file AFTER successful save (for data safety)
                 try:
-                    if hasattr(self, "streaming_temp_path") and os.path.exists(self.streaming_temp_path):
+                    if hasattr(self, "streaming_temp_path") and os.path.exists(
+                        self.streaming_temp_path
+                    ):
                         os.remove(self.streaming_temp_path)
-                        self.default_logger.info(f"Deleted temp file: {self.streaming_temp_path}")
+                        self.default_logger.info(
+                            f"Deleted temp file: {self.streaming_temp_path}"
+                        )
                 except Exception as e:
                     self.default_logger.warning(f"Failed to delete temp file: {e}")
 
@@ -2132,7 +2376,9 @@ class SequenceWindow(QWidget):
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(
+                    self.recorded_signal_info, None
+                )
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
@@ -2143,8 +2389,10 @@ class SequenceWindow(QWidget):
                 repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
                 if repeat_times > 1:
                     kwargs = {"repeat_times": repeat_times}
-                    self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
-                        self.data_struct.store_wave_data, sample_rate, **kwargs
+                    self.data_struct.split_repeat_data = (
+                        SplitRepeatSignal().split_repeat_signal(
+                            self.data_struct.store_wave_data, sample_rate, **kwargs
+                        )
                     )
 
             # Clean up streaming state
@@ -2185,7 +2433,9 @@ class SequenceWindow(QWidget):
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
-            self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
+            self.player_status_flag = (
+                False  # Clear flag even on error to prevent permanent blocking
+            )
             # Still enable buttons even on error
             self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)
@@ -2257,15 +2507,3 @@ class SequenceWindow(QWidget):
                 self.analysis_window = []
         except Exception:
             pass
-
-        # 关闭汇总窗口
-        try:
-            if getattr(self, "_analysis_result_summary_window", None) is not None:
-                try:
-                    self._analysis_result_summary_window.close()
-                except Exception:
-                    pass
-                self._analysis_result_summary_window = None
-        except Exception:
-            pass
-
