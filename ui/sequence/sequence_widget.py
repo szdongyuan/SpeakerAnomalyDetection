@@ -337,6 +337,8 @@ class SequenceWindow(QWidget):
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        # “重置统计”按钮：重置测试计数 + 恢复重播/分析按钮状态
+        self.count_board.reset_btn.clicked.connect(self.on_reset_statistics_clicked)
         self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
 
     def init_lineedit_text(self):
@@ -754,17 +756,84 @@ class SequenceWindow(QWidget):
                 pass
 
     def reset_test_reord(self):
+        """
+        Reset today's test counters (total/ok/ng/ok_percent) and refresh UI texts.
+        """
         current_time = datetime.now().strftime("%Y-%m-%d")
+        ensure_test_result_file(self.analysis_config)
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        with open(test_result_path, "r") as f:
-            lines = f.readlines()
-            lines[0] = f"total: 0\n"
-            lines[1] = f"ok: 0\n"
-            lines[2] = f"ng: 0\n"
-            lines[3] = f"ok_percent: 0\n"
+        lines = [
+            "total: 0\n",
+            "ok: 0\n",
+            "ng: 0\n",
+            "ok_percent: 0%\n",
+            f"datatime: {current_time}\n",
+        ]
         with open(test_result_path, "w") as f:
             f.writelines(lines)
-        self.count_board.set_mark_text()
+        # Refresh displayed counters
+        try:
+            self.count_board.set_test_text()
+        except Exception:
+            pass
+        try:
+            self.count_board.set_mark_text()
+        except Exception:
+            pass
+
+    def on_reset_statistics_clicked(self):
+        """
+        Handler for count-board “重置统计” button.
+
+        Expected behavior (用户期望):
+        - Reset test counters (统计面板显示归零)
+        - Reset related runtime UI states (重播/分析按钮回到禁用)
+        """
+        try:
+            self.reset_test_reord()
+        except Exception as e:
+            try:
+                self.default_logger.error(f"reset_statistics_error: {e}")
+            except Exception:
+                pass
+
+        # Reset replay/analyze buttons and related runtime flags
+        try:
+            self.last_play_count = None
+        except Exception:
+            pass
+        try:
+            self.player_status_flag = False
+        except Exception:
+            pass
+        try:
+            self.clicked_player_flag = False
+        except Exception:
+            pass
+        try:
+            self._awaiting_ok_ng = False
+            self._sn_clear_on_next_scan = False
+        except Exception:
+            pass
+        try:
+            # Clear cached wave so “分析”不会对旧数据误操作
+            if hasattr(self.data_struct, "store_wave_data"):
+                self.data_struct.store_wave_data = None
+        except Exception:
+            pass
+        try:
+            self.replayer_btn.setDisabled(True)
+        except Exception:
+            pass
+        try:
+            self.data_btn.setDisabled(True)
+        except Exception:
+            pass
+        try:
+            # Restore player UI to idle state
+            self.update_player_btn_is_paused()
+        except Exception:
+            pass
 
     def lineedit_count_lose_focus(self, lineedit):
         self.current_recorded_count = int(lineedit.text())
