@@ -5,6 +5,7 @@ Enables non-blocking audio capture with real-time chunk processing.
 
 import queue
 import threading
+import time
 import numpy as np
 
 from base.log_manager import LogManager
@@ -324,7 +325,6 @@ class StreamingAudioProcessor:
         Returns:
             bool: True if finished successfully, False if timeout or error
         """
-        import time
         start_time = time.time()
 
         while self.is_recording:
