@@ -8,6 +8,8 @@ import numpy as np
 from base.file_ops import FileOps
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.save_data import save_audio_simple
+from base.load_audio import load_audio_simple
+from base.log_manager import LogManager
 from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 
@@ -16,8 +18,6 @@ def _get_logger(logger=None):
     if logger is not None:
         return logger
     try:
-        from base.log_manager import LogManager  # noqa: WPS433
-
         return LogManager.set_log_handler("core")
     except Exception:
         logging.basicConfig(level=logging.INFO)
@@ -94,12 +94,6 @@ def _try_load_existing_wav(detail: dict, sample_rate: int, base_dirs: list, logg
     Returns (y, used_abs_path) or (None, None).
     """
     logger = _get_logger(logger)
-    try:
-        # Lazy import: allow regeneration-only environments without librosa.
-        from base.load_audio import load_audio_simple  # noqa: WPS433
-    except Exception as e:
-        logger.warning(f"Audio loader unavailable (librosa not installed?): {e}")
-        return None, None
 
     for key in ("stimulus_signal_path", "load_stimulus_signal_path"):
         raw = (detail or {}).get(key)
