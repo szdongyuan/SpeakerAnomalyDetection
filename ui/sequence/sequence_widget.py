@@ -105,6 +105,9 @@ class SequenceWindow(QWidget):
         self.count_board = SequenceCountBoard(self.analysis_config)
         self._refresh_test_mode_availability()
         self.player_status_flag = False
+        # True while a record run is still processing (record -> analysis -> save -> count updates).
+        # Used to prevent starting a new recording before the full workflow completes.
+        self._record_workflow_busy = False
         self.recorded_signal_info = {}
         self.ip_format = True
         self.port_format = True
@@ -613,7 +616,7 @@ class SequenceWindow(QWidget):
         self._barcode_capture_target_cursor_pos = None
 
         # 自动开始测试
-        if not self.player_status_flag:
+        if not getattr(self, "_record_workflow_busy", False):
             self.default_logger.info(f"S/N 收到({source}): {barcode}，自动开始测试")
             # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
             self._close_analysis_windows()
@@ -687,7 +690,7 @@ class SequenceWindow(QWidget):
 
     def on_sensor_triggered(self):
         """处理光电开关触发信号"""
-        if not self.player_status_flag:
+        if not getattr(self, "_record_workflow_busy", False):
             self.default_logger.info("光电触发响应: 开始测试")
             self.start_this_play("not_labeled")
         else:
@@ -961,6 +964,7 @@ class SequenceWindow(QWidget):
         self.default_ai_result = None
         self.default_ai = None
         self.clicked_scanner()
+        self.update_player_btn_is_paused()
 
     def update_recorded_signal_info_to_db(self):
         if self.recorded_signal_info["labels"] == "not_labeled":
@@ -1014,6 +1018,7 @@ class SequenceWindow(QWidget):
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
         self.clicked_scanner()
+        self.update_player_btn_is_paused()
 
     def on_clicked_player_btn(self, label="not_labeled"):
         if not self.sequence_config:
@@ -1060,6 +1065,13 @@ class SequenceWindow(QWidget):
             self.run()
 
     def start_this_play(self, label="not_labeled"):
+        if getattr(self, "_record_workflow_busy", False):
+            return
+        if getattr(self, "player_status_flag", False):
+            return
+        if self.checked_work_status_message():
+            return
+
         if self.clicked_player_flag is False:
             if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
@@ -1152,8 +1164,14 @@ class SequenceWindow(QWidget):
         return stimulus_dict, recorded_dict, sample_rate
 
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
+        if getattr(self, "_record_workflow_busy", False):
+            return
         if self.checked_work_status_message():
             return
+        if is_replay and self.last_play_count is None:
+            QMessageBox.warning(self, "提示", "请先进行录音")
+            return
+        self._record_workflow_busy = True
 
         self.line_graph.clear()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
@@ -1181,13 +1199,22 @@ class SequenceWindow(QWidget):
 
         # For replay: use cached count to overwrite the same file
         # For play: use current lineedit count (already incremented in start_this_play)
-        if is_replay:
-            if self.last_play_count is None:
-                QMessageBox.warning(self, "提示", "请先进行录音")
-                return
-            stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
-        else:
-            stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
+        try:
+            if is_replay:
+                stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
+            else:
+                stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
+        except Exception as e:
+            self.default_logger.error(f"reset_work_pram_error: {e}")
+            if not is_replay:
+                # rollback the increment done in start_this_play()
+                self.current_recorded_count -= 1
+                self.lineedit_count.setText(str(self.current_recorded_count))
+            self.player_status_flag = False
+            self._record_workflow_busy = False
+            self.update_player_btn_is_paused()
+            QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
+            return
 
         if stimulus_dict is None:
             if not is_replay:
@@ -1195,37 +1222,47 @@ class SequenceWindow(QWidget):
                 self.current_recorded_count -= 1
                 self.lineedit_count.setText(str(self.current_recorded_count))
             self.player_status_flag = False
+            self._record_workflow_busy = False
             self.update_player_btn_is_paused()
             return
 
         # Choose streaming or blocking(Not in use now) mode
         if self.use_streaming:
-            # Use modern streaming approach with true real-time updates (non-blocking)
-            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                # Start streaming play+record (non-blocking)
-                # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
-                temp_path = self.recorded_path.replace(".wav", "_temp.wav")
-                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
-                self.streaming_temp_path = temp_path
+            try:
+                # Use modern streaming approach with true real-time updates (non-blocking)
+                if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+                    # Start streaming play+record (non-blocking)
+                    # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
+                    temp_path = self.recorded_path.replace(".wav", "_temp.wav")
+                    self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
+                    self.streaming_temp_path = temp_path
 
-                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
-                )
-                self.streaming_mode = "play_record"
+                    self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
+                        stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+                    )
+                    self.streaming_mode = "play_record"
 
-            else:
-                # Start streaming record-only (non-blocking)
-                # Create WAV file writer for streaming saves (useful for long recordings)
-                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
+                else:
+                    # Start streaming record-only (non-blocking)
+                    # Create WAV file writer for streaming saves (useful for long recordings)
+                    self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
 
-                self.streaming_processor, _ = stream_record_without_play(
-                    recorded_dict, self.recorded_path, self.recorded_signal_info
-                )
-                self.streaming_mode = "record_only"
-                self.streaming_stimulus_data = None
+                    self.streaming_processor, _ = stream_record_without_play(
+                        recorded_dict, self.recorded_path, self.recorded_signal_info
+                    )
+                    self.streaming_mode = "record_only"
+                    self.streaming_stimulus_data = None
 
-            # Start polling timer to process queue and detect completion
-            self.streaming_poll_timer.start(50)  # Poll every 50ms
+                # Start polling timer to process queue and detect completion
+                self.streaming_poll_timer.start(50)  # Poll every 50ms
+            except Exception as e:
+                self.default_logger.error(f"start_streaming_error: {e}")
+                self._cleanup_streaming_resources()
+                self.player_status_flag = False
+                self._record_workflow_busy = False
+                self.update_player_btn_is_paused()
+                QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
+                return
 
             # Return immediately - completion will be handled by _on_streaming_complete()
             # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
@@ -1233,11 +1270,19 @@ class SequenceWindow(QWidget):
 
         else:
             # Use legacy blocking approach
-            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
-            else:
-                record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+            try:
+                if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+                    play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
+                else:
+                    record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
+                self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+            except Exception as e:
+                self.default_logger.error(f"blocking_record_error: {e}")
+                self.player_status_flag = False
+                self._record_workflow_busy = False
+                self.update_player_btn_is_paused()
+                QMessageBox.warning(self, "提示", f"录音失败: {e}")
+                return
 
         self.player_status_flag = False  # Recording complete, allow hardware access
         self.data_btn.setEnabled(True)
@@ -1255,6 +1300,7 @@ class SequenceWindow(QWidget):
 
         if self.analysis_config["auto_analysis"]:
             self.run()
+        self._record_workflow_busy = False
         self.update_player_btn_is_paused()
 
     def run(self):
@@ -1935,7 +1981,7 @@ class SequenceWindow(QWidget):
         LoadUiConfig.update_using_config_path(self.using_config_path)
         self.get_sequence_config_from_json()
         self.init_data_struct_stimulus_config()
-        self.player_btn.setDisabled(False)
+        self.update_player_btn_is_paused()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setDisabled(True)
 
@@ -1987,7 +2033,7 @@ class SequenceWindow(QWidget):
         """
         try:
             if available:
-                self.player_btn.setDisabled(False)
+                self.update_player_btn_is_paused()
                 # replay/data depend on runtime state; keep conservative defaults here
             else:
                 self.player_btn.setDisabled(True)
@@ -2188,6 +2234,7 @@ class SequenceWindow(QWidget):
                 self.run()
 
             # Update player button state
+            self._record_workflow_busy = False
             self.update_player_btn_is_paused()
 
             self.default_logger.info("Streaming recording completed successfully")
@@ -2205,9 +2252,10 @@ class SequenceWindow(QWidget):
             # Still enable buttons even on error
             self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)
-            self.update_player_btn_is_paused()
             self._awaiting_ok_ng = False
             self._sn_clear_on_next_scan = False
+            self._record_workflow_busy = False
+            self.update_player_btn_is_paused()
 
     def _cleanup_streaming_resources(self):
         """
@@ -2254,7 +2302,10 @@ class SequenceWindow(QWidget):
     def update_player_btn_is_paused(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
-        self.player_btn.setDisabled(False)
+        can_start = bool(getattr(self, "sequence_config", None))
+        can_start = can_start and not getattr(self, "player_status_flag", False)
+        can_start = can_start and not getattr(self, "_record_workflow_busy", False)
+        self.player_btn.setDisabled(not can_start)
 
     def _close_analysis_windows(self):
         """
