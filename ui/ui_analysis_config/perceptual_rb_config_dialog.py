@@ -34,8 +34,9 @@ class PerceptualRbConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(380, 380)
-        self.resize(400, 420)
+        # 默认高度偏小会把阈值绘图区域压缩得很矮
+        self.setMinimumSize(380, 420)
+        self.resize(400, 480)
 
         root_layout = QVBoxLayout()
 
