@@ -73,8 +73,6 @@ class SequenceWindow(QWidget):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.recorded_path = None
-        self.refresh_stimulus_flag = None
-        self.add_or_update_wave_flag = True
         self.count_board = None
         self.toolsbar = SequenceToolsBar()
 
@@ -87,8 +85,6 @@ class SequenceWindow(QWidget):
         self.init_fft_and_stft_flag()
         self.signal_info = {}
         self.analysis_window = []
-        self.default_ai = None
-        self.default_ai_result = None
         self._analysis_result_summary_window = None
         self._excel_export_cache = None
         self._excel_exported_record_id = None
@@ -337,6 +333,8 @@ class SequenceWindow(QWidget):
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        # “重置统计”按钮：重置测试计数 + 恢复重播/分析按钮状态
+        self.count_board.reset_btn.clicked.connect(self.on_reset_statistics_clicked)
         self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
 
     def init_lineedit_text(self):
@@ -618,8 +616,6 @@ class SequenceWindow(QWidget):
         # 自动开始测试
         if not getattr(self, "_record_workflow_busy", False):
             self.default_logger.info(f"S/N 收到({source}): {barcode}，自动开始测试")
-            # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
-            self._close_analysis_windows()
             self.start_this_play("not_labeled")
 
     def _on_barcode_return_pressed(self):
@@ -754,17 +750,84 @@ class SequenceWindow(QWidget):
                 pass
 
     def reset_test_reord(self):
+        """
+        Reset today's test counters (total/ok/ng/ok_percent) and refresh UI texts.
+        """
         current_time = datetime.now().strftime("%Y-%m-%d")
+        ensure_test_result_file(self.analysis_config)
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        with open(test_result_path, "r") as f:
-            lines = f.readlines()
-            lines[0] = f"total: 0\n"
-            lines[1] = f"ok: 0\n"
-            lines[2] = f"ng: 0\n"
-            lines[3] = f"ok_percent: 0\n"
+        lines = [
+            "total: 0\n",
+            "ok: 0\n",
+            "ng: 0\n",
+            "ok_percent: 0%\n",
+            f"datatime: {current_time}\n",
+        ]
         with open(test_result_path, "w") as f:
             f.writelines(lines)
-        self.count_board.set_mark_text()
+        # Refresh displayed counters
+        try:
+            self.count_board.set_test_text()
+        except Exception:
+            pass
+        try:
+            self.count_board.set_mark_text()
+        except Exception:
+            pass
+
+    def on_reset_statistics_clicked(self):
+        """
+        Handler for count-board “重置统计” button.
+
+        Expected behavior (用户期望):
+        - Reset test counters (统计面板显示归零)
+        - Reset related runtime UI states (重播/分析按钮回到禁用)
+        """
+        try:
+            self.reset_test_reord()
+        except Exception as e:
+            try:
+                self.default_logger.error(f"reset_statistics_error: {e}")
+            except Exception:
+                pass
+
+        # Reset replay/analyze buttons and related runtime flags
+        try:
+            self.last_play_count = None
+        except Exception:
+            pass
+        try:
+            self.player_status_flag = False
+        except Exception:
+            pass
+        try:
+            self.clicked_player_flag = False
+        except Exception:
+            pass
+        try:
+            self._awaiting_ok_ng = False
+            self._sn_clear_on_next_scan = False
+        except Exception:
+            pass
+        try:
+            # Clear cached wave so “分析”不会对旧数据误操作
+            if hasattr(self.data_struct, "store_wave_data"):
+                self.data_struct.store_wave_data = None
+        except Exception:
+            pass
+        try:
+            self.replayer_btn.setDisabled(True)
+        except Exception:
+            pass
+        try:
+            self.data_btn.setDisabled(True)
+        except Exception:
+            pass
+        try:
+            # Restore player UI to idle state
+            self.update_player_btn_is_paused()
+        except Exception:
+            pass
 
     def lineedit_count_lose_focus(self, lineedit):
         self.current_recorded_count = int(lineedit.text())
@@ -961,8 +1024,6 @@ class SequenceWindow(QWidget):
             self.replayer_btn.setDisabled(True)
             self.data_btn.setEnabled(False)
 
-        self.default_ai_result = None
-        self.default_ai = None
         self.clicked_scanner()
         self.update_player_btn_is_paused()
 
@@ -1013,8 +1074,6 @@ class SequenceWindow(QWidget):
         self.lineedit_s_or_n.clear()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setEnabled(False)
-        self.default_ai_result = None
-        self.default_ai = None
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
         self.clicked_scanner()
@@ -1076,6 +1135,8 @@ class SequenceWindow(QWidget):
             if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
+        # 产线场景：上一轮的分析弹窗如果还开着，自动关闭，避免必须人工点关闭
+        self._close_analysis_windows()
 
         # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
@@ -1327,9 +1388,6 @@ class SequenceWindow(QWidget):
                 )
                 return
 
-        self.analysis_window = []
-        if self._analysis_result_summary_window:
-            self._analysis_result_summary_window = None
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
         if self.analysis_config:
@@ -2322,5 +2380,16 @@ class SequenceWindow(QWidget):
                     except Exception:
                         pass
                 self.analysis_window = []
+        except Exception:
+            pass
+
+        # 关闭汇总窗口
+        try:
+            if getattr(self, "_analysis_result_summary_window", None) is not None:
+                try:
+                    self._analysis_result_summary_window.close()
+                except Exception:
+                    pass
+                self._analysis_result_summary_window = None
         except Exception:
             pass

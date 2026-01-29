@@ -1,7 +1,6 @@
 import csv
 import json
 import os
-import re
 import sys
 
 import librosa
@@ -38,6 +37,7 @@ from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
+from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
@@ -365,8 +365,6 @@ class Distortion(AnalysisGraphWidget):
 
         # Apply 1/6 octave smoothing for chirp signals only
         if stimulus_method == "chirps":
-            from base.utils.octave_smoothing import smooth_to_octave_grid
-
             freq_value, thd = smooth_to_octave_grid(freq_value, thd, fraction=6, method="log")
 
         # Keep the absolute curve for export/saving (do not subtract golden baseline).
@@ -661,8 +659,6 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
         # Apply 1/6 octave smoothing for chirp signals only
         if stimulus_metadata["stimulus_method"] == "chirps":
-            from base.utils.octave_smoothing import smooth_to_octave_grid
-
             freq_value, perceptual_loudness = smooth_to_octave_grid(
                 freq_value, perceptual_loudness, fraction=6, method="log"
             )
@@ -971,7 +967,7 @@ class SplFrequency(AnalysisGraphWidget):
 
         if octave_smoothing in {1, 3, 6, 12, 24, 48} and spl_db.size > 1:
             try:
-                from base.utils.octave_smoothing import smooth_to_octave_grid
+
 
                 freq = np.asarray(frequency_list, dtype=float)
                 val = np.asarray(spl_db, dtype=float)
@@ -1154,8 +1150,6 @@ class Frequency(AnalysisGraphWidget):
 
             if octave_smoothing in {1, 3, 6, 12, 24, 48} and fr.size > 1:
                 try:
-                    from base.utils.octave_smoothing import smooth_to_octave_grid
-
                     freq = np.asarray(frequency_list, dtype=float)
                     val = np.asarray(fr, dtype=float)
                     mask = np.isfinite(freq) & np.isfinite(val) & (freq > 0.0)
