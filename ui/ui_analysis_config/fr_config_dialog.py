@@ -36,8 +36,9 @@ class FrConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(380, 350)
-        self.resize(380, 350)
+        # 默认高度偏小会把阈值绘图区域压缩得很矮
+        self.setMinimumSize(380, 420)
+        self.resize(380, 450)
 
         layout = QVBoxLayout()
 
