@@ -40,9 +40,8 @@ class SplConfigWindow(QDialog):
     def __init__(self, config_manager, model_type):
         super().__init__()
         self.config_manager = config_manager
-        self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.analysis_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
+        self.model_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
         self.init_ui()
 
     def init_ui(self):
@@ -50,7 +49,7 @@ class SplConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         # 默认高度偏小会把阈值绘图区域压缩得很矮，导致“显示不完整”的观感
-        height = 570 if self.analysis_type == "SPLF" else 430
+        height = 570 if self.model_type == "SPLF" else 430
         self.setMinimumSize(380, height)
         self.resize(380, height)
 
@@ -58,14 +57,14 @@ class SplConfigWindow(QDialog):
 
         # SPL: time-domain smoothing checkbox
         self.smooth_chk_box = None
-        if self.analysis_type != "SPLF":
+        if self.model_type != "SPLF":
             self.smooth_chk_box = QCheckBox("平滑")
             self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
             self.smooth_chk_box.stateChanged.connect(self.get_default_config)
 
         # SPLF: calculation mode (fundamental-only vs total RMS SPL)
         self.splf_mode_group_box = None
-        if self.analysis_type == "SPLF":
+        if self.model_type == "SPLF":
             self.splf_mode_group_box = QGroupBox("SPLF 计算方式")
             self.radio_fundamental = QRadioButton("仅基频")
             self.radio_total = QRadioButton("总SPL")
@@ -96,7 +95,7 @@ class SplConfigWindow(QDialog):
 
         # SPLF only: golden sample checkbox (placed above threshold widget)
         self.golden_chk_box = None
-        if self.analysis_type == "SPLF":
+        if self.model_type == "SPLF":
             self.golden_chk_box = QCheckBox("使用黄金样本")
             self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
 
@@ -168,9 +167,9 @@ class SplConfigWindow(QDialog):
     def get_default_config(self):
         """获取配置数据"""
         config = {}
-        if self.analysis_type != "SPLF" and self.smooth_chk_box is not None:
+        if self.model_type != "SPLF" and self.smooth_chk_box is not None:
             config["smooth_checked"] = self.smooth_chk_box.isChecked()
-        if self.analysis_type == "SPLF":
+        if self.model_type == "SPLF":
             calc_mode = "fundamental"
             if hasattr(self, "radio_total") and self.radio_total.isChecked():
                 calc_mode = "total"
@@ -191,7 +190,7 @@ class SplConfigWindow(QDialog):
         config_data = self.get_default_config()
         if not self.threshold_widget.validate():
             return
-        save_flag = self.config_manager.save_default_config(self.analysis_type, config_data)
+        save_flag = self.config_manager.save_default_config(self.model_type, config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
