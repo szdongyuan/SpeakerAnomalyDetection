@@ -10,7 +10,7 @@ import librosa
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -23,6 +23,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QTextEdit,
     QPlainTextEdit,
+    QDialog,
+    QLabel,
 )
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
@@ -704,10 +706,24 @@ class SequenceWindow(QWidget):
             return
 
         while True:
+            # Show "saving" dialog
+            saving_dialog = QDialog(self)
+            saving_dialog.setWindowTitle("正在保存")
+            saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+            saving_dialog.setFixedSize(250, 80)
+            layout = QVBoxLayout(saving_dialog)
+            label = QLabel("正在保存数据，请稍候...")
+            label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(label)
+            saving_dialog.show()
+            QApplication.processEvents()
+
             try:
                 failures = self.flush_excel_spool_build(on_close=True)
             except Exception as e:
                 failures = [("unknown", str(e))]
+
+            saving_dialog.close()
 
             if not failures:
                 break

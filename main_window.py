@@ -3,7 +3,7 @@ import sys
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox, QDialog
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
@@ -329,10 +329,24 @@ class MainWindow(QMainWindow):
         # Retry loop if there are failures (e.g., Excel file is open)
         if hasattr(self, "sequence_window") and self.sequence_window is not None:
             while True:
+                # Show "saving" dialog
+                saving_dialog = QDialog(self)
+                saving_dialog.setWindowTitle("正在保存")
+                saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+                saving_dialog.setFixedSize(250, 80)
+                layout = QVBoxLayout(saving_dialog)
+                label = QLabel("正在保存数据，请稍候...")
+                label.setAlignment(Qt.AlignCenter)
+                layout.addWidget(label)
+                saving_dialog.show()
+                QApplication.processEvents()
+
                 try:
                     failures = self.sequence_window.flush_excel_spool_build(on_close=False)
                 except Exception as e:
                     failures = [("unknown", str(e))]
+
+                saving_dialog.close()
 
                 if not failures:
                     break
