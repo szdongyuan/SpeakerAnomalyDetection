@@ -19,10 +19,6 @@ from PyQt5.QtWidgets import (
     QWidget,
     QFileDialog,
     QLineEdit,
-    QAbstractSpinBox,
-    QComboBox,
-    QTextEdit,
-    QPlainTextEdit,
     QDialog,
     QLabel,
 )
@@ -40,6 +36,7 @@ from base.unified_hid_device_manager import UnifiedHardwareManager
 from PyQt5.QtCore import QMetaObject
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
+from ui.sequence.barcode_router import BarcodeRouter
 from base.log_manager import LogManager
 from base.play_and_record import (
     play_last_stimulus_wave,
@@ -122,16 +119,20 @@ class SequenceWindow(QWidget):
         self._missing_config_prompt_enabled = False
 
         self._barcode_debounce_ms = 120
-        self._barcode_fast_input_max_seconds = 0.6  # 首字符到末字符的总耗时，小于该值更像扫码
-        self._barcode_min_length_for_auto_commit = 6  # 太短容易误触发（可按你们条码规则调整）
+        self._barcode_fast_input_max_seconds = 0.4  # 首字符到末字符的总耗时，小于该值更像扫码（扫码枪通常 < 0.2秒）
+        self._barcode_min_length_for_auto_commit = 4  # 条码最小长度，太短容易误触发（可按实际条码规则调整）
+
+        # 扫码逻辑委托到 BarcodeRouter（需先创建，再连接定时器/信号）
+        self._barcode_router = BarcodeRouter(self)
 
         self._barcode_debounce_timer = QTimer(self)
         self._barcode_debounce_timer.setSingleShot(True)
         self._barcode_debounce_timer.setInterval(self._barcode_debounce_ms)
-        self._barcode_debounce_timer.timeout.connect(self._on_barcode_debounce_timeout)
+        # 扫码逻辑委托到 BarcodeRouter，SequenceWidget 只保留业务提交入口 _commit_barcode
+        self._barcode_debounce_timer.timeout.connect(self._barcode_router.on_barcode_debounce_timeout)
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None
-        # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免“必须点到输入框才生效”）
+        # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免"必须点到输入框才生效"）
         self._barcode_capture_buffer = ""
         self._barcode_capture_first_ts = None
         self._barcode_capture_last_ts = None
@@ -143,6 +144,14 @@ class SequenceWindow(QWidget):
             app.installEventFilter(self)
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
+
+        # 条码提交去重机制：防止 HID 模式和键盘楔入模式同时触发导致重复提交
+        self._last_committed_barcode = None
+        self._last_committed_barcode_time = 0.0
+        self._barcode_commit_dedup_window_sec = 0.8  # 800ms 去重窗口
+
+        # HID 模式激活标志：当 HID 模式成功接收条码后，暂时忽略键盘楔入模式的输入
+        self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
 
         # Streaming state variables
         self.streaming_buffer = []
@@ -328,8 +337,9 @@ class SequenceWindow(QWidget):
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
         self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
 
-        self.lineedit_s_or_n.returnPressed.connect(self._on_barcode_return_pressed)
-        self.lineedit_s_or_n.textChanged.connect(self._on_barcode_text_changed)
+        # 扫码键盘楔入模式：信号交给 BarcodeRouter 处理
+        self.lineedit_s_or_n.returnPressed.connect(self._barcode_router.on_barcode_return_pressed)
+        self.lineedit_s_or_n.textChanged.connect(self._barcode_router.on_barcode_text_changed)
 
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
@@ -346,6 +356,11 @@ class SequenceWindow(QWidget):
         else:
             product_model = "S004-1"
         self.lineedit_type.setText(product_model)
+        # 型号/计数：默认只读（单击进入编辑态），避免扫码枪后缀(Tab/Enter)导致焦点跳转/误触发
+        try:
+            self.lineedit_type.setReadOnly(True)
+        except Exception:
+            pass
 
         result, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
         if result is None:
@@ -354,6 +369,10 @@ class SequenceWindow(QWidget):
             self.current_recorded_count = result
 
         self.lineedit_count.setText(str(self.current_recorded_count))
+        try:
+            self.lineedit_count.setReadOnly(True)
+        except Exception:
+            pass
 
     @property
     def player_btn(self):
@@ -524,23 +543,24 @@ class SequenceWindow(QWidget):
             self.default_logger.info("硬件监听已停止")
 
     def on_barcode_received(self, barcode):
-        """处理扫码枪信号"""
+        """处理扫码枪信号（HID 模式）"""
+        # 设置 HID 模式激活标志，在接下来 1 秒内忽略键盘楔入模式的输入
+        # 这样可以避免 HID 模式和键盘模式同时工作导致的重复
+        self._hid_mode_active_until = time.monotonic() + 1.0
+        # 清空键盘楔入模式的缓冲区，防止残留数据干扰
+        self._barcode_capture_buffer = ""
+        self._barcode_capture_first_ts = None
+        self._barcode_capture_last_ts = None
+        self._barcode_capture_target_lineedit = None
+        self._barcode_capture_target_text = None
+        self._barcode_capture_target_cursor_pos = None
+        self._barcode_debounce_timer.stop()
         self._commit_barcode(barcode, source="hid")
 
     def _normalize_barcode(self, text: str) -> str:
         if text is None:
             return ""
         return str(text).strip()
-
-    def _should_auto_commit_barcode(self, text: str, first_ts: float, last_ts: float) -> bool:
-        """判断一段输入是否更像“扫码枪快速输入”，用于防抖自动提交。"""
-        text = self._normalize_barcode(text)
-        if not text:
-            return False
-        if len(text) < self._barcode_min_length_for_auto_commit:
-            return False
-        duration = max(0.0, last_ts - first_ts)
-        return duration <= self._barcode_fast_input_max_seconds
 
     # Windows 文件名中不允许的特殊字符
     _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
@@ -564,10 +584,30 @@ class SequenceWindow(QWidget):
         if not self.barcode_scanner_box.isChecked():
             return
 
+        # 条码提交去重：防止 HID 模式和键盘楔入模式同时触发导致重复提交
+        now = time.monotonic()
+        if (
+            self._last_committed_barcode == barcode
+            and (now - self._last_committed_barcode_time) < self._barcode_commit_dedup_window_sec
+        ):
+            self.default_logger.debug(f"忽略重复条码提交 (去重窗口内, source={source}): {barcode}")
+            # 清理键盘楔入模式的缓冲状态，避免残留数据
+            self._barcode_capture_buffer = ""
+            self._barcode_capture_first_ts = None
+            self._barcode_capture_last_ts = None
+            self._barcode_capture_target_lineedit = None
+            self._barcode_capture_target_text = None
+            self._barcode_capture_target_cursor_pos = None
+            return
+        # 更新去重记录
+        self._last_committed_barcode = barcode
+        self._last_committed_barcode_time = now
+
         try:
             fw = QApplication.focusWidget()
             fw_name = fw.__class__.__name__ if fw is not None else None
         except Exception:
+            fw = None
             fw_name = None
 
         # 检查条形码是否包含特殊字符（会导致文件名无效）
@@ -622,71 +662,14 @@ class SequenceWindow(QWidget):
             self._close_analysis_windows()
             self.start_this_play("not_labeled")
 
-    def _on_barcode_return_pressed(self):
-        """键盘楔入模式：扫码枪通常会发送 Enter，触发此信号"""
-        if not self.barcode_scanner_box.isChecked():
-            return
-        self._barcode_debounce_timer.stop()
-        self._commit_barcode(self.lineedit_s_or_n.text(), source="wedge_enter")
-
-    def _on_barcode_text_changed(self, _text: str):
-        """
-        键盘楔入模式：部分扫码枪不会发送 Enter，只会快速“敲”一串字符。
-        用防抖：输入停止一小段时间后认为扫码结束。
-        """
-        if not self.barcode_scanner_box.isChecked():
-            return
-        if not self.lineedit_s_or_n.isEnabled():
-            return
-        now = time.monotonic()
-        if self._barcode_first_char_ts is None:
-            self._barcode_first_char_ts = now
-        self._barcode_last_char_ts = now
-        self._barcode_debounce_timer.start()
-
-    def _on_barcode_debounce_timeout(self):
-        """输入停顿后自动提交（无 Enter 扫码枪）"""
-        if not self.barcode_scanner_box.isChecked():
-            return
-        # 1) 优先处理“非 S/N 输入框焦点”下的全局捕获 buffer
-        if (
-            self._barcode_capture_buffer
-            and self._barcode_capture_first_ts is not None
-            and self._barcode_capture_last_ts is not None
-        ):
-            text = self._normalize_barcode(self._barcode_capture_buffer)
-            if self._should_auto_commit_barcode(text, self._barcode_capture_first_ts, self._barcode_capture_last_ts):
-                # 如果之前焦点在其它输入框，让字符先进入了那个输入框，这里把它恢复，避免污染
-                try:
-                    le = self._barcode_capture_target_lineedit
-                    if le is not None and self._barcode_capture_target_text is not None:
-                        with QSignalBlocker(le):
-                            le.setText(self._barcode_capture_target_text)
-                        if self._barcode_capture_target_cursor_pos is not None:
-                            le.setCursorPosition(self._barcode_capture_target_cursor_pos)
-                except Exception:
-                    pass
-                self._commit_barcode(text, source="wedge_global_debounce")
-            else:
-                # 不符合扫码特征则丢弃，避免误触发
-                self._barcode_capture_buffer = ""
-                self._barcode_capture_first_ts = None
-                self._barcode_capture_last_ts = None
-                self._barcode_capture_target_lineedit = None
-                self._barcode_capture_target_text = None
-                self._barcode_capture_target_cursor_pos = None
-            return
-
-        # 2) 处理 S/N 输入框自身的 textChanged 防抖
-        text = self._normalize_barcode(self.lineedit_s_or_n.text())
-        if not text:
-            self._barcode_first_char_ts = None
-            self._barcode_last_char_ts = None
-            return
-        if self._barcode_first_char_ts is None or self._barcode_last_char_ts is None:
-            return
-        if self._should_auto_commit_barcode(text, self._barcode_first_char_ts, self._barcode_last_char_ts):
-            self._commit_barcode(text, source="wedge_debounce")
+        # 扫码完成后"可选"聚焦 S/N：
+        # - 默认：把焦点切回 S/N，便于连续扫码
+        # - 例外：如果操作员当前正在"型号/计数"里编辑，则不抢焦点（更符合最简方案：不干扰手动输入）
+        try:
+            if fw is not self.lineedit_type and fw is not self.lineedit_count:
+                self.lineedit_s_or_n.setFocus()
+        except Exception:
+            pass
 
     def on_sensor_triggered(self):
         """处理光电开关触发信号"""
@@ -911,6 +894,11 @@ class SequenceWindow(QWidget):
             self.lineedit_s_or_n.text(),
             self.barcode_scanner_box.isChecked(),
         )
+        # 退出编辑态：回到只读
+        try:
+            lineedit.setReadOnly(True)
+        except Exception:
+            pass
         lineedit.clearFocus()
         if lineedit.text() == "":
             result_count, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
@@ -923,6 +911,11 @@ class SequenceWindow(QWidget):
             self.lineedit_s_or_n.text(),
             self.barcode_scanner_box.isChecked(),
         )
+        # 退出编辑态：回到只读
+        try:
+            lineedit.setReadOnly(True)
+        except Exception:
+            pass
         lineedit.clearFocus()
         if lineedit.text() == "":
             last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
@@ -1850,11 +1843,43 @@ class SequenceWindow(QWidget):
 
         # 键盘事件捕获（扫码枪键盘楔入模式）
         try:
+            # 型号/计数：单击进入编辑态（默认只读）
+            # 设计：只读时单击解锁；编辑时单击不反向上锁（否则用户无法用鼠标定位光标）。
+            # 回到只读：依赖失去焦点（lineedit_*_lose_focus 已处理）。
+            if event.type() == QEvent.MouseButtonPress:
+                if obj is self.lineedit_type or obj is self.lineedit_count:
+                    try:
+                        if isinstance(obj, QLineEdit) and obj.isReadOnly():
+                            obj.setReadOnly(False)
+                            obj.setFocus()
+                            obj.selectAll()
+                            return True
+                    except Exception:
+                        pass
+
             if event.type() == QEvent.KeyPress and self.barcode_scanner_box.isChecked():
+                now = time.monotonic()
                 fw = QApplication.focusWidget()
-                # 焦点在 S/N 输入框：在“待确认”状态下，下一次扫码先清空旧内容，避免拼接
+
+                # 如果 HID 模式刚刚接收到条码，忽略所有键盘输入（避免 HID 和键盘模式同时工作的重复问题）
+                ch = event.text()
+                # "最简焦点方案"下，型号/计数输入框永远不拦截（保证手动输入不受影响）
+                if (
+                    ch
+                    and ch.isprintable()
+                    and now < self._hid_mode_active_until
+                    and fw is not self.lineedit_type
+                    and fw is not self.lineedit_count
+                ):
+                    return True  # 吞掉事件
+
+                # 焦点在 S/N 输入框
                 if fw is self.lineedit_s_or_n:
-                    ch = event.text()
+                    # HID 模式激活窗口内，吞掉键盘输入（避免 HID + 键盘模式重复导致 S/N 内容翻倍）
+                    if ch and ch.isprintable() and now < self._hid_mode_active_until:
+                        return True  # 吞掉事件
+                    
+                    # 在"待确认"状态下，下一次扫码先清空旧内容，避免拼接
                     if (
                         self._sn_clear_on_next_scan
                         and not self.player_status_flag
@@ -1873,60 +1898,14 @@ class SequenceWindow(QWidget):
                             pass
                     return super().eventFilter(obj, event)
 
-                key = event.key()
-                now = time.monotonic()
-
-                # Enter：提交
-                if key in (Qt.Key_Return, Qt.Key_Enter):
-                    self._barcode_debounce_timer.stop()
-                    if (
-                        self._barcode_capture_buffer
-                        and self._barcode_capture_first_ts is not None
-                        and self._barcode_capture_last_ts is not None
-                    ):
-                        text = self._normalize_barcode(self._barcode_capture_buffer)
-                        if self._should_auto_commit_barcode(
-                            text, self._barcode_capture_first_ts, self._barcode_capture_last_ts
-                        ):
-                            # 恢复被输入框接收到的内容（若有）
-                            try:
-                                le = self._barcode_capture_target_lineedit
-                                if le is not None and self._barcode_capture_target_text is not None:
-                                    with QSignalBlocker(le):
-                                        le.setText(self._barcode_capture_target_text)
-                                    if self._barcode_capture_target_cursor_pos is not None:
-                                        le.setCursorPosition(self._barcode_capture_target_cursor_pos)
-                            except Exception:
-                                pass
-                            self._commit_barcode(text, source="wedge_global_enter")
-                            return True  # 吞掉回车，避免触发按钮默认行为/输入框提交
-                    # 不像扫码则不拦截 Enter
-                    return super().eventFilter(obj, event)
-
-                # 可打印字符：收集到 buffer
-                ch = event.text()
-                if ch and ch.isprintable() and not ch.isspace():
-                    # 若焦点在其它输入框上，先记录其原内容，之后若判定为扫码则恢复
-                    if self._barcode_capture_first_ts is None and fw is not None and isinstance(fw, QLineEdit):
-                        self._barcode_capture_target_lineedit = fw
-                        try:
-                            self._barcode_capture_target_text = fw.text()
-                            self._barcode_capture_target_cursor_pos = fw.cursorPosition()
-                        except Exception:
-                            self._barcode_capture_target_text = None
-                            self._barcode_capture_target_cursor_pos = None
-
-                    if self._barcode_capture_first_ts is None:
-                        self._barcode_capture_first_ts = now
-                    self._barcode_capture_last_ts = now
-                    self._barcode_capture_buffer += ch
-                    self._barcode_debounce_timer.start()
-                    # 定义允许键盘输入的白名单：文本框、数字框、下拉框, 否则吞掉字符避免影响控件
-                    allowed_types = (QLineEdit, QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit)
-                    if fw is not None and not isinstance(fw, allowed_types):
+                # 其余键盘事件交给 BarcodeRouter 做路由/吞键/缓冲
+                try:
+                    handled = self._barcode_router.handle_keypress(obj, event)
+                    if handled is True:
                         return True
-                    # 焦点在其它输入框：先让字符进入输入框，后续若判定为扫码再恢复
-                    return super().eventFilter(obj, event)
+                except Exception:
+                    # router 逻辑异常时不影响主流程
+                    pass
 
         except Exception:
             # 出异常时不影响主流程
