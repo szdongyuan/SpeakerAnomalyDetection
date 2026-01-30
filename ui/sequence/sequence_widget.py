@@ -23,6 +23,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QTextEdit,
     QPlainTextEdit,
+    QDialog,
+    QLabel,
 )
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
@@ -695,18 +697,66 @@ class SequenceWindow(QWidget):
             self.default_logger.info("正在测试中，忽略光电触发")
 
     def closeEvent(self, event):
-        """窗口关闭时释放硬件资源"""
-        self.flush_excel_spool_build(on_close=True)
+        """窗口关闭时释放硬件资源，并强制等待Excel同步完成"""
+        # Skip sync dialog if window was never shown (startup close)
+        if not self.isVisible():
+            if hasattr(self, "hw_manager"):
+                self.hw_manager.stop()
+            super().closeEvent(event)
+            return
+
+        while True:
+            # Show "saving" dialog
+            saving_dialog = QDialog(self)
+            saving_dialog.setWindowTitle("正在保存")
+            saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+            saving_dialog.setFixedSize(250, 80)
+            layout = QVBoxLayout(saving_dialog)
+            label = QLabel("正在保存数据，请稍候...")
+            label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(label)
+            saving_dialog.show()
+            QApplication.processEvents()
+
+            try:
+                failures = self.flush_excel_spool_build(on_close=True)
+            except Exception as e:
+                failures = [("unknown", str(e))]
+
+            saving_dialog.close()
+
+            if not failures:
+                break
+
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setWindowTitle("Excel同步失败")
+            msg_box.setText("无法将数据同步到Excel文件，可能是文件被占用或权限不足。\n请关闭相关Excel文件后重试。")
+            retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
+            msg_box.addButton("忽略", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(retry_btn)
+            msg_box.exec_()
+
+            if msg_box.clickedButton() == retry_btn:
+                continue
+            else:
+                break
 
         if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
         super().closeEvent(event)
 
-    def flush_excel_spool_build(self, *, on_close: bool = False):
+    def flush_excel_spool_build(self, *, on_close: bool = False) -> list[tuple[str, str]]:
         """
         Best-effort: stop the idle-timer, wait for any ongoing background build, then rebuild
         the daily .xlsx from the CSV spool so the final Excel exists on exit.
+
+        Returns:
+            A list of (cfg_name, error_message) tuples for any failed builds.
+            Empty list means all builds succeeded or there was nothing to build.
         """
+        failures: list[tuple[str, str]] = []
+
         try:
             self._excel_spool_build_timer.stop()
         except Exception:
@@ -726,11 +776,29 @@ class SequenceWindow(QWidget):
         except Exception:
             pass
 
+        # Discover all Excel configs from analysis_config instead of relying on pending list
+        # This ensures we don't miss any configs that should be synced
         try:
-            pending = list(self._excel_spool_build_pending_cfgs or [])
-            if not pending:
-                return
-            for cfg_name, excel_cfg, file_path, spool_dir in pending:
+            excel_cfg_list = []
+            for k, v in (self.analysis_config or {}).items():
+                if not isinstance(v, dict):
+                    continue
+                if v.get("type") == "Excel" and v.get("enabled", True):
+                    # Only process fast_mode configs that use CSV spool
+                    if v.get("fast_mode", True):
+                        excel_cfg_list.append((k, v))
+
+            if not excel_cfg_list:
+                return failures
+
+            for cfg_name, excel_cfg in excel_cfg_list:
+                try:
+                    file_path = resolve_excel_output_path(excel_cfg)
+                    spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
+                except Exception as e:
+                    self.default_logger.error(f"excel_spool_build_path_error[{cfg_name}]: {e}")
+                    continue
+
                 ret = build_excel_from_csv_spool(excel_cfg, file_path=file_path, spool_dir=spool_dir)
                 if ret.ok:
                     self.default_logger.info(
@@ -744,12 +812,16 @@ class SequenceWindow(QWidget):
                         if not on_close
                         else f"excel_spool_build_on_close_fail[{cfg_name}]: {ret.message}"
                     )
+                    failures.append((cfg_name, ret.message))
         except Exception as e:
             try:
                 tag = "excel_spool_build_on_close_error" if on_close else "excel_spool_build_on_exit_error"
                 self.default_logger.error(f"{tag}: {e}")
+                failures.append(("unknown", str(e)))
             except Exception:
-                pass
+                failures.append(("unknown", str(e)))
+
+        return failures
 
     def reset_test_reord(self):
         """
@@ -1006,7 +1078,7 @@ class SequenceWindow(QWidget):
             QMessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
             return
         self.update_audio_label_info()
-        self._maybe_export_excel_results(show_message=manual)
+        self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
 
         self.mark_result()
@@ -1069,7 +1141,7 @@ class SequenceWindow(QWidget):
         except Exception:
             return
 
-        self._maybe_export_excel_results(show_message=False)
+        self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
         self.player_status_flag = False
         self.signal_info.clear()
@@ -1640,9 +1712,10 @@ class SequenceWindow(QWidget):
             with self._excel_spool_build_lock:
                 self._excel_spool_build_in_progress = False
 
-    def _maybe_export_excel_results(self, show_message: bool = False):
+    def _maybe_export_excel_results(self):
         """
         Export selected analysis items to Excel, if the global Excel analysis item exists in config.
+        Shows retry dialog on failure allowing user to close open files and retry.
         """
         # Find Excel exporter config(s)
         excel_cfg_list = []
@@ -1676,47 +1749,66 @@ class SequenceWindow(QWidget):
         analysis_items_data = cache.get("analysis_items_data") or {}
         analysis_result_dict = cache.get("analysis_result_dict") or {}
 
-        all_ok = True
-        spool_cfgs = []
-        for cfg_name, excel_cfg in excel_cfg_list:
-            use_spool = bool(excel_cfg.get("fast_mode", True))
-            if use_spool:
-                spool_cfgs.append((cfg_name, excel_cfg))
-                ret = export_analysis_to_csv_spool(
-                    excel_cfg,
-                    sn=sn,
-                    date_text=date_text,
-                    analysis_items_data=analysis_items_data,
-                    analysis_config=self.analysis_config,
-                    analysis_result_dict=analysis_result_dict,
-                )
-            else:
-                ret = export_analysis_to_excel(
-                    excel_cfg,
-                    sn=sn,
-                    date_text=date_text,
-                    analysis_items_data=analysis_items_data,
-                    analysis_config=self.analysis_config,
-                    analysis_result_dict=analysis_result_dict,
-                )
-            if ret.ok:
-                if use_spool:
-                    self.default_logger.info(f"excel_spool_ok[{cfg_name}]: {ret.message}")
-                else:
-                    self.default_logger.info(f"excel_export_ok[{cfg_name}]: {ret.message}")
-            else:
-                all_ok = False
-                if use_spool:
-                    self.default_logger.error(f"excel_spool_fail[{cfg_name}]: {ret.message}")
-                else:
-                    self.default_logger.error(f"excel_export_fail[{cfg_name}]: {ret.message}")
-                if show_message:
-                    QMessageBox.warning(self, "Excel保存失败", ret.message)
+        # Retry loop for export operations
+        while True:
+            all_ok = True
+            spool_cfgs = []
+            failed_exports = []
 
-        if all_ok:
-            self._excel_exported_record_id = record_id
-            if spool_cfgs:
-                self._schedule_excel_spool_build(spool_cfgs)
+            for cfg_name, excel_cfg in excel_cfg_list:
+                use_spool = bool(excel_cfg.get("fast_mode", True))
+                if use_spool:
+                    spool_cfgs.append((cfg_name, excel_cfg))
+                    ret = export_analysis_to_csv_spool(
+                        excel_cfg,
+                        sn=sn,
+                        date_text=date_text,
+                        analysis_items_data=analysis_items_data,
+                        analysis_config=self.analysis_config,
+                        analysis_result_dict=analysis_result_dict,
+                    )
+                else:
+                    ret = export_analysis_to_excel(
+                        excel_cfg,
+                        sn=sn,
+                        date_text=date_text,
+                        analysis_items_data=analysis_items_data,
+                        analysis_config=self.analysis_config,
+                        analysis_result_dict=analysis_result_dict,
+                    )
+                if ret.ok:
+                    if use_spool:
+                        self.default_logger.info(f"excel_spool_ok[{cfg_name}]: {ret.message}")
+                    else:
+                        self.default_logger.info(f"excel_export_ok[{cfg_name}]: {ret.message}")
+                else:
+                    all_ok = False
+                    if use_spool:
+                        self.default_logger.error(f"excel_spool_fail[{cfg_name}]: {ret.message}")
+                    else:
+                        self.default_logger.error(f"excel_export_fail[{cfg_name}]: {ret.message}")
+                    failed_exports.append((cfg_name, ret.message))
+
+            if all_ok:
+                self._excel_exported_record_id = record_id
+                if spool_cfgs:
+                    self._schedule_excel_spool_build(spool_cfgs)
+                break
+
+            # If there are failures, show retry dialog
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setWindowTitle("数据保存失败")
+            msg_box.setText("无法保存数据到文件，可能是文件被占用或权限不足。\n请关闭相关文件后重试。")
+            retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
+            msg_box.addButton("忽略", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(retry_btn)
+            msg_box.exec_()
+
+            if msg_box.clickedButton() == retry_btn:
+                continue
+            else:
+                break
 
     def instance_analysis_class(self, key, type, params):
         """

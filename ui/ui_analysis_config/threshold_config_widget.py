@@ -150,7 +150,7 @@ class ThresholdConfigWidget(QWidget):
         if "SPLF" in model_type:
             self.limit_graph.setLabel("left", "SPLF (dB)")
             self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        if "SPL" in model_type:
+        elif "SPL" in model_type:
             self.limit_graph.setLabel("left", "SPL (dB)")
             self.limit_graph.setLabel("bottom", "Time (s)")
         elif "FR" in model_type:

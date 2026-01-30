@@ -486,11 +486,12 @@ class AnalysisModelSelect(QDialog):
 
         # If registry contains only using_config_path (no saved/imported entries),
         # add the built-in default config mapping on confirm.
-        try:
-            registry = LoadUiConfig._load_sequence_config_registry()
-            other_keys = [
-                k for k in (registry or {}).keys() if k != "using_config_path"
-            ]
+        registry = LoadUiConfig._load_sequence_config_registry()
+        other_keys = [
+            k for k in (registry or {}).keys() if k != "using_config_path"
+        ]
+
+        if self.select_list.config:
             if len(other_keys) == 0:
                 LoadUiConfig.ensure_sequence_config_registry_field(
                     "默认配置",
@@ -502,19 +503,12 @@ class AnalysisModelSelect(QDialog):
                 self.using_config_path = (
                     DEFAULT_DIR + "ui/ui_config/sequence_config.json"
                 )
-        except Exception as e:
-            self.default_logger.warning(
-                f"Failed to ensure default config registry field: {e}"
-            )
-
-        if not LoadUiConfig.save_sequence_config_to_json(
-            save_config, self.using_config_path
-        ):
-            QMessageBox.warning(self, "警告", "保存配置文件失败")
-            self.close()
-            return
-
-        if self.select_list.config:
+            if not LoadUiConfig.save_sequence_config_to_json(
+                save_config, self.using_config_path
+            ):
+                QMessageBox.warning(self, "警告", "保存配置文件失败")
+                self.close()
+                return
             data_struct = DataDealStruct()
             detail = self.select_list.config[0].detail
             if self.select_list.config[0].mode in [
