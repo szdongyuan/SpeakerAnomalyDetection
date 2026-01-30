@@ -326,11 +326,31 @@ class MainWindow(QMainWindow):
             SequenceWindow.tcp_server = None
 
         # Best-effort: rebuild daily Excel from CSV spool before exit (fast_mode).
-        try:
-            if hasattr(self, "sequence_window") and self.sequence_window is not None:
-                self.sequence_window.flush_excel_spool_build(on_close=False)
-        except Exception:
-            pass
+        # Retry loop if there are failures (e.g., Excel file is open)
+        if hasattr(self, "sequence_window") and self.sequence_window is not None:
+            while True:
+                try:
+                    failures = self.sequence_window.flush_excel_spool_build(on_close=False)
+                except Exception as e:
+                    failures = [("unknown", str(e))]
+
+                if not failures:
+                    break
+
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Warning)
+                msg_box.setWindowTitle("Excel同步失败")
+                msg_box.setText("无法将数据同步到Excel文件，可能是文件被占用或权限不足。\n请关闭相关Excel文件后重试。")
+                retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
+                msg_box.addButton("忽略", QMessageBox.RejectRole)
+                msg_box.setDefaultButton(retry_btn)
+                msg_box.exec_()
+
+                if msg_box.clickedButton() == retry_btn:
+                    continue
+                else:
+                    break
+
         event.accept()
 
     def mousepressevent(self, event):
