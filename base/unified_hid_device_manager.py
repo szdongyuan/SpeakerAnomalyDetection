@@ -3,6 +3,7 @@ import pywinusb.hid as hid
 from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 import json
 import os
+import time
 
 from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
@@ -54,6 +55,11 @@ class UnifiedHardwareManager(QObject):
 
         # 尝试加载上次成功连接的扫码枪记忆（只在自动模式下作为优先候选）
         self._load_scanner_memory()
+
+        # 条码去重机制：同一条码在短时间窗口内只发射一次（防止多HID接口重复触发）
+        self._last_barcode = None
+        self._last_barcode_time = 0.0
+        self._barcode_dedup_window_sec = 0.5  # 500ms 去重窗口
 
     def _load_scanner_memory(self):
         try:
@@ -170,6 +176,9 @@ class UnifiedHardwareManager(QObject):
         self._scanner_locked_device_id = None
         self._auto_mode = False
         self._auto_no_device_logged = False
+        # 重置去重状态
+        self._last_barcode = None
+        self._last_barcode_time = 0.0
 
         if self._hid_poll_timer.isActive():
             self._hid_poll_timer.stop()
@@ -275,10 +284,23 @@ class UnifiedHardwareManager(QObject):
                 end_index = payload.find('"', start_index)
                 if end_index != -1:
                     barcode = payload[start_index:end_index]
+
+                    # 条码去重：在短时间窗口内收到相同条码则忽略（防止多HID接口重复触发）
+                    now = time.monotonic()
+                    if (
+                        self._last_barcode == barcode
+                        and (now - self._last_barcode_time) < self._barcode_dedup_window_sec
+                    ):
+                        self.logger.debug(f"[scanner] 忽略重复条码 (去重窗口内): {barcode}")
+                        return
+                    # 更新去重记录
+                    self._last_barcode = barcode
+                    self._last_barcode_time = now
+
                     # 自动模式：第一次成功解析到条码后锁定设备，避免打开太多 HID
                     if self._auto_mode and device_id and not self._scanner_locked_device_id:
                         self._scanner_locked_device_id = device_id
-                        # 给出“已确认/已锁定”的提示，便于现场确认识别成功
+                        # 给出"已确认/已锁定"的提示，便于现场确认识别成功
                         try:
                             dev = (self.hid_handles.get("scanner") or {}).get(device_id)
                             if dev is not None:
