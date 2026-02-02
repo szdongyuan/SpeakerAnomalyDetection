@@ -320,10 +320,37 @@ class MainWindow(QMainWindow):
         # close the window
         self.close()
 
+    def _close_all_subwindows(self):
+        """
+        Close all other top-level windows/dialogs besides the main window itself.
+
+        This is a best-effort cleanup to avoid leaving orphan dialogs/tool windows
+        alive when the main window exits.
+        """
+        try:
+            top_levels = QApplication.topLevelWidgets()
+        except Exception:
+            top_levels = []
+
+        for w in top_levels:
+            if w is None or w is self:
+                continue
+            # Only close visible windows to avoid touching already-closed widgets
+            # that may still be referenced by Qt/Python.
+            try:
+                if hasattr(w, "isVisible") and w.isVisible():
+                    w.close()
+            except Exception:
+                # Best-effort: ignore any close errors
+                pass
+
     def closeEvent(self, event):
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None
+
+        # Close any other sub windows/dialogs that may still be open.
+        self._close_all_subwindows()
 
         # Best-effort: rebuild daily Excel from CSV spool before exit (fast_mode).
         # Retry loop if there are failures (e.g., Excel file is open)

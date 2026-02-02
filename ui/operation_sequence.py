@@ -491,8 +491,8 @@ class AnalysisModelSelect(QDialog):
             k for k in (registry or {}).keys() if k != "using_config_path"
         ]
 
-        if self.select_list.config:
-            if len(other_keys) == 0:
+        if len(other_keys) == 0:
+            if self.select_list.config:
                 LoadUiConfig.ensure_sequence_config_registry_field(
                     "默认配置",
                     DEFAULT_DIR + "ui/ui_config/sequence_config.json",
@@ -503,25 +503,12 @@ class AnalysisModelSelect(QDialog):
                 self.using_config_path = (
                     DEFAULT_DIR + "ui/ui_config/sequence_config.json"
                 )
-            if not LoadUiConfig.save_sequence_config_to_json(
-                save_config, self.using_config_path
-            ):
-                QMessageBox.warning(self, "警告", "保存配置文件失败")
-                self.close()
-                return
-            data_struct = DataDealStruct()
-            detail = self.select_list.config[0].detail
-            if self.select_list.config[0].mode in [
-                "PLAY_AND_RECORD",
-                "IMPORT_STIMULUS_AUDIO",
-            ]:
-                self.set_data_struct_stimulus_signal(
-                    data_struct, detail, using_config_path=self.using_config_path
-                )
-            else:
-                data_struct.sample_rate = detail["sample_rate"]
-                data_struct.stimulus_info = None
-                data_struct.stimulus_data = None
+        if not LoadUiConfig.save_sequence_config_to_json(
+            save_config, self.using_config_path
+        ):
+            QMessageBox.warning(self, "警告", "保存配置文件失败")
+            self.close()
+            return
         # No forced mode switch / model sync here.
         # Main window will refresh the active config after this dialog closes.
         self.close()
