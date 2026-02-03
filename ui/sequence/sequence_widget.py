@@ -1063,13 +1063,14 @@ class SequenceWindow(QWidget):
         ):
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
-        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
-            QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
-            return
+        if self.sequence_config:
+            if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
+                QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
+                return
 
-        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
-            QMessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
-            return
+            if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
+                QMessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
+                return
         self.update_audio_label_info()
         self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
@@ -1878,7 +1879,7 @@ class SequenceWindow(QWidget):
                     # HID 模式激活窗口内，吞掉键盘输入（避免 HID + 键盘模式重复导致 S/N 内容翻倍）
                     if ch and ch.isprintable() and now < self._hid_mode_active_until:
                         return True  # 吞掉事件
-                    
+
                     # 在"待确认"状态下，下一次扫码先清空旧内容，避免拼接
                     if (
                         self._sn_clear_on_next_scan
@@ -2128,6 +2129,7 @@ class SequenceWindow(QWidget):
         self.update_player_btn_is_paused()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setDisabled(True)
+        self.data_struct.store_wave_data = None
 
     def get_sequence_config_from_json(self):
         """
