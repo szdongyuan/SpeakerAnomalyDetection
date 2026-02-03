@@ -354,6 +354,9 @@ class SequenceWindow(QWidget):
         self.data_struct.store_wave_data = None
         self.line_graph.clear()
         self._close_analysis_windows()
+        self.player_btn.setDisabled(False)
+        self.replayer_btn.setDisabled(True)
+        self.data_btn.setDisabled(True)
 
     def init_lineedit_text(self):
         last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
