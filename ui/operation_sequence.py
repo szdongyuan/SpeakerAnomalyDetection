@@ -484,6 +484,10 @@ class AnalysisModelSelect(QDialog):
     def ok_btn_clicked(self):
         save_config = self.format_config_data(self.select_list.config)
 
+        if not save_config:
+            QMessageBox.warning(self, "警告", "没有配置测试内容")
+            return
+
         # If registry contains only using_config_path (no saved/imported entries),
         # add the built-in default config mapping on confirm.
         registry = LoadUiConfig._load_sequence_config_registry()
