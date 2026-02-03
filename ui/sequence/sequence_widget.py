@@ -347,7 +347,13 @@ class SequenceWindow(QWidget):
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         # “重置统计”按钮：重置测试计数 + 恢复重播/分析按钮状态
         self.count_board.reset_btn.clicked.connect(self.on_reset_statistics_clicked)
+        self.count_board.mark_btn.clicked.connect(self.on_mark_btn_clicked)
         self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
+
+    def on_mark_btn_clicked(self):
+        self.data_struct.store_wave_data = None
+        self.line_graph.clear()
+        self._close_analysis_windows()
 
     def init_lineedit_text(self):
         last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
@@ -1074,6 +1080,7 @@ class SequenceWindow(QWidget):
         self.update_audio_label_info()
         self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
+        self._close_analysis_windows()
 
         self.mark_result()
         self.data_struct.store_wave_data = None
@@ -2110,6 +2117,11 @@ class SequenceWindow(QWidget):
         """
         # Prefer the item's userData (full file path). During combobox refresh,
         # `text` may temporarily be empty which would otherwise resolve to None.
+        if self.player_status_flag:
+            self.restore_previous_configuration()
+            QMessageBox.warning(self, "警告", "正在录音，请稍后...")
+            return
+
         path = None
         try:
             path = self.using_file_combobox.currentData()
@@ -2117,10 +2129,6 @@ class SequenceWindow(QWidget):
             path = None
         if not path:
             path = self.registry.get(text)
-        if not path:
-            # Ignore transient/invalid changes (e.g., during refresh/clear)
-            self.default_logger.warning(f"Invalid sequence config selection: text={text!r}, resolved_path=None")
-            return
 
         self.using_config_path = path
         LoadUiConfig.update_using_config_path(self.using_config_path)
@@ -2130,6 +2138,15 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setDisabled(True)
         self.data_btn.setDisabled(True)
         self.data_struct.store_wave_data = None
+
+    def restore_previous_configuration(self):
+        """恢复到之前的配置选项"""
+        index = self.using_file_combobox.findData(self.using_config_path)
+        if index >= 0:
+            self.using_file_combobox.blockSignals(True)
+            self.using_file_combobox.setCurrentIndex(index)
+            self.using_file_combobox.blockSignals(False)
+            self.default_logger.warning("已恢复到之前的配置选项")
 
     def get_sequence_config_from_json(self):
         """
