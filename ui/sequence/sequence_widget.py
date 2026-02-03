@@ -543,8 +543,7 @@ class SequenceWindow(QWidget):
             if self.hw_manager.start():
                 self.default_logger.info("硬件监听已启动")
             else:
-                self.barcode_scanner_box.setChecked(False)
-                QMessageBox.warning(self, "硬件初始化失败", "硬件监听启动失败，请检查环境/权限或日志输出。")
+                self.default_logger.warning("硬件初始化失败，已静默降级为普通键盘输入模式")
         else:
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
@@ -2141,6 +2140,18 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setDisabled(True)
         self.data_btn.setDisabled(True)
         self.data_struct.store_wave_data = None
+
+        # 1. 强制清除下拉框焦点
+        self.using_file_combobox.clearFocus()
+        # 2. 尝试聚焦 S/N 框 (提升体验)
+        if self.lineedit_s_or_n.isEnabled():
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()  # 全选，方便覆盖旧条码
+            except Exception:
+                pass
+        else:
+            self.setFocus() # 给主窗口，依靠 BarcodeRouter 后台捕获
 
     def restore_previous_configuration(self):
         """恢复到之前的配置选项"""
