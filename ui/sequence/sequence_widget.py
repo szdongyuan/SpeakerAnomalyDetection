@@ -1185,6 +1185,13 @@ class SequenceWindow(QWidget):
         )
         if not file_path:
             return
+        # Ensure subsequent exports (CSV/Excel) use this imported file as the current record id,
+        # instead of accidentally reusing a stale `recorded_path` from previous recordings.
+        try:
+            self.recorded_path = file_path
+            self.recorded_signal_info = {"file_path": file_path, "barcode": None, "labels": "not_labeled"}
+        except Exception:
+            pass
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         sample_rate = acq_detail.get("sample_rate", 44100)
         y, _ = load_audio_simple(file_path, sample_rate)
@@ -1546,6 +1553,9 @@ class SequenceWindow(QWidget):
 
             # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
             self._capture_excel_export_cache()
+            # Mark mode previously only exported on OK/NG click; now export immediately after analysis
+            # so results are always saved to CSV (spool) regardless of whether OK/NG is clicked.
+            self._maybe_export_excel_results()
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 can_output, _reason = self._can_output_ok_ng()
@@ -1608,7 +1618,8 @@ class SequenceWindow(QWidget):
         """
         Cache current analysis results for later Excel export.
 
-        Export is triggered on OK/NG click (or test finalization) to avoid duplicate writes when users rerun analysis.
+        Export may be triggered immediately after analysis (and also on OK/NG click / test finalization),
+        with per-record dedupe to avoid duplicate writes when users rerun analysis.
         """
         try:
             record_id = None
