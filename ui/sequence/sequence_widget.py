@@ -1181,7 +1181,7 @@ class SequenceWindow(QWidget):
             self,
             "选择音频文件",
             DEFAULT_DIR + "audio_data/stored_data",
-            "WAV Files (*.wav);;All Files (*)",
+            "WAV Files (*.wav)",
         )
         if not file_path:
             return

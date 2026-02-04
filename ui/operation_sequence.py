@@ -420,7 +420,7 @@ class AnalysisModelSelect(QDialog):
             self,
             "保存黄金样本分析结果",
             default_json_path,
-            filter="JSON Files (*.json);;All Files (*)",
+            filter="JSON Files (*.json)",
         )
         if not json_path:
             return
@@ -448,7 +448,7 @@ class AnalysisModelSelect(QDialog):
             self,
             "导入配置文件",
             DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
-            filter="JSON Files (*.json);;All Files (*)",
+            filter="JSON Files (*.json)",
         )
         if file_path:
             try:
@@ -470,7 +470,7 @@ class AnalysisModelSelect(QDialog):
             self,
             "保存配置文件",
             DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
-            filter="JSON Files (*.json);;All Files (*)",
+            filter="JSON Files (*.json)",
         )
         if file_path:
             save_config = self.format_config_data(self.select_list.config)
