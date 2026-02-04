@@ -141,7 +141,7 @@ class ModelInfoList(DataManageDialog):
     def register_model_info(self):
         home_directory = os.path.expanduser("~")
         model_path = QFileDialog.getOpenFileName(
-            self, "选择模型文件", home_directory, "KERAS Files (*.keras);;" "All Files (*)"
+            self, "选择模型文件", home_directory, "KERAS Files (*.keras)"
         )[0]
         if os.path.isfile(model_path):
             model_name = os.path.basename(model_path)
@@ -554,7 +554,7 @@ class SetModelConfig(QDialog):
 
         yml_config_path = QFileDialog.getOpenFileName(
             self, "选择模型YML配置文件", default_yml_dir,
-            "YML Files (*.yml);;All Files (*)"
+            "YML Files (*.yml)"
         )[0]
         if not yml_config_path:
             return
