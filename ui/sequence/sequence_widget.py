@@ -443,6 +443,8 @@ class SequenceWindow(QWidget):
                     )
         else:
             self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
+            self.data_struct.stimulus_data = None
+            self.data_struct.stimulus_info = None
 
     def create_waveform_layout(self):
         """
@@ -1008,13 +1010,7 @@ class SequenceWindow(QWidget):
             # 兼容多种客户端字段命名：
             # - 老客户端: Label
             # - 示例文档: label
-            # - 现场常见: Action(例如 ScanBarcode)
-            label = (
-                request_content.get("Label")
-                or request_content.get("label")
-                or request_content.get("Action")
-                or "not_labeled"
-            )
+            label = request_content.get("Label") or request_content.get("label") or "not_labeled"
             # Dispatch to current SequenceWindow instance in Qt main thread
             try:
                 ref = getattr(SequenceWindow, "_active_instance_ref", None)
@@ -2162,7 +2158,7 @@ class SequenceWindow(QWidget):
             except Exception:
                 pass
         else:
-            self.setFocus() # 给主窗口，依靠 BarcodeRouter 后台捕获
+            self.setFocus()  # 给主窗口，依靠 BarcodeRouter 后台捕获
 
     def restore_previous_configuration(self):
         """恢复到之前的配置选项"""
