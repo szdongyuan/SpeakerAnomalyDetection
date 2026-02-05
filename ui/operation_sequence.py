@@ -685,7 +685,7 @@ class OptionList(QListView):
                     self.config[0].detail, mic=self.mic, speaker=self.speaker
                 )
             elif "录制音频" in self.config[0].name:
-                model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
+                model = RecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             elif "导入音频" in self.config[0].name:
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
             elif "导入激励与音频" in self.config[0].name:
@@ -1216,7 +1216,12 @@ class OptionList(QListView):
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
-            seq_item.detail = {"total_time": 4.0, "sample_rate": 44100}
+            seq_item.detail = {
+                "total_time": 4.0,
+                "sample_rate": 44100,
+                "monitor_playback": False,
+                "monitor_output_channel": 0,
+            }
             self.signal_len = seq_item.detail.get(
                 "total_time", 4.0
             ) * seq_item.detail.get("sample_rate", 44100)

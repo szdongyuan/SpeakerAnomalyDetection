@@ -14,7 +14,8 @@ from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
-from ui.hardware_window import HardwareWindow
+# from ui.hardware_window import HardwareWindow
+from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_widget import SequenceWindow
@@ -30,6 +31,8 @@ class MainWindow(QMainWindow):
         self.refresh_stimulus_flag = None
         _, self.mic = SoundDeviceManager().get_default_device("mic")
         _, self.speaker = SoundDeviceManager().get_default_device("speaker")
+        self.mic_channels = SoundDeviceManager().get_default_device_all_channels("mic")
+        self.speaker_channels = SoundDeviceManager().get_default_device_all_channels("speaker")
 
         # set mouse drog date
         self.resize_direction = None
@@ -177,6 +180,8 @@ class MainWindow(QMainWindow):
         # transmit the mic and speaker to sequence widget
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
+        self.sequence_window.mic_channels = self.mic_channels
+        self.sequence_window.speaker_channels = self.speaker_channels
 
     def init_menu(self):
         # create menu bar, and link the menu bar to action
@@ -302,11 +307,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
 
-        dlg = HardwareWindow(self.speaker, self.mic)
-        self.speaker, self.mic = dlg.on_exec()
+        self.speaker, self.speaker_channels, self.mic, self.mic_channels = open_hardware_selection_window()
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
+        self.sequence_window.mic_channels = self.mic_channels
+        self.sequence_window.speaker_channels = self.speaker_channels
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker

@@ -1287,10 +1287,33 @@ class SequenceWindow(QWidget):
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
         recorded_dict["input_device"] = self.mic
+        recorded_dict["input_channels"] = self.mic_channels
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "PLAY_AND_RECORD":
             recorded_dict["output_device"] = self.speaker
+            recorded_dict["output_channels"] = self.speaker_channels
         else:
-            recorded_dict["output_device"] = None
+            # RECORD_ONLY: optional monitor playback (实时监听播放)
+            monitor_playback = bool(acq_detail.get("monitor_playback", False))
+            monitor_output_channel = acq_detail.get("monitor_output_channel", 0)
+            try:
+                monitor_output_channel = int(monitor_output_channel)
+            except Exception:
+                monitor_output_channel = 0
+
+            if monitor_playback and self.speaker:
+                # Clamp channel index to device capability if available
+                try:
+                    max_out = int(self.speaker.get("max_output_channels") or 0)
+                except Exception:
+                    max_out = 0
+                if max_out > 0:
+                    monitor_output_channel = max(0, min(monitor_output_channel, max_out - 1))
+                    recorded_dict["output_device"] = self.speaker
+                    recorded_dict["output_channels"] = [monitor_output_channel]
+                else:
+                    recorded_dict["output_device"] = None
+            else:
+                recorded_dict["output_device"] = None
 
         in_dev = recorded_dict.get("input_device")
         out_dev = recorded_dict.get("output_device")
@@ -1299,7 +1322,7 @@ class SequenceWindow(QWidget):
                 QMessageBox.warning(
                     self,
                     "设备组合不支持",
-                    "播放+录制需要选择同一驱动类型（Host API）的输入/输出设备。\n"
+                    "播放+录制/实时监听播放需要选择同一驱动类型（Host API）的输入/输出设备。\n"
                     f"当前输入: {in_dev.get('name')} (hostapi={in_dev.get('hostapi')})\n"
                     f"当前输出: {out_dev.get('name')} (hostapi={out_dev.get('hostapi')})",
                 )

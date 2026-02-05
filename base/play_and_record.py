@@ -117,6 +117,10 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     sample_rate = recorded_dict.get("sample_rate", data_struct.sample_rate)
     num_frames = recorded_dict.get("num_frames", 441000)
     device = recorded_dict.get("device")
+    input_channels = recorded_dict.get("input_channels")
+    output_device = recorded_dict.get("output_device")
+    output_channels = recorded_dict.get("output_channels")
+    monitor_playback = bool(output_device and output_channels)
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -125,7 +129,11 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     record_code, msg = processor.start_streaming_rec(
         sample_rate=sample_rate,
         target_samples=num_frames,  # Use exact sample count instead of duration
-        device=device
+        device=device,
+        input_channels=input_channels,
+        output_device=output_device,
+        output_channels=output_channels,
+        monitor_playback=monitor_playback,
     )
 
     if record_code == error_code.OK:
@@ -168,6 +176,8 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
 
     input_device = recorded_dict.get("input_device")
     output_device = recorded_dict.get("output_device")
+    input_channels = recorded_dict.get("input_channels")
+    output_channels = recorded_dict.get("output_channels")
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -179,6 +189,8 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         target_samples=target_samples,  # Use exact sample count instead of duration
         input_device=input_device,
         output_device=output_device,
+        input_channels=input_channels,
+        output_channels=output_channels,
         prepare_frames=prepare_frames,
         prolong_frames=prolong_frames
     )

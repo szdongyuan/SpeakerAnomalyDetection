@@ -50,3 +50,28 @@ class SoundDeviceManager(object):
     def refresh_available_device():
         sd._terminate()
         sd._initialize()
+
+    def get_default_device_all_channels(self, device_type: str, refresh: bool = False):
+        """
+        获取默认麦克风/扬声器的所有通道序号（0-based）。
+
+        - mic：基于 max_input_channels，返回 [0..max-1]
+        - speaker：基于 max_output_channels，返回 [0..max-1]
+        - 无默认设备或 max<=0：返回 []
+        """
+        if device_type not in ("mic", "speaker"):
+            return []
+
+        code, device = self.get_default_device(device_type, refresh=refresh)
+        if code != error_code.OK or not device:
+            return []
+
+        if device_type == "mic":
+            max_channels = int(device.get("max_input_channels") or 0)
+        else:
+            max_channels = int(device.get("max_output_channels") or 0)
+
+        if max_channels <= 0:
+            return []
+
+        return list(range(max_channels))

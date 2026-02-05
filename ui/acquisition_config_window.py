@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit, \
     QSizePolicy
-from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication, QComboBox
+from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication, QComboBox, QCheckBox
 
 
 from base.sound_device_manager import SoundDeviceManager
@@ -162,10 +162,14 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
 
 class RecordConfigWindow(BaseConfigWindow):
-    def __init__(self, input_data, mic=None):
-        super().__init__()
+    def __init__(self, input_data, mic=None, speaker=None):
+        super().__init__(mic=mic)
         self.setWindowTitle("录制音频")
-        self.input_data = input_data
+        self.input_data = input_data or {}
+        if speaker is not None:
+            self.speaker = speaker
+        else:
+            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
         self.init_ui()
 
     def init_ui(self):
@@ -202,6 +206,44 @@ class RecordConfigWindow(BaseConfigWindow):
         else:
             self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
+        # ---- monitor playback (optional) ----
+        label_monitor = QLabel("实时监听播放:")
+        self.monitor_checkbox = QCheckBox("启用")
+        self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
+
+        label_out_ch = QLabel("监听输出通道:")
+        self.monitor_output_channel_combo = QComboBox()
+
+        max_out = 0
+        try:
+            if self.speaker:
+                max_out = int(self.speaker.get("max_output_channels") or 0)
+        except Exception:
+            max_out = 0
+
+        if max_out > 0:
+            self.monitor_output_channel_combo.addItems([f"Out{i + 1}" for i in range(max_out)])
+            saved_ch = self.input_data.get("monitor_output_channel", 0)
+            try:
+                saved_ch = int(saved_ch)
+            except Exception:
+                saved_ch = 0
+            saved_ch = max(0, min(saved_ch, max_out - 1))
+            self.monitor_output_channel_combo.setCurrentIndex(saved_ch)
+        else:
+            # No available output channels -> force disable monitor
+            self.monitor_checkbox.setChecked(False)
+            self.monitor_checkbox.setEnabled(False)
+            self.monitor_output_channel_combo.addItem("无可用输出通道")
+            self.monitor_output_channel_combo.setEnabled(False)
+
+        def _refresh_monitor_enable_state():
+            enabled = bool(self.monitor_checkbox.isChecked()) and max_out > 0
+            self.monitor_output_channel_combo.setEnabled(enabled)
+
+        self.monitor_checkbox.stateChanged.connect(lambda *_: _refresh_monitor_enable_state())
+        _refresh_monitor_enable_state()
+
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
 
@@ -211,13 +253,27 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(label_input_device, 2, 0)
         grid_layout.addWidget(self.input_device_display, 2, 1)
 
+        grid_layout.addWidget(label_monitor, 3, 0)
+        grid_layout.addWidget(self.monitor_checkbox, 3, 1)
+
+        grid_layout.addWidget(label_out_ch, 4, 0)
+        grid_layout.addWidget(self.monitor_output_channel_combo, 4, 1)
+
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
     def on_click_ok_btn(self):
+        out_ch = 0
+        try:
+            out_ch = int(self.monitor_output_channel_combo.currentIndex())
+        except Exception:
+            out_ch = 0
+
         self.final_data = {
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
+            "monitor_playback": bool(self.monitor_checkbox.isChecked()),
+            "monitor_output_channel": out_ch,
         }
         self.accept()
 
