@@ -244,17 +244,8 @@ class LoadUiConfig(object):
         # Define the prolongation time to calculate the extended frame count
         prolong = 0.5
         stimulus_dict = dict()
-        if data_struct.stimulus_data is not None and len(data_struct.stimulus_data) > 0:
-            stimulus_dict = {
-                "data": data_struct.stimulus_data,
-                "amplitude": data_struct.stimulus_info["amplitude"],
-                "sr": data_struct.sample_rate,
-            }
-            num_frames = len(data_struct.stimulus_data) + int(prolong * data_struct.sample_rate)
-            prolong_frames = int(prolong * data_struct.sample_rate)
-        else:
-            num_frames = int(total_time * data_struct.sample_rate)
-            prolong_frames = 0
+        num_frames = int(total_time * data_struct.sample_rate)
+        prolong_frames = 0
         recorded_dict = {
             "channels": 1,
             "sr": data_struct.sample_rate,

@@ -17,11 +17,52 @@ class SoundcardAudioProcessor(object):
         prolong_frames = record_dict.get("prolong_frames", 10000)
         prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
         sr = stimulus_dict.get("sr")
-        rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
-        align_frames = self.calculate_alignment(data, rec_data)
-        aligned_data = rec_data[align_frames: align_frames + len(data)]
-        save_audio_simple(recording_path, aligned_data, sr)
-        return error_code.OK, aligned_data
+
+        in_sel = record_dict.get("input_channels")
+        if in_sel is None:
+            channels = int(record_dict.get("channels", 1) or 1)
+            in_sel = list(range(max(1, channels)))
+        try:
+            in_sel = sorted({int(i) for i in in_sel if int(i) >= 0})
+        except Exception:
+            in_sel = [0]
+        if not in_sel:
+            in_sel = [0]
+
+        in_num = max(in_sel) + 1
+
+        rec_raw = sd.playrec(prolong_data, samplerate=sr, channels=in_num, blocking=True)
+        rec_raw = np.asarray(rec_raw, dtype=np.float32)
+        if rec_raw.ndim == 1:
+            rec_raw = rec_raw.reshape(-1, 1)
+
+        rec_sel = rec_raw[:, in_sel] if rec_raw.shape[1] > 1 else rec_raw[:, [0]]
+        rec_mono = rec_sel.mean(axis=1).astype(np.float32, copy=False)
+
+        align_frames = self.calculate_alignment(data, rec_mono)
+        if align_frames < 0:
+            align_frames = 0
+
+        end_frame = align_frames + len(data)
+        if end_frame > rec_sel.shape[0]:
+            end_frame = rec_sel.shape[0]
+
+        aligned_multi = rec_sel[align_frames:end_frame, :].astype(np.float32, copy=False)
+        if aligned_multi.shape[0] < len(data):
+            shortfall = len(data) - aligned_multi.shape[0]
+            aligned_multi = np.concatenate(
+                [aligned_multi, np.zeros((shortfall, aligned_multi.shape[1]), dtype=np.float32)], axis=0
+            )
+
+        aligned_mono = aligned_multi.mean(axis=1).astype(np.float32, copy=False)
+
+        # Save multi-channel aligned data. keep mono return for compatibility.
+        try:
+            record_dict["_recorded_multi"] = aligned_multi
+        except Exception:
+            pass
+        save_audio_simple(recording_path, aligned_multi, sr)
+        return error_code.OK, aligned_mono
 
     @staticmethod
     def sd_play(stimulus_params):
@@ -42,14 +83,37 @@ class SoundcardAudioProcessor(object):
     def sd_rec(recorded_dict):
         num_frames = recorded_dict.get("num_frames", 441000)
         sample_rate = recorded_dict.get("sample_rate", 44100)
-        channels = recorded_dict.get("channels", 1)
+        channels = int(recorded_dict.get("channels", 1) or 1)
         blocking = recorded_dict.get("blocking", True)
         prolong_frames = recorded_dict.get("prolong_frames", 0)
-        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T[0]
-        if prolong_frames > 0:
-            recorded_data = recorded_data[prolong_frames:]
 
-        return error_code.OK, recorded_data
+        in_sel = recorded_dict.get("input_channels")
+        if in_sel is None:
+            in_sel = list(range(max(1, channels)))
+        try:
+            in_sel = sorted({int(i) for i in in_sel if int(i) >= 0})
+        except Exception:
+            in_sel = [0]
+        if not in_sel:
+            in_sel = [0]
+
+        in_num = max(in_sel) + 1
+        rec_raw = sd.rec(frames=num_frames, samplerate=sample_rate, channels=in_num, blocking=blocking)
+        rec_raw = np.asarray(rec_raw, dtype=np.float32)
+        if rec_raw.ndim == 1:
+            rec_raw = rec_raw.reshape(-1, 1)
+
+        rec_sel = rec_raw[:, in_sel] if rec_raw.shape[1] > 1 else rec_raw[:, [0]]
+        if prolong_frames > 0:
+            rec_sel = rec_sel[int(prolong_frames):, :]
+
+        try:
+            recorded_dict["_recorded_multi"] = rec_sel.astype(np.float32, copy=False)
+        except Exception:
+            pass
+
+        rec_mono = rec_sel.mean(axis=1).astype(np.float32, copy=False)
+        return error_code.OK, rec_mono
 
     @staticmethod
     def gcc_phat(stimulus_signal, recorded_signal):

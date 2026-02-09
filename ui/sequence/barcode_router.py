@@ -48,6 +48,20 @@ class BarcodeRouter(QObject):
             return ""
         return str(text).strip()
 
+    @staticmethod
+    def _fold_duplicated_payload(text: str) -> str:
+        """
+        Collapse immediate duplicated payload (e.g. "ABCABC" -> "ABC").
+        Used to guard against scanners/devices injecting the same sequence twice
+        into the line edit during one fast scan burst.
+        """
+        if not text or len(text) < 2 or (len(text) % 2) != 0:
+            return text
+        half = len(text) // 2
+        left = text[:half]
+        right = text[half:]
+        return left if left == right else text
+
     def should_auto_commit_barcode(self, text: str, first_ts: float, last_ts: float) -> bool:
         """判断一段输入是否更像“扫码枪快速输入”，用于防抖自动提交。"""
         text = self.normalize_barcode(text)
@@ -79,6 +93,20 @@ class BarcodeRouter(QObject):
             return
         if not ctx.lineedit_s_or_n.isEnabled():
             return
+
+        # Guard: some scanner paths may inject duplicated payload into the same
+        # edit stream (e.g. "ABCABC" for one physical scan). Fold it early.
+        # Only handle in scanner mode + very fast input path (this method),
+        # so manual editing behavior is not affected.
+        normalized = self.normalize_barcode(_text)
+        folded = self._fold_duplicated_payload(normalized)
+        if folded != normalized:
+            try:
+                with QSignalBlocker(ctx.lineedit_s_or_n):
+                    ctx.lineedit_s_or_n.setText(folded)
+            except Exception:
+                ctx.lineedit_s_or_n.setText(folded)
+
         now = time.monotonic()
         if ctx._barcode_first_char_ts is None:
             ctx._barcode_first_char_ts = now

@@ -65,7 +65,6 @@ MODULES_LOAD = [
     ("加载 校准模块", "ui.calibration_window"),
     ("加载 硬件选择模块", "ui.hardware_window"),
     ("加载 分析流程模块", "ui.sequence.sequence_widget"),
-    ("加载 激励信号模块", "ui.stimulus_window"),
     ("加载 模型选择模块", "ui.operation_sequence"),
     ("加载 登录模块", "ui.login_window"),
     ("加载完成", None),

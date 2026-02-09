@@ -30,6 +30,7 @@ class StreamingAudioProcessor:
         self.stream = None  
         self.audio_queue = queue.Queue()
         self.accumulated_chunks = []
+        self.accumulated_multi_chunks = []
         self.is_recording = False
         self.target_samples = 0
         self.samples_captured = 0
@@ -84,15 +85,39 @@ class StreamingAudioProcessor:
             mono = indata[:, list(in_sel)].mean(axis=1)
         return mono.astype(np.float32, copy=False).reshape(-1)
 
-    def _queue_chunk_and_maybe_stop(self, chunk: np.ndarray) -> Tuple[np.ndarray, bool]:
+    @staticmethod
+    def _select_multi(indata: np.ndarray, in_sel: Sequence[int]) -> np.ndarray:
         """
-        Update sample counters, trim final chunk if needed, enqueue, and stop if target reached.
+        Select and reorder channels from indata and return a 2D float32 array (frames, channels).
+
+        - If indata is 1D: returns (frames, 1)
+        - If in_sel is empty: returns all channels as-is
+        - Else: returns indata[:, in_sel] (in_sel order)
+        """
+        if indata.ndim == 1:
+            return indata.astype(np.float32, copy=False).reshape(-1, 1)
+
+        if not in_sel:
+            return indata.astype(np.float32, copy=False)
+
+        cols = [int(i) for i in in_sel]
+        if len(cols) == 1:
+            return indata[:, [cols[0]]].astype(np.float32, copy=False)
+        return indata[:, cols].astype(np.float32, copy=False)
+
+    def _queue_chunk_and_maybe_stop(self, multi_chunk: np.ndarray) -> Tuple[dict, bool]:
+        """
+        Update sample counters, trim final chunk if needed, enqueue payload, and stop if target reached.
 
         Returns:
-            (trimmed_chunk, reached_target)
+            (payload, reached_target)
         """
+        multi_chunk = np.asarray(multi_chunk, dtype=np.float32)
+        if multi_chunk.ndim == 1:
+            multi_chunk = multi_chunk.reshape(-1, 1)
+
         samples_before = self.samples_captured
-        self.samples_captured += int(len(chunk))
+        self.samples_captured += int(multi_chunk.shape[0])
 
         reached_target = (
             samples_before < self.target_samples
@@ -102,21 +127,24 @@ class StreamingAudioProcessor:
         if reached_target:
             excess = self.samples_captured - self.target_samples
             if excess > 0:
-                chunk = chunk[:-excess]
+                multi_chunk = multi_chunk[:-excess, :]
                 self.samples_captured = self.target_samples
                 self.logger.info(
                     f"Reached target samples: {self.target_samples}, trimmed {excess} samples"
                 )
 
+        mono_chunk = multi_chunk.mean(axis=1).astype(np.float32, copy=False).reshape(-1)
+        payload = {"mono": mono_chunk, "multi": multi_chunk}
+
         try:
-            self.audio_queue.put_nowait(chunk)
+            self.audio_queue.put_nowait(payload)
         except queue.Full:
             self.logger.warning("Audio queue full, dropping chunk")
 
         if reached_target:
             threading.Thread(target=self.stop_streaming, daemon=True).start()
 
-        return chunk, reached_target
+        return payload, reached_target
 
     def _audio_callback(self, indata, frames, time_info, status):
         """
@@ -131,14 +159,14 @@ class StreamingAudioProcessor:
         if status:
             self.logger.warning(f"Audio callback status: {status}")
 
-        # Always queue mono chunks for downstream compatibility (plot/alignment pipeline expects 1D)
-        mono_in = self._mix_to_mono(indata, self._rec_in_sel)
-        if len(mono_in) > frames:
-            mono_in = mono_in[:frames]
-        elif len(mono_in) < frames:
-            mono_in = np.pad(mono_in, (0, frames - len(mono_in)))
+        multi = self._select_multi(indata, self._rec_in_sel)
+        if multi.shape[0] > frames:
+            multi = multi[:frames, :]
+        elif multi.shape[0] < frames:
+            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
+            multi = np.concatenate([multi, pad], axis=0)
 
-        self._queue_chunk_and_maybe_stop(mono_in)
+        self._queue_chunk_and_maybe_stop(multi)
 
     def process_queue(self):
         """
@@ -149,11 +177,22 @@ class StreamingAudioProcessor:
         try:
             while True:
                 # Get all available chunks without blocking
-                chunk = self.audio_queue.get_nowait()
-                self.accumulated_chunks.append(chunk)
+                payload = self.audio_queue.get_nowait()
+                if isinstance(payload, dict) and "mono" in payload and "multi" in payload:
+                    mono = np.asarray(payload.get("mono"), dtype=np.float32).reshape(-1)
+                    multi = np.asarray(payload.get("multi"), dtype=np.float32)
+                    if multi.ndim == 1:
+                        multi = multi.reshape(-1, 1)
+                else:
+                    mono = np.asarray(payload, dtype=np.float32).reshape(-1)
+                    multi = mono.reshape(-1, 1)
+                    payload = {"mono": mono, "multi": multi}
+
+                self.accumulated_chunks.append(mono)
+                self.accumulated_multi_chunks.append(multi)
 
                 # Emit signal to update UI (waveform plot)
-                sign.stream_audio_chunk_signal.emit(chunk)
+                sign.stream_audio_chunk_signal.emit(payload)
 
         except queue.Empty:
             # No more chunks to process
@@ -192,6 +231,7 @@ class StreamingAudioProcessor:
         self.target_samples = target_samples
         self.samples_captured = 0
         self.accumulated_chunks = []
+        self.accumulated_multi_chunks = []
         self.is_recording = True
         self.error_occurred = False
 
@@ -245,18 +285,20 @@ class StreamingAudioProcessor:
                     if status:
                         self.logger.warning(f"Duplex status: {status}")
 
-                    mono_in = self._mix_to_mono(indata, in_sel)
-                    if len(mono_in) > frames:
-                        mono_in = mono_in[:frames]
-                    elif len(mono_in) < frames:
-                        mono_in = np.pad(mono_in, (0, frames - len(mono_in)))
+                    multi_in = self._select_multi(indata, in_sel)
+                    if multi_in.shape[0] > frames:
+                        multi_in = multi_in[:frames, :]
+                    elif multi_in.shape[0] < frames:
+                        pad = np.zeros((frames - multi_in.shape[0], multi_in.shape[1]), dtype=np.float32)
+                        multi_in = np.concatenate([multi_in, pad], axis=0)
 
-                    trimmed, reached = self._queue_chunk_and_maybe_stop(mono_in)
+                    payload, reached = self._queue_chunk_and_maybe_stop(multi_in)
+                    mono_in = payload["mono"]
 
                     outdata.fill(0)
-                    if reached and len(trimmed) < frames:
+                    if reached and len(mono_in) < frames:
                         play = np.zeros(frames, dtype=np.float32)
-                        play[: len(trimmed)] = trimmed
+                        play[: len(mono_in)] = mono_in
                     else:
                         play = mono_in
 
@@ -343,6 +385,7 @@ class StreamingAudioProcessor:
         self.target_samples = target_samples
         self.samples_captured = 0
         self.accumulated_chunks = []
+        self.accumulated_multi_chunks = []
         self.is_recording = True
         self.error_occurred = False
 
@@ -369,6 +412,7 @@ class StreamingAudioProcessor:
             # 这里用“打开足够的通道数 + 回调里按列路由”的方式实现通道选择。
             in_sel = sorted({int(i) for i in (input_channels or [0])})
             out_sel = sorted({int(i) for i in (output_channels or [0])})
+            self._rec_in_sel = list(in_sel)
 
             if input_device:
                 max_in = int(input_device.get("max_input_channels") or 0)
@@ -411,40 +455,15 @@ class StreamingAudioProcessor:
                 self.playback_index += frames
 
                 # ---- record (read from indata) ----
-                # 读取用户选择的物理输入通道。为兼容现有后处理链路，这里混合为单通道（1D）。
-                if not in_sel:
-                    chunk = indata.copy().reshape(-1)
-                elif len(in_sel) == 1:
-                    ch = in_sel[0]
-                    chunk = indata[:, ch].copy()
-                else:
-                    chunk = indata[:, in_sel].mean(axis=1).copy()
-
-                samples_before = self.samples_captured
-                self.samples_captured += len(chunk)
-
-                reached_target = (
-                    samples_before < self.target_samples
-                    and self.samples_captured >= self.target_samples
-                )
-
-                if reached_target:
-                    excess = self.samples_captured - self.target_samples
-                    if excess > 0:
-                        chunk = chunk[:-excess]
-                        self.samples_captured = self.target_samples
-                        self.logger.info(
-                            f"Reached target samples: {self.target_samples}, trimmed {excess} samples"
-                        )
+                multi_in = self._select_multi(indata, in_sel)
+                if multi_in.shape[0] > frames:
+                    multi_in = multi_in[:frames, :]
+                elif multi_in.shape[0] < frames:
+                    pad = np.zeros((frames - multi_in.shape[0], multi_in.shape[1]), dtype=np.float32)
+                    multi_in = np.concatenate([multi_in, pad], axis=0)
 
                 # Queue FIRST, then stop (avoid dropping final chunk)
-                try:
-                    self.audio_queue.put_nowait(chunk)
-                except queue.Full:
-                    self.logger.warning("Audio queue full, dropping chunk")
-
-                if reached_target:
-                    threading.Thread(target=self.stop_streaming, daemon=True).start()
+                self._queue_chunk_and_maybe_stop(multi_in)
 
             # ONE duplex stream instead of OutputStream + InputStream
             self.stream = sd.Stream(
@@ -504,6 +523,15 @@ class StreamingAudioProcessor:
             return np.array([], dtype=np.float32)
 
         return np.concatenate(self.accumulated_chunks).astype(np.float32)
+
+    def get_recorded_data_multi(self) -> np.ndarray:
+        """
+        Get the complete recorded multi-channel audio data as (frames, channels).
+        """
+        if not self.accumulated_multi_chunks:
+            ch = max(1, len(self._rec_in_sel) or 1)
+            return np.empty((0, ch), dtype=np.float32)
+        return np.concatenate(self.accumulated_multi_chunks, axis=0).astype(np.float32, copy=False)
 
     def wait_until_finished(self, timeout=None):
         """

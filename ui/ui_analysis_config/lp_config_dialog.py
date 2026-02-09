@@ -1,6 +1,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpinBox
+from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpinBox, QComboBox
+from typing import List, Optional
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -8,17 +9,44 @@ from ui.custom_ui_widget.popuputils import PopupUtils
 
 
 class LPConfigWindow(QDialog):
-    def __init__(self, config_manager, model_type):
+    def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.available_channels = self._normalize_available_channels(available_channels)
 
         self.init_ui()
+
+    @staticmethod
+    def _normalize_available_channels(available_channels):
+        channels = []
+        try:
+            channels = sorted({int(ch) for ch in (available_channels or [])})
+        except Exception:
+            channels = []
+        if not channels:
+            channels = [0]
+        return channels
+
+    def _create_channel_layout(self):
+        channel_layout = QHBoxLayout()
+        channel_layout.addWidget(QLabel("通道:"))
+        self.channel_combo_box = QComboBox()
+        for ch in self.available_channels:
+            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
+        saved_channel = self.load_config.get("analysis_channel", None)
+        if saved_channel is None or int(saved_channel) not in self.available_channels:
+            saved_channel = int(self.available_channels[0])
+        idx = self.channel_combo_box.findData(int(saved_channel))
+        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
+        channel_layout.addWidget(self.channel_combo_box)
+        return channel_layout
 
     def init_ui(self):
         self.setMinimumSize(350, 350)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         layout = QVBoxLayout()
+        layout.addLayout(self._create_channel_layout())
         lp_config_box = self.create_lp_config_box()
         btn_layout = self.create_btn_layout()
         layout.addWidget(lp_config_box)
@@ -153,6 +181,7 @@ class LPConfigWindow(QDialog):
             "max_check_duration": self.max_check_duration_spinbox.value(),
             "loose_particle_num": self.loose_particle_num_spinbox.value(),
             "cutoff_freq": self.stimulus_max_frequency_spinbox.value(),
+            "analysis_channel": int(self.channel_combo_box.currentData()),
         }
         return default_config
 

@@ -3,14 +3,33 @@ import os
 
 from datetime import datetime
 from scipy.io import wavfile
+import numpy as np
 
 from consts.running_consts import DEFAULT_DIR
 
 
 def save_audio_simple(save_path, audio, sr=44100):
-    # we assume audio is mono channel
-    audio = audio.astype("float32")
-    wavfile.write(save_path, sr, audio)
+    """
+    Save audio to WAV.
+
+    Supports:
+    - mono: shape (frames,)
+    - multi-channel: shape (frames, channels)
+
+    Data is written as float32.
+    """
+    if not save_path:
+        return
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    audio_arr = np.asarray(audio, dtype=np.float32)
+    if audio_arr.ndim == 2 and audio_arr.shape[1] == 1:
+        audio_arr = audio_arr.reshape(-1)
+    if audio_arr.ndim not in (1, 2):
+        raise ValueError(f"Unsupported audio shape: {audio_arr.shape}")
+
+    wavfile.write(save_path, int(sr), audio_arr)
 
 
 def save_recorded_data_to_json(product_model, current_recorded_count, scanner_barcode, scanner_barcode_check):

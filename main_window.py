@@ -14,7 +14,6 @@ from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
-# from ui.hardware_window import HardwareWindow
 from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
@@ -228,7 +227,12 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
-        analysis_model_select_dialog = AnalysisModelSelect(self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker)
+        analysis_model_select_dialog = AnalysisModelSelect(
+            self.sequence_window.using_config_path,
+            mic=self.mic,
+            speaker=self.speaker,
+            mic_channels=self.mic_channels,
+        )
         analysis_model_select_dialog.exec()
         # Refresh active sequence config without forcing mode switch
         self.sequence_window.on_sequence_config_updated()
@@ -306,13 +310,32 @@ class MainWindow(QMainWindow):
         if self.sequence_window.player_status_flag:
             QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
+        # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
+        driver_name = None
+        try:
+            if self.speaker and self.speaker.get("hostapi") is not None:
+                driver_name = SoundDeviceManager.get_api_info(int(self.speaker.get("hostapi"))).get("name")
+            elif self.mic and self.mic.get("hostapi") is not None:
+                driver_name = SoundDeviceManager.get_api_info(int(self.mic.get("hostapi"))).get("name")
+        except Exception:
+            driver_name = None
 
-        self.speaker, self.speaker_channels, self.mic, self.mic_channels = open_hardware_selection_window()
+        self.speaker, self.speaker_channels, self.mic, self.mic_channels = open_hardware_selection_window(
+            driver=driver_name,
+            speaker_device=self.speaker,
+            speaker_channels=self.speaker_channels,
+            mic_device=self.mic,
+            mic_channels=self.mic_channels,
+        )
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
+        try:
+            self.sequence_window.refresh_channel_windows()
+        except Exception:
+            pass
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker

@@ -45,8 +45,9 @@ class SingleCheckTableView(QTableView):
         self._init_view_style()
 
     def _init_view_style(self) -> None:
+        # 取消选择高亮：禁用行选择，仅保留勾选交互
         self.setSelectionBehavior(QTableView.SelectRows)
-        self.setSelectionMode(QTableView.SingleSelection)
+        self.setSelectionMode(QTableView.NoSelection)
         self.setEditTriggers(QTableView.NoEditTriggers)
         self.setFocusPolicy(Qt.NoFocus)
 
@@ -59,10 +60,13 @@ class SingleCheckTableView(QTableView):
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
         # 覆盖项目全局 QTableView::item 的 border-top（横线）
+        # 并将 selected 背景置为透明，避免出现点击高亮
         # 仅对本控件生效，避免影响其它页面表格样式
         self.setStyleSheet(
             """
             QTableView::item { border: none; }
+            QTableView::item:selected { background: transparent; color: inherit; }
+            QTableView::item:focus { outline: none; }
             """
         )
 
@@ -143,8 +147,9 @@ class MultiCheckTableView(QTableView):
         self._init_view_style()
 
     def _init_view_style(self) -> None:
+        # 取消选择高亮：禁用行选择，仅保留勾选交互
         self.setSelectionBehavior(QTableView.SelectRows)
-        self.setSelectionMode(QTableView.ExtendedSelection)
+        self.setSelectionMode(QTableView.NoSelection)
         self.setEditTriggers(QTableView.NoEditTriggers)
         self.setFocusPolicy(Qt.NoFocus)
 
@@ -157,9 +162,12 @@ class MultiCheckTableView(QTableView):
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
         # 覆盖项目全局 QTableView::item 的 border-top（横线）
+        # 并将 selected 背景置为透明，避免出现点击高亮
         self.setStyleSheet(
             """
             QTableView::item { border: none; }
+            QTableView::item:selected { background: transparent; color: inherit; }
+            QTableView::item:focus { outline: none; }
             """
         )
 
@@ -455,8 +463,8 @@ class HardwareSelectionController:
         self.model.state.speaker_device = payload if isinstance(payload, dict) else None
         channels = self.model.channels_for_device(self.model.state.speaker_device, "speaker")
         self.model.state.speaker_channels = []
-        # 显示仍用 In1..InN，但 payload/返回值为 0..N-1
-        self.view.speaker_channel_table.set_options([(f"In{i + 1}", i) for i in channels])
+        # Speaker 通道显示为 Out1..OutN；payload/返回值仍为 0..N-1（0-based）
+        self.view.speaker_channel_table.set_options([(f"Out{i + 1}", i) for i in channels])
 
     def _on_mic_device_checked(self, payload: object) -> None:
         self.model.state.mic_device = payload if isinstance(payload, dict) else None
@@ -502,8 +510,64 @@ class HardwareSelectionController:
             list(self._initial_state.mic_channels),
         )
 
-def open_hardware_selection_window():
-    model = HardwareSelectionModel()
+
+def _normalize_channel_indices(channels: Optional[Iterable[Any]]) -> List[int]:
+    """
+    将通道输入规范化为 0-based 的 int 列表。
+
+    兼容：
+    - [0, 1, 2]
+    - ["Out1", "Out2"] / ["In1", "In2"]（按 1-based 解析后转 0-based）
+    """
+    if not channels:
+        return []
+    out: List[int] = []
+    for x in channels:
+        if x is None:
+            continue
+        if isinstance(x, str):
+            s = x.strip()
+            # 支持 Out1 / In1 / 1
+            if s.lower().startswith(("out", "in")):
+                s = s[3:] if s.lower().startswith("out") else s[2:]
+            try:
+                n = int(s)
+                # 约定字符串通道为 1-based（Out1 表示索引 0）
+                out.append(max(0, n - 1))
+            except Exception:
+                continue
+        else:
+            try:
+                out.append(int(x))
+            except Exception:
+                continue
+    # 去重 + 排序
+    return sorted(set(out))
+
+
+def open_hardware_selection_window(
+    driver: Optional[str] = None,
+    speaker_device: Optional[Dict[str, Any]] = None,
+    speaker_channels: Optional[Iterable[Any]] = None,
+    mic_device: Optional[Dict[str, Any]] = None,
+    mic_channels: Optional[Iterable[Any]] = None,
+):
+    """
+    打开硬件选择窗口，并支持根据传入参数进行初始化回填：
+    - driver：Host API 名称（例如 WASAPI/ASIO/MME 等）
+    - speaker_device / mic_device：sounddevice 设备 dict
+    - speaker_channels / mic_channels：通道索引（0-based int）或显示字符串（Out1/In1）
+    """
+
+    initial_state = HardwareSelectionState(
+        speaker_device=speaker_device,
+        speaker_channels=_normalize_channel_indices(speaker_channels),
+        mic_device=mic_device,
+        mic_channels=_normalize_channel_indices(mic_channels),
+        api_name=driver,
+    )
+
+    model = HardwareSelectionModel(initial_state=initial_state)
     view = HardwareSelectionView()
     controller = HardwareSelectionController(model, view)
     result = controller.on_exec()

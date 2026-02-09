@@ -1,9 +1,6 @@
 import os
 import re
 import sys
-import json
-import copy
-from datetime import datetime
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
@@ -24,38 +21,35 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
-from base.soundcard_calibration_manager import get_mic_v2pa_factor
-from base.stimulus_resolver import (
-    set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal,
-)
-from base.soundcard_audio_processor import SoundcardAudioProcessor
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import (
     RecordConfigWindow,
-    PlayRecordConfigWindow,
     ImportAudioConfigWindow,
-    ImportStimulusAudioConfigWindow,
 )
 
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
-from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
-from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
-from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
-from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
-from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
-from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
-from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
-from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+
+SUPPORTED_ACQ_ITEMS = ["录制音频", "导入音频"]
+SUPPORTED_ACQ_MODES = {"RECORD_ONLY", "IMPORT_AUDIO"}
+SUPPORTED_ANALYSIS_ITEMS = [
+    "声压级 (SPL) ",
+    "频谱分析 (Spec) ",
+    "AI 分析 ",
+    "松散颗粒 (LP) ",
+    "结果导出 (Excel) ",
+]
+SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "AI", "LP", "Excel"}
 
 
 class AnalysisModelSelect(QDialog):
 
-    def __init__(self, using_config_path, mic=None, speaker=None):
+    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None):
         super().__init__()
         # When main window has no active config selected ("无配置"), using_config_path can be None.
         # Fall back to the built-in default sequence config so the test-queue window can still open.
@@ -67,7 +61,11 @@ class AnalysisModelSelect(QDialog):
         self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
         self.select_list = OptionList(
-            self.default_logger, using_config_path, mic=mic, speaker=speaker
+            self.default_logger,
+            using_config_path,
+            mic=mic,
+            speaker=speaker,
+            mic_channels=mic_channels,
         )
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
         self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
@@ -157,7 +155,7 @@ class AnalysisModelSelect(QDialog):
 
         self.analysis_model = AnalysisModel()
         sound_item = QStandardItem("音频设置")
-        sound_items = ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]
+        sound_items = SUPPORTED_ACQ_ITEMS
         for item in sound_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
@@ -165,21 +163,7 @@ class AnalysisModelSelect(QDialog):
         self.analysis_model.appendRow(sound_item)
 
         analysis_item_item = QStandardItem("音频分析")
-        analysis_items = [
-            "声压级 (SPL) ",
-            "声压级-频率 (SPLF) ",
-            "频谱分析 (Spec) ",
-            "频响 (FR) ",
-            "谐波失真 (HD) ",
-            "高阶谐波失真 (RB) ",
-            "感知失真 (PRB) ",
-            "松散颗粒 (LP) ",
-            "峰值检测 (PD) ",
-            "模式匹配(PM)",
-            "AI 分析 ",
-            "事件检测 (ED) ",
-            "结果导出 (Excel) ",
-        ]
+        analysis_items = SUPPORTED_ANALYSIS_ITEMS
         for item in analysis_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
@@ -252,10 +236,6 @@ class AnalysisModelSelect(QDialog):
         return layout
 
     def create_btn_layout(self):
-        record_golden_btn = QPushButton("录制黄金样本")
-        record_golden_btn.clicked.connect(self.record_golden_sample_btn_clicked)
-        record_golden_btn.setMinimumWidth(140)
-
         load_btn = QPushButton("导入")
         load_btn.clicked.connect(self.load_btn_clicked)
         save_btn = QPushButton("保存")
@@ -271,7 +251,6 @@ class AnalysisModelSelect(QDialog):
         clear_btn.setMinimumWidth(100)
 
         layout = QHBoxLayout()
-        layout.addWidget(record_golden_btn)
         layout.addStretch()
         layout.addWidget(clear_btn)
         layout.addWidget(load_btn)
@@ -281,167 +260,6 @@ class AnalysisModelSelect(QDialog):
 
         return layout
 
-    def record_golden_sample_btn_clicked(self):
-        """
-        Record a golden sample (baseline) for the currently selected sequence config:
-        - Play configured stimulus and record once (blocking)
-        - Run analysis ONLY for items with golden_sample_checked=True
-        - Save analysis results into a JSON file
-        - Store that JSON path into analysis_list['golden_sample_result_path'] (persisted on confirm/save)
-        """
-        if not self.select_list.config:
-            QMessageBox.warning(self, "提示", "请先配置测试序列")
-            return
-
-        seq = self.select_list.config[0]
-
-        detail = getattr(seq, "detail", None) or {}
-        data_struct = self.select_list.data_struct
-
-        # 录音前预检查：未勾选“使用黄金样本”的分析项则直接提示，避免白录一遍
-        analysis_cfg = getattr(seq, "analysis_list", {}) or {}
-        item_sort_list = analysis_cfg.get("display_sequence", [])
-        if not item_sort_list:
-            QMessageBox.warning(self, "提示", "当前序列没有可分析项目")
-            return
-        has_any_golden_checked = False
-        for key in item_sort_list:
-            key_config = analysis_cfg.get(key)
-            if not isinstance(key_config, dict):
-                continue
-            if not key_config.get("golden_sample_checked", False):
-                continue
-            item_type = key_config.get("type")
-            if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
-                continue
-            has_any_golden_checked = True
-            break
-        if not has_any_golden_checked:
-            QMessageBox.warning(self, "提示", "没有勾选任何“使用黄金样本”的分析项")
-            return
-
-        try:
-            # Ensure stimulus data is loaded/generated into DataDealStruct
-            self.set_data_struct_stimulus_signal(
-                data_struct,
-                detail,
-                using_config_path=self.using_config_path,
-                logger=self.default_logger,
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "提示", f"加载激励失败: {str(e)[:200]}")
-            return
-
-        try:
-            stimulus_dict, recorded_dict = (
-                LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(data_struct)
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")
-            return
-
-        # Prepare default save locations
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        golden_dir = os.path.join(DEFAULT_DIR, "audio_data", "stored_sample", "golden")
-        try:
-            os.makedirs(golden_dir, exist_ok=True)
-        except Exception:
-            pass
-
-        recorded_wav_path = os.path.join(golden_dir, f"golden_record_{ts}.wav").replace(
-            "\\", "/"
-        )
-
-        # Blocking play+record (also saves wav)
-        try:
-            sap = SoundcardAudioProcessor()
-            record_code, aligned_data = sap.sd_play_rec(
-                recorded_dict, stimulus_dict, recorded_wav_path
-            )
-            if record_code != 0 or aligned_data is None:
-                QMessageBox.warning(self, "提示", "录制黄金样本失败")
-                return
-            data_struct.store_wave_data = aligned_data
-        except Exception as e:
-            QMessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
-            return
-
-        # Collect only checked items
-        items_out = {}
-        class_mapping = get_class_mapping()
-        for key in item_sort_list:
-            key_config = analysis_cfg.get(key)
-            if not isinstance(key_config, dict):
-                continue
-            if not key_config.get("golden_sample_checked", False):
-                continue
-            item_type = key_config.get("type")
-            if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
-                continue
-
-            cls_map = class_mapping.get(item_type)
-            if cls_map is None:
-                continue
-
-            try:
-                params = copy.deepcopy(key_config)
-                # When generating baseline, always disable golden/threshold influence
-                params["golden_sample_checked"] = False
-                params.pop("golden_sample_result_path", None)
-                params["limit_checked"] = False
-                params["limit_data"] = None
-
-                instance = cls_map(key)
-                instance.analysis_config = params
-                instance.v2pa_factor = get_mic_v2pa_factor()
-
-                result = None
-                if hasattr(instance, "calculate_spl"):
-                    result = instance.calculate_spl()
-                elif hasattr(instance, "calculate_fr"):
-                    result = instance.calculate_fr()
-                elif hasattr(instance, "calculate_thd"):
-                    result = instance.calculate_thd()
-                    result.pop("harmonic", None)
-                else:
-                    continue
-
-                items_out[key] = {"type": item_type, "result": result}
-            except Exception as e:
-                self.default_logger.error(
-                    f"Golden sample analysis failed for {key}: {e}"
-                )
-                continue
-
-        default_json_path = os.path.join(
-            golden_dir, f"golden_baseline_{ts}.json"
-        ).replace("\\", "/")
-        json_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "保存黄金样本分析结果",
-            default_json_path,
-            filter="JSON Files (*.json)",
-        )
-        if not json_path:
-            return
-
-        payload = {
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "stimulus_info": getattr(data_struct, "stimulus_info", None),
-            "sample_rate": getattr(data_struct, "sample_rate", None),
-            "recorded_wav_path": recorded_wav_path,
-            "items": items_out,
-        }
-
-        try:
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            QMessageBox.warning(self, "提示", f"保存黄金样本文件失败: {str(e)[:200]}")
-            return
-
-        # Store path into sequence analysis config; persisted when user clicks 保存/确定
-        analysis_cfg["golden_sample_result_path"] = json_path.replace("\\", "/")
 
     def load_btn_clicked(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -462,6 +280,24 @@ class AnalysisModelSelect(QDialog):
     def format_config_data(self, config_data):
         for item in config_data:
             item.auto_analysis = self.auto_analysis_box.isChecked()
+
+            item.analysis_list.pop("golden_sample_result_path", None)
+            filtered_analysis = {}
+            for k, v in item.analysis_list.items():
+                if not isinstance(v, dict):
+                    continue
+                t = v.get("type")
+                if t not in SUPPORTED_ANALYSIS_TYPES:
+                    continue
+                clean = dict(v)
+                clean.pop("golden_sample_checked", None)
+                clean.pop("golden_sample_result_path", None)
+                filtered_analysis[k] = clean
+
+            item.analysis_list.clear()
+            item.analysis_list.update(filtered_analysis)
+            item.display_sequence = [name for name in item.display_sequence if name in filtered_analysis]
+
         save_config = [x.config_info for x in config_data]
         return save_config
 
@@ -517,23 +353,9 @@ class AnalysisModelSelect(QDialog):
         # Main window will refresh the active config after this dialog closes.
         self.close()
 
-    @staticmethod
-    def set_data_struct_stimulus_signal(
-        data_struct, detail, using_config_path: str = None, logger=None
-    ):
-        return _safe_set_data_struct_stimulus_signal(
-            data_struct,
-            detail,
-            using_config_path=using_config_path,
-            logger=logger,
-        )
-
-    # NOTE: removed update_test_file_current_model (no current model field in test log anymore)
-
-
 class OptionList(QListView):
 
-    def __init__(self, logger, using_config_path, mic=None, speaker=None):
+    def __init__(self, logger, using_config_path, mic=None, speaker=None, mic_channels=None):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.select_analysis_model = QStandardItemModel()
@@ -545,6 +367,7 @@ class OptionList(QListView):
         self.default_logger = logger
         self.mic = mic
         self.speaker = speaker
+        self.mic_channels = self._normalize_channels(mic_channels)
         self.row_num = None
         self.darpflag = None
         self.sound_item_type = None
@@ -565,6 +388,19 @@ class OptionList(QListView):
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
         self.dropEvent = self.dropevent
+
+    @staticmethod
+    def _normalize_channels(channels):
+        out = []
+        try:
+            for ch in (channels or []):
+                out.append(int(ch))
+        except Exception:
+            out = []
+        out = sorted(set(out))
+        if not out:
+            out = [0]
+        return out
 
     def itemmove(self, index):
         if self.index_num is None or not index:
@@ -679,87 +515,64 @@ class OptionList(QListView):
 
     def show_dialog(self, name):
         model = QDialog(self)
+        if not self.config:
+            return
+
         if name == self.config[0].name:
-            if "播放与录制" in self.config[0].name:
-                model = PlayRecordConfigWindow(
-                    self.config[0].detail, mic=self.mic, speaker=self.speaker
-                )
-            elif "录制音频" in self.config[0].name:
+            if self.config[0].mode == "RECORD_ONLY":
                 model = RecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
-            elif "导入音频" in self.config[0].name:
+            elif self.config[0].mode == "IMPORT_AUDIO":
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
-            elif "导入激励与音频" in self.config[0].name:
-                model = ImportStimulusAudioConfigWindow(
-                    self.config[0].detail, mic=self.mic, speaker=self.speaker
-                )
+            else:
+                return
+
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
-                if "播放与录制" in name or "导入激励与音频" in name:
-                    self.signal_len = int(
-                        result["stimulus_info"]["total_time"]
-                        * result["stimulus_info"]["sample_rate"]
-                    )
-                elif "录制音频" in name:
+                if self.config[0].mode == "RECORD_ONLY":
                     self.signal_len = int(result["total_time"] * result["sample_rate"])
+                else:
+                    self.signal_len = 0
+            return
 
-        elif name in self.config[0].display_sequence:
+        if name in self.config[0].display_sequence:
             prev_config_file = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-            model_type = None
-            config_manager = None
-            if name in self.config[0].analysis_list:
-                config_manager = ConfigManager(prev_config_file)
-            type = self.config[0].analysis_list.get(name)["type"]
-            if self.config[0].analysis_list.get(name):
-                config_manager.config = self.config[0].analysis_list
-                model_type = name
-            model = self.create_config_dialog(
-                model, config_manager, model_type, type, self.signal_len
-            )
+            if name not in self.config[0].analysis_list:
+                return
+            cfg = self.config[0].analysis_list.get(name) or {}
+            analysis_type = cfg.get("type")
+            if analysis_type not in SUPPORTED_ANALYSIS_TYPES:
+                return
+            config_manager = ConfigManager(prev_config_file)
+            config_manager.config = self.config[0].analysis_list
+            model = self.create_config_dialog(model, config_manager, name, analysis_type, self.signal_len)
+            if model is None:
+                return
             model.setWindowTitle(name)
             if model.exec_() == QDialog.Accepted:
                 config_data = model.on_click_ok_btn()
                 self.add_config(name, config_data)
 
-    def load_stimulus_config(self):
-        default_config_file = DEFAULT_DIR + "ui/ui_config/default_stimulus.json"
-        code, data = LoadUiConfig.load_data_from_json(default_config_file)
-        if code == 0:
-            return True, data
-        else:
-            self.default_logger.error(f"load default stimulus config error {data}")
-            return False, {}
-
     def create_config_dialog(
         self, model: QDialog, config_manager: ConfigManager, name, type, signal_len
     ):
+        available_channels = list(self.mic_channels or [0])
         if type == "SPL":
-            model = SplConfigWindow(config_manager, name)
-        elif type == "SPLF":
-            model = SplConfigWindow(config_manager, name)
-        elif type == "FR":
-            model = FrConfigWindow(config_manager, name)
-        elif type == "HD":
-            model = HdConfigWindow(config_manager, name)
-        elif type == "RB":
-            model = RbConfigWindow(config_manager, name)
-        elif type == "PRB":
-            model = PerceptualRbConfigWindow(config_manager, name)
-        elif type == "AI":
-            model = AIConfigWindow(config_manager, name, signal_len)
-        elif type == "Spec":
-            model = SpecConfigWindow(config_manager, name)
-        elif type == "LP":
-            model = LPConfigWindow(config_manager, name)
-        elif type == "PD":
-            model = PDConfigWindow(config_manager, name)
-        elif type == "ED":
-            model = PipelinePdPmConfigWindow(config_manager, name)
-        elif type == "PM":
-            model = PatternMatchConfigWindow(config_manager, name)
-        elif type == "Excel":
-            model = ExcelConfigWindow(config_manager, name)
-        return model
+            return SplConfigWindow(config_manager, name, available_channels=available_channels)
+        if type == "AI":
+            return AIConfigWindow(
+                config_manager,
+                name,
+                signal_len,
+                available_channels=available_channels,
+            )
+        if type == "Spec":
+            return SpecConfigWindow(config_manager, name, available_channels=available_channels)
+        if type == "LP":
+            return LPConfigWindow(config_manager, name, available_channels=available_channels)
+        if type == "Excel":
+            return ExcelConfigWindow(config_manager, name)
+        return None
 
     def init_config_info(self, config_file):
         code, config_info = LoadUiConfig.load_data_from_json(config_file)
@@ -768,34 +581,77 @@ class OptionList(QListView):
                 f"Failed to load the default config file. {config_info}"
             )
             return
-        if config_info:
-            for i in config_info:
-                key, value = next(iter(i.items()))
-                sequence_config = SequenceData(key)
-                sequence_config.name = value.get("acq", {}).get("name", None)
-                sequence_config.mode = value.get("acq", {}).get("mode", None)
-                self.sound_item_type = sequence_config.name.lstrip()
-                sequence_config.detail = value.get("acq", {}).get("detail", {})
+        if not config_info:
+            return
 
-                i_analysis_list = value.get("analysis_list", {})
-                # default_ai is deprecated for business logic (no longer used as test-mode dependency)
-                i_analysis_list.pop("default_ai", None)
-                sequence_config.default_ai = None
-                sequence_config.display_sequence = i_analysis_list.pop(
-                    "display_sequence", []
-                )
-                sequence_config.auto_analysis = i_analysis_list.pop(
-                    "auto_analysis", False
-                )
+        for i in config_info:
+            key, value = next(iter(i.items()))
+            sequence_config = SequenceData(key)
+            sequence_config.name = value.get("acq", {}).get("name", None)
+            sequence_config.mode = value.get("acq", {}).get("mode", None)
+            sequence_config.detail = value.get("acq", {}).get("detail", {})
 
-                sequence_config.analysis_list.update(i_analysis_list)
-                self.config.append(sequence_config)
-                if sequence_config.mode != "IMPORT_AUDIO":
-                    self.signal_len = sequence_config.detail.get(
-                        "total_time", 4.0
-                    ) * sequence_config.detail.get("sample_rate", 44100)
-                else:
-                    self.signal_len = 0
+            if sequence_config.mode in {"PLAY_AND_RECORD", "IMPORT_STIMULUS_AUDIO"}:
+                sequence_config.name = SUPPORTED_ACQ_ITEMS[0]
+                sequence_config.mode = "RECORD_ONLY"
+            if sequence_config.mode not in SUPPORTED_ACQ_MODES:
+                sequence_config.name = SUPPORTED_ACQ_ITEMS[0]
+                sequence_config.mode = "RECORD_ONLY"
+                sequence_config.detail = {
+                    "total_time": 4.0,
+                    "sample_rate": 44100,
+                    "monitor_playback": False,
+                    "monitor_output_channel": 0,
+                }
+            else:
+                if sequence_config.mode == "RECORD_ONLY":
+                    sequence_config.detail = {
+                        "total_time": float(sequence_config.detail.get("total_time", 4.0)),
+                        "sample_rate": int(sequence_config.detail.get("sample_rate", 44100)),
+                        "monitor_playback": bool(sequence_config.detail.get("monitor_playback", False)),
+                        "monitor_output_channel": int(sequence_config.detail.get("monitor_output_channel", 0)),
+                    }
+                elif sequence_config.mode == "IMPORT_AUDIO":
+                    sequence_config.detail = {
+                        "sample_rate": int(sequence_config.detail.get("sample_rate", 44100))
+                    }
+
+            self.sound_item_type = sequence_config.name.lstrip()
+
+            i_analysis_list = value.get("analysis_list", {})
+            i_analysis_list.pop("default_ai", None)
+            i_analysis_list.pop("golden_sample_result_path", None)
+            sequence_config.default_ai = None
+            sequence_config.auto_analysis = bool(i_analysis_list.pop("auto_analysis", False))
+
+            raw_display = i_analysis_list.pop("display_sequence", [])
+
+            filtered_analysis_list = {}
+            for item_name, item_cfg in i_analysis_list.items():
+                if not isinstance(item_cfg, dict):
+                    continue
+                item_type = item_cfg.get("type")
+                if item_type not in SUPPORTED_ANALYSIS_TYPES:
+                    continue
+                clean_cfg = dict(item_cfg)
+                clean_cfg.pop("golden_sample_checked", None)
+                clean_cfg.pop("golden_sample_result_path", None)
+                filtered_analysis_list[item_name] = clean_cfg
+
+            filtered_display = [
+                name for name in raw_display if name in filtered_analysis_list
+            ]
+
+            sequence_config.analysis_list.update(filtered_analysis_list)
+            sequence_config.display_sequence = filtered_display
+            self.config.append(sequence_config)
+
+            if sequence_config.mode != "IMPORT_AUDIO":
+                self.signal_len = sequence_config.detail.get(
+                    "total_time", 4.0
+                ) * sequence_config.detail.get("sample_rate", 44100)
+            else:
+                self.signal_len = 0
 
     def clear_option_list(self):
         self.config = list()
@@ -1129,25 +985,22 @@ class OptionList(QListView):
         e.accept()
 
     def dragenterevent(self, event):
-        if event.mimeData().hasText():
-            text = event.mimeData().text()
-            if text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
-                if self.sound_item_type:
-                    self.drop_is_accept = False
-            elif self.sound_item_type in ["录制音频", "导入音频"]:
-                if text in [
-                    "声压级-频率 (SPLF) ",
-                    "频响 (FR) ",
-                    "谐波失真 (HD) ",
-                    "高阶谐波失真 (RB) ",
-                    "感知失真 (PRB) ",
-                ]:
-                    self.drop_is_accept = False
-            elif not self.sound_item_type:
-                self.drop_is_accept = False
-            event.accept()
-        else:
+        if not event.mimeData().hasText():
             event.ignore()
+            return
+
+        text = event.mimeData().text().lstrip()
+        allowed_texts = set(SUPPORTED_ACQ_ITEMS + SUPPORTED_ANALYSIS_ITEMS)
+
+        self.drop_is_accept = True
+        if text not in allowed_texts:
+            self.drop_is_accept = False
+        elif text in SUPPORTED_ACQ_ITEMS and self.sound_item_type:
+            self.drop_is_accept = False
+        elif not self.sound_item_type and text not in SUPPORTED_ACQ_ITEMS:
+            self.drop_is_accept = False
+
+        event.accept()
 
     def dragmoveevent(self, event):
         if event.mimeData().hasText():
@@ -1156,44 +1009,41 @@ class OptionList(QListView):
             event.ignore()
 
     def dropevent(self, event):
-        if event.mimeData().hasText():
-            text = event.mimeData().text().lstrip()
-            if self.drop_is_accept is False:
-                if text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
-                    QMessageBox.warning(self, "警告", "已选择测试模式")
-                elif not self.config:
-                    QMessageBox.warning(self, "警告", "请选择测试模式")
-                elif text in [
-                    "声压级-频率 (SPLF) ",
-                    "频响 (FR) ",
-                    "谐波失真 (HD) ",
-                    "高阶谐波失真 (RB) ",
-                    "感知失真 (PRB) ",
-                ]:
-                    QMessageBox.warning(self, "警告", "当前模式不支持此功能")
-                self.drop_is_accept = True
-                return
-            elif text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
-                self.set_sound_item(text)
-                self.sound_item_type = text
-            else:
-                self.set_new_analysis_config(text)
-                self.data_struct.add_stft_or_fft_count(text)
-            event.accept()
-        else:
+        if not event.mimeData().hasText():
             event.ignore()
+            return
+
+        text = event.mimeData().text().lstrip()
+        if self.drop_is_accept is False:
+            if text in SUPPORTED_ACQ_ITEMS:
+                QMessageBox.warning(self, "警告", "已选择测试模式")
+            elif not self.config:
+                QMessageBox.warning(self, "警告", "请选择测试模式")
+            else:
+                QMessageBox.warning(self, "警告", "当前模式不支持此功能")
+            self.drop_is_accept = True
+            return
+
+        if text in SUPPORTED_ACQ_ITEMS:
+            self.set_sound_item(text)
+            self.sound_item_type = text
+        elif text in SUPPORTED_ANALYSIS_ITEMS:
+            self.set_new_analysis_config(text)
+            self.data_struct.add_stft_or_fft_count(text)
+        event.accept()
 
     def set_sound_item(self, item_text):
+        if item_text not in SUPPORTED_ACQ_ITEMS:
+            return
+
         list_item = QStandardItem(item_text)
         list_item.setIcon(
             QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png")
         )
-        if self.config:
-            seq_name_list = list()
-            for key, value in self.config.items():
-                seq_name_list.append(key)
-            count = len(seq_name_list)
 
+        if self.config:
+            seq_name_list = [seq.seq_name for seq in self.config]
+            count = len(seq_name_list)
             while True:
                 seq_name = "seq" + str(count)
                 if seq_name not in seq_name_list:
@@ -1201,20 +1051,11 @@ class OptionList(QListView):
                 count += 1
         else:
             seq_name = "seq1"
+
         seq_item = SequenceData(seq_name)
         seq_item.name = item_text
-        if item_text == "播放与录制":
-            flag, config = self.load_stimulus_config()
-            if flag:
-                seq_item.mode = "PLAY_AND_RECORD"
-                seq_item.detail = config
-                self.signal_len = seq_item.detail.get(
-                    "total_time", 4.0
-                ) * seq_item.detail.get("sample_rate", 44100)
-            else:
-                QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
-                return
-        elif item_text == "录制音频":
+
+        if item_text == SUPPORTED_ACQ_ITEMS[0]:
             seq_item.mode = "RECORD_ONLY"
             seq_item.detail = {
                 "total_time": 4.0,
@@ -1225,23 +1066,12 @@ class OptionList(QListView):
             self.signal_len = seq_item.detail.get(
                 "total_time", 4.0
             ) * seq_item.detail.get("sample_rate", 44100)
-        elif item_text == "导入音频":
+        elif item_text == SUPPORTED_ACQ_ITEMS[1]:
             seq_item.mode = "IMPORT_AUDIO"
             seq_item.detail = {"sample_rate": 44100}
             self.signal_len = 0
-        elif item_text == "导入激励与音频":
-            flag, config = self.load_stimulus_config()
-            if flag:
-                seq_item.mode = "IMPORT_STIMULUS_AUDIO"
-                seq_item.detail = config
-                self.signal_len = seq_item.detail.get(
-                    "total_time", 4.0
-                ) * seq_item.detail.get("sample_rate", 44100)
-            else:
-                QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
-                return
-        self.config.append(seq_item)
 
+        self.config.append(seq_item)
         self.model().insertRow(0, list_item)
 
     def set_new_analysis_config(self, item_text):
@@ -1264,16 +1094,22 @@ class OptionList(QListView):
     def get_item_default_config(self, item_text, list_item_text):
         if not item_text or not list_item_text:
             return
-        type = "".join(re.findall(r"[A-Za-z]", item_text))
+
+        analysis_type = "".join(re.findall(r"[A-Za-z]", item_text))
+        if analysis_type not in SUPPORTED_ANALYSIS_TYPES:
+            return
+
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
             return
 
-        default_of_type = data.get(type, {})
+        default_of_type = dict(data.get(analysis_type, {}))
+        default_of_type.pop("golden_sample_checked", None)
+        default_of_type.pop("golden_sample_result_path", None)
         self.config[0].analysis_list[list_item_text] = default_of_type
-        self.config[0].analysis_list[list_item_text]["type"] = type
+        self.config[0].analysis_list[list_item_text]["type"] = analysis_type
 
 
 class AnalysisModel(QStandardItemModel):

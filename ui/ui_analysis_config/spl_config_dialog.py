@@ -3,6 +3,7 @@ SPL (Sound Pressure Level) 分析配置对话框
 """
 
 import re
+from typing import List, Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
@@ -37,12 +38,39 @@ class SplConfigWindow(QDialog):
         "1/48 Oct": 48,
     }
 
-    def __init__(self, config_manager, model_type):
+    def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
         self.model_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
+        self.available_channels = self._normalize_available_channels(available_channels)
         self.init_ui()
+
+    @staticmethod
+    def _normalize_available_channels(available_channels):
+        channels = []
+        try:
+            channels = sorted({int(ch) for ch in (available_channels or [])})
+        except Exception:
+            channels = []
+        if not channels:
+            channels = [0]
+        return channels
+
+    def _create_channel_layout(self):
+        channel_layout = QHBoxLayout()
+        channel_layout.addWidget(QLabel("通道:"))
+        self.channel_combo_box = QComboBox()
+        for ch in self.available_channels:
+            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
+        saved_channel = self.load_config.get("analysis_channel", None)
+        if saved_channel is None or int(saved_channel) not in self.available_channels:
+            saved_channel = int(self.available_channels[0])
+        idx = self.channel_combo_box.findData(int(saved_channel))
+        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
+        channel_layout.addWidget(self.channel_combo_box)
+        channel_layout.addStretch()
+        return channel_layout
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -124,6 +152,7 @@ class SplConfigWindow(QDialog):
 
         btn_layout = self.create_btn()
 
+        layout.addLayout(self._create_channel_layout())
         layout.addLayout(threshold_weighting_layout)
         if self.splf_mode_group_box is not None:
             layout.addWidget(self.splf_mode_group_box)
@@ -184,6 +213,7 @@ class SplConfigWindow(QDialog):
             config["weighting"] = "Z"
         else:
             config["weighting"] = weighting_value
+        config["analysis_channel"] = int(self.channel_combo_box.currentData())
         return config
 
     def on_default_btn_clicked(self):

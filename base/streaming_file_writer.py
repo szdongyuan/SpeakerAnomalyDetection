@@ -17,7 +17,7 @@ class StreamingWavWriter:
     allowing real-time saving during recording without buffering the entire
     audio in memory before saving.
 
-    Supports mono channel float32 audio format.
+    Supports float32 mono and multi-channel audio format.
     """
 
     def __init__(self, file_path, sample_rate=44100, channels=1):

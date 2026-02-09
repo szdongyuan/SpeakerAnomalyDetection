@@ -16,6 +16,7 @@ class DataDealStruct(object):
             self.stft_result = None
 
             self.store_wave_data = None
+            self.store_wave_data_multi = None
             self.split_repeat_data = None
             self.stimulus_data = None
             self.stimulus_info = None
@@ -34,6 +35,7 @@ class DataDealStruct(object):
 
     def clear_data(self):
         self.store_wave_data = None
+        self.store_wave_data_multi = None
         self.split_repeat_data = None
         # self.stimulus_data = None
         self.fft_result = None
