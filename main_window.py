@@ -1,7 +1,7 @@
 import sys
 
-from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt5.QtCore import Qt, QPoint, QUrl
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox, QDialog
 
@@ -185,7 +185,8 @@ class MainWindow(QMainWindow):
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
-        help_menu = menu_bar.addMenu("帮助")
+        help_action = menu_bar.addAction("帮助")
+        help_action.triggered.connect(self.on_help_open_website)
 
         function_menu.addAction(self.function_action_test_sequence)
         self.function_action_test_sequence.triggered.disconnect()
@@ -220,6 +221,11 @@ class MainWindow(QMainWindow):
         self.user_action_change_pwd.triggered.connect(self.on_change_pwd_window_init)
 
         return menu_bar
+
+    @staticmethod
+    def on_help_open_website():
+        # Open company website in system default browser
+        QDesktopServices.openUrl(QUrl("https://suzhoudongyuan.com/"))
 
     def analysis_model_select(self):
         # Test items for configuring speakers
