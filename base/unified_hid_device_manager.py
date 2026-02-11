@@ -34,6 +34,7 @@ class UnifiedHardwareManager(QObject):
         self.hid_handles = {}
         self.hotkey_registered = False
         self.hotkey_string = None
+        self._hotkey_handle = None
 
         # 配置缓存
         self.config_path = self.DEFAULT_CONFIG
@@ -187,11 +188,12 @@ class UnifiedHardwareManager(QObject):
         for key in list(self.hid_handles.keys()):
             self.close_hid_device(key)
 
-        # 移除热键
-        if self.hotkey_registered:
+        # 移除热键（精确移除，不影响其他模块注册的热键）
+        if self.hotkey_registered and self._hotkey_handle is not None:
             try:
-                keyboard.unhook_all_hotkeys()
+                keyboard.remove_hotkey(self._hotkey_handle)
                 self.hotkey_registered = False
+                self._hotkey_handle = None
                 self.logger.info(f"光电热键已移除: {self.hotkey_string}")
             except Exception as e:
                 self.logger.warning(f"热键移除异常: {e}")
@@ -202,7 +204,7 @@ class UnifiedHardwareManager(QObject):
             return
         self.hotkey_string = hotkey_string
         try:
-            keyboard.add_hotkey(
+            self._hotkey_handle = keyboard.add_hotkey(
                 self.hotkey_string,
                 self._on_hotkey_triggered,
                 suppress=True
