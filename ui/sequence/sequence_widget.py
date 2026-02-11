@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
 )
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
+    ExportResult,
     build_excel_from_csv_spool,
     export_analysis_to_csv_spool,
     export_analysis_to_excel,
@@ -92,6 +93,8 @@ class SequenceWindow(QWidget):
         self._excel_spool_build_timer.setSingleShot(True)
         self._excel_spool_build_timer.timeout.connect(self._on_excel_spool_build_timeout)
         self._excel_spool_build_in_progress = False
+        self._excel_spool_targets_map = {}
+        self._excel_spool_build_pending_map = {}
         self._excel_spool_build_pending_cfgs = []
         self._excel_spool_build_lock = threading.Lock()
         self._excel_spool_build_thread = None
@@ -769,29 +772,43 @@ class SequenceWindow(QWidget):
         except Exception:
             pass
 
-        # Discover all Excel configs from analysis_config instead of relying on pending list
-        # This ensures we don't miss any configs that should be synced
+        # Prefer building from tracked spool targets. This supports "add_model_dir" where one
+        # Excel config may export to multiple model-specific folders during one app session.
         try:
-            excel_cfg_list = []
-            for k, v in (self.analysis_config or {}).items():
-                if not isinstance(v, dict):
-                    continue
-                if v.get("type") == "Excel" and v.get("enabled", True):
-                    # Only process fast_mode configs that use CSV spool
-                    if v.get("fast_mode", True):
-                        excel_cfg_list.append((k, v))
+            targets = {}
+            try:
+                targets.update(getattr(self, "_excel_spool_targets_map", {}) or {})
+                targets.update(getattr(self, "_excel_spool_build_pending_map", {}) or {})
+            except Exception:
+                targets = {}
 
-            if not excel_cfg_list:
+            if not targets:
+                product_model = ""
+                try:
+                    product_model = self.lineedit_type.text() or ""
+                except Exception:
+                    product_model = ""
+
+                for k, v in (self.analysis_config or {}).items():
+                    if not isinstance(v, dict):
+                        continue
+                    if v.get("type") != "Excel" or not v.get("enabled", True):
+                        continue
+                    if not v.get("fast_mode", True):
+                        continue
+
+                    try:
+                        file_path = resolve_excel_output_path(v, product_model=product_model)
+                        spool_dir = resolve_excel_spool_dir(v, file_path=file_path)
+                        key = (str(k), os.path.normcase(os.path.abspath(str(file_path))))
+                        targets[key] = (k, v, str(file_path), str(spool_dir))
+                    except Exception as e:
+                        self.default_logger.error(f"excel_spool_build_path_error[{k}]: {e}")
+
+            if not targets:
                 return failures
 
-            for cfg_name, excel_cfg in excel_cfg_list:
-                try:
-                    file_path = resolve_excel_output_path(excel_cfg)
-                    spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
-                except Exception as e:
-                    self.default_logger.error(f"excel_spool_build_path_error[{cfg_name}]: {e}")
-                    continue
-
+            for cfg_name, excel_cfg, file_path, spool_dir in list(targets.values()):
                 ret = build_excel_from_csv_spool(excel_cfg, file_path=file_path, spool_dir=spool_dir)
                 if ret.ok:
                     self.default_logger.info(
@@ -1626,11 +1643,16 @@ class SequenceWindow(QWidget):
 
             now_dt = datetime.now()
             sn = ""
+            product_model = ""
             # Second column includes accurate time (to seconds): YYYY/M/D HH:MM:SS
             time_part = now_dt.strftime("%H:%M:%S")
             date_text = f"{now_dt.year}/{now_dt.month}/{now_dt.day} {time_part}"
             if isinstance(self.recorded_signal_info, dict):
                 sn = self.recorded_signal_info.get("barcode") or ""
+            try:
+                product_model = self.lineedit_type.text() or ""
+            except Exception:
+                product_model = ""
 
             analysis_items_data = {}
             for inst in self.analysis_window or []:
@@ -1652,6 +1674,7 @@ class SequenceWindow(QWidget):
             self._excel_export_cache = {
                 "record_id": record_id,
                 "sn": sn,
+                "product_model": product_model,
                 "date_text": date_text,
                 "analysis_items_data": analysis_items_data,
                 "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
@@ -1668,16 +1691,20 @@ class SequenceWindow(QWidget):
         - On idle: rebuild the daily .xlsx from CSV (write_only, faster than incremental save)
         """
         try:
-            pending = []
-            for cfg_name, excel_cfg in list(excel_cfg_list or []):
+            for cfg_name, excel_cfg, file_path, spool_dir in list(excel_cfg_list or []):
                 try:
-                    file_path = resolve_excel_output_path(excel_cfg)
-                    spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
-                    pending.append((cfg_name, excel_cfg, file_path, spool_dir))
+                    fp = str(file_path)
+                    sd = str(spool_dir)
+                    key = (str(cfg_name), os.path.normcase(os.path.abspath(fp)))
+                    item = (cfg_name, excel_cfg, fp, sd)
+                    self._excel_spool_targets_map[key] = item
+                    self._excel_spool_build_pending_map[key] = item
                 except Exception as e:
                     self.default_logger.error(f"excel_spool_schedule_path_error[{cfg_name}]: {e}")
-            self._excel_spool_build_pending_cfgs = pending
-            self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
+
+            self._excel_spool_build_pending_cfgs = list(self._excel_spool_build_pending_map.values())
+            if self._excel_spool_build_pending_cfgs:
+                self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
         except Exception as e:
             self.default_logger.error(f"excel_spool_schedule_error: {e}")
 
@@ -1695,9 +1722,12 @@ class SequenceWindow(QWidget):
                 if self._excel_spool_build_in_progress:
                     self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
                     return
-                pending = list(self._excel_spool_build_pending_cfgs or [])
-                if not pending:
+                pending_map = getattr(self, "_excel_spool_build_pending_map", None)
+                if not isinstance(pending_map, dict) or not pending_map:
                     return
+                pending = list(pending_map.values())
+                pending_map.clear()
+                self._excel_spool_build_pending_cfgs = []
                 self._excel_spool_build_in_progress = True
 
             def _worker(cfgs):
@@ -1754,6 +1784,7 @@ class SequenceWindow(QWidget):
             return
 
         sn = cache.get("sn") or ""
+        product_model = cache.get("product_model") or ""
         now_dt = datetime.now()
         date_text = f"{now_dt.year}/{now_dt.month}/{now_dt.day} {now_dt.strftime('%H:%M:%S')}"
         analysis_items_data = cache.get("analysis_items_data") or {}
@@ -1768,24 +1799,38 @@ class SequenceWindow(QWidget):
             for cfg_name, excel_cfg in excel_cfg_list:
                 use_spool = bool(excel_cfg.get("fast_mode", True))
                 if use_spool:
-                    spool_cfgs.append((cfg_name, excel_cfg))
-                    ret = export_analysis_to_csv_spool(
-                        excel_cfg,
-                        sn=sn,
-                        date_text=date_text,
-                        analysis_items_data=analysis_items_data,
-                        analysis_config=self.analysis_config,
-                        analysis_result_dict=analysis_result_dict,
-                    )
+                    try:
+                        file_path = resolve_excel_output_path(excel_cfg, product_model=product_model)
+                        spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
+                        spool_cfgs.append((cfg_name, excel_cfg, file_path, spool_dir))
+                        ret = export_analysis_to_csv_spool(
+                            excel_cfg,
+                            sn=sn,
+                            date_text=date_text,
+                            analysis_items_data=analysis_items_data,
+                            analysis_config=self.analysis_config,
+                            analysis_result_dict=analysis_result_dict,
+                            product_model=product_model,
+                            file_path=file_path,
+                            spool_dir=spool_dir,
+                        )
+                    except Exception as e:
+                        ret = ExportResult(ok=False, message=f"导出异常: {e}")
                 else:
-                    ret = export_analysis_to_excel(
-                        excel_cfg,
-                        sn=sn,
-                        date_text=date_text,
-                        analysis_items_data=analysis_items_data,
-                        analysis_config=self.analysis_config,
-                        analysis_result_dict=analysis_result_dict,
-                    )
+                    try:
+                        file_path = resolve_excel_output_path(excel_cfg, product_model=product_model)
+                        ret = export_analysis_to_excel(
+                            excel_cfg,
+                            sn=sn,
+                            date_text=date_text,
+                            analysis_items_data=analysis_items_data,
+                            analysis_config=self.analysis_config,
+                            analysis_result_dict=analysis_result_dict,
+                            product_model=product_model,
+                            file_path=file_path,
+                        )
+                    except Exception as e:
+                        ret = ExportResult(ok=False, message=f"导出异常: {e}")
                 if ret.ok:
                     if use_spool:
                         self.default_logger.info(f"excel_spool_ok[{cfg_name}]: {ret.message}")
@@ -1809,7 +1854,15 @@ class SequenceWindow(QWidget):
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Warning)
             msg_box.setWindowTitle("数据保存失败")
-            msg_box.setText("无法保存数据到文件，可能是文件被占用或权限不足。\n请关闭相关文件后重试。")
+            msg_box.setText("无法保存数据到文件，可能是文件被占用、保存目录不可达或权限不足。\n请检查保存目录或关闭相关文件后重试。")
+            try:
+                if failed_exports:
+                    detail_lines = [f"{name}: {msg}" for name, msg in failed_exports[:5]]
+                    if len(failed_exports) > 5:
+                        detail_lines.append("...")
+                    msg_box.setInformativeText("\n".join(detail_lines))
+            except Exception:
+                pass
             retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
             msg_box.addButton("忽略", QMessageBox.RejectRole)
             msg_box.setDefaultButton(retry_btn)
