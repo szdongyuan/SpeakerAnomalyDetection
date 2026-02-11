@@ -33,6 +33,7 @@ from base.excel_result_exporter import (
 )
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
+from base.shortcut_trigger_manager import ShortcutTriggerManager
 from base.unified_hid_device_manager import UnifiedHardwareManager
 from PyQt5.QtCore import QMetaObject
 from base.utils.custom_signals import sign
@@ -178,6 +179,13 @@ class SequenceWindow(QWidget):
         self._analysis_window_geometry_dirty = False
 
         self.hw_manager = UnifiedHardwareManager()
+
+        # 全局快捷键触发录音（独立于扫码枪/光电开关，窗口初始化即启用）
+        self.shortcut_mgr = ShortcutTriggerManager(self)
+        self.shortcut_mgr.sig_triggered.connect(self.on_shortcut_triggered, Qt.QueuedConnection)
+        self.shortcut_mgr.start()
+        self._shortcut_processing = False  # 防止快捷键重入
+
         # Create QTimer in Qt main thread for queue polling
         self.streaming_poll_timer = QTimer(self)
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
@@ -692,6 +700,22 @@ class SequenceWindow(QWidget):
         else:
             self.default_logger.info("正在测试中，忽略光电触发")
 
+    def on_shortcut_triggered(self):
+        """处理快捷键触发信号（F2）"""
+        # 防止重入：QMessageBox 嵌套事件循环中可能再次处理队列中的 F2 信号，
+        # 导致递归雪崩（多层 QMessageBox 堆叠 → 栈溢出 → 崩溃）。
+        if self._shortcut_processing:
+            return
+        if not getattr(self, "_record_workflow_busy", False):
+            self._shortcut_processing = True
+            try:
+                self.default_logger.info(f"快捷键触发响应: 开始测试 ({ShortcutTriggerManager.HOTKEY})")
+                self.start_this_play("not_labeled")
+            finally:
+                self._shortcut_processing = False
+        else:
+            self.default_logger.info("正在测试中，忽略快捷键触发")
+
     def closeEvent(self, event):
         """窗口关闭时释放硬件资源，并强制等待Excel同步完成"""
         # Skip sync dialog if window was never shown (startup close)
@@ -738,6 +762,8 @@ class SequenceWindow(QWidget):
             else:
                 break
 
+        if hasattr(self, "shortcut_mgr"):
+            self.shortcut_mgr.stop()
         if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
         super().closeEvent(event)
