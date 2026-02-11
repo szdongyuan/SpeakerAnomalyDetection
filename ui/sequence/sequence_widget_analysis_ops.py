@@ -17,7 +17,6 @@ from base.load_config import LoadUiConfig
 
 from base.play_and_record import (
     get_recorded_info,
-    record_without_play,
     stream_record_without_play,
 )
 
@@ -259,90 +258,32 @@ class SequenceWidgetAnalysisOpsMixin:
             QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
 
-        # Choose streaming or blocking(Not in use now) mode
-        if self.use_streaming:
-            try:
-                # Start streaming record-only (non-blocking)
-                # Create WAV file writer for streaming saves (useful for long recordings)
-                nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
-                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
+        # Start streaming record-only (non-blocking)
+        try:
+            # Create WAV file writer for streaming saves (useful for long recordings)
+            nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
+            self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
 
-                self.streaming_processor, _ = stream_record_without_play(
-                    recorded_dict, self.recorded_path, self.recorded_signal_info
-                )
-                self.streaming_mode = "record_only"
-                self.streaming_stimulus_data = None
+            self.streaming_processor, _ = stream_record_without_play(
+                recorded_dict, self.recorded_path, self.recorded_signal_info
+            )
+            self.streaming_mode = "record_only"
+            self.streaming_stimulus_data = None
 
-                # Start polling timer to process queue and detect completion
-                self.streaming_poll_timer.start(50)  # Poll every 50ms
-            except Exception as e:
-                self.default_logger.error(f"start_streaming_error: {e}")
-                self._cleanup_streaming_resources()
-                self.player_status_flag = False
-                self._record_workflow_busy = False
-                self.update_player_btn_is_paused()
-                QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
-                return
-
-            # Return immediately - completion will be handled by _on_streaming_complete()
-            # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
+            # Start polling timer to process queue and detect completion
+            self.streaming_poll_timer.start(50)  # Poll every 50ms
+        except Exception as e:
+            self.default_logger.error(f"start_streaming_error: {e}")
+            self._cleanup_streaming_resources()
+            self.player_status_flag = False
+            self._record_workflow_busy = False
+            self.update_player_btn_is_paused()
+            QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
             return
 
-        else:
-            # Use legacy blocking approach
-            try:
-                record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-
-                recorded_multi = None
-                try:
-                    recorded_multi = recorded_dict.get("_recorded_multi")
-                except Exception:
-                    recorded_multi = None
-
-                if recorded_multi is not None:
-                    try:
-                        self.data_struct.store_wave_data_multi = np.asarray(recorded_multi, dtype=np.float32)
-                    except Exception:
-                        self.data_struct.store_wave_data_multi = None
-                    self.plot_waveform_to_workspace(recorded_multi, sample_rate)
-                else:
-                    try:
-                        mono = np.asarray(self.data_struct.store_wave_data, dtype=np.float32)
-                        self.data_struct.store_wave_data_multi = mono.reshape(-1, 1)
-                    except Exception:
-                        self.data_struct.store_wave_data_multi = None
-                    self.plot_waveform_to_workspace(self.data_struct.store_wave_data, sample_rate)
-            except Exception as e:
-                self.default_logger.error(f"blocking_record_error: {e}")
-                self.player_status_flag = False
-                self._record_workflow_busy = False
-                self.update_player_btn_is_paused()
-                QMessageBox.warning(self, "提示", f"录音失败: {e}")
-                return
-
-        self.player_status_flag = False  # Recording complete, allow hardware access
-        self.data_btn.setEnabled(True)
-        self.replayer_btn.setEnabled(True)
-
-        self._awaiting_ok_ng = True
-        self._sn_clear_on_next_scan = True
-        # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
-        if self.barcode_scanner_box.isChecked():
-            try:
-                self.lineedit_s_or_n.setFocus()
-                self.lineedit_s_or_n.selectAll()
-            except Exception:
-                pass
-
-        if self.analysis_config["auto_analysis"]:
-            self.run()
-        self._record_workflow_busy = False
-        self.update_player_btn_is_paused()
-        try:
-            self._reset_barcode_commit_dedup()
-        except Exception:
-            self._last_committed_barcode = None
-            self._last_committed_barcode_time = 0.0
+        # Return immediately - completion will be handled by _on_streaming_complete()
+        # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
+        return
 
     def run(self):
         """

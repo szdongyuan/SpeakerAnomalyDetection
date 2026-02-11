@@ -3,52 +3,11 @@ from datetime import datetime
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.system_intervction.hardware_intervction import get_mac_address
-from base.recording_management import RecordingManager
-from base.save_data import save_audio_simple
-from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.streaming_audio_processor import StreamingAudioProcessor
 from consts import error_code, model_consts
 
 data_struct = DataDealStruct()
 
-
-def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
-    """
-    Implements the complete workflow for the record-only mode.
-    It records audio based on the `sample_rate` specified in`data_struct`, then
-    saves the result to a .wav file and the database (with `stimulus_id` set to
-    0). All subsequent operations,such as FFT/STFT, automatic analysis, and
-    button state updates, are the same as in the play-and-record mode.
-    """
-
-    sample_rate = data_struct.sample_rate
-    record_code, recorded_signal = SoundcardAudioProcessor.sd_rec(recorded_dict)
-
-    if record_code == error_code.OK:
-        recorded_multi = None
-        try:
-            recorded_multi = recorded_dict.get("_recorded_multi")
-        except Exception:
-            recorded_multi = None
-
-        if recorded_multi is not None:
-            save_audio_simple(recorded_path, recorded_multi, sample_rate)
-            try:
-                data_struct.store_wave_data_multi = recorded_multi
-                data_struct.store_wave_data = recorded_multi.mean(axis=1)
-            except Exception:
-                data_struct.store_wave_data_multi = None
-                data_struct.store_wave_data = recorded_signal
-        else:
-            save_audio_simple(recorded_path, recorded_signal, sample_rate)
-            try:
-                data_struct.store_wave_data_multi = recorded_signal.reshape(-1, 1)
-            except Exception:
-                data_struct.store_wave_data_multi = None
-            data_struct.store_wave_data = recorded_signal
-
-        recorded_signal_info["sample_rate"] = sample_rate
-        RecordingManager().save_signal_info_to_db(recorded_signal_info, None)
 
 
 def get_recorded_info(product_model, product_number, barcode, label):
@@ -134,5 +93,3 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         return processor, sample_rate
     else:
         raise RuntimeError(f"Failed to start streaming recording: {msg}")
-
-

@@ -127,7 +127,6 @@ class SequenceWindow(
         self.streaming_processor = None  # StreamingAudioProcessor instance
         self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
         self.streaming_mode = None  # "play_record" or "record_only"
-        self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
         self._active_input_channels = [0]
         self.channel_workspace = None
         self._streaming_first_chunk_logged = False

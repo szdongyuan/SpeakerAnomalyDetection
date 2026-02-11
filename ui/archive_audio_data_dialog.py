@@ -1,12 +1,15 @@
 import os
+import time
 import sys
 from datetime import datetime
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt, QTimer
+from PyQt5.QtGui import QStandardItem
 from PyQt5.QtWidgets import QPushButton, QProgressDialog, QMessageBox, QFileDialog, QApplication
 
 from base.file_ops import FileOps
 from base.log_manager import LogManager
+from base.playback_controller import PlaybackController
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
@@ -15,15 +18,76 @@ from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
 class ArchiveAudioDataDialog(AudioDataManageDialog):
 
     def __init__(self, logger: LogManager):
+        self._play_btn_col = 6
+        self._play_text = "\u64ad\u653e"
+        self._stop_text = "\u505c\u6b62"
+        self._play_col_debounce_ms = 250
+        self._play_col_last_action_ts = 0.0
+        self._current_playing_row = None
+        self._current_playing_file = None
+        self._is_switching_playback = False
+        self._playback_poll_timer = None
+        self.playback_controller = PlaybackController()
+        # Hover hand cursor only; no hover color logic.
         super(ArchiveAudioDataDialog, self).__init__(logger)
+        self._playback_poll_timer = QTimer(self)
+        self._playback_poll_timer.setInterval(150)
+        self._playback_poll_timer.timeout.connect(self._on_playback_poll_timeout)
+        # removed blink/flash logic for play column
         self.package_btn = QPushButton(" 打  包 ")
         self.delete_btn = QPushButton(" 删  除 ")
+
+        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放"])
+
+        # 参考 historical_data.py：不在单元格里塞 QPushButton 控件，
+        # 而是在模型里放“播放/停止”文本项，并用 view.clicked 响应点击。
+        self.data_view.clicked.connect(self._on_data_view_clicked)
+        self.data_view.setMouseTracking(True)
+        self.data_view.viewport().installEventFilter(self)
+
+        self._rebuild_play_buttons()
         self.init_ui()
+
+    def _on_data_view_clicked(self, index):
+        if not index.isValid():
+            return
+        if index.column() != self._play_btn_col:
+            return
+        self._on_play_button_clicked(index.row())
 
     def init_ui(self):
         self.setWindowTitle("音频数据管理")
 
         self.set_bottom_layout()
+
+    def load_audio_data_to_view(self):
+        self._stop_playback_if_needed()
+        super().load_audio_data_to_view()
+        self._rebuild_play_buttons()
+
+    def show_all_wave(self):
+        self._stop_playback_if_needed()
+        super().show_all_wave()
+        self._rebuild_play_buttons()
+
+    def load_audio_data_to_model(self, audio_data, stimulus_name):
+        self.setRowCount(0)
+        if not audio_data:
+            return set(), set()
+
+        product_model_set = set()
+        record_date_set = set()
+        for item in audio_data:
+            product_model_set.add(item[2])
+            record_date_set.add(item[4])
+
+            file_name = item[1].split("/")[-1]
+            row_data_list = [None, file_name, item[2], item[5], item[3], item[4], None]
+            self.add_row_data(row_data_list)
+
+        self.resizeColumnsToContents()
+        self.resizeRowsToContents()
+        return product_model_set, record_date_set
 
     def set_bottom_layout(self):
         all_show_btn = QPushButton("全部显示")
@@ -37,7 +101,227 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.bottom_layout.addWidget(self.package_btn)
         self.bottom_layout.addWidget(self.delete_btn)
 
+    @staticmethod
+    def _play_btn_style():
+        return (
+            "QPushButton {"
+            " background-color: #eaf4ff;"
+            " border: 1px solid #b7d3f1;"
+            " border-bottom: 2px solid #79aee8;"
+            " color: #1f3f63;"
+            " border-radius: 2px;"
+            " padding: 2px 8px;"
+            " }"
+            "QPushButton:hover {"
+            " background-color: #d6ebff;"
+            " border-color: #8fb9e8;"
+            " border-bottom-color: #4f8fd4;"
+            " }"
+            "QPushButton:pressed {"
+            " background-color: #c6e2ff;"
+            " border-bottom-color: #3f7fc8;"
+            " }"
+            "QPushButton:disabled {"
+            " background-color: #f0f7ff;"
+            " color: #9a9a9a;"
+            " }"
+        )
+
+    @staticmethod
+    def _play_btn_blink_style():
+        return (
+            "QPushButton {"
+            " background-color: #ffe9e4;"
+            " border: 1px solid #f2a897;"
+            " border-bottom: 2px solid #e07e66;"
+            " color: #7a2e1f;"
+            " border-radius: 2px;"
+            " padding: 2px 8px;"
+            " }"
+            "QPushButton:hover {"
+            " background-color: #ffd9d0;"
+            " border-color: #ea8d78;"
+            " border-bottom-color: #d26f56;"
+            " }"
+            "QPushButton:pressed {"
+            " background-color: #ffcbbf;"
+            " border-bottom-color: #c85e47;"
+            " }"
+            "QPushButton:disabled {"
+            " background-color: #ffe9e4;"
+            " color: #9a9a9a;"
+            " }"
+        )
+
+    def _apply_play_action_item_style(self, item: QStandardItem):
+        font = item.font()
+        font.setUnderline(True)
+        font.setBold(False)
+        item.setFont(font)
+        item.setToolTip("")
+        item.setData(None, Qt.ForegroundRole)
+        item.setData(None, Qt.BackgroundRole)
+
+    def _resolve_row_file_path(self, row):
+        audio_data = self.filter_audio_data if self.is_filter_flag else self.all_audio_data
+        if row < 0 or row >= len(audio_data):
+            return None
+        raw_path = audio_data[row][1]
+        if not raw_path:
+            return None
+        if os.path.isabs(raw_path):
+            return os.path.abspath(raw_path)
+        return os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
+
+    def _rebuild_play_buttons(self):
+        model = self.model()
+        if model is None:
+            return
+        if model.columnCount() <= self._play_btn_col:
+            return
+        row_count = model.rowCount()
+        col_count = model.columnCount()
+
+        # 清理历史遗留的 indexWidget（旧实现用 QPushButton 塞单元格，可能产生残留/错位）。
+        for row in range(row_count):
+            for col in range(col_count):
+                idx = model.index(row, col)
+                widget = self.data_view.indexWidget(idx)
+                if widget is not None:
+                    self.data_view.setIndexWidget(idx, None)
+                    try:
+                        widget.deleteLater()
+                    except Exception:
+                        pass
+
+        for row in range(row_count):
+            item = model.item(row, self._play_btn_col)
+            if item is None:
+                item = QStandardItem()
+                model.setItem(row, self._play_btn_col, item)
+            item.setText(self._play_text)
+            item.setTextAlignment(Qt.AlignCenter)
+            self._apply_play_action_item_style(item)
+        self._refresh_play_button_states()
+
+    def _refresh_play_button_states(self):
+        model = self.model()
+        if model is None:
+            return
+        if model.columnCount() <= self._play_btn_col:
+            return
+        row_count = model.rowCount()
+        playing = self.playback_controller.is_audio_playing()
+        for row in range(row_count):
+            item = model.item(row, self._play_btn_col)
+            if item is None:
+                item = QStandardItem()
+                model.setItem(row, self._play_btn_col, item)
+
+            is_current = bool(playing and row == self._current_playing_row)
+
+            item.setText(self._stop_text if is_current else self._play_text)
+            item.setTextAlignment(Qt.AlignCenter)
+            self._apply_play_action_item_style(item)
+
+    def eventFilter(self, watched, event):
+        if watched is self.data_view.viewport():
+            if event.type() == QEvent.MouseMove:
+                index = self.data_view.indexAt(event.pos())
+                if index.isValid() and index.column() == self._play_btn_col:
+                    self.data_view.viewport().setCursor(Qt.PointingHandCursor)
+                else:
+                    self.data_view.viewport().unsetCursor()
+
+            elif event.type() == QEvent.Leave:
+                self.data_view.viewport().unsetCursor()
+
+        return super().eventFilter(watched, event)
+
+    def _show_switch_playback_blocked_popup(self):
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("提示")
+        msg_box.setText("当前有音频正在播放，请先停止后再播放其他音频。")
+        msg_box.setIcon(QMessageBox.NoIcon)
+        msg_box.addButton("确定", QMessageBox.AcceptRole)
+        msg_box.exec_()
+
+    def _clear_playing_state(self):
+        self._current_playing_row = None
+        self._current_playing_file = None
+        if self._playback_poll_timer is not None:
+            self._playback_poll_timer.stop()
+        self._refresh_play_button_states()
+
+    def _stop_playback_if_needed(self):
+        if self.playback_controller.is_audio_playing() or self._current_playing_row is not None:
+            self.playback_controller.stop_audio_playback()
+        self._clear_playing_state()
+
+    def _on_play_button_clicked(self, row):
+        now = time.monotonic()
+        if now - float(self._play_col_last_action_ts or 0.0) < (float(self._play_col_debounce_ms) / 1000.0):
+            return
+        self._play_col_last_action_ts = now
+
+        if self._is_switching_playback:
+            return
+
+        self._is_switching_playback = True
+        try:
+            row_path = self._resolve_row_file_path(row)
+            if not row_path:
+                QMessageBox.warning(self, "提示", "未找到该行对应音频文件路径")
+                self._clear_playing_state()
+                return
+
+            if self.playback_controller.is_audio_playing() and row == self._current_playing_row:
+                self.playback_controller.stop_audio_playback()
+                self._clear_playing_state()
+                return
+
+            if self.playback_controller.is_audio_playing() and row != self._current_playing_row:
+                self._show_switch_playback_blocked_popup()
+                return
+
+            if not self.playback_controller.is_audio_playing() and self._current_playing_row is not None:
+                self._clear_playing_state()
+
+            code, msg = self.playback_controller.start_audio_playback(row_path)
+            if code != error_code.OK:
+                QMessageBox.warning(self, "提示", msg)
+                self._clear_playing_state()
+                return
+
+            self._current_playing_row = row
+            self._current_playing_file = row_path
+            if self._playback_poll_timer is not None and not self._playback_poll_timer.isActive():
+                self._playback_poll_timer.start()
+            self._refresh_play_button_states()
+        except Exception as e:
+            print(e)
+        finally:
+            self._is_switching_playback = False
+
+    def _on_playback_poll_timeout(self):
+        if not self.playback_controller.is_audio_playing():
+            self._clear_playing_state()
+            return
+
+        playing_file = self.playback_controller.get_current_playing_file()
+        if not playing_file:
+            self._clear_playing_state()
+            return
+
+        if self._current_playing_file and os.path.abspath(playing_file) != os.path.abspath(self._current_playing_file):
+            self._clear_playing_state()
+            return
+
+    def _warn_cannot_close_while_playing(self):
+        QMessageBox.warning(self, "提示", "正在播放，请先停止播放后再退出")
+
     def on_clicked_package_btn(self):
+        self._stop_playback_if_needed()
         if not self.select_wave_data:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("提示")
@@ -78,10 +362,26 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.packaging_progress = None
 
     def on_clicked_delete_btn(self):
+        current_file = self.playback_controller.get_current_playing_file()
+        if current_file and self.select_wave_data:
+            selected_paths = []
+            for value in self.select_wave_data.values():
+                selected_path = value[1]
+                if os.path.isabs(selected_path):
+                    selected_paths.append(os.path.abspath(selected_path))
+                else:
+                    selected_paths.append(os.path.abspath(os.path.join(DEFAULT_DIR, selected_path)))
+            if os.path.abspath(current_file) in selected_paths:
+                self._stop_playback_if_needed()
+
         is_delete_item_list = list()
         will_delete_in_db_list = list()
         for key, value in self.select_wave_data.items():
-            file_path = DEFAULT_DIR + value[1]
+            raw_path = value[1]
+            if os.path.isabs(raw_path):
+                file_path = os.path.abspath(raw_path)
+            else:
+                file_path = os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
             if os.path.isfile(file_path):
                 try:
                     os.remove(file_path)
@@ -102,6 +402,24 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.delete_audio_data_with_id(will_delete_in_db_list)
         self.set_select_wave_num_text(0)
         self.update_filter_sets_after_deletion()
+        self._rebuild_play_buttons()
+
+    def closeEvent(self, event):
+        if self.playback_controller.is_audio_playing():
+            self._warn_cannot_close_while_playing()
+            event.ignore()
+            return
+        if self._playback_poll_timer is not None:
+            self._playback_poll_timer.stop()
+        super().closeEvent(event)
+
+    def reject(self):
+        if self.playback_controller.is_audio_playing():
+            self._warn_cannot_close_while_playing()
+            return
+        if self._playback_poll_timer is not None:
+            self._playback_poll_timer.stop()
+        super().reject()
 
 
 if __name__ == "__main__":
