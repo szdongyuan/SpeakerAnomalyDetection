@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -58,11 +59,17 @@ class ExcelConfigWindow(QDialog):
         dir_layout.addWidget(QLabel("保存目录:"))
         self.save_dir_edit = QLineEdit()
         self.save_dir_edit.setText(self.load_config.get("save_dir") or "")
+        self.save_dir_edit.editingFinished.connect(self.on_save_dir_editing_finished)
         browse_btn = QPushButton("浏览…")
         browse_btn.clicked.connect(self.on_browse_dir)
         dir_layout.addWidget(self.save_dir_edit)
         dir_layout.addWidget(browse_btn)
         basic_layout.addLayout(dir_layout)
+
+        # Optional: add product model as a subdirectory under save_dir
+        self.add_model_dir_chk = QCheckBox("根据型号分类")
+        self.add_model_dir_chk.setChecked(bool(self.load_config.get("add_model_dir", False)))
+        basic_layout.addWidget(self.add_model_dir_chk)
 
         # File base name
         name_layout = QHBoxLayout()
@@ -168,6 +175,47 @@ class ExcelConfigWindow(QDialog):
         path = QFileDialog.getExistingDirectory(self, "选择保存目录", init_dir)
         if path:
             self.save_dir_edit.setText(path)
+            self.on_save_dir_editing_finished()
+
+    def _validate_save_dir_text(self, text: str, *, create: bool) -> tuple[bool, str]:
+        raw = str(text or "").strip()
+        if not raw:
+            return True, ""
+
+        # Expand variables and user home when possible.
+        try:
+            path = os.path.expandvars(os.path.expanduser(raw))
+        except Exception:
+            path = raw
+
+        # Fast reachability check for drive/UNC root.
+        try:
+            drive, _tail = os.path.splitdrive(path)
+            if drive:
+                root = drive + os.sep
+                if not os.path.exists(root):
+                    return False, f"保存目录不可达：{root} 不存在或未映射"
+        except Exception:
+            pass
+
+        if create:
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception as e:
+                return False, f"保存目录不可达或无权限：\n{path}\n{e}"
+            try:
+                if not os.path.isdir(path):
+                    return False, f"保存目录不是有效文件夹：\n{path}"
+            except Exception:
+                return False, f"保存目录不可达：\n{path}"
+
+        return True, ""
+
+    def on_save_dir_editing_finished(self):
+        ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=False)
+        if ok:
+            return
+        QMessageBox.warning(self, "保存目录不可用", msg)
 
     def on_select_all(self):
         for cb in self._item_checkbox_by_name.values():
@@ -193,6 +241,7 @@ class ExcelConfigWindow(QDialog):
         file_base = self.file_base_edit.text().strip() or "analysis_results"
         add_date = self.append_date_chk.isChecked()
         lock_files = self.lock_files_chk.isChecked()
+        add_model_dir = self.add_model_dir_chk.isChecked()
         max_points = int(self.max_points_spin.value())
         save_items = [name for name, cb in self._item_checkbox_by_name.items() if cb.isChecked()]
         return {
@@ -200,6 +249,7 @@ class ExcelConfigWindow(QDialog):
             "save_dir": save_dir,
             "file_base": file_base,
             "add_date": add_date,
+            "add_model_dir": add_model_dir,
             "lock_files": lock_files,
             "date_format": "%Y%m%d",
             "max_points": max_points,
@@ -207,11 +257,19 @@ class ExcelConfigWindow(QDialog):
         }
 
     def on_default_btn_clicked(self):
+        ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)
+        if not ok:
+            QMessageBox.warning(self, "保存目录不可用", msg)
+            return
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("Excel", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_click_ok_btn(self):
+        ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)
+        if not ok:
+            QMessageBox.warning(self, "保存目录不可用", msg)
+            return None
         config_data = self.get_default_config()
         self.accept()
         return config_data

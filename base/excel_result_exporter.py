@@ -360,13 +360,24 @@ class _RuntimeFileLocker:
 _RUNTIME_LOCKER = _RuntimeFileLocker()
 
 
-def resolve_excel_output_path(excel_cfg: dict[str, Any]) -> str:
+def _resolve_product_model_dir_name(product_model: Any) -> str:
+    text = "" if product_model is None else str(product_model)
+    text = text.strip()
+    return text or "空型号"
+
+
+def resolve_excel_output_path(excel_cfg: dict[str, Any], *, product_model: str | None = None) -> str:
     """
     Resolve Excel output file path from config, creating the target directory if needed.
     """
     save_dir = excel_cfg.get("save_dir") if isinstance(excel_cfg, dict) else None
     if not save_dir:
         save_dir = os.path.join(DEFAULT_DIR, "audio_data", "excel_export")
+
+    # Optional: append product model as a subdirectory under save_dir.
+    if bool((excel_cfg or {}).get("add_model_dir", False)):
+        model_dir_name = _resolve_product_model_dir_name(product_model)
+        save_dir = os.path.join(save_dir, model_dir_name)
     os.makedirs(save_dir, exist_ok=True)
 
     file_base = _sanitize_filename((excel_cfg or {}).get("file_base") or "analysis_results")
@@ -680,7 +691,12 @@ def _append_row(ws, row_values: list[Any]):
         ws.cell(row=row_idx, column=col_idx).value = v
 
 
-def resolve_excel_spool_dir(excel_cfg: dict[str, Any], *, file_path: str | None = None) -> str:
+def resolve_excel_spool_dir(
+    excel_cfg: dict[str, Any],
+    *,
+    file_path: str | None = None,
+    product_model: str | None = None,
+) -> str:
     """
     Resolve a per-day spool directory for fast, append-only exporting.
 
@@ -688,7 +704,7 @@ def resolve_excel_spool_dir(excel_cfg: dict[str, Any], *, file_path: str | None 
     must rewrite the whole zip each save. We therefore append rows into CSV spool files during
     production (fast), then build the daily .xlsx in batch (idle / end-of-day).
     """
-    xlsx_path = str(file_path or resolve_excel_output_path(excel_cfg))
+    xlsx_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
     base, _ext = os.path.splitext(xlsx_path)
     return f"{base}_spool"
 
@@ -898,6 +914,9 @@ def export_analysis_to_csv_spool(
     analysis_items_data: dict[str, dict[str, Any]],
     analysis_config: dict[str, Any],
     analysis_result_dict: dict[str, tuple[bool, float]],
+    product_model: str | None = None,
+    file_path: str | None = None,
+    spool_dir: str | None = None,
 ) -> ExportResult:
     """
     Fast per-record export: append to CSV spool files instead of rewriting the .xlsx every time.
@@ -911,10 +930,16 @@ def export_analysis_to_csv_spool(
     if not isinstance(save_items, list) or len(save_items) == 0:
         return ExportResult(ok=False, message="未选择需要保存的分析项")
 
-    file_path = resolve_excel_output_path(excel_cfg)
+    try:
+        file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
+    except Exception as e:
+        return ExportResult(ok=False, message=f"保存目录不可达或无权限: {e}")
     max_points = resolve_excel_max_points(excel_cfg)
-    spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
-    os.makedirs(spool_dir, exist_ok=True)
+    try:
+        spool_dir = str(spool_dir or resolve_excel_spool_dir(excel_cfg, file_path=file_path))
+        os.makedirs(spool_dir, exist_ok=True)
+    except Exception as e:
+        return ExportResult(ok=False, message=f"CSV缓存目录不可达或无权限: {e}")
 
     use_locks = _locks_enabled(excel_cfg) and msvcrt is not None
     append_csv = _append_csv_row_locked if use_locks else _append_csv_row
@@ -1013,6 +1038,7 @@ def build_excel_from_csv_spool(
     *,
     file_path: str | None = None,
     spool_dir: str | None = None,
+    product_model: str | None = None,
 ) -> ExportResult:
     """
     Build (or rebuild) the daily .xlsx from CSV spool files using openpyxl write_only mode.
@@ -1024,8 +1050,14 @@ def build_excel_from_csv_spool(
 
     use_locks = _locks_enabled(excel_cfg) and msvcrt is not None
 
-    xlsx_path = str(file_path or resolve_excel_output_path(excel_cfg))
-    spool_path = str(spool_dir or resolve_excel_spool_dir(excel_cfg, file_path=xlsx_path))
+    try:
+        xlsx_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
+        spool_path = str(
+            spool_dir
+            or resolve_excel_spool_dir(excel_cfg, file_path=xlsx_path, product_model=product_model)
+        )
+    except Exception as e:
+        return ExportResult(ok=False, message=f"保存目录不可达或无权限: {e}")
     if not os.path.isdir(spool_path):
         return ExportResult(ok=True, message="未找到CSV缓存目录，跳过生成Excel")
 
@@ -1156,6 +1188,8 @@ def export_analysis_to_excel(
     analysis_items_data: dict[str, dict[str, Any]],
     analysis_config: dict[str, Any],
     analysis_result_dict: dict[str, tuple[bool, float]],
+    product_model: str | None = None,
+    file_path: str | None = None,
 ) -> ExportResult:
     if not isinstance(excel_cfg, dict) or not excel_cfg.get("enabled", True):
         return ExportResult(ok=True, message="Excel导出未启用")
@@ -1164,7 +1198,10 @@ def export_analysis_to_excel(
     if not isinstance(save_items, list) or len(save_items) == 0:
         return ExportResult(ok=False, message="未选择需要保存的分析项")
 
-    file_path = resolve_excel_output_path(excel_cfg)
+    try:
+        file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
+    except Exception as e:
+        return ExportResult(ok=False, message=f"保存目录不可达或无权限: {e}")
     max_points = resolve_excel_max_points(excel_cfg)
     use_locks = _locks_enabled(excel_cfg) and msvcrt is not None
 
