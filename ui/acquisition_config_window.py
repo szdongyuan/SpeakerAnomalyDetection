@@ -36,6 +36,7 @@ class BaseConfigWindow(QDialog):
             + ui_style_const.qspinbox_style
             + ui_style_const.qdoublespinbox_style
             + ui_style_const.qpushbutton_style
+            + ui_style_const.qcheckbox_style
         )
 
     def create_cancel_ok_buttons(self):

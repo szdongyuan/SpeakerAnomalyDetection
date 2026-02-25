@@ -9,7 +9,6 @@ from consts import error_code, model_consts
 data_struct = DataDealStruct()
 
 
-
 def get_recorded_info(product_model, product_number, barcode, label):
     """
         Generate recorded information.
@@ -71,8 +70,8 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     device = recorded_dict.get("device")
     input_channels = recorded_dict.get("input_channels")
     output_device = recorded_dict.get("output_device")
-    output_channels = recorded_dict.get("output_channels")
-    monitor_playback = bool(output_device and output_channels)
+    output_channels = [recorded_dict.get("output_channels")]
+    monitor_playback = recorded_dict.get("monitor_playback", False)
 
     # Create streaming processor
     processor = StreamingAudioProcessor()

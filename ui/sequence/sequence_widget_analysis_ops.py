@@ -156,17 +156,14 @@ class SequenceWidgetAnalysisOpsMixin:
         )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
+        monitor_playback = acq_detail.get("monitor_playback", False)
         sample_rate = self.data_struct.sample_rate
-        _, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
-            self.data_struct, total_time
-        )
+        _, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(self.data_struct, total_time)
         # Keep both keys for compatibility across legacy/streaming code paths.
         recorded_dict["sample_rate"] = sample_rate
 
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
-        recorded_dict["input_device"] = self.mic
-        recorded_dict["output_device"] = None
 
         # Channel selection (0-based indices). Used for multi-channel recording + per-channel plots.
         try:
@@ -177,8 +174,12 @@ class SequenceWidgetAnalysisOpsMixin:
             input_channels = [0]
 
         recorded_dict["input_channels"] = input_channels
-        recorded_dict["output_channels"] = []
         recorded_dict["channels"] = max(1, len(input_channels))
+
+        if monitor_playback:
+            recorded_dict["monitor_playback"] = True
+            recorded_dict["output_device"] = self.speaker
+            recorded_dict["output_channels"] = acq_detail.get("monitor_output_channel", 0)
 
         # Ensure workspace matches the channels for THIS recording.
         self._active_input_channels = [int(x) for x in input_channels]

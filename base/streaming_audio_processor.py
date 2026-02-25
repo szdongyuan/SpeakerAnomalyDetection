@@ -27,7 +27,7 @@ class StreamingAudioProcessor:
     def __init__(self):
         """Initialize streaming audio processor."""
         self.logger = LogManager.set_log_handler("streaming_core")
-        self.stream = None  
+        self.stream = None
         self.audio_queue = queue.Queue()
         self.accumulated_chunks = []
         self.accumulated_multi_chunks = []
@@ -119,19 +119,14 @@ class StreamingAudioProcessor:
         samples_before = self.samples_captured
         self.samples_captured += int(multi_chunk.shape[0])
 
-        reached_target = (
-            samples_before < self.target_samples
-            and self.samples_captured >= self.target_samples
-        )
+        reached_target = samples_before < self.target_samples and self.samples_captured >= self.target_samples
 
         if reached_target:
             excess = self.samples_captured - self.target_samples
             if excess > 0:
                 multi_chunk = multi_chunk[:-excess, :]
                 self.samples_captured = self.target_samples
-                self.logger.info(
-                    f"Reached target samples: {self.target_samples}, trimmed {excess} samples"
-                )
+                self.logger.info(f"Reached target samples: {self.target_samples}, trimmed {excess} samples")
 
         mono_chunk = multi_chunk.mean(axis=1).astype(np.float32, copy=False).reshape(-1)
         payload = {"mono": mono_chunk, "multi": multi_chunk}
@@ -343,151 +338,6 @@ class StreamingAudioProcessor:
             self.logger.error(f"Error starting streaming recording: {e}")
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
-    def start_streaming_playrec(
-        self,
-        stimulus_dict,
-        sample_rate=44100,
-        target_samples=None,
-        input_device=None,
-        output_device=None,
-        input_channels=None,
-        output_channels=None,
-        prepare_frames=1000,
-        prolong_frames=10000
-    ):
-        """
-        Start streaming play and record (simultaneous playback and recording).
-
-        Uses separate OutputStream and InputStream for true real-time streaming.
-
-        Args:
-            stimulus_dict (dict): Stimulus signal parameters
-                - 'data': numpy array of stimulus signal
-                - 'amplitude': playback amplitude multiplier
-            sample_rate (int): Sample rate in Hz
-            target_samples (int): Target number of samples to record (optional, calculated from stimulus if not provided)
-            input_device: Input device (None for default)
-            output_device: Output device (None for default)
-            input_channels: Input channels (None for default)
-            output_channels: Output channels (None for default)
-            prepare_frames (int): Silent frames before stimulus
-            prolong_frames (int): Silent frames after stimulus
-
-        Returns:
-            tuple: (error_code, message)
-        """
-        stimulus_data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
-
-        if target_samples is None:
-            target_samples = prepare_frames + len(stimulus_data) + prolong_frames
-
-        self.sample_rate = sample_rate
-        self.target_samples = target_samples
-        self.samples_captured = 0
-        self.accumulated_chunks = []
-        self.accumulated_multi_chunks = []
-        self.is_recording = True
-        self.error_occurred = False
-
-        try:
-            self.playback_data = np.concatenate(
-                [np.zeros(prepare_frames), stimulus_data, np.zeros(prolong_frames)]
-            ).astype(np.float32)
-            self.playback_index = 0
-
-            # Build duplex device selector:
-            # - If both provided: (input_index, output_index)
-            # - Else: None (use defaults)
-            device = None
-            if input_device and output_device:
-                in_idx = input_device["index"]
-                out_idx = output_device["index"]
-                device = in_idx if in_idx == out_idx else (in_idx, out_idx)
-            elif input_device:
-                device = (input_device["index"], None)
-            elif output_device:
-                device = (None, output_device["index"])
-
-            # sounddevice 0.5.x 的 Stream 不支持 mapping 参数。
-            # 这里用“打开足够的通道数 + 回调里按列路由”的方式实现通道选择。
-            in_sel = sorted({int(i) for i in (input_channels or [0])})
-            out_sel = sorted({int(i) for i in (output_channels or [0])})
-            self._rec_in_sel = list(in_sel)
-
-            if input_device:
-                max_in = int(input_device.get("max_input_channels") or 0)
-                if any(i < 0 or i >= max_in for i in in_sel):
-                    return error_code.INVALID_RECORD, f"Invalid input_channels: {in_sel}, max_input_channels={max_in}"
-            if output_device:
-                max_out = int(output_device.get("max_output_channels") or 0)
-                if any(i < 0 or i >= max_out for i in out_sel):
-                    return error_code.INVALID_RECORD, f"Invalid output_channels: {out_sel}, max_output_channels={max_out}"
-
-            in_num = max(in_sel) + 1 if in_sel else 1
-            # 为避免 1 通道输出被系统/驱动上混到双耳，这里至少打开 2 通道输出（若用户设备支持）
-            out_num = max(out_sel) + 1 if out_sel else 1
-            if output_device:
-                max_out = int(output_device.get("max_output_channels") or 0)
-                if max_out >= 2:
-                    out_num = max(out_num, 2)
-
-            def duplex_callback(indata, outdata, frames, time_info, status):
-                if status:
-                    self.logger.warning(f"Duplex status: {status}")
-
-                # ---- playback (write to outdata) ----
-                chunk_end = self.playback_index + frames
-                outdata.fill(0)
-                if chunk_end <= len(self.playback_data):
-                    mono = self.playback_data[self.playback_index:chunk_end]
-                else:
-                    remaining = len(self.playback_data) - self.playback_index
-                    if remaining > 0:
-                        mono = np.zeros(frames, dtype=np.float32)
-                        mono[:remaining] = self.playback_data[self.playback_index:]
-                    else:
-                        mono = np.zeros(frames, dtype=np.float32)
-
-                # 将激励写入用户选择的物理输出通道（按列路由）
-                for ch in out_sel:
-                    if ch < outdata.shape[1]:
-                        outdata[:, ch] = mono
-                self.playback_index += frames
-
-                # ---- record (read from indata) ----
-                multi_in = self._select_multi(indata, in_sel)
-                if multi_in.shape[0] > frames:
-                    multi_in = multi_in[:frames, :]
-                elif multi_in.shape[0] < frames:
-                    pad = np.zeros((frames - multi_in.shape[0], multi_in.shape[1]), dtype=np.float32)
-                    multi_in = np.concatenate([multi_in, pad], axis=0)
-
-                # Queue FIRST, then stop (avoid dropping final chunk)
-                self._queue_chunk_and_maybe_stop(multi_in)
-
-            # ONE duplex stream instead of OutputStream + InputStream
-            self.stream = sd.Stream(
-                samplerate=sample_rate,
-                channels=(in_num, out_num),          # (in_channels, out_channels)
-                callback=duplex_callback,
-                blocksize=2048,
-                device=device,
-            )
-
-            self.stream.start()
-            self.logger.info(
-                f"Started duplex play+record: target={target_samples} samples "
-                f"({target_samples/sample_rate:.2f}s) at {sample_rate}Hz, device={device}"
-            )
-            return error_code.OK, "Streaming play+record started successfully"
-
-        except Exception as e:
-            self.error_occurred = True
-            self.error_message = str(e)
-            self.logger.error(f"Error starting duplex play+record: {e}")
-            return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
-
-
     def stop_streaming(self):
         """
         Stop streaming and clean up resources.
@@ -502,7 +352,7 @@ class StreamingAudioProcessor:
                 self.stream = None
 
             # Stop and close output stream (for play+record mode)
-            if hasattr(self, 'output_stream') and self.output_stream:
+            if hasattr(self, "output_stream") and self.output_stream:
                 self.output_stream.stop()
                 self.output_stream.close()
                 self.output_stream = None
