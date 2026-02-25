@@ -62,6 +62,9 @@ class AnalysisModelSelect(QDialog):
         if not using_config_path:
             using_config_path = DEFAULT_DIR + "ui/ui_config/none_path.json"
         self.using_config_path = using_config_path
+        # When user selects a target path via “新建”, confirm should save to that path
+        # without touching main window's using_config_path registry.
+        self._new_target_path_selected = False
 
         self.analysis_list = QTreeView()
         self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
@@ -252,13 +255,17 @@ class AnalysisModelSelect(QDialog):
         return layout
 
     def create_btn_layout(self):
+        new_btn = QPushButton("新建")
+        new_btn.clicked.connect(self.new_btn_clicked)
+        new_btn.setMinimumWidth(100)
+
         record_golden_btn = QPushButton("录制黄金样本")
         record_golden_btn.clicked.connect(self.record_golden_sample_btn_clicked)
         record_golden_btn.setMinimumWidth(140)
 
         load_btn = QPushButton("导入")
         load_btn.clicked.connect(self.load_btn_clicked)
-        save_btn = QPushButton("保存")
+        save_btn = QPushButton("另存为")
         save_btn.clicked.connect(self.save_btn_clicked)
         ok_btn = QPushButton("确定")
         ok_btn.clicked.connect(self.ok_btn_clicked)
@@ -271,6 +278,7 @@ class AnalysisModelSelect(QDialog):
         clear_btn.setMinimumWidth(100)
 
         layout = QHBoxLayout()
+        layout.addWidget(new_btn)
         layout.addWidget(record_golden_btn)
         layout.addStretch()
         layout.addWidget(clear_btn)
@@ -444,10 +452,17 @@ class AnalysisModelSelect(QDialog):
         analysis_cfg["golden_sample_result_path"] = json_path.replace("\\", "/")
 
     def load_btn_clicked(self):
+        default_dir = os.path.normpath(
+            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
+        )
+        try:
+            os.makedirs(default_dir, exist_ok=True)
+        except Exception:
+            pass
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "导入配置文件",
-            DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
+            default_dir,
             filter="JSON Files (*.json)",
         )
         if file_path:
@@ -459,6 +474,42 @@ class AnalysisModelSelect(QDialog):
                     f"Unable to parse JSON data in {file_path}. {e}"
                 )
 
+    def new_btn_clicked(self):
+        default_dir = os.path.normpath(
+            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
+        )
+        try:
+            os.makedirs(default_dir, exist_ok=True)
+        except Exception:
+            pass
+        # Use a non-native dialog so we can control button text ("确认").
+        dialog = QFileDialog(self, "新建配置文件")
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setFileMode(QFileDialog.AnyFile)
+        dialog.setNameFilter("JSON Files (*.json)")
+        dialog.setDefaultSuffix("json")
+        dialog.setDirectory(default_dir)
+        dialog.setLabelText(QFileDialog.Accept, "确认")
+        dialog.setLabelText(QFileDialog.Reject, "取消")
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        selected = dialog.selectedFiles()
+        file_path = selected[0] if selected else ""
+        if not file_path:
+            return
+        # If user didn't type extension, default to .json
+        if not os.path.splitext(file_path)[1]:
+            file_path = file_path + ".json"
+        file_path = file_path.replace("\\", "/")
+
+        # Do NOT update main window registry here; only affect this dialog's save target.
+        self.using_config_path = file_path
+        self._new_target_path_selected = True
+
+        # Start from empty config
+        self.select_list.clear_option_list()
+
     def format_config_data(self, config_data):
         for item in config_data:
             item.auto_analysis = self.auto_analysis_box.isChecked()
@@ -466,10 +517,17 @@ class AnalysisModelSelect(QDialog):
         return save_config
 
     def save_btn_clicked(self):
+        default_dir = os.path.normpath(
+            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
+        )
+        try:
+            os.makedirs(default_dir, exist_ok=True)
+        except Exception:
+            pass
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "保存配置文件",
-            DEFAULT_DIR + "ui/ui_config/analysis_sequence_config",
+            "另存为",
+            default_dir,
             filter="JSON Files (*.json)",
         )
         if file_path:
@@ -488,31 +546,37 @@ class AnalysisModelSelect(QDialog):
             QMessageBox.warning(self, "警告", "没有配置测试内容")
             return
 
-        # If registry contains only using_config_path (no saved/imported entries),
-        # add the built-in default config mapping on confirm.
-        registry = LoadUiConfig._load_sequence_config_registry()
-        other_keys = [
-            k for k in (registry or {}).keys() if k != "using_config_path"
-        ]
+        if not self._new_target_path_selected:
+            # If registry contains only using_config_path (no saved/imported entries),
+            # add the built-in default config mapping on confirm.
+            registry = LoadUiConfig._load_sequence_config_registry()
+            other_keys = [
+                k for k in (registry or {}).keys() if k != "using_config_path"
+            ]
 
-        if len(other_keys) == 0:
-            if self.select_list.config:
-                LoadUiConfig.ensure_sequence_config_registry_field(
-                    "默认配置",
-                    DEFAULT_DIR + "ui/ui_config/sequence_config.json",
-                )
-                LoadUiConfig.update_using_config_path(
-                    DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-                )
-                self.using_config_path = (
-                    DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-                )
+            if len(other_keys) == 0:
+                if self.select_list.config:
+                    LoadUiConfig.ensure_sequence_config_registry_field(
+                        "默认配置",
+                        DEFAULT_DIR + "ui/ui_config/sequence_config.json",
+                    )
+                    LoadUiConfig.update_using_config_path(
+                        DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+                    )
+                    self.using_config_path = (
+                        DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+                    )
         if not LoadUiConfig.save_sequence_config_to_json(
             save_config, self.using_config_path
         ):
             QMessageBox.warning(self, "警告", "保存配置文件失败")
             self.close()
             return
+        # If the target path was chosen via “新建”, register it for future selection,
+        # but do NOT switch main window's current using_config_path.
+        if self._new_target_path_selected:
+            LoadUiConfig.append_sequence_config_registry_entry(self.using_config_path)
+
         # No forced mode switch / model sync here.
         # Main window will refresh the active config after this dialog closes.
         self.close()
