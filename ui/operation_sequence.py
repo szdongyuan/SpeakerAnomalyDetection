@@ -267,7 +267,7 @@ class AnalysisModelSelect(QDialog):
         load_btn.clicked.connect(self.load_btn_clicked)
         save_btn = QPushButton("另存为")
         save_btn.clicked.connect(self.save_btn_clicked)
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton("保存")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         ok_btn.setDefault(True)
         clear_btn = QPushButton("清空")
