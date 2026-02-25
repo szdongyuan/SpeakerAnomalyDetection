@@ -278,9 +278,9 @@ class AnalysisModelSelect(QDialog):
         clear_btn.setMinimumWidth(100)
 
         layout = QHBoxLayout()
-        layout.addWidget(new_btn)
         layout.addWidget(record_golden_btn)
         layout.addStretch()
+        layout.addWidget(new_btn)
         layout.addWidget(clear_btn)
         layout.addWidget(load_btn)
         layout.addWidget(save_btn)
