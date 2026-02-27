@@ -154,6 +154,7 @@ class AnalysisModelSelect(QDialog):
             + ui_style_const.qtreeview_style
         )
         self._update_current_config_label()
+        self.resize(740, 540)
 
     def add_analysis_btn_clicked(self):
         if self.analysis_list.currentIndex().row() != -1:
@@ -263,12 +264,22 @@ class AnalysisModelSelect(QDialog):
         top_btn.clicked.connect(self.top_btn_clicked)
         bottom_btn.clicked.connect(self.bottom_btn_clicked)
 
+        clear_btn = QPushButton()
+        clear_btn.setToolTip("清空")
+        clear_btn.setFixedSize(30, 30)
+        clear_btn.setIcon(
+            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/clear_icon.png")
+        )
+        clear_btn.setIconSize(QSize(26, 26))
+        clear_btn.clicked.connect(self.select_list.clear_option_list)
+
         layout = QVBoxLayout()
         layout.addWidget(top_btn)
         layout.addWidget(up_btn)
         layout.addWidget(down_btn)
         layout.addWidget(bottom_btn)
         layout.addStretch()
+        layout.addWidget(clear_btn)
         layout.setContentsMargins(0, 30, 0, 0)
 
         return layout
@@ -307,18 +318,14 @@ class AnalysisModelSelect(QDialog):
         ok_btn = QPushButton("保存")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         ok_btn.setDefault(True)
-        clear_btn = QPushButton("清空")
-        clear_btn.clicked.connect(self.select_list.clear_option_list)
         load_btn.setMinimumWidth(100)
         save_btn.setMinimumWidth(100)
         ok_btn.setMinimumWidth(100)
-        clear_btn.setMinimumWidth(100)
 
         layout = QHBoxLayout()
         layout.addWidget(record_golden_btn)
         layout.addStretch()
         layout.addWidget(new_btn)
-        layout.addWidget(clear_btn)
         layout.addWidget(load_btn)
         layout.addWidget(save_btn)
         layout.addWidget(ok_btn)
