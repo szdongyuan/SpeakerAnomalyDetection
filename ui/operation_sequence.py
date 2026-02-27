@@ -78,9 +78,43 @@ class AnalysisModelSelect(QDialog):
         self.drag_drop_function()
         self.init_ui()
 
+    def _get_using_config_display_name(self) -> str:
+        """
+        Prefer the registry key that maps to current using_config_path.
+        Fallback to filename (without extension) when not found.
+        """
+        try:
+            using_path = (self.using_config_path or "").replace("\\", "/")
+            registry = LoadUiConfig._load_sequence_config_registry() or {}
+            if using_path:
+                for k, v in registry.items():
+                    if k == "using_config_path":
+                        continue
+                    if isinstance(v, str) and v.replace("\\", "/") == using_path:
+                        return str(k)
+            if using_path:
+                base = os.path.splitext(os.path.basename(using_path))[0]
+                return base or using_path
+        except Exception:
+            pass
+        return "无配置"
+
+    def _update_current_config_label(self):
+        if not hasattr(self, "current_config_label") or self.current_config_label is None:
+            return
+        name = self._get_using_config_display_name()
+        self.current_config_label.setText(f"当前配置：{name}")
+
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("测试队列")
+
+        self.current_config_label = QLabel()
+        self.current_config_label.setText("当前配置：")
+        self.current_config_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        current_config_layout = QHBoxLayout()
+        current_config_layout.addWidget(self.current_config_label)
+        current_config_layout.addStretch()
 
         analysis_list_layout = self.create_analysis_list_layout()
         select_list_layout = self.create_select_list_layout()
@@ -105,6 +139,7 @@ class AnalysisModelSelect(QDialog):
         analysis_layout.addLayout(move_btn_layout)
 
         layout = QVBoxLayout()
+        layout.addLayout(current_config_layout)
         layout.addLayout(analysis_layout)
         layout.addLayout(btn_layout)
 
@@ -118,6 +153,7 @@ class AnalysisModelSelect(QDialog):
             + ui_style_const.qlistview_style
             + ui_style_const.qtreeview_style
         )
+        self._update_current_config_label()
 
     def add_analysis_btn_clicked(self):
         if self.analysis_list.currentIndex().row() != -1:
@@ -246,6 +282,7 @@ class AnalysisModelSelect(QDialog):
 
         analysis_title_layout = QHBoxLayout()
         analysis_title_layout.addWidget(select_analysis_label)
+        analysis_title_layout.addStretch()
         analysis_title_layout.addWidget(self.auto_analysis_box)
 
         layout = QVBoxLayout()
@@ -467,7 +504,12 @@ class AnalysisModelSelect(QDialog):
         )
         if file_path:
             try:
+                file_path = file_path.replace("\\", "/")
                 self.select_list.load_model_config(file_path)
+                # Make "当前配置" reflect the real save target for 保存/确定.
+                self.using_config_path = file_path
+                self._new_target_path_selected = False
+                self._update_current_config_label()
                 LoadUiConfig.append_sequence_config_registry_entry(file_path)
             except Exception as e:
                 self.default_logger.error(
@@ -506,6 +548,7 @@ class AnalysisModelSelect(QDialog):
         # Do NOT update main window registry here; only affect this dialog's save target.
         self.using_config_path = file_path
         self._new_target_path_selected = True
+        self._update_current_config_label()
 
         # Start from empty config
         self.select_list.clear_option_list()
