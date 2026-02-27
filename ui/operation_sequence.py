@@ -567,6 +567,11 @@ class AnalysisModelSelect(QDialog):
         return save_config
 
     def save_btn_clicked(self):
+        save_config = self.format_config_data(self.select_list.config)
+        if not save_config:
+            QMessageBox.warning(self, "警告", "没有配置测试内容")
+            return
+
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
@@ -581,7 +586,6 @@ class AnalysisModelSelect(QDialog):
             filter="JSON Files (*.json)",
         )
         if file_path:
-            save_config = self.format_config_data(self.select_list.config)
             if not LoadUiConfig.save_sequence_config_to_json(save_config, file_path):
                 QMessageBox.warning(self, "警告", "保存配置文件失败")
                 self.close()
