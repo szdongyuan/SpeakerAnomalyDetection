@@ -1570,6 +1570,11 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, "calculate_pipeline_pd_pm"):
                     instance.calculate_pipeline_pd_pm()
                     instance.show()
+                elif hasattr(instance, "calculate_fba"):
+                    result = instance.calculate_fba()
+                    if not result:
+                        continue
+                    instance.show()
 
                 # Restore last geometry if available; otherwise fallback to default cascade
                 default_geo = {"x": width, "y": height, "w": 600, "h": 500}
