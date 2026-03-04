@@ -49,6 +49,7 @@ from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
 from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
@@ -210,6 +211,7 @@ class AnalysisModelSelect(QDialog):
             "声压级-频率 (SPLF) ",
             "频谱分析 (Spec) ",
             "频响 (FR) ",
+            "频段能量 (FBA) ",
             "谐波失真 (HD) ",
             "高阶谐波失真 (RB) ",
             "感知失真 (PRB) ",
@@ -875,6 +877,8 @@ class OptionList(QListView):
             model = PipelinePdPmConfigWindow(config_manager, name)
         elif type == "PM":
             model = PatternMatchConfigWindow(config_manager, name)
+        elif type == "FBA":
+            model = FbaConfigWindow(config_manager, name)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         return model

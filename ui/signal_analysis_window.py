@@ -35,6 +35,9 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
+from base.core_algorithm.response.frequency_band_analyzer import (
+    FrequencyBandAnalyzer, BandAnalysisResult, Threshold as BandThreshold,
+)
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
@@ -66,6 +69,7 @@ def get_class_mapping():
         "PD": PeakDetection,
         "PM": PatternMatch,
         "ED": PipelinePdPm,
+        "FBA": FrequencyBandAnalysis,
     }
     return class_mapping
 
@@ -419,9 +423,23 @@ class Distortion(AnalysisGraphWidget):
 
         # === With limit config: use setup_limit_plot() ===
         if analysis_config and analysis_config.get("limit_checked"):
-            result = analysis_config.get("limit_data")
-            if result and valid_data:
+            limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
+            if limit_mode == "manual" and valid_data:
+                n = len(freq_value)
+                upper_ok = bool(analysis_config.get("manual_upper_enabled", True))
+                lower_ok = bool(analysis_config.get("manual_lower_enabled", False))
+                upper = float(analysis_config.get("manual_upper", 0.0) or 0.0)
+                lower = float(analysis_config.get("manual_lower", 0.0) or 0.0)
+                csv_freq_list = freq_value
+                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
+                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+            else:
+                result = analysis_config.get("limit_data")
+                if not result:
+                    return
                 csv_freq_list, csv_upper_list, csv_lower_list = result
+
+            if valid_data:
                 # Use common function for plot setup
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
@@ -717,9 +735,23 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
         # === With limit config: use THD-style limit handling (nearest-neighbor) ===
         if analysis_config and analysis_config.get("limit_checked"):
-            result = analysis_config.get("limit_data")
-            if result and valid_data:
+            limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
+            if limit_mode == "manual" and valid_data:
+                n = len(freq_value)
+                upper_ok = bool(analysis_config.get("manual_upper_enabled", True))
+                lower_ok = bool(analysis_config.get("manual_lower_enabled", False))
+                upper = float(analysis_config.get("manual_upper", 0.0) or 0.0)
+                lower = float(analysis_config.get("manual_lower", 0.0) or 0.0)
+                csv_freq_list = freq_value
+                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
+                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+            else:
+                result = analysis_config.get("limit_data")
+                if not result:
+                    return
                 csv_freq_list, csv_upper_list, csv_lower_list = result
+
+            if valid_data:
 
                 # 1) Plot main curve + limit curves (same as THD)
                 LimitPlotUtils.setup_limit_plot(
@@ -812,10 +844,21 @@ class Spl(AnalysisGraphWidget):
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
         limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
-            result = self.analysis_config.get("limit_data")
-            if not result:
-                return False
-            csv_time_list, csv_upper_list, csv_lower_list = result
+            limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
+            if limit_mode == "manual":
+                n = len(signal_duration)
+                upper_ok = bool(self.analysis_config.get("manual_upper_enabled", True))
+                lower_ok = bool(self.analysis_config.get("manual_lower_enabled", False))
+                upper = float(self.analysis_config.get("manual_upper", 0.0) or 0.0)
+                lower = float(self.analysis_config.get("manual_lower", 0.0) or 0.0)
+                csv_time_list = signal_duration
+                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
+                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+            else:
+                result = self.analysis_config.get("limit_data")
+                if not result:
+                    return False
+                csv_time_list, csv_upper_list, csv_lower_list = result
             self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
@@ -1004,10 +1047,21 @@ class SplFrequency(AnalysisGraphWidget):
 
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
-            result = analysis_config.get("limit_data")
-            if not result:
-                return False
-            csv_freq_list, csv_upper_list, csv_lower_list = result
+            limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
+            if limit_mode == "manual":
+                n = len(frequency_list)
+                upper_ok = bool(analysis_config.get("manual_upper_enabled", True))
+                lower_ok = bool(analysis_config.get("manual_lower_enabled", False))
+                upper = float(analysis_config.get("manual_upper", 0.0) or 0.0)
+                lower = float(analysis_config.get("manual_lower", 0.0) or 0.0)
+                csv_freq_list = frequency_list
+                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
+                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+            else:
+                result = analysis_config.get("limit_data")
+                if not result:
+                    return False
+                csv_freq_list, csv_upper_list, csv_lower_list = result
             self.plot_spl_frequency_with_limits(frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl_frequency(frequency_list, spl_db)
@@ -1189,10 +1243,21 @@ class Frequency(AnalysisGraphWidget):
                 QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
-            result = self.analysis_config.get("limit_data")
-            if not result:
-                return False
-            csv_freq_list, csv_upper_list, csv_lower_list = result
+            limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
+            if limit_mode == "manual":
+                n = len(frequency_list)
+                upper_ok = bool(self.analysis_config.get("manual_upper_enabled", True))
+                lower_ok = bool(self.analysis_config.get("manual_lower_enabled", False))
+                upper = float(self.analysis_config.get("manual_upper", 0.0) or 0.0)
+                lower = float(self.analysis_config.get("manual_lower", 0.0) or 0.0)
+                csv_freq_list = frequency_list
+                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
+                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+            else:
+                result = self.analysis_config.get("limit_data")
+                if not result:
+                    return False
+                csv_freq_list, csv_upper_list, csv_lower_list = result
             self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_fr(frequency_list, fr)
@@ -2282,6 +2347,279 @@ class PipelinePdPm(QWidget):
         self._update_table(sample_rate, results)
 
         return self._summarize_and_notify(results, cfg.get("pass_condition", {}))
+
+
+class FrequencyBandAnalysis(AnalysisGraphWidget):
+    """
+    频段能量分析 (Frequency Band Analysis) 窗口。
+
+    将音频频谱按指定策略拆分为有限个频段，计算各频段声压级，
+    以柱状图形式展示，并可与阈值比较。
+    """
+
+    STRATEGY_LABELS = {
+        "1/1 倍频程": ("octave", {"fraction": 1}),
+        "1/3 倍频程": ("octave", {"fraction": 3}),
+        "1/6 倍频程": ("octave", {"fraction": 6}),
+        "1/12 倍频程": ("octave", {"fraction": 12}),
+        "Bark": ("bark", {}),
+        "等宽": ("equal_width", {}),
+        "自定义": ("custom", {}),
+    }
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.result = {}
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_fba(self):
+        """执行频段能量分析并绘图"""
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        config = self.analysis_config or {}
+
+        if recorded_signal is None or sample_rate is None:
+            return False
+
+        strategy_label = config.get("band_strategy", "1/3 倍频程")
+        strategy_info = self.STRATEGY_LABELS.get(strategy_label)
+        if not strategy_info:
+            strategy_name, strategy_kwargs = "octave", {"fraction": 3}
+        else:
+            strategy_name, strategy_kwargs = strategy_info
+
+        weighting = config.get("weighting", "A")
+        if weighting in ("None", "Z（None）"):
+            weighting = "Z"
+        f_min = config.get("f_min", 20)
+        f_max = config.get("f_max", 20000)
+        n_bands = config.get("n_bands", 40)
+        bandwidth = config.get("bandwidth", 100)
+        custom_bands_text = config.get("custom_bands_text", "")
+        custom_edges = None
+        if strategy_label == "自定义":
+            try:
+                custom_edges = self._parse_custom_bands_text(custom_bands_text)
+            except Exception as e:
+                QMessageBox.warning(self, "提示", f"自定义频段解析失败: {str(e)[:200]}")
+                return False
+
+        try:
+            analyzer = FrequencyBandAnalyzer(
+                strategy=strategy_name,
+                weighting=weighting,
+                f_min=f_min,
+                f_max=f_max,
+                fraction=strategy_kwargs.get("fraction", 3),
+                n_bands=n_bands,
+                bandwidth=bandwidth,
+                custom_edges=custom_edges,
+            )
+            analysis_result = analyzer.analyze(
+                recorded_signal,
+                fs=int(sample_rate),
+                v2pa_factor=self.v2pa_factor or 1.0,
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"频段能量分析失败: {str(e)[:200]}")
+            return False
+
+        limit_checked = config.get("limit_checked", False)
+        limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
+        upper_limits = None
+        lower_limits = None
+
+        if limit_checked:
+            levels = np.asarray(analysis_result.band_levels_weighted_db, dtype=np.float64)
+            n = int(levels.size)
+            centers = np.array([b.f_center for b in analysis_result.bands], dtype=np.float64)
+
+            if limit_mode == "manual":
+                upper_ok = bool(config.get("manual_upper_enabled", True))
+                lower_ok = bool(config.get("manual_lower_enabled", False))
+                upper = float(config.get("manual_upper", 0.0) or 0.0)
+                lower = float(config.get("manual_lower", 0.0) or 0.0)
+                upper_limits = np.full(n, upper, dtype=np.float64) if upper_ok else np.full(n, np.nan, dtype=np.float64)
+                lower_limits = np.full(n, lower, dtype=np.float64) if lower_ok else np.full(n, np.nan, dtype=np.float64)
+            else:
+                limit_data = config.get("limit_data", None)
+                if not limit_data:
+                    QMessageBox.warning(self, "提示", "已启用阈值，但未加载 CSV 配置文件。")
+                    return False
+                csv_x_list, csv_upper_list, csv_lower_list = limit_data
+                csv_x = np.asarray(csv_x_list, dtype=np.float64)
+                csv_u = np.asarray(csv_upper_list, dtype=np.float64)
+                csv_l = np.asarray(csv_lower_list, dtype=np.float64)
+
+                sort_idx = np.argsort(csv_x)
+                csv_x = csv_x[sort_idx]
+                csv_u = csv_u[sort_idx]
+                csv_l = csv_l[sort_idx]
+
+                upper_limits = np.interp(centers, csv_x, csv_u, left=csv_u[0], right=csv_u[-1]) if csv_x.size else np.full(n, np.nan)
+                # lower 可能是全 NaN（仅上限），保持 NaN 即可
+                if np.all(np.isnan(csv_l)) or (not np.any(np.isfinite(csv_l))):
+                    lower_limits = np.full(n, np.nan, dtype=np.float64)
+                else:
+                    # 对 lower 的 NaN 先用最近的有限值填充后再插值，避免整段变 NaN
+                    finite = np.isfinite(csv_l)
+                    if np.any(finite):
+                        filled = np.interp(csv_x, csv_x[finite], csv_l[finite])
+                        lower_limits = np.interp(centers, csv_x, filled, left=filled[0], right=filled[-1])
+                    else:
+                        lower_limits = np.full(n, np.nan, dtype=np.float64)
+
+            # 用公共逻辑计算 OK/NG 与偏差
+            out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+                levels,
+                np.asarray(upper_limits, dtype=np.float64),
+                np.asarray(lower_limits, dtype=np.float64),
+                valid_mask=np.isfinite(levels),
+            )
+            analysis_result.exceeded_bands = np.where(out_mask)[0].astype(int).tolist()
+            self.data_struct.analysis_result_dict[self.title_name] = (bool(is_ok), float(deviation))
+
+        self._plot_bar_chart(analysis_result, weighting, upper_limits=upper_limits, lower_limits=lower_limits)
+
+        self.result = {
+            "bands": [b.label for b in analysis_result.bands],
+            "band_centers": [b.f_center for b in analysis_result.bands],
+            "band_levels_db": analysis_result.band_levels_db.tolist(),
+            "band_levels_weighted_db": analysis_result.band_levels_weighted_db.tolist(),
+            "overall_db": analysis_result.overall_db,
+            "overall_weighted_db": analysis_result.overall_weighted_db,
+            "weighting": analysis_result.weighting,
+            "exceeded_bands": analysis_result.exceeded_bands,
+        }
+        return self.result
+
+    @staticmethod
+    def _parse_custom_bands_text(text: str):
+        edges = []
+        for raw in (text or "").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            if "," in line:
+                parts = [p.strip() for p in line.split(",") if p.strip()]
+            else:
+                parts = [p.strip() for p in line.replace("\t", " ").split(" ") if p.strip()]
+
+            label = None
+            if len(parts) == 1 and "-" in parts[0]:
+                a, b = [p.strip() for p in parts[0].split("-", 1)]
+                fl, fh = float(a), float(b)
+            elif len(parts) >= 2:
+                fl, fh = float(parts[0]), float(parts[1])
+                if len(parts) >= 3:
+                    label = " ".join(parts[2:]).strip() or None
+            else:
+                raise ValueError(f"无法解析行: {raw!r}")
+
+            if not (fl > 0 and fh > 0):
+                raise ValueError(f"频率必须为正数: {raw!r}")
+            if not (fh > fl):
+                raise ValueError(f"频段上限必须大于下限: {raw!r}")
+            edges.append((fl, fh, label))
+
+        edges.sort(key=lambda x: x[0])
+        if not edges:
+            raise ValueError("请至少输入一个频段。")
+        for i in range(1, len(edges)):
+            if edges[i][0] < edges[i - 1][1]:
+                raise ValueError("自定义频段不允许重叠，请检查相邻频段边界。")
+        return edges
+
+    def _plot_bar_chart(
+        self,
+        result: BandAnalysisResult,
+        weighting: str,
+        *,
+        upper_limits: np.ndarray | None = None,
+        lower_limits: np.ndarray | None = None,
+    ):
+        """使用 pyqtgraph 绘制频段能量柱状图"""
+        self.analysis_plot.clear()
+
+        levels = np.asarray(result.band_levels_weighted_db, dtype=np.float64)
+        labels = [b.label for b in result.bands]
+        n = len(labels)
+        if n == 0:
+            return
+
+        x = np.arange(n)
+        bar_width = 0.7
+
+        normal_color = (76, 175, 80)
+        exceed_color = (244, 67, 54)
+        missing_color = (189, 189, 189)
+
+        finite_mask = np.isfinite(levels)
+        if not np.all(finite_mask):
+            # pyqtgraph 对 NaN/inf 的柱高兼容性不稳定，这里统一降级成 0 并用灰色标记缺失段
+            levels = levels.copy()
+            levels[~finite_mask] = 0.0
+
+        brushes = [pg.mkBrush(normal_color) for _ in range(n)]
+        for i in range(n):
+            if not finite_mask[i]:
+                brushes[i] = pg.mkBrush(missing_color)
+        for idx in result.exceeded_bands:
+            if 0 <= int(idx) < n and finite_mask[int(idx)]:
+                brushes[int(idx)] = pg.mkBrush(exceed_color)
+
+        bar_item = pg.BarGraphItem(
+            x=x, height=levels, width=bar_width, brushes=brushes,
+            pen=pg.mkPen("w", width=0.5),
+        )
+        self.analysis_plot.addItem(bar_item)
+
+        if upper_limits is not None:
+            u = np.asarray(upper_limits, dtype=np.float64)
+            if u.size == n and np.any(np.isfinite(u)):
+                self.analysis_plot.plot(
+                    x, u,
+                    pen=mkPen(color=(0, 188, 212), width=2),
+                    symbol="o", symbolSize=4,
+                    symbolBrush=(0, 188, 212),
+                    name="Upper Limit",
+                )
+        if lower_limits is not None:
+            l = np.asarray(lower_limits, dtype=np.float64)
+            if l.size == n and np.any(np.isfinite(l)):
+                self.analysis_plot.plot(
+                    x, l,
+                    pen=mkPen(color=(63, 81, 181), width=2),
+                    symbol="t", symbolSize=6,
+                    symbolBrush=(63, 81, 181),
+                    name="Lower Limit",
+                )
+
+        # 超限标注（仅提示超上限的幅度；下限超限同样标红柱子）
+        if result.exceeded_bands:
+            for idx in result.exceeded_bands:
+                if 0 <= int(idx) < n and np.isfinite(levels[int(idx)]):
+                    text = pg.TextItem("NG", color=exceed_color, anchor=(0.5, 1.0))
+                    text.setPos(int(idx), levels[int(idx)])
+                    self.analysis_plot.addItem(text)
+
+        x_axis = self.analysis_plot.getAxis("bottom")
+        x_ticks = [(i, lbl) for i, lbl in enumerate(labels)]
+        x_axis.setTicks([x_ticks])
+
+        weight_label = f"dB({weighting})" if weighting != "Z" else "dB"
+        self.analysis_plot.setLabel("left", f"Sound Pressure Level [{weight_label}]")
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+
+        overall = result.overall_weighted_db if weighting != "Z" else result.overall_db
+        self.analysis_plot.setTitle(f"Overall: {overall:.1f} {weight_label} [SPL]", size="14px", color="k")
+
+        self.analysis_plot.showGrid(x=False, y=True)
 
 
 if __name__ == "__main__":
