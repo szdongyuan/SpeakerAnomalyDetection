@@ -4,6 +4,7 @@ from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.audio_feature_extraction import AudioFeatureExtraction
 from base.pre_processing.data_alignment import DataAlignment
 from base.pre_processing.emphasis import Emphasis
+from base.pre_processing.matrix_slice import MatrixSlice
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 
 
@@ -53,6 +54,7 @@ class PreprocessingManager(object):
             "apply_equalizer": AudioEqualizer.apply_equalizer,
             "random_fluctuation": Emphasis.random_fluctuation,
             "split_repeat_signal": SplitRepeatSignal.split_repeat_signal,
+            "matrix_slice": MatrixSlice.matrix_slice,
             "sequence_process": cls.sequence_process,
             "stack_process": cls.stack_process,
         }
@@ -83,7 +85,7 @@ class PreprocessingManager(object):
         if not process_handler:
             return signal
 
-        if signal.ndim == 1:
+        if signal.ndim == 1 or kwargs.get("process_full_signal", False):
             return process_handler(signal, sr, **process_kwargs)
 
         process_segments = []
