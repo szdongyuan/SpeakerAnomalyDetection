@@ -19,5 +19,7 @@ class MySignals(QObject):
 
     stream_audio_chunk_signal = pyqtSignal(object)  # Emits numpy array chunks for streaming audio
 
+    display_update_signal = pyqtSignal(dict)  # Pushes test result data to DisplayWindow
+
 
 sign = MySignals()

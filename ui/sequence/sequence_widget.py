@@ -499,13 +499,15 @@ class SequenceWindow(QWidget):
         self.update_recorded_signal_info_to_db()
 
         self.mark_result()
+
+        label = self.recorded_signal_info.get("labels", "")
+        self._emit_display_update(manual_label=label)
+
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
         self.line_graph.clear()
 
-        # Only disable buttons when manually clicking OK/NG
-        # Auto-triggered calls should keep buttons enabled for user verification
         if manual:
             self.replayer_btn.setDisabled(True)
             self.data_btn.setEnabled(False)
@@ -808,12 +810,64 @@ class SequenceWindow(QWidget):
                 self.default_ai.show()
                 self.default_ai.setGeometry(width, height, 600, 500)
                 self.test_insert_data_into_db()
-            elif self.default_ai:
-                if self.default_ai.result == "OK":
-                    for instance in self.analysis_window:
-                        instance.close()
-                    self.default_ai_result = True
-                    self.clicked_ok_or_ng(manual=False)
+
+            self._emit_display_update()
+
+    def _emit_display_update(self, manual_label: str = None):
+        """Build display data from current analysis results and emit to DisplayWindow."""
+        try:
+            overall_result = "—"
+            if manual_label in ("OK", "NG"):
+                overall_result = manual_label
+            elif (
+                self.count_board.mode == "test"
+                and self.default_ai
+                and hasattr(self.default_ai, "result")
+                and self.default_ai.result in ("OK", "NG")
+            ):
+                overall_result = self.default_ai.result
+            elif isinstance(getattr(self, "recorded_signal_info", None), dict):
+                label = self.recorded_signal_info.get("labels", "")
+                if label in ("OK", "NG"):
+                    overall_result = label
+
+            sn = ""
+            product_model = ""
+            if isinstance(getattr(self, "recorded_signal_info", None), dict):
+                sn = self.recorded_signal_info.get("barcode", "")
+            try:
+                product_model = self.lineedit_type.text() or ""
+            except Exception:
+                pass
+
+            stats = self._read_current_statistics()
+
+            data = {
+                "sn": sn,
+                "product_model": product_model,
+                "overall_result": overall_result,
+                "statistics": stats,
+            }
+            sign.display_update_signal.emit(data)
+        except Exception as e:
+            self.default_logger.error(f"emit_display_update error: {e}")
+
+    def _read_current_statistics(self) -> dict:
+        """Read today's statistics from count board for display window."""
+        try:
+            if self.count_board.mode == "test":
+                total = int(self.count_board.total_line_edit.text() or "0")
+                ok = int(self.count_board.ok_line_edit.text() or "0")
+                ng = int(self.count_board.ng_line_edit.text() or "0")
+                pass_rate = self.count_board.yield_line_edit.text() or "0%"
+            else:
+                total = int(self.count_board.mark_total_edit.text() or "0")
+                ok = int(self.count_board.mark_ok_edit.text() or "0")
+                ng = int(self.count_board.mark_ng_edit.text() or "0")
+                pass_rate = f"{round(ok / total * 100, 2)}%" if total > 0 else "0%"
+            return {"total": total, "ok": ok, "ng": ng, "pass_rate": pass_rate}
+        except Exception:
+            return {"total": 0, "ok": 0, "ng": 0, "pass_rate": "0%"}
 
     def get_sequence_config_from_json(self):
         """
