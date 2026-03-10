@@ -8,12 +8,14 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
 from base.sound_device_manager import SoundDeviceManager
+from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
+from ui.display_window import DisplayWindow, save_display_config
 from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
@@ -48,6 +50,8 @@ class MainWindow(QMainWindow):
         self.function_action_test_sequence = QAction("测试队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_audio_manager = QAction("音频数据管理", self)
+        self.function_action_display_board = QAction("展示看板", self)
+        self.function_action_display_board.setCheckable(True)
         self.function_action_exit = QAction("退出", self)
         self.hardware_action_selection = QAction("硬件选择", self)
         self.hardware_action_calibration = QAction("校准", self)
@@ -59,11 +63,13 @@ class MainWindow(QMainWindow):
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_test_sequence,
             self.function_action_ai_training,
+            self.function_action_display_board,
             self.hardware_action_selection,
             self.hardware_action_calibration,
         ]
         self.widget_list_admin = self.widget_list_engineer + [self.user_action_add_account]
 
+        self._display_window = None
         self.init_ui()
 
     def init_ui(self):
@@ -75,6 +81,7 @@ class MainWindow(QMainWindow):
         self.on_access_lvl_changed()
         self.show_statusbar_layout()
         self.showMaximized()
+        self._init_display_board()
         self.on_login_window_init()
 
     def set_title(self):
@@ -185,6 +192,7 @@ class MainWindow(QMainWindow):
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
+        view_menu = menu_bar.addMenu("视图")
         help_menu = menu_bar.addMenu("帮助")
 
         function_menu.addAction(self.function_action_test_sequence)
@@ -198,8 +206,14 @@ class MainWindow(QMainWindow):
         self.function_audio_manager.triggered.disconnect()
         self.function_audio_manager.triggered.connect(self.on_audio_manager_init)
         function_menu.addSeparator()
-
         function_menu.addAction(self.function_action_exit)
+
+        view_menu.addAction(self.function_action_display_board)
+        try:
+            self.function_action_display_board.triggered.disconnect()
+        except TypeError:
+            pass
+        self.function_action_display_board.triggered.connect(self.on_display_board_toggled)
         self.function_action_exit.triggered.disconnect()
         self.function_action_exit.triggered.connect(self.on_window_close)
         hardware_menu.addAction(self.hardware_action_selection)
@@ -312,6 +326,34 @@ class MainWindow(QMainWindow):
         dlg.speaker = self.speaker
         dlg.exec()
 
+    def _init_display_board(self):
+        """Initialize display board as hidden; user can enable it via menu."""
+        self.function_action_display_board.setChecked(False)
+        sign.display_update_signal.connect(self._on_display_data_received, Qt.AutoConnection)
+
+    def on_display_board_toggled(self, checked: bool):
+        """Menu toggle handler for display board."""
+        if checked:
+            self._open_display_window()
+        else:
+            self._close_display_window()
+        save_display_config({"enabled": checked})
+
+    def _open_display_window(self):
+        if self._display_window is None:
+            self._display_window = DisplayWindow()
+        self._display_window.showNormal()
+        self._display_window.raise_()
+
+    def _close_display_window(self):
+        if self._display_window is not None:
+            self._display_window.close()
+            self._display_window = None
+
+    def _on_display_data_received(self, data: dict):
+        if self._display_window is not None and self._display_window.isVisible():
+            self._display_window.update_display(data)
+
     def on_window_close(self):
         # close the window
         self.close()
@@ -320,6 +362,7 @@ class MainWindow(QMainWindow):
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None
+        self._close_display_window()
         event.accept()
 
     def mousepressevent(self, event):

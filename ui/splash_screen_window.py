@@ -1,4 +1,7 @@
+import os
+import sys
 import time
+import traceback
 import importlib
 
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
@@ -73,4 +76,8 @@ class LoaderThread(QObject):
                 time.sleep(0.01)
             self.finished.emit()
         except Exception as e:
+            if getattr(sys, "frozen", False):
+                _log = os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "crash.log")
+                with open(_log, "a", encoding="utf-8") as f:
+                    traceback.print_exc(file=f)
             self.error.emit(f"{str(e)}")
