@@ -315,39 +315,45 @@ class SequenceWidgetAnalysisOpsMixin:
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
-                if hasattr(instance, "calculate_spl"):
-                    result = instance.calculate_spl()
-                    if not result:
+                try:
+                    if hasattr(instance, "calculate_spl"):
+                        result = instance.calculate_spl()
+                        if not result:
+                            continue
+                        instance.show()
+                    elif hasattr(instance, "calculate_fr"):
+                        result = instance.calculate_fr()
+                        if not result:
+                            continue
+                        instance.show()
+                    elif hasattr(instance, "calculate_thd"):
+                        instance.calculate_thd()
+                        instance.show()
+                    elif hasattr(instance, "calculate_ai_scores"):
+                        instance.calculate_ai_scores(
+                            self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
+                        )
+                        instance.show()
+                    elif hasattr(instance, "calculate_spec"):
+                        instance.calculate_spec()
+                        instance.show()
+                    elif hasattr(instance, "calculate_peak_detection"):
+                        instance.calculate_peak_detection()
+                        instance.show()
+                    elif hasattr(instance, "calculate_loose_particle"):
+                        instance.calculate_loose_particle()
+                        instance.show()
+                    elif hasattr(instance, "calculate_pattern_match"):
+                        instance.calculate_pattern_match()
+                        instance.show()
+                    elif hasattr(instance, "calculate_pipeline_pd_pm"):
+                        instance.calculate_pipeline_pd_pm()
+                        instance.show()
+                except ValueError as e:
+                    if self._is_channel_mismatch_error(e):
+                        self._show_channel_mismatch_warning(instance_key or "分析项", e)
                         continue
-                    instance.show()
-                elif hasattr(instance, "calculate_fr"):
-                    result = instance.calculate_fr()
-                    if not result:
-                        continue
-                    instance.show()
-                elif hasattr(instance, "calculate_thd"):
-                    instance.calculate_thd()
-                    instance.show()
-                elif hasattr(instance, "calculate_ai_scores"):
-                    instance.calculate_ai_scores(
-                        self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
-                    )
-                    instance.show()
-                elif hasattr(instance, "calculate_spec"):
-                    instance.calculate_spec()
-                    instance.show()
-                elif hasattr(instance, "calculate_peak_detection"):
-                    instance.calculate_peak_detection()
-                    instance.show()
-                elif hasattr(instance, "calculate_loose_particle"):
-                    instance.calculate_loose_particle()
-                    instance.show()
-                elif hasattr(instance, "calculate_pattern_match"):
-                    instance.calculate_pattern_match()
-                    instance.show()
-                elif hasattr(instance, "calculate_pipeline_pd_pm"):
-                    instance.calculate_pipeline_pd_pm()
-                    instance.show()
+                    raise
 
                 # Restore last geometry if available; otherwise fallback to default cascade
                 default_geo = {"x": width, "y": height, "w": 600, "h": 500}
@@ -389,6 +395,22 @@ class SequenceWidgetAnalysisOpsMixin:
 
         # Show summary window at the end (also in test mode), only if dict is not empty
         self._maybe_show_analysis_result_summary(width, height)
+
+    @staticmethod
+    def _is_channel_mismatch_error(err: Exception) -> bool:
+        msg = str(err or "")
+        if "analysis_channel=" not in msg:
+            return False
+        return ("out of range" in msg) or ("requires multi-channel recording" in msg)
+
+    def _show_channel_mismatch_warning(self, analysis_name: str, err: Exception):
+        QMessageBox.warning(
+            self,
+            "通道配置不匹配",
+            f"{analysis_name} 配置通道与本次录制通道不一致。\n"
+            f"请在分析参数中重新选择通道后再分析。\n\n"
+            f"详细信息: {err}",
+        )
 
     def _maybe_show_analysis_result_summary(self, width: int, height: int):
         result_dict = getattr(self.data_struct, "analysis_result_dict", None)
@@ -650,24 +672,37 @@ class SequenceWidgetAnalysisOpsMixin:
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
-                analysis_channel = 0
+                raw_channel = 0
                 if isinstance(params, dict):
                     raw_channel = params.get("analysis_channel", 0)
                     try:
-                        analysis_channel = int(raw_channel)
+                        raw_channel = int(raw_channel)
                     except (TypeError, ValueError):
-                        analysis_channel = 0
-                if analysis_channel < 0:
-                    analysis_channel = 0
-                display_key = f"{key}--通道{analysis_channel + 1}"
+                        raw_channel = 0
+                if raw_channel < 0:
+                    raw_channel = 0
+
+                # 配置里保存的是硬件绝对通道号；运行分析时需要映射到“本次录制子集”的局部列索引。
+                mapped_channel = raw_channel
+                active_input_channels = [0]
+                try:
+                    active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", None) or [0])]
+                except Exception:
+                    active_input_channels = [0]
+                if raw_channel in active_input_channels:
+                    mapped_channel = int(active_input_channels.index(raw_channel))
+
+                display_key = f"{key}--通道{raw_channel + 1}"
                 class_instance = cls_map(display_key)
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
                 class_instance.v2pa_factor = self.v2pa_factor
+                runtime_params = dict(params) if isinstance(params, dict) else {}
+                runtime_params["analysis_channel"] = mapped_channel
                 # Inject sequence-level golden baseline path into per-item params
-                if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
+                if isinstance(getattr(self, "analysis_config", None), dict):
                     golden_path = self.analysis_config.get("golden_sample_result_path")
                     if golden_path:
-                        params["golden_sample_result_path"] = golden_path
-                class_instance.analysis_config = params
+                        runtime_params["golden_sample_result_path"] = golden_path
+                class_instance.analysis_config = runtime_params
                 self.analysis_window.append(class_instance)

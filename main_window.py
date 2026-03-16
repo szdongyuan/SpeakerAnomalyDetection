@@ -232,6 +232,7 @@ class MainWindow(QMainWindow):
             mic=self.mic,
             speaker=self.speaker,
             mic_channels=self.mic_channels,
+            speaker_channels=self.speaker_channels,
         )
         analysis_model_select_dialog.exec()
         # Refresh active sequence config without forcing mode switch

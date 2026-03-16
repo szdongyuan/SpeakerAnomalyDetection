@@ -49,7 +49,7 @@ SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "AI", "LP", "Excel"}
 
 class AnalysisModelSelect(QDialog):
 
-    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None):
+    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None):
         super().__init__()
         # When main window has no active config selected ("无配置"), using_config_path can be None.
         # Fall back to the built-in default sequence config so the test-queue window can still open.
@@ -69,6 +69,7 @@ class AnalysisModelSelect(QDialog):
             mic=mic,
             speaker=speaker,
             mic_channels=mic_channels,
+            speaker_channels=speaker_channels,
         )
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
         self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
@@ -473,7 +474,7 @@ class AnalysisModelSelect(QDialog):
 
 class OptionList(QListView):
 
-    def __init__(self, logger, using_config_path, mic=None, speaker=None, mic_channels=None):
+    def __init__(self, logger, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.select_analysis_model = QStandardItemModel()
@@ -486,6 +487,7 @@ class OptionList(QListView):
         self.mic = mic
         self.speaker = speaker
         self.mic_channels = self._normalize_channels(mic_channels)
+        self.speaker_channels = self._normalize_channels(speaker_channels)
         self.row_num = None
         self.darpflag = None
         self.sound_item_type = None
@@ -638,7 +640,12 @@ class OptionList(QListView):
 
         if name == self.config[0].name:
             if self.config[0].mode == "RECORD_ONLY":
-                model = RecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
+                model = RecordConfigWindow(
+                    self.config[0].detail,
+                    mic=self.mic,
+                    speaker=self.speaker,
+                    speaker_channels=self.speaker_channels,
+                )
             elif self.config[0].mode == "IMPORT_AUDIO":
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
             else:
