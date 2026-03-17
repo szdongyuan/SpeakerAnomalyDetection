@@ -127,10 +127,10 @@ class SequenceWidgetStreamingOpsMixin:
         """
         layout = QHBoxLayout()
         self.channel_workspace = ChannelPlotWorkspace(self)
-        try:
-            self.refresh_channel_windows()
-        except Exception:
-            self.channel_workspace.set_channels([0])
+        # try:
+        #     self.refresh_channel_windows()
+        # except Exception:
+        #     self.channel_workspace.set_channels([0])
 
         layout.addWidget(self.count_board, stretch=1)
         layout.addSpacing(20)

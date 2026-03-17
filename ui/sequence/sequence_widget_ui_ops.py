@@ -21,10 +21,10 @@ class SequenceWidgetUiOpsMixin:
         """
         super().showEvent(event)
         self._missing_config_prompt_enabled = True
-        try:
-            self.refresh_channel_windows()
-        except Exception:
-            pass
+        # try:
+        #     self.refresh_channel_windows()
+        # except Exception:
+        #     pass
         if not self.sequence_config and not self._missing_config_prompted:
             QMessageBox.warning(
                 self,

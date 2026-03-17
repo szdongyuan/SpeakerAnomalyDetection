@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
         self.show_statusbar_layout()
         self.showMaximized()
         self.on_login_window_init()
+        self.sequence_window.refresh_channel_windows()
 
     def set_title(self):
         # hide the window title bar and reset the window title bar
@@ -333,10 +334,7 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
-        try:
-            self.sequence_window.refresh_channel_windows()
-        except Exception:
-            pass
+        self.sequence_window.refresh_channel_windows()
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker
