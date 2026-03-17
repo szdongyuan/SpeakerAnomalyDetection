@@ -70,7 +70,21 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     device = recorded_dict.get("device")
     input_channels = recorded_dict.get("input_channels")
     output_device = recorded_dict.get("output_device")
-    output_channels = [recorded_dict.get("output_channels")]
+    raw_output_channels = recorded_dict.get("output_channels")
+    if isinstance(raw_output_channels, (list, tuple)):
+        output_channels = []
+        for ch in raw_output_channels:
+            try:
+                output_channels.append(int(ch))
+            except Exception:
+                continue
+    elif raw_output_channels is None:
+        output_channels = []
+    else:
+        try:
+            output_channels = [int(raw_output_channels)]
+        except Exception:
+            output_channels = []
     monitor_playback = recorded_dict.get("monitor_playback", False)
 
     # Create streaming processor

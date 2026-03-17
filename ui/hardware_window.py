@@ -279,14 +279,12 @@ class HardwareSelectionView(QDialog):
         self.driver_combo.setMinimumWidth(220)
         top_layout.addWidget(self.driver_combo)
 
-        # 4 张表：设备（单选）、通道（多选）
+        # 3 张表：扬声器设备（单选）、麦克风设备（单选）、麦克风通道（多选）
         self.speaker_device_table = SingleCheckTableView()
-        self.speaker_channel_table = MultiCheckTableView()
         self.mic_device_table = SingleCheckTableView()
         self.mic_channel_table = MultiCheckTableView()
 
         speaker_device_box = self._wrap_table_group("选择设备", self.speaker_device_table)
-        speaker_channel_box = self._wrap_table_group("选择通道", self.speaker_channel_table)
         mic_device_box = self._wrap_table_group("选择设备", self.mic_device_table)
         mic_channel_box = self._wrap_table_group("选择通道", self.mic_channel_table)
 
@@ -294,7 +292,6 @@ class HardwareSelectionView(QDialog):
         left_big = QGroupBox("选择扬声器")
         left_layout = QVBoxLayout()
         left_layout.addWidget(speaker_device_box)
-        left_layout.addWidget(speaker_channel_box)
         left_big.setLayout(left_layout)
 
         right_big = QGroupBox("选择麦克风")
@@ -415,8 +412,7 @@ class HardwareSelectionController:
         self.view.speaker_device_table.set_options(speaker_opts)
         self.view.mic_device_table.set_options(mic_opts)
 
-        # 清空通道（等设备勾选后再填充）
-        self.view.speaker_channel_table.set_options([])
+        # 清空麦克风通道（等设备勾选后再填充）
         self.view.mic_channel_table.set_options([])
 
     def _try_restore_selection(self, last_state: HardwareSelectionState) -> None:
@@ -436,9 +432,7 @@ class HardwareSelectionController:
         if last_m_key:
             self.view.mic_device_table.set_checked_by_predicate(lambda p: self._device_key(p) == last_m_key)
 
-        # 恢复通道（在设备恢复后，通道表已刷新，这里再勾选）
-        if last_state.speaker_channels:
-            self._restore_channels(self.view.speaker_channel_table, last_state.speaker_channels)
+        # 恢复麦克风通道（在设备恢复后，通道表已刷新，这里再勾选）
         if last_state.mic_channels:
             self._restore_channels(self.view.mic_channel_table, last_state.mic_channels)
 
@@ -461,10 +455,8 @@ class HardwareSelectionController:
 
     def _on_speaker_device_checked(self, payload: object) -> None:
         self.model.state.speaker_device = payload if isinstance(payload, dict) else None
-        channels = self.model.channels_for_device(self.model.state.speaker_device, "speaker")
+        # 不再提供扬声器通道选择，保持为空兼容返回结构
         self.model.state.speaker_channels = []
-        # Speaker 通道显示为 Out1..OutN；payload/返回值仍为 0..N-1（0-based）
-        self.view.speaker_channel_table.set_options([(f"Out{i + 1}", i) for i in channels])
 
     def _on_mic_device_checked(self, payload: object) -> None:
         self.model.state.mic_device = payload if isinstance(payload, dict) else None
@@ -477,14 +469,13 @@ class HardwareSelectionController:
         speaker = self.model.state.speaker_device
         mic = self.model.state.mic_device
 
-        speaker_channels = sorted(int(x) for x in self.view.speaker_channel_table.checked_payloads())
         mic_channels = sorted(int(x) for x in self.view.mic_channel_table.checked_payloads())
 
-        if speaker and speaker_channels and mic and mic_channels:
-            self.model.state.speaker_channels = speaker_channels
+        if speaker and mic and mic_channels:
+            self.model.state.speaker_channels = []
             self.model.state.mic_channels = mic_channels
         else:
-            QMessageBox.warning(self.view, "提示", "请选择扬声器和麦克风设备及通道！")
+            QMessageBox.warning(self.view, "提示", "请选择扬声器和麦克风设备，以及麦克风通道！")
             return None
 
         mic_idx = int(mic.get("index")) if mic else -1

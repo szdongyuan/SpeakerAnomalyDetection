@@ -71,20 +71,7 @@ class RecordConfigWindow(BaseConfigWindow):
             self.speaker = speaker
         else:
             _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
-        self.speaker_channels = self._normalize_output_channels(speaker_channels)
         self.init_ui()
-
-    @staticmethod
-    def _normalize_output_channels(channels):
-        out = []
-        try:
-            for ch in (channels or []):
-                idx = int(ch)
-                if idx >= 0:
-                    out.append(idx)
-        except Exception:
-            out = []
-        return sorted(set(out))
 
     def init_ui(self):
         in_group_box = self.create_in_group()
@@ -124,9 +111,6 @@ class RecordConfigWindow(BaseConfigWindow):
         self.monitor_checkbox = QCheckBox("启用")
         self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
 
-        label_out_ch = QLabel("监听输出通道:")
-        self.monitor_output_channel_combo = QComboBox()
-
         max_out = 0
         try:
             if self.speaker:
@@ -134,39 +118,9 @@ class RecordConfigWindow(BaseConfigWindow):
         except Exception:
             max_out = 0
 
-        available_channels = []
-        if max_out > 0:
-            if self.speaker_channels:
-                available_channels = [ch for ch in self.speaker_channels if 0 <= ch < max_out]
-            if not available_channels:
-                available_channels = list(range(max_out))
-
-        if available_channels:
-            for ch in available_channels:
-                self.monitor_output_channel_combo.addItem(f"Out{ch + 1}", ch)
-            saved_ch = self.input_data.get("monitor_output_channel", available_channels[0])
-            try:
-                saved_ch = int(saved_ch)
-            except Exception:
-                saved_ch = available_channels[0]
-            if saved_ch in available_channels:
-                idx = self.monitor_output_channel_combo.findData(saved_ch)
-                self.monitor_output_channel_combo.setCurrentIndex(max(0, idx))
-            else:
-                # 历史配置不在当前硬件选择通道中时，安全回退到第一个可用通道
-                self.monitor_output_channel_combo.setCurrentIndex(0)
-        else:
+        if max_out <= 0:
             self.monitor_checkbox.setChecked(False)
             self.monitor_checkbox.setEnabled(False)
-            self.monitor_output_channel_combo.addItem("无可用输出通道")
-            self.monitor_output_channel_combo.setEnabled(False)
-
-        def _refresh_monitor_enable_state():
-            enabled = bool(self.monitor_checkbox.isChecked()) and max_out > 0
-            self.monitor_output_channel_combo.setEnabled(enabled)
-
-        self.monitor_checkbox.stateChanged.connect(lambda *_: _refresh_monitor_enable_state())
-        _refresh_monitor_enable_state()
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -176,28 +130,15 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.input_device_display, 2, 1)
         grid_layout.addWidget(label_monitor, 3, 0)
         grid_layout.addWidget(self.monitor_checkbox, 3, 1)
-        grid_layout.addWidget(label_out_ch, 4, 0)
-        grid_layout.addWidget(self.monitor_output_channel_combo, 4, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
     def on_click_ok_btn(self):
-        out_ch = 0
-        try:
-            data = self.monitor_output_channel_combo.currentData()
-            if data is None:
-                out_ch = int(self.monitor_output_channel_combo.currentIndex())
-            else:
-                out_ch = int(data)
-        except Exception:
-            out_ch = 0
-
         self.final_data = {
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
-            "monitor_output_channel": out_ch,
         }
         self.accept()
 

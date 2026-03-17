@@ -179,7 +179,13 @@ class SequenceWidgetAnalysisOpsMixin:
         if monitor_playback:
             recorded_dict["monitor_playback"] = True
             recorded_dict["output_device"] = self.speaker
-            recorded_dict["output_channels"] = acq_detail.get("monitor_output_channel", 0)
+            max_out = 0
+            try:
+                if self.speaker:
+                    max_out = int(self.speaker.get("max_output_channels") or 0)
+            except Exception:
+                max_out = 0
+            recorded_dict["output_channels"] = list(range(max_out)) if max_out > 0 else []
 
         # Ensure workspace matches the channels for THIS recording.
         self._active_input_channels = [int(x) for x in input_channels]
@@ -315,6 +321,10 @@ class SequenceWidgetAnalysisOpsMixin:
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
+                mismatch_info = getattr(instance, "_channel_mismatch_info", None)
+                if getattr(instance, "_channel_mismatch", False):
+                    self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
+                    continue
                 try:
                     if hasattr(instance, "calculate_spl"):
                         result = instance.calculate_spl()
@@ -351,7 +361,7 @@ class SequenceWidgetAnalysisOpsMixin:
                         instance.show()
                 except ValueError as e:
                     if self._is_channel_mismatch_error(e):
-                        self._show_channel_mismatch_warning(instance_key or "分析项", e)
+                        self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
                         continue
                     raise
 
@@ -403,13 +413,33 @@ class SequenceWidgetAnalysisOpsMixin:
             return False
         return ("out of range" in msg) or ("requires multi-channel recording" in msg)
 
-    def _show_channel_mismatch_warning(self, analysis_name: str, err: Exception):
+    def _show_channel_mismatch_warning(self, analysis_name: str, err: Exception = None, mismatch_info: dict = None):
+        configured_channel_text = "未知"
+        active_channels_text = "未知"
+        if isinstance(mismatch_info, dict):
+            raw_channel = mismatch_info.get("raw_channel")
+            active_channels = mismatch_info.get("active_input_channels", [])
+            try:
+                configured_channel_text = f"In{int(raw_channel) + 1}"
+            except Exception:
+                configured_channel_text = str(raw_channel)
+            try:
+                active_channels_text = ", ".join([f"In{int(ch) + 1}" for ch in active_channels]) or "无"
+            except Exception:
+                active_channels_text = str(active_channels)
+
+        detail_text = ""
+        if err is not None:
+            detail_text = f"\n\n详细信息: {err}"
+
         QMessageBox.warning(
             self,
             "通道配置不匹配",
             f"{analysis_name} 配置通道与本次录制通道不一致。\n"
-            f"请在分析参数中重新选择通道后再分析。\n\n"
-            f"详细信息: {err}",
+            f"当前配置通道: {configured_channel_text}\n"
+            f"本次录制通道: {active_channels_text}\n"
+            f"请在分析参数中重新选择通道后再分析。"
+            f"{detail_text}",
         )
 
     def _maybe_show_analysis_result_summary(self, width: int, height: int):
@@ -683,7 +713,8 @@ class SequenceWidgetAnalysisOpsMixin:
                     raw_channel = 0
 
                 # 配置里保存的是硬件绝对通道号；运行分析时需要映射到“本次录制子集”的局部列索引。
-                mapped_channel = raw_channel
+                mapped_channel = 0
+                channel_mismatch = False
                 active_input_channels = [0]
                 try:
                     active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", None) or [0])]
@@ -691,11 +722,22 @@ class SequenceWidgetAnalysisOpsMixin:
                     active_input_channels = [0]
                 if raw_channel in active_input_channels:
                     mapped_channel = int(active_input_channels.index(raw_channel))
+                else:
+                    channel_mismatch = True
 
                 display_key = f"{key}--通道{raw_channel + 1}"
                 class_instance = cls_map(display_key)
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
+                setattr(class_instance, "_channel_mismatch", channel_mismatch)
+                setattr(
+                    class_instance,
+                    "_channel_mismatch_info",
+                    {
+                        "raw_channel": raw_channel,
+                        "active_input_channels": list(active_input_channels),
+                    },
+                )
                 class_instance.v2pa_factor = self.v2pa_factor
                 runtime_params = dict(params) if isinstance(params, dict) else {}
                 runtime_params["analysis_channel"] = mapped_channel
