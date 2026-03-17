@@ -86,6 +86,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         except Exception:
             output_channels = []
     monitor_playback = recorded_dict.get("monitor_playback", False)
+    monitor_gain_db = float(recorded_dict.get("monitor_gain_db", 0.0))
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -99,6 +100,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         output_device=output_device,
         output_channels=output_channels,
         monitor_playback=monitor_playback,
+        monitor_gain_db=monitor_gain_db,
     )
 
     if record_code == error_code.OK:

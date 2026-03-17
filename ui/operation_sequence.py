@@ -727,6 +727,7 @@ class OptionList(QListView):
                     "sample_rate": 44100,
                     "monitor_playback": False,
                     "monitor_output_channel": 0,
+                    "monitor_gain_db": 0.0,
                 }
             else:
                 if sequence_config.mode == "RECORD_ONLY":
@@ -735,6 +736,7 @@ class OptionList(QListView):
                         "sample_rate": int(sequence_config.detail.get("sample_rate", 44100)),
                         "monitor_playback": bool(sequence_config.detail.get("monitor_playback", False)),
                         "monitor_output_channel": int(sequence_config.detail.get("monitor_output_channel", 0)),
+                        "monitor_gain_db": float(sequence_config.detail.get("monitor_gain_db", 0.0)),
                     }
                 elif sequence_config.mode == "IMPORT_AUDIO":
                     sequence_config.detail = {
@@ -1187,6 +1189,7 @@ class OptionList(QListView):
                 "sample_rate": 44100,
                 "monitor_playback": False,
                 "monitor_output_channel": 0,
+                "monitor_gain_db": 0.0,
             }
             self.signal_len = seq_item.detail.get(
                 "total_time", 4.0

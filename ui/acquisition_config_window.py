@@ -110,6 +110,14 @@ class RecordConfigWindow(BaseConfigWindow):
         label_monitor = QLabel("实时监听播放:")
         self.monitor_checkbox = QCheckBox("启用")
         self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
+        label_monitor_gain = QLabel("监听增益:")
+        self.monitor_gain_db_input = QDoubleSpinBox()
+        self.monitor_gain_db_input.setRange(-60.0, 24.0)
+        self.monitor_gain_db_input.setDecimals(1)
+        self.monitor_gain_db_input.setSingleStep(0.5)
+        self.monitor_gain_db_input.setSuffix(" dB")
+        self.monitor_gain_db_input.setValue(float(self.input_data.get("monitor_gain_db", 0.0)))
+        self.monitor_checkbox.toggled.connect(self._on_monitor_toggled)
 
         max_out = 0
         try:
@@ -121,6 +129,7 @@ class RecordConfigWindow(BaseConfigWindow):
         if max_out <= 0:
             self.monitor_checkbox.setChecked(False)
             self.monitor_checkbox.setEnabled(False)
+        self._on_monitor_toggled(self.monitor_checkbox.isChecked())
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -130,6 +139,8 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.input_device_display, 2, 1)
         grid_layout.addWidget(label_monitor, 3, 0)
         grid_layout.addWidget(self.monitor_checkbox, 3, 1)
+        grid_layout.addWidget(label_monitor_gain, 4, 0)
+        grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -139,8 +150,12 @@ class RecordConfigWindow(BaseConfigWindow):
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
+            "monitor_gain_db": float(self.monitor_gain_db_input.value()),
         }
         self.accept()
+
+    def _on_monitor_toggled(self, checked: bool):
+        self.monitor_gain_db_input.setEnabled(bool(checked))
 
 
 class ImportAudioConfigWindow(BaseConfigWindow):

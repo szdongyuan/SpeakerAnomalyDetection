@@ -203,6 +203,7 @@ class StreamingAudioProcessor:
         output_device: Optional[dict] = None,
         output_channels: Any = None,
         monitor_playback: bool = False,
+        monitor_gain_db: float = 0.0,
     ):
         """
         Start streaming audio recording (record-only mode).
@@ -258,6 +259,7 @@ class StreamingAudioProcessor:
 
             # Optional monitor playback: use ONE duplex stream (sd.Stream)
             if monitor_playback and output_device and out_sel:
+                monitor_gain_linear = float(10 ** (float(monitor_gain_db) / 20.0))
                 out_num = max(out_sel) + 1
                 try:
                     max_out = int(output_device.get("max_output_channels") or 0)
@@ -296,6 +298,7 @@ class StreamingAudioProcessor:
                         play[: len(mono_in)] = mono_in
                     else:
                         play = mono_in
+                    play = np.clip(play * monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
 
                     for ch in out_sel:
                         if ch < outdata.shape[1]:

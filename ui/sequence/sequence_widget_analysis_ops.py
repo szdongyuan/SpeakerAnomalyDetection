@@ -157,6 +157,7 @@ class SequenceWidgetAnalysisOpsMixin:
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
         monitor_playback = acq_detail.get("monitor_playback", False)
+        monitor_gain_db = float(acq_detail.get("monitor_gain_db", 0.0))
         sample_rate = self.data_struct.sample_rate
         _, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(self.data_struct, total_time)
         # Keep both keys for compatibility across legacy/streaming code paths.
@@ -178,6 +179,7 @@ class SequenceWidgetAnalysisOpsMixin:
 
         if monitor_playback:
             recorded_dict["monitor_playback"] = True
+            recorded_dict["monitor_gain_db"] = monitor_gain_db
             recorded_dict["output_device"] = self.speaker
             max_out = 0
             try:
