@@ -112,7 +112,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
         label_monitor_gain = QLabel("监听增益:")
         self.monitor_gain_db_input = QDoubleSpinBox()
-        self.monitor_gain_db_input.setRange(-60.0, 24.0)
+        self.monitor_gain_db_input.setRange(-60.0, 50.0)
         self.monitor_gain_db_input.setDecimals(1)
         self.monitor_gain_db_input.setSingleStep(0.5)
         self.monitor_gain_db_input.setSuffix(" dB")
