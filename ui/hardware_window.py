@@ -94,7 +94,7 @@ class HardwareWindow(QDialog):
         return mic_box
 
     def select_speaker_btn_clicked(self):
-        dlg = DeviceListWindow("speaker")
+        dlg = DeviceListWindow("speaker", current_device=self.speaker)
         selected_speaker = dlg.on_exec()
         if selected_speaker:
             self.speaker = selected_speaker
@@ -104,7 +104,7 @@ class HardwareWindow(QDialog):
             )
 
     def select_mic_btn_clicked(self):
-        dlg = DeviceListWindow("mic")
+        dlg = DeviceListWindow("mic", current_device=self.mic)
         selected_mic = dlg.on_exec()
         if selected_mic:
             self.mic = selected_mic
@@ -175,6 +175,7 @@ class HardwareWindow(QDialog):
         mic_idx = self.mic["index"] if self.mic else -1
         speaker_idx = self.speaker["index"] if self.speaker else -1
         SoundDeviceManager().change_default_device(mic_idx, speaker_idx)
+        SoundDeviceManager().save_selected_devices(self.mic, self.speaker)
         self.accept()
 
     def on_exec(self):
@@ -187,7 +188,7 @@ class HardwareWindow(QDialog):
 
 class DeviceListWindow(QDialog):
 
-    def __init__(self, device_type):
+    def __init__(self, device_type, current_device=None):
         super().__init__()
         if device_type == "speaker":
             self.device_type = "output"
@@ -196,8 +197,12 @@ class DeviceListWindow(QDialog):
             self.device_type = "input"
             self.device_title = " —— 麦克风"
 
-        self.selected_device = None
+        self.current_device = current_device
+        self.selected_device = current_device
         self.api_info = SoundDeviceManager().get_device_info()
+        self.device_list = []
+        self.item_model = QStandardItemModel()
+        self.updating_checks = False
 
         self.api_combo_box = QComboBox()
         self.list_view = QListView()
@@ -212,18 +217,16 @@ class DeviceListWindow(QDialog):
         api_label = QLabel("选择驱动")
         self.api_combo_box.addItems([api for api in self.api_info])
         self.api_combo_box.currentTextChanged.connect(self.update_api_device)
+        current_api_name = SoundDeviceManager.get_device_hostapi_name(self.current_device)
+        if current_api_name in self.api_info:
+            self.api_combo_box.setCurrentText(current_api_name)
         api_layout.addWidget(api_label)
         api_layout.addWidget(self.api_combo_box)
         self.list_view.setSelectionMode(QAbstractItemView.SingleSelection)
         self.list_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        item_model = QStandardItemModel()
-        current_api = self.api_combo_box.currentText()
-        self.device_list = self.api_info[current_api][self.device_type]
-        for device in self.device_list:
-            item_model.appendRow(QStandardItem(device["name"]))
-        self.list_view.setModel(item_model)
         self.list_view.setSelectionRectVisible(True)
-        self.list_view.clicked.connect(self.on_select_item)
+        self.list_view.setModel(self.item_model)
+        self.item_model.itemChanged.connect(self.on_item_changed)
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
@@ -250,17 +253,76 @@ class DeviceListWindow(QDialog):
                            ui_style_const.qlabel_style +
                            ui_style_const.qcombobox_style +
                            ui_style_const.qlistview_style)
+        self.update_api_device()
 
     def update_api_device(self):
-        item_model = QStandardItemModel()
         current_api = self.api_combo_box.currentText()
-        self.device_list = self.api_info[current_api][self.device_type]
+        self.device_list = self.api_info.get(current_api, {}).get(self.device_type, [])
+        self.updating_checks = True
+        self.item_model.clear()
         for device in self.device_list:
-            item_model.appendRow(QStandardItem(device["name"]))
-        self.list_view.setModel(item_model)
+            item = QStandardItem(device["name"])
+            item.setCheckable(True)
+            item.setEditable(False)
+            item.setData(device, Qt.UserRole)
+            self.item_model.appendRow(item)
+        self.updating_checks = False
+        self.apply_default_selection(current_api)
 
-    def on_select_item(self, index):
-        self.selected_device = self.device_list[index.row()]
+    def apply_default_selection(self, current_api):
+        target_device = None
+        current_device_api_name = SoundDeviceManager.get_device_hostapi_name(self.current_device)
+        if self.current_device and current_device_api_name == current_api:
+            target_device = self.current_device
+        elif self.device_list:
+            target_device = self.device_list[0]
+
+        if target_device is None:
+            self.selected_device = None
+            return
+
+        self.selected_device = target_device
+        self.set_checked_device(target_device)
+        target_index = next(
+            (
+                row for row, device in enumerate(self.device_list)
+                if device.get("name") == target_device.get("name") and device.get("hostapi") == target_device.get("hostapi")
+            ),
+            -1,
+        )
+        if target_index >= 0:
+            model_index = self.item_model.index(target_index, 0)
+            self.list_view.setCurrentIndex(model_index)
+
+    def set_checked_device(self, target_device):
+        self.updating_checks = True
+        for row in range(self.item_model.rowCount()):
+            item = self.item_model.item(row)
+            device = item.data(Qt.UserRole)
+            checked = (
+                target_device is not None
+                and device.get("name") == target_device.get("name")
+                and device.get("hostapi") == target_device.get("hostapi")
+            )
+            item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.updating_checks = False
+
+    def on_item_changed(self, item):
+        if self.updating_checks:
+            return
+
+        device = item.data(Qt.UserRole)
+        if item.checkState() == Qt.Checked:
+            self.selected_device = device
+            self.current_device = device
+            self.set_checked_device(device)
+            model_index = self.item_model.indexFromItem(item)
+            self.list_view.setCurrentIndex(model_index)
+            return
+
+        fallback_device = self.selected_device or self.current_device or device
+        if fallback_device is not None:
+            self.set_checked_device(fallback_device)
 
     def on_click_ok_btn(self):
         self.close()
