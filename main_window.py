@@ -1,6 +1,6 @@
 import sys
 
-from PyQt5.QtCore import Qt, QPoint, QUrl
+from PyQt5.QtCore import Qt, QPoint, QTimer, QUrl
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox, QDialog
@@ -28,8 +28,11 @@ class MainWindow(QMainWindow):
         self.user_name = None
         self.access_lvl = None
         self.refresh_stimulus_flag = None
-        _, self.mic = SoundDeviceManager().get_default_device("mic")
-        _, self.speaker = SoundDeviceManager().get_default_device("speaker")
+        startup_devices = SoundDeviceManager().get_startup_devices()
+        self.mic = startup_devices.get("mic")
+        self.speaker = startup_devices.get("speaker")
+        self.startup_device_fallback_targets = startup_devices.get("fallback_targets", [])
+        self.startup_device_notice_message = startup_devices.get("startup_notice_message")
 
         # set mouse drog date
         self.resize_direction = None
@@ -76,6 +79,8 @@ class MainWindow(QMainWindow):
         self.show_statusbar_layout()
         self.showMaximized()
         self.on_login_window_init()
+        if self.startup_device_notice_message or self.startup_device_fallback_targets:
+            QTimer.singleShot(0, self.show_startup_device_warning)
 
     def set_title(self):
         # hide the window title bar and reset the window title bar
@@ -313,6 +318,21 @@ class MainWindow(QMainWindow):
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
+
+    def show_startup_device_warning(self):
+        if self.startup_device_notice_message:
+            QMessageBox.warning(
+                self,
+                "提示",
+                self.startup_device_notice_message
+            )
+            return
+
+        QMessageBox.warning(
+            self,
+            "提示",
+            "已保存的音频设备不存在或配置无效，正在使用系统默认麦克风和扬声器。"
+        )
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker
