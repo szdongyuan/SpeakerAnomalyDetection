@@ -1747,6 +1747,31 @@ class LooseParticle(AnalysisGraphWidget):
         else:
             self.status_label.setText("状态: 正常")
 
+    @staticmethod
+    def downsample_min_max(x_data, y_data, window_size=8):
+        x_data = np.asarray(x_data)
+        y_data = np.asarray(y_data)
+        if x_data.size <= 2 or y_data.size <= 2 or x_data.size != y_data.size or window_size <= 1:
+            return x_data, y_data
+
+        downsampled_x = []
+        downsampled_y = []
+        for start in range(0, y_data.size, window_size):
+            end = min(start + window_size, y_data.size)
+            window_x = x_data[start:end]
+            window_y = y_data[start:end]
+            if window_y.size == 0:
+                continue
+
+            max_idx = int(np.argmax(window_y))
+            min_idx = int(np.argmin(window_y))
+            selected_indices = sorted({min_idx, max_idx})
+            for idx in selected_indices:
+                downsampled_x.append(window_x[idx])
+                downsampled_y.append(window_y[idx])
+
+        return np.asarray(downsampled_x), np.asarray(downsampled_y)
+
     def plot_graph(self, amplitude, deviation):
         signal_duration = np.linspace(0, len(amplitude) / (self.data_struct.sample_rate), len(amplitude))
         self.result = self.detect_peaks(
@@ -1758,7 +1783,8 @@ class LooseParticle(AnalysisGraphWidget):
             self.data_struct.sample_rate,
         )
         amplitude = amplitude - deviation
-        self.analysis_plot.plot(signal_duration, amplitude, pen=mkPen(color=(51, 196, 77), width=2))
+        plot_x, plot_y = self.downsample_min_max(signal_duration, amplitude)
+        self.analysis_plot.plot(plot_x, plot_y, pen=mkPen(color=(51, 196, 77), width=2))
         self.plot_loose_particle_waveform(self.threshould, signal_duration, deviation)
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Time (s)")
@@ -1816,7 +1842,8 @@ class LooseParticle(AnalysisGraphWidget):
     def plot_loose_particle_waveform(self, out_range_points, signal_duration, deviation):
         pen = pg.mkPen(color="orange", width=2)
         out_range_points = np.array(out_range_points) - deviation
-        out_range_plot = pg.PlotDataItem(signal_duration, out_range_points, pen=pen)
+        plot_x, plot_y = self.downsample_min_max(signal_duration, out_range_points)
+        out_range_plot = pg.PlotDataItem(plot_x, plot_y, pen=pen)
         self.analysis_plot.addItem(out_range_plot)
 
 
