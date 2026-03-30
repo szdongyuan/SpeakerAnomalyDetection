@@ -108,9 +108,11 @@ class SoundDeviceManager(object):
         default_mic_idx = default_mic["index"] if default_mic else -1
         default_speaker_idx = default_speaker["index"] if default_speaker else -1
 
-        def build_default_result(notice_message, fallback_targets=None):
+        def build_default_result(notice_message, fallback_targets=None):          
             self.change_default_device(default_mic_idx, default_speaker_idx)
             self.save_selected_devices(default_mic, default_speaker)
+            if default_mic_idx == -1 or default_speaker_idx == -1:
+                notice_message = "硬件设备异常，请检查硬件设备是否正常。"
             return {
                 "mic": default_mic,
                 "speaker": default_speaker,
