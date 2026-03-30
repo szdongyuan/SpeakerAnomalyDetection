@@ -163,7 +163,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
 class RecordConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None):
-        super().__init__()
+        super().__init__(mic=mic)
         self.setWindowTitle("录制音频")
         self.input_data = input_data
         self.init_ui()
