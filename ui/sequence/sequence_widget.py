@@ -1,16 +1,25 @@
 import json
 import os
 import re
+import time
 from datetime import datetime
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QSize, Qt, QTimer
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
+from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
+from base.fixed_mic_capture import FixedMicCaptureController
+from base.session_finalize_pipeline import SessionFinalizePipeline
 from base.unified_hid_device_manager import UnifiedHardwareManager
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
@@ -31,6 +40,21 @@ from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.operation_sequence import AnalysisModelSelect
+from ui.sequence.fixed_mic import (
+    FixedMicSessionTablePanel,
+    finalize_and_run_fixed_mic_session,
+    finalize_fixed_mic_session_analysis_result,
+    get_fixed_mic_ai_result_text,
+    run_fixed_mic_session_analysis,
+    show_fixed_mic_session_analysis_windows,
+    show_fixed_mic_session_result_by_id,
+)
+from ui.sequence.fixed_mic.runtime_bridge import (
+    handle_fixed_mic_manual_trigger,
+    poll_fixed_mic_runtime,
+    process_next_fixed_mic_analysis,
+    stop_fixed_mic_runtime,
+)
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.signal_analysis_window import get_class_mapping
 from ui.sequence.sequencement_count_board import SequenceCountBoard
@@ -85,11 +109,31 @@ class SequenceWindow(QWidget):
         self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
         self.streaming_mode = None  # "play_record" or "record_only"
         self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
+        self.fixed_mic_controller = None
+        self.fixed_mic_plot_item = None
+        self.fixed_mic_analysis_queue = []
+        self.fixed_mic_analysis_busy = False
+        self.fixed_mic_finalize_pipeline = SessionFinalizePipeline()
+        self.fixed_mic_pending_review_sessions = []
+        self.fixed_mic_current_review_session = None
+        self.fixed_mic_plot_window_sec = 15.0
+        self.fixed_mic_plot_interval_sec = 0.12
+        self.fixed_mic_last_plot_update_ts = 0.0
+        self.fixed_mic_live_y_limit = 0.01
+        self.fixed_mic_stream_buffer = []
+        self.fixed_mic_session_rows = {}
+        self.fixed_mic_session_store = {}
+        self.fixed_mic_detail_panel = None
+        self.fixed_mic_session_panel = None
+        self.fixed_mic_session_table = None
+        self._sync_fixed_mic_mode_state()
 
         self.hw_manager = UnifiedHardwareManager()
         # Create QTimer in Qt main thread for queue polling
         self.streaming_poll_timer = QTimer(self)
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
+        self.fixed_mic_poll_timer = QTimer(self)
+        self.fixed_mic_poll_timer.timeout.connect(self._poll_fixed_mic_runtime)
 
         self.set_member_connect()
         self.bind_hw_signals()
@@ -135,6 +179,7 @@ class SequenceWindow(QWidget):
             + ui_style_const.qlabel_style
             + ui_style_const.qcheckbox_style
         )
+        self._sync_fixed_mic_mode_state()
 
     def connect_set_result_file_sign(self, index, label, model_name):
         if self.count_board.mode == "test":
@@ -150,7 +195,7 @@ class SequenceWindow(QWidget):
 
     def set_member_connect(self):
         self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
-        self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record(is_replay=True))
+        self.replayer_btn.clicked.connect(self.on_clicked_replayer_btn)
         self.data_btn.clicked.connect(self.run)
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
         self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
@@ -159,6 +204,8 @@ class SequenceWindow(QWidget):
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
+        self.count_board.test_btn.clicked.connect(self._on_count_board_mode_changed)
+        self.count_board.mark_btn.clicked.connect(self._on_count_board_mode_changed)
 
     def init_lineedit_text(self):
         last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
@@ -231,26 +278,52 @@ class SequenceWindow(QWidget):
         """
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
-        self.line_graph.setBackground("white")
-        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
-        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
-        self.line_graph.showGrid(x=True, y=True)
+        self._configure_main_waveform_plot(self.line_graph)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(12)
+        right_layout.addWidget(self.line_graph, stretch=7)
+        right_layout.addWidget(self.create_fixed_mic_detail_panel(), stretch=5)
+        right_panel.setLayout(right_layout)
+
+        layout.addWidget(self.count_board, stretch=1)
+        layout.addSpacing(20)
+        layout.addWidget(right_panel, stretch=8)
+        layout.setContentsMargins(40, 20, 40, 20)
+        layout.setSpacing(30)
+        return layout
+
+    def _configure_main_waveform_plot(self, plot_widget):
+        plot_widget.setBackground("white")
+        plot_widget.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
+        plot_widget.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
+        plot_widget.showGrid(x=True, y=True)
 
         font = QFont()
         font.setPixelSize(20)
-        b_axis = self.line_graph.getAxis("bottom")
-        l_axis = self.line_graph.getAxis("left")
+        b_axis = plot_widget.getAxis("bottom")
+        l_axis = plot_widget.getAxis("left")
         b_axis.setTickFont(font)
         l_axis.setTickFont(font)
         b_axis.setTextPen("black")
         l_axis.setTextPen("black")
 
-        layout.addWidget(self.count_board, stretch=1)
-        layout.addSpacing(20)
-        layout.addWidget(self.line_graph, stretch=8)
-        layout.setContentsMargins(40, 20, 40, 20)
-        layout.setSpacing(30)
-        return layout
+    def create_fixed_mic_detail_panel(self):
+        self.fixed_mic_detail_panel = QWidget()
+        panel_layout = QVBoxLayout()
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+        self.fixed_mic_session_panel = FixedMicSessionTablePanel(on_view_session=self._show_fixed_mic_session_result_by_id)
+        self.fixed_mic_session_panel.session_table.itemSelectionChanged.connect(self._on_fixed_mic_session_selection_changed)
+        self.fixed_mic_session_rows = self.fixed_mic_session_panel.session_rows
+        self.fixed_mic_session_store = self.fixed_mic_session_panel.session_store
+        self.fixed_mic_session_table = self.fixed_mic_session_panel.session_table
+        panel_layout.addWidget(self.fixed_mic_session_panel)
+        self.fixed_mic_detail_panel.setLayout(panel_layout)
+        self.fixed_mic_detail_panel.hide()
+        return self.fixed_mic_detail_panel
 
     def init_fft_and_stft_flag(self):
         model_item_list = self.analysis_config.get("display_sequence", "")
@@ -328,6 +401,10 @@ class SequenceWindow(QWidget):
         if not barcode:
             return
 
+        if self.is_fixed_mic_mode():
+            self.default_logger.info("固定麦并发模式当前忽略扫码触发。")
+            return
+
         self.lineedit_s_or_n.setText(barcode)
 
         if self.barcode_scanner_box.isChecked():
@@ -336,6 +413,9 @@ class SequenceWindow(QWidget):
 
     def on_sensor_triggered(self):
         """处理光电开关触发信号"""
+        if self.is_fixed_mic_mode():
+            self.default_logger.info("固定麦并发模式当前忽略光电触发。")
+            return
         if not self.player_status_flag:
             self.default_logger.info("光电触发响应: 开始测试")
             self.start_this_play("not_labeled")
@@ -346,6 +426,7 @@ class SequenceWindow(QWidget):
         """窗口关闭时释放硬件资源"""
         if hasattr(self, 'hw_manager'):
             self.hw_manager.stop()
+        self._stop_fixed_mic_runtime()
         super().closeEvent(event)
 
     def reset_test_reord(self):
@@ -491,6 +572,10 @@ class SequenceWindow(QWidget):
             manual: If True (default), this is a manual user click; if False, this is an auto-triggered call.
                     Only manual calls will disable the replay and data buttons.
         """
+        if self.is_fixed_mic_mode() and self.count_board.mode == "mark":
+            self._handle_fixed_mic_mark_result()
+            return
+
         if not hasattr(self.data_struct, 'store_wave_data') or self.data_struct.store_wave_data is None or len(self.data_struct.store_wave_data) == 0:
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
@@ -565,11 +650,25 @@ class SequenceWindow(QWidget):
         self.clicked_player_flag = True
         self.start_this_play(label)
 
+    def on_clicked_replayer_btn(self):
+        if self.is_fixed_mic_mode():
+            if self.fixed_mic_controller is None or not self.fixed_mic_controller.is_running:
+                return
+            self.default_logger.info("固定麦持续采集已手动停止。")
+            self._stop_fixed_mic_runtime()
+            return
+        self.judge_play_and_record(is_replay=True)
+
     def start_this_play(self, label="not_labeled"):
         if self.clicked_player_flag is False:
             if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
+
+        if self.is_fixed_mic_mode():
+            self._handle_fixed_mic_manual_trigger()
+            self.clicked_player_flag = False
+            return
 
         # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
@@ -601,14 +700,272 @@ class SequenceWindow(QWidget):
             QMessageBox.warning(self, "提示", "未找到录音模式，请在功能-测试队列中配置")
             return True
 
+        current_mode = self.sequence_config[0]["seq1"]["acq"].get("mode")
+
         if not self.mic:
             QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return True
-        if not self.speaker:
+
+        if current_mode != "FIXED_MIC_MULTI_SESSION" and not self.speaker:
             QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
             return True
 
         return False
+
+    def is_fixed_mic_mode(self):
+        if not self.sequence_config:
+            return False
+        return self.sequence_config[0]["seq1"]["acq"].get("mode") == "FIXED_MIC_MULTI_SESSION"
+
+    def _handle_fixed_mic_manual_trigger(self):
+        handle_fixed_mic_manual_trigger(self, FixedMicCaptureController)
+
+    def _poll_fixed_mic_runtime(self):
+        poll_fixed_mic_runtime(self)
+
+    def _stop_fixed_mic_runtime(self):
+        stop_fixed_mic_runtime(self)
+
+    def _process_next_fixed_mic_analysis(self):
+        process_next_fixed_mic_analysis(self, lambda callback: QTimer.singleShot(0, callback))
+
+    def _finalize_and_run_fixed_mic_session(self, session):
+        finalize_and_run_fixed_mic_session(self, session, save_recorded_data_to_json)
+
+    def _close_analysis_windows(self):
+        if not getattr(self, "analysis_window", None):
+            return
+        for instance in self.analysis_window:
+            try:
+                instance.close()
+            except Exception:
+                pass
+        self.analysis_window = []
+
+    def _get_analysis_window_position(self):
+        width = int((self.screen().size().width() - 400) / 3)
+        height = int((self.screen().size().height() - 400) / 3)
+        return width, height
+
+    def _prepare_analysis_instances(self):
+        self.analysis_window = []
+        self.default_ai = None
+        if self.analysis_config:
+            item_sort_list = self.analysis_config.get("display_sequence", [])
+            for key in item_sort_list:
+                key_config = self.analysis_config.get(key)
+                if not isinstance(key_config, dict):
+                    continue
+                item_type = key_config.get("type")
+                self.instance_analysis_class(key, item_type, key_config)
+
+    def _calculate_analysis_instance(self, instance):
+        if hasattr(instance, "calculate_spl"):
+            return bool(instance.calculate_spl())
+        if hasattr(instance, "calculate_fr"):
+            return bool(instance.calculate_fr())
+        if hasattr(instance, "calculate_thd"):
+            instance.calculate_thd()
+            return True
+        if hasattr(instance, "calculate_ai_scores"):
+            instance.calculate_ai_scores(self.count_board.mode, self.analysis_config)
+            return True
+        if hasattr(instance, "calculate_spec"):
+            instance.calculate_spec()
+            return True
+        if hasattr(instance, "calculate_peak_detection"):
+            instance.calculate_peak_detection()
+            return True
+        if hasattr(instance, "calculate_loose_particle"):
+            instance.calculate_loose_particle()
+            return True
+        if hasattr(instance, "calculate_pattern_match"):
+            instance.calculate_pattern_match()
+            return True
+        if hasattr(instance, "calculate_pipeline_pd_pm"):
+            instance.calculate_pipeline_pd_pm()
+            return True
+        return False
+
+    def _execute_analysis_windows(self, width, height, show_windows=True):
+        for instance in self.analysis_window:
+            if self.count_board.mode == "test":
+                if instance is self.default_ai:
+                    continue
+            result = self._calculate_analysis_instance(instance)
+            if not result:
+                continue
+            if show_windows:
+                instance.show()
+                instance.setGeometry(width, height, 600, 500)
+                instance.setMinimumSize(QSize(600, 500))
+                width += 20
+                height += 20
+        return width, height
+
+    def _show_default_ai_window(self, width, height, show_window=True):
+        if self.count_board.mode != "test":
+            return
+        if not self.default_ai:
+            return
+        self.default_ai.calculate_ai_scores(self.count_board.mode, self.analysis_config)
+        if show_window:
+            self.default_ai.show()
+            self.default_ai.setGeometry(width, height, 600, 500)
+
+    def _run_fixed_mic_session_analysis(self, session, use_ai_result_as_label=False):
+        run_fixed_mic_session_analysis(self, session, use_ai_result_as_label=use_ai_result_as_label)
+
+    def _finalize_fixed_mic_session_analysis_result(self, session, use_ai_result_as_label=False):
+        finalize_fixed_mic_session_analysis_result(self, session, use_ai_result_as_label=use_ai_result_as_label)
+
+    def _enqueue_fixed_mic_review_session(self, session):
+        self.fixed_mic_pending_review_sessions.append(session)
+        self.default_logger.info("固定麦标记模式加入待审核队列: session_id=%s", session.session_id)
+        if self.fixed_mic_current_review_session is None:
+            self._activate_next_fixed_mic_review_session()
+        else:
+            self._refresh_fixed_mic_review_session_display()
+
+    def _is_fixed_mic_session_pending(self, session):
+        if session is None:
+            return False
+        session_id = getattr(session, "session_id", None)
+        for pending_session in self.fixed_mic_pending_review_sessions:
+            if getattr(pending_session, "session_id", None) == session_id:
+                return True
+        return False
+
+    def _set_fixed_mic_current_review_session(self, session, sync_selection=False):
+        previous_session = self.fixed_mic_current_review_session
+        if previous_session is not None and previous_session is not session and self._is_fixed_mic_session_pending(previous_session):
+            self._update_fixed_mic_session_status(previous_session, "待审核")
+
+        self.fixed_mic_current_review_session = session
+        if session is None:
+            self._refresh_fixed_mic_review_session_display()
+            return
+
+        if self._is_fixed_mic_session_pending(session):
+            self._update_fixed_mic_session_status(session, "审核中")
+        if sync_selection:
+            self._select_fixed_mic_session_row(session.session_id)
+        self._refresh_fixed_mic_review_session_display()
+
+    def _activate_next_fixed_mic_review_session(self):
+        if not self.fixed_mic_pending_review_sessions:
+            self._set_fixed_mic_current_review_session(None)
+            return
+
+        session = self.fixed_mic_pending_review_sessions[0]
+        self._set_fixed_mic_current_review_session(session, sync_selection=True)
+
+    def _load_fixed_mic_review_session_context(self, session, update_plot=True):
+        recorded_signal_info = session.metadata.get("recorded_signal_info", {}).copy()
+        self.recorded_path = session.metadata.get("recorded_path")
+        self.recorded_signal_info = recorded_signal_info
+        self.data_struct.store_wave_data = session.audio_clip.copy() if session.audio_clip is not None else None
+        self.data_struct.sample_rate = session.metadata.get("sample_rate", self.data_struct.sample_rate)
+        self.data_struct.update_channel_count()
+        if update_plot and self.data_struct.store_wave_data is not None:
+            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
+
+    def _refresh_fixed_mic_review_session_display(self):
+        if self.fixed_mic_current_review_session is None:
+            if getattr(self, "count_board", None) is not None:
+                self.count_board.set_review_session_text("无")
+            return
+        session = self.fixed_mic_current_review_session
+        display_text = "%s | %s" % (
+            session.session_id.split("_")[-1],
+            session.trigger_time.strftime("%H:%M:%S"),
+        )
+        if getattr(self, "count_board", None) is not None:
+            self.count_board.set_review_session_text(display_text)
+
+    def _handle_fixed_mic_mark_result(self):
+        session = self.fixed_mic_current_review_session
+        if session is None:
+            QMessageBox.warning(self, "警告", "当前没有待标记的固定麦会话。")
+            return
+
+        button = self.sender()
+        if button == self.count_board.ok_btn:
+            label = "OK"
+        elif button == self.count_board.ng_btn:
+            label = "NG"
+        else:
+            return
+
+        self._load_fixed_mic_review_session_context(session, update_plot=False)
+        self.recorded_signal_info["labels"] = label
+        session.analysis_result = {
+            "overall_result": label,
+            "recorded_path": self.recorded_signal_info.get("file_path"),
+        }
+        session.metadata["recorded_signal_info"] = self.recorded_signal_info.copy()
+        self.update_recorded_signal_info_to_db()
+        session.metadata["recorded_signal_info"] = self.recorded_signal_info.copy()
+        self._update_fixed_mic_session_status(session, "已标记")
+        self._update_fixed_mic_session_result(session, label)
+        self.count_board.set_mark_result_file(label)
+        self.count_board.set_mark_text()
+        self._emit_display_update(manual_label=label)
+        self.default_logger.info("固定麦标记模式完成人工标记: session_id=%s, label=%s", session.session_id, label)
+
+        if self.fixed_mic_pending_review_sessions and self.fixed_mic_pending_review_sessions[0] is session:
+            self.fixed_mic_pending_review_sessions.pop(0)
+        else:
+            try:
+                self.fixed_mic_pending_review_sessions.remove(session)
+            except ValueError:
+                pass
+
+        self.fixed_mic_current_review_session = None
+        self._activate_next_fixed_mic_review_session()
+
+    def _on_count_board_mode_changed(self):
+        desired_mode = None
+        if getattr(self, "count_board", None) is not None:
+            button = self.sender()
+            if button == self.count_board.test_btn:
+                desired_mode = "test"
+            elif button == self.count_board.mark_btn:
+                desired_mode = "mark"
+        QTimer.singleShot(0, lambda mode=desired_mode: self._sync_fixed_mic_mode_state(mode))
+
+    def _sync_fixed_mic_mode_state(self, desired_mode=None):
+        if getattr(self, "count_board", None) is None:
+            return
+        if getattr(self, "fixed_mic_detail_panel", None) is not None:
+            self.fixed_mic_detail_panel.setVisible(self.is_fixed_mic_mode())
+        if not self.is_fixed_mic_mode():
+            self.count_board.set_mark_mode_enabled(True)
+            self.count_board.set_review_session_text("无")
+            self.count_board.set_review_session_visible(False)
+            self._update_fixed_mic_toolbar_state()
+            return
+
+        if desired_mode == "test" and self.count_board.mode != "test":
+            self.count_board.force_test_mode()
+        elif desired_mode == "mark" and self.count_board.mode != "mark":
+            self.count_board.on_mark_btn_clicked()
+
+        self.count_board.set_mark_mode_enabled(True)
+        if self.count_board.mode == "mark":
+            self.count_board.mark_btn.setEnabled(False)
+            self.count_board.test_btn.setEnabled(True)
+            self.count_board.set_review_session_visible(False)
+            if self.fixed_mic_current_review_session is None and self.fixed_mic_pending_review_sessions:
+                self._activate_next_fixed_mic_review_session()
+            else:
+                self._refresh_fixed_mic_review_session_display()
+        else:
+            self.count_board.test_btn.setEnabled(False)
+            self.count_board.mark_btn.setEnabled(True)
+            self.count_board.set_review_session_text("无")
+            self.count_board.set_review_session_visible(False)
+        self._update_fixed_mic_toolbar_state()
 
     def reset_work_pram(self, label, count=None):
         self.data_struct.clear_data()
@@ -755,63 +1112,13 @@ class SequenceWindow(QWidget):
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
-        self.analysis_window = []
-        width = int((self.screen().size().width() - 400) / 3)
-        height = int((self.screen().size().height() - 400) / 3)
-        if self.analysis_config:
-            item_sort_list = self.analysis_config.get("display_sequence", [])
-            for key in item_sort_list:
-                key_config = self.analysis_config.get(key)
-                if not isinstance(key_config, dict):
-                    continue
-                item_type = key_config.get("type")
-                self.instance_analysis_class(key, item_type, key_config)
-            for instance in self.analysis_window:
-                if self.count_board.mode == "test":
-                    if instance is self.default_ai:
-                        continue
-                if hasattr(instance, "calculate_spl"):
-                    result = instance.calculate_spl()
-                    if not result:
-                        continue
-                    instance.show()
-                elif hasattr(instance, "calculate_fr"):
-                    result = instance.calculate_fr()
-                    if not result:
-                        continue
-                    instance.show()
-                elif hasattr(instance, "calculate_thd"):
-                    instance.calculate_thd()
-                    instance.show()
-                elif hasattr(instance, "calculate_ai_scores"):
-                    instance.calculate_ai_scores(self.count_board.mode, self.analysis_config)
-                    instance.show()
-                elif hasattr(instance, "calculate_spec"):
-                    instance.calculate_spec()
-                    instance.show()
-                elif hasattr(instance, "calculate_peak_detection"):
-                    instance.calculate_peak_detection()
-                    instance.show()
-                elif hasattr(instance, "calculate_loose_particle"):
-                    instance.calculate_loose_particle()
-                    instance.show()
-                elif hasattr(instance, "calculate_pattern_match"):
-                    instance.calculate_pattern_match()
-                    instance.show()
-                elif hasattr(instance, "calculate_pipeline_pd_pm"):
-                    instance.calculate_pipeline_pd_pm()
-                    instance.show()
-                instance.setGeometry(width, height, 600, 500)
-                instance.setMinimumSize(QSize(600, 500))
-                width += 20
-                height += 20
-            if self.count_board.mode == "test":
-                self.default_ai.calculate_ai_scores(self.count_board.mode, self.analysis_config)
-                self.default_ai.show()
-                self.default_ai.setGeometry(width, height, 600, 500)
-                self.test_insert_data_into_db()
-
-            self._emit_display_update()
+        self._prepare_analysis_instances()
+        width, height = self._get_analysis_window_position()
+        width, height = self._execute_analysis_windows(width, height)
+        if self.count_board.mode == "test" and self.default_ai:
+            self._show_default_ai_window(width, height)
+            self.test_insert_data_into_db()
+        self._emit_display_update()
 
     def _emit_display_update(self, manual_label: str = None):
         """Build display data from current analysis results and emit to DisplayWindow."""
@@ -886,9 +1193,198 @@ class SequenceWindow(QWidget):
             self.analysis_config = seq.get("analysis_list", {})
             if self.count_board:
                 self.count_board.analysis_config = seq.get("analysis_list", {})
+            if seq.get("acq", {}).get("mode") != "FIXED_MIC_MULTI_SESSION":
+                self._stop_fixed_mic_runtime()
         else:
             self.sequence_config = []
             self.analysis_config = dict()
+            self._stop_fixed_mic_runtime()
+        if self.count_board:
+            self._sync_fixed_mic_mode_state()
+
+    @staticmethod
+    def build_live_plot_data(plot_audio, sample_rate, max_points=4000):
+        audio_data = np.asarray(plot_audio, dtype=np.float32)
+        if audio_data.size == 0:
+            return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+        if audio_data.shape[0] > max_points:
+            sample_positions = np.linspace(0, audio_data.shape[0] - 1, int(max_points), dtype=np.int64)
+            display_audio = audio_data[sample_positions]
+            time_axis = sample_positions.astype(np.float32) / float(sample_rate)
+            return time_axis, display_audio
+        time_axis = np.arange(audio_data.shape[0], dtype=np.float32) / float(sample_rate)
+        return time_axis, audio_data
+
+    def _append_fixed_mic_stream_chunks(self, chunks, sample_rate):
+        if not chunks:
+            return
+
+        plot_chunks = []
+        for chunk in chunks:
+            audio_chunk = np.asarray(chunk, dtype=np.float32)
+            if audio_chunk.ndim == 2:
+                plot_chunks.append(audio_chunk[:, 0])
+            else:
+                plot_chunks.append(audio_chunk.reshape(-1))
+
+        if not plot_chunks:
+            return
+
+        self.fixed_mic_stream_buffer.extend(plot_chunks)
+        if not self.fixed_mic_stream_buffer:
+            return
+
+        max_samples = max(int(float(self.fixed_mic_plot_window_sec) * float(sample_rate)), 1)
+        total_samples = sum(len(chunk) for chunk in self.fixed_mic_stream_buffer)
+        while total_samples > max_samples and self.fixed_mic_stream_buffer:
+            first_chunk = self.fixed_mic_stream_buffer[0]
+            overflow = total_samples - max_samples
+            if len(first_chunk) <= overflow:
+                total_samples -= len(first_chunk)
+                self.fixed_mic_stream_buffer.pop(0)
+            else:
+                self.fixed_mic_stream_buffer[0] = first_chunk[overflow:]
+                total_samples -= overflow
+
+    def _get_fixed_mic_stream_plot_audio(self):
+        if not self.fixed_mic_stream_buffer:
+            return np.array([], dtype=np.float32)
+        return np.concatenate(self.fixed_mic_stream_buffer, axis=0)
+
+    def _reset_fixed_mic_session_views(self):
+        if getattr(self, "fixed_mic_session_panel", None) is not None:
+            self.fixed_mic_session_panel.reset_sessions()
+            self.fixed_mic_session_rows = self.fixed_mic_session_panel.session_rows
+            self.fixed_mic_session_store = self.fixed_mic_session_panel.session_store
+            self.fixed_mic_session_table = self.fixed_mic_session_panel.session_table
+        self._clear_fixed_mic_result_panel()
+
+    def _register_fixed_mic_session(self, session, status_text="采集中"):
+        if getattr(self, "fixed_mic_session_panel", None) is None:
+            return
+        self.fixed_mic_session_panel.register_session(session, status_text=status_text)
+
+    def _update_fixed_mic_session_status(self, session, status_text):
+        if getattr(self, "fixed_mic_session_panel", None) is None:
+            return
+        self.fixed_mic_session_panel.update_session_status(session, status_text)
+
+    def _update_fixed_mic_session_result(self, session, result_label):
+        if getattr(self, "fixed_mic_session_panel", None) is None:
+            return
+        self.fixed_mic_session_panel.update_session_result(session, result_label)
+
+    def _select_fixed_mic_session_row(self, session_id):
+        if getattr(self, "fixed_mic_session_panel", None) is None:
+            return
+        self.fixed_mic_session_panel.select_session_row(session_id)
+
+    def _show_fixed_mic_session_result_by_id(self, session_id):
+        show_fixed_mic_session_result_by_id(self, session_id)
+
+    def _show_fixed_mic_session_analysis_windows(self, session):
+        show_fixed_mic_session_analysis_windows(self, session)
+
+    def _on_fixed_mic_session_selection_changed(self):
+        if not self.is_fixed_mic_mode():
+            return
+        if getattr(self, "count_board", None) is None or self.count_board.mode != "mark":
+            return
+        if getattr(self, "fixed_mic_session_table", None) is None:
+            return
+        current_row = self.fixed_mic_session_table.currentRow()
+        if current_row < 0:
+            self._set_fixed_mic_current_review_session(None)
+            return
+        session_item = self.fixed_mic_session_table.item(current_row, 0)
+        if session_item is None:
+            self._set_fixed_mic_current_review_session(None)
+            return
+        session_id = session_item.data(Qt.UserRole)
+        if not session_id or getattr(self, "fixed_mic_session_panel", None) is None:
+            self._set_fixed_mic_current_review_session(None)
+            return
+        session = self.fixed_mic_session_panel.get_session(session_id)
+        if not self._is_fixed_mic_session_pending(session):
+            self._set_fixed_mic_current_review_session(None)
+            return
+        self._set_fixed_mic_current_review_session(session, sync_selection=False)
+
+    def _clear_fixed_mic_result_panel(self):
+        return
+
+    def _get_fixed_mic_spec_analysis_config(self):
+        default_config = {
+            "n_fft": 2048,
+            "hop_length": 256,
+            "color_map": "viridis",
+            "window_func": "hann",
+            "freq_scale_type": "linear",
+        }
+        display_sequence = self.analysis_config.get("display_sequence", [])
+        for key in display_sequence:
+            key_config = self.analysis_config.get(key)
+            if isinstance(key_config, dict) and key_config.get("type") == "Spec":
+                default_config.update(key_config)
+                break
+        return default_config
+
+    def _get_fixed_mic_ai_result_text(self, session=None):
+        return get_fixed_mic_ai_result_text(self, session=session)
+
+    def _update_fixed_mic_result_panel(self, session, result_label, ai_text=""):
+        return
+
+    def _configure_fixed_mic_live_plot_view(self):
+        if not getattr(self, "line_graph", None):
+            return
+        self.line_graph.enableAutoRange(x=False, y=False)
+        self.line_graph.setMouseEnabled(x=False, y=False)
+        self.line_graph.setXRange(0.0, float(self.fixed_mic_plot_window_sec), padding=0.0)
+        self.line_graph.setYRange(-float(self.fixed_mic_live_y_limit), float(self.fixed_mic_live_y_limit), padding=0.0)
+
+    def _update_fixed_mic_live_plot_range(self, plot_audio):
+        if not getattr(self, "line_graph", None):
+            return
+        amplitude = float(np.max(np.abs(plot_audio))) if len(plot_audio) > 0 else 0.0
+        target_limit = max(amplitude * 1.2, 0.01)
+        current_limit = float(getattr(self, "fixed_mic_live_y_limit", 0.01))
+        if target_limit > current_limit:
+            current_limit = current_limit * 0.7 + target_limit * 0.3
+        else:
+            current_limit = current_limit * 0.92 + target_limit * 0.08
+        self.fixed_mic_live_y_limit = max(current_limit, 0.01)
+        self.line_graph.setXRange(0.0, float(self.fixed_mic_plot_window_sec), padding=0.0)
+        self.line_graph.setYRange(
+            -float(self.fixed_mic_live_y_limit),
+            float(self.fixed_mic_live_y_limit),
+            padding=0.0,
+        )
+
+    def _update_fixed_mic_toolbar_state(self):
+        if not getattr(self, "toolsbar", None):
+            return
+        if not self.is_fixed_mic_mode():
+            if getattr(self, "line_graph", None):
+                self.line_graph.enableAutoRange(x=True, y=True)
+                self.line_graph.setMouseEnabled(x=True, y=True)
+            self.player_btn.setToolTip("开始录制")
+            self.update_player_btn_is_paused()
+            self.replayer_btn.setToolTip("重新录制")
+            self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
+            self.replayer_btn.setIconSize(QSize(30, 30))
+            return
+
+        self.player_btn.setToolTip("触发固定麦会话")
+        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
+        self.player_btn.setIconSize(QSize(35, 35))
+        self.player_btn.setDisabled(False)
+
+        is_running = self.fixed_mic_controller is not None and self.fixed_mic_controller.is_running
+        self.replayer_btn.setToolTip("停止固定麦采集")
+        self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
+        self.replayer_btn.setIconSize(QSize(30, 30))
+        self.replayer_btn.setEnabled(is_running)
 
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):

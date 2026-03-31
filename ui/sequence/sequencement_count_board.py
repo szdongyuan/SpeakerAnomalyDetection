@@ -29,9 +29,11 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit = QLineEdit("0")
         self.mark_ok_edit = QLineEdit("0")
         self.mark_ng_edit = QLineEdit("0")
+        self.review_session_edit = QLineEdit("无")
         self.ok_btn = QPushButton(" OK ")
         self.ng_btn = QPushButton(" NG ")
         self.reset_btn = QPushButton("重置统计")
+        self.review_session_widget = None
 
         self.set_lineedit()
         self.set_btn()
@@ -87,6 +89,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setAlignment(Qt.AlignCenter)
         self.mark_ok_edit.setAlignment(Qt.AlignCenter)
         self.mark_ng_edit.setAlignment(Qt.AlignCenter)
+        self.review_session_edit.setAlignment(Qt.AlignCenter)
 
         self.total_line_edit.setDisabled(True)
         self.ok_line_edit.setDisabled(True)
@@ -97,6 +100,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setDisabled(True)
         self.mark_ok_edit.setDisabled(True)
         self.mark_ng_edit.setDisabled(True)
+        self.review_session_edit.setDisabled(True)
 
         self.total_line_edit.setFixedSize(130, 35)
         self.ok_line_edit.setFixedSize(130, 35)
@@ -107,6 +111,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setFixedSize(130, 35)
         self.mark_ok_edit.setFixedSize(130, 35)
         self.mark_ng_edit.setFixedSize(130, 35)
+        self.review_session_edit.setFixedSize(170, 35)
 
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
@@ -162,6 +167,13 @@ class SequenceCountBoard(QWidget):
         return test_widget
 
     def set_mark_widget(self):
+        review_label = QLabel("当前审核：")
+        review_layout = QHBoxLayout()
+        review_layout.addWidget(review_label)
+        review_layout.addWidget(self.review_session_edit)
+        self.review_session_widget = QWidget()
+        self.review_session_widget.setLayout(review_layout)
+        self.review_session_widget.hide()
         total_layout = self.create_horizontal_layout("总    数：", self.mark_total_edit)
         ok_layout = self.create_horizontal_layout("OK    数：", self.mark_ok_edit)
         ng_layout = self.create_horizontal_layout("NG    数：", self.mark_ng_edit)
@@ -175,6 +187,7 @@ class SequenceCountBoard(QWidget):
         ng_btn_layout.addStretch()
 
         mark_layout = QVBoxLayout()
+        mark_layout.addWidget(self.review_session_widget, stretch=1)
         mark_layout.addLayout(total_layout, stretch=1)
         mark_layout.addLayout(ok_layout, stretch=1)
         mark_layout.addLayout(ng_layout, stretch=1)
@@ -193,15 +206,10 @@ class SequenceCountBoard(QWidget):
             analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
             self.model_line_edit.setText(analyse_model_name)
             self.model_line_edit.setCursorPosition(0)
-            self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-            self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-            self.test_btn.setEnabled(False)
-            self.mark_btn.setEnabled(True)
+            self.force_test_mode()
         else:
             self.on_mark_btn_clicked()
             return
-        self.stacked_widget.setCurrentIndex(0)
-        self.mode = "test"
 
     def on_mark_btn_clicked(self):
         self.stacked_widget.setCurrentIndex(1)
@@ -282,4 +290,38 @@ class SequenceCountBoard(QWidget):
         data["datatime"] = datatime
         with open(mark_result_path, "w") as f:
             json.dump(data, f, indent=4)
+
+    def set_review_session_text(self, text):
+        self.review_session_edit.setText(text)
+        self.review_session_edit.setCursorPosition(0)
+        self.review_session_edit.setToolTip(text)
+
+    def set_review_session_visible(self, visible):
+        if self.review_session_widget is None:
+            return
+        self.review_session_widget.setVisible(visible)
+
+    def set_mark_mode_enabled(self, enabled):
+        self.mark_btn.setEnabled(enabled)
+        if enabled:
+            if self.mode != "mark":
+                self.test_btn.setEnabled(True)
+        else:
+            self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+            if self.mode == "mark":
+                self.force_test_mode()
+            self.mark_btn.setEnabled(False)
+
+    def force_test_mode(self):
+        default_ai_model = self.analysis_config.get("default_ai")
+        if default_ai_model:
+            analyse_model_name = self.analysis_config.get(default_ai_model, {}).get("analyse_model_name", None)
+            self.model_line_edit.setText(analyse_model_name)
+            self.model_line_edit.setCursorPosition(0)
+        self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+        self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+        self.stacked_widget.setCurrentIndex(0)
+        self.mode = "test"
+        self.test_btn.setEnabled(False)
+        self.mark_btn.setEnabled(True)
 

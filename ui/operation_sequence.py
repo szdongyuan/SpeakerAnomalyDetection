@@ -17,7 +17,7 @@ from base.log_manager import LogManager
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow
+from ui.acquisition_config_window import RecordConfigWindow, PlayRecordConfigWindow, FixedMicConcurrentConfigWindow
 
 # from ui.analysis_config_window import SplConfigWindow, FrConfigWindow, HdConfigWindow, AIConfigWindow, SpecConfigWindow, \
 #     PatternMatchConfigWindow
@@ -33,6 +33,10 @@ from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
 from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+
+SOUND_ITEMS = ["播放与录制", "录制音频", "固定麦并发采集"]
+NON_PLAYBACK_SOUND_ITEMS = ["录制音频", "固定麦并发采集"]
 
 
 class AnalysisModelSelect(QDialog):
@@ -130,7 +134,7 @@ class AnalysisModelSelect(QDialog):
 
         self.analysis_model = AnalysisModel()
         sound_item = QStandardItem("音频设置")
-        sound_items = ["播放与录制", "录制音频"]
+        sound_items = SOUND_ITEMS
         for item in sound_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
@@ -482,6 +486,8 @@ class OptionList(QListView):
                 model = PlayRecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             elif "录制音频" in self.config[0].name:
                 model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
+            elif "固定麦并发采集" in self.config[0].name:
+                model = FixedMicConcurrentConfigWindow(self.config[0].detail, mic=self.mic)
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
@@ -489,7 +495,7 @@ class OptionList(QListView):
                     self.signal_len = int(
                         result["stimulus_info"]["total_time"] * result["stimulus_info"]["sample_rate"]
                     )
-                elif "录制音频" in name:
+                elif "录制音频" in name or "固定麦并发采集" in name:
                     self.signal_len = int(result["total_time"] * result["sample_rate"])
 
         elif name in self.config[0].display_sequence:
@@ -802,10 +808,10 @@ class OptionList(QListView):
     def dragenterevent(self, event):
         if event.mimeData().hasText():
             text = event.mimeData().text()
-            if text in ["播放与录制", "录制音频"]:
+            if text in SOUND_ITEMS:
                 if self.sound_item_type:
                     self.drop_is_accept = False
-            elif self.sound_item_type == "录制音频":
+            elif self.sound_item_type in NON_PLAYBACK_SOUND_ITEMS:
                 if text in ["频响 (FR) ", "谐波失真 (HD) "]:
                     self.drop_is_accept = False
             elif not self.sound_item_type:
@@ -824,7 +830,7 @@ class OptionList(QListView):
         if event.mimeData().hasText():
             text = event.mimeData().text().lstrip()
             if self.drop_is_accept is False:
-                if text in ["播放与录制", "录制音频"]:
+                if text in SOUND_ITEMS:
                     QMessageBox.warning(self, "警告", "已选择测试模式")
                 elif not self.config:
                     QMessageBox.warning(self, "警告", "请选择测试模式")
@@ -832,7 +838,7 @@ class OptionList(QListView):
                     QMessageBox.warning(self, "警告", "当前模式不支持此功能")
                 self.drop_is_accept = True
                 return
-            elif text in ["播放与录制", "录制音频"]:
+            elif text in SOUND_ITEMS:
                 self.set_sound_item(text)
                 self.sound_item_type = text
             else:
@@ -871,6 +877,14 @@ class OptionList(QListView):
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
             seq_item.detail = {"total_time": 4.0, "sample_rate": 44100}
+        elif item_text == "固定麦并发采集":
+            flag, config = self.load_fixed_mic_config()
+            if flag:
+                seq_item.mode = "FIXED_MIC_MULTI_SESSION"
+                seq_item.detail = config
+            else:
+                QMessageBox.warning(self, "提示", "固定麦并发默认配置加载失败，请检查配置!")
+                return
         self.config.append(seq_item)
 
         self.model().insertRow(0, list_item)
@@ -903,6 +917,13 @@ class OptionList(QListView):
         default_of_type = data.get(type, {})
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type
+
+    def load_fixed_mic_config(self):
+        code, data = LoadUiConfig.load_fixed_mic_concurrent_config()
+        if code == 0:
+            return True, data
+        self.default_logger.error(f"load fixed mic concurrent config error {data}")
+        return False, {}
 
 
 class AnalysisModel(QStandardItemModel):

@@ -205,6 +205,55 @@ class LoadUiConfig(object):
             port = int(port_text)
             return ip, port
 
+    @staticmethod
+    def get_default_fixed_mic_concurrent_config():
+        channel_count = 4
+        fixed_mic_channels = []
+        for index in range(channel_count):
+            fixed_mic_channels.append(
+                {
+                    "channel_id": f"ch_{index + 1:02d}",
+                    "enabled": True,
+                    "label": f"Mic{index + 1}",
+                    "zone": f"zone_{index + 1:02d}",
+                }
+            )
+
+        return {
+            "capture_mode": "fixed_mic_multi_session",
+            "fixed_mic_mode_version": "basic_concurrent",
+            "trigger_mode": "manual_click",
+            "total_time": 3.0,
+            "window_duration": 3.0,
+            "sample_rate": 44100,
+            "channels": channel_count,
+            "buffer_duration": 15.0,
+            "max_sessions": 4,
+            "save_all_channels": True,
+            "grating_adapter_enabled": False,
+            "fixed_mic_channels": fixed_mic_channels,
+        }
+
+    @staticmethod
+    def load_fixed_mic_concurrent_config():
+        config_path = DEFAULT_DIR + "ui/ui_config/fixed_mic_concurrent_config.json"
+        code, data = LoadUiConfig.load_data_from_json(config_path)
+        if code == error_code.OK and isinstance(data, dict):
+            merged_config = LoadUiConfig.get_default_fixed_mic_concurrent_config()
+            merged_config.update(data)
+            if "fixed_mic_channels" in data:
+                merged_config["fixed_mic_channels"] = data["fixed_mic_channels"]
+            return error_code.OK, merged_config
+
+        default_config = LoadUiConfig.get_default_fixed_mic_concurrent_config()
+        LoadUiConfig.save_fixed_mic_concurrent_config(default_config)
+        return error_code.OK, default_config
+
+    @staticmethod
+    def save_fixed_mic_concurrent_config(config_data):
+        config_path = DEFAULT_DIR + "ui/ui_config/fixed_mic_concurrent_config.json"
+        return LoadUiConfig.save_sequence_config_to_json(config_data, config_path)
+
 
 class ConfigManager(object):
     """负责读写分析窗口各项配置的通用管理器，迁移自 ui.analysis_config_window"""
