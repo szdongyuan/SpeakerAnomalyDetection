@@ -10,8 +10,12 @@ from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
     QApplication,
+    QGridLayout,
     QHBoxLayout,
+    QLabel,
     QMessageBox,
+    QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +52,11 @@ from ui.sequence.fixed_mic import (
     run_fixed_mic_session_analysis,
     show_fixed_mic_session_analysis_windows,
     show_fixed_mic_session_result_by_id,
+)
+from ui.sequence.fixed_mic.waveform_helpers import (
+    build_fixed_mic_plot_data,
+    get_fixed_mic_channel_titles,
+    get_fixed_mic_page_channel_indices,
 )
 from ui.sequence.fixed_mic.runtime_bridge import (
     handle_fixed_mic_manual_trigger,
@@ -111,6 +120,8 @@ class SequenceWindow(QWidget):
         self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
         self.fixed_mic_controller = None
         self.fixed_mic_plot_item = None
+        self.fixed_mic_plot_items = []
+        self.fixed_mic_plot_widgets = []
         self.fixed_mic_analysis_queue = []
         self.fixed_mic_analysis_busy = False
         self.fixed_mic_finalize_pipeline = SessionFinalizePipeline()
@@ -120,12 +131,25 @@ class SequenceWindow(QWidget):
         self.fixed_mic_plot_interval_sec = 0.12
         self.fixed_mic_last_plot_update_ts = 0.0
         self.fixed_mic_live_y_limit = 0.01
+        self.fixed_mic_live_y_limits = []
         self.fixed_mic_stream_buffer = []
         self.fixed_mic_session_rows = {}
         self.fixed_mic_session_store = {}
         self.fixed_mic_detail_panel = None
         self.fixed_mic_session_panel = None
         self.fixed_mic_session_table = None
+        self.fixed_mic_page_size = 4
+        self.fixed_mic_current_page = 0
+        self.fixed_mic_display_total_channels = 0
+        self.fixed_mic_display_audio = None
+        self.fixed_mic_display_sample_rate = 0.0
+        self.fixed_mic_display_live_mode = False
+        self.fixed_mic_waveform_widget = None
+        self.fixed_mic_waveform_grid = None
+        self.fixed_mic_page_label = None
+        self.fixed_mic_prev_page_btn = None
+        self.fixed_mic_next_page_btn = None
+        self.waveform_stack = None
         self._sync_fixed_mic_mode_state()
 
         self.hw_manager = UnifiedHardwareManager()
@@ -279,12 +303,16 @@ class SequenceWindow(QWidget):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self._configure_main_waveform_plot(self.line_graph)
+        self.fixed_mic_waveform_widget = self._create_fixed_mic_waveform_widget()
+        self.waveform_stack = QStackedWidget()
+        self.waveform_stack.addWidget(self.line_graph)
+        self.waveform_stack.addWidget(self.fixed_mic_waveform_widget)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
-        right_layout.addWidget(self.line_graph, stretch=7)
+        right_layout.addWidget(self.waveform_stack, stretch=7)
         right_layout.addWidget(self.create_fixed_mic_detail_panel(), stretch=5)
         right_panel.setLayout(right_layout)
 
@@ -309,6 +337,281 @@ class SequenceWindow(QWidget):
         l_axis.setTickFont(font)
         b_axis.setTextPen("black")
         l_axis.setTextPen("black")
+
+    def _configure_fixed_mic_subplot(self, plot_widget):
+        plot_widget.setBackground("white")
+        plot_widget.setLabel("left", "Amplitude(V)", **{"font-size": "11px"})
+        plot_widget.setLabel("bottom", "Time(s)", **{"font-size": "11px"})
+        plot_widget.showGrid(x=True, y=True, alpha=0.2)
+
+        font = QFont()
+        font.setPixelSize(11)
+        b_axis = plot_widget.getAxis("bottom")
+        l_axis = plot_widget.getAxis("left")
+        b_axis.setTickFont(font)
+        l_axis.setTickFont(font)
+        b_axis.setTextPen("black")
+        l_axis.setTextPen("black")
+
+    def _create_fixed_mic_waveform_widget(self):
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(8)
+
+        pager_layout = QHBoxLayout()
+        pager_layout.setContentsMargins(0, 0, 0, 0)
+        pager_layout.addStretch()
+        self.fixed_mic_prev_page_btn = QPushButton("上一页")
+        self.fixed_mic_prev_page_btn.clicked.connect(lambda: self._change_fixed_mic_waveform_page(-1))
+        self.fixed_mic_page_label = QLabel("1 / 1")
+        self.fixed_mic_next_page_btn = QPushButton("下一页")
+        self.fixed_mic_next_page_btn.clicked.connect(lambda: self._change_fixed_mic_waveform_page(1))
+        pager_layout.addWidget(self.fixed_mic_prev_page_btn)
+        pager_layout.addWidget(self.fixed_mic_page_label)
+        pager_layout.addWidget(self.fixed_mic_next_page_btn)
+        pager_layout.addStretch()
+        container_layout.addLayout(pager_layout)
+
+        self.fixed_mic_waveform_grid = QGridLayout()
+        self.fixed_mic_waveform_grid.setContentsMargins(0, 0, 0, 0)
+        self.fixed_mic_waveform_grid.setHorizontalSpacing(10)
+        self.fixed_mic_waveform_grid.setVerticalSpacing(10)
+
+        for _ in range(self.fixed_mic_page_size):
+            plot_widget = pg.PlotWidget()
+            self._configure_fixed_mic_subplot(plot_widget)
+            plot_widget.hide()
+            self.fixed_mic_plot_widgets.append(plot_widget)
+            self.fixed_mic_plot_items.append(None)
+            self.fixed_mic_live_y_limits.append(0.01)
+
+        grid_host = QWidget()
+        grid_host.setLayout(self.fixed_mic_waveform_grid)
+        container_layout.addWidget(grid_host, stretch=1)
+        container.setLayout(container_layout)
+        self._refresh_fixed_mic_waveform_paging_controls(0)
+        self._layout_fixed_mic_subplot_widgets(0)
+        return container
+
+    def _show_standard_waveform_view(self):
+        if getattr(self, "waveform_stack", None) is not None:
+            self.waveform_stack.setCurrentWidget(self.line_graph)
+
+    def _show_fixed_mic_waveform_view(self):
+        if getattr(self, "waveform_stack", None) is not None and getattr(self, "fixed_mic_waveform_widget", None) is not None:
+            self.waveform_stack.setCurrentWidget(self.fixed_mic_waveform_widget)
+
+    def _clear_waveform_display(self):
+        if getattr(self, "line_graph", None):
+            self.line_graph.clear()
+        self._clear_fixed_mic_waveform_plots(reset_state=self.is_fixed_mic_mode())
+
+    def _clear_fixed_mic_waveform_plots(self, reset_state=False):
+        for index, plot_widget in enumerate(getattr(self, "fixed_mic_plot_widgets", [])):
+            plot_widget.clear()
+            plot_widget.hide()
+            plot_widget.setTitle("")
+            if index < len(self.fixed_mic_plot_items):
+                self.fixed_mic_plot_items[index] = None
+            if index < len(self.fixed_mic_live_y_limits):
+                self.fixed_mic_live_y_limits[index] = 0.01
+        self._layout_fixed_mic_subplot_widgets(0)
+        if reset_state:
+            self.fixed_mic_current_page = 0
+            self.fixed_mic_display_total_channels = 0
+            self.fixed_mic_display_audio = None
+            self.fixed_mic_display_sample_rate = 0.0
+            self.fixed_mic_display_live_mode = False
+        self._refresh_fixed_mic_waveform_paging_controls(0)
+
+    def _get_fixed_mic_channel_config(self):
+        if not self.is_fixed_mic_mode():
+            return []
+        acq_detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
+        channel_config = acq_detail.get("fixed_mic_channels", [])
+        return channel_config if isinstance(channel_config, list) else []
+
+    def _get_fixed_mic_configured_channels(self):
+        if not self.is_fixed_mic_mode():
+            return 0
+        acq_detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
+        return max(int(acq_detail.get("channels", 0) or 0), 0)
+
+    def _refresh_fixed_mic_waveform_paging_controls(self, total_channels):
+        total_pages = max((max(int(total_channels or 0), 0) - 1) // self.fixed_mic_page_size + 1, 1)
+        current_page = min(max(int(self.fixed_mic_current_page or 0), 0), total_pages - 1)
+        self.fixed_mic_current_page = current_page
+        show_controls = total_pages > 1
+        if self.fixed_mic_page_label is not None:
+            self.fixed_mic_page_label.setText("%d / %d" % (current_page + 1, total_pages))
+            self.fixed_mic_page_label.setVisible(show_controls)
+        if self.fixed_mic_prev_page_btn is not None:
+            self.fixed_mic_prev_page_btn.setVisible(show_controls)
+            self.fixed_mic_prev_page_btn.setEnabled(show_controls and current_page > 0)
+        if self.fixed_mic_next_page_btn is not None:
+            self.fixed_mic_next_page_btn.setVisible(show_controls)
+            self.fixed_mic_next_page_btn.setEnabled(show_controls and current_page < total_pages - 1)
+
+    def _layout_fixed_mic_subplot_widgets(self, visible_count):
+        if getattr(self, "fixed_mic_waveform_grid", None) is None:
+            return
+
+        while self.fixed_mic_waveform_grid.count():
+            item = self.fixed_mic_waveform_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                self.fixed_mic_waveform_grid.removeWidget(widget)
+
+        for row in range(2):
+            self.fixed_mic_waveform_grid.setRowStretch(row, 1)
+            self.fixed_mic_waveform_grid.setColumnStretch(row, 1)
+
+        if visible_count <= 0:
+            return
+
+        if visible_count == 1:
+            self.fixed_mic_waveform_grid.addWidget(self.fixed_mic_plot_widgets[0], 0, 0, 2, 2)
+            return
+
+        if visible_count == 2:
+            self.fixed_mic_waveform_grid.addWidget(self.fixed_mic_plot_widgets[0], 0, 0, 2, 1)
+            self.fixed_mic_waveform_grid.addWidget(self.fixed_mic_plot_widgets[1], 0, 1, 2, 1)
+            return
+
+        positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        for index in range(min(visible_count, self.fixed_mic_page_size)):
+            row, column = positions[index]
+            self.fixed_mic_waveform_grid.addWidget(self.fixed_mic_plot_widgets[index], row, column, 1, 1)
+
+    def _change_fixed_mic_waveform_page(self, page_delta):
+        total_channels = max(int(getattr(self, "fixed_mic_display_total_channels", 0) or 0), 0)
+        if total_channels <= self.fixed_mic_page_size:
+            return
+
+        max_page = max((total_channels - 1) // self.fixed_mic_page_size, 0)
+        target_page = min(max(self.fixed_mic_current_page + int(page_delta), 0), max_page)
+        if target_page == self.fixed_mic_current_page:
+            return
+
+        self.fixed_mic_current_page = target_page
+        if self.fixed_mic_display_live_mode:
+            self.fixed_mic_live_y_limits = [0.01] * self.fixed_mic_page_size
+        self._render_fixed_mic_waveforms(
+            self.fixed_mic_display_audio,
+            self.fixed_mic_display_sample_rate or self.data_struct.sample_rate,
+            total_channels=total_channels,
+            reset_page=False,
+            live_mode=self.fixed_mic_display_live_mode,
+        )
+
+    def _update_fixed_mic_subplot_range(self, plot_widget, plot_audio, time_axis, slot_index, live_mode):
+        amplitude = float(np.max(np.abs(plot_audio))) if len(plot_audio) > 0 else 0.0
+        target_limit = max(amplitude * 1.2, 0.01)
+
+        if live_mode:
+            current_limit = float(self.fixed_mic_live_y_limits[slot_index])
+            if target_limit > current_limit:
+                current_limit = current_limit * 0.7 + target_limit * 0.3
+            else:
+                current_limit = current_limit * 0.92 + target_limit * 0.08
+            self.fixed_mic_live_y_limits[slot_index] = max(current_limit, 0.01)
+            plot_widget.enableAutoRange(x=False, y=False)
+            plot_widget.setMouseEnabled(x=False, y=False)
+            plot_widget.setXRange(0.0, float(self.fixed_mic_plot_window_sec), padding=0.0)
+            plot_widget.setYRange(
+                -float(self.fixed_mic_live_y_limits[slot_index]),
+                float(self.fixed_mic_live_y_limits[slot_index]),
+                padding=0.0,
+            )
+            return
+
+        x_end = float(time_axis[-1]) if len(time_axis) > 0 else 1.0
+        plot_widget.enableAutoRange(x=False, y=False)
+        plot_widget.setMouseEnabled(x=True, y=True)
+        plot_widget.setXRange(0.0, x_end, padding=0.0)
+        plot_widget.setYRange(-target_limit, target_limit, padding=0.0)
+
+    def _render_fixed_mic_waveforms(self, audio_data, sample_rate, total_channels=None, reset_page=False, live_mode=False):
+        normalized_audio = None
+        if audio_data is not None:
+            normalized_audio = np.asarray(audio_data, dtype=np.float32)
+            if normalized_audio.ndim == 1:
+                normalized_audio = normalized_audio.reshape(-1, 1)
+
+        if total_channels is None:
+            if normalized_audio is not None and normalized_audio.ndim == 2:
+                total_channels = normalized_audio.shape[1]
+            else:
+                total_channels = self._get_fixed_mic_configured_channels()
+        total_channels = max(int(total_channels or 0), 0)
+        if normalized_audio is not None and normalized_audio.ndim == 2:
+            total_channels = min(total_channels or normalized_audio.shape[1], normalized_audio.shape[1])
+
+        if reset_page:
+            self.fixed_mic_current_page = 0
+            self.fixed_mic_live_y_limits = [0.01] * self.fixed_mic_page_size
+
+        self.fixed_mic_display_audio = normalized_audio
+        self.fixed_mic_display_sample_rate = float(sample_rate or self.data_struct.sample_rate or 1.0)
+        self.fixed_mic_display_total_channels = total_channels
+        self.fixed_mic_display_live_mode = bool(live_mode)
+        self._show_fixed_mic_waveform_view()
+
+        titles = get_fixed_mic_channel_titles(total_channels, self._get_fixed_mic_channel_config())
+        visible_channel_indices = get_fixed_mic_page_channel_indices(
+            total_channels,
+            self.fixed_mic_current_page,
+            self.fixed_mic_page_size,
+        )
+        visible_count = len(visible_channel_indices)
+        self._layout_fixed_mic_subplot_widgets(visible_count)
+        self._refresh_fixed_mic_waveform_paging_controls(total_channels)
+
+        time_axis = np.array([], dtype=np.float32)
+        display_audio = np.empty((0, visible_count), dtype=np.float32)
+        if normalized_audio is not None and normalized_audio.size > 0 and visible_count > 0:
+            visible_audio = normalized_audio[:, visible_channel_indices]
+            time_axis, display_audio = build_fixed_mic_plot_data(
+                visible_audio,
+                self.fixed_mic_display_sample_rate,
+                visible_count,
+            )
+
+        for slot_index, plot_widget in enumerate(self.fixed_mic_plot_widgets):
+            if slot_index >= visible_count:
+                plot_widget.hide()
+                plot_widget.clear()
+                plot_widget.setTitle("")
+                self.fixed_mic_plot_items[slot_index] = None
+                self.fixed_mic_live_y_limits[slot_index] = 0.01
+                continue
+
+            channel_index = visible_channel_indices[slot_index]
+            plot_widget.show()
+            title_text = titles[channel_index] if channel_index < len(titles) else "Mic%d" % (channel_index + 1)
+            plot_widget.setTitle(title_text, color="black", size="12pt")
+
+            channel_audio = (
+                display_audio[:, slot_index]
+                if display_audio.ndim == 2 and display_audio.shape[1] > slot_index
+                else np.array([], dtype=np.float32)
+            )
+            if self.fixed_mic_plot_items[slot_index] is None:
+                self.fixed_mic_plot_items[slot_index] = plot_widget.plot(
+                    time_axis,
+                    channel_audio,
+                    pen=pg.mkPen(color=(30, 30, 30), width=1),
+                )
+            else:
+                self.fixed_mic_plot_items[slot_index].setData(time_axis, channel_audio)
+            self._update_fixed_mic_subplot_range(
+                plot_widget,
+                channel_audio,
+                time_axis,
+                slot_index,
+                bool(live_mode),
+            )
 
     def create_fixed_mic_detail_panel(self):
         self.fixed_mic_detail_panel = QWidget()
@@ -591,7 +894,7 @@ class SequenceWindow(QWidget):
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
-        self.line_graph.clear()
+        self._clear_waveform_display()
 
         if manual:
             self.replayer_btn.setDisabled(True)
@@ -884,7 +1187,7 @@ class SequenceWindow(QWidget):
         self.data_struct.sample_rate = session.metadata.get("sample_rate", self.data_struct.sample_rate)
         self.data_struct.update_channel_count()
         if update_plot and self.data_struct.store_wave_data is not None:
-            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
+            self._plot_recorded_signal(self.data_struct.store_wave_data, self.data_struct.sample_rate, reset_page=True)
 
     def _refresh_fixed_mic_review_session_display(self):
         if self.fixed_mic_current_review_session is None:
@@ -954,11 +1257,21 @@ class SequenceWindow(QWidget):
         if getattr(self, "fixed_mic_detail_panel", None) is not None:
             self.fixed_mic_detail_panel.setVisible(self.is_fixed_mic_mode())
         if not self.is_fixed_mic_mode():
+            self._show_standard_waveform_view()
             self.count_board.set_mark_mode_enabled(True)
             self.count_board.set_review_session_text("无")
             self.count_board.set_review_session_visible(False)
             self._update_fixed_mic_toolbar_state()
             return
+
+        if self.fixed_mic_controller is None and self.fixed_mic_current_review_session is None:
+            self._render_fixed_mic_waveforms(
+                None,
+                self.data_struct.sample_rate,
+                total_channels=self._get_fixed_mic_configured_channels(),
+                reset_page=True,
+                live_mode=False,
+            )
 
         if desired_mode == "test" and self.count_board.mode != "test":
             self.count_board.force_test_mode()
@@ -1012,7 +1325,8 @@ class SequenceWindow(QWidget):
         if self.checked_work_status_message():
             return
 
-        self.line_graph.clear()
+        self._show_standard_waveform_view()
+        self._clear_waveform_display()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
         # This prevents device conflicts and freezing when replay is clicked multiple times
         self._cleanup_streaming_resources()
@@ -1021,7 +1335,7 @@ class SequenceWindow(QWidget):
 
         # Clear plot and reset streaming state for NEW recording
         if self.player_status_flag:
-            self.line_graph.clear()
+            self._clear_waveform_display()
 
         self.streaming_buffer = []
         self.streaming_time_data = []
@@ -1087,7 +1401,7 @@ class SequenceWindow(QWidget):
                 play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
             else:
                 record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-            self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
+            self._plot_recorded_signal(self.data_struct.store_wave_data, sample_rate, reset_page=True)
 
         self.player_status_flag = False  # Recording complete, allow hardware access
         self.data_btn.setEnabled(True)
@@ -1239,10 +1553,9 @@ class SequenceWindow(QWidget):
         plot_chunks = []
         for chunk in chunks:
             audio_chunk = np.asarray(chunk, dtype=np.float32)
-            if audio_chunk.ndim == 2:
-                plot_chunks.append(audio_chunk[:, 0])
-            else:
-                plot_chunks.append(audio_chunk.reshape(-1))
+            if audio_chunk.ndim == 1:
+                audio_chunk = audio_chunk.reshape(-1, 1)
+            plot_chunks.append(audio_chunk)
 
         if not plot_chunks:
             return
@@ -1252,20 +1565,21 @@ class SequenceWindow(QWidget):
             return
 
         max_samples = max(int(float(self.fixed_mic_plot_window_sec) * float(sample_rate)), 1)
-        total_samples = sum(len(chunk) for chunk in self.fixed_mic_stream_buffer)
+        total_samples = sum(chunk.shape[0] for chunk in self.fixed_mic_stream_buffer)
         while total_samples > max_samples and self.fixed_mic_stream_buffer:
             first_chunk = self.fixed_mic_stream_buffer[0]
             overflow = total_samples - max_samples
-            if len(first_chunk) <= overflow:
-                total_samples -= len(first_chunk)
+            if first_chunk.shape[0] <= overflow:
+                total_samples -= first_chunk.shape[0]
                 self.fixed_mic_stream_buffer.pop(0)
             else:
-                self.fixed_mic_stream_buffer[0] = first_chunk[overflow:]
+                self.fixed_mic_stream_buffer[0] = first_chunk[overflow:, :]
                 total_samples -= overflow
 
     def _get_fixed_mic_stream_plot_audio(self):
         if not self.fixed_mic_stream_buffer:
-            return np.array([], dtype=np.float32)
+            channel_count = max(int(self.fixed_mic_display_total_channels or self._get_fixed_mic_configured_channels() or 0), 0)
+            return np.empty((0, channel_count), dtype=np.float32)
         return np.concatenate(self.fixed_mic_stream_buffer, axis=0)
 
     def _reset_fixed_mic_session_views(self):
@@ -1353,35 +1667,16 @@ class SequenceWindow(QWidget):
         return
 
     def _configure_fixed_mic_live_plot_view(self):
-        if not getattr(self, "line_graph", None):
-            return
-        self.line_graph.enableAutoRange(x=False, y=False)
-        self.line_graph.setMouseEnabled(x=False, y=False)
-        self.line_graph.setXRange(0.0, float(self.fixed_mic_plot_window_sec), padding=0.0)
-        self.line_graph.setYRange(-float(self.fixed_mic_live_y_limit), float(self.fixed_mic_live_y_limit), padding=0.0)
+        self.fixed_mic_live_y_limits = [0.01] * self.fixed_mic_page_size
 
     def _update_fixed_mic_live_plot_range(self, plot_audio):
-        if not getattr(self, "line_graph", None):
-            return
-        amplitude = float(np.max(np.abs(plot_audio))) if len(plot_audio) > 0 else 0.0
-        target_limit = max(amplitude * 1.2, 0.01)
-        current_limit = float(getattr(self, "fixed_mic_live_y_limit", 0.01))
-        if target_limit > current_limit:
-            current_limit = current_limit * 0.7 + target_limit * 0.3
-        else:
-            current_limit = current_limit * 0.92 + target_limit * 0.08
-        self.fixed_mic_live_y_limit = max(current_limit, 0.01)
-        self.line_graph.setXRange(0.0, float(self.fixed_mic_plot_window_sec), padding=0.0)
-        self.line_graph.setYRange(
-            -float(self.fixed_mic_live_y_limit),
-            float(self.fixed_mic_live_y_limit),
-            padding=0.0,
-        )
+        return
 
     def _update_fixed_mic_toolbar_state(self):
         if not getattr(self, "toolsbar", None):
             return
         if not self.is_fixed_mic_mode():
+            self._show_standard_waveform_view()
             if getattr(self, "line_graph", None):
                 self.line_graph.enableAutoRange(x=True, y=True)
                 self.line_graph.setMouseEnabled(x=True, y=True)
@@ -1402,6 +1697,22 @@ class SequenceWindow(QWidget):
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
         self.replayer_btn.setIconSize(QSize(30, 30))
         self.replayer_btn.setEnabled(is_running)
+
+    def _plot_recorded_signal(self, recorded_signal, sample_rate, reset_page=False):
+        if self.is_fixed_mic_mode() and isinstance(recorded_signal, np.ndarray):
+            if recorded_signal.ndim == 1:
+                recorded_signal = recorded_signal.reshape(-1, 1)
+            self._render_fixed_mic_waveforms(
+                recorded_signal,
+                sample_rate,
+                total_channels=recorded_signal.shape[1],
+                reset_page=reset_page,
+                live_mode=False,
+            )
+            return
+
+        self._show_standard_waveform_view()
+        self.plot_line_graph(recorded_signal, self.line_graph, sample_rate)
 
     @staticmethod
     def plot_line_graph(recorded_signal, line_graph, sample_rate):

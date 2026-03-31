@@ -1,6 +1,5 @@
 import time
 
-import pyqtgraph as pg
 from PyQt5.QtWidgets import QMessageBox
 
 from consts import error_code
@@ -27,13 +26,20 @@ def handle_fixed_mic_manual_trigger(window, controller_cls):
             float(window.fixed_mic_controller.window_duration),
         )
         window.fixed_mic_poll_timer.start(50)
-        window.line_graph.clear()
+        window._clear_waveform_display()
         window.fixed_mic_plot_item = None
         window.fixed_mic_last_plot_update_ts = 0.0
         window.fixed_mic_live_y_limit = 0.01
         window.fixed_mic_stream_buffer = []
         window._reset_fixed_mic_session_views()
         window._configure_fixed_mic_live_plot_view()
+        window._render_fixed_mic_waveforms(
+            None,
+            window.fixed_mic_controller.sample_rate,
+            total_channels=window.fixed_mic_controller.channels,
+            reset_page=True,
+            live_mode=True,
+        )
 
     barcode = window.lineedit_s_or_n.text().strip() or None
     create_code, create_msg, session = window.fixed_mic_controller.create_manual_session(barcode)
@@ -60,21 +66,13 @@ def poll_fixed_mic_runtime(window):
     plot_interval_sec = getattr(window, "fixed_mic_plot_interval_sec", 0.12)
     if plot_chunks and current_time - getattr(window, "fixed_mic_last_plot_update_ts", 0.0) >= plot_interval_sec:
         plot_audio = window._get_fixed_mic_stream_plot_audio()
-        if plot_audio.size > 0:
-            time_axis, plot_audio = window.build_live_plot_data(
-                plot_audio,
-                window.fixed_mic_controller.sample_rate,
-                max_points=4000,
-            )
-            if window.fixed_mic_plot_item is None:
-                window.fixed_mic_plot_item = window.line_graph.plot(
-                    time_axis,
-                    plot_audio,
-                    pen=pg.mkPen(color=(30, 30, 30), width=1),
-                )
-            else:
-                window.fixed_mic_plot_item.setData(time_axis, plot_audio)
-            window._update_fixed_mic_live_plot_range(plot_audio)
+        window._render_fixed_mic_waveforms(
+            plot_audio,
+            window.fixed_mic_controller.sample_rate,
+            total_channels=window.fixed_mic_controller.channels,
+            reset_page=False,
+            live_mode=True,
+        )
         window.fixed_mic_last_plot_update_ts = current_time
 
     for session in completed_sessions:
@@ -114,8 +112,6 @@ def stop_fixed_mic_runtime(window):
             pass
         window.fixed_mic_controller.stop_capture()
         window.fixed_mic_controller = None
-    if hasattr(window, "line_graph"):
-        window.line_graph.clear()
     window.fixed_mic_plot_item = None
     window.fixed_mic_last_plot_update_ts = 0.0
     window.fixed_mic_live_y_limit = 0.01
