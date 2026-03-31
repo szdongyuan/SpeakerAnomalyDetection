@@ -822,10 +822,7 @@ class SequenceWindow(QWidget):
     def _enqueue_fixed_mic_review_session(self, session):
         self.fixed_mic_pending_review_sessions.append(session)
         self.default_logger.info("固定麦标记模式加入待审核队列: session_id=%s", session.session_id)
-        if self.fixed_mic_current_review_session is None:
-            self._activate_next_fixed_mic_review_session()
-        else:
-            self._refresh_fixed_mic_review_session_display()
+        self._refresh_fixed_mic_review_session_display()
 
     def _is_fixed_mic_session_pending(self, session):
         if session is None:
@@ -852,13 +849,32 @@ class SequenceWindow(QWidget):
             self._select_fixed_mic_session_row(session.session_id)
         self._refresh_fixed_mic_review_session_display()
 
+    def _get_selected_fixed_mic_session(self):
+        if getattr(self, "fixed_mic_session_table", None) is None:
+            return None
+        current_row = self.fixed_mic_session_table.currentRow()
+        if current_row < 0:
+            return None
+        session_item = self.fixed_mic_session_table.item(current_row, 0)
+        if session_item is None:
+            return None
+        session_id = session_item.data(Qt.UserRole)
+        if not session_id or getattr(self, "fixed_mic_session_panel", None) is None:
+            return None
+        return self.fixed_mic_session_panel.get_session(session_id)
+
     def _activate_next_fixed_mic_review_session(self):
         if not self.fixed_mic_pending_review_sessions:
             self._set_fixed_mic_current_review_session(None)
             return
 
-        session = self.fixed_mic_pending_review_sessions[0]
-        self._set_fixed_mic_current_review_session(session, sync_selection=True)
+        get_selected_session = getattr(self, "_get_selected_fixed_mic_session", lambda: None)
+        is_pending_session = getattr(self, "_is_fixed_mic_session_pending", lambda session: False)
+        session = get_selected_session()
+        if not is_pending_session(session):
+            self._set_fixed_mic_current_review_session(None)
+            return
+        self._set_fixed_mic_current_review_session(session, sync_selection=False)
 
     def _load_fixed_mic_review_session_context(self, session, update_plot=True):
         recorded_signal_info = session.metadata.get("recorded_signal_info", {}).copy()
@@ -913,16 +929,14 @@ class SequenceWindow(QWidget):
         self._emit_display_update(manual_label=label)
         self.default_logger.info("固定麦标记模式完成人工标记: session_id=%s, label=%s", session.session_id, label)
 
-        if self.fixed_mic_pending_review_sessions and self.fixed_mic_pending_review_sessions[0] is session:
-            self.fixed_mic_pending_review_sessions.pop(0)
-        else:
-            try:
-                self.fixed_mic_pending_review_sessions.remove(session)
-            except ValueError:
-                pass
-
+        session_id = getattr(session, "session_id", None)
+        self.fixed_mic_pending_review_sessions = [
+            pending_session
+            for pending_session in self.fixed_mic_pending_review_sessions
+            if getattr(pending_session, "session_id", None) != session_id
+        ]
         self.fixed_mic_current_review_session = None
-        self._activate_next_fixed_mic_review_session()
+        self._refresh_fixed_mic_review_session_display()
 
     def _on_count_board_mode_changed(self):
         desired_mode = None
@@ -956,10 +970,13 @@ class SequenceWindow(QWidget):
             self.count_board.mark_btn.setEnabled(False)
             self.count_board.test_btn.setEnabled(True)
             self.count_board.set_review_session_visible(False)
-            if self.fixed_mic_current_review_session is None and self.fixed_mic_pending_review_sessions:
-                self._activate_next_fixed_mic_review_session()
+            get_selected_session = getattr(self, "_get_selected_fixed_mic_session", lambda: None)
+            is_pending_session = getattr(self, "_is_fixed_mic_session_pending", lambda session: False)
+            selected_session = get_selected_session()
+            if is_pending_session(selected_session):
+                self._set_fixed_mic_current_review_session(selected_session, sync_selection=False)
             else:
-                self._refresh_fixed_mic_review_session_display()
+                self._set_fixed_mic_current_review_session(None)
         else:
             self.count_board.test_btn.setEnabled(False)
             self.count_board.mark_btn.setEnabled(True)

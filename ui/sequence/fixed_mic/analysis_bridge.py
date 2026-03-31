@@ -42,7 +42,6 @@ def finalize_and_run_fixed_mic_session(window, session, save_recorded_data_to_js
         window._update_fixed_mic_session_status(session, "待审核")
         result_label = FixedMicSessionTablePanel.get_result_label(session)
         window._update_fixed_mic_session_result(session, result_label)
-        window._select_fixed_mic_session_row(session.session_id)
         window._enqueue_fixed_mic_review_session(session)
         window.default_logger.info("固定麦阶段4已完成保存，等待人工标记: session_id=%s", session.session_id)
         return

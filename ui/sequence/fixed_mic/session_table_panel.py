@@ -177,6 +177,7 @@ class FixedMicSessionTablePanel(QWidget):
             return
         self.session_table.blockSignals(True)
         try:
+            self.session_table.setCurrentCell(row, 0)
             self.session_table.selectRow(row)
         finally:
             self.session_table.blockSignals(False)
