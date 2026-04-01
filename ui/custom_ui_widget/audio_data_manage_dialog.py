@@ -63,7 +63,7 @@ class audioDataManageDialog(DataManageDialog):
 
         self.all_selected_checkbox = QCheckBox("全选")
 
-        self.init_ui_layout(0, 7, [])
+        self.init_ui_layout(0, self.get_table_column_count(), [])
 
         self.set_view_checked_changed(self.on_row_checkbox_toggled)
 
@@ -71,7 +71,7 @@ class audioDataManageDialog(DataManageDialog):
 
     def init_base_ui(self):
         self.set_checkable_of_column([0])
-        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"])
+        self.set_h_header(self.get_header_labels())
         self.verticalHeader().setVisible(False)
 
         self.set_top_layout()
@@ -79,6 +79,12 @@ class audioDataManageDialog(DataManageDialog):
         self.load_all_audio_data()
         self.load_audio_data_to_view()
         self.set_select_wave_num_text(0)
+
+    def get_table_column_count(self):
+        return 7
+
+    def get_header_labels(self):
+        return ["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"]
 
     def set_top_layout(self):
         filter_btn = QPushButton(" 筛  选 ")
@@ -251,6 +257,7 @@ class FilterAudioDialog(QDialog):
         self.filter_sample_rate_num = 0
         self.filter_label_num = 0
         self.sample_rate_filter_layout = QHBoxLayout()
+        self.sample_rate_layout_adjusted = False
 
         self.is_clicked_ok = False
 
@@ -361,9 +368,12 @@ class FilterAudioDialog(QDialog):
         if is_hide:
             self.select_not_label_check_box.hide()
             self.select_not_label_check_box.setChecked(False)
-        else:
+        elif not self.sample_rate_layout_adjusted:
             self.sample_rate_filter_layout.addSpacing(10)
             self.sample_rate_filter_layout.addStretch(1)
+            self.sample_rate_layout_adjusted = True
+            self.select_not_label_check_box.show()
+        else:
             self.select_not_label_check_box.show()
 
     def create_product_model_filter_groupbox(self):
