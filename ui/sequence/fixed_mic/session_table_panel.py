@@ -1,6 +1,7 @@
+import os
 from datetime import timedelta
 
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -12,7 +13,12 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QMessageBox,
 )
+
+from base.playback_controller import PlaybackController
+from consts import error_code
+from consts.running_consts import DEFAULT_DIR
 
 
 class FixedMicSessionTablePanel(QWidget):
@@ -22,15 +28,21 @@ class FixedMicSessionTablePanel(QWidget):
         self.session_rows = {}
         self.session_store = {}
         self.session_table = None
+        self.playback_controller = PlaybackController()
+        self._playback_poll_timer = QTimer(self)
+        self._playback_poll_timer.setInterval(150)
+        self._playback_poll_timer.timeout.connect(self._on_playback_poll_timeout)
+        self._current_playing_session_id = None
+        self._current_playing_file = None
         self.init_ui()
 
     def init_ui(self):
         group_box = QGroupBox("会话列表")
         group_layout = QVBoxLayout()
 
-        self.session_table = QTableWidget(0, 8)
+        self.session_table = QTableWidget(0, 9)
         self.session_table.setHorizontalHeaderLabels(
-            ["会话", "触发时间", "截止时间", "音频时长", "条码", "进度", "结果", "分析"]
+            ["会话", "触发时间", "截止时间", "音频时长", "条码", "进度", "结果", "播放", "分析"]
         )
         self.session_table.verticalHeader().setVisible(False)
         self.session_table.verticalHeader().setDefaultSectionSize(34)
@@ -59,11 +71,13 @@ class FixedMicSessionTablePanel(QWidget):
         header.setSectionResizeMode(5, QHeaderView.Stretch)
         header.setSectionResizeMode(6, QHeaderView.Stretch)
         header.setSectionResizeMode(7, QHeaderView.Fixed)
+        header.setSectionResizeMode(8, QHeaderView.Fixed)
         self.session_table.setColumnWidth(0, 56)
         self.session_table.setColumnWidth(1, 92)
         self.session_table.setColumnWidth(2, 92)
         self.session_table.setColumnWidth(3, 86)
-        self.session_table.setColumnWidth(7, 84)
+        self.session_table.setColumnWidth(7, 72)
+        self.session_table.setColumnWidth(8, 84)
 
         group_layout.addWidget(self.session_table)
         group_box.setLayout(group_layout)
@@ -75,6 +89,7 @@ class FixedMicSessionTablePanel(QWidget):
         self.setLayout(layout)
 
     def reset_sessions(self):
+        self._stop_playback_if_needed()
         self.session_rows = {}
         self.session_store = {}
         if self.session_table is not None:
@@ -110,7 +125,9 @@ class FixedMicSessionTablePanel(QWidget):
             if col == 4:
                 item.setToolTip(str(value))
             self.session_table.setItem(row, col, item)
-        self.session_table.setCellWidget(row, 7, self.create_view_cell(session.session_id))
+        self.session_table.setCellWidget(row, 7, self.create_play_cell(session.session_id))
+        self.session_table.setCellWidget(row, 8, self.create_view_cell(session.session_id))
+        self._refresh_play_button_for_session(session.session_id)
         self.session_table.scrollToBottom()
 
     def update_session_status(self, session, status_text):
@@ -129,6 +146,7 @@ class FixedMicSessionTablePanel(QWidget):
             self.session_table.setItem(row, 5, item)
         else:
             item.setText(status_text)
+        self._refresh_play_button_for_session(session.session_id)
 
     def update_session_result(self, session, result_label):
         if session is None:
@@ -149,6 +167,7 @@ class FixedMicSessionTablePanel(QWidget):
             self.session_table.setItem(row, 6, item)
         else:
             item.setText(normalized_label)
+        self._refresh_play_button_for_session(session.session_id)
 
     def refresh_session_timing(self, row, session):
         if session is None or row is None:
@@ -184,6 +203,35 @@ class FixedMicSessionTablePanel(QWidget):
 
     def get_session(self, session_id):
         return self.session_store.get(session_id)
+
+    def create_play_button(self, session_id):
+        play_btn = QToolButton()
+        play_btn.setText("播放")
+        play_btn.setFixedSize(46, 24)
+        play_btn.setAutoRaise(False)
+        play_btn.setStyleSheet(
+            """
+            QToolButton {
+                border: 1px solid rgba(120, 120, 120, 0.25);
+                background-color: rgba(120, 120, 120, 0.04);
+                border-radius: 3px;
+                padding: 0px 6px;
+            }
+            QToolButton:hover:enabled {
+                background-color: rgba(120, 120, 120, 0.08);
+            }
+            QToolButton:pressed:enabled {
+                background-color: rgba(120, 120, 120, 0.12);
+            }
+            QToolButton:disabled {
+                color: rgb(160, 160, 160);
+                border-color: rgba(160, 160, 160, 0.2);
+                background-color: rgba(120, 120, 120, 0.02);
+            }
+            """
+        )
+        play_btn.clicked.connect(lambda: self._on_play_button_clicked(session_id))
+        return play_btn
 
     def create_view_button(self, session_id):
         view_btn = QToolButton()
@@ -227,6 +275,120 @@ class FixedMicSessionTablePanel(QWidget):
         cell_layout.addStretch()
         cell_widget.setLayout(cell_layout)
         return cell_widget
+
+    def create_play_cell(self, session_id):
+        cell_widget = QWidget()
+        cell_layout = QHBoxLayout()
+        cell_layout.setContentsMargins(0, 0, 0, 0)
+        cell_layout.setSpacing(0)
+        cell_layout.addStretch()
+        cell_layout.addWidget(self.create_play_button(session_id), alignment=Qt.AlignCenter)
+        cell_layout.addStretch()
+        cell_widget.setLayout(cell_layout)
+        return cell_widget
+
+    def _resolve_session_playback_path(self, session):
+        if session is None:
+            return None
+        metadata = getattr(session, "metadata", {}) or {}
+        candidate_paths = [metadata.get("recorded_path"), (metadata.get("recorded_signal_info", {}) or {}).get("file_path")]
+        for candidate in candidate_paths:
+            if not candidate:
+                continue
+            normalized_candidate = candidate
+            if not os.path.isabs(normalized_candidate):
+                normalized_candidate = os.path.join(DEFAULT_DIR, normalized_candidate).replace("\\", "/")
+            normalized_candidate = os.path.abspath(normalized_candidate)
+            if os.path.isfile(normalized_candidate):
+                return normalized_candidate
+        return None
+
+    @staticmethod
+    def _get_cell_center_widget(table, row, column):
+        cell_widget = table.cellWidget(row, column)
+        if cell_widget is None or cell_widget.layout() is None or cell_widget.layout().count() < 2:
+            return None
+        item = cell_widget.layout().itemAt(1)
+        return item.widget() if item is not None else None
+
+    def _refresh_play_button_for_session(self, session_id):
+        row = self.session_rows.get(session_id)
+        if row is None or self.session_table is None:
+            return
+        play_btn = self._get_cell_center_widget(self.session_table, row, 7)
+        if play_btn is None:
+            return
+
+        session = self.get_session(session_id)
+        playback_path = self._resolve_session_playback_path(session)
+        is_current = session_id == self._current_playing_session_id and self.playback_controller.is_audio_playing()
+
+        play_btn.setEnabled(playback_path is not None)
+        play_btn.setText("停止" if is_current else "播放")
+        if playback_path is None:
+            play_btn.setToolTip("当前会话尚未保存音频，暂不可播放")
+        else:
+            play_btn.setToolTip(playback_path)
+
+    def _refresh_all_play_buttons(self):
+        for session_id in list(self.session_rows.keys()):
+            self._refresh_play_button_for_session(session_id)
+
+    def _clear_playing_state(self):
+        self._current_playing_session_id = None
+        self._current_playing_file = None
+        self._playback_poll_timer.stop()
+        self._refresh_all_play_buttons()
+
+    def _stop_playback_if_needed(self):
+        if self.playback_controller.is_audio_playing() or self._current_playing_session_id is not None:
+            self.playback_controller.stop_audio_playback()
+        self._clear_playing_state()
+
+    def _on_play_button_clicked(self, session_id):
+        session = self.get_session(session_id)
+        playback_path = self._resolve_session_playback_path(session)
+        if not playback_path:
+            self._refresh_play_button_for_session(session_id)
+            return
+
+        if self.playback_controller.is_audio_playing() and session_id == self._current_playing_session_id:
+            self.playback_controller.stop_audio_playback()
+            self._clear_playing_state()
+            return
+
+        if self.playback_controller.is_audio_playing():
+            self.playback_controller.stop_audio_playback()
+            self._clear_playing_state()
+
+        code, msg = self.playback_controller.start_audio_playback(playback_path)
+        if code != error_code.OK:
+            QMessageBox.warning(self, "提示", msg)
+            self._clear_playing_state()
+            return
+
+        self._current_playing_session_id = session_id
+        self._current_playing_file = playback_path
+        self._refresh_all_play_buttons()
+        if not self._playback_poll_timer.isActive():
+            self._playback_poll_timer.start()
+
+    def _on_playback_poll_timeout(self):
+        if not self.playback_controller.is_audio_playing():
+            self._clear_playing_state()
+            return
+
+        playing_file = self.playback_controller.get_current_playing_file()
+        if not playing_file or not self._current_playing_file:
+            self._clear_playing_state()
+            return
+
+        if os.path.abspath(playing_file) != os.path.abspath(self._current_playing_file):
+            self._clear_playing_state()
+
+    def closeEvent(self, event):
+        self._stop_playback_if_needed()
+        super(FixedMicSessionTablePanel, self).closeEvent(event)
 
     @staticmethod
     def make_table_item(text, session_id=None):

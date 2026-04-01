@@ -773,7 +773,7 @@ class TestFixedMicConcurrent(unittest.TestCase):
             trigger_time=datetime(2026, 3, 19, 10, 55, 58),
             vehicle_barcode="BARCODE_001",
             window_duration=3.0,
-            metadata={},
+            metadata={"recorded_path": "test.wav"},
         )
         panel = FixedMicSessionTablePanel(on_view_session=lambda _session_id: None)
         fake_window = SimpleNamespace(
@@ -787,7 +787,69 @@ class TestFixedMicConcurrent(unittest.TestCase):
         self.assertEqual(panel.session_table.item(0, 3).text(), "3.00s")
         self.assertEqual(panel.session_table.item(0, 5).text(), "采集中")
         self.assertEqual(panel.session_table.item(0, 6).text(), "not_labeled")
+        self.assertEqual(panel.session_table.columnCount(), 9)
+        self.assertEqual(panel.session_table.horizontalHeaderItem(7).text(), "播放")
+        self.assertEqual(panel.session_table.horizontalHeaderItem(8).text(), "分析")
         self.assertIsNotNone(panel.session_table.cellWidget(0, 7))
+        self.assertIsNotNone(panel.session_table.cellWidget(0, 8))
+
+    def test_register_fixed_mic_session_disables_play_button_when_session_has_no_saved_audio(self):
+        fake_session = SimpleNamespace(
+            session_id="fixed_mic_session_001",
+            trigger_time=datetime(2026, 3, 19, 10, 55, 58),
+            vehicle_barcode="BARCODE_001",
+            window_duration=3.0,
+            metadata={},
+        )
+        panel = FixedMicSessionTablePanel(on_view_session=lambda _session_id: None)
+
+        panel.register_session(fake_session, status_text="采集中")
+
+        play_cell = panel.session_table.cellWidget(0, 7)
+        play_button = play_cell.layout().itemAt(1).widget()
+        self.assertFalse(play_button.isEnabled())
+
+    def test_fixed_mic_play_button_switches_playback_between_saved_sessions(self):
+        panel = FixedMicSessionTablePanel(on_view_session=lambda _session_id: None)
+        session_a = SimpleNamespace(
+            session_id="fixed_mic_session_001",
+            trigger_time=datetime(2026, 3, 19, 10, 55, 58),
+            vehicle_barcode="BARCODE_001",
+            window_duration=3.0,
+            metadata={"recorded_path": "a.wav"},
+        )
+        session_b = SimpleNamespace(
+            session_id="fixed_mic_session_002",
+            trigger_time=datetime(2026, 3, 19, 10, 56, 10),
+            vehicle_barcode="BARCODE_002",
+            window_duration=3.0,
+            metadata={"recorded_path": "b.wav"},
+        )
+        panel.register_session(session_a, status_text="已保存")
+        panel.register_session(session_b, status_text="已保存")
+        playback_state = {"playing": False}
+
+        def _start_audio_playback(_path):
+            playback_state["playing"] = True
+            return error_code.OK, "Audio playback started."
+
+        def _stop_audio_playback():
+            playback_state["playing"] = False
+            return error_code.OK, "Audio playback stopped."
+
+        panel.playback_controller = SimpleNamespace(
+            is_audio_playing=mock.Mock(side_effect=lambda: playback_state["playing"]),
+            start_audio_playback=mock.Mock(side_effect=_start_audio_playback),
+            stop_audio_playback=mock.Mock(side_effect=_stop_audio_playback),
+            get_current_playing_file=mock.Mock(return_value=None),
+        )
+
+        with mock.patch("ui.sequence.fixed_mic.session_table_panel.os.path.isfile", return_value=True):
+            panel._on_play_button_clicked(session_a.session_id)
+            panel._on_play_button_clicked(session_b.session_id)
+
+        self.assertEqual(panel.playback_controller.start_audio_playback.call_count, 2)
+        panel.playback_controller.stop_audio_playback.assert_called_once()
 
     def test_update_fixed_mic_session_result_updates_result_column(self):
         fake_session = SimpleNamespace(
