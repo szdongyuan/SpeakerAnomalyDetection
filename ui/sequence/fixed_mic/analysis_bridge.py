@@ -1,9 +1,69 @@
+import os
 import re
 
+import numpy as np
 from PyQt5.QtWidgets import QMessageBox
 
+from base.load_audio import load_audio_simple
 from consts import error_code
+from consts.running_consts import DEFAULT_DIR
 from ui.sequence.fixed_mic.session_table_panel import FixedMicSessionTablePanel
+
+
+def sync_fixed_mic_session_paths(window, session):
+    if session is None:
+        return
+
+    recorded_signal_info = getattr(window, "recorded_signal_info", {}) or {}
+    updated_file_path = recorded_signal_info.get("file_path")
+    if not updated_file_path:
+        return
+
+    if os.path.isabs(updated_file_path):
+        updated_recorded_path = updated_file_path
+    else:
+        updated_recorded_path = os.path.join(DEFAULT_DIR, updated_file_path).replace("\\", "/")
+
+    window.recorded_path = updated_recorded_path
+    session.metadata["recorded_path"] = updated_recorded_path
+    session.metadata["recorded_signal_info"] = recorded_signal_info.copy()
+    if getattr(session, "analysis_result", None) is not None:
+        session.analysis_result["recorded_path"] = updated_file_path
+
+
+def load_fixed_mic_session_audio(session):
+    if session is None:
+        return None
+
+    audio_clip = getattr(session, "audio_clip", None)
+    if audio_clip is not None:
+        return np.asarray(audio_clip, dtype=np.float32).copy()
+
+    metadata = getattr(session, "metadata", {}) or {}
+    recorded_path = metadata.get("recorded_path")
+    sample_rate = metadata.get("sample_rate")
+    recorded_signal_info = metadata.get("recorded_signal_info", {}) or {}
+    candidate_paths = [recorded_path, recorded_signal_info.get("file_path")]
+    normalized_paths = []
+    for candidate in candidate_paths:
+        if not candidate:
+            continue
+        normalized_candidate = candidate
+        if not os.path.isabs(normalized_candidate):
+            normalized_candidate = os.path.join(DEFAULT_DIR, normalized_candidate).replace("\\", "/")
+        if normalized_candidate not in normalized_paths:
+            normalized_paths.append(normalized_candidate)
+
+    for candidate_path in normalized_paths:
+        try:
+            loaded_audio, _ = load_audio_simple(candidate_path, sr=sample_rate)
+        except (FileNotFoundError, OSError):
+            continue
+        except Exception:
+            continue
+        if loaded_audio is not None:
+            return np.asarray(loaded_audio, dtype=np.float32).copy()
+    return None
 
 
 def finalize_and_run_fixed_mic_session(window, session, save_recorded_data_to_json_func):
@@ -36,6 +96,7 @@ def finalize_and_run_fixed_mic_session(window, session, save_recorded_data_to_js
     window.data_struct.update_channel_count()
     session.metadata["recorded_path"] = recorded_path
     session.metadata["recorded_signal_info"] = recorded_signal_info.copy()
+    session.audio_clip = None
 
     current_mode = getattr(getattr(window, "count_board", None), "mode", "test")
     if current_mode == "mark":
@@ -91,6 +152,7 @@ def finalize_fixed_mic_session_analysis_result(window, session, use_ai_result_as
 
     if use_ai_result_as_label and result_label in ("OK", "NG"):
         window.update_recorded_signal_info_to_db()
+        sync_fixed_mic_session_paths(window, session)
         sync_fixed_mic_test_statistics(window, result_label)
 
     window.default_logger.info(
@@ -108,7 +170,10 @@ def show_fixed_mic_session_result_by_id(window, session_id):
         session = window.fixed_mic_session_panel.get_session(session_id)
     if session is None:
         return
-    if getattr(session, "audio_clip", None) is None:
+    recorded_signal_info = session.metadata.get("recorded_signal_info", {}) or {}
+    if getattr(session, "audio_clip", None) is None and not (
+        session.metadata.get("recorded_path") or recorded_signal_info.get("file_path")
+    ):
         status_text = session.metadata.get("display_status", "处理中")
         QMessageBox.information(
             window,
@@ -121,7 +186,7 @@ def show_fixed_mic_session_result_by_id(window, session_id):
 
 
 def show_fixed_mic_session_analysis_windows(window, session):
-    if session is None or getattr(session, "audio_clip", None) is None:
+    if session is None:
         return
 
     previous_recorded_path = window.recorded_path
@@ -129,11 +194,15 @@ def show_fixed_mic_session_analysis_windows(window, session):
     previous_wave_data = window.data_struct.store_wave_data
     previous_sample_rate = window.data_struct.sample_rate
     previous_mode = getattr(window.count_board, "mode", "test")
+    session_audio = load_fixed_mic_session_audio(session)
+    if session_audio is None:
+        QMessageBox.information(window, "提示", "当前会话音频文件不可用，无法查看分析结果。")
+        return
 
     try:
         window.recorded_path = session.metadata.get("recorded_path")
         window.recorded_signal_info = session.metadata.get("recorded_signal_info", {}).copy()
-        window.data_struct.store_wave_data = session.audio_clip.copy()
+        window.data_struct.store_wave_data = session_audio
         window.data_struct.sample_rate = session.metadata.get("sample_rate", window.data_struct.sample_rate)
         window.data_struct.update_channel_count()
 

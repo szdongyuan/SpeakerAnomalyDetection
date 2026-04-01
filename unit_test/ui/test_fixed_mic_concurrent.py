@@ -1,4 +1,7 @@
+import logging
 import os
+import sys
+import types
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
@@ -7,11 +10,39 @@ from unittest import mock
 import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+if "concurrent_log_handler" not in sys.modules:
+    concurrent_log_handler = types.ModuleType("concurrent_log_handler")
+
+    class _ConcurrentRotatingFileHandler(logging.Handler):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def emit(self, record):
+            return
+
+    concurrent_log_handler.ConcurrentRotatingFileHandler = _ConcurrentRotatingFileHandler
+    sys.modules["concurrent_log_handler"] = concurrent_log_handler
+
+if "keyboard" not in sys.modules:
+    keyboard = types.ModuleType("keyboard")
+    keyboard.add_hotkey = lambda *args, **kwargs: None
+    keyboard.unhook_all_hotkeys = lambda *args, **kwargs: None
+    sys.modules["keyboard"] = keyboard
+
+if "pywinusb" not in sys.modules:
+    hid_module = types.ModuleType("hid")
+    hid_module.find_all_hid_devices = lambda: []
+    pywinusb_module = types.ModuleType("pywinusb")
+    pywinusb_module.hid = hid_module
+    sys.modules["pywinusb"] = pywinusb_module
+    sys.modules["pywinusb.hid"] = hid_module
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
 
 from base.fixed_mic_capture import FixedMicCaptureController
 from consts import error_code
+from consts.running_consts import DEFAULT_DIR
 from ui.sequence.fixed_mic import FixedMicSessionTablePanel
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget import SequenceWindow
@@ -319,6 +350,49 @@ class TestFixedMicConcurrent(unittest.TestCase):
         self.assertEqual(fake_window.fixed_mic_pending_review_sessions, [remaining_session])
         fake_window._update_fixed_mic_session_status.assert_called_once_with(selected_session, "已标记")
 
+    def test_handle_fixed_mic_mark_result_syncs_session_paths_after_label_move(self):
+        ok_button = object()
+        selected_session = SimpleNamespace(
+            session_id="fixed_mic_session_001",
+            metadata={"recorded_path": DEFAULT_DIR + "audio_data/stored_data/not_labeled/test.wav"},
+            analysis_result=None,
+        )
+        fake_window = SimpleNamespace(
+            fixed_mic_current_review_session=selected_session,
+            fixed_mic_pending_review_sessions=[selected_session],
+            count_board=SimpleNamespace(
+                ok_btn=ok_button,
+                ng_btn=object(),
+                set_mark_result_file=mock.Mock(),
+                set_mark_text=mock.Mock(),
+            ),
+            recorded_signal_info={"file_path": "audio_data/stored_data/not_labeled/test.wav"},
+            sender=lambda: ok_button,
+            _load_fixed_mic_review_session_context=mock.Mock(),
+            update_recorded_signal_info_to_db=mock.Mock(
+                side_effect=lambda: fake_window.recorded_signal_info.update(
+                    {"file_path": "audio_data/stored_data/OK/test.wav"}
+                )
+            ),
+            _update_fixed_mic_session_status=mock.Mock(),
+            _update_fixed_mic_session_result=mock.Mock(),
+            _emit_display_update=mock.Mock(),
+            _refresh_fixed_mic_review_session_display=mock.Mock(),
+            default_logger=SimpleNamespace(info=lambda *args, **kwargs: None),
+        )
+
+        SequenceWindow._handle_fixed_mic_mark_result(fake_window)
+
+        self.assertTrue(selected_session.metadata["recorded_path"].endswith("audio_data/stored_data/OK/test.wav"))
+        self.assertEqual(
+            selected_session.metadata["recorded_signal_info"]["file_path"],
+            "audio_data/stored_data/OK/test.wav",
+        )
+        self.assertEqual(
+            selected_session.analysis_result["recorded_path"],
+            "audio_data/stored_data/OK/test.wav",
+        )
+
     def test_selection_changed_marks_selected_pending_session_as_reviewing(self):
         session_a = SimpleNamespace(session_id="fixed_mic_session_001", metadata={})
         session_b = SimpleNamespace(session_id="fixed_mic_session_002", metadata={})
@@ -402,6 +476,49 @@ class TestFixedMicConcurrent(unittest.TestCase):
         self.assertEqual(fake_window.recorded_signal_info, {"file_path": "test.wav"})
         fake_window.data_struct.update_channel_count.assert_called_once()
         fake_window.plot_line_graph.assert_not_called()
+
+    def test_load_fixed_mic_review_session_context_reads_saved_audio_when_clip_is_released(self):
+        fake_session = SimpleNamespace(
+            metadata={"recorded_path": "test.wav", "recorded_signal_info": {"file_path": "test.wav"}, "sample_rate": 10},
+            audio_clip=None,
+        )
+        loaded_audio = np.array([[0.1], [0.2]], dtype=np.float32)
+        fake_window = SimpleNamespace(
+            recorded_path=None,
+            recorded_signal_info={},
+            data_struct=SimpleNamespace(store_wave_data=None, sample_rate=1, update_channel_count=mock.Mock()),
+            _plot_recorded_signal=mock.Mock(),
+        )
+
+        with mock.patch("ui.sequence.sequence_widget.load_fixed_mic_session_audio", return_value=loaded_audio):
+            SequenceWindow._load_fixed_mic_review_session_context(fake_window, fake_session, update_plot=True)
+
+        self.assertTrue(np.array_equal(fake_window.data_struct.store_wave_data, loaded_audio))
+        fake_window._plot_recorded_signal.assert_called_once_with(loaded_audio, 10, reset_page=True)
+
+    def test_load_fixed_mic_session_audio_falls_back_to_updated_file_path_when_recorded_path_is_stale(self):
+        from ui.sequence.fixed_mic.analysis_bridge import load_fixed_mic_session_audio
+
+        fake_session = SimpleNamespace(
+            audio_clip=None,
+            metadata={
+                "recorded_path": DEFAULT_DIR + "audio_data/stored_data/not_labeled/test.wav",
+                "recorded_signal_info": {"file_path": "audio_data/stored_data/OK/test.wav"},
+                "sample_rate": 10,
+            },
+        )
+        loaded_audio = np.array([[0.1], [0.2]], dtype=np.float32)
+
+        with mock.patch(
+            "ui.sequence.fixed_mic.analysis_bridge.load_audio_simple",
+            side_effect=[FileNotFoundError("old path missing"), (loaded_audio, np.array([0.0, 0.1]))],
+        ) as load_mock:
+            result = load_fixed_mic_session_audio(fake_session)
+
+        self.assertTrue(np.array_equal(result, loaded_audio))
+        self.assertEqual(load_mock.call_count, 2)
+        self.assertEqual(load_mock.call_args_list[0].kwargs["sr"], 10)
+        self.assertTrue(load_mock.call_args_list[1].args[0].endswith("audio_data/stored_data/OK/test.wav"))
 
     def test_handle_fixed_mic_manual_trigger_starts_capture_and_creates_session(self):
         class FakeTimer(object):
@@ -708,6 +825,25 @@ class TestFixedMicConcurrent(unittest.TestCase):
         fake_window._select_fixed_mic_session_row.assert_called_once_with("fixed_mic_session_001")
         fake_window._show_fixed_mic_session_analysis_windows.assert_called_once_with(fake_session)
 
+    def test_show_fixed_mic_session_result_by_id_allows_saved_session_without_memory_clip(self):
+        fake_session = SimpleNamespace(
+            session_id="fixed_mic_session_001",
+            audio_clip=None,
+            metadata={"recorded_path": "test.wav", "display_status": "待审核"},
+        )
+        fake_window = SimpleNamespace(
+            fixed_mic_session_panel=SimpleNamespace(get_session=mock.Mock(return_value=fake_session)),
+            _select_fixed_mic_session_row=mock.Mock(),
+            _show_fixed_mic_session_analysis_windows=mock.Mock(),
+        )
+
+        with mock.patch("ui.sequence.fixed_mic.analysis_bridge.QMessageBox.information") as info_mock:
+            SequenceWindow._show_fixed_mic_session_result_by_id(fake_window, "fixed_mic_session_001")
+
+        info_mock.assert_not_called()
+        fake_window._select_fixed_mic_session_row.assert_called_once_with("fixed_mic_session_001")
+        fake_window._show_fixed_mic_session_analysis_windows.assert_called_once_with(fake_session)
+
     def test_update_fixed_mic_live_plot_range_locks_x_axis_and_smooths_y_axis(self):
         fake_line_graph = SimpleNamespace(
             setXRange=mock.Mock(),
@@ -843,6 +979,7 @@ class TestFixedMicConcurrent(unittest.TestCase):
         fake_window._select_fixed_mic_session_row.assert_not_called()
         fake_window._enqueue_fixed_mic_review_session.assert_called_once_with(fake_session)
         fake_window._run_fixed_mic_session_analysis.assert_not_called()
+        self.assertIsNone(fake_session.audio_clip)
 
     def test_finalize_fixed_mic_analysis_result_uses_ai_result_without_default_ai(self):
         fake_session = SimpleNamespace(
@@ -877,6 +1014,45 @@ class TestFixedMicConcurrent(unittest.TestCase):
         fake_window.update_recorded_signal_info_to_db.assert_called_once()
         fake_window.count_board.set_test_result_file.assert_called_once_with("OK", "demo_model")
         fake_window.count_board.set_test_text.assert_called_once()
+
+    def test_finalize_fixed_mic_analysis_result_syncs_paths_after_auto_label_move(self):
+        fake_session = SimpleNamespace(
+            session_id="fixed_mic_session_001",
+            metadata={},
+            analysis_result=None,
+        )
+        fake_ai = SimpleNamespace(
+            result="OK",
+            calculate_ai_scores=mock.Mock(),
+            ai_analyse_score_textedit=SimpleNamespace(toPlainText=lambda: "评分结果: OK"),
+        )
+        fake_window = SimpleNamespace(
+            recorded_path=DEFAULT_DIR + "audio_data/stored_data/not_labeled/test.wav",
+            recorded_signal_info={"labels": "not_labeled", "file_path": "audio_data/stored_data/not_labeled/test.wav"},
+            default_ai=None,
+            analysis_window=[fake_ai],
+            analysis_config={"default_ai": None, "display_sequence": []},
+            count_board=SimpleNamespace(mode="test", set_test_result_file=mock.Mock(), set_test_text=mock.Mock()),
+            update_recorded_signal_info_to_db=mock.Mock(
+                side_effect=lambda: fake_window.recorded_signal_info.update(
+                    {"file_path": "audio_data/stored_data/OK/test.wav"}
+                )
+            ),
+            default_logger=SimpleNamespace(info=lambda *args, **kwargs: None),
+        )
+
+        SequenceWindow._finalize_fixed_mic_session_analysis_result(fake_window, fake_session, use_ai_result_as_label=True)
+
+        self.assertTrue(fake_window.recorded_path.endswith("audio_data/stored_data/OK/test.wav"))
+        self.assertTrue(fake_session.metadata["recorded_path"].endswith("audio_data/stored_data/OK/test.wav"))
+        self.assertEqual(
+            fake_session.metadata["recorded_signal_info"]["file_path"],
+            "audio_data/stored_data/OK/test.wav",
+        )
+        self.assertEqual(
+            fake_session.analysis_result["recorded_path"],
+            "audio_data/stored_data/OK/test.wav",
+        )
 
     def test_run_fixed_mic_session_analysis_only_runs_ai_for_auto_label(self):
         fake_session = SimpleNamespace(

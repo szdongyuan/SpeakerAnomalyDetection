@@ -49,9 +49,11 @@ from ui.sequence.fixed_mic import (
     finalize_and_run_fixed_mic_session,
     finalize_fixed_mic_session_analysis_result,
     get_fixed_mic_ai_result_text,
+    load_fixed_mic_session_audio,
     run_fixed_mic_session_analysis,
     show_fixed_mic_session_analysis_windows,
     show_fixed_mic_session_result_by_id,
+    sync_fixed_mic_session_paths,
 )
 from ui.sequence.fixed_mic.waveform_helpers import (
     build_fixed_mic_plot_data,
@@ -1183,7 +1185,7 @@ class SequenceWindow(QWidget):
         recorded_signal_info = session.metadata.get("recorded_signal_info", {}).copy()
         self.recorded_path = session.metadata.get("recorded_path")
         self.recorded_signal_info = recorded_signal_info
-        self.data_struct.store_wave_data = session.audio_clip.copy() if session.audio_clip is not None else None
+        self.data_struct.store_wave_data = load_fixed_mic_session_audio(session)
         self.data_struct.sample_rate = session.metadata.get("sample_rate", self.data_struct.sample_rate)
         self.data_struct.update_channel_count()
         if update_plot and self.data_struct.store_wave_data is not None:
@@ -1224,7 +1226,7 @@ class SequenceWindow(QWidget):
         }
         session.metadata["recorded_signal_info"] = self.recorded_signal_info.copy()
         self.update_recorded_signal_info_to_db()
-        session.metadata["recorded_signal_info"] = self.recorded_signal_info.copy()
+        sync_fixed_mic_session_paths(self, session)
         self._update_fixed_mic_session_status(session, "已标记")
         self._update_fixed_mic_session_result(session, label)
         self.count_board.set_mark_result_file(label)
