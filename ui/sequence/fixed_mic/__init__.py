@@ -9,9 +9,11 @@ from ui.sequence.fixed_mic.analysis_bridge import (
     finalize_and_run_fixed_mic_session,
     finalize_fixed_mic_session_analysis_result,
     get_fixed_mic_ai_result_text,
+    load_fixed_mic_session_audio,
     run_fixed_mic_session_analysis,
     show_fixed_mic_session_analysis_windows,
     show_fixed_mic_session_result_by_id,
+    sync_fixed_mic_session_paths,
 )
 
 __all__ = [
@@ -23,7 +25,9 @@ __all__ = [
     "finalize_and_run_fixed_mic_session",
     "finalize_fixed_mic_session_analysis_result",
     "get_fixed_mic_ai_result_text",
+    "load_fixed_mic_session_audio",
     "run_fixed_mic_session_analysis",
     "show_fixed_mic_session_analysis_windows",
     "show_fixed_mic_session_result_by_id",
+    "sync_fixed_mic_session_paths",
 ]
