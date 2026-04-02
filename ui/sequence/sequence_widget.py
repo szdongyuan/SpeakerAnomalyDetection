@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -61,10 +62,16 @@ from ui.sequence.fixed_mic.waveform_helpers import (
     get_fixed_mic_page_channel_indices,
 )
 from ui.sequence.fixed_mic.runtime_bridge import (
+    handle_fixed_mic_hotkey_trigger,
     handle_fixed_mic_manual_trigger,
     poll_fixed_mic_runtime,
     process_next_fixed_mic_analysis,
     stop_fixed_mic_runtime,
+)
+from ui.sequence.fixed_mic.hotkey_bridge import (
+    install_fixed_mic_hotkeys,
+    set_fixed_mic_hotkeys_enabled,
+    uninstall_fixed_mic_hotkeys,
 )
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.signal_analysis_window import get_class_mapping
@@ -146,12 +153,18 @@ class SequenceWindow(QWidget):
         self.fixed_mic_display_audio = None
         self.fixed_mic_display_sample_rate = 0.0
         self.fixed_mic_display_live_mode = False
+        self.fixed_mic_display_channel_indices_override = None
+        self.fixed_mic_display_channel_text = ""
+        self.fixed_mic_display_session_text = ""
         self.fixed_mic_waveform_widget = None
         self.fixed_mic_waveform_grid = None
+        self.fixed_mic_waveform_context_label = None
         self.fixed_mic_page_label = None
         self.fixed_mic_prev_page_btn = None
         self.fixed_mic_next_page_btn = None
         self.waveform_stack = None
+        self.fixed_mic_vertical_splitter = None
+        self.fixed_mic_hotkey_shortcuts = []
         self._sync_fixed_mic_mode_state()
 
         self.hw_manager = UnifiedHardwareManager()
@@ -165,6 +178,8 @@ class SequenceWindow(QWidget):
         self.bind_hw_signals()
         self.init_lineedit_text()
         self.init_ui()
+        install_fixed_mic_hotkeys(self)
+        set_fixed_mic_hotkeys_enabled(self, self.is_fixed_mic_mode())
 
     def init_ui(self):
         """
@@ -313,9 +328,16 @@ class SequenceWindow(QWidget):
         right_panel = QWidget()
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
-        right_layout.addWidget(self.waveform_stack, stretch=7)
-        right_layout.addWidget(self.create_fixed_mic_detail_panel(), stretch=5)
+        right_layout.setSpacing(0)
+        self.fixed_mic_vertical_splitter = QSplitter(Qt.Vertical)
+        self.fixed_mic_vertical_splitter.setChildrenCollapsible(False)
+        self.fixed_mic_vertical_splitter.setHandleWidth(8)
+        self.fixed_mic_vertical_splitter.addWidget(self.waveform_stack)
+        self.fixed_mic_vertical_splitter.addWidget(self.create_fixed_mic_detail_panel())
+        self.fixed_mic_vertical_splitter.setStretchFactor(0, 7)
+        self.fixed_mic_vertical_splitter.setStretchFactor(1, 4)
+        self.fixed_mic_vertical_splitter.setSizes([520, 260])
+        right_layout.addWidget(self.fixed_mic_vertical_splitter)
         right_panel.setLayout(right_layout)
 
         layout.addWidget(self.count_board, stretch=1)
@@ -360,6 +382,18 @@ class SequenceWindow(QWidget):
         container_layout = QVBoxLayout()
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(8)
+
+        self.fixed_mic_waveform_context_label = QLabel("固定麦波形 | 等待触发")
+        self.fixed_mic_waveform_context_label.setStyleSheet(
+            """
+            QLabel {
+                color: #5f6368;
+                font-size: 13px;
+                padding: 2px 2px 0px 2px;
+            }
+            """
+        )
+        container_layout.addWidget(self.fixed_mic_waveform_context_label)
 
         pager_layout = QHBoxLayout()
         pager_layout.setContentsMargins(0, 0, 0, 0)
@@ -425,7 +459,13 @@ class SequenceWindow(QWidget):
             self.fixed_mic_display_audio = None
             self.fixed_mic_display_sample_rate = 0.0
             self.fixed_mic_display_live_mode = False
+            self.fixed_mic_display_channel_indices_override = None
+            self.fixed_mic_display_channel_text = ""
+            self.fixed_mic_display_session_text = ""
         self._refresh_fixed_mic_waveform_paging_controls(0)
+        refresh_context = getattr(self, "_refresh_fixed_mic_waveform_context_label", None)
+        if callable(refresh_context):
+            refresh_context()
 
     def _get_fixed_mic_channel_config(self):
         if not self.is_fixed_mic_mode():
@@ -433,6 +473,55 @@ class SequenceWindow(QWidget):
         acq_detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
         channel_config = acq_detail.get("fixed_mic_channels", [])
         return channel_config if isinstance(channel_config, list) else []
+
+    def _set_fixed_mic_display_channel_context(self, session=None):
+        if session is None:
+            self.fixed_mic_display_channel_indices_override = None
+            self.fixed_mic_display_channel_text = ""
+            self.fixed_mic_display_session_text = ""
+            refresh_context = getattr(self, "_refresh_fixed_mic_waveform_context_label", None)
+            if callable(refresh_context):
+                refresh_context()
+            return
+
+        session_id = str(getattr(session, "session_id", "") or "")
+        session_no = session_id.split("_")[-1] if session_id else ""
+        self.fixed_mic_display_session_text = "会话 %s" % session_no if session_no else "会话回看"
+
+        selected_channel = getattr(session, "selected_channel", None)
+        if selected_channel:
+            normalized_channel = max(int(selected_channel), 1)
+            self.fixed_mic_display_channel_indices_override = [normalized_channel - 1]
+            self.fixed_mic_display_channel_text = "CH%s" % normalized_channel
+            refresh_context = getattr(self, "_refresh_fixed_mic_waveform_context_label", None)
+            if callable(refresh_context):
+                refresh_context()
+            return
+
+        self.fixed_mic_display_channel_indices_override = None
+        self.fixed_mic_display_channel_text = "全通道"
+        refresh_context = getattr(self, "_refresh_fixed_mic_waveform_context_label", None)
+        if callable(refresh_context):
+            refresh_context()
+
+    def _build_fixed_mic_waveform_context_text(self):
+        channel_text = str(getattr(self, "fixed_mic_display_channel_text", "") or "").strip()
+        session_text = str(getattr(self, "fixed_mic_display_session_text", "") or "").strip()
+        if bool(getattr(self, "fixed_mic_display_live_mode", False)):
+            return "实时采集中 | %s" % (channel_text or "全通道")
+        if session_text:
+            if channel_text:
+                return "%s 回看 | %s" % (session_text, channel_text)
+            return "%s 回看" % session_text
+        if getattr(self, "fixed_mic_display_audio", None) is not None:
+            return "固定麦波形 | %s" % (channel_text or "全通道")
+        return "固定麦波形 | 等待触发"
+
+    def _refresh_fixed_mic_waveform_context_label(self):
+        label = getattr(self, "fixed_mic_waveform_context_label", None)
+        if label is None:
+            return
+        label.setText(self._build_fixed_mic_waveform_context_text())
 
     def _get_fixed_mic_configured_channels(self):
         if not self.is_fixed_mic_mode():
@@ -556,24 +645,42 @@ class SequenceWindow(QWidget):
 
         self.fixed_mic_display_audio = normalized_audio
         self.fixed_mic_display_sample_rate = float(sample_rate or self.data_struct.sample_rate or 1.0)
-        self.fixed_mic_display_total_channels = total_channels
+        override_indices = list(getattr(self, "fixed_mic_display_channel_indices_override", None) or [])
+        display_total_channels = len(override_indices) if override_indices else total_channels
+        self.fixed_mic_display_total_channels = display_total_channels
         self.fixed_mic_display_live_mode = bool(live_mode)
         self._show_fixed_mic_waveform_view()
+        refresh_context = getattr(self, "_refresh_fixed_mic_waveform_context_label", None)
+        if callable(refresh_context):
+            refresh_context()
 
-        titles = get_fixed_mic_channel_titles(total_channels, self._get_fixed_mic_channel_config())
-        visible_channel_indices = get_fixed_mic_page_channel_indices(
-            total_channels,
-            self.fixed_mic_current_page,
-            self.fixed_mic_page_size,
-        )
+        title_total_channels = total_channels
+        if override_indices:
+            title_total_channels = max(
+                int(total_channels or 0),
+                int(self._get_fixed_mic_configured_channels() or 0),
+                max(override_indices) + 1,
+            )
+        titles = get_fixed_mic_channel_titles(title_total_channels, self._get_fixed_mic_channel_config())
+        if override_indices:
+            visible_channel_indices = override_indices
+        else:
+            visible_channel_indices = get_fixed_mic_page_channel_indices(
+                total_channels,
+                self.fixed_mic_current_page,
+                self.fixed_mic_page_size,
+            )
         visible_count = len(visible_channel_indices)
         self._layout_fixed_mic_subplot_widgets(visible_count)
-        self._refresh_fixed_mic_waveform_paging_controls(total_channels)
+        self._refresh_fixed_mic_waveform_paging_controls(display_total_channels)
 
         time_axis = np.array([], dtype=np.float32)
         display_audio = np.empty((0, visible_count), dtype=np.float32)
         if normalized_audio is not None and normalized_audio.size > 0 and visible_count > 0:
-            visible_audio = normalized_audio[:, visible_channel_indices]
+            if override_indices and normalized_audio.shape[1] == visible_count:
+                visible_audio = normalized_audio
+            else:
+                visible_audio = normalized_audio[:, visible_channel_indices]
             time_axis, display_audio = build_fixed_mic_plot_data(
                 visible_audio,
                 self.fixed_mic_display_sample_rate,
@@ -592,6 +699,8 @@ class SequenceWindow(QWidget):
             channel_index = visible_channel_indices[slot_index]
             plot_widget.show()
             title_text = titles[channel_index] if channel_index < len(titles) else "Mic%d" % (channel_index + 1)
+            if override_indices:
+                title_text = "%s (CH%d)" % (title_text, channel_index + 1)
             plot_widget.setTitle(title_text, color="black", size="12pt")
 
             channel_audio = (
@@ -732,6 +841,7 @@ class SequenceWindow(QWidget):
         if hasattr(self, 'hw_manager'):
             self.hw_manager.stop()
         self._stop_fixed_mic_runtime()
+        uninstall_fixed_mic_hotkeys(self)
         super().closeEvent(event)
 
     def reset_test_reord(self):
@@ -1025,6 +1135,9 @@ class SequenceWindow(QWidget):
     def _handle_fixed_mic_manual_trigger(self):
         handle_fixed_mic_manual_trigger(self, FixedMicCaptureController)
 
+    def _handle_fixed_mic_hotkey_trigger(self, channel_index):
+        handle_fixed_mic_hotkey_trigger(self, FixedMicCaptureController, channel_index)
+
     def _poll_fixed_mic_runtime(self):
         poll_fixed_mic_runtime(self)
 
@@ -1188,6 +1301,7 @@ class SequenceWindow(QWidget):
         self.data_struct.store_wave_data = load_fixed_mic_session_audio(session)
         self.data_struct.sample_rate = session.metadata.get("sample_rate", self.data_struct.sample_rate)
         self.data_struct.update_channel_count()
+        self._set_fixed_mic_display_channel_context(session)
         if update_plot and self.data_struct.store_wave_data is not None:
             self._plot_recorded_signal(self.data_struct.store_wave_data, self.data_struct.sample_rate, reset_page=True)
 
@@ -1256,6 +1370,7 @@ class SequenceWindow(QWidget):
     def _sync_fixed_mic_mode_state(self, desired_mode=None):
         if getattr(self, "count_board", None) is None:
             return
+        set_fixed_mic_hotkeys_enabled(self, self.is_fixed_mic_mode())
         if getattr(self, "fixed_mic_detail_panel", None) is not None:
             self.fixed_mic_detail_panel.setVisible(self.is_fixed_mic_mode())
         if not self.is_fixed_mic_mode():
@@ -1430,6 +1545,7 @@ class SequenceWindow(QWidget):
             cls_map = class_mapping.get(type)
             if cls_map:
                 class_instance = cls_map(key)
+                class_instance.fixed_mic_base_title = key
                 if self.analysis_config["default_ai"] == key:
                     self.default_ai = class_instance
                 class_instance.deviation_value = self.deviation_value

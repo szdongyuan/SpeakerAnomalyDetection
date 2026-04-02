@@ -1,10 +1,14 @@
 import numpy as np
 
 from base.load_config import load_config
+from base.log_manager import LogManager
 from base.pre_processing.preprocessing_manager import PreprocessingManager
 from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
 from machine_learning import MODEL_MAPPING
+
+
+default_logger = LogManager.set_log_handler("core")
 
 def load_data_from_database():
     try:
@@ -47,5 +51,19 @@ def preprocess_raw_signals(raw_signals, fs, preprocess_config):
     processed_data = []
     pm = PreprocessingManager()
     for i in range(len(raw_signals)):
-        processed_data.append(pm.process(raw_signals[i], fs[i], **preprocess_config))
+        signal = np.asarray(raw_signals[i], dtype=np.float32)
+        original_shape = tuple(signal.shape)
+        squeezed_signal = np.squeeze(signal)
+        if squeezed_signal.ndim == 0:
+            signal = squeezed_signal.reshape(1)
+        elif squeezed_signal.ndim == 1:
+            signal = squeezed_signal
+        if tuple(signal.shape) != original_shape:
+            default_logger.info(
+                "预处理输入归一化: index=%s, original_shape=%s, normalized_shape=%s",
+                i,
+                original_shape,
+                tuple(signal.shape),
+            )
+        processed_data.append(pm.process(signal, fs[i], **preprocess_config))
     return np.array(processed_data)

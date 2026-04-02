@@ -48,6 +48,33 @@ def get_class_mapping():
     return class_mapping
 
 
+def resolve_ai_model_name_for_runtime(analysis_item_config, actual_channels):
+    if not isinstance(analysis_item_config, dict):
+        return ""
+
+    default_model_name = str(analysis_item_config.get("analyse_model_name", "") or "").strip()
+    routing_config = analysis_item_config.get("channel_model_switch")
+    if not isinstance(routing_config, dict):
+        routing_config = analysis_item_config.get("_fixed_mic_ai_model_routing")
+    if not isinstance(routing_config, dict) or not routing_config.get("enabled", False):
+        return default_model_name
+
+    normalized_channels = max(int(actual_channels or 1), 1)
+    if normalized_channels <= 1:
+        return str(routing_config.get("single_channel_model_name", "") or "").strip() or default_model_name
+    return str(routing_config.get("multi_channel_model_name", "") or "").strip() or default_model_name
+
+
+def prepare_single_channel_waveform_for_prediction(raw_data):
+    normalized_data = np.asarray(raw_data, dtype=np.float32)
+    squeezed_data = np.squeeze(normalized_data)
+    if squeezed_data.ndim == 0:
+        return squeezed_data.reshape(1)
+    if squeezed_data.ndim == 1:
+        return squeezed_data
+    return normalized_data
+
+
 class AnalysisGraphWidget(QWidget):
 
     def __init__(self):
@@ -191,6 +218,7 @@ class AI(QWidget):
         self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
+        self.resolved_model_name = ""
         self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
         self.setWindowTitle(title_name)
@@ -233,7 +261,17 @@ class AI(QWidget):
             first_match.mergeCharFormat(format)
 
     def calculate_ai_scores(self, mode, analysis_config):
-        model_name = self.analysis_config["analyse_model_name"]
+        model_name = resolve_ai_model_name_for_runtime(
+            self.analysis_config,
+            getattr(self.data_struct, "num_channels", 1),
+        )
+        self.resolved_model_name = model_name
+        self.default_logger.info(
+            "AI评分开始: mode=%s, resolved_model=%s, data_channels=%s",
+            mode,
+            model_name,
+            getattr(self.data_struct, "num_channels", 1),
+        )
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
             self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
@@ -243,7 +281,7 @@ class AI(QWidget):
             result_text = self.model_predict(model_path, model_name, **kwargs)
             default_ai_model = analysis_config["default_ai"]
             if mode == "test" and default_ai_model:
-                analyse_model_name = analysis_config.get(default_ai_model, None).get("analyse_model_name", None)
+                analyse_model_name = model_name
                 match_object = re.search(r"评分结果:\s*(\S+)", result_text)
                 if match_object:
                     match_result = match_object.group(1)
@@ -264,11 +302,19 @@ class AI(QWidget):
         full_config_path = config_path
         data_load_config = load_config(config_path=full_config_path, module_name="data_load")
         multichannel_config = data_load_config.get("multichannel", {})
+        original_wave_data = np.array(self.data_struct.store_wave_data, dtype=np.float32)
         if multichannel_config.get("enabled"):
             # 多通道预测
-            raw_data = np.array(self.data_struct.store_wave_data, dtype=np.float32)
+            raw_data = original_wave_data
             if raw_data.ndim == 2 and raw_data.shape[0] > raw_data.shape[1]:
                 raw_data = raw_data.T
+            self.default_logger.info(
+                "AI预测输入(多通道): model=%s, original_shape=%s, normalized_shape=%s, sample_rate=%s",
+                model_name,
+                tuple(original_wave_data.shape),
+                tuple(raw_data.shape),
+                self.data_struct.sample_rate,
+            )
             ret_str = predict_multichannel_from_audio(
                 multichannel_signal=np.array(raw_data, dtype=np.float32),
                 file_name="modelpredict.wav",
@@ -277,8 +323,16 @@ class AI(QWidget):
                 **kwargs,
             )
         else:
+            raw_data = prepare_single_channel_waveform_for_prediction(self.data_struct.store_wave_data)
+            self.default_logger.info(
+                "AI预测输入(单通道): model=%s, original_shape=%s, normalized_shape=%s, sample_rate=%s",
+                model_name,
+                tuple(original_wave_data.shape),
+                tuple(raw_data.shape),
+                self.data_struct.sample_rate,
+            )
             ret_str = predict_from_audio(
-                signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
+                signals=[raw_data],
                 file_names=["modelpredict.wav"],
                 fs=[self.data_struct.sample_rate],
                 load_model_path=model_path,

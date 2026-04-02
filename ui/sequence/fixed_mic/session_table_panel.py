@@ -40,9 +40,9 @@ class FixedMicSessionTablePanel(QWidget):
         group_box = QGroupBox("会话列表")
         group_layout = QVBoxLayout()
 
-        self.session_table = QTableWidget(0, 9)
+        self.session_table = QTableWidget(0, 10)
         self.session_table.setHorizontalHeaderLabels(
-            ["会话", "触发时间", "截止时间", "音频时长", "条码", "进度", "结果", "播放", "分析"]
+            ["会话", "触发时间", "截止时间", "音频时长", "通道", "条码", "进度", "结果", "播放", "分析"]
         )
         self.session_table.verticalHeader().setVisible(False)
         self.session_table.verticalHeader().setDefaultSectionSize(34)
@@ -54,7 +54,7 @@ class FixedMicSessionTablePanel(QWidget):
         self.session_table.setTextElideMode(Qt.ElideMiddle)
         self.session_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.session_table.setMinimumWidth(0)
-        self.session_table.setMinimumHeight(240)
+        self.session_table.setMinimumHeight(160)
 
         header = self.session_table.horizontalHeader()
         header_font = header.font()
@@ -67,17 +67,19 @@ class FixedMicSessionTablePanel(QWidget):
         header.setSectionResizeMode(1, QHeaderView.Fixed)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.Fixed)
         header.setSectionResizeMode(5, QHeaderView.Stretch)
         header.setSectionResizeMode(6, QHeaderView.Stretch)
-        header.setSectionResizeMode(7, QHeaderView.Fixed)
+        header.setSectionResizeMode(7, QHeaderView.Stretch)
         header.setSectionResizeMode(8, QHeaderView.Fixed)
+        header.setSectionResizeMode(9, QHeaderView.Fixed)
         self.session_table.setColumnWidth(0, 56)
         self.session_table.setColumnWidth(1, 92)
         self.session_table.setColumnWidth(2, 92)
         self.session_table.setColumnWidth(3, 86)
-        self.session_table.setColumnWidth(7, 72)
-        self.session_table.setColumnWidth(8, 84)
+        self.session_table.setColumnWidth(4, 76)
+        self.session_table.setColumnWidth(8, 72)
+        self.session_table.setColumnWidth(9, 84)
 
         group_layout.addWidget(self.session_table)
         group_box.setLayout(group_layout)
@@ -116,17 +118,18 @@ class FixedMicSessionTablePanel(QWidget):
         trigger_time = session.trigger_time.strftime("%H:%M:%S") if getattr(session, "trigger_time", None) else "-"
         deadline_time = self.get_deadline_text(session)
         duration_text = self.get_duration_text(session)
+        channel_text = self.get_channel_text(session)
         barcode = session.vehicle_barcode or "-"
         result_label = self.get_result_label(session)
-        values = [session_no, trigger_time, deadline_time, duration_text, barcode, status_text, result_label]
+        values = [session_no, trigger_time, deadline_time, duration_text, channel_text, barcode, status_text, result_label]
         for col, value in enumerate(values):
             session_id = session.session_id if col == 0 else None
             item = self.make_table_item(str(value), session_id=session_id)
-            if col == 4:
+            if col == 5:
                 item.setToolTip(str(value))
             self.session_table.setItem(row, col, item)
-        self.session_table.setCellWidget(row, 7, self.create_play_cell(session.session_id))
-        self.session_table.setCellWidget(row, 8, self.create_view_cell(session.session_id))
+        self.session_table.setCellWidget(row, 8, self.create_play_cell(session.session_id))
+        self.session_table.setCellWidget(row, 9, self.create_view_cell(session.session_id))
         self._refresh_play_button_for_session(session.session_id)
         self.session_table.scrollToBottom()
 
@@ -140,10 +143,17 @@ class FixedMicSessionTablePanel(QWidget):
             self.register_session(session, status_text=status_text)
             return
         self.refresh_session_timing(row, session)
-        item = self.session_table.item(row, 5)
+        channel_item = self.session_table.item(row, 4)
+        channel_text = self.get_channel_text(session)
+        if channel_item is None:
+            channel_item = self.make_table_item(channel_text)
+            self.session_table.setItem(row, 4, channel_item)
+        else:
+            channel_item.setText(channel_text)
+        item = self.session_table.item(row, 6)
         if item is None:
             item = self.make_table_item(status_text)
-            self.session_table.setItem(row, 5, item)
+            self.session_table.setItem(row, 6, item)
         else:
             item.setText(status_text)
         self._refresh_play_button_for_session(session.session_id)
@@ -161,10 +171,10 @@ class FixedMicSessionTablePanel(QWidget):
         if row is None:
             return
         self.refresh_session_timing(row, session)
-        item = self.session_table.item(row, 6)
+        item = self.session_table.item(row, 7)
         if item is None:
             item = self.make_table_item(normalized_label)
-            self.session_table.setItem(row, 6, item)
+            self.session_table.setItem(row, 7, item)
         else:
             item.setText(normalized_label)
         self._refresh_play_button_for_session(session.session_id)
@@ -315,7 +325,7 @@ class FixedMicSessionTablePanel(QWidget):
         row = self.session_rows.get(session_id)
         if row is None or self.session_table is None:
             return
-        play_btn = self._get_cell_center_widget(self.session_table, row, 7)
+        play_btn = self._get_cell_center_widget(self.session_table, row, 8)
         if play_btn is None:
             return
 
@@ -430,6 +440,15 @@ class FixedMicSessionTablePanel(QWidget):
             return "not_labeled"
         metadata = getattr(session, "metadata", {})
         return metadata.get("result_label", "not_labeled")
+
+    @staticmethod
+    def get_channel_text(session):
+        if session is None:
+            return "-"
+        selected_channel = getattr(session, "selected_channel", None)
+        if selected_channel:
+            return "CH%s" % selected_channel
+        return "全通道"
 
     @staticmethod
     def get_deadline_text(session):

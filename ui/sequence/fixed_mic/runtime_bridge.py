@@ -5,6 +5,54 @@ from PyQt5.QtWidgets import QMessageBox
 from consts import error_code
 
 
+def ensure_fixed_mic_capture_started(window, controller_cls):
+    if window.fixed_mic_controller is not None:
+        return error_code.OK, "Fixed mic capture already running."
+
+    acq_detail = window.sequence_config[0]["seq1"]["acq"]["detail"]
+    window.fixed_mic_controller = controller_cls(acq_detail, input_device=window.mic)
+    start_code, start_msg = window.fixed_mic_controller.start_capture()
+    if start_code != error_code.OK:
+        window.fixed_mic_controller = None
+        return start_code, start_msg
+
+    window.fixed_mic_plot_window_sec = max(
+        min(float(window.fixed_mic_controller.buffer_duration), 15.0),
+        float(window.fixed_mic_controller.window_duration),
+    )
+    window.fixed_mic_poll_timer.start(50)
+    window._clear_waveform_display()
+    window.fixed_mic_plot_item = None
+    window.fixed_mic_last_plot_update_ts = 0.0
+    window.fixed_mic_live_y_limit = 0.01
+    window.fixed_mic_stream_buffer = []
+    if hasattr(window, "_set_fixed_mic_display_channel_context"):
+        window._set_fixed_mic_display_channel_context(None)
+    window._reset_fixed_mic_session_views()
+    window._configure_fixed_mic_live_plot_view()
+    window._render_fixed_mic_waveforms(
+        None,
+        window.fixed_mic_controller.sample_rate,
+        total_channels=window.fixed_mic_controller.channels,
+        reset_page=True,
+        live_mode=True,
+    )
+    return error_code.OK, "Fixed mic capture started."
+
+
+def finalize_fixed_mic_session_created(window, session):
+    window.player_status_flag = window.fixed_mic_controller.is_running
+    window.data_btn.setEnabled(False)
+    window._update_fixed_mic_toolbar_state()
+    window._register_fixed_mic_session(session, status_text="采集中")
+    window.default_logger.info(
+        "固定麦阶段2已创建会话: %s, trigger_source=%s, selected_channel=%s",
+        session.session_id,
+        getattr(session, "trigger_source", None),
+        getattr(session, "selected_channel", None),
+    )
+
+
 def handle_fixed_mic_manual_trigger(window, controller_cls):
     if window.checked_work_status_message():
         return
@@ -13,33 +61,10 @@ def handle_fixed_mic_manual_trigger(window, controller_cls):
         window.default_logger.info("固定麦并发模式阶段2仅接收手动点击触发。")
         return
 
-    if window.fixed_mic_controller is None:
-        acq_detail = window.sequence_config[0]["seq1"]["acq"]["detail"]
-        window.fixed_mic_controller = controller_cls(acq_detail, input_device=window.mic)
-        start_code, start_msg = window.fixed_mic_controller.start_capture()
-        if start_code != error_code.OK:
-            QMessageBox.warning(window, "提示", "固定麦持续采集启动失败: %s" % start_msg)
-            window.fixed_mic_controller = None
-            return
-        window.fixed_mic_plot_window_sec = max(
-            min(float(window.fixed_mic_controller.buffer_duration), 15.0),
-            float(window.fixed_mic_controller.window_duration),
-        )
-        window.fixed_mic_poll_timer.start(50)
-        window._clear_waveform_display()
-        window.fixed_mic_plot_item = None
-        window.fixed_mic_last_plot_update_ts = 0.0
-        window.fixed_mic_live_y_limit = 0.01
-        window.fixed_mic_stream_buffer = []
-        window._reset_fixed_mic_session_views()
-        window._configure_fixed_mic_live_plot_view()
-        window._render_fixed_mic_waveforms(
-            None,
-            window.fixed_mic_controller.sample_rate,
-            total_channels=window.fixed_mic_controller.channels,
-            reset_page=True,
-            live_mode=True,
-        )
+    start_code, start_msg = ensure_fixed_mic_capture_started(window, controller_cls)
+    if start_code != error_code.OK:
+        QMessageBox.warning(window, "提示", "固定麦持续采集启动失败: %s" % start_msg)
+        return
 
     barcode = window.lineedit_s_or_n.text().strip() or None
     create_code, create_msg, session = window.fixed_mic_controller.create_manual_session(barcode)
@@ -47,11 +72,27 @@ def handle_fixed_mic_manual_trigger(window, controller_cls):
         QMessageBox.warning(window, "提示", create_msg)
         return
 
-    window.player_status_flag = window.fixed_mic_controller.is_running
-    window.data_btn.setEnabled(False)
-    window._update_fixed_mic_toolbar_state()
-    window._register_fixed_mic_session(session, status_text="采集中")
-    window.default_logger.info("固定麦阶段2已创建会话: %s" % session.session_id)
+    finalize_fixed_mic_session_created(window, session)
+
+
+def handle_fixed_mic_hotkey_trigger(window, controller_cls, channel_index):
+    if window.checked_work_status_message():
+        return
+    if not window.is_fixed_mic_mode():
+        return
+
+    start_code, start_msg = ensure_fixed_mic_capture_started(window, controller_cls)
+    if start_code != error_code.OK:
+        QMessageBox.warning(window, "提示", "固定麦持续采集启动失败: %s" % start_msg)
+        return
+
+    barcode = window.lineedit_s_or_n.text().strip() or None
+    create_code, create_msg, session = window.fixed_mic_controller.create_hotkey_session(channel_index, barcode)
+    if create_code != error_code.OK:
+        QMessageBox.warning(window, "提示", create_msg)
+        return
+
+    finalize_fixed_mic_session_created(window, session)
 
 
 def poll_fixed_mic_runtime(window):
@@ -116,6 +157,8 @@ def stop_fixed_mic_runtime(window):
     window.fixed_mic_last_plot_update_ts = 0.0
     window.fixed_mic_live_y_limit = 0.01
     window.fixed_mic_stream_buffer = []
+    if hasattr(window, "_set_fixed_mic_display_channel_context") and not preserve_review_state:
+        window._set_fixed_mic_display_channel_context(None)
     if preserve_review_state:
         if window.fixed_mic_analysis_queue and not window.fixed_mic_analysis_busy:
             try:

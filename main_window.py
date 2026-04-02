@@ -19,11 +19,11 @@ from ui.display_window import DisplayWindow, save_display_config
 from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
+from ui.sequence.fixed_mic.hotkey_bridge import handle_fixed_mic_native_hotkey
 from ui.sequence.sequence_widget import SequenceWindow
 
 
 class MainWindow(QMainWindow):
-
     def __init__(self):
         super().__init__()
         # set up statusbar object data
@@ -364,6 +364,13 @@ class MainWindow(QMainWindow):
             SequenceWindow.tcp_server = None
         self._close_display_window()
         event.accept()
+
+    def nativeEvent(self, eventType, message):
+        sequence_window = getattr(self, "sequence_window", None)
+        if sys.platform == "win32" and sequence_window is not None:
+            if handle_fixed_mic_native_hotkey(sequence_window, eventType, message):
+                return True, 1
+        return super().nativeEvent(eventType, message)
 
     def mousepressevent(self, event):
         # If the mouse is pressed, recoed mouse move data, start the window resizing

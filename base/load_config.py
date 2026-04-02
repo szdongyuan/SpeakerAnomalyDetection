@@ -219,6 +219,15 @@ class LoadUiConfig(object):
                 }
             )
 
+        fixed_mic_hotkeys = []
+        for index in range(channel_count):
+            fixed_mic_hotkeys.append(
+                {
+                    "shortcut": f"Ctrl+{index + 1}",
+                    "channel_index": index + 1,
+                }
+            )
+
         return {
             "capture_mode": "fixed_mic_multi_session",
             "fixed_mic_mode_version": "basic_concurrent",
@@ -232,6 +241,7 @@ class LoadUiConfig(object):
             "save_all_channels": True,
             "grating_adapter_enabled": False,
             "fixed_mic_channels": fixed_mic_channels,
+            "fixed_mic_hotkeys": fixed_mic_hotkeys,
         }
 
     @staticmethod
@@ -241,8 +251,15 @@ class LoadUiConfig(object):
         if code == error_code.OK and isinstance(data, dict):
             merged_config = LoadUiConfig.get_default_fixed_mic_concurrent_config()
             merged_config.update(data)
+            needs_backfill = False
             if "fixed_mic_channels" in data:
                 merged_config["fixed_mic_channels"] = data["fixed_mic_channels"]
+            if "fixed_mic_hotkeys" in data:
+                merged_config["fixed_mic_hotkeys"] = data["fixed_mic_hotkeys"]
+            else:
+                needs_backfill = True
+            if needs_backfill:
+                LoadUiConfig.save_fixed_mic_concurrent_config(merged_config)
             return error_code.OK, merged_config
 
         default_config = LoadUiConfig.get_default_fixed_mic_concurrent_config()

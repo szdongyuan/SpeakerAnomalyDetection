@@ -24,6 +24,9 @@ class FixedMicSession(object):
         capture_end_sample,
         window_duration,
         metadata=None,
+        selected_channel=None,
+        source_channel_count=None,
+        effective_channel_count=None,
     ):
         self.session_id = session_id
         self.vehicle_barcode = vehicle_barcode
@@ -37,6 +40,9 @@ class FixedMicSession(object):
         self.audio_clip = None
         self.analysis_result = None
         self.metadata = metadata if metadata is not None else {}
+        self.selected_channel = selected_channel
+        self.source_channel_count = source_channel_count
+        self.effective_channel_count = effective_channel_count
         self.created_at = datetime.now()
         self.completed_at = None
 
@@ -52,9 +58,16 @@ class FixedMicSession(object):
             self.audio_clip = None
             return
         self.audio_clip = np.asarray(audio_clip, dtype=np.float32).copy()
+        if self.audio_clip.ndim == 1:
+            self.effective_channel_count = 1
+        else:
+            self.effective_channel_count = int(self.audio_clip.shape[1])
         self.status = FixedMicSessionStatus.FROZEN
         self.completed_at = datetime.now()
         self.metadata["audio_clip_shape"] = tuple(self.audio_clip.shape)
+        self.metadata["selected_channel"] = self.selected_channel
+        self.metadata["source_channel_count"] = self.source_channel_count
+        self.metadata["effective_channel_count"] = self.effective_channel_count
         if self.audio_clip.ndim == 1:
             self.metadata["audio_clip_samples"] = int(len(self.audio_clip))
         else:
@@ -79,6 +92,8 @@ class FixedMicSession(object):
             "capture_start_sample": self.capture_start_sample,
             "capture_end_sample": self.capture_end_sample,
             "has_audio_clip": self.audio_clip is not None,
+            "selected_channel": self.selected_channel,
+            "effective_channel_count": self.effective_channel_count,
         }
 
 
@@ -183,6 +198,14 @@ class FixedMicTriggerAdapter(object):
             "trigger_mode": "manual_click",
             "vehicle_barcode": vehicle_barcode,
             "trigger_time": datetime.now(),
+        }
+
+    def build_hotkey_trigger_payload(self, channel_index, vehicle_barcode=None):
+        return {
+            "trigger_mode": "hotkey_channel",
+            "vehicle_barcode": vehicle_barcode,
+            "trigger_time": datetime.now(),
+            "selected_channel": int(channel_index),
         }
 
     def on_grating_trigger(self, event):
