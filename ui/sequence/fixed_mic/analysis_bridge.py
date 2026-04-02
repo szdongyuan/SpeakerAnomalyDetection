@@ -66,6 +66,59 @@ def load_fixed_mic_session_audio(session):
     return None
 
 
+def get_fixed_mic_session_channel_text(session):
+    if session is None:
+        return ""
+
+    selected_channel = getattr(session, "selected_channel", None)
+    if selected_channel:
+        return "CH%s" % int(selected_channel)
+    return "全通道"
+
+
+def apply_fixed_mic_analysis_window_titles(window, session):
+    channel_text = get_fixed_mic_session_channel_text(session)
+    if not channel_text:
+        return
+
+    analysis_instances = list(getattr(window, "analysis_window", []) or [])
+    default_ai = getattr(window, "default_ai", None)
+    if default_ai is not None and default_ai not in analysis_instances:
+        analysis_instances.append(default_ai)
+
+    for instance in analysis_instances:
+        base_title = getattr(instance, "fixed_mic_base_title", None) or instance.windowTitle()
+        instance.fixed_mic_base_title = base_title
+        instance.setWindowTitle("%s - %s" % (base_title, channel_text))
+
+
+def get_fixed_mic_ai_model_routing(window):
+    try:
+        acq_detail = window.sequence_config[0]["seq1"]["acq"].get("detail", {})
+    except Exception:
+        return {}
+
+    routing_config = acq_detail.get("fixed_mic_ai_model_routing", {})
+    if not isinstance(routing_config, dict):
+        return {}
+    return routing_config.copy()
+
+
+def apply_fixed_mic_ai_model_routing(window):
+    routing_config = get_fixed_mic_ai_model_routing(window)
+    if not routing_config:
+        return
+
+    for instance in getattr(window, "analysis_window", []) or []:
+        if not hasattr(instance, "calculate_ai_scores"):
+            continue
+        merged_config = dict(getattr(instance, "analysis_config", {}) or {})
+        if isinstance(merged_config.get("channel_model_switch"), dict):
+            continue
+        merged_config["_fixed_mic_ai_model_routing"] = routing_config.copy()
+        instance.analysis_config = merged_config
+
+
 def finalize_and_run_fixed_mic_session(window, session, save_recorded_data_to_json_func):
     if session is None or session.audio_clip is None:
         return
@@ -122,6 +175,7 @@ def finalize_and_run_fixed_mic_session(window, session, save_recorded_data_to_js
 
 def run_fixed_mic_session_analysis(window, session, use_ai_result_as_label=False):
     window._prepare_analysis_instances()
+    apply_fixed_mic_ai_model_routing(window)
     if use_ai_result_as_label:
         run_fixed_mic_ai_only_analysis(window)
     else:
@@ -208,6 +262,8 @@ def show_fixed_mic_session_analysis_windows(window, session):
 
         window._close_analysis_windows()
         window._prepare_analysis_instances()
+        apply_fixed_mic_ai_model_routing(window)
+        apply_fixed_mic_analysis_window_titles(window, session)
         width, height = window._get_analysis_window_position()
         window.count_board.mode = "view"
         window._execute_analysis_windows(width, height, show_windows=True)
@@ -278,8 +334,10 @@ def sync_fixed_mic_test_statistics(window, result_label):
     analyse_model_name = ""
     ai_instance = get_fixed_mic_ai_instance(window)
     if ai_instance is not None:
-        ai_config = getattr(ai_instance, "analysis_config", None) or {}
-        analyse_model_name = ai_config.get("analyse_model_name", "")
+        analyse_model_name = str(getattr(ai_instance, "resolved_model_name", "") or "").strip()
+        if not analyse_model_name:
+            ai_config = getattr(ai_instance, "analysis_config", None) or {}
+            analyse_model_name = ai_config.get("analyse_model_name", "")
     if not analyse_model_name:
         for key in analysis_config.get("display_sequence", []):
             key_config = analysis_config.get(key)

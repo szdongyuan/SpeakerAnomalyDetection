@@ -1,3 +1,5 @@
+import os
+
 from base.log_manager import LogManager
 from base.play_and_record import get_recorded_info
 from base.recording_management import RecordingManager
@@ -8,6 +10,20 @@ from consts import error_code
 class SessionFinalizePipeline(object):
     def __init__(self):
         self.default_logger = LogManager.set_log_handler("core")
+
+    @staticmethod
+    def apply_fixed_mic_channel_suffix(recorded_path, recorded_signal_info, session):
+        selected_channel = getattr(session, "selected_channel", None)
+        if not selected_channel:
+            return recorded_path, recorded_signal_info
+
+        base_path, ext = os.path.splitext(recorded_path)
+        suffixed_path = "%s_ch%s%s" % (base_path, selected_channel, ext or "")
+        updated_signal_info = recorded_signal_info.copy()
+        updated_signal_info["file_path"] = suffixed_path
+        updated_signal_info["selected_channel"] = selected_channel
+        updated_signal_info["effective_channel_count"] = getattr(session, "effective_channel_count", None)
+        return suffixed_path, updated_signal_info
 
     def save_fixed_mic_session(self, session, product_model, recorded_count):
         if session is None:
@@ -20,6 +36,11 @@ class SessionFinalizePipeline(object):
             recorded_count,
             session.vehicle_barcode,
             "not_labeled",
+        )
+        recorded_path, recorded_signal_info = self.apply_fixed_mic_channel_suffix(
+            recorded_path,
+            recorded_signal_info,
+            session,
         )
         sample_rate = session.metadata.get("sample_rate", 44100)
 

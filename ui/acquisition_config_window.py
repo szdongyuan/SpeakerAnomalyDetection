@@ -404,6 +404,9 @@ class FixedMicConcurrentConfigWindow(BaseConfigWindow):
 
     def on_click_ok_btn(self):
         channel_rows = self.build_channel_rows_for_save(self.channels_spin.value())
+        preserved_hotkeys = self.input_data.get("fixed_mic_hotkeys")
+        if not isinstance(preserved_hotkeys, list) or not preserved_hotkeys:
+            preserved_hotkeys = LoadUiConfig.get_default_fixed_mic_concurrent_config().get("fixed_mic_hotkeys", [])
         config_data = {
             "capture_mode": "fixed_mic_multi_session",
             "fixed_mic_mode_version": "basic_concurrent",
@@ -417,6 +420,7 @@ class FixedMicConcurrentConfigWindow(BaseConfigWindow):
             "save_all_channels": self.save_all_channels_box.isChecked(),
             "grating_adapter_enabled": False,
             "fixed_mic_channels": channel_rows,
+            "fixed_mic_hotkeys": preserved_hotkeys,
         }
         LoadUiConfig.save_fixed_mic_concurrent_config(config_data)
         self.final_data = config_data

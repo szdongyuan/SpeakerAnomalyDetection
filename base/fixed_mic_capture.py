@@ -101,6 +101,14 @@ class FixedMicCaptureController(object):
                 break
 
     def create_manual_session(self, vehicle_barcode=None):
+        trigger_payload = self.trigger_adapter.build_manual_trigger_payload(vehicle_barcode)
+        return self._create_session(trigger_payload)
+
+    def create_hotkey_session(self, channel_index, vehicle_barcode=None):
+        trigger_payload = self.trigger_adapter.build_hotkey_trigger_payload(channel_index, vehicle_barcode)
+        return self._create_session(trigger_payload)
+
+    def _create_session(self, trigger_payload):
         if not self.is_running:
             return error_code.INVALID_RECORD, "Fixed mic capture is not running.", None
 
@@ -108,7 +116,10 @@ class FixedMicCaptureController(object):
             if len(self._active_sessions) >= self.max_sessions:
                 return error_code.INVALID_ADD, "Maximum active fixed mic sessions reached.", None
 
-            trigger_payload = self.trigger_adapter.build_manual_trigger_payload(vehicle_barcode)
+            selected_channel = trigger_payload.get("selected_channel")
+            if selected_channel is not None and not 1 <= int(selected_channel) <= self.channels:
+                return error_code.INVALID_ADD, "Selected fixed mic channel is out of range.", None
+
             trigger_sample_index = self._total_callback_samples
             self._session_counter += 1
             session_id = "fixed_mic_session_%03d" % self._session_counter
@@ -126,7 +137,11 @@ class FixedMicCaptureController(object):
                 metadata={
                     "sample_rate": self.sample_rate,
                     "channels": self.channels,
+                    "selected_channel": selected_channel,
                 },
+                selected_channel=selected_channel,
+                source_channel_count=self.channels,
+                effective_channel_count=self.channels,
             )
             session.mark_capturing()
             self._active_sessions[session_id] = session
@@ -215,6 +230,15 @@ class FixedMicCaptureController(object):
             )
             return
 
+        audio_clip = self._select_session_audio_clip(audio_clip, session)
+        if audio_clip is None:
+            session.cancel("selected fixed mic channel is invalid")
+            self._cancelled_sessions.append(session)
+            self.default_logger.warning(
+                "Fixed mic session selected channel is invalid: %s", session.to_summary()
+            )
+            return
+
         session.freeze_audio_clip(audio_clip)
         self._captured_sessions.append(session)
         self.default_logger.info(
@@ -222,6 +246,20 @@ class FixedMicCaptureController(object):
             session.session_id,
             session.metadata.get("audio_clip_shape"),
         )
+
+    def _select_session_audio_clip(self, audio_clip, session):
+        selected_channel = getattr(session, "selected_channel", None)
+        if selected_channel is None:
+            return audio_clip
+
+        normalized_audio = np.asarray(audio_clip, dtype=np.float32)
+        if normalized_audio.ndim == 1:
+            normalized_audio = normalized_audio.reshape(-1, 1)
+
+        channel_index = int(selected_channel) - 1
+        if channel_index < 0 or channel_index >= normalized_audio.shape[1]:
+            return None
+        return normalized_audio[:, channel_index : channel_index + 1].copy()
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
