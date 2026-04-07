@@ -30,6 +30,7 @@ from ui.acquisition_config_window import (
 
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
+from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpectrumConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
@@ -40,11 +41,12 @@ SUPPORTED_ACQ_MODES = {"RECORD_ONLY", "IMPORT_AUDIO"}
 SUPPORTED_ANALYSIS_ITEMS = [
     "声压级 (SPL) ",
     "频谱分析 (Spec) ",
+    "参考频谱对比 (RSC) ",
     "AI 分析 ",
     "松散颗粒 (LP) ",
     "结果导出 (Excel) ",
 ]
-SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "AI", "LP", "Excel"}
+SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "RSC", "AI", "LP", "Excel"}
 
 
 class AnalysisModelSelect(QDialog):
@@ -693,6 +695,12 @@ class OptionList(QListView):
             )
         if type == "Spec":
             return SpecConfigWindow(config_manager, name, available_channels=available_channels)
+        if type == "RSC":
+            return ReferenceSpectrumConfigWindow(
+                config_manager,
+                name,
+                available_channels=available_channels,
+            )
         if type == "LP":
             return LPConfigWindow(config_manager, name, available_channels=available_channels)
         if type == "Excel":

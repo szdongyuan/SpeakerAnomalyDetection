@@ -65,14 +65,20 @@ class SequenceWidgetStreamingOpsMixin:
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
             return False, "NG"
         passed = True
+        judged_count = 0
         for _, v in result_dict.items():
             try:
-                ok = bool(v[0])
+                ok = v[0]
             except Exception:
                 ok = False
+            if ok is None:
+                continue
+            judged_count += 1
             if not ok:
                 passed = False
                 break
+        if judged_count == 0:
+            return False, "NG"
         return passed, ("OK" if passed else "NG")
 
     def _can_output_ok_ng(self):
@@ -81,6 +87,7 @@ class SequenceWidgetStreamingOpsMixin:
 
         We rely on analysis_result_dict being written by a subset of analysis widgets:
         - AI always writes (label + deviation)
+        - RSC always writes (overall OK/NG + max exceed)
         - SPL/SPLF/FR/HD/RB/PRB write only when threshold/compare (limit or golden) is enabled.
         """
         cfg = self.analysis_config or {}
@@ -96,6 +103,10 @@ class SequenceWidgetStreamingOpsMixin:
             t = item_cfg.get("type")
             if t == "AI":
                 candidates.append(key)
+                continue
+            if t == "RSC":
+                if bool(item_cfg.get("enable_threshold_judgment", True)):
+                    candidates.append(key)
                 continue
             if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB"):
                 if item_cfg.get("limit_checked"):

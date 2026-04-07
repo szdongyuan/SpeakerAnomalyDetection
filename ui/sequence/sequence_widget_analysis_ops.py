@@ -328,7 +328,12 @@ class SequenceWidgetAnalysisOpsMixin:
                     self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
                     continue
                 try:
-                    if hasattr(instance, "calculate_spl"):
+                    if hasattr(instance, "calculate_reference_spectrum"):
+                        result = instance.calculate_reference_spectrum()
+                        if not result:
+                            continue
+                        instance.show()
+                    elif hasattr(instance, "calculate_spl"):
                         result = instance.calculate_spl()
                         if not result:
                             continue
@@ -704,6 +709,17 @@ class SequenceWidgetAnalysisOpsMixin:
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
+                if type == "RSC":
+                    class_instance = cls_map(key)
+                    class_instance.data_struct = self.data_struct
+                    setattr(class_instance, "_sequence_analysis_key", key)
+                    setattr(class_instance, "_channel_mismatch", False)
+                    setattr(class_instance, "_channel_mismatch_info", None)
+                    runtime_params = dict(params) if isinstance(params, dict) else {}
+                    class_instance.analysis_config = runtime_params
+                    self.analysis_window.append(class_instance)
+                    return
+
                 raw_channel = 0
                 if isinstance(params, dict):
                     raw_channel = params.get("analysis_channel", 0)
@@ -729,6 +745,7 @@ class SequenceWidgetAnalysisOpsMixin:
 
                 display_key = f"{key}--通道{raw_channel + 1}"
                 class_instance = cls_map(display_key)
+                class_instance.data_struct = self.data_struct
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
                 setattr(class_instance, "_channel_mismatch", channel_mismatch)

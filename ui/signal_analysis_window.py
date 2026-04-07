@@ -41,6 +41,7 @@ from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
+from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 
 
 def get_class_mapping():
@@ -57,6 +58,7 @@ def get_class_mapping():
         "SPL": Spl,
         "SPLF": SplFrequency,
         "FR": Frequency,
+        "RSC": ReferenceSpectrumCompareWindow,
         "HD": Distortion,
         "RB": RubAndBuzz,  # Rub & Buzz (high-order 10th-35th harmonic distortion)
         "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (2nd-35th harmonics, psychoacoustic loudness in phons)
@@ -227,17 +229,23 @@ class AnalysisResultSummaryWindow(QWidget):
         # Stable order (alphabetical by name) for readability
         items.sort(key=lambda kv: kv[0])
 
-        # Overall judgment: all OK -> OK else NG
         overall_ok = True
+        judged_count = 0
         for _, (ok, _dev) in items:
+            if ok is None:
+                continue
+            judged_count += 1
             if not bool(ok):
                 overall_ok = False
                 break
-        overall_text = "OK" if overall_ok else "NG"
+        overall_text = "N/A" if judged_count == 0 else ("OK" if overall_ok else "NG")
         self._overall_label.setText(f"最终结果：{overall_text}")
-        self._overall_label.setStyleSheet(
-            "color: rgb(0, 128, 0);" if overall_ok else "color: rgb(200, 0, 0);"
-        )
+        if judged_count == 0:
+            self._overall_label.setStyleSheet("color: rgb(90, 103, 120);")
+        else:
+            self._overall_label.setStyleSheet(
+                "color: rgb(0, 128, 0);" if overall_ok else "color: rgb(200, 0, 0);"
+            )
 
         self._table.setRowCount(len(items))
         for row, (name, (ok, deviation)) in enumerate(items):
@@ -246,17 +254,22 @@ class AnalysisResultSummaryWindow(QWidget):
                 deviation = f"{deviation:.2f} dB"
             elif "FR" in name:
                 deviation = f"{deviation:.2f} dB"
+            elif "RSC" in name:
+                deviation = f"{deviation:.2f} dB"
             elif "PRB" in name:
                 deviation = f"{deviation:.2f} phon"
             elif "HD" in name or "RB" in name:
                 deviation = f"{deviation:.2f} %"
             deviation_item = QTableWidgetItem(str(deviation))
-            result_text = "OK" if ok else "NG"
+            result_text = "N/A" if ok is None else ("OK" if ok else "NG")
             result_item = QTableWidgetItem(result_text)
             result_item.setTextAlignment(Qt.AlignCenter)
 
             # color hint
-            if ok:
+            if ok is None:
+                deviation_item.setForeground(QColor(90, 103, 120))
+                result_item.setForeground(QColor(90, 103, 120))
+            elif ok:
                 deviation_item.setForeground(QColor(0, 128, 0))
                 result_item.setForeground(QColor(0, 128, 0))
             else:

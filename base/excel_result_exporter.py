@@ -642,6 +642,7 @@ def _extract_curve_xy(result: dict[str, Any]) -> tuple[list[Any], list[Any]] | N
         return None
 
     candidates = [
+        ("frequencies_hz", "current_db"),
         ("frequency_list", "fr_raw"),
         ("frequency_list", "fr"),
         ("frequency_list", "spl_db_raw"),
@@ -664,6 +665,34 @@ def _extract_curve_xy(result: dict[str, Any]) -> tuple[list[Any], list[Any]] | N
             if isinstance(x, list) and isinstance(y, list) and len(x) > 0 and len(y) > 0:
                 return x, y
     return None
+
+
+def _extract_export_curves(
+    item_name: str,
+    item_type: Any,
+    payload: dict[str, Any] | None,
+) -> list[tuple[str, list[Any], list[Any]]]:
+    if not isinstance(payload, dict):
+        return []
+
+    if str(item_type or "").strip().upper() == "RSC":
+        export_curves = []
+        for index, curve_payload in enumerate(payload.get("export_channel_curves") or []):
+            if not isinstance(curve_payload, dict):
+                continue
+            xy = _extract_curve_xy(curve_payload)
+            if xy is None:
+                continue
+            channel_name = str(curve_payload.get("channel_name") or "").strip() or f"CH{index + 1}"
+            curve_item_name = f"{item_name}_{channel_name}"
+            export_curves.append((curve_item_name, xy[0], xy[1]))
+        if export_curves:
+            return export_curves
+
+    xy = _extract_curve_xy(payload)
+    if xy is None:
+        return []
+    return [(item_name, xy[0], xy[1])]
 
 
 def _ensure_header(ws, header: list[Any]):
@@ -727,7 +756,7 @@ def _export_unit(item_type: Any, cfg: dict[str, Any] | None) -> str:
         return "%"
     if t == "AI":
         return "%"
-    if t in ("SPL", "SPLF", "FR"):
+    if t in ("SPL", "SPLF", "FR", "RSC"):
         return "dB"
     if t == "PRB":
         return "phon"
@@ -741,6 +770,14 @@ def _export_tolerance(cfg: dict[str, Any] | None) -> tuple[str, str]:
     - import_config/config_dir -> Tolerance curves + Absolute Limits
     - otherwise               -> Absolute Limits + Absolute Limits
     """
+    if isinstance(cfg, dict):
+        cfg_type = str(cfg.get("type") or "").strip().upper()
+        if cfg_type == "RSC":
+            if not bool(cfg.get("enable_threshold_judgment", True)):
+                return "No threshold", "Comparison Only"
+            lower = float(cfg.get("lower_offset_db", 0.0) or 0.0)
+            upper = float(cfg.get("upper_offset_db", 0.0) or 0.0)
+            return f"{lower:+.2f}~{upper:+.2f} dB", "Reference Relative Limits"
     if isinstance(cfg, dict) and (cfg.get("import_config") or cfg.get("config_dir")):
         return "Tolerance curves", "Absolute Limits"
     return "Absolute Limits", "Absolute Limits"
@@ -969,18 +1006,22 @@ def export_analysis_to_csv_spool(
                 return ret
         else:
             result = item_data.get("result")
-            xy = _extract_curve_xy(result) if isinstance(result, dict) else None
-            if xy is None:
+            xy_source = result if isinstance(result, dict) else item_data
+            curve_payloads = _extract_export_curves(item_name, item_type, xy_source)
+            if not curve_payloads:
                 continue
-            x, y = xy
-            x, y = _downsample_xy(x, y, min(int(max_points), EXCEL_MAX_DATA_POINTS))
-
-            _sheet_name, csv_path = _resolve_curve_spool_csv_path(spool_dir, item_name=item_name, expected_x=x)
-            header = CURVE_SHEET_HEADER_PREFIX + [_normalize_header_value(v) for v in x]
-            row = [sn, date_text] + list(y)
-            ret = append_csv(csv_path, header=header, row=row)
-            if not ret.ok:
-                return ret
+            for curve_item_name, x, y in curve_payloads:
+                x, y = _downsample_xy(x, y, min(int(max_points), EXCEL_MAX_DATA_POINTS))
+                _sheet_name, csv_path = _resolve_curve_spool_csv_path(
+                    spool_dir,
+                    item_name=curve_item_name,
+                    expected_x=x,
+                )
+                header = CURVE_SHEET_HEADER_PREFIX + [_normalize_header_value(v) for v in x]
+                row = [sn, date_text] + list(y)
+                ret = append_csv(csv_path, header=header, row=row)
+                if not ret.ok:
+                    return ret
 
         result_tuple = analysis_result_dict.get(item_name)
         if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
@@ -1225,36 +1266,39 @@ def export_analysis_to_excel(
             _append_row(ws, [sn, date_text, label, ok_score, ng_score, model_name])
         else:
             result = item_data.get("result")
-            xy = _extract_curve_xy(result) if isinstance(result, dict) else None
-            if xy is None:
+            xy_source = result if isinstance(result, dict) else item_data
+            curve_payloads = _extract_export_curves(item_name, item_type, xy_source)
+            if not curve_payloads:
                 continue
-            x, y = xy
-            x, y = _downsample_xy(x, y, min(max_points, EXCEL_MAX_DATA_POINTS))
+            for curve_item_name, x, y in curve_payloads:
+                x, y = _downsample_xy(x, y, min(max_points, EXCEL_MAX_DATA_POINTS))
 
-            ws_base = _sanitize_sheet_name(item_name)
-            if ws_base in wb.sheetnames:
-                ws = wb[ws_base]
-                existing = [c.value for c in ws[1][2:] if c.value is not None]
-                expected = [_normalize_header_value(v) for v in x]
-                if not _headers_match(existing, expected):
-                    v2_name = _sanitize_sheet_name(f"{item_name}_v2")
-                    if v2_name in wb.sheetnames:
-                        ws2 = wb[v2_name]
-                        existing2 = [c.value for c in ws2[1][2:] if c.value is not None]
-                        if _headers_match(existing2, expected):
-                            ws = ws2
+                ws_base = _sanitize_sheet_name(curve_item_name)
+                if ws_base in wb.sheetnames:
+                    ws = wb[ws_base]
+                    existing = [c.value for c in ws[1][2:] if c.value is not None]
+                    expected = [_normalize_header_value(v) for v in x]
+                    if not _headers_match(existing, expected):
+                        v2_name = _sanitize_sheet_name(f"{curve_item_name}_v2")
+                        if v2_name in wb.sheetnames:
+                            ws2 = wb[v2_name]
+                            existing2 = [c.value for c in ws2[1][2:] if c.value is not None]
+                            if _headers_match(existing2, expected):
+                                ws = ws2
+                            else:
+                                v2_name = _make_unique_sheet_name(wb.sheetnames, f"{curve_item_name}_v2")
+                                ws = ensure_sheet(v2_name)
                         else:
-                            v2_name = _make_unique_sheet_name(wb.sheetnames, f"{item_name}_v2")
                             ws = ensure_sheet(v2_name)
                     else:
-                        ws = ensure_sheet(v2_name)
-            else:
-                ws = ensure_sheet(ws_base)
+                        ws = wb[ws_base]
+                else:
+                    ws = ensure_sheet(ws_base)
 
-            header = CURVE_SHEET_HEADER_PREFIX + x
-            if ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
-                _ensure_header(ws, header)
-            _append_row(ws, [sn, date_text] + y)
+                header = CURVE_SHEET_HEADER_PREFIX + x
+                if ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
+                    _ensure_header(ws, header)
+                _append_row(ws, [sn, date_text] + y)
 
         result_tuple = analysis_result_dict.get(item_name)
         if isinstance(result_tuple, tuple) and len(result_tuple) == 2:

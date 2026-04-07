@@ -29,7 +29,7 @@ class DataDealStruct(object):
             # multiple PD instances result mapping: { analysis_key(str): [idx1, idx2, ...] }
             self.pd_peak_grid_points_map = {}
 
-            self.analysis_result_dict = dict[str, (bool, float)]()
+            self.analysis_result_dict = dict[str, (bool | None, float)]()
 
             self._initialized = True
 
