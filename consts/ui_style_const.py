@@ -316,6 +316,7 @@ qtreeview_style = """
 
 
 _STYLE_NAMES = (
+    "qtoolbutton_style",
     "qpushbutton_style",
     "qlineedit_style",
     "qcombobox_style",

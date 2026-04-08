@@ -262,6 +262,7 @@ class AnalysisGraphWidget(QWidget):
         self.setLayout(layout)
 
     def set_plot_font_size(self, font_size: int):
+        font_size = ui_style_const.scale_font_px(font_size)
         font = QFont()
         font.setPixelSize(font_size)
 
