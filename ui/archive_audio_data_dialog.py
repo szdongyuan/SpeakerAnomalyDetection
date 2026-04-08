@@ -25,6 +25,8 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         self.set_bottom_layout()
 
+        self.resize(1060, 700)
+
     def set_bottom_layout(self):
         all_show_btn = QPushButton("全部显示")
 
