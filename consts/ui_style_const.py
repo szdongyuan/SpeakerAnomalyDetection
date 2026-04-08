@@ -23,7 +23,6 @@ def _get_font_scale():
 
 
 _FONT_SCALE = _get_font_scale()
-print(f"FONT_SCALE: {_FONT_SCALE}")
 _FONT_SIZE_PATTERN = re.compile(r"(font-size\s*:\s*)(\d+(?:\.\d+)?)(\s*)(pt|px)(\s*;)", re.IGNORECASE)
 
 
