@@ -473,8 +473,8 @@ class SequenceWindow(QWidget):
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground("white")
         axis_font_px = ui_style_const.scale_font_px(20)
-        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": f"{axis_font_px}px"})
-        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": f"{axis_font_px}px"})
+        self.line_graph.setLabel("left", "Amplitude(V)")
+        self.line_graph.setLabel("bottom", "Time(s)")
         self.line_graph.showGrid(x=True, y=True)
 
         font = QFont()
