@@ -2,7 +2,7 @@ import sys
 
 from PyQt5.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QParallelAnimationGroup, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 
@@ -52,11 +52,13 @@ class TrayPopupPanel(QFrame):
         in_device_layout.setSpacing(8)
         in_device_layout.addWidget(QLabel("输入设备："))
         in_device_layout.addWidget(self.in_device)
+        in_device_layout.addStretch()
 
         out_device_layout = QHBoxLayout()
         out_device_layout.setSpacing(8)
         out_device_layout.addWidget(QLabel("输出设备："))
         out_device_layout.addWidget(self.out_device)
+        out_device_layout.addStretch()
 
         card_layout.addLayout(in_device_layout)
         card_layout.addLayout(out_device_layout)
