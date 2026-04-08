@@ -87,12 +87,12 @@ class StimulusWindow(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         if ui_style_const._FONT_SCALE < 0.8:
             self.setFixedSize(
-                ui_style_const.scale_font_px(600),
-                ui_style_const.scale_font_px(800),
+                ui_style_const.scale_font_px(630),
+                ui_style_const.scale_font_px(780),
             )
         elif ui_style_const._FONT_SCALE < 0.9:
             self.setFixedSize(
-                ui_style_const.scale_font_px(550),
+                ui_style_const.scale_font_px(580),
                 ui_style_const.scale_font_px(750),
             )
         elif ui_style_const._FONT_SCALE < 0.95:
@@ -102,7 +102,7 @@ class StimulusWindow(QDialog):
             )
         elif ui_style_const._FONT_SCALE < 1.05:
             self.setFixedSize(
-                ui_style_const.scale_font_px(500),
+                ui_style_const.scale_font_px(515),
                 ui_style_const.scale_font_px(650),
             )
         # elif ui_style_const._FONT_SCALE < 1.1:
@@ -271,12 +271,12 @@ class StimulusWindow(QDialog):
             QGroupBox: Configured group box with frequency range widgets
         """
         frequency_group_box = QGroupBox("频率范围 (10 - 24000Hz)")
-        start_freq_label = QLabel("起始频率：")
+        start_freq_label = QLabel("起始频率:")
         self.start_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_freq_box.setSuffix(" Hz")
         self.start_freq_box.setRange(10, 24000)
         self.start_freq_box.setMinimumWidth(100)
-        stop_freq_label = QLabel("截止频率：")
+        stop_freq_label = QLabel("截止频率:")
         self.stop_freq_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.stop_freq_box.setSuffix(" Hz")
         self.stop_freq_box.setRange(10, 24000)
@@ -287,7 +287,7 @@ class StimulusWindow(QDialog):
         frequency_layout.addWidget(stop_freq_label)
         frequency_layout.addWidget(self.stop_freq_box)
         frequency_group_box.setLayout(frequency_layout)
-        frequency_layout.setContentsMargins(10, 10, 10, 10)
+        frequency_layout.setContentsMargins(10, 10, 20, 10)
         frequency_layout.setSpacing(20)
         return frequency_group_box
 
@@ -301,14 +301,14 @@ class StimulusWindow(QDialog):
             QGroupBox: Container widget with horizontal layout of time configuration controls
         """
         time_group_box = QGroupBox()
-        total_time_label = QLabel("信号时长：")
+        total_time_label = QLabel("信号时长:")
         self.total_time_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.total_time_box.setSuffix(" s")
         self.total_time_box.setDecimals(1)  # Allow one decimal place
         self.total_time_box.setRange(0.5, 60)  # Set range 0.5-60 seconds
         self.total_time_box.setSingleStep(0.5)
         self.total_time_box.setMinimumWidth(100)
-        repeat_label = QLabel("信号重复：")
+        repeat_label = QLabel("信号重复:")
         self.repeat_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.repeat_box.setRange(1, 10)
         self.repeat_box.setSuffix(" 次")
@@ -318,7 +318,7 @@ class StimulusWindow(QDialog):
         time_layout.addWidget(self.total_time_box)
         time_layout.addWidget(repeat_label)
         time_layout.addWidget(self.repeat_box)
-        time_layout.setContentsMargins(10, 10, 10, 10)
+        time_layout.setContentsMargins(10, 10, 20, 10)
         time_layout.setSpacing(20)
         time_group_box.setLayout(time_layout)
         return time_group_box
