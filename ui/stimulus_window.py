@@ -85,11 +85,35 @@ class StimulusWindow(QDialog):
         self.setWindowTitle("激励信号")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedSize(540, 700)
+        if ui_style_const._FONT_SCALE < 0.8:
+            self.setFixedSize(
+                ui_style_const.scale_font_px(600),
+                ui_style_const.scale_font_px(800),
+            )
+        elif ui_style_const._FONT_SCALE < 0.9:
+            self.setFixedSize(
+                ui_style_const.scale_font_px(550),
+                ui_style_const.scale_font_px(750),
+            )
+        elif ui_style_const._FONT_SCALE < 0.95:
+            self.setFixedSize(
+                ui_style_const.scale_font_px(530),
+                ui_style_const.scale_font_px(730),
+            )
+        elif ui_style_const._FONT_SCALE < 1.05:
+            self.setFixedSize(
+                ui_style_const.scale_font_px(500),
+                ui_style_const.scale_font_px(650),
+            )
+        # elif ui_style_const._FONT_SCALE < 1.1:
+        else:
+            self.setFixedSize(
+                ui_style_const.scale_font_px(500),
+                ui_style_const.scale_font_px(650),
+            )
 
         self.plot_stimulus = pyqtgraph.PlotWidget()
         self.plot_stimulus.setBackground("white")
-        self.plot_stimulus.resize(400, 170)
 
         # create layout to strore custom button layout
         custom_stimulus_layout = QGridLayout()
@@ -311,7 +335,7 @@ class StimulusWindow(QDialog):
         """
         step_group_box = QGroupBox()
         step_label = QLabel("步进数量")
-        self.step_box.setFixedSize(100, 30)
+        self.step_box.setMinimumWidth(100)
         self.step_box.setRange(1, 100)
         step_layout = QHBoxLayout()
         step_layout.addWidget(step_label)

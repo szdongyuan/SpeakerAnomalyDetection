@@ -18,6 +18,7 @@ from ui.hardware_window import HardwareWindow
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_widget import SequenceWindow
+from ui.custom_ui_widget.traypopuppanel import TrayPopupButton
 
 
 class MainWindow(QMainWindow):
@@ -66,6 +67,8 @@ class MainWindow(QMainWindow):
             self.hardware_action_calibration,
         ]
         self.widget_list_admin = self.widget_list_engineer + [self.user_action_add_account]
+
+        self.tray_popup_button: TrayPopupButton = None
 
         self.init_ui()
 
@@ -244,22 +247,21 @@ class MainWindow(QMainWindow):
         self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
         self.user_label.setStyleSheet(ui_style_const.qlabel_style)
-        self.device_label = QLabel()
-        self.device_label.setStyleSheet(ui_style_const.qlabel_style)
+        self.tray_popup_button = TrayPopupButton()
         self.update_statusbar()
 
         statusbar = QStatusBar()
         statusbar.setSizeGripEnabled(False)
         statusbar.addWidget(self.user_label)
-        statusbar.addPermanentWidget(self.device_label)
+        statusbar.addPermanentWidget(self.tray_popup_button)
         self.setStatusBar(statusbar)
 
     def update_statusbar(self):
         # update the status bar data
         mic_name = self.mic["name"] if self.mic else "无可用输入设备"
         speaker_name = self.speaker["name"] if self.speaker else "无可用输出设备"
-        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=mic_name, speaker=speaker_name)
-        self.device_label.setText(device_txt)
+        self.tray_popup_button.set_in_device(mic_name)
+        self.tray_popup_button.set_out_device(speaker_name)
         self.user_label.setText(
             "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
         )

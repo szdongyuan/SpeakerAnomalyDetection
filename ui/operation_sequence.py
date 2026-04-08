@@ -129,8 +129,8 @@ class AnalysisModelSelect(QDialog):
         add_analysis_btn.setIcon(
             QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/right_arrow.svg")
         )
-        add_analysis_btn.setFixedSize(50, 50)
-        add_analysis_btn.setIconSize(QSize(50, 50))
+        # add_analysis_btn.setFixedSize(50, 50)
+        add_analysis_btn.setIconSize(QSize(40, 40))
         add_analysis_btn.clicked.connect(self.add_analysis_btn_clicked)
 
         analysis_layout = QHBoxLayout()
@@ -243,23 +243,19 @@ class AnalysisModelSelect(QDialog):
         down_btn = QPushButton()
         top_btn = QPushButton()
         bottom_btn = QPushButton()
-        up_btn.setFixedSize(30, 30)
-        down_btn.setFixedSize(30, 30)
-        top_btn.setFixedSize(30, 30)
-        bottom_btn.setFixedSize(30, 30)
 
         up_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/up.svg"))
-        up_btn.setIconSize(QSize(30, 30))
+        up_btn.setIconSize(QSize(20, 20))
         down_btn.setIcon(
             QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/down.svg")
         )
-        down_btn.setIconSize(QSize(30, 30))
+        down_btn.setIconSize(QSize(20, 20))
         top_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/top.svg"))
-        top_btn.setIconSize(QSize(30, 30))
+        top_btn.setIconSize(QSize(20, 20))
         bottom_btn.setIcon(
             QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/bottom.svg")
         )
-        bottom_btn.setIconSize(QSize(30, 30))
+        bottom_btn.setIconSize(QSize(20, 20))
 
         up_btn.clicked.connect(self.up_btn_clicked)
         down_btn.clicked.connect(self.down_btn_clicked)
@@ -268,7 +264,7 @@ class AnalysisModelSelect(QDialog):
 
         clear_btn = QPushButton()
         clear_btn.setToolTip("清空")
-        clear_btn.setFixedSize(30, 30)
+        # clear_btn.setFixedSize(30, 30)
         clear_btn.setIcon(
             QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/clear_icon.png")
         )

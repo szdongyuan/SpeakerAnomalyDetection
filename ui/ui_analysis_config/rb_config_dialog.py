@@ -109,7 +109,8 @@ class RbConfigWindow(QDialog):
         # Rub & Buzz: harmonics 10-35 (26 harmonics total)
         for i in range(10, 36):
             label = QLabel("  " + str(i))
-            label.setFixedSize(90, 25)
+            label.setMinimumWidth(90)
+            label.setMinimumHeight(25)
             label.setAlignment(Qt.AlignLeft)
             label.setStyleSheet("QLabel:focus { outline: none; }")
             label.setAutoFillBackground(True)
