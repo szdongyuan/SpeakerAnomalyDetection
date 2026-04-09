@@ -13,6 +13,7 @@ from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
 from PyQt5.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QMessageBox,
     QVBoxLayout,
@@ -469,27 +470,54 @@ class SequenceWindow(QWidget):
             Returns:
                 QHBoxLayout: The configured wavefrom layout object.
         """
-        layout = QHBoxLayout()
+        # --- Waveform plot widget ---
         self.line_graph = pg.PlotWidget()
-        self.line_graph.setBackground("white")
-        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
-        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
-        self.line_graph.showGrid(x=True, y=True)
+        self.line_graph.setBackground("#EEF6FF")
+        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": "14px", "color": "#0A66B8"})
+        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": "14px", "color": "#0A66B8"})
+        self.line_graph.showGrid(x=True, y=True, alpha=0.35)
 
-        font = QFont()
-        font.setPixelSize(20)
+        font = QFont("Segoe UI", -1)
+        font.setPixelSize(13)
         b_axis = self.line_graph.getAxis("bottom")
         l_axis = self.line_graph.getAxis("left")
         b_axis.setTickFont(font)
         l_axis.setTickFont(font)
-        b_axis.setTextPen("black")
-        l_axis.setTextPen("black")
+        b_axis.setTextPen("#0A66B8")
+        l_axis.setTextPen("#0A66B8")
+        b_axis.setPen(pg.mkPen(color="#7AAAC8", width=1))
+        l_axis.setPen(pg.mkPen(color="#7AAAC8", width=1))
 
+        # --- Framed panel wrapping the plot ---
+        chart_header = QLabel("  实时采集波形")
+        chart_header.setFixedHeight(32)
+        chart_header.setStyleSheet(
+            "background-color: #0A66B8; color: #FFFFFF;"
+            " font-family: 'Microsoft YaHei', 'SimSun'; font-size: 14px; font-weight: bold;"
+            " border-top-left-radius: 4px; border-top-right-radius: 4px;"
+        )
+
+        chart_inner = QVBoxLayout()
+        chart_inner.setContentsMargins(0, 0, 0, 0)
+        chart_inner.setSpacing(0)
+        chart_inner.addWidget(chart_header)
+        chart_inner.addWidget(self.line_graph)
+
+        chart_frame = QFrame()
+        chart_frame.setFrameShape(QFrame.StyledPanel)
+        chart_frame.setStyleSheet(
+            "QFrame { background-color: #EEF6FF;"
+            " border: 1.5px solid #7AAAC8; border-radius: 4px; }"
+        )
+        chart_frame.setLayout(chart_inner)
+
+        # --- Outer layout ---
+        layout = QHBoxLayout()
         layout.addWidget(self.count_board, stretch=1)
-        layout.addSpacing(20)
-        layout.addWidget(self.line_graph, stretch=8)
-        layout.setContentsMargins(40, 20, 40, 20)
-        layout.setSpacing(30)
+        layout.addSpacing(16)
+        layout.addWidget(chart_frame, stretch=8)
+        layout.setContentsMargins(32, 16, 32, 16)
+        layout.setSpacing(0)
         return layout
 
     def init_fft_and_stft_flag(self):
@@ -1584,8 +1612,8 @@ class SequenceWindow(QWidget):
                     # Persist the default once so next run restores from the same place
                     if instance_key:
                         self._set_analysis_window_geometry(instance_key, geo)
-                instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
                 instance.setMinimumSize(QSize(300, 255))
+                instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
 
                 # Install event filter to capture move/resize and persist geometry (no close listener)
                 if instance_key:
@@ -1642,8 +1670,8 @@ class SequenceWindow(QWidget):
         if geo is None:
             geo = default_geo
             self._set_analysis_window_geometry(summary_key, geo)
-        summary.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
         summary.setMinimumSize(QSize(360, 220))
+        summary.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
 
         # Ensure eventFilter is installed once for persistence
         if summary_key:
@@ -2324,7 +2352,7 @@ class SequenceWindow(QWidget):
         line_graph.clear()
         # Use np.arange for correct sample time stamps (0, 1/fs, 2/fs, ..., (N-1)/fs)
         signal_duration = np.arange(len(recorded_signal)) / sample_rate
-        line_graph.plot(signal_duration, recorded_signal, pen=pg.mkPen("k", width=2))
+        line_graph.plot(signal_duration, recorded_signal, pen=pg.mkPen("#0A66B8", width=2))
 
     def on_audio_chunk_received(self, chunk):
         """

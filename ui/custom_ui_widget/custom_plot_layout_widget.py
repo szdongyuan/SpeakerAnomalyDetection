@@ -12,13 +12,13 @@ class AnalysisGraphWidget(QWidget):
 
         self.analysis_plot = pg.PlotWidget()
 
-        self.set_plot_font_size(20)
+        self.set_plot_font_size(14)
         self.init_ui()
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
 
-        self.analysis_plot.setBackground("white")
+        self.analysis_plot.setBackground("#EEF6FF")
 
         layout = QVBoxLayout()
         layout.addWidget(self.analysis_plot)
@@ -35,7 +35,7 @@ class AnalysisGraphWidget(QWidget):
 
         b_axis.setTickFont(font)
         l_axis.setTickFont(font)
-        b_axis.setTextPen("black")
-        l_axis.setTextPen("black")
+        b_axis.setTextPen("#081828")
+        l_axis.setTextPen("#081828")
         b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
         l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})

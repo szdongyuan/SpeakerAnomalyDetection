@@ -1,4 +1,5 @@
 import sys
+import onnxruntime
 
 from PyQt5.QtCore import QThread
 from PyQt5.QtWidgets import QApplication, QMessageBox

@@ -88,7 +88,7 @@ class StimulusWindow(QDialog):
         self.setFixedSize(540, 700)
 
         self.plot_stimulus = pyqtgraph.PlotWidget()
-        self.plot_stimulus.setBackground("white")
+        self.plot_stimulus.setBackground("#EEF6FF")
         self.plot_stimulus.resize(400, 170)
 
         # create layout to strore custom button layout
@@ -123,7 +123,7 @@ class StimulusWindow(QDialog):
         time_group_box = self.create_time_group_box()
         # Disable step_group_box during initialization
         self.step_group_box.setDisabled(True)
-        self.step_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+        self.step_group_box.setStyleSheet("color: #3A5870;")
         function_btn_layout = self.create_function_btn_layout()
 
         layout = QVBoxLayout()
@@ -433,11 +433,11 @@ class StimulusWindow(QDialog):
         stimulus_method = self.STIMULUS_DICT[self.stimulus_method_combo_box.currentText()]["name"]
         for widget in self.box_checked_enable_dict["step"]:
             widget.setDisabled(True)
-            widget.setStyleSheet("color: rgb(162, 162, 162);")
+            widget.setStyleSheet("color: #3A5870;")
         if enable_status:
             for widget in self.box_checked_enable_dict[stimulus_method]:
                 widget.setEnabled(True)
-                widget.setStyleSheet("color: rgb(0, 0, 0);")
+                widget.setStyleSheet("color: #081828;")
 
     def change_custom_chk_box(self, custom_box_checked):
         """
@@ -451,9 +451,9 @@ class StimulusWindow(QDialog):
         for widget in self.box_checked_disable_list:
             widget.setDisabled(custom_box_checked)
             if custom_box_checked:
-                widget.setStyleSheet("color: rgb(162, 162, 162);")
+                widget.setStyleSheet("color: #3A5870;")
             else:
-                widget.setStyleSheet("color: rgb(0, 0, 0);")
+                widget.setStyleSheet("color: #081828;")
         self.stimulus_info["use_custom_stimulus"] = custom_box_checked
         if custom_box_checked:
             self.create_signal_from_stimulus_info()
@@ -482,18 +482,18 @@ class StimulusWindow(QDialog):
         if stimulus_method == "啁啾":
             self.step_group_box.setDisabled(True)
             self.frequency_group_box.setEnabled(True)
-            self.step_group_box.setStyleSheet("color: rgb(162, 162, 162);")
-            self.frequency_group_box.setStyleSheet("color: rgb(0, 0, 0);")
+            self.step_group_box.setStyleSheet("color: #3A5870;")
+            self.frequency_group_box.setStyleSheet("color: #081828;")
         elif stimulus_method == "噪音":
             self.frequency_group_box.setDisabled(True)
             self.step_group_box.setDisabled(True)
-            self.step_group_box.setStyleSheet("color: rgb(162, 162, 162);")
-            self.frequency_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+            self.step_group_box.setStyleSheet("color: #3A5870;")
+            self.frequency_group_box.setStyleSheet("color: #3A5870;")
         else:
             self.frequency_group_box.setEnabled(True)
             self.step_group_box.setEnabled(True)
-            self.step_group_box.setStyleSheet("color: rgb(0, 0, 0);")
-            self.frequency_group_box.setStyleSheet("color: rgb(0, 0, 0);")
+            self.step_group_box.setStyleSheet("color: #081828;")
+            self.frequency_group_box.setStyleSheet("color: #081828;")
 
     @staticmethod
     def get_predict_amplitude(target_voltage):
@@ -639,17 +639,17 @@ class StimulusWindow(QDialog):
         sample_rate = self.stimulus_info["sample_rate"]
         if self.stimulus_data is not None:
             signal_duration = np.linspace(0, len(self.stimulus_data) - 1, len(self.stimulus_data)) / sample_rate
-            self.plot_stimulus.plot(signal_duration, self.stimulus_data, pen=pyqtgraph.mkPen("b", width=2))
-            self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
-            self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "20px"})
+            self.plot_stimulus.plot(signal_duration, self.stimulus_data, pen=pyqtgraph.mkPen("#0A66B8", width=1.5))
+            self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "14px"})
+            self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "14px"})
             font = QFont()
-            font.setPixelSize(20)
+            font.setPixelSize(13)
             b_axis = self.plot_stimulus.getAxis("bottom")
             l_axis = self.plot_stimulus.getAxis("left")
             b_axis.setTickFont(font)
             l_axis.setTickFont(font)
-            b_axis.setTextPen("black")
-            l_axis.setTextPen("black")
+            b_axis.setTextPen("#081828")
+            l_axis.setTextPen("#081828")
 
     def load_config_btn_clicked(self):
         """

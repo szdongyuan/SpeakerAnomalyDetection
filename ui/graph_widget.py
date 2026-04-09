@@ -353,7 +353,7 @@ class LimitPlotUtils:
         x_data: np.ndarray,
         y_data: np.ndarray,
         out_mask: np.ndarray,
-        pen_color: str = "r",
+        pen_color = (196, 24, 38),
         pen_width: int = 2,
     ):
         """
@@ -405,7 +405,7 @@ class LimitPlotUtils:
         x_label: str = "X",
         y_label: str = "Y",
         log_x: bool = False,
-        curve_color: tuple = (51, 196, 77),
+        curve_color: tuple = (10, 102, 184),
         curve_width: int = 2,
         curve_name: str = None,
     ):
@@ -424,17 +424,17 @@ class LimitPlotUtils:
             x_label: X axis label
             y_label: Y axis label
             log_x: Whether to use logarithmic X axis
-            curve_color: Main curve color, default green (51, 196, 77)
+            curve_color: Main curve color, default blue (10, 102, 184)
             curve_width: Main curve width
             curve_name: Main curve name (optional, THD uses "THD")
         """
         plot_widget.clear()
 
         # 1. Draw main curve (supports name parameter for legend)
-        plot_widget.plot(data_x, data_y, pen=mkPen(color=curve_color, width=curve_width), name=curve_name)
+        plot_widget.plot(data_x, data_y, pen=mkPen(color=curve_color, width=curve_width + 1), name=curve_name)
 
-        # 2. Draw limit curves (purple dashed)
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
+        # 2. Draw limit curves (red dashed)
+        dashed_pen = mkPen(color=(196, 24, 38), width=2, style=Qt.DashLine)
         plot_widget.plot(csv_x, csv_upper, pen=dashed_pen)
         plot_widget.plot(csv_x, csv_lower, pen=dashed_pen)
 
@@ -446,7 +446,7 @@ class LimitPlotUtils:
         plot_widget.setLogMode(x=log_x, y=False)
 
         # 5. Show grid
-        plot_widget.showGrid(x=True, y=True)
+        plot_widget.showGrid(x=True, y=True, alpha=0.5)
 
     @staticmethod
     def check_interp_limits(

@@ -48,7 +48,7 @@ class SequenceCountBoard(QWidget):
         separator_line = QFrame()
         separator_line.setFrameShape(QFrame.HLine)
         separator_line.setFrameShadow(QFrame.Sunken)
-        separator_line.setStyleSheet("color: gray;")
+        separator_line.setStyleSheet("color: #7AAAC8;")
         separator_line.setFixedHeight(2)
 
         test_widget = self.set_test_widget()
@@ -97,37 +97,55 @@ class SequenceCountBoard(QWidget):
         self.mark_ok_edit.setDisabled(True)
         self.mark_ng_edit.setDisabled(True)
 
-        self.total_line_edit.setFixedSize(130, 35)
-        self.ok_line_edit.setFixedSize(130, 35)
-        self.ng_line_edit.setFixedSize(130, 35)
-        self.yield_line_edit.setFixedSize(130, 35)
-        self.datatime_line_edit.setFixedSize(130, 35)
-        self.mark_total_edit.setFixedSize(130, 35)
-        self.mark_ok_edit.setFixedSize(130, 35)
-        self.mark_ng_edit.setFixedSize(130, 35)
+        self.total_line_edit.setFixedSize(110, 26)
+        self.ok_line_edit.setFixedSize(110, 26)
+        self.ng_line_edit.setFixedSize(110, 26)
+        self.yield_line_edit.setFixedSize(110, 26)
+        self.datatime_line_edit.setFixedSize(110, 26)
+        self.mark_total_edit.setFixedSize(110, 26)
+        self.mark_ok_edit.setFixedSize(110, 26)
+        self.mark_ng_edit.setFixedSize(110, 26)
+
+    _STYLE_OK_BTN = (
+        "QPushButton { background-color: #088A38; color: #FFFFFF; border: none;"
+        " border-radius: 6px; font-family: 'Microsoft YaHei', 'SimSun';"
+        " font-size: 46px; font-weight: bold; }"
+        "QPushButton:hover { background-color: #0AA844; }"
+        "QPushButton:pressed { background-color: #067030; }"
+        "QPushButton:disabled { background-color: #A8C8B4; color: #E0EEE6; }"
+    )
+    _STYLE_NG_BTN = (
+        "QPushButton { background-color: #C41826; color: #FFFFFF; border: none;"
+        " border-radius: 6px; font-family: 'Microsoft YaHei', 'SimSun';"
+        " font-size: 46px; font-weight: bold; }"
+        "QPushButton:hover { background-color: #E01E30; }"
+        "QPushButton:pressed { background-color: #A0101E; }"
+        "QPushButton:disabled { background-color: #C8A8AC; color: #EEE0E2; }"
+    )
 
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ok_btn.setFixedSize(180, 80)
-        self.ok_btn.setIconSize(QSize(24, 24))
+        self.ok_btn.setStyleSheet(self._STYLE_OK_BTN)
+        self.ok_btn.setFixedSize(160, 70)
+        self.ok_btn.setIconSize(QSize(20, 20))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ng_btn.setFixedSize(180, 80)
-        self.ng_btn.setIconSize(QSize(24, 24))
+        self.ng_btn.setStyleSheet(self._STYLE_NG_BTN)
+        self.ng_btn.setFixedSize(160, 70)
+        self.ng_btn.setIconSize(QSize(20, 20))
 
     def create_mode_btn_layout(self):
-        mode_label = QLabel("模式：")
-        self.test_btn.setFixedSize(100, 35)
-        self.mark_btn.setFixedSize(100, 35)
+        mode_label = QLabel("模式")
+        self.test_btn.setFixedSize(80, 28)
+        self.mark_btn.setFixedSize(80, 28)
         self.test_btn.clicked.connect(self.on_test_btn_clicked)
         self.mark_btn.clicked.connect(self.on_mark_btn_clicked)
 
         model_button_layout = QHBoxLayout()
         model_button_layout.addWidget(mode_label)
-        model_button_layout.addSpacing(70)
+        model_button_layout.addStretch()
         model_button_layout.addWidget(self.test_btn)
+        model_button_layout.addSpacing(4)
         model_button_layout.addWidget(self.mark_btn)
         model_button_layout.setSpacing(0)
 
@@ -183,13 +201,22 @@ class SequenceCountBoard(QWidget):
 
         return mark_widget
     
+    _STYLE_MODE_ACTIVE = (
+        "background-color: #0A66B8; color: #FFFFFF; border: 1px solid #0857A0;"
+        " border-radius: 3px; font-family: 'Microsoft YaHei', 'SimSun'; font-size: 15px;"
+    )
+    _STYLE_MODE_INACTIVE = (
+        "background-color: #D6E8F5; color: #2A4A68; border: 1px solid #7AAAC8;"
+        " border-radius: 3px; font-family: 'Microsoft YaHei', 'SimSun'; font-size: 15px;"
+    )
+
     def on_test_btn_clicked(self):
         if not self._test_available:
             QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
             self.on_mark_btn_clicked()
             return
-        self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-        self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+        self.test_btn.setStyleSheet(self._STYLE_MODE_ACTIVE)
+        self.mark_btn.setStyleSheet(self._STYLE_MODE_INACTIVE)
         self.test_btn.setEnabled(False)
         self.mark_btn.setEnabled(True)
         self.stacked_widget.setCurrentIndex(0)
@@ -198,8 +225,8 @@ class SequenceCountBoard(QWidget):
     def on_mark_btn_clicked(self):
         self.stacked_widget.setCurrentIndex(1)
         self.mode = "mark"
-        self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-        self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+        self.test_btn.setStyleSheet(self._STYLE_MODE_INACTIVE)
+        self.mark_btn.setStyleSheet(self._STYLE_MODE_ACTIVE)
         self.mark_btn.setEnabled(False)
         self.test_btn.setEnabled(bool(self._test_available))
 

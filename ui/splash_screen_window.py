@@ -36,7 +36,7 @@ class Splash(QWidget):
 
         self.lab = QLabel(self)
         self.lab.setGeometry(QRect(30, 340, 200, 16))
-        self.lab.setStyleSheet("color: rgb(0, 0, 0);")
+        self.lab.setStyleSheet("color: #081828;")
         self.lab.setObjectName("lab")
         self.lab.setText("正在初始化...0%")
 

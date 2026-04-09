@@ -151,10 +151,10 @@ class SpecConfigWindow(QDialog):
     def on_custom_limit_checkbox_changed(self, state):
         if state == Qt.Checked:
             self.limit_group_box.setEnabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
+            self.limit_group_box.setStyleSheet("color: #081828;")
         else:
             self.limit_group_box.setEnabled(False)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+            self.limit_group_box.setStyleSheet("color: #3A5870;")
 
     def get_default_config(self):
         default_config = {

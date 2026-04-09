@@ -65,10 +65,11 @@ class ThresholdConfigWidget(QWidget):
         self.limit_group_box.setMinimumSize(180, 180)
         if not self.limit_checkbox.isChecked():
             self.limit_group_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+            self.limit_group_box.setStyleSheet("color: #3A5870;")
 
         # 配置数据展示
         self.limit_graph = PlotWidget()
+        self.limit_graph.setBackground("#EEF6FF")
         self.limit_graph.showGrid(True, True, 0.7)
         self.set_graph_label_until(self.model_type)
         self.draw_limit_curve(self.limit_data)
@@ -114,11 +115,11 @@ class ThresholdConfigWidget(QWidget):
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
             self.config_dir_box.setDisabled(False)
-            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
+            self.limit_group_box.setStyleSheet("color: #081828;")
         else:
             self.limit_group_box.setDisabled(True)
             self.config_dir_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+            self.limit_group_box.setStyleSheet("color: #3A5870;")
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -175,9 +176,9 @@ class ThresholdConfigWidget(QWidget):
         duration, upper_limit, lower_limit = result_data
         self.limit_graph.clear()
         if upper_limit is not None and not np.all(np.isnan(upper_limit)):
-            self.limit_graph.plot(duration, upper_limit, pen=mkPen(color="r", width=2), name="Upper Limit")
+            self.limit_graph.plot(duration, upper_limit, pen=mkPen(color="#C41826", width=2), name="Upper Limit")
         if lower_limit is not None and not np.all(np.isnan(lower_limit)):
-            self.limit_graph.plot(duration, lower_limit, pen=mkPen(color="b", width=2), name="Lower Limit")
+            self.limit_graph.plot(duration, lower_limit, pen=mkPen(color="#0A66B8", width=2), name="Lower Limit")
 
     def get_config(self) -> dict:
         """

@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox, QApplication, QFileDialog, QMessageBox
 )
 import pyqtgraph as pg
+from pyqtgraph import mkPen
 
 from base.file_ops import FileOps
 from base.save_data import save_audio_simple
@@ -81,16 +82,16 @@ class AudioClipExtractionDialog(QDialog):
         return layout
 
     def create_plot_widget(self):
-        self.plot_curve = pg.PlotDataItem(pen='k')
-        self.region = pg.LinearRegionItem(values=[0, 0], brush=(50, 150, 250, 50),
-                                          pen={'color': (0, 0, 255), 'width': 2})
+        self.plot_curve = pg.PlotDataItem(pen=mkPen(color="#081828", width=1.5))
+        self.region = pg.LinearRegionItem(values=[0, 0], brush=(10, 102, 184, 55),
+                                          pen={'color': (10, 102, 184), 'width': 2})
         self.region.setZValue(10)
         self.region.sigRegionChanged.connect(self.on_region_changed)
 
         plot_widget = DraggablePlotWidget(region_item=self.region)
-        plot_widget.setBackground("white")
-        plot_widget.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
-        plot_widget.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
+        plot_widget.setBackground("#EEF6FF")
+        plot_widget.setLabel("left", "Amplitude(V)", **{"font-size": "14px"})
+        plot_widget.setLabel("bottom", "Time(s)", **{"font-size": "14px"})
         plot_widget.showGrid(x=True, y=True, alpha=0.5)
         plot_widget.addItem(self.plot_curve)
         plot_widget.addItem(self.region)

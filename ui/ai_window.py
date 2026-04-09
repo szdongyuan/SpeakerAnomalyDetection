@@ -10,6 +10,7 @@ from base.evaluate_model import evaluate, evaluate_with_data
 from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.model_config import init_model_from_config
+from base.onnx_audio_predictor import build_onnx_model_summary
 from base.training_model import train_with_dir, train_with_data, save_trained_model
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const, model_consts
@@ -353,6 +354,10 @@ class AiWindow(QDialog):
         process = Process_Widget()
         code, result = self.get_model_info(self.model_path, self.logger)
 
+        if os.path.splitext(self.model_path)[1].lower() == ".onnx":
+            QMessageBox.warning(self, "提示", "ONNX 模型当前只支持推理，不支持在此窗口训练或评估。")
+            return
+
         if self.train_model_with_dir:
             train_data = self.train_dir
         else:
@@ -612,7 +617,9 @@ class BaseModel(QWidget):
         if selected_model:
             model = self.load_model_structure(selected_model)
             self.save_model_path_to_config()
-            if model is not None:
+            if isinstance(model, str):
+                self.summary_text = model
+            elif model is not None:
                 model_summary = []
                 model.model.summary(print_fn=lambda x: model_summary.append(x))
                 self.summary_text = "\n".join(model_summary)
@@ -698,6 +705,8 @@ class BaseModel(QWidget):
             self.model_path, config_path = query_result[0]
             self.model_path = DEFAULT_DIR + self.model_path
             really_config_path = DEFAULT_DIR + config_path
+            if os.path.splitext(self.model_path)[1].lower() == ".onnx":
+                return build_onnx_model_summary(self.model_path, really_config_path)
             kwargs = {"config_path": really_config_path}
             model = init_model_from_config(**kwargs)
             model.load_model(self.model_path)

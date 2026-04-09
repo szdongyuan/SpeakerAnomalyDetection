@@ -113,7 +113,7 @@ class ModelInfoList(DataManageDialog):
             dim_dict["input_left"] = self.model_info[self.select_model_row][1].split(" x ")[0]
             dim_dict["input_right"] = self.model_info[self.select_model_row][1].split(" x ")[1]
             dim_dict["output_dim"] = self.model_info[self.select_model_row][2]
-            dim_dict["config_path"] = os.path.basename(config_path_from_db).split(".yml")[0]
+            dim_dict["config_path"] = os.path.splitext(os.path.basename(config_path_from_db))[0]
 
         model_obj_data = SetModelConfig(
             model_info=self.model_info,
@@ -141,7 +141,7 @@ class ModelInfoList(DataManageDialog):
     def register_model_info(self):
         home_directory = os.path.expanduser("~")
         model_path = QFileDialog.getOpenFileName(
-            self, "选择模型文件", home_directory, "KERAS Files (*.keras)"
+            self, "选择模型文件", home_directory, "Model Files (*.keras *.onnx)"
         )[0]
         if os.path.isfile(model_path):
             model_name = os.path.basename(model_path)
@@ -598,11 +598,18 @@ class SetModelConfig(QDialog):
         return btn_layout
 
     def get_yaml_files(self):
-        directory = DEFAULT_DIR + "/configs/ai_model_config"
         yaml_files_data = []
-        for filename in os.listdir(directory):
-            if filename.endswith(".yml"):
-                file_name_only = os.path.basename(filename).split(".yml")[0]
+        directories = [
+            os.path.join(DEFAULT_DIR, "configs", "ai_model_config"),
+            os.path.join(DEFAULT_DIR, "torchmodel", "config"),
+        ]
+        for directory in directories:
+            if not os.path.isdir(directory):
+                continue
+            for filename in os.listdir(directory):
+                if not (filename.endswith(".yml") or filename.endswith(".yaml")):
+                    continue
+                file_name_only = os.path.splitext(os.path.basename(filename))[0]
                 full_path = os.path.join(directory, filename)
                 yaml_files_data.append((file_name_only, full_path))
         return yaml_files_data

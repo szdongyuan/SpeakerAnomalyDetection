@@ -1,6 +1,7 @@
 import sys
+import onnxruntime
 
-from PyQt5.QtCore import Qt, QPoint, QTimer, QUrl
+from PyQt5.QtCore import Qt, QPoint, QUrl
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox, QDialog
@@ -28,11 +29,8 @@ class MainWindow(QMainWindow):
         self.user_name = None
         self.access_lvl = None
         self.refresh_stimulus_flag = None
-        startup_devices = SoundDeviceManager().get_startup_devices()
-        self.mic = startup_devices.get("mic")
-        self.speaker = startup_devices.get("speaker")
-        self.startup_device_fallback_targets = startup_devices.get("fallback_targets", [])
-        self.startup_device_notice_message = startup_devices.get("startup_notice_message")
+        _, self.mic = SoundDeviceManager().get_default_device("mic")
+        _, self.speaker = SoundDeviceManager().get_default_device("speaker")
 
         # set mouse drog date
         self.resize_direction = None
@@ -79,8 +77,6 @@ class MainWindow(QMainWindow):
         self.show_statusbar_layout()
         self.showMaximized()
         self.on_login_window_init()
-        if self.startup_device_notice_message or self.startup_device_fallback_targets:
-            QTimer.singleShot(0, self.show_startup_device_warning)
 
     def set_title(self):
         # hide the window title bar and reset the window title bar
@@ -96,6 +92,10 @@ class MainWindow(QMainWindow):
         icon_label.setScaledContents(True)
         current_version = self.get_current_version()
         title_label = QLabel(f"谛听异音检测 -{current_version} beta")
+        title_label.setStyleSheet(
+            "color: #FFFFFF; background-color: transparent;"
+            " font-family: 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        )
         h_spacer = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
@@ -250,6 +250,7 @@ class MainWindow(QMainWindow):
 
         statusbar = QStatusBar()
         statusbar.setSizeGripEnabled(False)
+        statusbar.setStyleSheet(ui_style_const.qstatusbar_style)
         statusbar.addWidget(self.user_label)
         statusbar.addPermanentWidget(self.device_label)
         self.setStatusBar(statusbar)
@@ -318,21 +319,6 @@ class MainWindow(QMainWindow):
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
-
-    def show_startup_device_warning(self):
-        if self.startup_device_notice_message:
-            QMessageBox.warning(
-                self,
-                "提示",
-                self.startup_device_notice_message
-            )
-            return
-
-        QMessageBox.warning(
-            self,
-            "提示",
-            "已保存的音频设备不存在或配置无效，正在使用系统默认麦克风和扬声器。"
-        )
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker
@@ -522,9 +508,11 @@ class MainWindow(QMainWindow):
         width = self.width()
         height = self.height()
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(208, 206, 202))
+        # Title bar — deep navy, anchors the window
+        painter.setBrush(QColor(12, 48, 92))
         painter.drawRect(1, 1, width - 2, 31)
-        painter.setBrush(QColor(208, 206, 202, 124))
+        # Menu-bar strip and status bar — panel steel blue
+        painter.setBrush(QColor(196, 216, 236))
         painter.drawRect(1, 31, width - 2, 41)
         painter.drawRect(1, height - 24, width - 2, 23)
         painter.end()

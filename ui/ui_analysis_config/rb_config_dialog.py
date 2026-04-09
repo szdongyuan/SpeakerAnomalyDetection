@@ -131,7 +131,7 @@ class RbConfigWindow(QDialog):
         self.get_default_config()
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
-            self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
+            self.scroll_area.setStyleSheet("color: #3A5870;")
             # Select all rub&buzz harmonics (10-35)
             self.selected_labels = list(range(10, 36))
             for i in range(self.box_layout.count()):
@@ -141,7 +141,7 @@ class RbConfigWindow(QDialog):
                     label.setText("\u2713" + text)
         else:
             self.scroll_area.setDisabled(False)
-            self.scroll_area.setStyleSheet("color: rgb(0, 0, 0);")
+            self.scroll_area.setStyleSheet("color: #081828;")
             self.selected_labels = []
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
@@ -164,7 +164,7 @@ class RbConfigWindow(QDialog):
         self.selected_labels_changed.emit()
 
     def on_label_enter(self, label, event):
-        label.setStyleSheet("background-color: #5099ccff;")
+        label.setStyleSheet("background-color: #D6EAFA;")
 
     def on_label_leave(self, label, event):
         label.setStyleSheet("background-color: transparent;")

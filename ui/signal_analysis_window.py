@@ -14,6 +14,7 @@ from PyQt5.QtCore import Qt, QModelIndex
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
+    QFrame,
     QTextEdit,
     QHBoxLayout,
     QVBoxLayout,
@@ -152,23 +153,41 @@ class AnalysisResultSummaryWindow(QWidget):
     """
     Summary window for DataDealStruct.analysis_result_dict.
 
-    Displays a simple table: Analysis Item / Result(OK/NG).
+    Displays a banner result + table: Analysis Item / Deviation / Result(OK/NG).
     """
+
+    _BANNER_OK = (
+        "background-color: #088A38; color: #FFFFFF; border-radius: 4px;"
+        " font-family: 'Segoe UI', 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        " padding: 6px 0;"
+    )
+    _BANNER_NG = (
+        "background-color: #C41826; color: #FFFFFF; border-radius: 4px;"
+        " font-family: 'Segoe UI', 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        " padding: 6px 0;"
+    )
+    _ROW_BG_OK  = QColor(240, 252, 244)   # very light green tint
+    _ROW_BG_NG  = QColor(255, 240, 242)   # very light red tint
 
     def __init__(self, result_dict: dict[str, bool], title: str = "分析结果汇总"):
         super().__init__()
         self.setWindowTitle(title)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setMinimumWidth(460)
 
+        self.setStyleSheet(
+            ui_style_const.qtableview_style + ui_style_const.qlabel_style
+        )
+
+        # ── Result banner ──────────────────────────────────────────────────────
         self._overall_label = QLabel(self)
-        overall_font = QFont()
-        overall_font.setPixelSize(22)
-        self._overall_label.setFont(overall_font)
         self._overall_label.setAlignment(Qt.AlignCenter)
+        self._overall_label.setFixedHeight(44)
 
+        # ── Detail table ───────────────────────────────────────────────────────
         self._table = QTableWidget(self)
         font = QFont()
-        font.setPixelSize(20)
+        font.setPixelSize(14)
         self._table.setFont(font)
         self._table.horizontalHeader().setFont(font)
         self._table.verticalHeader().setFont(font)
@@ -181,88 +200,151 @@ class AnalysisResultSummaryWindow(QWidget):
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setSelectionMode(QTableWidget.SingleSelection)
-        # Avoid default focus/selection highlight on show
+        self._table.setAlternatingRowColors(False)   # we set per-row manually
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
         layout.addWidget(self._overall_label)
         layout.addWidget(self._table)
         self.setLayout(layout)
 
         self.set_results(result_dict)
-        # Ensure no default selected cell/row
         self._table.clearSelection()
         self._table.setCurrentIndex(QModelIndex())
 
     def set_results(self, result_dict: dict[str, (bool, float)]):
         items = list(result_dict.items())
-        # Stable order (alphabetical by name) for readability
         items.sort(key=lambda kv: kv[0])
 
-        # Overall judgment: all OK -> OK else NG
-        overall_ok = True
-        for _, (ok, _dev) in items:
-            if not bool(ok):
-                overall_ok = False
-                break
-        overall_text = "OK" if overall_ok else "NG"
-        self._overall_label.setText(f"最终结果：{overall_text}")
-        self._overall_label.setStyleSheet(
-            "color: rgb(0, 128, 0);" if overall_ok else "color: rgb(200, 0, 0);"
-        )
+        overall_ok = all(bool(ok) for _, (ok, _dev) in items)
 
+        # Banner
+        if overall_ok:
+            self._overall_label.setText("最终结果：合格（OK）")
+            self._overall_label.setStyleSheet(self._BANNER_OK)
+        else:
+            self._overall_label.setText("最终结果：不合格（NG）")
+            self._overall_label.setStyleSheet(self._BANNER_NG)
+
+        # Table rows
         self._table.setRowCount(len(items))
-        for row, (name, (ok, deviation)) in enumerate(items):
-            name_item = QTableWidgetItem(str(name))
-            if "SPL" in name:
-                deviation = f"{deviation:.2f} dB"
-            elif "FR" in name:
-                deviation = f"{deviation:.2f} dB"
-            elif "PRB" in name:
-                deviation = f"{deviation:.2f} phon"
-            elif "HD" in name or "RB" in name:
-                deviation = f"{deviation:.2f} %"
-            deviation_item = QTableWidgetItem(str(deviation))
-            result_text = "OK" if ok else "NG"
-            result_item = QTableWidgetItem(result_text)
-            result_item.setTextAlignment(Qt.AlignCenter)
 
-            # color hint
-            if ok:
-                deviation_item.setForeground(QColor(0, 128, 0))
-                result_item.setForeground(QColor(0, 128, 0))
+        for row, (name, (ok, deviation)) in enumerate(items):
+            row_bg = self._ROW_BG_OK if ok else self._ROW_BG_NG
+
+            if "SPL" in name:
+                dev_str = f"{deviation:.2f} dB"
+            elif "FR" in name:
+                dev_str = f"{deviation:.2f} dB"
+            elif "PRB" in name:
+                dev_str = f"{deviation:.2f} phon"
+            elif "HD" in name or "RB" in name:
+                dev_str = f"{deviation:.2f} %"
             else:
-                deviation_item.setForeground(QColor(200, 0, 0))
-                result_item.setForeground(QColor(200, 0, 0))
+                dev_str = str(deviation)
+
+            name_item = QTableWidgetItem(str(name))
+            deviation_item = QTableWidgetItem(dev_str)
+
+            for item in (name_item, deviation_item):
+                item.setBackground(row_bg)
 
             self._table.setItem(row, 0, name_item)
             self._table.setItem(row, 1, deviation_item)
-            self._table.setItem(row, 2, result_item)
-        # Ensure no default selected cell/row after refreshing data
+
+            # Result badge — use setCellWidget so QSS color override doesn't apply
+            result_label = QLabel("OK" if ok else "NG")
+            result_label.setAlignment(Qt.AlignCenter)
+            result_color = "#088A38" if ok else "#C41826"
+            result_label.setStyleSheet(
+                f"QLabel {{ color: {result_color}; font-weight: bold;"
+                f" font-size: 14px; background-color: transparent; }}"
+            )
+            self._table.setCellWidget(row, 2, result_label)
+            self._table.setRowHeight(row, 28)
+
         self._table.clearSelection()
         self._table.setCurrentIndex(QModelIndex())
 
 
 class AnalysisGraphWidget(QWidget):
 
+    _BANNER_OK = (
+        "background-color: #088A38; color: #FFFFFF;"
+        " border-radius: 4px;"
+        " font-family: 'Segoe UI', 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        " padding: 0 16px;"
+    )
+    _BANNER_NG = (
+        "background-color: #C41826; color: #FFFFFF;"
+        " border-radius: 4px;"
+        " font-family: 'Segoe UI', 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        " padding: 0 16px;"
+    )
+    _PLOT_AXIS_PEN = pg.mkPen(color="#7AAAC8", width=1)
+
     def __init__(self):
         super().__init__()
 
         self.analysis_plot = pg.PlotWidget()
+        self._result_label = None
 
-        self.set_plot_font_size(20)
+        self.set_plot_font_size(14)
         self.init_ui()
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setMinimumSize(700, 460)
+        self.setStyleSheet("QWidget { background-color: #D6E8F5; }")
 
-        self.analysis_plot.setBackground("white")
+        # Plot background and axis styling
+        self.analysis_plot.setBackground("#EEF6FF")
+        for side in ("bottom", "left", "top", "right"):
+            ax = self.analysis_plot.getAxis(side)
+            ax.setPen(self._PLOT_AXIS_PEN)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
+
+        # Frame around the plot
+        plot_frame = QFrame()
+        plot_frame.setFrameShape(QFrame.StyledPanel)
+        plot_frame.setStyleSheet(
+            "QFrame { border: 1.5px solid #5A90BC; border-radius: 4px;"
+            " background-color: #EEF6FF; }"
+        )
+        plot_frame_layout = QVBoxLayout()
+        plot_frame_layout.setContentsMargins(0, 0, 0, 0)
+        plot_frame_layout.setSpacing(0)
+        plot_frame_layout.addWidget(self.analysis_plot)
+        plot_frame.setLayout(plot_frame_layout)
+
+        # Result banner
+        self._result_label = QLabel()
+        self._result_label.setAlignment(Qt.AlignCenter)
+        self._result_label.setFixedHeight(44)
+        self._result_label.hide()
 
         layout = QVBoxLayout()
-        layout.addWidget(self.analysis_plot)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(8)
+        layout.addWidget(self._result_label)
+        layout.addWidget(plot_frame)
         self.setLayout(layout)
 
+    def set_result_status(self, ok: bool):
+        """Show a coloured OK / NG banner at the top of the chart window."""
+        if self._result_label is None:
+            return
+        if ok:
+            self._result_label.setText("合格（OK）")
+            self._result_label.setStyleSheet(self._BANNER_OK)
+        else:
+            self._result_label.setText("不合格（NG）")
+            self._result_label.setStyleSheet(self._BANNER_NG)
+        self._result_label.show()
+
     def set_plot_font_size(self, font_size: int):
-        font = QFont()
+        font = QFont("Segoe UI", -1)
         font.setPixelSize(font_size)
 
         b_axis = self.analysis_plot.getAxis("bottom")
@@ -272,10 +354,12 @@ class AnalysisGraphWidget(QWidget):
 
         b_axis.setTickFont(font)
         l_axis.setTickFont(font)
-        b_axis.setTextPen("black")
-        l_axis.setTextPen("black")
-        b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
-        l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
+        b_axis.setTextPen("#0A66B8")
+        l_axis.setTextPen("#0A66B8")
+        b_axis.setPen(self._PLOT_AXIS_PEN)
+        l_axis.setPen(self._PLOT_AXIS_PEN)
+        b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px", "color": "#0A66B8"})
+        l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px", "color": "#0A66B8"})
 
 
 class Distortion(AnalysisGraphWidget):
@@ -460,13 +544,13 @@ class Distortion(AnalysisGraphWidget):
         # === Without limit config: original logic ===
         self.analysis_plot.clear()
         if valid_data:
-            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color=(51, 196, 77), width=2), name="THD")
+            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color=(10, 102, 184), width=3), name="THD")
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
     def _highlight_out_of_range_curve(self, freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list):
         """
@@ -541,6 +625,7 @@ class Distortion(AnalysisGraphWidget):
         deviation = round(deviation, 2)
         is_ok = not np.any(out_mask)
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        self.set_result_status(bool(is_ok))
 
         # === 3. Plot out-of-limit segments using LimitPlotUtils ===
         LimitPlotUtils.plot_out_segments(self.analysis_plot, freq_arr, y_arr, out_mask)
@@ -783,7 +868,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             self.analysis_plot.plot(
                 freq_value,
                 perceptual_loudness,
-                pen=mkPen(color=(51, 196, 77), width=2),
+                pen=mkPen(color=(10, 102, 184), width=3),
                 name=self._prb_curve_label,
             )
         if self.selected_label is not None:
@@ -791,7 +876,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         self.analysis_plot.setLabel("left", self._prb_y_label)
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
 
 class Spl(AnalysisGraphWidget):
@@ -926,16 +1011,17 @@ class Spl(AnalysisGraphWidget):
 
         # === 6. Save result ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        self.set_result_status(bool(is_ok))
 
         # === 7. Plot out-of-limit segments using LimitPlotUtils ===
         LimitPlotUtils.plot_out_segments(self.analysis_plot, sig_t, sig_spl, out_mask)
 
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
+        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(10, 102, 184), width=3))
         self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
 
 class SplFrequency(AnalysisGraphWidget):
@@ -1126,15 +1212,16 @@ class SplFrequency(AnalysisGraphWidget):
 
         # === 4. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        self.set_result_status(bool(is_ok))
         LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
     def plot_spl_frequency(self, frequency_list, spl_db):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77), width=2))
+        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(10, 102, 184), width=3))
         self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
 
 class Frequency(AnalysisGraphWidget):
@@ -1417,19 +1504,32 @@ class Frequency(AnalysisGraphWidget):
 
         # === 4. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        self.set_result_status(bool(is_ok))
         LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
     def plot_fr(self, frequency_list, fr):
         self.analysis_plot.clear()
         # fr = fr + 94 + self.v2pa_factor  # Todo: modify later
-        self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77), width=2))
+        self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(10, 102, 184), width=3))
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
 
 class AI(QWidget):
+
+    _BANNER_OK = (
+        "background-color: #088A38; color: #FFFFFF; border-radius: 4px;"
+        " font-family: 'Segoe UI', 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        " padding: 0 16px;"
+    )
+    _BANNER_NG = (
+        "background-color: #C41826; color: #FFFFFF; border-radius: 4px;"
+        " font-family: 'Segoe UI', 'Microsoft YaHei', 'SimSun'; font-size: 15px; font-weight: bold;"
+        " padding: 0 16px;"
+    )
+
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -1438,46 +1538,57 @@ class AI(QWidget):
         self.export_detail = None
         self.default_logger = LogManager.set_log_handler("core")
         self.title_name = title_name
+        self._result_label = None
 
         self.init_ui()
         self.setWindowTitle(title_name)
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        ai_analyse_layout = self.create_ai_analyse_layout()
-        self.setLayout(ai_analyse_layout)
+        self.setMinimumSize(360, 280)
+        self.setStyleSheet("QWidget { background-color: #D6E8F5; }")
 
-    def create_ai_analyse_layout(self):
-        ai_analyse_layout = QVBoxLayout()
-        analyse_score_layout = QHBoxLayout()
+        self._result_label = QLabel()
+        self._result_label.setAlignment(Qt.AlignCenter)
+        self._result_label.setFixedHeight(44)
+        self._result_label.hide()
+
+        # Text edit inside a styled frame
         self.ai_analyse_score_textedit = QTextEdit()
-        self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_textedit.setDisabled(True)
+        self.ai_analyse_score_textedit.setStyleSheet(
+            "QTextEdit { background-color: #EEF6FF; border: none;"
+            " font-family: 'Segoe UI', 'Microsoft YaHei'; font-size: 14px; }"
+        )
 
-        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_style)
-        analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
-        analyse_score_layout.setContentsMargins(20, 0, 20, 0)
+        text_frame = QFrame()
+        text_frame.setFrameShape(QFrame.StyledPanel)
+        text_frame.setStyleSheet(
+            "QFrame { border: 1.5px solid #5A90BC; border-radius: 4px;"
+            " background-color: #EEF6FF; }"
+        )
+        frame_inner = QVBoxLayout()
+        frame_inner.setContentsMargins(0, 0, 0, 0)
+        frame_inner.addWidget(self.ai_analyse_score_textedit)
+        text_frame.setLayout(frame_inner)
 
-        ai_analyse_layout.addLayout(analyse_score_layout)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(8)
+        layout.addWidget(self._result_label)
+        layout.addWidget(text_frame)
+        self.setLayout(layout)
 
-        return ai_analyse_layout
-
-    def highlight_keywords(self, keyword, text_edit):
-        cursor = text_edit.textCursor()
-        format = QTextCharFormat()
-        format.setForeground(QColor("red"))
-
-        matches = []
-        cursor.movePosition(QTextCursor.Start)
-        while True:
-            cursor = text_edit.document().find(keyword, cursor)
-            if cursor.isNull():
-                break
-            matches.append(cursor)
-
-        if len(matches) == 2:
-            first_match = matches[0]
-            first_match.mergeCharFormat(format)
+    def set_result_status(self, ok: bool):
+        if self._result_label is None:
+            return
+        if ok:
+            self._result_label.setText("合格（OK）")
+            self._result_label.setStyleSheet(self._BANNER_OK)
+        else:
+            self._result_label.setText("不合格（NG）")
+            self._result_label.setStyleSheet(self._BANNER_NG)
+        self._result_label.show()
 
     def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
@@ -1486,22 +1597,26 @@ class AI(QWidget):
             if query_code == error_code.OK:
                 input_dim = str(query_result).split("x")[0].strip()
                 if input_dim != str(len(self.data_struct.store_wave_data)):
-                    self.ai_analyse_score_textedit.setPlainText("模型与音频时长不匹配")
+                    self.ai_analyse_score_textedit.setHtml(
+                        "<p style='color:#C41826;padding:12px;'>模型与音频时长不匹配</p>"
+                    )
                     return
                 else:
                     self.default_logger.info("The model matches the audio duration. Starting analysis...")
             else:
-                self.ai_analyse_score_textedit.setPlainText("查询数据库模型时长失败")
+                self.ai_analyse_score_textedit.setHtml(
+                    "<p style='color:#C41826;padding:12px;'>查询数据库模型时长失败</p>"
+                )
                 return
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
-            self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择！")
+            self.ai_analyse_score_textedit.setHtml(
+                "<p style='color:#C41826;padding:12px;'>模型不存在，请重新选择！</p>"
+            )
         else:
             model_path, config_path = result
             kwargs = {"config_path": config_path}
-            result_text = self.model_predict(model_path, model_name, **kwargs)
-            self.ai_analyse_score_textedit.setPlainText(result_text)
-            self.highlight_keywords("ng", self.ai_analyse_score_textedit)
+            self.model_predict(model_path, model_name, **kwargs)
 
     def model_predict(self, model_path, model_name, **kwargs):
         ret_str, pred_config = predict_from_audio(
@@ -1512,13 +1627,26 @@ class AI(QWidget):
             **kwargs,
         )
         ret_dict = json.loads(ret_str)
-        predict_result = ret_dict["result"]
+        if ret_dict.get("ret_code") != error_code.OK:
+            self.ai_analyse_score_textedit.setHtml(
+                f"<p style='color:#C41826;padding:12px;'>{ret_dict.get('ret_msg', '模型推理失败')}</p>"
+            )
+            return
+
+        predict_result = ret_dict.get("result", [])
+        if not predict_result or len(predict_result[0]) < 3:
+            self.ai_analyse_score_textedit.setHtml(
+                "<p style='color:#C41826;padding:12px;'>模型推理返回结果格式无效</p>"
+            )
+            return
+
         predict_label = predict_result[0][1]
         ok_scores = float(predict_result[0][2]) * 100
         ng_scores = 100 - ok_scores
         deviation = round(abs(float(predict_result[0][2]) - float(pred_config.get("acc_req", 0.5))), 2)
         is_passed_bool = True if predict_label == "OK" else False
         self.data_struct.analysis_result_dict[self.title_name] = (is_passed_bool, deviation)
+        self.set_result_status(bool(is_passed_bool))
         self.result = predict_label
         self.export_detail = {
             "label": predict_label,
@@ -1526,13 +1654,116 @@ class AI(QWidget):
             "ng_score": round(ng_scores, 2),
             "model_name": model_name,
         }
-        result_text = (
-            f"评分结果: {predict_label} \n \n"
-            f"\xa0\xa0评分模型: {model_name}\n"
-            f"\xa0\xa0OK Score: {ok_scores:.2f}%\n"
-            f"\xa0\xa0NG Score: {ng_scores:.2f}%"
-        )
-        return result_text
+        ok_color = "#088A38"
+        ng_color = "#C41826"
+        bar_bg   = "#C8DEEE"
+        # clamp bar widths so table cells always have valid widths
+        ok_fill  = max(2, min(98, int(ok_scores)))
+        ng_fill  = max(2, min(98, int(ng_scores)))
+        acc_req  = float(pred_config.get("acc_req", 0.5))
+        thr_pct  = acc_req * 100
+        # threshold tick positions (clamped away from edges)
+        t_ok = max(2, min(96, int(thr_pct)))        # OK bar: threshold at t_ok% from left
+        t_ng = max(2, min(96, int(100 - thr_pct)))  # NG bar: threshold at t_ng% from left
+        html = f"""
+<table width="100%" cellspacing="0" cellpadding="0"
+       style="font-family:'Segoe UI','Microsoft YaHei',sans-serif;">
+  <tr>
+    <td style="padding:14px 18px 10px 18px;color:#0A66B8;font-size:13px;
+               border-bottom:1px solid #B8D0E8;">
+      评分模型：<b>{model_name}</b>
+    </td>
+  </tr>
+  <tr><td style="padding:12px 18px 0 18px;">
+
+    <table width="100%" cellspacing="0" cellpadding="0">
+
+      <!-- OK Score label + value -->
+      <tr>
+        <td style="font-size:13px;color:#555;white-space:nowrap;padding-bottom:3px;">OK Score</td>
+        <td style="text-align:right;padding-bottom:3px;">
+          <b style="color:{ok_color};font-size:17px;">{ok_scores:.1f}%</b>
+        </td>
+      </tr>
+      <!-- OK bar -->
+      <tr>
+        <td colspan="2">
+          <table width="100%" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="{ok_fill}%" height="11" bgcolor="{ok_color}"></td>
+              <td height="11" bgcolor="{bar_bg}"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <!-- OK threshold tick (dashed line at t_ok%) -->
+      <tr>
+        <td colspan="2" style="padding-bottom:14px;">
+          <table width="100%" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="{t_ok}%" style="border-right:2px dashed #0A66B8;font-size:1px;">&nbsp;</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td width="{t_ok}%" style="text-align:right;padding-right:3px;">
+                <span style="color:#0A66B8;font-size:10px;">{thr_pct:.0f}%</span>
+              </td>
+              <td></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- NG Score label + value -->
+      <tr>
+        <td style="font-size:13px;color:#555;white-space:nowrap;padding-bottom:3px;">NG Score</td>
+        <td style="text-align:right;padding-bottom:3px;">
+          <b style="color:{ng_color};font-size:17px;">{ng_scores:.1f}%</b>
+        </td>
+      </tr>
+      <!-- NG bar -->
+      <tr>
+        <td colspan="2">
+          <table width="100%" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="{ng_fill}%" height="11" bgcolor="{ng_color}"></td>
+              <td height="11" bgcolor="{bar_bg}"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <!-- NG threshold tick (dashed line at t_ng%) -->
+      <tr>
+        <td colspan="2" style="padding-bottom:6px;">
+          <table width="100%" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="{t_ng}%" style="border-right:2px dashed #C41826;font-size:1px;">&nbsp;</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td width="{t_ng}%" style="text-align:right;padding-right:3px;">
+                <span style="color:#C41826;font-size:10px;">{100-thr_pct:.0f}%</span>
+              </td>
+              <td></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Footer: threshold info -->
+      <tr>
+        <td colspan="2" style="border-top:1px solid #B8D0E8;padding-top:10px;
+                                color:#666;font-size:12px;">
+          合格线：OK ≥ <b style="color:#0A66B8;">{thr_pct:.1f}%</b>
+          &nbsp;／&nbsp;
+          NG ≤ <b style="color:#C41826;">{100-thr_pct:.1f}%</b>
+        </td>
+      </tr>
+
+    </table>
+  </td></tr>
+</table>"""
+        self.ai_analyse_score_textedit.setHtml(html)
 
     @staticmethod
     def get_model_info(selected_model, logger: LogManager):
@@ -1574,7 +1805,7 @@ class Spectrogram(QWidget):
 
     def _init_stft_plot_components(self):
         self.stft_plot_widget = pg.PlotWidget()
-        self.stft_plot_widget.setBackground("white")
+        self.stft_plot_widget.setBackground("#EEF6FF")
         self.img_item = pg.ImageItem()
         self.stft_plot_widget.addItem(self.img_item)
 
@@ -1582,25 +1813,25 @@ class Spectrogram(QWidget):
         plot_widgets = self.plot_container.findChildren(pg.PlotWidget)
         for plot_widget in plot_widgets:
             font = QFont()
-            font.setPixelSize(20)
+            font.setPixelSize(14)
             b_axis = plot_widget.getAxis("bottom")
             l_axis = plot_widget.getAxis("left")
             b_axis.setTickFont(font)
             l_axis.setTickFont(font)
-            b_axis.setTextPen("black")
-            l_axis.setTextPen("black")
-            b_axis.setLabel(b_axis.labelText, **{"font-size": "20px"})
-            l_axis.setLabel(l_axis.labelText, **{"font-size": "20px"})
+            b_axis.setTextPen("#081828")
+            l_axis.setTextPen("#081828")
+            b_axis.setLabel(b_axis.labelText, **{"font-size": "14px"})
+            l_axis.setLabel(l_axis.labelText, **{"font-size": "14px"})
 
             current_title = plot_widget.plotItem.titleLabel.text  # 获取当前标题
-            plot_widget.setTitle(current_title, size="20px", color="black")
+            plot_widget.setTitle(current_title, size="14px", color="#081828")
 
         if self.stft_colorbar:
             color_bar_axis = self.stft_colorbar.axis
             color_bar_font = QFont()
-            color_bar_font.setPixelSize(20)  # 设置颜色条字体大小为 14px
+            color_bar_font.setPixelSize(13)  # 设置颜色条字体大小为 14px
             color_bar_axis.setTickFont(color_bar_font)
-            color_bar_axis.setTextPen("black")
+            color_bar_axis.setTextPen("#081828")
             # color_bar_axis.setStyle(tickTextOffset=10)
 
     def calculate_spec(self):
@@ -1724,7 +1955,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.threshould = None
         self.setWindowTitle(title_name)
         self.add_label_to_layout()
-        self.setStyleSheet("font-size: 20px;")
+        self.setStyleSheet("font-size: 15px;")
 
     def add_label_to_layout(self):
         lp_num_layout = QHBoxLayout()
@@ -1747,31 +1978,6 @@ class LooseParticle(AnalysisGraphWidget):
         else:
             self.status_label.setText("状态: 正常")
 
-    @staticmethod
-    def downsample_min_max(x_data, y_data, window_size=8):
-        x_data = np.asarray(x_data)
-        y_data = np.asarray(y_data)
-        if x_data.size <= 2 or y_data.size <= 2 or x_data.size != y_data.size or window_size <= 1:
-            return x_data, y_data
-
-        downsampled_x = []
-        downsampled_y = []
-        for start in range(0, y_data.size, window_size):
-            end = min(start + window_size, y_data.size)
-            window_x = x_data[start:end]
-            window_y = y_data[start:end]
-            if window_y.size == 0:
-                continue
-
-            max_idx = int(np.argmax(window_y))
-            min_idx = int(np.argmin(window_y))
-            selected_indices = sorted({min_idx, max_idx})
-            for idx in selected_indices:
-                downsampled_x.append(window_x[idx])
-                downsampled_y.append(window_y[idx])
-
-        return np.asarray(downsampled_x), np.asarray(downsampled_y)
-
     def plot_graph(self, amplitude, deviation):
         signal_duration = np.linspace(0, len(amplitude) / (self.data_struct.sample_rate), len(amplitude))
         self.result = self.detect_peaks(
@@ -1783,12 +1989,11 @@ class LooseParticle(AnalysisGraphWidget):
             self.data_struct.sample_rate,
         )
         amplitude = amplitude - deviation
-        plot_x, plot_y = self.downsample_min_max(signal_duration, amplitude)
-        self.analysis_plot.plot(plot_x, plot_y, pen=mkPen(color=(51, 196, 77), width=2))
+        self.analysis_plot.plot(signal_duration, amplitude, pen=mkPen(color=(10, 102, 184), width=3))
         self.plot_loose_particle_waveform(self.threshould, signal_duration, deviation)
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
     def detect_peaks(
         self, filtered_db, max_threshold, hysterests_threshold, min_check_duration, max_check_duration, sampling_rate
@@ -1842,8 +2047,7 @@ class LooseParticle(AnalysisGraphWidget):
     def plot_loose_particle_waveform(self, out_range_points, signal_duration, deviation):
         pen = pg.mkPen(color="orange", width=2)
         out_range_points = np.array(out_range_points) - deviation
-        plot_x, plot_y = self.downsample_min_max(signal_duration, out_range_points)
-        out_range_plot = pg.PlotDataItem(plot_x, plot_y, pen=pen)
+        out_range_plot = pg.PlotDataItem(signal_duration, out_range_points, pen=pen)
         self.analysis_plot.addItem(out_range_plot)
 
 
@@ -1908,20 +2112,20 @@ class PeakDetection(AnalysisGraphWidget):
                 recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
-        self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77), width=2))
+        self.analysis_plot.plot(time_axis, spl_series, pen=mkPen(color=(10, 102, 184), width=3))
 
         peak_times = self.result.get("peaks_time_sec", [])
         if peak_times:
             peak_indices = np.clip((np.array(peak_times) * sample_rate).astype(int), 0, len(spl_series) - 1)
             peak_values = spl_series[peak_indices]
             scatter = pg.ScatterPlotItem(
-                x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+                x=np.array(peak_times), y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(196, 24, 38, 200), size=8
             )
             self.analysis_plot.addItem(scatter)
 
         self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Time (s)")
-        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.showGrid(x=True, y=True, alpha=0.5)
 
         # update the number and status
         num_peaks = int(self.result.get("num_peaks", 0))
@@ -2129,7 +2333,7 @@ class PipelinePdPm(QWidget):
             ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
         )
 
-        self.result_display.setStyleSheet("font-size:20px;")
+        self.result_display.setStyleSheet("font-size:15px;")
         self._right_view = None
         self._bars_item = None
         self._last_spl_series = None
@@ -2248,7 +2452,7 @@ class PipelinePdPm(QWidget):
                 recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
-        plot_item.plot(time_axis, spl_series, pen=mkPen(color=(51, 196, 77), width=2))
+        plot_item.plot(time_axis, spl_series, pen=mkPen(color=(10, 102, 184), width=3))
         self._last_spl_series = np.asarray(spl_series)
 
         if peak_indices:
@@ -2256,7 +2460,7 @@ class PipelinePdPm(QWidget):
             peak_times = peak_indices_arr / float(sample_rate)
             peak_values = np.asarray(spl_series)[peak_indices_arr]
             scatter = pg.ScatterPlotItem(
-                x=peak_times, y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(200, 0, 0, 200), size=8
+                x=peak_times, y=peak_values, pen=pg.mkPen(None), brush=pg.mkBrush(196, 24, 38, 200), size=8
             )
             plot_item.addItem(scatter)
 
@@ -2276,7 +2480,7 @@ class PipelinePdPm(QWidget):
                     height=scores,
                     width=bar_width,
                     brush=pg.mkBrush(100, 149, 237, 180),
-                    pen=pg.mkPen(100, 149, 237, 220),
+                    pen=pg.mkPen(10, 102, 184, 220),
                 )
                 self._right_view.addItem(bars)
                 self._bars_item = bars
@@ -2509,6 +2713,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             )
             analysis_result.exceeded_bands = np.where(out_mask)[0].astype(int).tolist()
             self.data_struct.analysis_result_dict[self.title_name] = (bool(is_ok), float(deviation))
+            self.set_result_status(bool(is_ok))
 
         self._plot_bar_chart(analysis_result, weighting, upper_limits=upper_limits, lower_limits=lower_limits)
 
