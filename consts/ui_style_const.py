@@ -100,6 +100,7 @@ qdoublespinbox_style = """
 qdialog_style = """
             QDialog {
                 border-radius: 20px;
+                background-color: #F0F0F0;
             }
 """
 

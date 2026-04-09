@@ -84,6 +84,9 @@ class SequenceWidgetAnalysisOpsMixin:
             self.run()
 
     def start_this_play(self, label="not_labeled"):
+        cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
+        if callable(cancel_pending_serial_trigger):
+            cancel_pending_serial_trigger()
         if getattr(self, "_record_workflow_busy", False):
             return
         if getattr(self, "player_status_flag", False):

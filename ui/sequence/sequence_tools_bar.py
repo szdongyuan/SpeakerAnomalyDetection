@@ -15,12 +15,15 @@ class SequenceToolsBar(QWidget):
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
         self.tcp_btn = QPushButton()
+        self.serial_trigger_btn = QPushButton()
         self.data_btn = QPushButton()
         self.using_file_combobox = QComboBox()
         self.lineedit_type = QLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = QLineEdit()
         self.barcode_scanner_box = QCheckBox("S/N：")
+        self.serial_trigger_status_label = QLabel("未启用")
+        self.serial_trigger_code_label = QLabel("最近接收: -")
 
         self.init_ui()
 
@@ -29,6 +32,7 @@ class SequenceToolsBar(QWidget):
         self.set_replay_btn()
         self.set_data_btn()
         self.set_tcp_btn()
+        self.set_serial_trigger_btn()
         tools_layout = self.create_tools_layout()
 
         self.setLayout(tools_layout)
@@ -63,16 +67,17 @@ class SequenceToolsBar(QWidget):
         vertical_line_2 = QFrame()
         vertical_line_3 = QFrame()
         vertical_line_4 = QFrame()
+        vertical_line_5 = QFrame()
         vertical_line_1.setFrameShape(QFrame.VLine)
         vertical_line_2.setFrameShape(QFrame.VLine)
         vertical_line_3.setFrameShape(QFrame.VLine)
         vertical_line_4.setFrameShape(QFrame.VLine)
+        vertical_line_5.setFrameShape(QFrame.VLine)
 
         mode_type_layout = self.create_mode_type_layout()
         mode_count_layout = self.create_mode_count_layout()
         barcode_scanner_layout = self.create_barcode_scanner_layout()
         using_file_combobox_layout = self.create_using_file_combobox()
-
         layout = QHBoxLayout()
         layout.addWidget(self.player_btn)
         layout.addWidget(vertical_line_1)
@@ -82,6 +87,9 @@ class SequenceToolsBar(QWidget):
         layout.addWidget(vertical_line_3)
         layout.addWidget(self.tcp_btn)
         layout.addWidget(vertical_line_4)
+        layout.addWidget(self.serial_trigger_btn)
+        layout.addLayout(self.create_serial_trigger_status_layout())
+        layout.addWidget(vertical_line_5)
         layout.addLayout(using_file_combobox_layout)
         layout.addLayout(mode_type_layout)
         layout.addLayout(mode_count_layout)
@@ -123,6 +131,13 @@ class SequenceToolsBar(QWidget):
         self.tcp_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/network.png"))
         self.tcp_btn.setIconSize(QSize(35, 35))
 
+    def set_serial_trigger_btn(self):
+        self.serial_trigger_btn.setFixedSize(100, 40)
+        self.serial_trigger_btn.setToolTip("串口离散输入触发配置")
+        self.serial_trigger_btn.setStyleSheet(ui_style_const.toolbar_button_style)
+        self.serial_trigger_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/new_com.png"))
+        self.serial_trigger_btn.setIconSize(QSize(35, 35))
+
     def create_using_file_combobox(self):
         type_label = QLabel(" 使用配置：")
         type_label.setFixedHeight(40)
@@ -138,6 +153,16 @@ class SequenceToolsBar(QWidget):
         using_file_combobox_layout.addWidget(vertical_line)
 
         return using_file_combobox_layout
+
+    def create_serial_trigger_status_layout(self):
+        self.serial_trigger_status_label.setStyleSheet("font-size: 14px; color: black;")
+        self.serial_trigger_status_label.setMinimumWidth(70)
+
+        layout = QHBoxLayout()
+        layout.setSpacing(0)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.addWidget(self.serial_trigger_status_label)
+        return layout
 
     def create_mode_type_layout(self):
         type_label = QLabel(" 型 号：")

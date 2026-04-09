@@ -26,6 +26,8 @@ class UnifiedHardwareManager(QObject):
 
     sig_barcode = pyqtSignal(str)
     sig_trigger = pyqtSignal()
+    sig_directional_trigger = pyqtSignal(str)
+    sig_serial_trigger_status = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -60,6 +62,28 @@ class UnifiedHardwareManager(QObject):
         self._last_barcode = None
         self._last_barcode_time = 0.0
         self._barcode_dedup_window_sec = 0.5  # 500ms 去重窗口
+
+        self.serial_worker = None
+        self.serial_config = {}
+        self.serial_trigger_armed = True
+        self.serial_last_trigger_direction = ""
+        self.serial_listener_status = {
+            "enabled": False,
+            "running": False,
+            "connected": False,
+            "message": "未启用",
+            "raw_hex": "",
+            "value": "",
+            "action": "",
+            "direction": "",
+            "mode": "",
+            "error": "",
+            "device_model": "",
+        }
+
+    @staticmethod
+    def _debug_print(message):
+        print(f"[serial-trigger][manager] {message}")
 
     def _load_scanner_memory(self):
         try:
@@ -135,26 +159,39 @@ class UnifiedHardwareManager(QObject):
         elif sensor:
             self.logger.warning("光电开关缺少 hotkey, 光电触发将不可用")
 
-    def start(self):
-        """
-        启动硬件监听。
+    def _emit_serial_status(self, **kwargs):
+        status = dict(self.serial_listener_status or {})
+        status.update(kwargs)
+        self.serial_listener_status = status
+        self.sig_serial_trigger_status.emit(status)
 
-        兼容两种模式：
-        - 配置模式：配置文件提供扫码枪 VID/PID，按 VID/PID 绑定
-        - 自动模式：无 VID/PID 时，自动枚举并在插入后自动绑定；第一次成功解码后锁定该设备
+    @staticmethod
+    def _serial_config_path():
+        return DEFAULT_DIR + "configs/scanner_barcode_config/serial_discrete_input.json"
+
+    def load_serial_discrete_input_config(self):
+        err_code, data = LoadUiConfig.load_serial_discrete_input_config()
+        if err_code != error_code.OK or not isinstance(data, dict):
+            return False, data
+        self.serial_config = data
+        return True, data
+
+    def get_serial_discrete_input_status(self):
+        return dict(self.serial_listener_status or {})
+
+    def start_scanner_and_sensor_listeners(self):
         """
-        # 尝试加载配置（失败，进入扫码枪自动模式）
+        仅启动扫码枪和光电热键监听。
+        串口离散输入触发有自己的独立入口，不从这里拉起。
+        """
         self.ensure_config_loaded()
 
-        # UI 勾选“扫码枪功能”即认为启用扫码枪监听
         self._scanner_enabled = True
         self._auto_mode = not bool(self.scanner_conf)
 
         if self.scanner_conf:
-            # 先做一次同步绑定
             self._poll_hid_devices()
         else:
-            # 自动模式：开启轮询等待插入
             self.logger.info("扫码枪未配置 VID/PID，进入自动识别模式：开启后插入扫码枪即可使用。")
             self._poll_hid_devices()
 
@@ -163,31 +200,24 @@ class UnifiedHardwareManager(QObject):
         elif self.sensor_conf:
             self.logger.warning("光电开关已配置 VID/PID，但未配置 hotkey，光电监听未启用")
 
-        # 扫码枪需要持续轮询以支持热插拔
         if self._scanner_enabled and not self._hid_poll_timer.isActive():
             self._hid_poll_timer.start()
-
-        # 即使当前未插入扫码枪，仍返回 True（等待热插拔）
         return True
 
-    def stop(self):
-        """停止所有监听"""
+    def stop_scanner_and_sensor_listeners(self):
         self._scanner_enabled = False
         self._scanner_locked_device_id = None
         self._auto_mode = False
         self._auto_no_device_logged = False
-        # 重置去重状态
         self._last_barcode = None
         self._last_barcode_time = 0.0
 
         if self._hid_poll_timer.isActive():
             self._hid_poll_timer.stop()
 
-        # 关闭所有 HID 设备
         for key in list(self.hid_handles.keys()):
             self.close_hid_device(key)
 
-        # 移除热键
         if self.hotkey_registered:
             try:
                 keyboard.unhook_all_hotkeys()
@@ -195,6 +225,137 @@ class UnifiedHardwareManager(QObject):
                 self.logger.info(f"光电热键已移除: {self.hotkey_string}")
             except Exception as e:
                 self.logger.warning(f"热键移除异常: {e}")
+
+    def start_serial_discrete_input_listener(self, config_data=None):
+        if self.serial_worker is not None and self.serial_worker.isRunning():
+            self._debug_print("start 请求被忽略: 监听已在运行")
+            self._emit_serial_status(message="串口离散输入监听已在运行")
+            return {"ok": True, "message": "already running"}
+
+        if config_data is not None:
+            self.serial_config = LoadUiConfig.normalize_serial_discrete_input_config(config_data)
+        else:
+            ok, loaded = self.load_serial_discrete_input_config()
+            if not ok:
+                msg = f"串口离散输入配置加载失败: {loaded}"
+                self._emit_serial_status(enabled=False, running=False, connected=False, message=msg, error=str(loaded))
+                return {"ok": False, "message": msg}
+
+        if not self.serial_config.get("enabled", False):
+            self.serial_trigger_armed = True
+            self.serial_last_trigger_direction = ""
+            self._debug_print("start 请求结束: 配置存在但 enabled=False")
+            self._emit_serial_status(
+                enabled=False,
+                running=False,
+                connected=False,
+                message="串口离散输入触发未启用",
+                device_model=str(self.serial_config.get("device_model", "") or ""),
+            )
+            return {"ok": True, "message": "disabled"}
+
+        from base.hardware_trigger.serial_discrete_input_worker import SerialDiscreteInputWorker
+
+        self.serial_trigger_armed = True
+        self.serial_last_trigger_direction = ""
+        serial_settings = self.serial_config.get("serial_settings", {}) or {}
+        decoder = self.serial_config.get("decoder", {}) or {}
+        self._debug_print(
+            "启动监听: "
+            f"port={serial_settings.get('port', 'COM3')}, "
+            f"baudrate={serial_settings.get('baudrate', 9600)}, "
+            f"mode={decoder.get('mode', 'full_frame')}"
+        )
+        self.serial_worker = SerialDiscreteInputWorker(self.serial_config)
+        self.serial_worker.sig_state_changed.connect(self._on_serial_state_changed)
+        self.serial_worker.sig_status.connect(self._on_serial_worker_status)
+        self.serial_worker.start()
+        self._emit_serial_status(
+            enabled=True,
+            running=True,
+            connected=False,
+            message="正在启动串口离散输入监听",
+            device_model=str(self.serial_config.get("device_model", "") or ""),
+        )
+        return {"ok": True, "message": "starting"}
+
+    def stop_serial_discrete_input_listener(self):
+        if self.serial_worker is not None:
+            self._debug_print("停止监听")
+            self.serial_worker.stop()
+            self.serial_worker = None
+        self.serial_trigger_armed = True
+        self.serial_last_trigger_direction = ""
+        self._emit_serial_status(
+            enabled=bool(self.serial_config.get("enabled", False)),
+            running=False,
+            connected=False,
+            message="串口离散输入监听已停止",
+            action="",
+            direction="",
+            raw_hex="",
+            value="",
+        )
+
+    def test_serial_discrete_input_connection(self, config_data=None):
+        cfg = LoadUiConfig.normalize_serial_discrete_input_config(config_data or self.serial_config or {})
+        serial_settings = cfg.get("serial_settings", {}) or {}
+        polling_settings = cfg.get("polling_settings", {}) or {}
+        port = serial_settings.get("port", "COM3")
+        self._debug_print(
+            "测试连接: "
+            f"port={port}, "
+            f"baudrate={serial_settings.get('baudrate', 9600)}"
+        )
+        try:
+            import serial
+        except Exception as e:
+            return {"ok": False, "message": "pyserial 未安装", "raw_hex": "", "error": str(e)}
+
+        try:
+            ser = serial.Serial(
+                port=port,
+                baudrate=serial_settings.get("baudrate", 9600),
+                bytesize=serial_settings.get("bytesize", 8),
+                parity=serial_settings.get("parity", "N"),
+                stopbits=serial_settings.get("stopbits", 1),
+                timeout=serial_settings.get("timeout", 0.1),
+            )
+            try:
+                ser.reset_input_buffer()
+            except Exception:
+                pass
+            ser.write(bytes.fromhex(str(polling_settings.get("query_command_hex", "")).strip()))
+            time.sleep(float(polling_settings.get("interval_ms", 50)) / 1000.0)
+            received = ser.read(getattr(ser, "in_waiting", 0))
+            ser.close()
+            raw_hex = " ".join(f"{b:02X}" for b in received) if received else ""
+            if raw_hex:
+                self._debug_print(f"测试连接收到响应: raw_hex={raw_hex}")
+                return {"ok": True, "message": "测试连接成功", "raw_hex": raw_hex}
+            self._debug_print("测试连接成功，但未收到设备响应")
+            return {"ok": False, "message": "测试连接成功，但未收到设备响应", "raw_hex": ""}
+        except Exception as e:
+            err_text = str(e)
+            if "PermissionError" in repr(e) or "拒绝访问" in err_text:
+                msg = f"测试连接失败: 串口 {port} 当前被占用，请关闭其他占用程序后重试"
+                self._debug_print(msg)
+                return {"ok": False, "message": msg, "raw_hex": "", "error": err_text}
+            self._debug_print(f"测试连接失败: {e}")
+            return {"ok": False, "message": f"测试连接失败: {e}", "raw_hex": "", "error": str(e)}
+
+    def start(self):
+        """
+        为兼容旧逻辑保留的入口：
+        仅启动扫码枪和光电热键监听。
+        串口离散输入触发必须走独立入口 `start_serial_discrete_input_listener()`。
+        """
+        return self.start_scanner_and_sensor_listeners()
+
+    def stop(self):
+        """停止所有监听（扫码枪/光电/串口）"""
+        self.stop_scanner_and_sensor_listeners()
+        self.stop_serial_discrete_input_listener()
 
     def _register_hotkey(self, hotkey_string):
         """注册全局键盘热键"""
@@ -216,6 +377,88 @@ class UnifiedHardwareManager(QObject):
         """热键触发回调"""
         self.logger.info(f"光电开关触发 (热键: {self.hotkey_string})")
         self.sig_trigger.emit()
+
+    def _on_serial_worker_status(self, payload):
+        if not isinstance(payload, dict):
+            return
+        self._emit_serial_status(
+            enabled=bool(self.serial_config.get("enabled", False)),
+            device_model=str(self.serial_config.get("device_model", "") or ""),
+            **payload,
+        )
+
+    def _on_serial_state_changed(self, payload):
+        """串口离散输入状态变化回调"""
+        if not isinstance(payload, dict):
+            return
+
+        mode = str(payload.get("mode", self.serial_config.get("decoder", {}).get("mode", "full_frame")))
+        state_code = str(payload.get("value", "") or "")
+        raw_hex = str(payload.get("raw_hex", "") or "")
+        state_map = (self.serial_config.get("state_maps", {}) or {}).get(mode, {}) or {}
+        state_config = state_map.get(state_code)
+        self._debug_print(
+            f"收到状态变化: mode={mode}, state={state_code}, raw_hex={raw_hex}, armed={self.serial_trigger_armed}"
+        )
+
+        if not state_config:
+            self.logger.warning(f"Unknown serial state code [{mode}]: {state_code}")
+            self._debug_print(f"未匹配到状态映射: mode={mode}, state={state_code}")
+            self._emit_serial_status(
+                enabled=bool(self.serial_config.get("enabled", False)),
+                mode=mode,
+                raw_hex=raw_hex,
+                value=state_code,
+                action="unknown",
+                direction="",
+                message=f"未识别的状态码: {state_code}",
+            )
+            return
+
+        action = str(state_config.get("action", "") or "")
+        direction = str(state_config.get("direction", "") or "")
+        desc = str(state_config.get("description", "") or action or "Unknown")
+        self._debug_print(
+            f"状态映射成功: action={action}, direction={direction}, desc={desc}, armed_before={self.serial_trigger_armed}"
+        )
+
+        if action == "start_record":
+            allow_trigger = self.serial_trigger_armed or (
+                bool(direction) and direction != self.serial_last_trigger_direction
+            )
+            if allow_trigger:
+                self.serial_trigger_armed = False
+                self.serial_last_trigger_direction = direction
+                self.logger.info(f"串口离散输入触发响应: 方向={direction} (状态码={state_code})")
+                self._debug_print(f"发出方向触发信号: direction={direction}")
+                self.sig_directional_trigger.emit(direction)
+                msg = f"串口触发: {direction}"
+            else:
+                msg = f"串口触发已锁定，等待 rearm: {direction}"
+                self.logger.debug(msg)
+                self._debug_print(msg)
+        elif action in ("idle", "ignore"):
+            self.serial_trigger_armed = True
+            if action == "idle":
+                self.serial_last_trigger_direction = ""
+            msg = f"串口状态更新: {desc}，已 rearm"
+            self.logger.debug(msg)
+            self._debug_print(msg)
+        else:
+            msg = f"串口状态更新: {desc}"
+            self.logger.debug(msg)
+            self._debug_print(msg)
+
+        self._emit_serial_status(
+            enabled=bool(self.serial_config.get("enabled", False)),
+            mode=mode,
+            raw_hex=raw_hex,
+            value=state_code,
+            action=action,
+            direction=direction,
+            message=msg,
+            armed=self.serial_trigger_armed,
+        )
 
     def _attach_hid_device(self, key, conf, handler):
         """查找并打开 HID 设备，注册回调"""

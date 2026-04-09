@@ -293,6 +293,8 @@ class MainWindow(QMainWindow):
         if access_lvl is not None:
             self.access_lvl, self.user_name = access_lvl, user_name
             self.sequence_window.show()
+            if hasattr(self.sequence_window, "init_serial_trigger_runtime"):
+                self.sequence_window.init_serial_trigger_runtime()
             self.update_statusbar()
         self.on_access_lvl_changed()
 

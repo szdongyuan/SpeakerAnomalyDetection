@@ -110,6 +110,7 @@ class SequenceWidgetUiOpsMixin:
 
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
+        self.serial_trigger_btn.clicked.connect(self.on_serial_trigger_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         # “重置统计”按钮：重置测试计数 + 恢复重播/分析按钮状态
@@ -190,6 +191,18 @@ class SequenceWidgetUiOpsMixin:
     @property
     def tcp_btn(self):
         return self.toolsbar.tcp_btn
+
+    @property
+    def serial_trigger_btn(self):
+        return self.toolsbar.serial_trigger_btn
+
+    @property
+    def serial_trigger_status_label(self):
+        return self.toolsbar.serial_trigger_status_label
+
+    @property
+    def serial_trigger_code_label(self):
+        return self.toolsbar.serial_trigger_code_label
 
     def lineedit_count_lose_focus(self, lineedit):
         self.current_recorded_count = int(lineedit.text())

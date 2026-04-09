@@ -7,6 +7,35 @@ from PyQt5.QtWidgets import QMessageBox, QApplication
 class SequenceWidgetBarcodeOpsMixin:
     _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
 
+    @staticmethod
+    def _resolve_serial_trigger_delay_ms(config) -> int:
+        trigger_settings = (config or {}).get("trigger_settings", {}) or {}
+        delay_seconds = trigger_settings.get("delay_seconds", 0)
+        try:
+            return max(0, int(round(float(delay_seconds) * 1000)))
+        except (TypeError, ValueError):
+            return 0
+
+    def _cancel_pending_serial_trigger_delay(self):
+        timer = getattr(self, "_serial_trigger_delay_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._pending_serial_trigger_direction = ""
+
+    def _on_serial_trigger_delay_timeout(self):
+        direction = str(getattr(self, "_pending_serial_trigger_direction", "") or "")
+        self._pending_serial_trigger_direction = ""
+        if not direction:
+            return
+        if getattr(self, "_record_workflow_busy", False):
+            print(f"[serial-trigger][ui] 延迟到期，但当前 busy=True，已忽略: direction={direction}")
+            self.default_logger.info(f"串口离散输入延迟触发已忽略，当前正在测试中 (方向={direction})")
+            return
+        print(f"[serial-trigger][ui] 延迟到期，开始录音: direction={direction}")
+        self.default_logger.info(f"离散输入延迟触发响应: 开始测试, 方向={direction}")
+        self._current_trigger_direction = direction
+        self.start_this_play("not_labeled")
+
     def _reset_barcode_commit_dedup(self):
         """Clear barcode dedup cache so same S/N can trigger a new workflow."""
         self._last_committed_barcode = None
@@ -17,10 +46,15 @@ class SequenceWidgetBarcodeOpsMixin:
         try:
             self.hw_manager.sig_barcode.disconnect()
             self.hw_manager.sig_trigger.disconnect()
+            self.hw_manager.sig_directional_trigger.disconnect()
+            self.hw_manager.sig_serial_trigger_status.disconnect()
         except TypeError:
             pass
         self.hw_manager.sig_barcode.connect(self.on_barcode_received)
         self.hw_manager.sig_trigger.connect(self.on_sensor_triggered)
+        self.hw_manager.sig_directional_trigger.connect(self.on_directional_triggered)
+        if hasattr(self, "on_serial_trigger_status_changed"):
+            self.hw_manager.sig_serial_trigger_status.connect(self.on_serial_trigger_status_changed)
 
     def clicked_scanner(self):
         """Checkbox 状态改变时的回调"""
@@ -39,14 +73,14 @@ class SequenceWidgetBarcodeOpsMixin:
                 self.lineedit_s_or_n.selectAll()
             except Exception:
                 pass
-            if self.hw_manager.start():
+            if self.hw_manager.start_scanner_and_sensor_listeners():
                 self.default_logger.info("硬件监听已启动")
             else:
                 self.default_logger.warning("硬件初始化失败，已静默降级为普通键盘输入模式")
         else:
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
-            self.hw_manager.stop()
+            self.hw_manager.stop_scanner_and_sensor_listeners()
             self.default_logger.info("硬件监听已停止")
 
     def on_barcode_received(self, barcode):
@@ -158,6 +192,30 @@ class SequenceWidgetBarcodeOpsMixin:
         else:
             self.default_logger.info("正在测试中，忽略光电触发")
 
+    def on_directional_triggered(self, direction: str):
+        """处理串口离散输入触发信号（区分正反转）"""
+        if not getattr(self, "_record_workflow_busy", False):
+            config = getattr(self, "_serial_trigger_config", {}) or {}
+            delay_ms = self._resolve_serial_trigger_delay_ms(config)
+            if delay_ms > 0:
+                print(
+                    f"[serial-trigger][ui] 收到方向触发: direction={direction}, "
+                    f"busy=False，延迟 {delay_ms}ms 后开始录音"
+                )
+                self.default_logger.info(
+                    f"离散输入触发响应: 延迟 {delay_ms}ms 后开始测试, 方向={direction}"
+                )
+                self._pending_serial_trigger_direction = direction
+                self._serial_trigger_delay_timer.start(delay_ms)
+            else:
+                print(f"[serial-trigger][ui] 收到方向触发: direction={direction}, busy=False，准备开始录音")
+                self.default_logger.info(f"离散输入触发响应: 开始测试, 方向={direction}")
+                self._current_trigger_direction = direction
+                self.start_this_play("not_labeled")
+        else:
+            print(f"[serial-trigger][ui] 收到方向触发: direction={direction}, busy=True，已忽略")
+            self.default_logger.info(f"正在测试中，忽略离散输入触发 (方向={direction})")
+
     def clicked_ok_or_ng(self, manual=True):
         """
         Handles the logic when the OK or NG button is clicked.
@@ -209,7 +267,12 @@ class SequenceWidgetBarcodeOpsMixin:
             self.replayer_btn.setDisabled(True)
             self.data_btn.setEnabled(False)
 
-        self.clicked_scanner()
+        if self.barcode_scanner_box.isChecked():
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
+            except Exception:
+                pass
         self.update_player_btn_is_paused()
 
     def mark_result(self):
@@ -243,5 +306,10 @@ class SequenceWidgetBarcodeOpsMixin:
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
         self._reset_barcode_commit_dedup()
-        self.clicked_scanner()
+        if self.barcode_scanner_box.isChecked():
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
+            except Exception:
+                pass
         self.update_player_btn_is_paused()

@@ -36,6 +36,97 @@ def load_config(config_path, module_name=None):
 
 
 class LoadUiConfig(object):
+    @staticmethod
+    def _merge_dict_with_defaults(defaults, overrides):
+        if not isinstance(defaults, dict):
+            return overrides
+        merged = dict(defaults)
+        if not isinstance(overrides, dict):
+            return merged
+        for key, value in overrides.items():
+            default_value = merged.get(key)
+            if isinstance(default_value, dict) and isinstance(value, dict):
+                merged[key] = LoadUiConfig._merge_dict_with_defaults(default_value, value)
+            else:
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def get_default_serial_discrete_input_config():
+        return {
+            "_comment_global": "串口离散输入触发配置",
+            "enabled": False,
+            "device_model": "JY-DAM0404D",
+            "serial_settings": {
+                "port": "COM3",
+                "baudrate": 9600,
+                "bytesize": 8,
+                "parity": "N",
+                "stopbits": 1,
+                "timeout": 0.1,
+            },
+            "polling_settings": {
+                "interval_ms": 50,
+                "query_command_hex": "FE 02 00 00 00 04 6D C6",
+            },
+            "trigger_settings": {
+                "delay_seconds": 0.5,
+            },
+            "decoder": {
+                "_comment": "mode 可以是 'full_frame' 或 'state_byte'",
+                "mode": "full_frame",
+                "state_byte_index": 3,
+            },
+            "state_maps": {
+                "full_frame": {
+                    "FE 02 01 01 50 5C": {
+                        "action": "start_record",
+                        "direction": "forward",
+                        "description": "只按下绿色按钮 (正转)",
+                    },
+                    "FE 02 01 03 D1 9D": {
+                        "action": "start_record",
+                        "direction": "reverse",
+                        "description": "绿色和红色按钮都按下 (反转)",
+                    },
+                    "FE 02 01 00 90 5C": {
+                        "action": "idle",
+                        "description": "全部松开 (空闲)",
+                    },
+                    "FE 02 01 02 91 9C": {
+                        "action": "ignore",
+                        "description": "只按下红色按钮 (忽略)",
+                    },
+                },
+                "state_byte": {
+                    "01": {
+                        "action": "start_record",
+                        "direction": "forward",
+                        "description": "只按下绿色按钮 (正转)",
+                    },
+                    "03": {
+                        "action": "start_record",
+                        "direction": "reverse",
+                        "description": "绿色和红色按钮都按下 (反转)",
+                    },
+                    "00": {
+                        "action": "idle",
+                        "description": "全部松开 (空闲)",
+                    },
+                    "02": {
+                        "action": "ignore",
+                        "description": "只按下红色按钮 (忽略)",
+                    },
+                },
+            },
+        }
+
+    @staticmethod
+    def normalize_serial_discrete_input_config(config_data):
+        return LoadUiConfig._merge_dict_with_defaults(
+            LoadUiConfig.get_default_serial_discrete_input_config(),
+            config_data if isinstance(config_data, dict) else {},
+        )
 
     @staticmethod
     def load_sequence_config_from_json(json_file_path):
@@ -275,6 +366,37 @@ class LoadUiConfig(object):
             port_text = config_data[1].split("=")[1].strip()
             port = int(port_text)
             return ip, port
+
+    @staticmethod
+    def get_serial_discrete_input_config_path():
+        return DEFAULT_DIR + "configs/scanner_barcode_config/serial_discrete_input.json"
+
+    @staticmethod
+    def load_serial_discrete_input_config():
+        err_code, data = LoadUiConfig.load_data_from_json(LoadUiConfig.get_serial_discrete_input_config_path())
+        if err_code != error_code.OK or not isinstance(data, dict):
+            return err_code, data
+        merged = LoadUiConfig.normalize_serial_discrete_input_config(data)
+        return error_code.OK, merged
+
+    @staticmethod
+    def save_serial_discrete_input_config(config_data):
+        file_path = LoadUiConfig.get_serial_discrete_input_config_path()
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        try:
+            base_config = LoadUiConfig.get_default_serial_discrete_input_config()
+            existing_err_code, existing_data = LoadUiConfig.load_data_from_json(file_path)
+            if existing_err_code == error_code.OK and isinstance(existing_data, dict):
+                base_config = LoadUiConfig.normalize_serial_discrete_input_config(existing_data)
+            merged_config = LoadUiConfig._merge_dict_with_defaults(
+                base_config,
+                config_data if isinstance(config_data, dict) else {},
+            )
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(merged_config, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
 
 
 class ConfigManager(object):

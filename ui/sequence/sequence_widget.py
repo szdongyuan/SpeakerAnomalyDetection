@@ -18,6 +18,7 @@ from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
 from ui.sequence.sequence_widget_tcp_ops import SequenceWidgetTcpOpsMixin
+from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
@@ -27,6 +28,7 @@ class SequenceWindow(
     SequenceWidgetUiOpsMixin,
     SequenceWidgetBarcodeOpsMixin,
     SequenceWidgetTcpOpsMixin,
+    SequenceWidgetSerialTriggerOpsMixin,
     SequenceWidgetAnalysisOpsMixin,
     SequenceWidgetConfigOpsMixin,
     SequenceWidgetStreamingOpsMixin,
@@ -98,6 +100,10 @@ class SequenceWindow(
         self._barcode_debounce_timer.setInterval(self._barcode_debounce_ms)
         # 扫码逻辑委托到 BarcodeRouter，SequenceWidget 只保留业务提交入口 _commit_barcode
         self._barcode_debounce_timer.timeout.connect(self._barcode_router.on_barcode_debounce_timeout)
+        self._serial_trigger_delay_timer = QTimer(self)
+        self._serial_trigger_delay_timer.setSingleShot(True)
+        self._serial_trigger_delay_timer.timeout.connect(self._on_serial_trigger_delay_timeout)
+        self._pending_serial_trigger_direction = ""
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None
         # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免"必须点到输入框才生效"）
@@ -151,3 +157,4 @@ class SequenceWindow(
         self.bind_hw_signals()
         self.init_lineedit_text()
         self.init_ui()
+        self._serial_trigger_runtime_initialized = False
