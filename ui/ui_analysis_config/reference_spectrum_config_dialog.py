@@ -45,7 +45,7 @@ from ui.custom_ui_widget.popuputils import PopupUtils
 
 class ReferenceSpectrumConfigWindow(QDialog):
     WINDOW_OPTIONS = ["hann", "hamming", "blackman"]
-    NPERSEG_OPTIONS = ["1024", "2048", "4096", "8192"]
+    NPERSEG_OPTIONS = ["128", "256", "512", "1024", "2048", "4096", "8192"]
     OVERLAP_OPTIONS = [("25%", 0.25), ("50%", 0.5), ("75%", 0.75)]
     SMOOTHING_OPTIONS = [
         ("不平滑", 0),

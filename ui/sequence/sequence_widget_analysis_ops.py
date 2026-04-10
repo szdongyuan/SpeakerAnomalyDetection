@@ -457,15 +457,26 @@ class SequenceWidgetAnalysisOpsMixin:
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
             return
 
+        judged_result_dict = {}
+        for name, result in result_dict.items():
+            if not isinstance(result, tuple) or len(result) != 2:
+                continue
+            ok, deviation = result
+            if ok is None:
+                continue
+            judged_result_dict[name] = (ok, deviation)
+        if len(judged_result_dict) == 0:
+            return
+
         # Create or reuse summary window
         if self._analysis_result_summary_window is None:
-            self._analysis_result_summary_window = AnalysisResultSummaryWindow(result_dict)
+            self._analysis_result_summary_window = AnalysisResultSummaryWindow(judged_result_dict)
         else:
             try:
-                self._analysis_result_summary_window.set_results(result_dict)
+                self._analysis_result_summary_window.set_results(judged_result_dict)
             except Exception:
                 # fallback: recreate if something went wrong
-                self._analysis_result_summary_window = AnalysisResultSummaryWindow(result_dict)
+                self._analysis_result_summary_window = AnalysisResultSummaryWindow(judged_result_dict)
 
         summary = self._analysis_result_summary_window
         summary_key = "__analysis_result_summary__"

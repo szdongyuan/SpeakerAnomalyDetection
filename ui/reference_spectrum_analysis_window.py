@@ -31,11 +31,25 @@ from base.reference_spectrum_cache import (
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import custom_log_tick_strings
 
-REFERENCE_CURVE_COLOR = "#5d6875"
-CURRENT_CURVE_COLOR = "#00b8ab"
-LIMIT_CURVE_COLOR = "#7158b4"
-OUT_OF_RANGE_CURVE_COLOR = "#cc4b37"
-HIGHLIGHT_REGION_COLOR = "#7158b4"
+# Previous palette (kept for quick rollback / comparison)
+# REFERENCE_CURVE_COLOR = "#5d6875"
+# CURRENT_CURVE_COLOR = "#00b8ab"
+# LIMIT_CURVE_COLOR = "#7158b4"
+# OUT_OF_RANGE_CURVE_COLOR = "#cc4b37"
+# HIGHLIGHT_REGION_COLOR = "#7158b4"
+# HIGHLIGHT_REGION_BRUSH = (113, 88, 180, 20)
+
+# Industrial palette: graphite blue + safety orange
+REFERENCE_CURVE_COLOR = "#627789"
+CURRENT_CURVE_COLOR = "#e8891f"
+# Previous industrial limit / band highlight (kept for comparison)
+# LIMIT_CURVE_COLOR = "#5f748a"
+# HIGHLIGHT_REGION_COLOR = "#5f748a"
+# HIGHLIGHT_REGION_BRUSH = (95, 116, 138, 20)
+LIMIT_CURVE_COLOR = "#8f7b44"
+OUT_OF_RANGE_CURVE_COLOR = "#c83e30"
+HIGHLIGHT_REGION_COLOR = "#8f7b44"
+HIGHLIGHT_REGION_BRUSH = (143, 123, 68, 20)
 
 
 class ReferenceSpectrumCompareWindow(QWidget):
@@ -228,7 +242,7 @@ class ReferenceSpectrumCompareWindow(QWidget):
         highlight_region = pg.LinearRegionItem(
             values=[1.0, 1.0],
             movable=False,
-            brush=(113, 88, 180, 20),
+            brush=HIGHLIGHT_REGION_BRUSH,
             pen=pg.mkPen(color=HIGHLIGHT_REGION_COLOR, width=1),
         )
         highlight_region.setVisible(False)
@@ -236,8 +250,8 @@ class ReferenceSpectrumCompareWindow(QWidget):
 
         cache = {
             "highlight_region": highlight_region,
-            "reference_curve": plot_widget.plot([], [], pen=mkPen(color=REFERENCE_CURVE_COLOR, width=2.7)),
-            "current_curve": plot_widget.plot([], [], pen=mkPen(color=CURRENT_CURVE_COLOR, width=3.4)),
+            "reference_curve": plot_widget.plot([], [], pen=mkPen(color=REFERENCE_CURVE_COLOR, width=3.3)),
+            "current_curve": plot_widget.plot([], [], pen=mkPen(color=CURRENT_CURVE_COLOR, width=4.2)),
             "upper_curve": plot_widget.plot(
                 [], [], pen=mkPen(color=LIMIT_CURVE_COLOR, width=1.6, style=Qt.DashLine)
             ),
