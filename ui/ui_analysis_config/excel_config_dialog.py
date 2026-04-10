@@ -46,8 +46,7 @@ class ExcelConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(520, 520)
-        self.resize(520, 520)
+        self.setMinimumSize(420, 420)
 
         layout = QVBoxLayout()
 

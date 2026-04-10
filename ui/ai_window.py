@@ -4,7 +4,7 @@ import sys
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QTextCursor
 from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QRadioButton, QWidget, QMessageBox
-from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QVBoxLayout, QFrame
+from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QVBoxLayout
 
 from base.evaluate_model import evaluate, evaluate_with_data
 from base.file_ops import FileOps
@@ -57,7 +57,8 @@ class AiWindow(QDialog):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("AI训练窗口")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setMinimumWidth(730)
+        window_width = ui_style_const.scale_font_px(730)
+        self.setMinimumWidth(window_width)
 
         base_model_wdiget = BaseModel(self.logger)
 
@@ -541,7 +542,8 @@ class BaseModel(QWidget):
         and a text edit area for displaying model information.
         """
         base_model_box = QGroupBox("模型")
-        base_model_box.setMinimumWidth(350)
+        base_model_box_width = ui_style_const.scale_font_px(350)
+        base_model_box.setMinimumWidth(base_model_box_width)
         combobox_layout = self.create_model_combobox_layout()
         button_layout = self.create_btn_layout()
 
@@ -557,7 +559,8 @@ class BaseModel(QWidget):
     def create_model_combobox_layout(self):
         base_model_label = QLabel("基础模型:")
         self.base_model_combobox = QComboBox(self)
-        self.base_model_combobox.setMinimumWidth(350)
+        combobox_width = ui_style_const.scale_font_px(350)
+        self.base_model_combobox.setMinimumWidth(combobox_width)
         self.update_base_model_combobox()
         self.base_model_combobox.currentIndexChanged.connect(self.combobox_clicked)
         self.set_default_model()

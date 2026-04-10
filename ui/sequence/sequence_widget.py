@@ -221,7 +221,7 @@ class SequenceWindow(QWidget):
         their respective handlers and applies style sheets to the widgets.
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumHeight(700)
+        self.setMinimumHeight(600)
         waveform_layout = self.create_waveform_layout()
 
         sequence_layout = QVBoxLayout()
@@ -473,8 +473,8 @@ class SequenceWindow(QWidget):
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground("white")
         axis_font_px = ui_style_const.scale_font_px(20)
-        self.line_graph.setLabel("left", "Amplitude(V)")
-        self.line_graph.setLabel("bottom", "Time(s)")
+        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": f"{axis_font_px}px"})
+        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.showGrid(x=True, y=True)
 
         font = QFont()
@@ -1527,6 +1527,8 @@ class SequenceWindow(QWidget):
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
+        window_width = ui_style_const.scale_font_px(600)
+        window_height = ui_style_const.scale_font_px(500)
         if self.analysis_config:
             item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
@@ -1578,7 +1580,7 @@ class SequenceWindow(QWidget):
                     instance.show()
 
                 # Restore last geometry if available; otherwise fallback to default cascade
-                default_geo = {"x": width, "y": height, "w": 600, "h": 500}
+                default_geo = {"x": width, "y": height, "w": window_width, "h": window_height}
                 geo = self._get_analysis_window_geometry(instance_key) if instance_key else None
                 if geo is None:
                     geo = default_geo
@@ -1586,7 +1588,7 @@ class SequenceWindow(QWidget):
                     if instance_key:
                         self._set_analysis_window_geometry(instance_key, geo)
                 instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
-                instance.setMinimumSize(QSize(300, 255))
+                instance.setMinimumSize(QSize(200, 155))
 
                 # Install event filter to capture move/resize and persist geometry (no close listener)
                 if instance_key:
@@ -2130,7 +2132,7 @@ class SequenceWindow(QWidget):
         Retrieves the sequence configuration from the registry.
         """
         registry = LoadUiConfig._load_sequence_config_registry()
-        # IMPORTANT: Do not auto-add "默认配置" into registry.
+          # IMPORTANT: Do not auto-add "默认配置" into registry.
         # The combobox should either never show it, or always show it if it already exists in registry.
         user_keys = [k for k in (registry or {}).keys() if k not in ("using_config_path", "默认配置")]
         using_config_path = registry.get("using_config_path", None)

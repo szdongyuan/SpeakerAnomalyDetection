@@ -12,6 +12,14 @@ class SequenceToolsBar(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
 
+        self.icon_size = ui_style_const.scale_font_px(35)
+        self.button_width = ui_style_const.scale_font_px(80)
+        self.label_height = ui_style_const.scale_font_px(40)
+        self.lineedit_height = ui_style_const.scale_font_px(35)
+        self.lineedit_width = ui_style_const.scale_font_px(100)
+        self.lineedit_margin = ui_style_const.scale_font_px(10)
+        self.lineedit_spacing = ui_style_const.scale_font_px(10)
+
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
         self.tcp_btn = QPushButton()
@@ -93,41 +101,45 @@ class SequenceToolsBar(QWidget):
         return layout
 
     def set_play_btn(self):
+        self.player_btn.setFixedHeight(self.label_height)
         self.player_btn.setMinimumWidth(80)
         self.player_btn.setToolTip("开始录制")
         self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
-        self.player_btn.setIconSize(QSize(35, 35))
+        self.player_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def set_replay_btn(self):
-        self.player_btn.setIconSize(QSize(35, 35))
+        self.replayer_btn.setFixedHeight(self.label_height)
         self.replayer_btn.setMinimumWidth(80)
         self.replayer_btn.setToolTip("重新录制")
         self.replayer_btn.setDisabled(True)
         self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
-        self.replayer_btn.setIconSize(QSize(30, 30))
+        size = ui_style_const.scale_font_px(30)
+        self.replayer_btn.setIconSize(QSize(size, size))
 
     def set_data_btn(self):
+        self.data_btn.setFixedHeight(self.label_height)
         self.data_btn.setMinimumWidth(80)
         self.data_btn.setToolTip("分析")
         self.data_btn.setEnabled(False)
         self.data_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
-        self.data_btn.setIconSize(QSize(35, 35))
+        self.data_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def set_tcp_btn(self):
+        self.tcp_btn.setFixedHeight(self.label_height)
         self.tcp_btn.setMinimumWidth(80)
         self.tcp_btn.setToolTip("tcp配置")
         self.tcp_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.tcp_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/network.png"))
-        self.tcp_btn.setIconSize(QSize(35, 35))
+        self.tcp_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def create_using_file_combobox(self):
         type_label = QLabel(" 使用配置：")
-        type_label.setFixedHeight(40)
-        self.using_file_combobox.setFixedHeight(35)
-        self.using_file_combobox.setMinimumWidth(100)
+        type_label.setFixedHeight(self.label_height)
+        self.using_file_combobox.setFixedHeight(self.lineedit_height)
+        self.using_file_combobox.setMinimumWidth(self.lineedit_width)
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
 
@@ -141,8 +153,8 @@ class SequenceToolsBar(QWidget):
 
     def create_mode_type_layout(self):
         type_label = QLabel(" 型 号：")
-        type_label.setFixedHeight(40)
-        self.lineedit_type.setFixedHeight(35)
+        type_label.setFixedHeight(self.label_height)
+        self.lineedit_type.setFixedHeight(self.lineedit_height)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
@@ -158,7 +170,7 @@ class SequenceToolsBar(QWidget):
     def create_barcode_scanner_layout(self):
         self.barcode_scanner_box.setChecked(False)
         self.lineedit_s_or_n.setDisabled(True)
-        self.lineedit_s_or_n.setFixedHeight(35)
+        self.lineedit_s_or_n.setFixedHeight(self.lineedit_height)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
@@ -173,8 +185,8 @@ class SequenceToolsBar(QWidget):
 
     def create_mode_count_layout(self):
         label_count = QLabel(" 计 数：")
-        label_count.setFixedHeight(40)
-        self.lineedit_count.setFixedHeight(35)
+        label_count.setFixedHeight(self.label_height)
+        self.lineedit_count.setFixedHeight(self.lineedit_height)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
