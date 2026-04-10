@@ -15,6 +15,13 @@ class SequenceCountBoard(QWidget):
     def __init__(self, analysis_config, parent=None):
         super(SequenceCountBoard, self).__init__(parent)
 
+        self.btn_height = ui_style_const.scale_font_px(80)
+        self.btn_width = ui_style_const.scale_font_px(180)
+        self.lineedit_width = ui_style_const.scale_font_px(130)
+        self.lineedit_height = ui_style_const.scale_font_px(35)
+        self.label_width = ui_style_const.scale_font_px(100)
+        self.icon_size = ui_style_const.scale_font_px(24)
+
         self.analysis_config = analysis_config
         self.mode = str()
         self._test_available = True
@@ -97,30 +104,30 @@ class SequenceCountBoard(QWidget):
         self.mark_ok_edit.setDisabled(True)
         self.mark_ng_edit.setDisabled(True)
 
-        self.total_line_edit.setFixedSize(130, 35)
-        self.ok_line_edit.setFixedSize(130, 35)
-        self.ng_line_edit.setFixedSize(130, 35)
-        self.yield_line_edit.setFixedSize(130, 35)
-        self.datatime_line_edit.setFixedSize(130, 35)
-        self.mark_total_edit.setFixedSize(130, 35)
-        self.mark_ok_edit.setFixedSize(130, 35)
-        self.mark_ng_edit.setFixedSize(130, 35)
+        self.total_line_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.ok_line_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.ng_line_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.yield_line_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.datatime_line_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.mark_total_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.mark_ok_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
+        self.mark_ng_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
 
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
         self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ok_btn.setFixedSize(180, 80)
-        self.ok_btn.setIconSize(QSize(24, 24))
+        self.ok_btn.setFixedSize(self.btn_width, self.btn_height)
+        self.ok_btn.setIconSize(QSize(self.icon_size, self.icon_size))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
         self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ng_btn.setFixedSize(180, 80)
-        self.ng_btn.setIconSize(QSize(24, 24))
+        self.ng_btn.setFixedSize(self.btn_width, self.btn_height)
+        self.ng_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def create_mode_btn_layout(self):
         mode_label = QLabel("模式：")
-        self.test_btn.setFixedSize(100, 35)
-        self.mark_btn.setFixedSize(100, 35)
+        self.test_btn.setFixedSize(self.label_width, self.lineedit_height)
+        self.mark_btn.setFixedSize(self.label_width, self.lineedit_height)
         self.test_btn.clicked.connect(self.on_test_btn_clicked)
         self.mark_btn.clicked.connect(self.on_mark_btn_clicked)
 
@@ -182,7 +189,7 @@ class SequenceCountBoard(QWidget):
         mark_widget.setLayout(mark_layout)
 
         return mark_widget
-    
+
     def on_test_btn_clicked(self):
         if not self._test_available:
             QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")

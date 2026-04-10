@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QPushButton, QProgressDialog, QMessageBox, QFileDial
 
 from base.file_ops import FileOps
 from base.log_manager import LogManager
-from consts import error_code, model_consts
+from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
 
@@ -25,7 +25,9 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         self.set_bottom_layout()
 
-        self.resize(1060, 700)
+        window_width = ui_style_const.scale_font_px(1060)
+        window_height = ui_style_const.scale_font_px(700)
+        self.resize(window_width, window_height)
 
     def set_bottom_layout(self):
         all_show_btn = QPushButton("全部显示")
