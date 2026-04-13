@@ -51,6 +51,7 @@ class BaseConfigWindow(QDialog):
         cancel_btn = QPushButton(" 取  消 ")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
         ok_btn = QPushButton(" 确  认 ")
+        ok_btn.setDefault(True)
         ok_btn.clicked.connect(self.on_click_ok_btn)
 
         btn_layout.addWidget(cancel_btn)
