@@ -37,6 +37,7 @@ class StreamingAudioProcessor:
         self.error_occurred = False
         self.error_message = ""
         self.monitor_gain_linear: float = None
+        self.monitor_gain_linear: float = None
 
     def _audio_callback(self, indata, frames, time_info, status):
         """
@@ -204,6 +205,7 @@ class StreamingAudioProcessor:
             # Optional monitor playback: use ONE duplex stream (sd.Stream)
             if monitor_playback and output_device:
                 self.monitor_gain_linear = float(10 ** (float(monitor_gain_db) / 20.0))
+                self.monitor_gain_linear = float(10 ** (float(monitor_gain_db) / 20.0))
                 out_num = 2
                 try:
                     max_out = int(output_device.get("max_output_channels") or 0)
@@ -223,6 +225,7 @@ class StreamingAudioProcessor:
                 self.stream = sd.Stream(
                     samplerate=sample_rate,
                     channels=(in_num, out_num),
+                    callback=self.monitor_duplex_callback,
                     callback=self.monitor_duplex_callback,
                     blocksize=2048,
                     device=device_selector,
