@@ -3,9 +3,8 @@ from copy import deepcopy
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit, \
-    QSizePolicy
-from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication, QComboBox
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox, QGridLayout, QLabel, QLineEdit
+from PyQt5.QtWidgets import QMessageBox, QDoubleSpinBox, QApplication, QComboBox, QCheckBox, QSizePolicy
 
 
 from base.sound_device_manager import SoundDeviceManager
@@ -15,13 +14,17 @@ from ui.stimulus_window import StimulusWindow
 
 
 class BaseConfigWindow(QDialog):
-    def __init__(self, mic=None):
+    def __init__(self, mic=None, speaker=None):
         super().__init__()
         self.final_data = None
         if mic is not None:
             self.mic = mic
         else:
             _, self.mic = SoundDeviceManager().get_default_device("mic", refresh=False)
+        if speaker is not None:
+            self.speaker = speaker
+        else:
+            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
         self.setup_ui()
 
     def setup_ui(self):
@@ -40,6 +43,7 @@ class BaseConfigWindow(QDialog):
             + ui_style_const.qspinbox_style
             + ui_style_const.qdoublespinbox_style
             + ui_style_const.qpushbutton_style
+            + ui_style_const.qcheckbox_style
         )
 
     def create_cancel_ok_buttons(self):
@@ -67,15 +71,11 @@ class BaseConfigWindow(QDialog):
 
 class PlayRecordConfigWindow(BaseConfigWindow):
     def __init__(self, stimulus_config_data, mic=None, speaker=None):
-        super().__init__(mic=mic)
+        super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("播放与录制")
         self.stimulus_config_data = deepcopy(stimulus_config_data)
         self.clicked_stimulus_btn_flag = False
         self.stimulus_signal = None
-        if speaker is not None:
-            self.speaker = speaker
-        else:
-            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
         self.init_ui()
 
     def init_ui(self):
@@ -162,8 +162,8 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
 
 class RecordConfigWindow(BaseConfigWindow):
-    def __init__(self, input_data, mic=None):
-        super().__init__(mic=mic)
+    def __init__(self, input_data, mic=None, speaker=None):
+        super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("录制音频")
         self.input_data = input_data
         self.init_ui()
@@ -202,6 +202,30 @@ class RecordConfigWindow(BaseConfigWindow):
         else:
             self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
+        label_monitor = QLabel("实时监听播放:")
+        self.monitor_checkbox = QCheckBox("启用")
+        self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
+        label_monitor_gain = QLabel("监听增益:")
+        self.monitor_gain_db_input = QDoubleSpinBox()
+        self.monitor_gain_db_input.setRange(-60.0, 50.0)
+        self.monitor_gain_db_input.setDecimals(1)
+        self.monitor_gain_db_input.setSingleStep(0.5)
+        self.monitor_gain_db_input.setSuffix(" dB")
+        self.monitor_gain_db_input.setValue(float(self.input_data.get("monitor_gain_db", 0.0)))
+        self.monitor_checkbox.toggled.connect(self._on_monitor_toggled)
+
+        max_out = 0
+        try:
+            if self.speaker:
+                max_out = int(self.speaker.get("max_output_channels") or 0)
+        except Exception:
+            max_out = 0
+
+        if max_out <= 0:
+            self.monitor_checkbox.setChecked(False)
+            self.monitor_checkbox.setEnabled(False)
+        self._on_monitor_toggled(self.monitor_checkbox.isChecked())
+
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
 
@@ -210,6 +234,10 @@ class RecordConfigWindow(BaseConfigWindow):
 
         grid_layout.addWidget(label_input_device, 2, 0)
         grid_layout.addWidget(self.input_device_display, 2, 1)
+        grid_layout.addWidget(label_monitor, 3, 0)
+        grid_layout.addWidget(self.monitor_checkbox, 3, 1)
+        grid_layout.addWidget(label_monitor_gain, 4, 0)
+        grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -218,8 +246,14 @@ class RecordConfigWindow(BaseConfigWindow):
         self.final_data = {
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
+            "monitor_playback": bool(self.monitor_checkbox.isChecked()),
+            "monitor_gain_db": float(self.monitor_gain_db_input.value()),
         }
         self.accept()
+
+    def _on_monitor_toggled(self, checked: bool):
+        self.monitor_gain_db_input.setEnabled(bool(checked))
+
 
 class ImportAudioConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None):

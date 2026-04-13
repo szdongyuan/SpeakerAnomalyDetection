@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 import numpy as np
+from typing import Tuple, Optional
 
 from base.log_manager import LogManager
 from base.sound_device_manager import sd
@@ -26,7 +27,7 @@ class StreamingAudioProcessor:
     def __init__(self):
         """Initialize streaming audio processor."""
         self.logger = LogManager.set_log_handler("streaming_core")
-        self.stream = None  
+        self.stream = None
         self.audio_queue = queue.Queue()
         self.accumulated_chunks = []
         self.is_recording = False
@@ -78,6 +79,39 @@ class StreamingAudioProcessor:
         if reached_target:
             threading.Thread(target=self.stop_streaming, daemon=True).start()
 
+    def _queue_chunk_and_maybe_stop(self, chunk: np.ndarray) -> Tuple[dict, bool]:
+        """
+        Update sample counters, trim final chunk if needed, enqueue payload, and stop if target reached.
+
+        Returns:
+            (payload, reached_target)
+        """
+        chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
+
+        samples_before = self.samples_captured
+        self.samples_captured += len(chunk)
+
+        reached_target = samples_before < self.target_samples and self.samples_captured >= self.target_samples
+
+        if reached_target:
+            excess = self.samples_captured - self.target_samples
+            if excess > 0:
+                chunk = chunk[:-excess]
+                self.samples_captured = self.target_samples
+                self.logger.info(f"Reached target samples: {self.target_samples}, trimmed {excess} samples")
+
+        mono_chunk = chunk.astype(np.float32, copy=False)
+
+        try:
+            self.audio_queue.put_nowait(mono_chunk)
+        except queue.Full:
+            self.logger.warning("Audio queue full, dropping chunk")
+
+        if reached_target:
+            threading.Thread(target=self.stop_streaming, daemon=True).start()
+
+        return mono_chunk, reached_target
+
     def process_queue(self):
         """
         Process audio chunks from queue and emit signals.
@@ -97,7 +131,16 @@ class StreamingAudioProcessor:
             # No more chunks to process
             pass
 
-    def start_streaming_rec(self, sample_rate=44100, target_samples=None, duration=None, device=None):
+    def start_streaming_rec(
+        self,
+        sample_rate: int = 44100,
+        target_samples: Optional[int] = None,
+        duration: Optional[float] = None,
+        device: Optional[dict] = None,
+        output_device: Optional[dict] = None,
+        monitor_playback: bool = False,
+        monitor_gain_db: float = 0.0,
+    ):
         """
         Start streaming audio recording (record-only mode).
 
@@ -120,28 +163,91 @@ class StreamingAudioProcessor:
         self.target_samples = target_samples
         self.samples_captured = 0
         self.accumulated_chunks = []
+        self.accumulated_multi_chunks = []
         self.is_recording = True
         self.error_occurred = False
 
-        try:
-            # Set default device if specified
-            if device:
-                sd.default.device = device['index']
+        input_device = device  # legacy alias
 
-            # Create input stream
+        try:
+            in_num = 1
+            self.input_channels = in_num
+
+            # Optional monitor playback: use ONE duplex stream (sd.Stream)
+            if monitor_playback and output_device:
+                monitor_gain_linear = float(10 ** (float(monitor_gain_db) / 20.0))
+                out_num = 2
+                try:
+                    max_out = int(output_device.get("max_output_channels") or 0)
+                except Exception:
+                    max_out = 0
+                if max_out == 1:
+                    out_num = 1
+
+                device_selector = None
+                if input_device and output_device:
+                    in_idx = int(input_device["index"])
+                    out_idx = int(output_device["index"])
+                    device_selector = in_idx if in_idx == out_idx else (in_idx, out_idx)
+                elif input_device:
+                    device_selector = (int(input_device["index"]), None)
+
+                def monitor_duplex_callback(indata, outdata, frames, time_info, status):
+                    if status:
+                        self.logger.warning(f"Duplex status: {status}")
+
+                    chunk = indata.copy().flatten()
+                    if len(chunk) > frames:
+                        chunk = chunk[:frames]
+                    elif len(chunk) < frames:
+                        pad = np.zeros(frames - len(chunk), dtype=np.float32)
+                        chunk = np.concatenate([chunk, pad], axis=0)
+
+                    mono_in, reached = self._queue_chunk_and_maybe_stop(chunk)
+
+                    outdata.fill(0)
+                    if reached and len(mono_in) < frames:
+                        play = np.zeros(frames, dtype=np.float32)
+                        play[: len(mono_in)] = mono_in
+                    else:
+                        play = mono_in
+                    play = np.clip(play * monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
+
+                    if outdata.shape[1] >= 2:
+                        outdata[:, 0] = play
+                        outdata[:, 1] = play
+                    elif outdata.shape[1] >= 1:
+                        outdata[:, 0] = play
+
+                self.stream = sd.Stream(
+                    samplerate=sample_rate,
+                    channels=(in_num, out_num),
+                    callback=monitor_duplex_callback,
+                    blocksize=2048,
+                    device=device_selector,
+                )
+
+                self.stream.start()
+                self.logger.info(
+                    f"Started streaming recording with monitor playback: target={target_samples} samples "
+                    f"({target_samples/sample_rate:.2f}s) at {sample_rate}Hz, device={device_selector}, out_channels={out_num}"
+                )
+                return error_code.OK, "Streaming recording (monitor) started successfully"
+
+            # Default: record-only input stream (sd.InputStream)
+            input_dev_idx = int(input_device["index"]) if input_device else None
             self.stream = sd.InputStream(
                 samplerate=sample_rate,
-                channels=1,
+                channels=in_num,
                 callback=self._audio_callback,
-                blocksize=2048  # Process in chunks of 2048 samples
+                blocksize=2048,
+                device=input_dev_idx,
             )
 
-            # Start the stream
             self.stream.start()
-            self.logger.info(f"Started streaming recording: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz")
-
-            # No timer needed - callback handles stopping based on sample count
-            # Note: QTimer for queue polling is managed by UI layer
+            self.logger.info(
+                f"Started streaming recording: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz"
+            )
             return error_code.OK, "Streaming started successfully"
 
         except Exception as e:
