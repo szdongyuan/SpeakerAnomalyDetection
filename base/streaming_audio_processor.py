@@ -36,6 +36,7 @@ class StreamingAudioProcessor:
         self.sample_rate = 44100
         self.error_occurred = False
         self.error_message = ""
+        self.monitor_gain_linear: float = None
 
     def _audio_callback(self, indata, frames, time_info, status):
         """
@@ -79,6 +80,32 @@ class StreamingAudioProcessor:
         if reached_target:
             threading.Thread(target=self.stop_streaming, daemon=True).start()
 
+    def monitor_duplex_callback(self, indata, outdata, frames, time_info, status):
+        if status:
+            self.logger.warning(f"Duplex status: {status}")
+
+        chunk = indata.copy().flatten()
+        if len(chunk) > frames:
+            chunk = chunk[:frames]
+        elif len(chunk) < frames:
+            pad = np.zeros(frames - len(chunk), dtype=np.float32)
+            chunk = np.concatenate([chunk, pad], axis=0)
+
+        mono_in, reached = self._queue_chunk_and_maybe_stop(chunk)
+
+        outdata.fill(0)
+        if reached and len(mono_in) < frames:
+            play = np.zeros(frames, dtype=np.float32)
+            play[: len(mono_in)] = mono_in
+        else:
+            play = mono_in
+
+        if outdata.shape[1] >= 2:
+            outdata[:, 0] = play
+            outdata[:, 1] = play
+        elif outdata.shape[1] >= 1:
+            outdata[:, 0] = play
+
     def _queue_chunk_and_maybe_stop(self, chunk: np.ndarray) -> Tuple[dict, bool]:
         """
         Update sample counters, trim final chunk if needed, enqueue payload, and stop if target reached.
@@ -101,6 +128,7 @@ class StreamingAudioProcessor:
                 self.logger.info(f"Reached target samples: {self.target_samples}, trimmed {excess} samples")
 
         mono_chunk = chunk.astype(np.float32, copy=False)
+        mono_chunk = np.clip(mono_chunk * self.monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
 
         try:
             self.audio_queue.put_nowait(mono_chunk)
@@ -175,7 +203,7 @@ class StreamingAudioProcessor:
 
             # Optional monitor playback: use ONE duplex stream (sd.Stream)
             if monitor_playback and output_device:
-                monitor_gain_linear = float(10 ** (float(monitor_gain_db) / 20.0))
+                self.monitor_gain_linear = float(10 ** (float(monitor_gain_db) / 20.0))
                 out_num = 2
                 try:
                     max_out = int(output_device.get("max_output_channels") or 0)
@@ -192,37 +220,10 @@ class StreamingAudioProcessor:
                 elif input_device:
                     device_selector = (int(input_device["index"]), None)
 
-                def monitor_duplex_callback(indata, outdata, frames, time_info, status):
-                    if status:
-                        self.logger.warning(f"Duplex status: {status}")
-
-                    chunk = indata.copy().flatten()
-                    if len(chunk) > frames:
-                        chunk = chunk[:frames]
-                    elif len(chunk) < frames:
-                        pad = np.zeros(frames - len(chunk), dtype=np.float32)
-                        chunk = np.concatenate([chunk, pad], axis=0)
-
-                    mono_in, reached = self._queue_chunk_and_maybe_stop(chunk)
-
-                    outdata.fill(0)
-                    if reached and len(mono_in) < frames:
-                        play = np.zeros(frames, dtype=np.float32)
-                        play[: len(mono_in)] = mono_in
-                    else:
-                        play = mono_in
-                    play = np.clip(play * monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
-
-                    if outdata.shape[1] >= 2:
-                        outdata[:, 0] = play
-                        outdata[:, 1] = play
-                    elif outdata.shape[1] >= 1:
-                        outdata[:, 0] = play
-
                 self.stream = sd.Stream(
                     samplerate=sample_rate,
                     channels=(in_num, out_num),
-                    callback=monitor_duplex_callback,
+                    callback=self.monitor_duplex_callback,
                     blocksize=2048,
                     device=device_selector,
                 )
