@@ -117,6 +117,9 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     sample_rate = recorded_dict.get("sample_rate", data_struct.sample_rate)
     num_frames = recorded_dict.get("num_frames", 441000)
     device = recorded_dict.get("device")
+    output_device = recorded_dict.get("output_device")
+    monitor_playback = recorded_dict.get("monitor_playback", False)
+    monitor_gain_db = float(recorded_dict.get("monitor_gain_db", 0.0))
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -125,7 +128,10 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     record_code, msg = processor.start_streaming_rec(
         sample_rate=sample_rate,
         target_samples=num_frames,  # Use exact sample count instead of duration
-        device=device
+        device=device,
+        output_device=output_device,
+        monitor_playback=monitor_playback,
+        monitor_gain_db=monitor_gain_db,
     )
 
     if record_code == error_code.OK:
