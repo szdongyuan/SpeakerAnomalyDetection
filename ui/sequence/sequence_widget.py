@@ -135,6 +135,13 @@ class SequenceWindow(
         self.streaming_mode = None  # "play_record" or "record_only"
         self._active_input_channels = [0]
         self.channel_workspace = None
+        self.recent_session_panel = None
+        self.recent_test_sessions = []
+        self.recent_test_session_by_id = {}
+        self._recent_session_seq = 0
+        self._recent_session_max_items = 20
+        self._current_recent_session_id = None
+        self._pending_recent_session_append = False
         self._streaming_first_chunk_logged = False
 
         # Analysis window geometry persistence (per analysis item key)

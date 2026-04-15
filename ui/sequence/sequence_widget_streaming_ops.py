@@ -4,7 +4,7 @@ from datetime import datetime
 
 import numpy as np
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel, QSplitter
 
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
@@ -18,6 +18,7 @@ from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+from ui.sequence.recent_session_panel import RecentSessionPanel
 
 
 class SequenceWidgetStreamingOpsMixin:
@@ -138,14 +139,27 @@ class SequenceWidgetStreamingOpsMixin:
         """
         layout = QHBoxLayout()
         self.channel_workspace = ChannelPlotWorkspace(self)
+        self.recent_session_panel = RecentSessionPanel(
+            on_play_session=self._resolve_recent_session,
+            on_view_session=self._show_recent_session_analysis_by_id,
+            parent=self,
+        )
         # try:
         #     self.refresh_channel_windows()
         # except Exception:
         #     self.channel_workspace.set_channels([0])
 
+        right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.addWidget(self.channel_workspace)
+        right_splitter.addWidget(self.recent_session_panel)
+        right_splitter.setChildrenCollapsible(False)
+        right_splitter.setStretchFactor(0, 8)
+        right_splitter.setStretchFactor(1, 3)
+        right_splitter.setSizes([640, 240])
+
         layout.addWidget(self.count_board, stretch=1)
         layout.addSpacing(20)
-        layout.addWidget(self.channel_workspace, stretch=8)
+        layout.addWidget(right_splitter, stretch=8)
         layout.setContentsMargins(40, 20, 40, 20)
         layout.setSpacing(30)
         return layout
@@ -606,6 +620,12 @@ class SequenceWidgetStreamingOpsMixin:
 
             self._awaiting_ok_ng = True
             self._sn_clear_on_next_scan = True
+            self._pending_recent_session_append = True
+            try:
+                current_label = (self.recorded_signal_info or {}).get("labels", "not_labeled")
+            except Exception:
+                current_label = "not_labeled"
+            self._update_current_recent_session_result(current_label)
             # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
             if self.barcode_scanner_box.isChecked():
                 try:
@@ -644,6 +664,7 @@ class SequenceWidgetStreamingOpsMixin:
             self.replayer_btn.setEnabled(True)
             self._awaiting_ok_ng = False
             self._sn_clear_on_next_scan = False
+            self._pending_recent_session_append = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
             try:

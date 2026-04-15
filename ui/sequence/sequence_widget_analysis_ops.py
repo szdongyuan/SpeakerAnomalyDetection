@@ -1,3 +1,4 @@
+import os
 import threading
 from datetime import datetime
 
@@ -30,6 +31,21 @@ from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_map
 
 
 class SequenceWidgetAnalysisOpsMixin:
+    _RECENT_SESSION_WAITING_TEXT = "等待测试完成"
+
+    @classmethod
+    def _format_recent_session_result_label(cls, result_label):
+        normalized = str(result_label or "").strip()
+        lowered = normalized.lower()
+        if not normalized:
+            return "not labeled"
+        if normalized == cls._RECENT_SESSION_WAITING_TEXT:
+            return cls._RECENT_SESSION_WAITING_TEXT
+        if lowered in ("ok", "ng"):
+            return lowered
+        if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
+            return "not labeled"
+        return normalized
 
     def on_clicked_player_btn(self, label="not_labeled"):
         if not self.sequence_config:
@@ -64,24 +80,189 @@ class SequenceWidgetAnalysisOpsMixin:
             self.recorded_signal_info = {"file_path": file_path, "barcode": None, "labels": "not_labeled"}
         except Exception:
             pass
-        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
-        sample_rate = acq_detail.get("sample_rate", 44100)
-        audio_multi, _ = librosa.load(file_path, sr=sample_rate, mono=False)
+        self._load_audio_file_to_data_struct(file_path)
+
+        self.data_btn.setEnabled(True)
+        if self.analysis_config.get("auto_analysis"):
+            self.run()
+
+    def _load_audio_file_to_data_struct(self, file_path: str, sample_rate: float | None = None):
+        if not file_path:
+            raise ValueError("missing audio file path")
+
+        target_sample_rate = sample_rate
+        if target_sample_rate is None:
+            acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"] if self.sequence_config else {}
+            target_sample_rate = acq_detail.get("sample_rate", 44100)
+
+        audio_multi, _ = librosa.load(file_path, sr=target_sample_rate, mono=False)
         audio_multi = np.asarray(audio_multi, dtype=np.float32)
         if audio_multi.ndim == 1:
             audio_multi = audio_multi.reshape(1, -1)
         audio_multi = audio_multi.T
         self.data_struct.store_wave_data_multi = audio_multi
         self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(np.float32, copy=False)
-        self.data_struct.sample_rate = sample_rate
+        self.data_struct.sample_rate = target_sample_rate
         audio_y, _ = librosa.load(file_path, sr=None)
         self.data_struct.audio_lenth = len(audio_y)
         self._clear_plot_area()
         self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
 
-        self.data_btn.setEnabled(True)
-        if self.analysis_config.get("auto_analysis"):
+    @staticmethod
+    def _get_recent_session_mode_text(mode: str) -> str:
+        return ""
+
+    def _resolve_recent_session_path(self, session_record: dict | None):
+        if not isinstance(session_record, dict):
+            return None
+        candidate_paths = [session_record.get("recorded_path")]
+        recorded_signal_info = session_record.get("recorded_signal_info", {}) or {}
+        candidate_paths.append(recorded_signal_info.get("file_path"))
+        for candidate in candidate_paths:
+            if not candidate:
+                continue
+            normalized_candidate = str(candidate)
+            if not os.path.isabs(normalized_candidate):
+                normalized_candidate = os.path.join(DEFAULT_DIR, normalized_candidate).replace("\\", "/")
+            normalized_candidate = os.path.abspath(normalized_candidate)
+            if os.path.isfile(normalized_candidate):
+                return normalized_candidate
+        return None
+
+    def _build_recent_session_record(self, result_label: str):
+        recorded_path = self.recorded_path
+        if not recorded_path and isinstance(self.recorded_signal_info, dict):
+            recorded_path = self.recorded_signal_info.get("file_path")
+        if not recorded_path:
+            return None
+
+        self._recent_session_seq += 1
+        session_id = f"recent_{self._recent_session_seq:06d}"
+        now_dt = datetime.now()
+        recorded_signal_info = dict(self.recorded_signal_info or {})
+        barcode = recorded_signal_info.get("barcode") or self.lineedit_s_or_n.text().strip() or "-"
+        product_model = self.lineedit_type.text().strip() or recorded_signal_info.get("product_model") or "-"
+        mode_text = self._get_recent_session_mode_text(getattr(self.count_board, "mode", ""))
+
+        return {
+            "session_id": session_id,
+            "created_at": now_dt.isoformat(timespec="seconds"),
+            "time_text": now_dt.strftime("%H:%M:%S"),
+            "barcode": barcode,
+            "product_model": product_model,
+            "mode_text": mode_text,
+            "result_label": self._format_recent_session_result_label(result_label),
+            "recorded_path": recorded_path,
+            "recorded_signal_info": recorded_signal_info,
+            "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+            "sample_rate": self.data_struct.sample_rate,
+        }
+
+    def _append_recent_session_from_current_run(self, result_label: str):
+        session_record = self._build_recent_session_record(result_label=result_label)
+        if session_record is None:
+            return
+
+        session_id = session_record["session_id"]
+        self.recent_test_sessions.insert(0, session_id)
+        self.recent_test_session_by_id[session_id] = session_record
+        self._current_recent_session_id = session_id
+        self._pending_recent_session_append = False
+        if self.recent_session_panel is not None:
+            self.recent_session_panel.upsert_session(session_record)
+
+        while len(self.recent_test_sessions) > int(self._recent_session_max_items):
+            removed_session_id = self.recent_test_sessions.pop()
+            self.recent_test_session_by_id.pop(removed_session_id, None)
+            if self.recent_session_panel is not None:
+                self.recent_session_panel.remove_session(removed_session_id)
+
+    def _update_recent_session(self, session_id: str, **fields):
+        if not session_id:
+            return
+        session_record = self.recent_test_session_by_id.get(session_id)
+        if not isinstance(session_record, dict):
+            return
+        session_record.update(fields)
+        if self.recent_session_panel is not None:
+            self.recent_session_panel.upsert_session(session_record)
+
+    def _update_current_recent_session_result(self, result_label: str):
+        session_id = getattr(self, "_current_recent_session_id", None)
+        if not session_id:
+            return
+        self._update_recent_session(
+            session_id,
+            result_label=self._format_recent_session_result_label(result_label),
+            recorded_path=self.recorded_path,
+            recorded_signal_info=dict(self.recorded_signal_info or {}),
+            analysis_result_dict=dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+            sample_rate=self.data_struct.sample_rate,
+        )
+
+    def _begin_recent_session_for_current_run(self):
+        self._current_recent_session_id = None
+        self._append_recent_session_from_current_run(self._RECENT_SESSION_WAITING_TEXT)
+
+    def _resolve_recent_session(self, session_id: str):
+        return self.recent_test_session_by_id.get(session_id)
+
+    def _show_recent_session_analysis_by_id(self, session_id: str):
+        session_record = self._resolve_recent_session(session_id)
+        if not isinstance(session_record, dict):
+            return
+
+        playback_path = self._resolve_recent_session_path(session_record)
+        if not playback_path:
+            QMessageBox.information(self, "提示", "当前记录音频文件不可用，无法查看分析结果。")
+            return
+
+        previous_recorded_path = self.recorded_path
+        previous_recorded_signal_info = dict(self.recorded_signal_info or {})
+        previous_store_wave_data = (
+            None if self.data_struct.store_wave_data is None else np.asarray(self.data_struct.store_wave_data).copy()
+        )
+        previous_store_wave_data_multi = (
+            None
+            if getattr(self.data_struct, "store_wave_data_multi", None) is None
+            else np.asarray(self.data_struct.store_wave_data_multi).copy()
+        )
+        previous_sample_rate = self.data_struct.sample_rate
+        previous_audio_length = getattr(self.data_struct, "audio_lenth", 0)
+        previous_analysis_result_dict = dict(getattr(self.data_struct, "analysis_result_dict", {}) or {})
+        previous_mode = getattr(self.count_board, "mode", "")
+        previous_excel_export_cache = self._excel_export_cache
+        previous_excel_exported_record_id = self._excel_exported_record_id
+
+        try:
+            self._close_analysis_windows()
+            self.recorded_path = playback_path
+            self.recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
+            if not self.recorded_signal_info.get("file_path"):
+                self.recorded_signal_info["file_path"] = playback_path
+            self._load_audio_file_to_data_struct(
+                playback_path,
+                sample_rate=session_record.get("sample_rate") or previous_sample_rate or None,
+            )
+            self.count_board.mode = "view"
             self.run()
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"查看近期测试结果失败: {e}")
+        finally:
+            self.count_board.mode = previous_mode
+            self.recorded_path = previous_recorded_path
+            self.recorded_signal_info = previous_recorded_signal_info
+            self.data_struct.store_wave_data = previous_store_wave_data
+            self.data_struct.store_wave_data_multi = previous_store_wave_data_multi
+            self.data_struct.sample_rate = previous_sample_rate
+            self.data_struct.audio_lenth = previous_audio_length
+            self.data_struct.analysis_result_dict = previous_analysis_result_dict
+            self._excel_export_cache = previous_excel_export_cache
+            self._excel_exported_record_id = previous_excel_exported_record_id
+            if previous_store_wave_data_multi is not None:
+                self.plot_waveform_to_workspace(previous_store_wave_data_multi, previous_sample_rate)
+            else:
+                self._clear_plot_area()
 
     def start_this_play(self, label="not_labeled"):
         cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
@@ -281,6 +462,7 @@ class SequenceWidgetAnalysisOpsMixin:
             )
             self.streaming_mode = "record_only"
             self.streaming_stimulus_data = None
+            self._begin_recent_session_for_current_run()
 
             # Start polling timer to process queue and detect completion
             self.streaming_poll_timer.start(50)  # Poll every 50ms
@@ -415,6 +597,9 @@ class SequenceWidgetAnalysisOpsMixin:
 
         # Show summary window at the end (also in test mode), only if dict is not empty
         self._maybe_show_analysis_result_summary(width, height)
+        if getattr(self.count_board, "mode", "") != "test":
+            result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"
+            self._update_current_recent_session_result(result_label=result_label)
 
     @staticmethod
     def _is_channel_mismatch_error(err: Exception) -> bool:
