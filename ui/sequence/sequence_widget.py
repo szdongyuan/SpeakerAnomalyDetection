@@ -12,6 +12,7 @@ from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.unified_hid_device_manager import UnifiedHardwareManager
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.barcode_router import BarcodeRouter
+from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 
@@ -68,6 +69,7 @@ class SequenceWindow(
 
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
+        self.left_panel = MotorDetectionLeftPanel(self.count_board)
         self._refresh_test_mode_availability()
         self.player_status_flag = False
         # True while a record run is still processing (record -> analysis -> save -> count updates).
@@ -103,6 +105,10 @@ class SequenceWindow(
         self._serial_trigger_delay_timer = QTimer(self)
         self._serial_trigger_delay_timer.setSingleShot(True)
         self._serial_trigger_delay_timer.timeout.connect(self._on_serial_trigger_delay_timeout)
+        self._current_trigger_direction = ""
+        self._manual_direction_fallback_next_direction = "forward"
+        self._ai_cycle_started_at = ""
+        self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._pending_serial_trigger_direction = ""
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None

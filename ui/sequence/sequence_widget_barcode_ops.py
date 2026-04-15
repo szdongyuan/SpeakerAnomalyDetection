@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 
 from PyQt5.QtCore import QSignalBlocker
 from PyQt5.QtWidgets import QMessageBox, QApplication
@@ -6,6 +7,121 @@ from PyQt5.QtWidgets import QMessageBox, QApplication
 
 class SequenceWidgetBarcodeOpsMixin:
     _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
+
+    @staticmethod
+    def _normalize_trigger_direction(direction: str) -> str:
+        value = str(direction or "").strip().lower()
+        return value if value in ("forward", "reverse") else ""
+
+    def _is_manual_direction_fallback_active(self) -> bool:
+        config = getattr(self, "_serial_trigger_config", {}) or {}
+        if not bool(config.get("enabled", False)):
+            return False
+        status = getattr(self, "_serial_trigger_runtime_status", {}) or {}
+        return not bool(status.get("connected", False))
+
+    def _is_directional_cycle_active(self) -> bool:
+        return self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", "")) in ("forward", "reverse")
+
+    def _clear_ai_cycle_runtime_state(self):
+        self._current_trigger_direction = ""
+        self._manual_direction_fallback_next_direction = "forward"
+        self._ai_cycle_started_at = ""
+        self._ai_cycle_direction_results = {"forward": None, "reverse": None}
+        self._pending_serial_trigger_direction = ""
+
+    def _reset_ai_cycle_panel_state(self):
+        self._ai_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._ai_cycle_direction_results = {"forward": None, "reverse": None}
+        if getattr(self, "left_panel", None) is not None:
+            self.left_panel.set_current_timestamp(self._ai_cycle_started_at)
+            self.left_panel.set_forward_result("待检测", tone="pending")
+            self.left_panel.set_reverse_result("待检测", tone="pending")
+            self.left_panel.set_final_result("待判定", tone="pending")
+
+    def _start_directional_workflow(self, direction: str):
+        direction = self._normalize_trigger_direction(direction)
+        if not direction:
+            return
+
+        if direction == "forward":
+            self._reset_ai_cycle_panel_state()
+            self._manual_direction_fallback_next_direction = "reverse"
+        else:
+            if not getattr(self, "_ai_cycle_started_at", ""):
+                self._reset_ai_cycle_panel_state()
+            self._manual_direction_fallback_next_direction = "forward"
+
+        self._current_trigger_direction = direction
+
+        if getattr(self, "left_panel", None) is not None:
+            if direction == "forward":
+                self.left_panel.set_current_stage("正转检测中", tone="running")
+                self.left_panel.set_forward_result("检测中", tone="running")
+            else:
+                self.left_panel.set_current_stage("反转检测中", tone="running")
+                self.left_panel.set_reverse_result("检测中", tone="running")
+
+        self.start_this_play("not_labeled")
+
+    def _on_directional_recording_completed(self):
+        direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
+        if not direction:
+            return
+        if getattr(self, "left_panel", None) is None:
+            return
+
+        if direction == "forward":
+            self.left_panel.set_current_stage("正转录音完成，等待分析", tone="pending")
+        else:
+            self.left_panel.set_current_stage("反转录音完成，等待分析", tone="pending")
+
+    def _update_ai_cycle_result_after_analysis(self, label: str, ai_scores=None):
+        direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
+        if direction not in ("forward", "reverse"):
+            return None
+        if label not in ("OK", "NG"):
+            return None
+        ai_scores = dict(ai_scores or {})
+
+        result_cache = dict(getattr(self, "_ai_cycle_direction_results", {}) or {})
+        result_cache[direction] = label
+        self._ai_cycle_direction_results = result_cache
+        left_panel = getattr(self, "left_panel", None)
+
+        if direction == "forward":
+            if left_panel is not None:
+                left_panel.set_forward_result(label)
+                if hasattr(left_panel, "set_forward_scores"):
+                    left_panel.set_forward_scores(
+                        ai_scores.get("ok_score"),
+                        ai_scores.get("ng_score"),
+                    )
+                left_panel.set_current_stage("等待反转", tone="pending")
+                left_panel.set_final_result("待判定", tone="pending")
+            return None
+
+        forward_label = result_cache.get("forward")
+        reverse_label = result_cache.get("reverse")
+        if left_panel is not None:
+            left_panel.set_reverse_result(label)
+            if hasattr(left_panel, "set_reverse_scores"):
+                left_panel.set_reverse_scores(
+                    ai_scores.get("ok_score"),
+                    ai_scores.get("ng_score"),
+                )
+        if forward_label in ("OK", "NG") and reverse_label in ("OK", "NG"):
+            final_label = "OK" if forward_label == "OK" and reverse_label == "OK" else "NG"
+            final_tone = "ok" if final_label == "OK" else "ng"
+            if left_panel is not None:
+                left_panel.set_final_result(final_label, tone=final_tone)
+                left_panel.set_current_stage("循环完成", tone=final_tone)
+            return final_label
+        else:
+            if left_panel is not None:
+                left_panel.set_current_stage("等待反转", tone="pending")
+                left_panel.set_final_result("待判定", tone="pending")
+            return None
 
     @staticmethod
     def _resolve_serial_trigger_delay_ms(config) -> int:
@@ -33,8 +149,7 @@ class SequenceWidgetBarcodeOpsMixin:
             return
         print(f"[serial-trigger][ui] 延迟到期，开始录音: direction={direction}")
         self.default_logger.info(f"离散输入延迟触发响应: 开始测试, 方向={direction}")
-        self._current_trigger_direction = direction
-        self.start_this_play("not_labeled")
+        self._start_directional_workflow(direction)
 
     def _reset_barcode_commit_dedup(self):
         """Clear barcode dedup cache so same S/N can trigger a new workflow."""
@@ -210,8 +325,7 @@ class SequenceWidgetBarcodeOpsMixin:
             else:
                 print(f"[serial-trigger][ui] 收到方向触发: direction={direction}, busy=False，准备开始录音")
                 self.default_logger.info(f"离散输入触发响应: 开始测试, 方向={direction}")
-                self._current_trigger_direction = direction
-                self.start_this_play("not_labeled")
+                self._start_directional_workflow(direction)
         else:
             print(f"[serial-trigger][ui] 收到方向触发: direction={direction}, busy=True，已忽略")
             self.default_logger.info(f"正在测试中，忽略离散输入触发 (方向={direction})")

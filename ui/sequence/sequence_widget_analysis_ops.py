@@ -47,6 +47,21 @@ class SequenceWidgetAnalysisOpsMixin:
             return "not labeled"
         return normalized
 
+    def _extract_ai_result_scores_for_left_panel(self):
+        for instance in self.analysis_window or []:
+            detail = getattr(instance, "export_detail", None)
+            if not isinstance(detail, dict):
+                continue
+            ok_score = detail.get("ok_score")
+            ng_score = detail.get("ng_score")
+            if ok_score in (None, "") and ng_score in (None, ""):
+                continue
+            return {
+                "ok_score": ok_score,
+                "ng_score": ng_score,
+            }
+        return {"ok_score": None, "ng_score": None}
+
     def on_clicked_player_btn(self, label="not_labeled"):
         if not self.sequence_config:
             QMessageBox.warning(
@@ -60,6 +75,16 @@ class SequenceWidgetAnalysisOpsMixin:
         acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
         if acq_mode == "IMPORT_AUDIO":
             self.import_audio_and_analyze()
+            return
+        manual_direction_fallback = getattr(self, "_is_manual_direction_fallback_active", None)
+        if callable(manual_direction_fallback) and manual_direction_fallback():
+            direction = str(getattr(self, "_manual_direction_fallback_next_direction", "forward") or "forward")
+            try:
+                self.default_logger.info(f"串口未连接，播放按钮进入手动方向回退模式: direction={direction}")
+            except Exception:
+                pass
+            self.clicked_player_flag = True
+            self._start_directional_workflow(direction)
             return
         self.clicked_player_flag = True
         self.start_this_play(label)
@@ -110,7 +135,12 @@ class SequenceWidgetAnalysisOpsMixin:
 
     @staticmethod
     def _get_recent_session_mode_text(mode: str) -> str:
-        return ""
+        normalized = str(mode or "").strip().lower()
+        if normalized == "mark":
+            return "标记"
+        if normalized == "test":
+            return "测试"
+        return "-"
 
     def _resolve_recent_session_path(self, session_record: dict | None):
         if not isinstance(session_record, dict):
@@ -147,9 +177,10 @@ class SequenceWidgetAnalysisOpsMixin:
         return {
             "session_id": session_id,
             "created_at": now_dt.isoformat(timespec="seconds"),
-            "time_text": now_dt.strftime("%H:%M:%S"),
+            "time_text": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "barcode": barcode,
             "product_model": product_model,
+            "mode": str(getattr(self.count_board, "mode", "") or ""),
             "mode_text": mode_text,
             "result_label": self._format_recent_session_result_label(result_label),
             "recorded_path": recorded_path,
@@ -263,6 +294,10 @@ class SequenceWidgetAnalysisOpsMixin:
                 self.plot_waveform_to_workspace(previous_store_wave_data_multi, previous_sample_rate)
             else:
                 self._clear_plot_area()
+
+        self.data_btn.setEnabled(True)
+        if self.analysis_config.get("auto_analysis"):
+            self.run(show_windows=False)
 
     def start_this_play(self, label="not_labeled"):
         cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
@@ -479,9 +514,9 @@ class SequenceWidgetAnalysisOpsMixin:
         # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
         return
 
-    def run(self):
+    def run(self, show_windows=True):
         """
-        Executes the analysis tasks and displays the analysis windows.
+        Executes the analysis tasks and optionally displays the analysis windows.
 
         This method initializes the analysis windows based on the configuration and creates corresponding
         analysis instances according to the analysis types specified in the configuration. It then performs
@@ -517,86 +552,122 @@ class SequenceWidgetAnalysisOpsMixin:
                         result = instance.calculate_reference_spectrum()
                         if not result:
                             continue
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_spl"):
                         result = instance.calculate_spl()
                         if not result:
                             continue
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_fr"):
                         result = instance.calculate_fr()
                         if not result:
                             continue
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_thd"):
                         instance.calculate_thd()
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_ai_scores"):
                         instance.calculate_ai_scores(
                             self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
                         )
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_spec"):
                         instance.calculate_spec()
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_peak_detection"):
                         instance.calculate_peak_detection()
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_loose_particle"):
                         instance.calculate_loose_particle()
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_pattern_match"):
                         instance.calculate_pattern_match()
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_pipeline_pd_pm"):
                         instance.calculate_pipeline_pd_pm()
-                        instance.show()
+                        if show_windows:
+                            instance.show()
                 except ValueError as e:
                     if self._is_channel_mismatch_error(e):
                         self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
                         continue
                     raise
 
-                # Restore last geometry if available; otherwise fallback to default cascade
-                default_geo = {"x": width, "y": height, "w": 600, "h": 500}
-                geo = self._get_analysis_window_geometry(instance_key) if instance_key else None
-                if geo is None:
-                    geo = default_geo
-                    # Persist the default once so next run restores from the same place
+                if show_windows:
+                    # Restore last geometry if available; otherwise fallback to default cascade
+                    default_geo = {"x": width, "y": height, "w": 600, "h": 500}
+                    geo = self._get_analysis_window_geometry(instance_key) if instance_key else None
+                    if geo is None:
+                        geo = default_geo
+                        # Persist the default once so next run restores from the same place
+                        if instance_key:
+                            self._set_analysis_window_geometry(instance_key, geo)
+                    instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+                    instance.setMinimumSize(QSize(300, 255))
+
+                    # Install event filter to capture move/resize and persist geometry (no close listener)
                     if instance_key:
-                        self._set_analysis_window_geometry(instance_key, geo)
-                instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
-                instance.setMinimumSize(QSize(300, 255))
+                        self._analysis_window_key_by_obj[instance] = instance_key
+                        instance.installEventFilter(self)
 
-                # Install event filter to capture move/resize and persist geometry (no close listener)
-                if instance_key:
-                    self._analysis_window_key_by_obj[instance] = instance_key
-                    instance.installEventFilter(self)
-
-                width += 20
-                height += 20
+                    width += 20
+                    height += 20
 
             # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
             self._capture_excel_export_cache()
             # Mark mode previously only exported on OK/NG click; now export immediately after analysis
             # so results are always saved to CSV (spool) regardless of whether OK/NG is clicked.
             self._maybe_export_excel_results()
+            can_output, _reason = self._can_output_ok_ng()
+            cycle_final_label = None
+            if can_output:
+                _passed, label = self._summarize_ok_ng()
+                ai_scores = self._extract_ai_result_scores_for_left_panel()
+                update_ai_cycle_result = getattr(self, "_update_ai_cycle_result_after_analysis", None)
+                if callable(update_ai_cycle_result):
+                    cycle_final_label = update_ai_cycle_result(label, ai_scores=ai_scores)
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
-                can_output, _reason = self._can_output_ok_ng()
                 if not can_output:
                     QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
                 else:
-                    _passed, label = self._summarize_ok_ng()
-                    try:
-                        self.count_board.set_test_result_file(label)
-                        self.count_board.set_test_text()
-                    except Exception:
+                    auto_label = label
+                    is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
+                    directional_cycle_active = (
+                        callable(is_directional_cycle_active) and is_directional_cycle_active()
+                    )
+                    if directional_cycle_active:
+                        auto_label = cycle_final_label
+                    if auto_label not in ("OK", "NG"):
+                        auto_label = None
+                    if auto_label is None:
+                        # Directional cycle should only be counted/finalized after the reverse leg
+                        # produces the final combined AI judgment.
                         pass
-                    self._finalize_test_run(label)
+                    else:
+                        try:
+                            self.count_board.set_test_result_file(auto_label)
+                            self.count_board.set_test_text()
+                        except Exception:
+                            pass
+                        self._finalize_test_run(auto_label)
+                        if directional_cycle_active:
+                            clear_ai_cycle_runtime_state = getattr(self, "_clear_ai_cycle_runtime_state", None)
+                            if callable(clear_ai_cycle_runtime_state):
+                                clear_ai_cycle_runtime_state()
 
-        # Show summary window at the end (also in test mode), only if dict is not empty
-        self._maybe_show_analysis_result_summary(width, height)
+        if show_windows:
+            # Show summary window at the end (also in test mode), only if dict is not empty
+            self._maybe_show_analysis_result_summary(width, height)
         if getattr(self.count_board, "mode", "") != "test":
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"
             self._update_current_recent_session_result(result_label=result_label)

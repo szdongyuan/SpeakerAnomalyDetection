@@ -168,6 +168,297 @@ qframe_style = """
             }
 """
 
+motor_left_panel_style = """
+            QWidget {
+                background: transparent;
+            }
+"""
+
+motor_section_card_style = """
+            QFrame {
+                background-color: #f3f6fb;
+                border: 1px solid #b7c7dd;
+                border-radius: 5px;
+            }
+"""
+
+motor_section_title_style = """
+            QLabel {
+                background-color: #4472c4;
+                color: white;
+                font-family: 'SimSun';
+                font-size: 18px;
+                font-weight: bold;
+                padding: 7px 10px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+"""
+
+motor_field_label_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 18px;
+                color: #2f4770;
+                background: transparent;
+            }
+"""
+
+motor_value_label_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 17px;
+                color: #24344f;
+                background-color: #ffffff;
+                border: 1px solid #bfd0e6;
+                border-radius: 5px;
+                padding: 6px 8px;
+            }
+"""
+
+motor_status_badge_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 17px;
+                font-weight: bold;
+                border-radius: 5px;
+                padding: 8px 10px;
+            }
+"""
+
+motor_status_badge_compact_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 30px;
+                font-weight: bold;
+                border-radius: 5px;
+                padding: 11px 14px;
+            }
+"""
+
+motor_status_badge_large_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 46px;
+                font-weight: bold;
+                border-radius: 5px;
+                padding: 18px 18px;
+            }
+"""
+
+motor_status_badge_pending_style = """
+            QLabel {
+                background-color: #e8eef8;
+                color: #4a628a;
+                border: 1px solid #a9bddb;
+            }
+"""
+
+motor_status_badge_running_style = """
+            QLabel {
+                background-color: #fff3d8;
+                color: #8a6720;
+                border: 1px solid #d8b66b;
+            }
+"""
+
+motor_status_badge_ok_style = """
+            QLabel {
+                background-color: #deefdf;
+                color: #29613a;
+                border: 1px solid #87b48e;
+            }
+"""
+
+motor_status_badge_ng_style = """
+            QLabel {
+                background-color: #f6dddd;
+                color: #9b3434;
+                border: 1px solid #d49a9a;
+            }
+"""
+
+motor_summary_hint_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 16px;
+                color: #5f6368;
+                background: transparent;
+                padding: 4px 2px;
+            }
+"""
+
+motor_result_caption_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 16px;
+                font-weight: bold;
+                color: #3c5f9d;
+                background: transparent;
+                padding: 2px 0px;
+            }
+"""
+
+motor_inline_title_label_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 15px;
+                font-weight: bold;
+                color: #5f79a4;
+                background-color: #f9fbff;
+                border: 1px solid #d2ddec;
+                border-radius: 5px;
+                padding: 6px 10px;
+            }
+"""
+
+motor_inline_title_label_pending_style = """
+            QLabel {
+                color: #5f79a4;
+                background-color: #f9fbff;
+                border: 1px solid #d2ddec;
+            }
+"""
+
+motor_inline_title_label_running_style = """
+            QLabel {
+                color: #8a6a27;
+                background-color: #fffaf0;
+                border: 1px solid #e4d0a1;
+            }
+"""
+
+motor_inline_title_label_ok_style = """
+            QLabel {
+                color: #5b7f60;
+                background-color: #f8fcf8;
+                border: 1px solid #c6ddc9;
+            }
+"""
+
+motor_inline_title_label_ng_style = """
+            QLabel {
+                color: #9a6262;
+                background-color: #fff8f8;
+                border: 1px solid #e8caca;
+            }
+"""
+
+motor_result_group_frame_style = """
+            QFrame {
+                background-color: #edf3fa;
+                border: 1px solid #c2d1e4;
+                border-radius: 5px;
+            }
+"""
+
+motor_score_label_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 13px;
+                color: #657b9f;
+                background: transparent;
+                border: none;
+                padding: 0px 2px;
+            }
+"""
+
+motor_score_title_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 13px;
+                color: #5f759a;
+                background: transparent;
+                border: none;
+                padding: 0px;
+            }
+"""
+
+motor_final_result_title_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 14px;
+                color: #7186aa;
+                background: transparent;
+                border: none;
+                padding: 0px 2px;
+            }
+"""
+
+motor_result_divider_style = """
+            QFrame {
+                color: #c8d5e6;
+                background-color: #c8d5e6;
+                border: none;
+            }
+"""
+
+motor_stage_frame_style = """
+            QFrame {
+                background-color: #edf3fa;
+                border: 1px solid #c2d1e4;
+                border-radius: 5px;
+            }
+"""
+
+motor_stage_title_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 16px;
+                font-weight: bold;
+                color: #3c5f9d;
+                background: transparent;
+                padding: 2px 0px;
+            }
+"""
+
+motor_mode_switch_panel_style = """
+            QFrame {
+                background-color: #eef3fa;
+                border: 1px solid #c7d6e8;
+                border-radius: 5px;
+            }
+"""
+
+motor_mode_switch_label_style = """
+            QLabel {
+                font-family: 'SimSun';
+                font-size: 15px;
+                color: #6980a4;
+                background: transparent;
+            }
+"""
+
+motor_mode_switch_button_base_style = """
+            QPushButton {
+                min-height: 32px;
+                border: 1px solid #bfd0e5;
+                border-radius: 4px;
+                background-color: #fafcff;
+                color: #5f7599;
+                font-family: 'SimSun';
+                font-size: 15px;
+                font-weight: bold;
+                padding: 2px 11px;
+            }
+"""
+
+motor_mode_switch_button_active_style = """
+            QPushButton {
+                background-color: #4472c4;
+                color: white;
+                border: 1px solid #4472c4;
+            }
+"""
+
+motor_mode_switch_button_inactive_style = """
+            QPushButton {
+                background-color: #f8fbff;
+                color: #7a8ead;
+                border: 1px solid #d1dceb;
+            }
+"""
+
 hardware_qframe_style = """
             QFrame {
                 color: rgb(204, 204, 204);

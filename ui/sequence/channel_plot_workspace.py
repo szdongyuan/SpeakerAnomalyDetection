@@ -268,19 +268,14 @@ class ChannelPlotWorkspace(QWidget):
         win_w = int((usable_w - gap * (cols - 1)) / cols)
         win_w = max(220, min(win_w, usable_w))
 
-        # Default behavior: keep a stable minimum height and let the scroll area handle overflow.
         usable_h = max(1, viewport_h - 2 * pad)
-        rows = 2 if usable_h >= (min_win_h * 2 + gap) else 1
+        rows = max(1, (int(num_windows) + cols - 1) // cols)
 
         win_h = int((usable_h - gap * (rows - 1)) / rows)
         win_h = max(220, min(win_h, usable_h))
 
-        # Special-case: when showing 4 channels, prefer a 2x2 tiling that fills the viewport height.
-        # If the viewport is short, the windows will shrink accordingly (no forced minimum in this mode).
         if int(num_windows) == 4 and viewport_h > 0:
-            rows = (num_windows + cols - 1) // cols
             if rows == 2:
-                usable_h = max(1, viewport_h - 2 * pad)
                 filled_h = int((usable_h - gap * (rows - 1)) / rows)
                 if filled_h >= 1:
                     win_h = filled_h

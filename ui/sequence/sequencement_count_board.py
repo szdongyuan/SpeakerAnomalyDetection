@@ -3,7 +3,18 @@ from datetime import datetime
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QWidget, QStackedWidget, QMessageBox
+from PyQt5.QtWidgets import (
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QFrame,
+    QWidget,
+    QStackedWidget,
+    QMessageBox,
+    QSizePolicy,
+)
 
 from base.save_data import ensure_test_result_file
 from consts import ui_style_const
@@ -19,6 +30,7 @@ class SequenceCountBoard(QWidget):
         self.mode = str()
         self._test_available = True
         self._test_unavailable_reason = ""
+        self._mode_change_callbacks = []
 
         self.test_btn = QPushButton("测试")
         self.mark_btn = QPushButton("标记")
@@ -30,6 +42,8 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit = QLineEdit("0")
         self.mark_ok_edit = QLineEdit("0")
         self.mark_ng_edit = QLineEdit("0")
+        self.mark_yield_edit = QLineEdit("0%")
+        self.mark_datatime_edit = QLineEdit()
         self.ok_btn = QPushButton(" OK ")
         self.ng_btn = QPushButton(" NG ")
         self.reset_btn = QPushButton("重置统计")
@@ -43,26 +57,33 @@ class SequenceCountBoard(QWidget):
         # Do NOT force switch to test mode during init.
 
     def init_ui(self):
-        mode_btn_layout = self.create_mode_btn_layout()
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.mode_switch_widget = self.create_mode_switch_widget()
 
-        separator_line = QFrame()
-        separator_line.setFrameShape(QFrame.HLine)
-        separator_line.setFrameShadow(QFrame.Sunken)
-        separator_line.setStyleSheet("color: gray;")
-        separator_line.setFixedHeight(2)
+        self.separator_line = QFrame()
+        self.separator_line.setFrameShape(QFrame.HLine)
+        self.separator_line.setFrameShadow(QFrame.Sunken)
+        self.separator_line.setStyleSheet("color: gray;")
+        self.separator_line.setFixedHeight(2)
 
         test_widget = self.set_test_widget()
         mark_widget = self.set_mark_widget()
 
         self.stacked_widget = QStackedWidget()
+        self.stacked_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.stacked_widget.setFrameShape(QFrame.NoFrame)
+        self.stacked_widget.setLineWidth(0)
+        self.stacked_widget.setMidLineWidth(0)
+        self.stacked_widget.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self.stacked_widget.addWidget(test_widget)
         self.stacked_widget.addWidget(mark_widget)
 
         layout = QVBoxLayout()
-        layout.addLayout(mode_btn_layout)
-        layout.addWidget(separator_line)
+        layout.addWidget(self.mode_switch_widget)
+        layout.addWidget(self.separator_line)
         layout.addWidget(self.stacked_widget)
-        layout.addStretch()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         self.setLayout(layout)
 
@@ -73,6 +94,8 @@ class SequenceCountBoard(QWidget):
         label = QLabel(label_str)
 
         layout = QHBoxLayout()
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(12)
         layout.addWidget(label)
         layout.addWidget(item)
 
@@ -87,6 +110,8 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setAlignment(Qt.AlignCenter)
         self.mark_ok_edit.setAlignment(Qt.AlignCenter)
         self.mark_ng_edit.setAlignment(Qt.AlignCenter)
+        self.mark_yield_edit.setAlignment(Qt.AlignCenter)
+        self.mark_datatime_edit.setAlignment(Qt.AlignCenter)
 
         self.total_line_edit.setDisabled(True)
         self.ok_line_edit.setDisabled(True)
@@ -96,15 +121,19 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setDisabled(True)
         self.mark_ok_edit.setDisabled(True)
         self.mark_ng_edit.setDisabled(True)
+        self.mark_yield_edit.setDisabled(True)
+        self.mark_datatime_edit.setDisabled(True)
 
-        self.total_line_edit.setFixedSize(130, 35)
-        self.ok_line_edit.setFixedSize(130, 35)
-        self.ng_line_edit.setFixedSize(130, 35)
-        self.yield_line_edit.setFixedSize(130, 35)
-        self.datatime_line_edit.setFixedSize(130, 35)
-        self.mark_total_edit.setFixedSize(130, 35)
-        self.mark_ok_edit.setFixedSize(130, 35)
-        self.mark_ng_edit.setFixedSize(130, 35)
+        self.total_line_edit.setFixedSize(130, 32)
+        self.ok_line_edit.setFixedSize(130, 32)
+        self.ng_line_edit.setFixedSize(130, 32)
+        self.yield_line_edit.setFixedSize(130, 32)
+        self.datatime_line_edit.setFixedSize(130, 32)
+        self.mark_total_edit.setFixedSize(130, 32)
+        self.mark_ok_edit.setFixedSize(130, 32)
+        self.mark_ng_edit.setFixedSize(130, 32)
+        self.mark_yield_edit.setFixedSize(130, 32)
+        self.mark_datatime_edit.setFixedSize(130, 32)
 
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
@@ -133,6 +162,11 @@ class SequenceCountBoard(QWidget):
 
         return model_button_layout
 
+    def create_mode_switch_widget(self):
+        widget = QWidget()
+        widget.setLayout(self.create_mode_btn_layout())
+        return widget
+
     def set_test_widget(self):
         total_layout = self.create_horizontal_layout("总    数：", self.total_line_edit)
         ok_layout = self.create_horizontal_layout("OK    数：", self.ok_line_edit)
@@ -145,14 +179,17 @@ class SequenceCountBoard(QWidget):
         reset_btn_layout.addStretch()
 
         test_layout = QVBoxLayout()
-        test_layout.addLayout(total_layout, stretch=1)
-        test_layout.addLayout(ok_layout, stretch=1)
-        test_layout.addLayout(ng_layout, stretch=1)
-        test_layout.addLayout(yield_layout, stretch=1)
-        test_layout.addLayout(datatime_layout, stretch=1)
-        test_layout.addLayout(reset_btn_layout, stretch=1)
+        test_layout.setContentsMargins(0, 0, 0, 0)
+        test_layout.setSpacing(10)
+        test_layout.addLayout(total_layout)
+        test_layout.addLayout(ok_layout)
+        test_layout.addLayout(ng_layout)
+        test_layout.addLayout(yield_layout)
+        test_layout.addLayout(datatime_layout)
+        test_layout.addLayout(reset_btn_layout)
 
         test_widget = QWidget()
+        test_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         test_widget.setLayout(test_layout)
 
         return test_widget
@@ -161,24 +198,17 @@ class SequenceCountBoard(QWidget):
         total_layout = self.create_horizontal_layout("总    数：", self.mark_total_edit)
         ok_layout = self.create_horizontal_layout("OK    数：", self.mark_ok_edit)
         ng_layout = self.create_horizontal_layout("NG    数：", self.mark_ng_edit)
-        ok_btn_layout = QHBoxLayout()
-        ok_btn_layout.addStretch()
-        ok_btn_layout.addWidget(self.ok_btn)
-        ok_btn_layout.addStretch()
-        ng_btn_layout = QHBoxLayout()
-        ng_btn_layout.addStretch()
-        ng_btn_layout.addWidget(self.ng_btn)
-        ng_btn_layout.addStretch()
 
         mark_layout = QVBoxLayout()
-        mark_layout.addLayout(total_layout, stretch=1)
-        mark_layout.addLayout(ok_layout, stretch=1)
-        mark_layout.addLayout(ng_layout, stretch=1)
-        mark_layout.addSpacing(10)
-        mark_layout.addLayout(ok_btn_layout, stretch=1)
-        mark_layout.addLayout(ng_btn_layout, stretch=1)
+        mark_layout.setContentsMargins(0, 0, 0, 0)
+        mark_layout.setSpacing(10)
+        mark_layout.addLayout(total_layout)
+        mark_layout.addLayout(ok_layout)
+        mark_layout.addLayout(ng_layout)
+        mark_layout.addStretch(1)
 
         mark_widget = QWidget()
+        mark_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         mark_widget.setLayout(mark_layout)
 
         return mark_widget
@@ -194,6 +224,7 @@ class SequenceCountBoard(QWidget):
         self.mark_btn.setEnabled(True)
         self.stacked_widget.setCurrentIndex(0)
         self.mode = "test"
+        self._notify_mode_state_changed()
 
     def on_mark_btn_clicked(self):
         self.stacked_widget.setCurrentIndex(1)
@@ -202,6 +233,7 @@ class SequenceCountBoard(QWidget):
         self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
         self.mark_btn.setEnabled(False)
         self.test_btn.setEnabled(bool(self._test_available))
+        self._notify_mode_state_changed()
 
     def set_test_available(self, available: bool, reason: str = ""):
         """
@@ -216,6 +248,33 @@ class SequenceCountBoard(QWidget):
             pass
         if (not self._test_available) and self.mode == "test":
             self.on_mark_btn_clicked()
+            return
+        self._notify_mode_state_changed()
+
+    def set_mode_switch_visible(self, visible: bool):
+        if hasattr(self, "mode_switch_widget") and self.mode_switch_widget is not None:
+            self.mode_switch_widget.setVisible(bool(visible))
+        if hasattr(self, "separator_line") and self.separator_line is not None:
+            self.separator_line.setVisible(bool(visible))
+
+    def register_mode_change_callback(self, callback):
+        if callable(callback):
+            self._mode_change_callbacks.append(callback)
+
+    def get_mode_state(self) -> dict:
+        return {
+            "mode": str(self.mode or ""),
+            "test_available": bool(self._test_available),
+            "test_unavailable_reason": str(self._test_unavailable_reason or ""),
+        }
+
+    def _notify_mode_state_changed(self):
+        state = self.get_mode_state()
+        for callback in list(self._mode_change_callbacks):
+            try:
+                callback(dict(state))
+            except Exception:
+                pass
 
     @staticmethod
     def _parse_test_log(lines):
@@ -254,6 +313,11 @@ class SequenceCountBoard(QWidget):
             self.mark_total_edit.setText(str(data["total"]))
             self.mark_ok_edit.setText(str(data["ok"]))
             self.mark_ng_edit.setText(str(data["ng"]))
+            total = int(data.get("total", 0) or 0)
+            ok = int(data.get("ok", 0) or 0)
+            yield_percent = round(ok / total * 100, 2) if total > 0 else 0
+            self.mark_yield_edit.setText(f"{yield_percent}%")
+            self.mark_datatime_edit.setText(str(data.get("datatime", datetime.now().strftime("%Y-%m-%d"))))
 
     def set_test_result_file(self, params):
         current_time = datetime.now().strftime("%Y-%m-%d")

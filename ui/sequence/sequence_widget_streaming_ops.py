@@ -22,6 +22,11 @@ from ui.sequence.recent_session_panel import RecentSessionPanel
 
 
 class SequenceWidgetStreamingOpsMixin:
+    def _should_run_silent_analysis_after_recording(self) -> bool:
+        if bool((getattr(self, "analysis_config", {}) or {}).get("auto_analysis", False)):
+            return True
+        is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
+        return callable(is_directional_cycle_active) and is_directional_cycle_active()
 
     def on_sequence_config_updated(self, *_):
         """
@@ -106,7 +111,9 @@ class SequenceWidgetStreamingOpsMixin:
                 candidates.append(key)
                 continue
             if t == "RSC":
-                if bool(item_cfg.get("enable_threshold_judgment", True)):
+                has_reference = bool(str(item_cfg.get("reference_source_path") or "").strip())
+                current_only_mode = bool(item_cfg.get("view_current_only_without_reference", False))
+                if has_reference and not current_only_mode and bool(item_cfg.get("enable_threshold_judgment", True)):
                     candidates.append(key)
                 continue
             if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB"):
@@ -127,15 +134,13 @@ class SequenceWidgetStreamingOpsMixin:
 
     def create_waveform_layout(self):
         """
-            Create waveform display layout
+            Create the main work area layout.
 
-            This function is responsible for generating a horizontal layout to display the waveform and related button area.
-            It first creates a horizontal layout object and a plot widget, then sets the background color and creates
-        the button layout.
-            Finally, it adds these components to the layout and sets the layout margins.
+            Left side is the motor sidebar (AI result + summary board), and
+            right side remains the waveform workspace.
 
             Returns:
-                QHBoxLayout: The configured wavefrom layout object.
+                QHBoxLayout: The configured layout object.
         """
         layout = QHBoxLayout()
         self.channel_workspace = ChannelPlotWorkspace(self)
@@ -153,15 +158,15 @@ class SequenceWidgetStreamingOpsMixin:
         right_splitter.addWidget(self.channel_workspace)
         right_splitter.addWidget(self.recent_session_panel)
         right_splitter.setChildrenCollapsible(False)
-        right_splitter.setStretchFactor(0, 8)
-        right_splitter.setStretchFactor(1, 3)
-        right_splitter.setSizes([640, 240])
+        right_splitter.setStretchFactor(0, 9)
+        right_splitter.setStretchFactor(1, 11)
+        right_splitter.setSizes([460, 560])
 
-        layout.addWidget(self.count_board, stretch=1)
-        layout.addSpacing(20)
-        layout.addWidget(right_splitter, stretch=8)
+        layout.addWidget(self.left_panel, stretch=0)
+        layout.addSpacing(18)
+        layout.addWidget(right_splitter, stretch=1)
         layout.setContentsMargins(40, 20, 40, 20)
-        layout.setSpacing(30)
+        layout.setSpacing(18)
         return layout
 
     def init_fft_and_stft_flag(self):
@@ -634,9 +639,14 @@ class SequenceWidgetStreamingOpsMixin:
                 except Exception:
                     pass
 
-            # Run auto-analysis if enabled
-            if self.analysis_config.get("auto_analysis", False):
-                self.run()
+            on_directional_recording_completed = getattr(self, "_on_directional_recording_completed", None)
+            if callable(on_directional_recording_completed):
+                on_directional_recording_completed()
+
+            # Motor directional workflow needs left-panel AI results even when the
+            # legacy auto-analysis checkbox is off, so run silently in that case too.
+            if self._should_run_silent_analysis_after_recording():
+                self.run(show_windows=False)
 
             # Update player button state
             self._record_workflow_busy = False
