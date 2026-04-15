@@ -134,12 +134,12 @@ class SequenceWidgetAnalysisOpsMixin:
         self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
 
     @staticmethod
-    def _get_recent_session_mode_text(mode: str) -> str:
-        normalized = str(mode or "").strip().lower()
-        if normalized == "mark":
-            return "标记"
-        if normalized == "test":
-            return "测试"
+    def _get_recent_session_mode_text(direction: str) -> str:
+        normalized = str(direction or "").strip().lower()
+        if normalized == "forward":
+            return "正转"
+        if normalized == "reverse":
+            return "反转"
         return "-"
 
     def _resolve_recent_session_path(self, session_record: dict | None):
@@ -172,7 +172,8 @@ class SequenceWidgetAnalysisOpsMixin:
         recorded_signal_info = dict(self.recorded_signal_info or {})
         barcode = recorded_signal_info.get("barcode") or self.lineedit_s_or_n.text().strip() or "-"
         product_model = self.lineedit_type.text().strip() or recorded_signal_info.get("product_model") or "-"
-        mode_text = self._get_recent_session_mode_text(getattr(self.count_board, "mode", ""))
+        current_direction = str(getattr(self, "_current_trigger_direction", "") or "")
+        mode_text = self._get_recent_session_mode_text(current_direction)
 
         return {
             "session_id": session_id,
@@ -180,7 +181,7 @@ class SequenceWidgetAnalysisOpsMixin:
             "time_text": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "barcode": barcode,
             "product_model": product_model,
-            "mode": str(getattr(self.count_board, "mode", "") or ""),
+            "mode": current_direction,
             "mode_text": mode_text,
             "result_label": self._format_recent_session_result_label(result_label),
             "recorded_path": recorded_path,

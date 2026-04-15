@@ -138,13 +138,51 @@ class SequenceCountBoard(QWidget):
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ok_btn.setFixedSize(180, 80)
-        self.ok_btn.setIconSize(QSize(24, 24))
+        self.ok_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #edf7ef;
+                color: #29613a;
+                font-family: 'SimSun';
+                font-size: 24px;
+                font-weight: bold;
+                border-radius: 8px;
+                border: 1px solid #87b48e;
+                padding: 5px 12px;
+            }
+            QPushButton:hover {
+                background-color: #e1f1e4;
+            }
+            QPushButton:pressed {
+                background-color: #d5ebd9;
+            }
+            """
+        )
+        self.ok_btn.setFixedSize(148, 56)
+        self.ok_btn.setIconSize(QSize(20, 20))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
-        self.ng_btn.setFixedSize(180, 80)
-        self.ng_btn.setIconSize(QSize(24, 24))
+        self.ng_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #fbefef;
+                color: #9b3434;
+                font-family: 'SimSun';
+                font-size: 24px;
+                font-weight: bold;
+                border-radius: 8px;
+                border: 1px solid #d49a9a;
+                padding: 5px 12px;
+            }
+            QPushButton:hover {
+                background-color: #f7e3e3;
+            }
+            QPushButton:pressed {
+                background-color: #f1d7d7;
+            }
+            """
+        )
+        self.ng_btn.setFixedSize(148, 56)
+        self.ng_btn.setIconSize(QSize(20, 20))
 
     def create_mode_btn_layout(self):
         mode_label = QLabel("模式：")
@@ -198,6 +236,13 @@ class SequenceCountBoard(QWidget):
         total_layout = self.create_horizontal_layout("总    数：", self.mark_total_edit)
         ok_layout = self.create_horizontal_layout("OK    数：", self.mark_ok_edit)
         ng_layout = self.create_horizontal_layout("NG    数：", self.mark_ng_edit)
+        action_btn_layout = QHBoxLayout()
+        action_btn_layout.setContentsMargins(0, 6, 0, 0)
+        action_btn_layout.setSpacing(24)
+        action_btn_layout.addStretch()
+        action_btn_layout.addWidget(self.ok_btn)
+        action_btn_layout.addWidget(self.ng_btn)
+        action_btn_layout.addStretch()
 
         mark_layout = QVBoxLayout()
         mark_layout.setContentsMargins(0, 0, 0, 0)
@@ -205,7 +250,7 @@ class SequenceCountBoard(QWidget):
         mark_layout.addLayout(total_layout)
         mark_layout.addLayout(ok_layout)
         mark_layout.addLayout(ng_layout)
-        mark_layout.addStretch(1)
+        mark_layout.addLayout(action_btn_layout)
 
         mark_widget = QWidget()
         mark_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)

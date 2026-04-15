@@ -7,8 +7,6 @@ from PyQt5.QtCore import QSize, Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
-    QFrame,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QMessageBox,
@@ -22,6 +20,7 @@ from PyQt5.QtWidgets import (
 from base.playback_controller import PlaybackController
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
+from ui.sequence.motor_panel_common import MotorSectionCard
 
 
 class RecentSessionPanel(QWidget):
@@ -45,39 +44,26 @@ class RecentSessionPanel(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        panel_frame = QFrame()
-        panel_frame.setObjectName("recentSessionOuterFrame")
-        panel_frame.setStyleSheet(
+        card = MotorSectionCard("近期测试历史")
+        card.layout().itemAt(0).widget().setStyleSheet(
             """
-            QFrame#recentSessionOuterFrame {
-                background-color: #f6f8fc;
-                border: 1px solid #e8eef8;
-                border-radius: 4px;
-            }
-            QFrame#recentSessionOuterFrame > QGroupBox {
-                background: transparent;
-                border: none;
-                font-size: 20px;
-                margin-top: 14px;
-                color: #273b63;
-            }
-            QFrame#recentSessionOuterFrame > QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 10px;
-                background-color: #f6f8fc;
-                padding: 0px 6px 2px 6px;
+            QLabel {
+                background-color: #4472c4;
+                color: white;
+                font-family: 'SimSun';
+                font-size: 17px;
+                font-weight: bold;
+                padding: 4px 10px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
             }
             """
         )
+        card.content_layout.setContentsMargins(8, 6, 8, 8)
+        card.content_layout.setSpacing(0)
 
-        group_box = QGroupBox("近期测试历史")
-        group_layout = QVBoxLayout()
-        group_layout.setContentsMargins(10, 8, 10, 10)
-        group_layout.setSpacing(6)
-
-        self.session_table = QTableWidget(0, 8)
-        self.session_table.setHorizontalHeaderLabels(["时间", "条码", "型号", "模式", "结果", "标记", "播放", "查看结果"])
+        self.session_table = QTableWidget(0, 7)
+        self.session_table.setHorizontalHeaderLabels(["时间", "条码", "型号", "方向", "结果", "播放", "查看结果"])
         self.session_table.verticalHeader().setVisible(False)
         self.session_table.verticalHeader().setDefaultSectionSize(34)
         self.session_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -107,7 +93,7 @@ class RecentSessionPanel(QWidget):
                 border: none;
                 border-right: 1px solid #edf2f9;
                 border-bottom: 1px solid #edf2f9;
-                padding: 6px 4px;
+                padding: 2px 4px;
             }
             QTableCornerButton::section {
                 background-color: #fbfcff;
@@ -120,9 +106,9 @@ class RecentSessionPanel(QWidget):
 
         header = self.session_table.horizontalHeader()
         header_font = header.font()
-        header_font.setPixelSize(14)
+        header_font.setPixelSize(13)
         header.setFont(header_font)
-        header.setMinimumHeight(34)
+        header.setMinimumHeight(24)
         header.setDefaultAlignment(Qt.AlignCenter)
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Fixed)
@@ -132,28 +118,19 @@ class RecentSessionPanel(QWidget):
         header.setSectionResizeMode(4, QHeaderView.Fixed)
         header.setSectionResizeMode(5, QHeaderView.Fixed)
         header.setSectionResizeMode(6, QHeaderView.Fixed)
-        header.setSectionResizeMode(7, QHeaderView.Fixed)
         self.session_table.setColumnWidth(0, 158)
         self.session_table.setColumnWidth(2, 120)
         self.session_table.setColumnWidth(3, 62)
-        self.session_table.setColumnWidth(4, 84)
-        self.session_table.setColumnWidth(5, 96)
-        self.session_table.setColumnWidth(6, 72)
-        self.session_table.setColumnWidth(7, 92)
+        self.session_table.setColumnWidth(4, 110)
+        self.session_table.setColumnWidth(5, 72)
+        self.session_table.setColumnWidth(6, 92)
 
-        group_layout.addWidget(self.session_table)
-        group_box.setLayout(group_layout)
-
-        frame_layout = QVBoxLayout()
-        frame_layout.setContentsMargins(0, 0, 0, 0)
-        frame_layout.setSpacing(0)
-        frame_layout.addWidget(group_box)
-        panel_frame.setLayout(frame_layout)
+        card.content_layout.addWidget(self.session_table)
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(0)
-        layout.addWidget(panel_frame)
+        layout.addWidget(card)
         self.setLayout(layout)
 
     def reset_sessions(self):
@@ -215,9 +192,8 @@ class RecentSessionPanel(QWidget):
                 self._apply_result_item_style(item, str(value))
             self.session_table.setItem(row, col, item)
         session_id = str(session_record.get("session_id") or "")
-        self.session_table.setCellWidget(row, 5, self.create_mark_cell(session_record))
-        self.session_table.setCellWidget(row, 6, self.create_play_cell(session_id))
-        self.session_table.setCellWidget(row, 7, self.create_view_cell(session_id))
+        self.session_table.setCellWidget(row, 5, self.create_play_cell(session_id))
+        self.session_table.setCellWidget(row, 6, self.create_view_cell(session_id))
 
     @staticmethod
     def _apply_result_item_style(item: QTableWidgetItem, value: str):
@@ -274,15 +250,6 @@ class RecentSessionPanel(QWidget):
         cell_layout.addStretch()
         cell_layout.addWidget(self.create_play_button(session_id), alignment=Qt.AlignCenter)
         cell_layout.addStretch()
-        cell_widget.setLayout(cell_layout)
-        return cell_widget
-
-    def create_mark_cell(self, session_record: dict[str, Any]):
-        _ = session_record
-        cell_widget = QWidget()
-        cell_layout = QHBoxLayout()
-        cell_layout.setContentsMargins(0, 0, 0, 0)
-        cell_layout.setSpacing(0)
         cell_widget.setLayout(cell_layout)
         return cell_widget
 
@@ -345,7 +312,7 @@ class RecentSessionPanel(QWidget):
         row = self.row_by_session_id.get(session_id)
         if row is None or self.session_table is None:
             return
-        play_btn = self._get_cell_center_widget(self.session_table, row, 6)
+        play_btn = self._get_cell_center_widget(self.session_table, row, 5)
         if play_btn is None:
             return
 
