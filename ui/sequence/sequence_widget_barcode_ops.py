@@ -247,6 +247,10 @@ class SequenceWidgetBarcodeOpsMixin:
         self.update_audio_label_info()
         self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
+        try:
+            self._update_current_recent_session_result(self.recorded_signal_info.get("labels", "-"))
+        except Exception:
+            pass
         self._close_analysis_windows()
 
         self.mark_result()
@@ -298,6 +302,7 @@ class SequenceWidgetBarcodeOpsMixin:
 
         self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
+        self._update_current_recent_session_result(label)
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
