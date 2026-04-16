@@ -1,5 +1,5 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget, QSizePolicy
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget, QSizePolicy
 
 from consts import ui_style_const
 from ui.sequence.motor_panel_common import (
@@ -41,33 +41,48 @@ class MotorAiResultPanel(QWidget):
         self.reset()
 
     def _init_ui(self):
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         card = MotorSectionCard("AI评判结果")
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        card.content_layout.setContentsMargins(14, 14, 14, 14)
-        card.content_layout.setSpacing(12)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        card.content_layout.setContentsMargins(0, 0, 0, 0)
+        card.content_layout.setSpacing(0)
 
-        card.content_layout.addWidget(self._create_direction_result_section(
+        content_widget = QWidget(card)
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(14, 14, 14, 14)
+        content_layout.setSpacing(12)
+
+        content_layout.addWidget(self._create_direction_result_section(
             self.forward_title_label,
             self.forward_value,
             self.forward_ok_score_label,
             self.forward_ng_score_label,
         ))
-        card.content_layout.addWidget(self._create_divider())
-        card.content_layout.addWidget(self._create_direction_result_section(
+        content_layout.addWidget(self._create_divider())
+        content_layout.addWidget(self._create_direction_result_section(
             self.reverse_title_label,
             self.reverse_value,
             self.reverse_ok_score_label,
             self.reverse_ng_score_label,
         ))
-        card.content_layout.addWidget(self._create_divider())
-        card.content_layout.addWidget(self._create_final_result_section())
+        content_layout.addWidget(self._create_divider())
+        content_layout.addWidget(self._create_final_result_section())
+        content_layout.addStretch(1)
+        content_widget.setLayout(content_layout)
 
-        layout.addWidget(card)
+        scroll_area = QScrollArea(card)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setWidget(content_widget)
+
+        card.content_layout.addWidget(scroll_area, stretch=1)
+        layout.addWidget(card, stretch=1)
         self.setLayout(layout)
         self._apply_result_visual_hierarchy()
 

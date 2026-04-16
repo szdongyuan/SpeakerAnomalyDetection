@@ -27,28 +27,47 @@ class MotorDetectionLeftPanel(QWidget):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setStyleSheet(ui_style_const.motor_left_panel_style)
 
-        content_widget = QWidget(self)
-        content_layout = QVBoxLayout()
-        content_layout.addWidget(self.ai_result_panel)
-        content_layout.addWidget(self.summary_panel)
-        content_layout.addStretch(1)
-        content_layout.setContentsMargins(0, 0, 6, 0)
-        content_layout.setSpacing(12)
-        content_widget.setLayout(content_layout)
+        self.content_widget = QWidget(self)
+        self.content_layout = QVBoxLayout()
+        self.content_layout.addWidget(self.ai_result_panel)
+        self.content_layout.addWidget(self.summary_panel)
+        self.content_layout.addStretch(1)
+        self.content_layout.setContentsMargins(0, 0, 6, 0)
+        self.content_layout.setSpacing(12)
+        self.content_widget.setLayout(self.content_layout)
 
-        scroll_area = QScrollArea(self)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setFrameShape(QFrame.NoFrame)
-        scroll_area.setWidget(content_widget)
-        scroll_area.setStyleSheet(ui_style_const.motor_left_panel_scroll_area_style)
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setWidget(self.content_widget)
+        self.scroll_area.setStyleSheet(ui_style_const.motor_left_panel_scroll_area_style)
 
         layout = QVBoxLayout()
-        layout.addWidget(scroll_area)
+        layout.addWidget(self.scroll_area)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self.setLayout(layout)
+
+    def take_split_sections(self):
+        return (
+            self._detach_section_widget(self.ai_result_panel),
+            self._detach_section_widget(self.summary_panel),
+        )
+
+    def _detach_section_widget(self, widget: QWidget):
+        if widget is None:
+            return None
+        if getattr(self, "content_layout", None) is not None:
+            index = self.content_layout.indexOf(widget)
+            if index >= 0:
+                item = self.content_layout.takeAt(index)
+                if item is not None and item.widget() is not None:
+                    item.widget().setParent(None)
+        if widget.parent() is not None:
+            widget.setParent(None)
+        return widget
 
     def reset_ai_result_panel(self):
         self.ai_result_panel.reset()
