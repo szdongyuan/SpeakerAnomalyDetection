@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 from typing import Any, Callable
 
-from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSize, Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QMessageBox,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -23,17 +25,52 @@ from consts.running_consts import DEFAULT_DIR
 from ui.sequence.motor_panel_common import MotorSectionCard
 
 
+class _ClickableResultComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        if self.lineEdit() is not None:
+            self.lineEdit().installEventFilter(self)
+
+    def mousePressEvent(self, event):
+        if self.isEnabled() and event is not None and event.button() == Qt.LeftButton:
+            self.setFocus(Qt.MouseFocusReason)
+            self.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def eventFilter(self, watched, event):
+        if (
+            watched is self.lineEdit()
+            and event is not None
+            and event.type() == QEvent.MouseButtonPress
+            and getattr(event, "button", lambda: None)() == Qt.LeftButton
+            and self.isEnabled()
+        ):
+            self.setFocus(Qt.MouseFocusReason)
+            self.showPopup()
+            return True
+        return super().eventFilter(watched, event)
+
+
 class RecentSessionPanel(QWidget):
+    _RESULT_OPTIONS = ("OK", "NG", "not_labeled")
+    _RESULT_WAITING_TEXT = "等待测试完成"
+
     def __init__(
         self,
         on_play_session: Callable[[str], Any] | None = None,
         on_view_session: Callable[[str], None] | None = None,
+        on_change_session_result: Callable[[str, str], Any] | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.on_play_session = on_play_session
         self.on_view_session = on_view_session
+        self.on_change_session_result = on_change_session_result
         self.row_by_session_id = {}
+        self._result_editable = False
         self.playback_controller = PlaybackController()
         self._playback_poll_timer = QTimer(self)
         self._playback_poll_timer.setInterval(150)
@@ -118,16 +155,16 @@ class RecentSessionPanel(QWidget):
         header.setDefaultAlignment(Qt.AlignCenter)
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
         header.setSectionResizeMode(4, QHeaderView.Fixed)
         header.setSectionResizeMode(5, QHeaderView.Fixed)
         header.setSectionResizeMode(6, QHeaderView.Fixed)
         self.session_table.setColumnWidth(0, 158)
-        self.session_table.setColumnWidth(2, 120)
+        self.session_table.setColumnWidth(1, 136)
         self.session_table.setColumnWidth(3, 62)
-        self.session_table.setColumnWidth(4, 110)
+        self.session_table.setColumnWidth(4, 138)
         self.session_table.setColumnWidth(5, 72)
         self.session_table.setColumnWidth(6, 92)
 
@@ -188,15 +225,13 @@ class RecentSessionPanel(QWidget):
             session_record.get("barcode") or "-",
             session_record.get("product_model") or "-",
             session_record.get("mode_text", ""),
-            session_record.get("result_label") or "-",
         ]
         for col, value in enumerate(values):
             item = self.make_table_item(str(value))
             if col in (1, 2):
                 item.setToolTip(str(value))
-            elif col == 4:
-                self._apply_result_item_style(item, str(value))
             self.session_table.setItem(row, col, item)
+        self._set_result_cell(row, session_record)
         session_id = str(session_record.get("session_id") or "")
         self.session_table.setCellWidget(row, 5, self.create_play_cell(session_id))
         self.session_table.setCellWidget(row, 6, self.create_view_cell(session_id))
@@ -210,6 +245,149 @@ class RecentSessionPanel(QWidget):
             item.setForeground(QColor(200, 0, 0))
         else:
             item.setForeground(QColor(50, 50, 50))
+
+    @classmethod
+    def _normalize_result_label_for_edit(cls, session_record: dict[str, Any] | None):
+        if not isinstance(session_record, dict):
+            return ""
+        recorded_signal_info = session_record.get("recorded_signal_info", {}) or {}
+        candidate_values = [recorded_signal_info.get("labels"), session_record.get("result_label")]
+        for value in candidate_values:
+            normalized = str(value or "").strip()
+            lowered = normalized.lower()
+            if lowered == "ok":
+                return "OK"
+            if lowered == "ng":
+                return "NG"
+            if normalized == cls._RESULT_WAITING_TEXT:
+                return cls._RESULT_WAITING_TEXT
+            if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
+                return "not_labeled"
+        return ""
+
+    def _create_result_item(self, session_record: dict[str, Any]):
+        value = str(session_record.get("result_label") or "-")
+        item = self.make_table_item(value)
+        self._apply_result_item_style(item, value)
+        if value == self._RESULT_WAITING_TEXT:
+            item.setToolTip(value)
+        return item
+
+    def _apply_result_combo_style(self, combo: QComboBox, value: str):
+        normalized = str(value or "").strip().lower()
+        color = "#323232"
+        if normalized == "ok":
+            color = "#008c00"
+        elif normalized == "ng":
+            color = "#c80000"
+        combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                color: {color};
+                background: transparent;
+                border: none;
+                padding: 0px 16px 0px 2px;
+                font-family: 'SimSun';
+                font-size: 13px;
+            }}
+            QComboBox:hover {{
+                background: rgba(68, 114, 196, 0.06);
+                border-radius: 3px;
+            }}
+            QComboBox::drop-down {{
+                width: 14px;
+                border: none;
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                width: 8px;
+                height: 8px;
+            }}
+            QComboBox QAbstractItemView {{
+                padding: 2px;
+            }}
+            QComboBox QLineEdit {{
+                background: transparent;
+                border: none;
+                selection-background-color: transparent;
+            }}
+            """
+        )
+
+    def _create_result_combo(self, session_id: str, session_record: dict[str, Any]):
+        combo = _ClickableResultComboBox()
+        combo.lineEdit().setReadOnly(True)
+        combo.lineEdit().setAlignment(Qt.AlignCenter)
+        combo.lineEdit().setFrame(False)
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        combo.setFixedHeight(24)
+        for option in self._RESULT_OPTIONS:
+            combo.addItem(option)
+        current_value = self._normalize_result_label_for_edit(session_record) or "not_labeled"
+        combo.setCurrentText(current_value)
+        self._apply_result_combo_style(combo, current_value)
+        combo.currentTextChanged.connect(lambda value, sid=session_id: self._on_result_combo_changed(sid, value))
+        return combo
+
+    def _can_edit_result_for_session(self, session_record: dict[str, Any]):
+        if str(session_record.get("result_label") or "").strip() == self._RESULT_WAITING_TEXT:
+            return False
+        normalized = self._normalize_result_label_for_edit(session_record)
+        return self._result_editable and normalized in self._RESULT_OPTIONS
+
+    def _set_result_cell(self, row: int, session_record: dict[str, Any]):
+        if self.session_table is None:
+            return
+        session_id = str(session_record.get("session_id") or "")
+        self.session_table.removeCellWidget(row, 4)
+        existing_item = self.session_table.takeItem(row, 4)
+        if existing_item is not None:
+            del existing_item
+        if self._can_edit_result_for_session(session_record):
+            cell_widget = QWidget()
+            cell_layout = QHBoxLayout()
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(0)
+            cell_layout.addWidget(self._create_result_combo(session_id, session_record))
+            cell_widget.setLayout(cell_layout)
+            self.session_table.setCellWidget(row, 4, cell_widget)
+            return
+        self.session_table.setItem(row, 4, self._create_result_item(session_record))
+
+    def _refresh_result_cell_for_session(self, session_id: str):
+        row = self.row_by_session_id.get(session_id)
+        if row is None:
+            return
+        session_record = self._resolve_session_record(session_id)
+        if not isinstance(session_record, dict):
+            return
+        self._set_result_cell(row, session_record)
+
+    def set_result_editable(self, editable: bool):
+        editable = bool(editable)
+        if self._result_editable == editable:
+            return
+        self._result_editable = editable
+        for session_id in list(self.row_by_session_id.keys()):
+            self._refresh_result_cell_for_session(session_id)
+
+    def _on_result_combo_changed(self, session_id: str, new_label: str):
+        if not self._result_editable or not callable(self.on_change_session_result):
+            self._refresh_result_cell_for_session(session_id)
+            return
+        session_record = self._resolve_session_record(session_id)
+        current_label = self._normalize_result_label_for_edit(session_record)
+        if current_label == str(new_label or "").strip():
+            combo = self._get_cell_center_widget(self.session_table, self.row_by_session_id.get(session_id), 4)
+            if isinstance(combo, QComboBox):
+                self._apply_result_combo_style(combo, current_label)
+            return
+        try:
+            changed = self.on_change_session_result(session_id, str(new_label or "").strip())
+        except Exception:
+            changed = False
+        if changed is False:
+            self._refresh_result_cell_for_session(session_id)
 
     def create_play_button(self, session_id: str):
         play_btn = QToolButton()
@@ -309,9 +487,10 @@ class RecentSessionPanel(QWidget):
     @staticmethod
     def _get_cell_center_widget(table, row, column):
         cell_widget = table.cellWidget(row, column)
-        if cell_widget is None or cell_widget.layout() is None or cell_widget.layout().count() < 2:
+        if cell_widget is None or cell_widget.layout() is None or cell_widget.layout().count() == 0:
             return None
-        item = cell_widget.layout().itemAt(1)
+        item_index = 1 if cell_widget.layout().count() >= 2 else 0
+        item = cell_widget.layout().itemAt(item_index)
         return item.widget() if item is not None else None
 
     def _refresh_play_button_for_session(self, session_id: str):
@@ -325,7 +504,8 @@ class RecentSessionPanel(QWidget):
         playback_path = self._resolve_session_playback_path(session_id)
         is_current = session_id == self._current_playing_session_id and self.playback_controller.is_audio_playing()
 
-        play_btn.setEnabled(playback_path is not None)
+        # Keep the button clickable so missing historical audio can show a user-facing prompt.
+        play_btn.setEnabled(True)
         play_btn.setText("停止" if is_current else "播放")
         if playback_path is None:
             play_btn.setToolTip("当前记录暂无可播放音频")
@@ -353,6 +533,7 @@ class RecentSessionPanel(QWidget):
     def _on_play_button_clicked(self, session_id: str):
         playback_path = self._resolve_session_playback_path(session_id)
         if not playback_path:
+            QMessageBox.information(self, "提示", "当前记录音频文件不可用，无法播放音频。")
             self._refresh_play_button_for_session(session_id)
             return
 

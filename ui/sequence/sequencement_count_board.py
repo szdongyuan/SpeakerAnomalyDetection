@@ -406,3 +406,56 @@ class SequenceCountBoard(QWidget):
         with open(mark_result_path, "w") as f:
             json.dump(data, f, indent=4)
 
+    @staticmethod
+    def _normalize_mark_label(label: str) -> str:
+        lowered = str(label or "").strip().lower()
+        if lowered == "ok":
+            return "OK"
+        if lowered == "ng":
+            return "NG"
+        if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
+            return "not_labeled"
+        return ""
+
+    def update_mark_result_file_on_relabel(self, old_label: str, new_label: str):
+        old_normalized = self._normalize_mark_label(old_label)
+        new_normalized = self._normalize_mark_label(new_label)
+        if old_normalized == new_normalized:
+            return
+
+        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
+        with open(mark_result_path, "r") as f:
+            data = json.load(f)
+
+        def _is_labeled(value: str) -> bool:
+            return value in ("OK", "NG")
+
+        total = int(data.get("total", 0) or 0)
+        ok = int(data.get("ok", 0) or 0)
+        ng = int(data.get("ng", 0) or 0)
+        not_labels = int(data.get("not_labels", 0) or 0)
+
+        if old_normalized == "OK":
+            ok = max(0, ok - 1)
+        elif old_normalized == "NG":
+            ng = max(0, ng - 1)
+        elif old_normalized == "not_labeled":
+            not_labels = max(0, not_labels - 1)
+
+        if new_normalized == "OK":
+            ok += 1
+        elif new_normalized == "NG":
+            ng += 1
+        elif new_normalized == "not_labeled":
+            not_labels += 1
+
+        total = max(0, total - (1 if _is_labeled(old_normalized) else 0) + (1 if _is_labeled(new_normalized) else 0))
+        data["total"] = total
+        data["ok"] = ok
+        data["ng"] = ng
+        data["not_labels"] = not_labels
+        data["datatime"] = datetime.now().strftime("%Y-%m-%d")
+        with open(mark_result_path, "w") as f:
+            json.dump(data, f, indent=4)
+        self.set_mark_text()
+

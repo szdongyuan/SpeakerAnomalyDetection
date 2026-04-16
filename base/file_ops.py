@@ -251,12 +251,13 @@ class FileOps(object):
         """
         Move the recorded WAV file to the directory corresponding to its label.
 
-        This function moves the recorded audio file to a predefined directory structure based on its label (OK/NG).
+        This function moves the recorded audio file to a predefined directory structure based on its label
+        (OK/NG/not_labeled).
         If the target directories do not exist, they will be created automatically.
 
         Args:
             recorded_path (str): The full path of the recorded file
-            label (str): File label, should be either "OK" or "NG"
+            label (str): File label, should be either "OK", "NG" or "not_labeled"
 
         Returns:
             str: The full path of the file after moving, or an empty string if the filename is empty
@@ -269,14 +270,21 @@ class FileOps(object):
         for path in dir_paths:
             if not os.path.exists(path):
                 os.makedirs(path)
-        file_name = os.path.basename(recorded_path)
+        source_path = str(recorded_path or "")
+        file_name = os.path.basename(source_path)
         target_path = ""
         if file_name:
             if label == "OK":
                 target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
             elif label == "NG":
                 target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
+            elif label == "not_labeled":
+                target_path = model_consts.STORED_RECORDED_UNLABELED_PATH + "/" + file_name
             else:
                 return
-            shutil.move(recorded_path, target_path)
+            if os.path.abspath(source_path) == os.path.abspath(target_path):
+                return target_path
+            if os.path.exists(target_path):
+                raise FileExistsError(f"Target file already exists: {target_path}")
+            shutil.move(source_path, target_path)
         return target_path
