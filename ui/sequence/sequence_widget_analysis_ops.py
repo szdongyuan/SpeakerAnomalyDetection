@@ -8,6 +8,7 @@ from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from consts import error_code
+from base.ai_runtime_policy import count_judged_results, extract_ai_runtime_state
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
     export_analysis_to_csv_spool,
@@ -59,21 +60,6 @@ class SequenceWidgetAnalysisOpsMixin:
         if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
             return "not_labeled"
         return ""
-
-    def _extract_ai_result_scores_for_left_panel(self):
-        for instance in self.analysis_window or []:
-            detail = getattr(instance, "export_detail", None)
-            if not isinstance(detail, dict):
-                continue
-            ok_score = detail.get("ok_score")
-            ng_score = detail.get("ng_score")
-            if ok_score in (None, "") and ng_score in (None, ""):
-                continue
-            return {
-                "ok_score": ok_score,
-                "ng_score": ng_score,
-            }
-        return {"ok_score": None, "ng_score": None}
 
     def _get_recording_direction(self) -> str:
         normalize_direction = getattr(self, "_normalize_trigger_direction", None)
@@ -754,26 +740,40 @@ class SequenceWidgetAnalysisOpsMixin:
             # so results are always saved to CSV (spool) regardless of whether OK/NG is clicked.
             self._maybe_export_excel_results()
             can_output, _reason = self._can_output_ok_ng()
+            ai_runtime_state = extract_ai_runtime_state(self.analysis_window, self.analysis_config)
+            has_ai_analysis = bool(ai_runtime_state.get("has_ai_analysis", False))
+            ai_label = ai_runtime_state.get("label")
+            ai_scores = ai_runtime_state.get("scores") or {"ok_score": None, "ng_score": None}
             cycle_final_label = None
+            label = None
             if can_output:
                 _passed, label = self._summarize_ok_ng()
-                ai_scores = self._extract_ai_result_scores_for_left_panel()
                 update_ai_cycle_result = getattr(self, "_update_ai_cycle_result_after_analysis", None)
-                if callable(update_ai_cycle_result):
-                    cycle_final_label = update_ai_cycle_result(label, ai_scores=ai_scores)
+                if callable(update_ai_cycle_result) and ai_label in ("OK", "NG"):
+                    cycle_final_label = update_ai_cycle_result(ai_label, ai_scores=ai_scores)
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 if not can_output:
                     QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
                 else:
-                    auto_label = label
+                    judged_count = count_judged_results(getattr(self.data_struct, "analysis_result_dict", None))
+                    auto_label = ai_label if has_ai_analysis else label
+                    ai_block_message = str(ai_runtime_state.get("blocked_message") or "") if has_ai_analysis else ""
                     is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
                     directional_cycle_active = (
                         callable(is_directional_cycle_active) and is_directional_cycle_active()
                     )
-                    if directional_cycle_active and label in ("OK", "NG"):
+                    if has_ai_analysis and auto_label not in ("OK", "NG"):
+                        if judged_count == 0 and not ai_block_message:
+                            QMessageBox.warning(
+                                self,
+                                "提示",
+                                "AI 未产出有效评分，本次不写入 OK/NG 结果。\n请检查模型与音频时长是否匹配。",
+                            )
+                        auto_label = None
+                    if directional_cycle_active and auto_label in ("OK", "NG"):
                         # Each directional session row should show its own AI label.
-                        self._update_current_recent_session_result(label)
+                        self._update_current_recent_session_result(auto_label)
                     if directional_cycle_active:
                         auto_label = cycle_final_label
                     if auto_label not in ("OK", "NG"):

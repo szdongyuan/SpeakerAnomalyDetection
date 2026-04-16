@@ -42,7 +42,11 @@ class SequenceWidgetBarcodeOpsMixin:
         if getattr(self, "left_panel", None) is not None:
             self.left_panel.set_current_timestamp(self._ai_cycle_started_at)
             self.left_panel.set_forward_result("待检测", tone="pending")
+            if hasattr(self.left_panel, "set_forward_scores"):
+                self.left_panel.set_forward_scores(None, None)
             self.left_panel.set_reverse_result("待检测", tone="pending")
+            if hasattr(self.left_panel, "set_reverse_scores"):
+                self.left_panel.set_reverse_scores(None, None)
             self.left_panel.set_final_result("待判定", tone="pending")
 
     def _start_directional_workflow(self, direction: str):
