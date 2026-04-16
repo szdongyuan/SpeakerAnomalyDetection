@@ -211,11 +211,6 @@ class SequenceCountBoard(QWidget):
         ng_layout = self.create_horizontal_layout("NG    数：", self.ng_line_edit)
         yield_layout = self.create_horizontal_layout("合 格 率：", self.yield_line_edit)
         datatime_layout = self.create_horizontal_layout("录制日期：", self.datatime_line_edit)
-        reset_btn_layout = QHBoxLayout()
-        reset_btn_layout.addStretch()
-        reset_btn_layout.addWidget(self.reset_btn)
-        reset_btn_layout.addStretch()
-
         test_layout = QVBoxLayout()
         test_layout.setContentsMargins(0, 0, 0, 0)
         test_layout.setSpacing(10)
@@ -224,7 +219,6 @@ class SequenceCountBoard(QWidget):
         test_layout.addLayout(ng_layout)
         test_layout.addLayout(yield_layout)
         test_layout.addLayout(datatime_layout)
-        test_layout.addLayout(reset_btn_layout)
 
         test_widget = QWidget()
         test_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
