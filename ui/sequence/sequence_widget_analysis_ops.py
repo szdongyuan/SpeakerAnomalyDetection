@@ -7,6 +7,7 @@ import numpy as np
 from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from consts import error_code
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
     export_analysis_to_csv_spool,
@@ -46,6 +47,18 @@ class SequenceWidgetAnalysisOpsMixin:
         if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
             return "not labeled"
         return normalized
+
+    @staticmethod
+    def _normalize_recent_session_storage_label(result_label):
+        normalized = str(result_label or "").strip()
+        lowered = normalized.lower()
+        if lowered == "ok":
+            return "OK"
+        if lowered == "ng":
+            return "NG"
+        if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
+            return "not_labeled"
+        return ""
 
     def _extract_ai_result_scores_for_left_panel(self):
         for instance in self.analysis_window or []:
@@ -238,6 +251,56 @@ class SequenceWidgetAnalysisOpsMixin:
 
     def _resolve_recent_session(self, session_id: str):
         return self.recent_test_session_by_id.get(session_id)
+
+    def _change_recent_session_result_by_id(self, session_id: str, new_label: str):
+        if str(getattr(self.count_board, "mode", "") or "") != "mark":
+            return False
+
+        session_record = self._resolve_recent_session(session_id)
+        if not isinstance(session_record, dict):
+            return False
+
+        normalized_label = self._normalize_recent_session_storage_label(new_label)
+        if normalized_label not in ("OK", "NG", "not_labeled"):
+            return False
+
+        recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
+        current_label = self._normalize_recent_session_storage_label(
+            recorded_signal_info.get("labels") or session_record.get("result_label")
+        )
+        if current_label == normalized_label:
+            return True
+
+        recorded_path = self._resolve_recent_session_path(session_record)
+        if not recorded_path:
+            QMessageBox.information(self, "提示", "当前记录音频文件不可用，无法修改结果。")
+            return False
+
+        save_code, msg, new_recorded_path, updated_signal_info = self._relabel_stored_audio_record(
+            recorded_path,
+            recorded_signal_info,
+            normalized_label,
+        )
+        if save_code != error_code.OK:
+            QMessageBox.warning(self, "提示", f"修改近期历史结果失败: {msg}")
+            return False
+
+        update_mark_result_file_on_relabel = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
+        if callable(update_mark_result_file_on_relabel):
+            update_mark_result_file_on_relabel(current_label, normalized_label)
+
+        self._update_recent_session(
+            session_id,
+            result_label=self._format_recent_session_result_label(normalized_label),
+            recorded_path=new_recorded_path,
+            recorded_signal_info=updated_signal_info,
+        )
+
+        current_recorded_path = str(getattr(self, "recorded_path", "") or "")
+        if current_recorded_path and os.path.abspath(current_recorded_path) == os.path.abspath(recorded_path):
+            self.recorded_path = new_recorded_path
+            self.recorded_signal_info = dict(updated_signal_info or {})
+        return True
 
     def _show_recent_session_analysis_by_id(self, session_id: str):
         session_record = self._resolve_recent_session(session_id)

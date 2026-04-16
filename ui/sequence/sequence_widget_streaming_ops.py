@@ -22,6 +22,80 @@ from ui.sequence.recent_session_panel import RecentSessionPanel
 
 
 class SequenceWidgetStreamingOpsMixin:
+    @staticmethod
+    def _normalize_audio_label(label: str) -> str:
+        normalized = str(label or "").strip()
+        lowered = normalized.lower()
+        if lowered == "ok":
+            return "OK"
+        if lowered == "ng":
+            return "NG"
+        if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
+            return "not_labeled"
+        return ""
+
+    @staticmethod
+    def _resolve_audio_path_to_abs(file_path: str | None):
+        normalized = str(file_path or "").strip()
+        if not normalized:
+            return None
+        if not os.path.isabs(normalized):
+            normalized = os.path.join(DEFAULT_DIR, normalized).replace("\\", "/")
+        return os.path.abspath(normalized)
+
+    @staticmethod
+    def _normalize_db_audio_path(file_path: str):
+        normalized = str(file_path or "").replace("\\", "/")
+        default_dir = DEFAULT_DIR.replace("\\", "/")
+        if normalized.startswith(default_dir):
+            return normalized.replace(default_dir, "", 1)
+        return normalized
+
+    def _relabel_stored_audio_record(self, recorded_path, recorded_signal_info, label):
+        target_label = self._normalize_audio_label(label)
+        if target_label not in ("OK", "NG", "not_labeled"):
+            return error_code.INVALID_TYPE_DATA, "不支持的标签结果。", None, None
+        if not isinstance(recorded_signal_info, dict):
+            return error_code.INVALID_TYPE_DATA, "缺少录音元信息。", None, None
+
+        source_path = self._resolve_audio_path_to_abs(recorded_path or recorded_signal_info.get("file_path"))
+        if not source_path or not os.path.isfile(source_path):
+            return error_code.INVALID_PATH, "当前记录音频文件不存在。", None, None
+
+        updated_signal_info = dict(recorded_signal_info or {})
+        previous_label = self._normalize_audio_label(updated_signal_info.get("labels"))
+        old_file_path_candidates = []
+        for candidate in (updated_signal_info.get("file_path"), source_path, recorded_path):
+            normalized_candidate = self._normalize_db_audio_path(candidate)
+            if normalized_candidate and normalized_candidate not in old_file_path_candidates:
+                old_file_path_candidates.append(normalized_candidate)
+
+        try:
+            new_file_path = FileOps.move_wav_to_dir(source_path, target_label)
+        except Exception as exc:
+            return error_code.INVALID_MOVE, f"移动音频文件失败: {exc}", None, None
+
+        if not new_file_path:
+            return error_code.INVALID_MOVE, "未能生成新的音频路径。", None, None
+
+        updated_signal_info["labels"] = target_label
+        updated_signal_info["file_path"] = self._normalize_db_audio_path(new_file_path)
+        save_code = error_code.INVALID_UPDATE
+        msg = "未找到可更新的数据库记录。"
+        for old_file_path in old_file_path_candidates:
+            save_code, msg = RecordingManager().update_audio_label(updated_signal_info, old_file_path)
+            if save_code == error_code.OK:
+                break
+        if save_code != error_code.OK and os.path.abspath(new_file_path) != os.path.abspath(source_path):
+            try:
+                rollback_label = previous_label or "not_labeled"
+                rollback_path = FileOps.move_wav_to_dir(new_file_path, rollback_label)
+                if rollback_path:
+                    updated_signal_info["file_path"] = self._normalize_db_audio_path(rollback_path)
+            except Exception:
+                pass
+        return save_code, msg, new_file_path, updated_signal_info
+
     def _should_run_silent_analysis_after_recording(self) -> bool:
         if bool((getattr(self, "analysis_config", {}) or {}).get("auto_analysis", False)):
             return True
@@ -147,8 +221,12 @@ class SequenceWidgetStreamingOpsMixin:
         self.recent_session_panel = RecentSessionPanel(
             on_play_session=self._resolve_recent_session,
             on_view_session=self._show_recent_session_analysis_by_id,
+            on_change_session_result=self._change_recent_session_result_by_id,
             parent=self,
         )
+        self.recent_session_panel.set_result_editable(str(getattr(self.count_board, "mode", "") or "") == "mark")
+        if self.count_board is not None:
+            self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
         # try:
         #     self.refresh_channel_windows()
         # except Exception:
@@ -413,15 +491,25 @@ class SequenceWidgetStreamingOpsMixin:
 
     def update_recorded_signal_info_to_db(self):
         if self.recorded_signal_info["labels"] == "not_labeled":
-            return
-        new_file_path = FileOps.move_wav_to_dir(self.recorded_path, self.recorded_signal_info["labels"])
-        old_file_path = self.recorded_signal_info["file_path"]
-        self.recorded_signal_info["file_path"] = new_file_path.replace(DEFAULT_DIR, "")
-        save_code, msg = RecordingManager().update_audio_label(self.recorded_signal_info, old_file_path)
+            return error_code.OK, ""
+        save_code, msg, new_file_path, updated_signal_info = self._relabel_stored_audio_record(
+            self.recorded_path,
+            self.recorded_signal_info,
+            self.recorded_signal_info.get("labels"),
+        )
         if save_code == error_code.OK:
+            self.recorded_path = new_file_path
+            self.recorded_signal_info = updated_signal_info
             self.default_logger.info("Recorded signal successfully updated.")
         else:
-            self.default_logger.error("Failed to update recorded signal.")
+            self.default_logger.error(f"Failed to update recorded signal: {msg}")
+        return save_code, msg
+
+    def _on_recent_session_mode_changed(self, state: dict | None):
+        if self.recent_session_panel is None:
+            return
+        mode = str((state or {}).get("mode") or "")
+        self.recent_session_panel.set_result_editable(mode == "mark")
 
     def update_audio_label_info(self):
         button = self.sender()

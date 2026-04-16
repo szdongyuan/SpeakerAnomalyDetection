@@ -4,6 +4,8 @@ from datetime import datetime
 from PyQt5.QtCore import QSignalBlocker
 from PyQt5.QtWidgets import QMessageBox, QApplication
 
+from consts import error_code
+
 
 class SequenceWidgetBarcodeOpsMixin:
     _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
@@ -358,7 +360,10 @@ class SequenceWidgetBarcodeOpsMixin:
                 return
         self.update_audio_label_info()
         self._maybe_export_excel_results()
-        self.update_recorded_signal_info_to_db()
+        save_code, save_msg = self.update_recorded_signal_info_to_db()
+        if save_code != error_code.OK:
+            QMessageBox.warning(self, "提示", f"更新音频标签失败: {save_msg}")
+            return
         try:
             self._update_current_recent_session_result(self.recorded_signal_info.get("labels", "-"))
         except Exception:
@@ -413,7 +418,10 @@ class SequenceWidgetBarcodeOpsMixin:
             return
 
         self._maybe_export_excel_results()
-        self.update_recorded_signal_info_to_db()
+        save_code, save_msg = self.update_recorded_signal_info_to_db()
+        if save_code != error_code.OK:
+            QMessageBox.warning(self, "提示", f"更新音频标签失败: {save_msg}")
+            return
         if update_recent_session:
             self._update_current_recent_session_result(label)
         self.player_status_flag = False
