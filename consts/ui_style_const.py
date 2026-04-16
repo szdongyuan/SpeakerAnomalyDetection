@@ -174,6 +174,16 @@ motor_left_panel_style = """
             }
 """
 
+motor_left_panel_scroll_area_style = """
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollArea > QWidget > QWidget {
+                background-color: transparent;
+            }
+"""
+
 motor_section_card_style = """
             QFrame {
                 background-color: #f3f6fb;

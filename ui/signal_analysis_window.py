@@ -30,6 +30,7 @@ from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_fil
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
+from base.model_runtime_validation import should_validate_model_duration, validate_model_duration
 from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
@@ -1496,17 +1497,16 @@ class AI(QWidget):
             self.ai_analyse_score_textedit.setPlainText(str(e))
             return
 
-        if acq_mode in ["IMPORT_AUDIO"]:
-            query_code, query_result = TrainingModelManagement().get_input_dim_info_by_name(model_name)
-            if query_code == error_code.OK:
-                input_dim = str(query_result).split("x")[0].strip()
-                if input_dim != str(len(ai_signal)):
-                    self.ai_analyse_score_textedit.setPlainText("???????????????")
-                    return
-                self.default_logger.info("The model matches the audio duration. Starting analysis...")
-            else:
-                self.ai_analyse_score_textedit.setPlainText("模型时长查询失败")
+        if should_validate_model_duration(mode, acq_mode=acq_mode):
+            matched, message = validate_model_duration(
+                model_name,
+                len(ai_signal),
+                sample_rate=getattr(self.data_struct, "sample_rate", 0),
+            )
+            if not matched:
+                self.ai_analyse_score_textedit.setPlainText(message)
                 return
+            self.default_logger.info("The model matches the audio duration. Starting analysis...")
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
             self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择")

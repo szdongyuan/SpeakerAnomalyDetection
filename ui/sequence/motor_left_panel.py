@@ -1,4 +1,5 @@
-from PyQt5.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QFrame, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
@@ -26,13 +27,28 @@ class MotorDetectionLeftPanel(QWidget):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setStyleSheet(ui_style_const.motor_left_panel_style)
 
+        content_widget = QWidget(self)
+        content_layout = QVBoxLayout()
+        content_layout.addWidget(self.mode_switch_panel)
+        content_layout.addWidget(self.ai_result_panel)
+        content_layout.addWidget(self.summary_panel)
+        content_layout.addStretch(1)
+        content_layout.setContentsMargins(0, 0, 6, 0)
+        content_layout.setSpacing(12)
+        content_widget.setLayout(content_layout)
+
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setWidget(content_widget)
+        scroll_area.setStyleSheet(ui_style_const.motor_left_panel_scroll_area_style)
+
         layout = QVBoxLayout()
-        layout.addWidget(self.mode_switch_panel)
-        layout.addWidget(self.ai_result_panel)
-        layout.addWidget(self.summary_panel)
-        layout.addStretch(1)
+        layout.addWidget(scroll_area)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         self.setLayout(layout)
 
     def reset_ai_result_panel(self):
