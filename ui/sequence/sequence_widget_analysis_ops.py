@@ -646,6 +646,9 @@ class SequenceWidgetAnalysisOpsMixin:
                     directional_cycle_active = (
                         callable(is_directional_cycle_active) and is_directional_cycle_active()
                     )
+                    if directional_cycle_active and label in ("OK", "NG"):
+                        # Each directional session row should show its own AI label.
+                        self._update_current_recent_session_result(label)
                     if directional_cycle_active:
                         auto_label = cycle_final_label
                     if auto_label not in ("OK", "NG"):
@@ -660,7 +663,10 @@ class SequenceWidgetAnalysisOpsMixin:
                             self.count_board.set_test_text()
                         except Exception:
                             pass
-                        self._finalize_test_run(auto_label)
+                        self._finalize_test_run(
+                            auto_label,
+                            update_recent_session=not directional_cycle_active,
+                        )
                         if directional_cycle_active:
                             clear_ai_cycle_runtime_state = getattr(self, "_clear_ai_cycle_runtime_state", None)
                             if callable(clear_ai_cycle_runtime_state):

@@ -290,12 +290,10 @@ class SequenceWidgetBarcodeOpsMixin:
         self._barcode_capture_target_text = None
         self._barcode_capture_target_cursor_pos = None
 
-        self._close_analysis_windows()
-        self.start_this_play("not_labeled")
-
         try:
             if fw is not self.lineedit_type and fw is not self.lineedit_count:
                 self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
         except Exception:
             pass
 
@@ -402,7 +400,7 @@ class SequenceWidgetBarcodeOpsMixin:
             self.count_board.set_mark_result_file("NG")
             self.count_board.set_mark_text()
 
-    def _finalize_test_run(self, label: str):
+    def _finalize_test_run(self, label: str, update_recent_session: bool = True):
         """
         Finalize a test-mode run by applying the summarized OK/NG label,
         exporting results, updating DB label, and resetting UI state.
@@ -416,7 +414,8 @@ class SequenceWidgetBarcodeOpsMixin:
 
         self._maybe_export_excel_results()
         self.update_recorded_signal_info_to_db()
-        self._update_current_recent_session_result(label)
+        if update_recent_session:
+            self._update_current_recent_session_result(label)
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()

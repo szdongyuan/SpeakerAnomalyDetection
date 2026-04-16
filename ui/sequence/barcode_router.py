@@ -17,7 +17,7 @@ class BarcodeRouter(QObject):
 
     设计说明：
     - ctx 传入 SequenceWidget 实例（作为上下文），router 只负责“路由/拦截/缓冲/防抖提交”。
-    - 条码最终提交仍走 ctx._commit_barcode(...)，保证业务流程不变（写回 S/N、触发录音等）。
+    - 条码最终提交仍走 ctx._commit_barcode(...)，保证业务流程不变（写回 S/N、复用统一校验/去重逻辑）。
     """
 
     def __init__(self, ctx):
