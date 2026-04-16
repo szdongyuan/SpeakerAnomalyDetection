@@ -19,7 +19,7 @@ class MotorDetectionLeftPanel(QWidget):
         super().__init__(parent)
         self.mode_switch_panel = MotorModeSwitchPanel(summary_widget, self)
         self.ai_result_panel = MotorAiResultPanel(self)
-        self.summary_panel = MotorSummaryPanel(summary_widget, self)
+        self.summary_panel = MotorSummaryPanel(summary_widget, self.mode_switch_panel, self)
         self._init_ui()
 
     def _init_ui(self):
@@ -29,7 +29,6 @@ class MotorDetectionLeftPanel(QWidget):
 
         content_widget = QWidget(self)
         content_layout = QVBoxLayout()
-        content_layout.addWidget(self.mode_switch_panel)
         content_layout.addWidget(self.ai_result_panel)
         content_layout.addWidget(self.summary_panel)
         content_layout.addStretch(1)

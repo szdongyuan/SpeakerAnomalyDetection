@@ -13,10 +13,11 @@ class MotorSectionCard(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        title = QLabel(title_text)
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(ui_style_const.motor_section_title_style)
-        layout.addWidget(title)
+        if title_text:
+            title = QLabel(title_text)
+            title.setAlignment(Qt.AlignCenter)
+            title.setStyleSheet(ui_style_const.motor_section_title_style)
+            layout.addWidget(title)
 
         self.content_layout = QVBoxLayout()
         self.content_layout.setContentsMargins(0, 0, 0, 0)

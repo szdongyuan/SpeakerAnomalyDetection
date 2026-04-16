@@ -422,34 +422,18 @@ motor_stage_title_style = """
             }
 """
 
-motor_mode_switch_panel_style = """
-            QFrame {
-                background-color: #eef3fa;
-                border: 1px solid #c7d6e8;
-                border-radius: 5px;
-            }
-"""
-
-motor_mode_switch_label_style = """
-            QLabel {
-                font-family: 'SimSun';
-                font-size: 15px;
-                color: #6980a4;
-                background: transparent;
-            }
-"""
-
 motor_mode_switch_button_base_style = """
             QPushButton {
-                min-height: 32px;
+                min-height: 40px;
+                min-width: 90px;
                 border: 1px solid #bfd0e5;
-                border-radius: 4px;
+                border-radius: 5px;
                 background-color: #fafcff;
                 color: #5f7599;
                 font-family: 'SimSun';
-                font-size: 15px;
+                font-size: 17px;
                 font-weight: bold;
-                padding: 2px 11px;
+                padding: 4px 18px;
             }
 """
 

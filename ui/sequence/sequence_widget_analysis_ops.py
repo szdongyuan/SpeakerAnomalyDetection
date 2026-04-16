@@ -294,6 +294,14 @@ class SequenceWidgetAnalysisOpsMixin:
             sample_rate=self.data_struct.sample_rate,
         )
 
+    def _clear_recent_session_history(self):
+        self.recent_test_sessions = []
+        self.recent_test_session_by_id = {}
+        self._current_recent_session_id = None
+        self._pending_recent_session_append = False
+        if self.recent_session_panel is not None:
+            self.recent_session_panel.reset_sessions()
+
     def _begin_recent_session_for_current_run(self):
         self._current_recent_session_id = None
         self._append_recent_session_from_current_run(self._RECENT_SESSION_WAITING_TEXT)

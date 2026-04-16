@@ -292,7 +292,8 @@ class SequenceWidgetStreamingOpsMixin:
             on_change_session_result=self._change_recent_session_result_by_id,
             parent=self,
         )
-        self.recent_session_panel.set_result_editable(str(getattr(self.count_board, "mode", "") or "") == "mark")
+        self._last_recent_session_mode = str(getattr(self.count_board, "mode", "") or "")
+        self.recent_session_panel.set_result_editable(self._last_recent_session_mode == "mark")
         if self.count_board is not None:
             self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
         # try:
@@ -578,7 +579,40 @@ class SequenceWidgetStreamingOpsMixin:
         if self.recent_session_panel is None:
             return
         mode = str((state or {}).get("mode") or "")
+        previous_mode = str(getattr(self, "_last_recent_session_mode", "") or "")
+        if mode and previous_mode and mode != previous_mode:
+            self._clear_recent_session_history()
+            self._reset_statistics_for_mode(mode)
+        self._last_recent_session_mode = mode
         self.recent_session_panel.set_result_editable(mode == "mark")
+
+    def _reset_statistics_for_mode(self, mode: str):
+        try:
+            if mode == "test":
+                self.reset_test_reord()
+            elif mode == "mark":
+                self._reset_mark_record()
+        except Exception as e:
+            try:
+                self.default_logger.error(f"reset_statistics_on_mode_switch_error: {e}")
+            except Exception:
+                pass
+
+    def _reset_mark_record(self):
+        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
+        data = {
+            "total": 0,
+            "ok": 0,
+            "ng": 0,
+            "not_labels": 0,
+            "datatime": datetime.now().strftime("%Y-%m-%d"),
+        }
+        with open(mark_result_path, "w") as f:
+            json.dump(data, f, indent=4)
+        try:
+            self.count_board.set_mark_text()
+        except Exception:
+            pass
 
     def update_audio_label_info(self):
         button = self.sender()
