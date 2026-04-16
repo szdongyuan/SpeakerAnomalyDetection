@@ -27,7 +27,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIsInstance(first_widget, MotorAiResultPanel)
         self.assertIsInstance(second_widget, MotorSummaryPanel)
 
-        card = second_widget.layout().itemAt(0).widget()
+        card = second_widget.findChild(MotorSectionCard)
         self.assertIsInstance(card, MotorSectionCard)
 
         labels = [lbl.text() for lbl in second_widget.findChildren(QLabel)]
@@ -35,7 +35,9 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIn("模式切换", labels)
         self.assertIn("汇总信息", labels)
 
-        embedded_mode_switch = card.content_layout.itemAt(1).widget()
+        content_scroll_area = card.content_layout.itemAt(0).widget()
+        content_widget = content_scroll_area.widget()
+        embedded_mode_switch = content_widget.layout().itemAt(1).widget()
         self.assertIsInstance(embedded_mode_switch, MotorModeSwitchPanel)
 
 

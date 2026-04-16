@@ -278,13 +278,14 @@ class SequenceWidgetStreamingOpsMixin:
         """
             Create the main work area layout.
 
-            Left side is the motor sidebar (AI result + summary board), and
-            right side remains the waveform workspace.
+            Arrange the workspace into a top-bottom structure:
+            top row = AI result + waveform workspace
+            bottom row = operation panel + recent session history
 
             Returns:
-                QHBoxLayout: The configured layout object.
+                QVBoxLayout: The configured layout object.
         """
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
         self.channel_workspace = ChannelPlotWorkspace(self)
         self.recent_session_panel = RecentSessionPanel(
             on_play_session=self._resolve_recent_session,
@@ -302,19 +303,39 @@ class SequenceWidgetStreamingOpsMixin:
         #     self.channel_workspace.set_channels([0])
         self._configure_direction_waveform_workspace()
 
-        right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.addWidget(self.channel_workspace)
-        right_splitter.addWidget(self.recent_session_panel)
-        right_splitter.setChildrenCollapsible(False)
-        right_splitter.setStretchFactor(0, 9)
-        right_splitter.setStretchFactor(1, 11)
-        right_splitter.setSizes([460, 560])
+        ai_result_panel, summary_panel = self.left_panel.take_split_sections()
+        if ai_result_panel is not None:
+            ai_result_panel.setMinimumWidth(340)
+        if summary_panel is not None:
+            summary_panel.setMinimumWidth(340)
 
-        layout.addWidget(self.left_panel, stretch=0)
-        layout.addSpacing(18)
-        layout.addWidget(right_splitter, stretch=1)
+        top_row_splitter = QSplitter(Qt.Horizontal)
+        top_row_splitter.addWidget(ai_result_panel)
+        top_row_splitter.addWidget(self.channel_workspace)
+        top_row_splitter.setChildrenCollapsible(False)
+        top_row_splitter.setStretchFactor(0, 4)
+        top_row_splitter.setStretchFactor(1, 9)
+        top_row_splitter.setSizes([380, 920])
+
+        bottom_row_splitter = QSplitter(Qt.Horizontal)
+        bottom_row_splitter.addWidget(summary_panel)
+        bottom_row_splitter.addWidget(self.recent_session_panel)
+        bottom_row_splitter.setChildrenCollapsible(False)
+        bottom_row_splitter.setStretchFactor(0, 4)
+        bottom_row_splitter.setStretchFactor(1, 9)
+        bottom_row_splitter.setSizes([380, 920])
+
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.addWidget(top_row_splitter)
+        main_splitter.addWidget(bottom_row_splitter)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.setStretchFactor(0, 9)
+        main_splitter.setStretchFactor(1, 11)
+        main_splitter.setSizes([450, 550])
+
+        layout.addWidget(main_splitter)
         layout.setContentsMargins(40, 20, 40, 20)
-        layout.setSpacing(18)
+        layout.setSpacing(0)
         return layout
 
     def init_fft_and_stft_flag(self):
