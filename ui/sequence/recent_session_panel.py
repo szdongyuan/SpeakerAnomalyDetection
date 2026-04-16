@@ -82,10 +82,16 @@ class RecentSessionPanel(QWidget):
                 border: 1px solid #eef3fa;
                 gridline-color: #edf2f9;
                 color: #495b78;
+                selection-background-color: #dbe8ff;
+                selection-color: #203245;
             }
             QTableWidget::item {
                 padding: 2px 4px;
                 border: none;
+            }
+            QTableWidget::item:selected {
+                background-color: #dbe8ff;
+                color: #203245;
             }
             QHeaderView::section {
                 background-color: #fbfcff;

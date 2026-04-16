@@ -297,8 +297,8 @@ class SequenceWidgetAnalysisOpsMixin:
                 self._clear_plot_area()
 
         self.data_btn.setEnabled(True)
-        if self.analysis_config.get("auto_analysis"):
-            self.run(show_windows=False)
+        # Viewing a historical record already runs analysis once with visible windows.
+        # Triggering a second silent run here clears those window references immediately.
 
     def start_this_play(self, label="not_labeled"):
         cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
