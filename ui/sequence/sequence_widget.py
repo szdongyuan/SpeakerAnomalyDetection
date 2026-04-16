@@ -84,6 +84,8 @@ class SequenceWindow(
         self.mode = None
         self.current_recorded_count = None
         self.last_play_count = None  # Cache last play count for replay
+        self._current_cycle_recorded_count = None
+        self._current_run_incremented_recorded_count = False
 
         self.default_logger = LogManager.set_log_handler("core")
         self._missing_config_prompted = False
@@ -109,6 +111,8 @@ class SequenceWindow(
         self._manual_direction_fallback_next_direction = "forward"
         self._ai_cycle_started_at = ""
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
+        self._direction_waveform_cache = {"forward": None, "reverse": None}
+        self._waveform_display_override_direction = ""
         self._pending_serial_trigger_direction = ""
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None

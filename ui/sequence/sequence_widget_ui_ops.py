@@ -37,7 +37,7 @@ class SequenceWidgetUiOpsMixin:
 
     def refresh_channel_windows(self):
         """
-        Refresh plot subwindows based on current mic_channels selection.
+        Refresh the fixed directional waveform windows.
 
         MainWindow assigns mic_channels after SequenceWindow construction, so this should be
         called at least once after the window is shown, and again after hardware selection changes.
@@ -53,9 +53,11 @@ class SequenceWidgetUiOpsMixin:
         self._active_input_channels = [int(x) for x in channels]
 
         if self.channel_workspace is not None:
-            self.channel_workspace.set_channels(self._active_input_channels)
+            configure_waveform_workspace = getattr(self, "_configure_direction_waveform_workspace", None)
+            if callable(configure_waveform_workspace):
+                configure_waveform_workspace()
         try:
-            self.default_logger.info(f"Plot workspace channels: {self._active_input_channels}")
+            self.default_logger.info(f"Directional waveform workspace ready, input channels: {self._active_input_channels}")
         except Exception:
             pass
 
@@ -123,7 +125,11 @@ class SequenceWidgetUiOpsMixin:
     def on_mark_btn_clicked(self):
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
-        self._clear_plot_area()
+        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+        if callable(clear_all_direction_waveforms):
+            clear_all_direction_waveforms()
+        else:
+            self._clear_plot_area()
         self._close_analysis_windows()
         try:
             self._reset_barcode_commit_dedup()

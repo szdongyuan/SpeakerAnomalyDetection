@@ -9,7 +9,7 @@ from consts import error_code, model_consts
 data_struct = DataDealStruct()
 
 
-def get_recorded_info(product_model, product_number, barcode, label):
+def get_recorded_info(product_model, product_number, barcode, label, name_suffix=""):
     """
         Generate recorded information.
 
@@ -30,6 +30,8 @@ def get_recorded_info(product_model, product_number, barcode, label):
         recorded_name = recorded_name + "_BC" + barcode
     else:
         barcode = None
+    if name_suffix:
+        recorded_name = recorded_name + str(name_suffix)
     recorded_name = recorded_name + ".wav"
     store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
     if not os.path.exists(store_record_dir):
@@ -41,6 +43,7 @@ def get_recorded_info(product_model, product_number, barcode, label):
         "record_date": recording_time,
         "barcode": barcode,
         "labels": label,
+        "record_name_suffix": str(name_suffix or ""),
     }
 
     return recorded_path, recorded_signal_info

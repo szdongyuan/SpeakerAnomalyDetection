@@ -75,6 +75,51 @@ class SequenceWidgetAnalysisOpsMixin:
             }
         return {"ok_score": None, "ng_score": None}
 
+    def _get_recording_direction(self) -> str:
+        normalize_direction = getattr(self, "_normalize_trigger_direction", None)
+        if callable(normalize_direction):
+            return normalize_direction(getattr(self, "_current_trigger_direction", ""))
+        return ""
+
+    def _reserve_recorded_count_for_run(self) -> int:
+        direction = self._get_recording_direction()
+        self._current_run_incremented_recorded_count = False
+
+        if direction in ("forward", "reverse"):
+            cycle_count = getattr(self, "_current_cycle_recorded_count", None)
+            if cycle_count in (None, ""):
+                self.current_recorded_count += 1
+                cycle_count = self.current_recorded_count
+                self._current_cycle_recorded_count = cycle_count
+                self._current_run_incremented_recorded_count = True
+                save_recorded_data_to_json(
+                    self.lineedit_type.text(),
+                    str(self.current_recorded_count),
+                    self.lineedit_s_or_n.text(),
+                    self.barcode_scanner_box.isChecked(),
+                )
+            self.lineedit_count.setText(str(cycle_count))
+            self.last_play_count = int(cycle_count)
+            return int(cycle_count)
+
+        self.current_recorded_count += 1
+        self._current_run_incremented_recorded_count = True
+        self.lineedit_count.setText(str(self.current_recorded_count))
+        self.last_play_count = self.current_recorded_count
+        save_recorded_data_to_json(
+            self.lineedit_type.text(),
+            str(self.current_recorded_count),
+            self.lineedit_s_or_n.text(),
+            self.barcode_scanner_box.isChecked(),
+        )
+        return int(self.current_recorded_count)
+
+    def _resolve_recording_name_suffix(self) -> str:
+        direction = self._get_recording_direction()
+        if direction in ("forward", "reverse"):
+            return f"_{direction}"
+        return ""
+
     def on_clicked_player_btn(self, label="not_labeled"):
         if not self.sequence_config:
             QMessageBox.warning(
@@ -143,7 +188,11 @@ class SequenceWidgetAnalysisOpsMixin:
         self.data_struct.sample_rate = target_sample_rate
         audio_y, _ = librosa.load(file_path, sr=None)
         self.data_struct.audio_lenth = len(audio_y)
-        self._clear_plot_area()
+        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+        if callable(clear_all_direction_waveforms):
+            clear_all_direction_waveforms()
+        else:
+            self._clear_plot_area()
         self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
 
     @staticmethod
@@ -326,6 +375,10 @@ class SequenceWidgetAnalysisOpsMixin:
         previous_audio_length = getattr(self.data_struct, "audio_lenth", 0)
         previous_analysis_result_dict = dict(getattr(self.data_struct, "analysis_result_dict", {}) or {})
         previous_mode = getattr(self.count_board, "mode", "")
+        previous_direction_waveform_cache = dict(getattr(self, "_direction_waveform_cache", {}) or {})
+        previous_waveform_display_override_direction = str(
+            getattr(self, "_waveform_display_override_direction", "") or ""
+        )
         previous_excel_export_cache = self._excel_export_cache
         previous_excel_exported_record_id = self._excel_exported_record_id
 
@@ -335,6 +388,7 @@ class SequenceWidgetAnalysisOpsMixin:
             self.recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
             if not self.recorded_signal_info.get("file_path"):
                 self.recorded_signal_info["file_path"] = playback_path
+            self._waveform_display_override_direction = str(session_record.get("mode") or "")
             self._load_audio_file_to_data_struct(
                 playback_path,
                 sample_rate=session_record.get("sample_rate") or previous_sample_rate or None,
@@ -352,9 +406,14 @@ class SequenceWidgetAnalysisOpsMixin:
             self.data_struct.sample_rate = previous_sample_rate
             self.data_struct.audio_lenth = previous_audio_length
             self.data_struct.analysis_result_dict = previous_analysis_result_dict
+            self._direction_waveform_cache = previous_direction_waveform_cache
+            self._waveform_display_override_direction = previous_waveform_display_override_direction
             self._excel_export_cache = previous_excel_export_cache
             self._excel_exported_record_id = previous_excel_exported_record_id
-            if previous_store_wave_data_multi is not None:
+            refresh_direction_waveform_workspace = getattr(self, "_refresh_direction_waveform_workspace", None)
+            if callable(refresh_direction_waveform_workspace):
+                refresh_direction_waveform_workspace()
+            elif previous_store_wave_data_multi is not None:
                 self.plot_waveform_to_workspace(previous_store_wave_data_multi, previous_sample_rate)
             else:
                 self._clear_plot_area()
@@ -384,19 +443,7 @@ class SequenceWidgetAnalysisOpsMixin:
         if self._analysis_result_summary_window:
             self._analysis_result_summary_window = None
 
-        # Increment count BEFORE recording (so display count = file count)
-        self.current_recorded_count += 1
-        self.lineedit_count.setText(str(self.current_recorded_count))
-
-        # Cache this count for replay
-        self.last_play_count = self.current_recorded_count
-
-        save_recorded_data_to_json(
-            self.lineedit_type.text(),
-            self.lineedit_count.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
-        )
+        self._reserve_recorded_count_for_run()
 
         # Record with new count
         self.judge_play_and_record(label, is_replay=False)
@@ -434,9 +481,12 @@ class SequenceWidgetAnalysisOpsMixin:
         # Use provided count if available (for replay), otherwise use lineedit value
         count_str = str(count) if count is not None else self.lineedit_count.text()
 
+        name_suffix = self._resolve_recording_name_suffix()
         self.recorded_path, self.recorded_signal_info = get_recorded_info(
-            self.lineedit_type.text(), count_str, self.lineedit_s_or_n.text(), label
+            self.lineedit_type.text(), count_str, self.lineedit_s_or_n.text(), label, name_suffix=name_suffix
         )
+        if name_suffix:
+            self.recorded_signal_info["record_name_suffix"] = name_suffix
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
         monitor_playback = acq_detail.get("monitor_playback", False)
@@ -472,10 +522,12 @@ class SequenceWidgetAnalysisOpsMixin:
                 max_out = 0
             recorded_dict["output_channels"] = list(range(max_out)) if max_out > 0 else []
 
-        # Ensure workspace matches the channels for THIS recording.
+        # Keep the active input channels for downstream analysis mapping.
         self._active_input_channels = [int(x) for x in input_channels]
         if self.channel_workspace is not None:
-            self.channel_workspace.set_channels(self._active_input_channels)
+            configure_waveform_workspace = getattr(self, "_configure_direction_waveform_workspace", None)
+            if callable(configure_waveform_workspace):
+                configure_waveform_workspace()
 
         in_dev = recorded_dict.get("input_device")
         out_dev = recorded_dict.get("output_device")
@@ -540,10 +592,11 @@ class SequenceWidgetAnalysisOpsMixin:
                 recorded_dict, sample_rate = self.reset_work_pram(label)
         except Exception as e:
             self.default_logger.error(f"reset_work_pram_error: {e}")
-            if not is_replay:
+            if not is_replay and bool(getattr(self, "_current_run_incremented_recorded_count", False)):
                 # rollback the increment done in start_this_play()
                 self.current_recorded_count -= 1
                 self.lineedit_count.setText(str(self.current_recorded_count))
+                self._current_run_incremented_recorded_count = False
             self.player_status_flag = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
@@ -565,6 +618,7 @@ class SequenceWidgetAnalysisOpsMixin:
 
             # Start polling timer to process queue and detect completion
             self.streaming_poll_timer.start(50)  # Poll every 50ms
+            self._current_run_incremented_recorded_count = False
         except Exception as e:
             self.default_logger.error(f"start_streaming_error: {e}")
             self._cleanup_streaming_resources()

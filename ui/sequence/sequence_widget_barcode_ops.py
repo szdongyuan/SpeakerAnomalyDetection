@@ -30,11 +30,15 @@ class SequenceWidgetBarcodeOpsMixin:
         self._manual_direction_fallback_next_direction = "forward"
         self._ai_cycle_started_at = ""
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
+        self._current_cycle_recorded_count = None
         self._pending_serial_trigger_direction = ""
 
     def _reset_ai_cycle_panel_state(self):
         self._ai_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
+        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+        if callable(clear_all_direction_waveforms):
+            clear_all_direction_waveforms()
         if getattr(self, "left_panel", None) is not None:
             self.left_panel.set_current_timestamp(self._ai_cycle_started_at)
             self.left_panel.set_forward_result("待检测", tone="pending")
@@ -377,7 +381,11 @@ class SequenceWidgetBarcodeOpsMixin:
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
-        self._clear_plot_area()
+        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+        if callable(clear_all_direction_waveforms):
+            clear_all_direction_waveforms()
+        else:
+            self._clear_plot_area()
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
         self._reset_barcode_commit_dedup()

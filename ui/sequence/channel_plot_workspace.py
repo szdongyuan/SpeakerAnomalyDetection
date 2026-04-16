@@ -101,6 +101,9 @@ class ChannelPlotSubWindow(QFrame):
 
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
+    def set_title(self, title: str) -> None:
+        self.title_bar.title_label.setText(str(title or ""))
+
     @staticmethod
     def _setup_plot_style(plot_widget: pg.PlotWidget) -> None:
         plot_widget.setBackground("white")
@@ -177,6 +180,8 @@ class ChannelPlotWorkspace(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preserve_positions = True
+        self._forced_cols = None
         self.scroll = QScrollArea(self)
         # Resizable is important so the canvas width tracks the viewport; otherwise during early init
         # viewport width may be 0/1 and child windows get fully clipped.
@@ -229,6 +234,25 @@ class ChannelPlotWorkspace(QWidget):
         # Tile after the event loop gets a chance to layout the scroll viewport (width becomes valid).
         QTimer.singleShot(0, self._tile_subwindows)
 
+    def set_preserve_positions(self, preserve: bool) -> None:
+        self._preserve_positions = bool(preserve)
+        if self._subwins:
+            QTimer.singleShot(0, lambda: self._tile_subwindows(keep_positions=self._preserve_positions))
+
+    def set_forced_columns(self, cols: int | None) -> None:
+        try:
+            cols = int(cols) if cols is not None else None
+        except Exception:
+            cols = None
+        self._forced_cols = cols if cols and cols > 0 else None
+        if self._subwins:
+            QTimer.singleShot(0, lambda: self._tile_subwindows(keep_positions=self._preserve_positions))
+
+    def set_window_titles(self, titles: List[str]) -> None:
+        for idx, w in enumerate(self._subwins):
+            title = titles[idx] if idx < len(titles or []) else f"In{idx + 1}"
+            w.set_title(title)
+
     def subwindows(self) -> List[ChannelPlotSubWindow]:
         return list(self._subwins)
 
@@ -238,9 +262,10 @@ class ChannelPlotWorkspace(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Keep canvas width in sync with the viewport, and ensure all windows remain in-bounds.
-        self._tile_subwindows(keep_positions=True)
-        if not self._layout_is_valid():
+        # Keep canvas width in sync with the viewport; directional waveform mode
+        # disables free positioning so windows always reflow to fill the area.
+        self._tile_subwindows(keep_positions=self._preserve_positions)
+        if self._preserve_positions and not self._layout_is_valid():
             # If resizing caused overlaps/out-of-bounds, fall back to a clean tiling layout.
             self._tile_subwindows(keep_positions=False)
 
@@ -263,10 +288,15 @@ class ChannelPlotWorkspace(QWidget):
         min_win_h = 220
 
         usable_w = max(1, viewport_w - 2 * pad)
-        cols = 2 if usable_w >= (min_win_w * 2 + gap) else 1
+        forced_cols = self._forced_cols
+        if forced_cols:
+            cols = max(1, min(int(forced_cols), int(num_windows) or 1))
+            min_win_w = 160
+        else:
+            cols = 2 if usable_w >= (min_win_w * 2 + gap) else 1
 
         win_w = int((usable_w - gap * (cols - 1)) / cols)
-        win_w = max(220, min(win_w, usable_w))
+        win_w = max(min_win_w, min(win_w, usable_w))
 
         usable_h = max(1, viewport_h - 2 * pad)
         rows = max(1, (int(num_windows) + cols - 1) // cols)

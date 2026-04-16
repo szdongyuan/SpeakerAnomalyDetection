@@ -22,6 +22,12 @@ from ui.sequence.recent_session_panel import RecentSessionPanel
 
 
 class SequenceWidgetStreamingOpsMixin:
+    _DIRECTION_WAVEFORM_ORDER = ("forward", "reverse")
+    _DIRECTION_WAVEFORM_TITLES = {
+        "forward": "正转波形",
+        "reverse": "反转波形",
+    }
+
     @staticmethod
     def _normalize_audio_label(label: str) -> str:
         normalized = str(label or "").strip()
@@ -206,6 +212,68 @@ class SequenceWidgetStreamingOpsMixin:
         self.data_struct.stimulus_data = None
         self.data_struct.stimulus_info = None
 
+    def _normalize_waveform_direction(self, direction: str) -> str:
+        value = str(direction or "").strip().lower()
+        return value if value in self._DIRECTION_WAVEFORM_ORDER else ""
+
+    def _resolve_waveform_direction(self, fallback: str = "forward") -> str:
+        override_direction = self._normalize_waveform_direction(
+            getattr(self, "_waveform_display_override_direction", "")
+        )
+        if override_direction:
+            return override_direction
+        current_direction = self._normalize_waveform_direction(getattr(self, "_current_trigger_direction", ""))
+        if current_direction:
+            return current_direction
+        return self._normalize_waveform_direction(fallback)
+
+    def _normalize_waveform_signal(self, recorded_signal):
+        if recorded_signal is None:
+            return None
+        y = np.asarray(recorded_signal, dtype=np.float32)
+        if y.ndim == 1:
+            return y if y.shape[0] > 0 else None
+        if y.ndim == 2:
+            if y.shape[0] <= 0:
+                return None
+            return y.mean(axis=1).astype(np.float32, copy=False)
+        return None
+
+    def _configure_direction_waveform_workspace(self):
+        if self.channel_workspace is None:
+            return
+        self.channel_workspace.set_preserve_positions(False)
+        self.channel_workspace.set_forced_columns(2)
+        self.channel_workspace.set_channels([0, 1])
+        self.channel_workspace.set_window_titles(
+            [self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER]
+        )
+        self._refresh_direction_waveform_workspace()
+
+    def _refresh_direction_waveform_workspace(self):
+        if self.channel_workspace is None:
+            return
+        wins = self.channel_workspace.subwindows()
+        if not wins:
+            return
+        self.channel_workspace.set_window_titles(
+            [self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER]
+        )
+        for index, direction in enumerate(self._DIRECTION_WAVEFORM_ORDER):
+            if index >= len(wins):
+                break
+            waveform_entry = (getattr(self, "_direction_waveform_cache", {}) or {}).get(direction)
+            if not waveform_entry:
+                wins[index].clear_plot()
+                continue
+            waveform, sample_rate = waveform_entry
+            waveform = self._normalize_waveform_signal(waveform)
+            if waveform is None:
+                wins[index].clear_plot()
+                continue
+            time_axis = np.arange(waveform.shape[0]) / float(sample_rate or 1.0)
+            wins[index].set_data(time_axis, waveform)
+
     def create_waveform_layout(self):
         """
             Create the main work area layout.
@@ -231,6 +299,7 @@ class SequenceWidgetStreamingOpsMixin:
         #     self.refresh_channel_windows()
         # except Exception:
         #     self.channel_workspace.set_channels([0])
+        self._configure_direction_waveform_workspace()
 
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.addWidget(self.channel_workspace)
@@ -519,54 +588,41 @@ class SequenceWidgetStreamingOpsMixin:
             self.recorded_signal_info["labels"] = "NG"
 
     def _clear_plot_area(self) -> None:
+        direction = self._resolve_waveform_direction(fallback="")
+        if direction in self._DIRECTION_WAVEFORM_ORDER:
+            self._direction_waveform_cache[direction] = None
+            self._refresh_direction_waveform_workspace()
+            return
+        for key in self._DIRECTION_WAVEFORM_ORDER:
+            self._direction_waveform_cache[key] = None
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
 
-    def plot_waveform_to_workspace(self, recorded_signal, sample_rate: float) -> None:
-        """
-        Plot waveform data to the channel subwindows.
+    def clear_all_direction_waveforms(self) -> None:
+        for key in self._DIRECTION_WAVEFORM_ORDER:
+            self._direction_waveform_cache[key] = None
+        if self.channel_workspace is not None:
+            self.channel_workspace.clear_plots()
 
-        - If recorded_signal is 2D: shape (frames, channels), each channel plots to its own subwindow.
-        - If recorded_signal is 1D: plot the same waveform to all subwindows (best-effort fallback).
+    def plot_waveform_to_workspace(self, recorded_signal, sample_rate: float, direction: str = None) -> None:
+        """
+        Plot waveform data to the directional waveform subwindows.
         """
         if self.channel_workspace is None:
-            return
-
-        wins = self.channel_workspace.subwindows()
-        if not wins:
             return
 
         if recorded_signal is None:
             self._clear_plot_area()
             return
 
-        y = np.asarray(recorded_signal)
-        if y.ndim == 1:
-            frames = int(y.shape[0])
-            if frames <= 0:
-                self._clear_plot_area()
-                return
-            t = np.arange(frames) / float(sample_rate or 1.0)
-            for w in wins:
-                w.set_data(t, y)
+        waveform = self._normalize_waveform_signal(recorded_signal)
+        if waveform is None:
+            self._clear_plot_area()
             return
 
-        if y.ndim == 2:
-            frames = int(y.shape[0])
-            if frames <= 0:
-                self._clear_plot_area()
-                return
-            t = np.arange(frames) / float(sample_rate or 1.0)
-            ch_n = int(y.shape[1])
-            for i, w in enumerate(wins):
-                if i < ch_n:
-                    w.set_data(t, y[:, i])
-                else:
-                    w.clear_plot()
-            return
-
-        # Unexpected shape -> clear for safety
-        self._clear_plot_area()
+        target_direction = self._normalize_waveform_direction(direction) or self._resolve_waveform_direction() or "forward"
+        self._direction_waveform_cache[target_direction] = (waveform, float(sample_rate or 1.0))
+        self._refresh_direction_waveform_workspace()
 
     def on_audio_chunk_received(self, chunk):
         """
@@ -607,19 +663,9 @@ class SequenceWidgetStreamingOpsMixin:
             accumulated = np.concatenate(self.streaming_buffer_multi, axis=0)
 
         sample_rate = float(self.data_struct.sample_rate or 1.0)
-        time_axis = np.arange(accumulated.shape[0]) / sample_rate
-
-        if self.channel_workspace is not None:
-            wins = self.channel_workspace.subwindows()
-        else:
-            wins = []
-
-        ch_n = int(accumulated.shape[1])
-        for i, w in enumerate(wins):
-            if i < ch_n:
-                w.set_data(time_axis, accumulated[:, i])
-            else:
-                w.clear_plot()
+        direction = self._resolve_waveform_direction() or "forward"
+        self._direction_waveform_cache[direction] = (accumulated.mean(axis=1).astype(np.float32, copy=False), sample_rate)
+        self._refresh_direction_waveform_workspace()
 
         if self.streaming_wav_writer:
             try:

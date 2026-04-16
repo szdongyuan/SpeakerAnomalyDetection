@@ -73,6 +73,7 @@ class AnalysisModelSelect(QDialog):
             mic_channels=mic_channels,
             speaker_channels=speaker_channels,
         )
+        self.select_list.set_change_notifier(self._persist_current_config_silently)
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
         self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
 
@@ -105,6 +106,32 @@ class AnalysisModelSelect(QDialog):
             return
         name = self._get_using_config_display_name()
         self.current_config_label.setText(f"当前配置：{name}")
+
+    def _can_persist_current_config(self) -> bool:
+        if self._new_target_path_selected:
+            return False
+        path = str(self.using_config_path or "").strip()
+        if not path:
+            return False
+        normalized_path = path.replace("\\", "/").lower()
+        if not normalized_path.endswith(".json"):
+            return False
+        if normalized_path.endswith("/none_path.json"):
+            return False
+        return True
+
+    def _persist_current_config_silently(self) -> None:
+        if not self._can_persist_current_config():
+            return
+        save_config = self.format_config_data(self.select_list.config)
+        if not save_config:
+            return
+        if not LoadUiConfig.save_sequence_config_to_json(save_config, self.using_config_path):
+            self.default_logger.warning(
+                f"Failed to auto-persist the current sequence config: {self.using_config_path}"
+            )
+            return
+        LoadUiConfig.append_sequence_config_registry_entry(self.using_config_path)
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
@@ -503,6 +530,7 @@ class OptionList(QListView):
         self.config = list()
         self.drop_is_accept = True
         self.signal_len = 0
+        self._on_config_changed = None
         self.load_model_config(using_config_path)
 
         self.mousePressEvent = self.mousepressevent
@@ -523,6 +551,17 @@ class OptionList(QListView):
         if not out:
             out = [0]
         return out
+
+    def set_change_notifier(self, on_config_changed):
+        self._on_config_changed = on_config_changed
+
+    def _notify_config_changed(self):
+        if not callable(self._on_config_changed):
+            return
+        try:
+            self._on_config_changed()
+        except Exception as exc:
+            self.default_logger.warning(f"Failed to notify config change. {exc}")
 
     def itemmove(self, index):
         if self.index_num is None or not index:
@@ -584,6 +623,7 @@ class OptionList(QListView):
                 self.index_num + 1,
             )
             self.index_num += 1
+        self._notify_config_changed()
         self.setCurrentIndex(self.model().index(self.index_num, 0))
 
     def update_at_itemmove(
@@ -860,6 +900,7 @@ class OptionList(QListView):
             self.config[0].analysis_list[class_name].update(config_data)
         else:
             self.config[0].analysis_list[class_name] = config_data
+        self._notify_config_changed()
 
     def delete_item(self, index):
         if index.data().lstrip() == self.sound_item_type:
@@ -879,6 +920,7 @@ class OptionList(QListView):
             self.update_default_ai_index_at_delete_item(index)
         model = self.model()
         model.removeRow(index.row())
+        self._notify_config_changed()
 
     def update_default_ai_index_at_delete_item(self, index):
         if self.prev_select_ai is None:
@@ -940,6 +982,7 @@ class OptionList(QListView):
                     self.start_row_number = new_index
         self.setCurrentIndex(self.model().index(self.start_row_number, 0))
         self.update_select_ai(old_index, new_index, True)
+        self._notify_config_changed()
 
     def update_select_ai(self, old_index, new_index, step_index: bool):
         if (
@@ -1029,6 +1072,7 @@ class OptionList(QListView):
                     )
                     self.is_update_config = False
                 self.old_name = new_name
+            self._notify_config_changed()
         else:
             if new_name == self.old_name:
                 return
@@ -1209,6 +1253,7 @@ class OptionList(QListView):
 
         self.config.append(seq_item)
         self.model().insertRow(0, list_item)
+        self._notify_config_changed()
 
     def set_new_analysis_config(self, item_text):
         count = 1
@@ -1226,6 +1271,7 @@ class OptionList(QListView):
             self.store_ai_item(self.all_ai_item, list_item_text)
         self.config[0].display_sequence.append(list_item_text)
         self.get_item_default_config(item_text, list_item_text)
+        self._notify_config_changed()
 
     def get_item_default_config(self, item_text, list_item_text):
         if not item_text or not list_item_text:
