@@ -5,32 +5,6 @@ import os
 from typing import Any
 
 
-_RESERVED_DEVICE_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    "COM1",
-    "COM2",
-    "COM3",
-    "COM4",
-    "COM5",
-    "COM6",
-    "COM7",
-    "COM8",
-    "COM9",
-    "LPT1",
-    "LPT2",
-    "LPT3",
-    "LPT4",
-    "LPT5",
-    "LPT6",
-    "LPT7",
-    "LPT8",
-    "LPT9",
-}
-
-
 @dataclass(frozen=True)
 class MesWriteResult:
     ok: bool
@@ -104,10 +78,6 @@ def _is_valid_mes_file_name(text: str) -> bool:
     if os.path.basename(raw) != raw:
         return False
     if any(sep in raw for sep in ("/", "\\")):
-        return False
-
-    normalized_basename = trimmed.split(".", 1)[0].rstrip(" .").upper()
-    if normalized_basename in _RESERVED_DEVICE_NAMES:
         return False
 
     return True
