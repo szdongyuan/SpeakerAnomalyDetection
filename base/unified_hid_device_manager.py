@@ -71,6 +71,7 @@ class UnifiedHardwareManager(QObject):
             "enabled": False,
             "running": False,
             "connected": False,
+            "has_response": False,
             "message": "未启用",
             "raw_hex": "",
             "value": "",
@@ -249,6 +250,7 @@ class UnifiedHardwareManager(QObject):
                 enabled=False,
                 running=False,
                 connected=False,
+                has_response=False,
                 message="串口离散输入触发未启用",
                 device_model=str(self.serial_config.get("device_model", "") or ""),
             )
@@ -274,6 +276,7 @@ class UnifiedHardwareManager(QObject):
             enabled=True,
             running=True,
             connected=False,
+            has_response=False,
             message="正在启动串口离散输入监听",
             device_model=str(self.serial_config.get("device_model", "") or ""),
         )
@@ -290,6 +293,7 @@ class UnifiedHardwareManager(QObject):
             enabled=bool(self.serial_config.get("enabled", False)),
             running=False,
             connected=False,
+            has_response=False,
             message="串口离散输入监听已停止",
             action="",
             direction="",
@@ -407,6 +411,7 @@ class UnifiedHardwareManager(QObject):
             self._emit_serial_status(
                 enabled=bool(self.serial_config.get("enabled", False)),
                 mode=mode,
+                has_response=bool(raw_hex),
                 raw_hex=raw_hex,
                 value=state_code,
                 action="unknown",
@@ -451,6 +456,7 @@ class UnifiedHardwareManager(QObject):
 
         self._emit_serial_status(
             enabled=bool(self.serial_config.get("enabled", False)),
+            has_response=bool(raw_hex),
             mode=mode,
             raw_hex=raw_hex,
             value=state_code,

@@ -17,10 +17,7 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def _is_manual_direction_fallback_active(self) -> bool:
         config = getattr(self, "_serial_trigger_config", {}) or {}
-        if not bool(config.get("enabled", False)):
-            return False
-        status = getattr(self, "_serial_trigger_runtime_status", {}) or {}
-        return not bool(status.get("connected", False))
+        return bool(config.get("enabled", False))
 
     def _is_directional_cycle_active(self) -> bool:
         return self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", "")) in ("forward", "reverse")

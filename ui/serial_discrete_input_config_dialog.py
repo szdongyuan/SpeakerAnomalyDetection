@@ -26,10 +26,11 @@ class SerialDiscreteInputConfigDialog(QDialog):
     COMMON_BAUDRATES = ["1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"]
     NO_PORTS_TEXT = "未检测到可用串口"
 
-    def __init__(self, config: dict, runtime_status: dict = None, parent=None):
+    def __init__(self, config: dict, runtime_status: dict = None, test_connection_callback=None, parent=None):
         super().__init__(parent)
         self.config = dict(config or {})
         self.runtime_status = dict(runtime_status or {})
+        self._test_connection_callback = test_connection_callback
         self._dialog_action = None
 
         self.enabled_checkbox = QCheckBox("启用串口离散输入触发")
@@ -63,7 +64,6 @@ class SerialDiscreteInputConfigDialog(QDialog):
         layout.addWidget(self._create_groupbox("串口号", self.port_combobox))
         layout.addWidget(self._create_groupbox("波特率", self.baudrate_combobox))
         layout.addWidget(self._create_groupbox("设备型号", self.device_model_lineedit))
-        layout.addWidget(self._create_runtime_status_groupbox())
         layout.addStretch()
         layout.addLayout(self._create_btn_layout())
         self.setLayout(layout)
@@ -98,19 +98,6 @@ class SerialDiscreteInputConfigDialog(QDialog):
         layout.addWidget(self.cancel_btn)
         layout.addWidget(self.ok_btn)
         return layout
-
-    def _create_runtime_status_groupbox(self):
-        self.runtime_status_label.setWordWrap(True)
-        self.runtime_status_label.setMinimumHeight(32)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
-        layout.addWidget(self.runtime_status_label)
-
-        groupbox = QGroupBox("运行状态")
-        groupbox.setLayout(layout)
-        return groupbox
 
     @staticmethod
     def _format_port_label(device, description):
@@ -179,11 +166,25 @@ class SerialDiscreteInputConfigDialog(QDialog):
     def update_runtime_status(self, status):
         status = status or {}
         connected = bool(status.get("connected", False))
+        has_response = bool(status.get("has_response", False))
         message = str(status.get("message", "") or "")
-        status_text = "当前状态：已连接" if connected else "当前状态：未连接"
+        raw_hex = str(status.get("raw_hex", "") or "")
+        if connected and has_response:
+            status_text = "已连接"
+        elif connected:
+            status_text = "待响应"
+        else:
+            status_text = "未连接"
 
-        self.runtime_status_label.setText(status_text)
-        self.runtime_status_label.setToolTip(message or status_text)
+        lines = [status_text]
+        if message and message != status_text:
+            lines.append(message)
+        if raw_hex:
+            lines.append(f"最近接收码：{raw_hex}")
+
+        self.runtime_status = dict(status)
+        self.runtime_status_label.setText("\n".join(lines))
+        self.runtime_status_label.setToolTip("\n".join(lines))
 
     def _build_config(self):
         config = dict(self.config or {})
@@ -221,8 +222,44 @@ class SerialDiscreteInputConfigDialog(QDialog):
         except ValueError as e:
             QMessageBox.warning(self, "配置无效", str(e))
             return
-        self._dialog_action = "test"
-        self.accept()
+        callback = self._test_connection_callback
+        if not callable(callback):
+            self.update_runtime_status(
+                {
+                    "connected": False,
+                    "has_response": False,
+                    "message": "当前窗口未配置测试连接回调",
+                    "raw_hex": "",
+                }
+            )
+            return
+        try:
+            result = callback(dict(self.config or {})) or {}
+        except Exception as e:
+            result = {
+                "connected": False,
+                "has_response": False,
+                "message": f"测试连接失败: {e}",
+                "raw_hex": "",
+            }
+        self._show_test_result_popup(result)
+
+    def _show_test_result_popup(self, result: dict):
+        result = result or {}
+        connected = bool(result.get("connected", False))
+        has_response = bool(result.get("has_response", False))
+        message = str(result.get("message", "") or "测试连接失败")
+        raw_hex = str(result.get("raw_hex", "") or "")
+
+        text = message
+        if raw_hex:
+            text = f"{text}\n\n最近接收码: {raw_hex}"
+
+        # Only treat as successful when serial is reachable and response code is received.
+        if connected and has_response:
+            QMessageBox.information(self, "测试连接", text)
+            return
+        QMessageBox.warning(self, "测试连接", text)
 
     def exec(self):
         super().exec()

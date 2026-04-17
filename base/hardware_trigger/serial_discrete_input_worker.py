@@ -31,6 +31,7 @@ class SerialDiscreteInputWorker(QThread):
     def _emit_status(self, **kwargs):
         payload = {
             "connected": False,
+            "has_response": False,
             "running": self._is_running,
             "message": "",
             "raw_hex": "",
@@ -109,10 +110,10 @@ class SerialDiscreteInputWorker(QThread):
                 self.serial_port.reset_input_buffer()
             except Exception:
                 pass
-            msg = f"串口已连接: {port}"
+            msg = f"串口已打开: {port}，等待设备响应"
             self.logger.info(msg)
             self._debug_print(msg)
-            self._emit_status(running=True, connected=True, message=msg, mode=decoder_mode)
+            self._emit_status(running=True, connected=True, has_response=False, message=msg, mode=decoder_mode)
         except Exception as e:
             msg = f"串口打开失败: {port}, {e}"
             self.logger.error(msg)

@@ -124,7 +124,7 @@ class SequenceWidgetAnalysisOpsMixin:
         if callable(manual_direction_fallback) and manual_direction_fallback():
             direction = str(getattr(self, "_manual_direction_fallback_next_direction", "forward") or "forward")
             try:
-                self.default_logger.info(f"串口未连接，播放按钮进入手动方向回退模式: direction={direction}")
+                self.default_logger.info(f"串口离散输入触发已启用，播放按钮进入手动方向轮转模式: direction={direction}")
             except Exception:
                 pass
             self.clicked_player_flag = True
