@@ -33,6 +33,7 @@ from base.excel_result_exporter import (
 )
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
+from base.mes_result_exporter import _validate_mes_runtime_config, select_mes_export_config, write_mes_result
 from base.shortcut_trigger_manager import ShortcutTriggerManager
 from base.unified_hid_device_manager import UnifiedHardwareManager
 from PyQt5.QtCore import QMetaObject
@@ -1604,11 +1605,7 @@ class SequenceWindow(QWidget):
                 width += 20
                 height += 20
 
-            # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
-            self._capture_excel_export_cache()
-            # Mark mode previously only exported on OK/NG click; now export immediately after analysis
-            # so results are always saved to CSV (spool) regardless of whether OK/NG is clicked.
-            self._maybe_export_excel_results()
+            self._handle_post_analysis_exports()
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 can_output, _reason = self._can_output_ok_ng()

@@ -209,6 +209,12 @@ class ExcelConfigWindow(QDialog):
             self.save_dir_edit.setText(path)
             self.on_save_dir_editing_finished()
 
+    def on_browse_mes_dir(self):
+        init_dir = self.mes_file_base_edit.text().strip() or "D:/dataMES"
+        path = QFileDialog.getExistingDirectory(self, "选择MES保存目录", init_dir)
+        if path:
+            self.mes_file_base_edit.setText(path)
+
     def _validate_save_dir_text(self, text: str, *, create: bool) -> tuple[bool, str]:
         raw = str(text or "").strip()
         if not raw:
