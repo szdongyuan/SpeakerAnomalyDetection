@@ -21,11 +21,13 @@ def get_recorded_info(product_model, product_number, barcode, label, name_suffix
         Returns:
             tuple: A tuple containing the recording file path and a dictionary with recording information.
     """
-    recording_time = datetime.now().strftime("%Y-%m-%d")
+    now = datetime.now()
+    recording_time = now.strftime("%Y-%m-%d")
+    recording_time_for_name = now.strftime("%Y-%m-%d-%H-%M-%S")
     mac_address = get_mac_address()
     mac_address = mac_address.replace(":", "") if mac_address else None
     product_number = "{:03}".format(int(product_number))
-    recorded_name = product_model + "_" + recording_time + "_" + mac_address + "_" + product_number
+    recorded_name = product_model + "_" + recording_time_for_name + "_" + mac_address + "_" + product_number
     if barcode:
         recorded_name = recorded_name + "_BC" + barcode
     else:

@@ -42,6 +42,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit = QLineEdit("0")
         self.mark_ok_edit = QLineEdit("0")
         self.mark_ng_edit = QLineEdit("0")
+        self.mark_not_labeled_edit = QLineEdit("0")
         self.mark_yield_edit = QLineEdit("0%")
         self.mark_datatime_edit = QLineEdit()
         self.ok_btn = QPushButton(" OK ")
@@ -110,6 +111,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setAlignment(Qt.AlignCenter)
         self.mark_ok_edit.setAlignment(Qt.AlignCenter)
         self.mark_ng_edit.setAlignment(Qt.AlignCenter)
+        self.mark_not_labeled_edit.setAlignment(Qt.AlignCenter)
         self.mark_yield_edit.setAlignment(Qt.AlignCenter)
         self.mark_datatime_edit.setAlignment(Qt.AlignCenter)
 
@@ -121,6 +123,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setDisabled(True)
         self.mark_ok_edit.setDisabled(True)
         self.mark_ng_edit.setDisabled(True)
+        self.mark_not_labeled_edit.setDisabled(True)
         self.mark_yield_edit.setDisabled(True)
         self.mark_datatime_edit.setDisabled(True)
 
@@ -132,6 +135,7 @@ class SequenceCountBoard(QWidget):
         self.mark_total_edit.setFixedSize(130, 32)
         self.mark_ok_edit.setFixedSize(130, 32)
         self.mark_ng_edit.setFixedSize(130, 32)
+        self.mark_not_labeled_edit.setFixedSize(130, 32)
         self.mark_yield_edit.setFixedSize(130, 32)
         self.mark_datatime_edit.setFixedSize(130, 32)
 
@@ -230,6 +234,7 @@ class SequenceCountBoard(QWidget):
         total_layout = self.create_horizontal_layout("总    数：", self.mark_total_edit)
         ok_layout = self.create_horizontal_layout("OK    数：", self.mark_ok_edit)
         ng_layout = self.create_horizontal_layout("NG    数：", self.mark_ng_edit)
+        not_labeled_layout = self.create_horizontal_layout("待标记数：", self.mark_not_labeled_edit)
         action_btn_layout = QHBoxLayout()
         action_btn_layout.setContentsMargins(0, 6, 0, 0)
         action_btn_layout.setSpacing(24)
@@ -244,6 +249,7 @@ class SequenceCountBoard(QWidget):
         mark_layout.addLayout(total_layout)
         mark_layout.addLayout(ok_layout)
         mark_layout.addLayout(ng_layout)
+        mark_layout.addLayout(not_labeled_layout)
         mark_layout.addLayout(action_btn_layout)
 
         mark_widget = QWidget()
@@ -349,9 +355,10 @@ class SequenceCountBoard(QWidget):
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
         with open(mark_result_path, "r") as f:
             data = json.load(f)
-            self.mark_total_edit.setText(str(data["total"]))
-            self.mark_ok_edit.setText(str(data["ok"]))
-            self.mark_ng_edit.setText(str(data["ng"]))
+            self.mark_total_edit.setText(str(int(data.get("total", 0) or 0)))
+            self.mark_ok_edit.setText(str(int(data.get("ok", 0) or 0)))
+            self.mark_ng_edit.setText(str(int(data.get("ng", 0) or 0)))
+            self.mark_not_labeled_edit.setText(str(int(data.get("not_labels", 0) or 0)))
             total = int(data.get("total", 0) or 0)
             ok = int(data.get("ok", 0) or 0)
             yield_percent = round(ok / total * 100, 2) if total > 0 else 0
@@ -382,20 +389,33 @@ class SequenceCountBoard(QWidget):
             f.writelines(lines)
 
     def set_mark_result_file(self, params):
+        # Backward-compatible alias for historical callers.
+        self.append_mark_result_file(params)
+
+    def append_mark_result_file(self, params):
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
         datatime = datetime.now().strftime("%Y-%m-%d")
-        total = int(self.mark_total_edit.text())
-        ok = int(self.mark_ok_edit.text())
-        ng = int(self.mark_ng_edit.text())
-        data = dict()
-        total = total + 1
-        if params == "OK":
-            ok = ok + 1
-        elif params == "NG":
-            ng = ng + 1
+        with open(mark_result_path, "r") as f:
+            data = json.load(f)
+
+        total = int(data.get("total", 0) or 0)
+        ok = int(data.get("ok", 0) or 0)
+        ng = int(data.get("ng", 0) or 0)
+        not_labels = int(data.get("not_labels", 0) or 0)
+
+        normalized = self._normalize_mark_label(params)
+        total += 1
+        if normalized == "OK":
+            ok += 1
+        elif normalized == "NG":
+            ng += 1
+        else:
+            not_labels += 1
+
         data["total"] = total
         data["ng"] = ng
         data["ok"] = ok
+        data["not_labels"] = not_labels
         data["datatime"] = datatime
         with open(mark_result_path, "w") as f:
             json.dump(data, f, indent=4)
@@ -421,9 +441,6 @@ class SequenceCountBoard(QWidget):
         with open(mark_result_path, "r") as f:
             data = json.load(f)
 
-        def _is_labeled(value: str) -> bool:
-            return value in ("OK", "NG")
-
         total = int(data.get("total", 0) or 0)
         ok = int(data.get("ok", 0) or 0)
         ng = int(data.get("ng", 0) or 0)
@@ -443,7 +460,9 @@ class SequenceCountBoard(QWidget):
         elif new_normalized == "not_labeled":
             not_labels += 1
 
-        total = max(0, total - (1 if _is_labeled(old_normalized) else 0) + (1 if _is_labeled(new_normalized) else 0))
+        # Mark-mode total represents session count, so relabeling should not
+        # increase/decrease total; only category buckets migrate.
+        total = max(0, max(total, ok + ng + not_labels))
         data["total"] = total
         data["ok"] = ok
         data["ng"] = ng

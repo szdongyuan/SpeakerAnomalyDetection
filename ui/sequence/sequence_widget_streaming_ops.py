@@ -611,9 +611,22 @@ class SequenceWidgetStreamingOpsMixin:
         previous_mode = str(getattr(self, "_last_recent_session_mode", "") or "")
         if mode and previous_mode and mode != previous_mode:
             self._clear_recent_session_history()
+            self._reset_runtime_state_for_mode_switch()
             self._reset_statistics_for_mode(mode)
         self._last_recent_session_mode = mode
         self.recent_session_panel.set_result_editable(mode == "mark")
+
+    def _reset_runtime_state_for_mode_switch(self):
+        # When switching mode mid-cycle (e.g. after only forward is recorded), do not
+        # carry over directional state/counter reservation into the next mode.
+        clear_cycle_runtime = getattr(self, "_clear_ai_cycle_runtime_state", None)
+        if callable(clear_cycle_runtime):
+            clear_cycle_runtime()
+        try:
+            self._awaiting_ok_ng = False
+            self._sn_clear_on_next_scan = False
+        except Exception:
+            pass
 
     def _reset_statistics_for_mode(self, mode: str):
         try:
@@ -832,6 +845,15 @@ class SequenceWidgetStreamingOpsMixin:
             except Exception:
                 current_label = "not_labeled"
             self._update_current_recent_session_result(current_label)
+            if str(getattr(self.count_board, "mode", "") or "") == "mark":
+                on_mark_cycle_direction_recorded = getattr(self, "_on_mark_cycle_direction_recorded", None)
+                if callable(on_mark_cycle_direction_recorded):
+                    on_mark_cycle_direction_recorded(current_label)
+                else:
+                    append_mark_result_file = getattr(self.count_board, "append_mark_result_file", None)
+                    if callable(append_mark_result_file):
+                        append_mark_result_file(current_label)
+                        self.count_board.set_mark_text()
             # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
             if self.barcode_scanner_box.isChecked():
                 try:
