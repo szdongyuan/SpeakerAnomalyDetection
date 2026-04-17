@@ -15,3 +15,11 @@ ui/readme.md
 .vscode/*
 .idea/
 requirements.txt
+temp_program.py
+.cursor/
+build/
+main_window_Launcher.spec
+.agents/
+.codex
+.worktrees/
+docs/

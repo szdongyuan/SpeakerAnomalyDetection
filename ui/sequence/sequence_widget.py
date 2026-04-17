@@ -1626,6 +1626,85 @@ class SequenceWindow(QWidget):
         # Show summary window at the end (also in test mode), only if dict is not empty
         self._maybe_show_analysis_result_summary(width, height)
 
+    def _handle_post_analysis_exports(self):
+        # Cache first so MES and Excel both read the same completed-analysis state.
+        self._capture_excel_export_cache()
+        try:
+            self._maybe_write_mes_result()
+        except Exception as e:
+            self.default_logger.warning(f"mes_export_error_after_analysis: {e}")
+        try:
+            self._maybe_export_excel_results()
+        except Exception as e:
+            self.default_logger.warning(f"excel_export_error_after_mes: {e}")
+
+    @staticmethod
+    def _validate_mes_summary_input(result_dict):
+        if not isinstance(result_dict, dict):
+            return False, "analysis_result_dict is not a dict"
+        if not result_dict:
+            return False, "analysis_result_dict is empty"
+
+        for item_name, item_result in result_dict.items():
+            if not isinstance(item_result, (tuple, list)):
+                return False, f"{item_name!r} is not a tuple/list"
+            if len(item_result) < 1:
+                return False, f"{item_name!r} has no status flag"
+            if not isinstance(item_result[0], (bool, np.bool_)):
+                return False, f"{item_name!r} has non-boolean status flag"
+
+        return True, ""
+
+    def _maybe_write_mes_result(self):
+        result_dict = getattr(self.data_struct, "analysis_result_dict", None)
+        if not isinstance(result_dict, dict) or not result_dict:
+            return
+
+        can_output, _reason = self._can_output_ok_ng()
+        if not can_output:
+            return
+
+        cfg_name, mes_cfg = select_mes_export_config(self.analysis_config)
+        if not mes_cfg:
+            return
+
+        try:
+            sn = (self.lineedit_s_or_n.text() or "").strip()
+        except Exception:
+            sn = ""
+        if not sn:
+            return
+        if any(ch in sn for ch in (",", "\r", "\n")):
+            self.default_logger.warning(f"mes_write_skip_bad_sn[{cfg_name}]: {sn!r}")
+            return
+
+        cfg_ok, cfg_message = _validate_mes_runtime_config(mes_cfg)
+        if not cfg_ok:
+            self.default_logger.warning(f"mes_write_skip_bad_config[{cfg_name}]: {cfg_message}")
+            return
+
+        summary_input_ok, summary_input_message = SequenceWindow._validate_mes_summary_input(result_dict)
+        if not summary_input_ok:
+            self.default_logger.warning(f"mes_write_skip_invalid_summary_input[{cfg_name}]: {summary_input_message}")
+            return
+
+        try:
+            summary = self._summarize_ok_ng()
+        except Exception as e:
+            self.default_logger.warning(f"mes_write_skip_summary_error[{cfg_name}]: {e}")
+            return
+        if not isinstance(summary, tuple) or len(summary) != 2:
+            self.default_logger.warning(f"mes_write_skip_bad_summary[{cfg_name}]: {summary!r}")
+            return
+
+        _passed, label = summary
+        if label not in ("OK", "NG"):
+            self.default_logger.warning(f"mes_write_skip_bad_label[{cfg_name}]: {label!r}")
+            return
+        ret = write_mes_result(mes_cfg, sn=sn, label=label, logger=self.default_logger)
+        if not ret.ok:
+            self.default_logger.warning(f"mes_write_fail[{cfg_name}]: {ret.message}")
+
     def _maybe_show_analysis_result_summary(self, width: int, height: int):
         result_dict = getattr(self.data_struct, "analysis_result_dict", None)
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
