@@ -553,6 +553,14 @@ class SequenceWidgetAnalysisOpsMixin:
             self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
+        is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
+        sync_active_recording_direction = getattr(self, "_sync_active_recording_direction_from_trigger", None)
+        clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
+        if callable(is_directional_cycle_active) and is_directional_cycle_active():
+            if callable(sync_active_recording_direction):
+                sync_active_recording_direction()
+        elif callable(clear_active_recording_direction):
+            clear_active_recording_direction()
 
         self._clear_plot_area()
         # CRITICAL: Clean up any existing streaming resources before starting new recording

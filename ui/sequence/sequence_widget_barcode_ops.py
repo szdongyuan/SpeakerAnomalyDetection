@@ -25,8 +25,26 @@ class SequenceWidgetBarcodeOpsMixin:
     def _is_directional_cycle_active(self) -> bool:
         return self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", "")) in ("forward", "reverse")
 
+    def _set_active_recording_direction(self, direction: str) -> str:
+        normalized = self._normalize_trigger_direction(direction)
+        self._active_recording_direction = normalized
+        return normalized
+
+    def _get_active_recording_direction(self, fallback: str = "") -> str:
+        active_direction = self._normalize_trigger_direction(getattr(self, "_active_recording_direction", ""))
+        if active_direction:
+            return active_direction
+        return self._normalize_trigger_direction(fallback)
+
+    def _clear_active_recording_direction(self) -> None:
+        self._active_recording_direction = ""
+
+    def _sync_active_recording_direction_from_trigger(self) -> str:
+        return self._set_active_recording_direction(getattr(self, "_current_trigger_direction", ""))
+
     def _clear_ai_cycle_runtime_state(self):
         self._current_trigger_direction = ""
+        self._clear_active_recording_direction()
         self._manual_direction_fallback_next_direction = "forward"
         self._ai_cycle_started_at = ""
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
@@ -63,6 +81,8 @@ class SequenceWidgetBarcodeOpsMixin:
             self._manual_direction_fallback_next_direction = "forward"
 
         self._current_trigger_direction = direction
+        # Bind waveform routing to the direction that started this recording.
+        self._set_active_recording_direction(direction)
 
         if getattr(self, "left_panel", None) is not None:
             if direction == "forward":

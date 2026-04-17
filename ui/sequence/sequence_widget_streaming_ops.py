@@ -227,6 +227,14 @@ class SequenceWidgetStreamingOpsMixin:
             return current_direction
         return self._normalize_waveform_direction(fallback)
 
+    def _resolve_active_recording_waveform_direction(self, fallback: str = "forward") -> str:
+        get_active_recording_direction = getattr(self, "_get_active_recording_direction", None)
+        if callable(get_active_recording_direction):
+            active_direction = self._normalize_waveform_direction(get_active_recording_direction(""))
+            if active_direction:
+                return active_direction
+        return self._resolve_waveform_direction(fallback=fallback)
+
     def _normalize_waveform_signal(self, recorded_signal):
         if recorded_signal is None:
             return None
@@ -718,7 +726,7 @@ class SequenceWidgetStreamingOpsMixin:
             accumulated = np.concatenate(self.streaming_buffer_multi, axis=0)
 
         sample_rate = float(self.data_struct.sample_rate or 1.0)
-        direction = self._resolve_waveform_direction() or "forward"
+        direction = self._resolve_active_recording_waveform_direction() or "forward"
         self._direction_waveform_cache[direction] = (accumulated.mean(axis=1).astype(np.float32, copy=False), sample_rate)
         self._refresh_direction_waveform_workspace()
 
@@ -791,8 +799,9 @@ class SequenceWidgetStreamingOpsMixin:
                 self.streaming_wav_writer.finalize()
                 self.streaming_wav_writer = None
 
-            # Update plots with final multi-channel data (refresh display)
-            self.plot_waveform_to_workspace(recorded_multi, sample_rate)
+            # Update plots with final multi-channel data using the direction fixed when this run started.
+            active_direction = self._resolve_active_recording_waveform_direction(fallback="")
+            self.plot_waveform_to_workspace(recorded_multi, sample_rate, direction=active_direction or None)
 
             # Save to database
             self.recorded_signal_info["sample_rate"] = sample_rate
@@ -806,6 +815,9 @@ class SequenceWidgetStreamingOpsMixin:
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
+            if callable(clear_active_recording_direction):
+                clear_active_recording_direction()
             self.player_status_flag = False  # Recording complete, allow hardware access
 
             # Enable buttons for replay and data analysis
@@ -857,6 +869,9 @@ class SequenceWidgetStreamingOpsMixin:
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
+            if callable(clear_active_recording_direction):
+                clear_active_recording_direction()
             self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
             # Still enable buttons even on error
             self.data_btn.setEnabled(True)

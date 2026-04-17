@@ -108,6 +108,7 @@ class SequenceWindow(
         self._serial_trigger_delay_timer.setSingleShot(True)
         self._serial_trigger_delay_timer.timeout.connect(self._on_serial_trigger_delay_timeout)
         self._current_trigger_direction = ""
+        self._active_recording_direction = ""
         self._manual_direction_fallback_next_direction = "forward"
         self._ai_cycle_started_at = ""
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
