@@ -567,8 +567,21 @@ class SequenceWidgetBarcodeOpsMixin:
         if save_code != error_code.OK:
             QMessageBox.warning(self, "提示", f"更新音频标签失败: {save_msg}")
             return
+        # Keep recent-session record in sync with post-relabel file path.
+        # In directional test mode we may keep per-direction result text unchanged,
+        # but the underlying audio file can still be moved to final label folder.
         if update_recent_session:
             self._update_current_recent_session_result(label)
+        else:
+            session_id = getattr(self, "_current_recent_session_id", None)
+            if session_id:
+                self._update_recent_session(
+                    session_id,
+                    recorded_path=self.recorded_path,
+                    recorded_signal_info=dict(self.recorded_signal_info or {}),
+                    analysis_result_dict=dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+                    sample_rate=self.data_struct.sample_rate,
+                )
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
