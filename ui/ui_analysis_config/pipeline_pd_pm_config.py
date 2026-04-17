@@ -3,7 +3,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
 from PyQt5.QtWidgets import QLabel, QCheckBox, QMessageBox, QSpinBox
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
@@ -82,14 +81,6 @@ class PipelineConfigWindow(QDialog):
         root_layout.addLayout(btn_layout)
 
         self.setLayout(root_layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qcheckbox_style
-        )
 
         # local storage (only used inside the pipeline)
         self.head_local_type = None

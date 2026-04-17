@@ -3,7 +3,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QButtonGroup
 from PyQt5.QtWidgets import QLabel, QCheckBox, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QRadioButton
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
@@ -54,17 +53,6 @@ class PDConfigWindow(QDialog):
         root_layout.setSpacing(12)
         self.setLayout(root_layout)
 
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcombobox_style
-        )
         # adapt the size according to the visibility of the panel
         self.adjustSize()
 

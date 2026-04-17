@@ -15,12 +15,12 @@ class SequenceCountBoard(QWidget):
     def __init__(self, analysis_config, parent=None):
         super(SequenceCountBoard, self).__init__(parent)
 
-        self.btn_height = ui_style_const.scale_font_px(80)
-        self.btn_width = ui_style_const.scale_font_px(180)
-        self.lineedit_width = ui_style_const.scale_font_px(130)
-        self.lineedit_height = ui_style_const.scale_font_px(35)
-        self.label_width = ui_style_const.scale_font_px(100)
-        self.icon_size = ui_style_const.scale_font_px(24)
+        self.btn_height = ui_style_const.scale_size_px(80)
+        self.btn_width = ui_style_const.scale_size_px(180)
+        self.lineedit_width = ui_style_const.scale_size_px(130)
+        self.lineedit_height = ui_style_const.scale_size_px(35)
+        self.label_width = ui_style_const.scale_size_px(100)
+        self.icon_size = ui_style_const.scale_size_px(24)
 
         self.analysis_config = analysis_config
         self.mode = str()
@@ -114,13 +114,10 @@ class SequenceCountBoard(QWidget):
         self.mark_ng_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
 
     def set_btn(self):
-        self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
         self.ok_btn.setFixedSize(self.btn_width, self.btn_height)
         self.ok_btn.setIconSize(QSize(self.icon_size, self.icon_size))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
         self.ng_btn.setFixedSize(self.btn_width, self.btn_height)
         self.ng_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 

@@ -2,7 +2,6 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpinBox
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
@@ -25,12 +24,6 @@ class LPConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qgroupbox_style
-        )
 
     def create_lp_config_box(self):
         lp_config_box = QGroupBox("松散颗粒参数配置")

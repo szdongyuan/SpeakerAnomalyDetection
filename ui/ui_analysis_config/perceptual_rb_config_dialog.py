@@ -9,7 +9,6 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
@@ -97,16 +96,6 @@ class PerceptualRbConfigWindow(QDialog):
         root_layout.addLayout(btn_layout)
         self.setLayout(root_layout)
 
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qdoublespinbox_style
-        )
 
     def get_default_config(self):
         """获取配置数据"""

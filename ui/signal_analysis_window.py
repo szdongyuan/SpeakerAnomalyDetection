@@ -262,7 +262,7 @@ class AnalysisGraphWidget(QWidget):
         self.setLayout(layout)
 
     def set_plot_font_size(self, font_size: int):
-        font_size = ui_style_const.scale_font_px(font_size)
+        font_size = ui_style_const.scale_size_px(font_size)
         font = QFont()
         font.setPixelSize(font_size)
 
@@ -1455,7 +1455,6 @@ class AI(QWidget):
         self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_textedit.setDisabled(True)
 
-        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_style)
         analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
 
@@ -1952,9 +1951,6 @@ class PatternMatch(QWidget):
 
         self.main_layout.addWidget(self.result_display)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
-        )
 
     def calculate_pattern_match(self, target_data=None, analysis_config=None):
         if target_data is not None:
@@ -2126,9 +2122,6 @@ class PipelinePdPm(QWidget):
         content_layout.setStretch(1, 2)
         self.main_layout.addLayout(content_layout)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
-        )
 
         self.result_display.setStyleSheet("font-size:20px;")
         self._right_view = None

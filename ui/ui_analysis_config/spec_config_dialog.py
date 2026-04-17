@@ -3,7 +3,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QCheckBox, QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
 from PyQt5.QtWidgets import QLabel, QComboBox, QSpinBox, QMessageBox
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
@@ -31,14 +30,6 @@ class SpecConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qcheckbox_style
-        )
 
     def create_spec_param(self):
         freq_scale_label = QLabel("频率轴类型")

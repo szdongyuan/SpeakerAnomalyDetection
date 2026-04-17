@@ -18,7 +18,6 @@ from PyQt5.QtWidgets import (
     QPushButton,
 )
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
@@ -141,17 +140,6 @@ class SplConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         layout.setSpacing(10)
         self.setLayout(layout)
-
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qcombobox_style
-        )
 
     def create_btn(self):
         btn_layout = QHBoxLayout()

@@ -2,10 +2,10 @@ import re
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QLineEdit, QPushButton, QGroupBox, QCheckBox, QVBoxLayout, QHBoxLayout, QDialog, QMessageBox
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QDialog, QMessageBox
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, LineEdit, CheckBox, GroupBox
 
 
 class TcpConfigDialog(QDialog):
@@ -21,11 +21,11 @@ class TcpConfigDialog(QDialog):
         self.port_format = False
         self.groupbox_list = list()
 
-        self.ip_lineedit = QLineEdit()
-        self.port_lineedit = QLineEdit()
-        self.tcp_checkbox = QCheckBox("TCP")
-        self.ok_btn = QPushButton(" 确  定 ")
-        self.cancel_btn = QPushButton(" 取  消 ")
+        self.ip_lineedit = LineEdit()
+        self.port_lineedit = LineEdit()
+        self.tcp_checkbox = CheckBox("TCP")
+        self.ok_btn = PushButton(" 确  定 ")
+        self.cancel_btn = PushButton(" 取  消 ")
 
         self.set_member_connect()
         self.set_lineedit_text()
@@ -41,13 +41,6 @@ class TcpConfigDialog(QDialog):
 
         self.set_main_layout()
         self.swap_able_status()
-
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-        )
 
     def set_member_connect(self):
         self.cancel_btn.clicked.connect(self.close)
@@ -84,7 +77,7 @@ class TcpConfigDialog(QDialog):
         ip_layout = QHBoxLayout()
         ip_layout.addWidget(self.ip_lineedit)
 
-        ip_groupbox = QGroupBox("网络地址")
+        ip_groupbox = GroupBox("网络地址")
         ip_groupbox.setLayout(ip_layout)
         return ip_groupbox
 
@@ -92,13 +85,13 @@ class TcpConfigDialog(QDialog):
         port_layout = QHBoxLayout()
         port_layout.addWidget(self.port_lineedit)
 
-        port_groupbox = QGroupBox("监听端口 ")
+        port_groupbox = GroupBox("监听端口 ")
         port_groupbox.setLayout(port_layout)
 
         return port_groupbox
 
     def create_btn_layout(self):
-        a = QPushButton()
+        a = PushButton()
         a.setVisible(False)
         a.setDefault(True)
 

@@ -4,8 +4,6 @@ from PyQt5.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QParallelAnim
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
-from consts import ui_style_const
-
 
 class TrayPopupPanel(QFrame):
     """
@@ -80,8 +78,6 @@ class TrayPopupPanel(QFrame):
                 border: 1px solid #d9d9d9;
             }
             """
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
         )
 
     def hideEvent(self, event):
@@ -109,7 +105,6 @@ class TrayPopupButton(QToolButton):
         self._hover_sync_timer.setInterval(50)
         self._hover_sync_timer.timeout.connect(self._refresh_hot_state)
         self.setProperty("hot", False)
-        self.setStyleSheet(ui_style_const.qtoolbutton_style)
 
     def toggle_popup(self):
         if self._panel.isVisible():

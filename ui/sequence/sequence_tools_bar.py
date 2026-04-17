@@ -12,13 +12,13 @@ class SequenceToolsBar(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
 
-        self.icon_size = ui_style_const.scale_font_px(35)
-        self.button_width = ui_style_const.scale_font_px(80)
-        self.label_height = ui_style_const.scale_font_px(40)
-        self.lineedit_height = ui_style_const.scale_font_px(35)
-        self.lineedit_width = ui_style_const.scale_font_px(100)
-        self.lineedit_margin = ui_style_const.scale_font_px(10)
-        self.lineedit_spacing = ui_style_const.scale_font_px(10)
+        self.icon_size = ui_style_const.scale_size_px(35)
+        self.button_width = ui_style_const.scale_size_px(80)
+        self.label_height = ui_style_const.scale_size_px(40)
+        self.lineedit_height = ui_style_const.scale_size_px(35)
+        self.lineedit_width = ui_style_const.scale_size_px(100)
+        self.lineedit_margin = ui_style_const.scale_size_px(10)
+        self.lineedit_spacing = ui_style_const.scale_size_px(10)
 
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
@@ -104,7 +104,6 @@ class SequenceToolsBar(QWidget):
         self.player_btn.setFixedHeight(self.label_height)
         self.player_btn.setMinimumWidth(80)
         self.player_btn.setToolTip("开始录制")
-        self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
@@ -113,9 +112,8 @@ class SequenceToolsBar(QWidget):
         self.replayer_btn.setMinimumWidth(80)
         self.replayer_btn.setToolTip("重新录制")
         self.replayer_btn.setDisabled(True)
-        self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
-        size = ui_style_const.scale_font_px(30)
+        size = ui_style_const.scale_size_px(30)
         self.replayer_btn.setIconSize(QSize(size, size))
 
     def set_data_btn(self):
@@ -123,7 +121,6 @@ class SequenceToolsBar(QWidget):
         self.data_btn.setMinimumWidth(80)
         self.data_btn.setToolTip("分析")
         self.data_btn.setEnabled(False)
-        self.data_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
         self.data_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
@@ -131,7 +128,6 @@ class SequenceToolsBar(QWidget):
         self.tcp_btn.setFixedHeight(self.label_height)
         self.tcp_btn.setMinimumWidth(80)
         self.tcp_btn.setToolTip("tcp配置")
-        self.tcp_btn.setStyleSheet(ui_style_const.toolbar_button_style)
         self.tcp_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/network.png"))
         self.tcp_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 

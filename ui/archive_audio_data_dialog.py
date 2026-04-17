@@ -6,16 +6,7 @@ from datetime import datetime
 
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtGui import QStandardItem, QBrush, QColor
-from PyQt5.QtWidgets import (
-    QPushButton,
-    QProgressDialog,
-    QMessageBox,
-    QFileDialog,
-    QApplication,
-    QLabel,
-    QWidget,
-    QHBoxLayout,
-)
+from PyQt5.QtWidgets import QProgressDialog, QMessageBox, QFileDialog, QApplication, QWidget, QHBoxLayout
 from scipy.io import wavfile as scipy_wavfile
 
 from base.file_ops import FileOps
@@ -24,6 +15,7 @@ from base.playback_controller import PlaybackController
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
+from ui.custom_ui_widget.widgets import Label, PushButton
 
 
 class ArchiveAudioDataDialog(AudioDataManageDialog):
@@ -45,7 +37,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._click_order = False
         # Base __init__ will trigger load_audio_data_to_view(), which may reset this label.
         # Create it early to avoid attribute access before init_ui() runs.
-        self.remaining_time_label = QLabel()
+        self.remaining_time_label = Label()
         self._is_switching_playback = False
         self._playback_poll_timer = None
         self.playback_controller = PlaybackController()
@@ -55,9 +47,9 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._playback_poll_timer.setInterval(150)
         self._playback_poll_timer.timeout.connect(self._on_playback_poll_timeout)
         # removed blink/flash logic for play column
-        self.order_btn = QPushButton(" 倒  序 ")
-        self.package_btn = QPushButton(" 打  包 ")
-        self.delete_btn = QPushButton(" 删  除 ")
+        self.order_btn = PushButton(" 倒  序 ")
+        self.package_btn = PushButton(" 打  包 ")
+        self.delete_btn = PushButton(" 删  除 ")
 
         self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放"])
 
@@ -84,8 +76,8 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._setup_status_row_with_remaining_label()
         self._set_remaining_label_idle()
 
-        window_width = ui_style_const.scale_font_px(1060)
-        window_height = ui_style_const.scale_font_px(700)
+        window_width = ui_style_const.scale_size_px(1060)
+        window_height = ui_style_const.scale_size_px(700)
         self.resize(window_width, window_height)
 
     def load_audio_data_to_view(self):
@@ -118,7 +110,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         return product_model_set, record_date_set
 
     def set_bottom_layout(self):
-        all_show_btn = QPushButton("全部显示")
+        all_show_btn = PushButton("全部显示")
 
         all_show_btn.clicked.connect(self.show_all_wave)
         self.order_btn.clicked.connect(self.on_clicked_order_btn)

@@ -241,14 +241,6 @@ class SequenceWindow(QWidget):
         sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
         # Register this instance as current target for TCP callbacks
         SequenceWindow._active_instance_ref = weakref.ref(self)
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qframe_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcheckbox_style
-        )
 
     @pyqtSlot(str)
     def _tcp_run_test(self, label: str = "not_labeled"):
@@ -473,7 +465,7 @@ class SequenceWindow(QWidget):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground("white")
-        axis_font_px = ui_style_const.scale_font_px(20)
+        axis_font_px = ui_style_const.scale_size_px(20)
         self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.showGrid(x=True, y=True)
@@ -1534,8 +1526,8 @@ class SequenceWindow(QWidget):
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
-        window_width = ui_style_const.scale_font_px(600)
-        window_height = ui_style_const.scale_font_px(500)
+        window_width = ui_style_const.scale_size_px(600)
+        window_height = ui_style_const.scale_size_px(500)
         if self.analysis_config:
             item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:

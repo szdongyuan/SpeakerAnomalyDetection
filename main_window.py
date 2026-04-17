@@ -2,15 +2,15 @@ import sys
 
 from PyQt5.QtCore import Qt, QPoint, QTimer, QUrl
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
-from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox, QDialog
+from PyQt5.QtWidgets import QApplication, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QMessageBox, QDialog
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
 from base.sound_device_manager import SoundDeviceManager
-from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, MenuBar, Label, Action
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
@@ -49,15 +49,15 @@ class MainWindow(QMainWindow):
         self.mouseMoveEvent = self.mousemoveevent
 
         # set the menubar action
-        self.function_action_test_sequence = QAction("测试队列", self)
-        self.function_action_ai_training = QAction("训练AI模型", self)
-        self.function_audio_manager = QAction("音频数据管理", self)
-        self.function_action_exit = QAction("退出", self)
-        self.hardware_action_selection = QAction("硬件选择", self)
-        self.hardware_action_calibration = QAction("校准", self)
-        self.user_action_switch_account = QAction("切换用户", self)
-        self.user_action_add_account = QAction("添加用户", self)
-        self.user_action_change_pwd = QAction("修改密码", self)
+        self.function_action_test_sequence = Action("测试队列", self)
+        self.function_action_ai_training = Action("训练AI模型", self)
+        self.function_audio_manager = Action("音频数据管理", self)
+        self.function_action_exit = Action("退出", self)
+        self.hardware_action_selection = Action("硬件选择", self)
+        self.hardware_action_calibration = Action("校准", self)
+        self.user_action_switch_account = Action("切换用户", self)
+        self.user_action_add_account = Action("添加用户", self)
+        self.user_action_change_pwd = Action("修改密码", self)
         # set the operator and engineer and admin power
         self.widget_list_operator = [self.user_action_change_pwd]
         self.widget_list_engineer = self.widget_list_operator + [
@@ -91,14 +91,14 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         title_layout = QHBoxLayout()
         title_btn_layout = self.set_title_btn()
-        icon_label = QLabel()
+        icon_label = Label()
         icon_label.setStyleSheet("background-color: transparent")
         title_icon = QPixmap(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico")
         icon_label.setPixmap(title_icon)
         icon_label.setFixedSize(25, 25)
         icon_label.setScaledContents(True)
         current_version = self.get_current_version()
-        title_label = QLabel(f"谛听异音检测 -{current_version} beta")
+        title_label = Label(f"谛听异音检测 -{current_version} beta")
         h_spacer = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
@@ -106,9 +106,6 @@ class MainWindow(QMainWindow):
         title_layout.addLayout(title_btn_layout)
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style + ui_style_const.qpushbutton_style + ui_style_const.qmainwindow_style
-        )
         self.get_current_version()
 
         return title_layout
@@ -121,17 +118,17 @@ class MainWindow(QMainWindow):
 
     def set_title_btn(self):
         # create three button, include minimize, switch size and close
-        self.min_btn = QPushButton()
-        self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minsize.svg"))
+        self.min_btn = PushButton()
+        self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minus.png"))
         self.min_btn.setStyleSheet("border: None; background-color: transparent")
         self.min_btn.clicked.connect(self.showMinimized)
         self.max_flag = True
-        self.max_btn = QPushButton()
-        self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.svg"))
+        self.max_btn = PushButton()
+        self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/restore.png"))
         self.max_btn.clicked.connect(self.show_window_size)
         self.max_btn.setStyleSheet("border: None; background-color: transparent")
-        self.close_btn = QPushButton()
-        self.close_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/close.svg"))
+        self.close_btn = PushButton()
+        self.close_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/fork.png"))
         self.close_btn.setStyleSheet("border: None; background-color: transparent")
         self.close_btn.clicked.connect(self.close)
 
@@ -150,14 +147,14 @@ class MainWindow(QMainWindow):
     def show_window_size(self):
         # change the window size, and update the mouse tracking
         if self.max_flag:
-            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maxsize.svg"))
+            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/maximize.png"))
             self.showNormal()
             self.sequence_window.setMouseTracking(True)
             self.setMouseTracking(True)
             self.statusBar().setMouseTracking(True)
             self.max_flag = False
         else:
-            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.svg"))
+            self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/restore.png"))
             self.showMaximized()
             self.max_flag = True
             self.sequence_window.setMouseTracking(False)
@@ -188,8 +185,7 @@ class MainWindow(QMainWindow):
 
     def init_menu(self):
         # create menu bar, and link the menu bar to action
-        menu_bar = QMenuBar()
-        menu_bar.setStyleSheet(ui_style_const.main_window_menubar_style)
+        menu_bar = MenuBar()
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
@@ -237,16 +233,17 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
-        analysis_model_select_dialog = AnalysisModelSelect(self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker)
+        analysis_model_select_dialog = AnalysisModelSelect(
+            self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker
+        )
         analysis_model_select_dialog.exec()
         # Refresh active sequence config without forcing mode switch
         self.sequence_window.on_sequence_config_updated()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
-        self.user_label = QLabel()
+        self.user_label = Label()
         self.user_label.setAlignment(Qt.AlignLeft)
-        self.user_label.setStyleSheet(ui_style_const.qlabel_style)
         self.tray_popup_button = TrayPopupButton()
         self.update_statusbar()
 
@@ -323,18 +320,10 @@ class MainWindow(QMainWindow):
 
     def show_startup_device_warning(self):
         if self.startup_device_notice_message:
-            QMessageBox.warning(
-                self,
-                "提示",
-                self.startup_device_notice_message
-            )
+            QMessageBox.warning(self, "提示", self.startup_device_notice_message)
             return
 
-        QMessageBox.warning(
-            self,
-            "提示",
-            "已保存的音频设备不存在或配置无效，正在使用系统默认麦克风和扬声器。"
-        )
+        QMessageBox.warning(self, "提示", "已保存的音频设备不存在或配置无效，正在使用系统默认麦克风和扬声器。")
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker
@@ -390,7 +379,7 @@ class MainWindow(QMainWindow):
                 saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
                 saving_dialog.setFixedSize(250, 80)
                 layout = QVBoxLayout(saving_dialog)
-                label = QLabel("正在保存数据，请稍候...")
+                label = Label("正在保存数据，请稍候...")
                 label.setAlignment(Qt.AlignCenter)
                 layout.addWidget(label)
                 saving_dialog.show()

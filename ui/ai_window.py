@@ -3,8 +3,16 @@ import sys
 
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QTextCursor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QFileDialog, QRadioButton, QWidget, QMessageBox
-from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QVBoxLayout
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QWidget,
+    QMessageBox,
+    QHBoxLayout,
+    QVBoxLayout,
+    QTextEdit,
+)
 
 from base.evaluate_model import evaluate, evaluate_with_data
 from base.file_ops import FileOps
@@ -14,6 +22,7 @@ from base.training_model import train_with_dir, train_with_data, save_trained_mo
 from base.training_model_management import TrainingModelManagement
 from consts import error_code, ui_style_const, model_consts
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, GroupBox, Label, LineEdit, ComboBox, RadioButton
 from ui.model_manager_widget import ModelInfoList
 from ui.ai_select_audio_data import SelectAudioDataView
 
@@ -37,13 +46,13 @@ class AiWindow(QDialog):
         self.train_model_with_dir: bool = True
         self.evaluate_audio_data = dict()
         self.evaluate_model_with_dir: bool = True
-        self.train_select_data_label = QLabel()
-        self.test_select_data_label = QLabel()
+        self.train_select_data_label = Label()
+        self.test_select_data_label = Label()
         self.train_select_num = (0, 0)
         self.test_select_num = (0, 0)
 
-        self.train_select_dir_btn = QPushButton(" 选择路径 ")
-        self.test_select_dir_btn = QPushButton(" 选择路径 ")
+        self.train_select_dir_btn = PushButton(" 选择路径 ")
+        self.test_select_dir_btn = PushButton(" 选择路径 ")
 
         self.init_ui()
 
@@ -57,7 +66,7 @@ class AiWindow(QDialog):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("AI训练窗口")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        window_width = ui_style_const.scale_font_px(730)
+        window_width = ui_style_const.scale_size_px(730)
         self.setMinimumWidth(window_width)
 
         base_model_wdiget = BaseModel(self.logger)
@@ -71,14 +80,6 @@ class AiWindow(QDialog):
         btn_function_layout.addWidget(evaluate_group_box)
 
         self.setLayout(btn_function_layout)
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qradiobutton_style
-        )
 
     def set_label_text(self, label, ok_num, ng_num):
         text = "当前选择：OK: %s, NG: %s， 总数：%s" % (ok_num, ng_num, ok_num + ng_num)
@@ -86,13 +87,13 @@ class AiWindow(QDialog):
 
     def create_train_group_box(self):
         train_layout = self.set_train_layout()
-        train_group_box = QGroupBox("训练")
+        train_group_box = GroupBox("训练")
         train_group_box.setLayout(train_layout)
 
         return train_group_box
 
     def set_train_layout(self):
-        self.select_train_audio_data_btn = QPushButton(" 选择音频 ")
+        self.select_train_audio_data_btn = PushButton(" 选择音频 ")
         self.select_train_audio_data_btn.setDisabled(True)
         self.select_train_audio_data_btn.setStyleSheet("padding: 5px")
         self.select_train_audio_data_btn.clicked.connect(lambda: self.select_audio_data_btn_clicked("train"))
@@ -114,7 +115,7 @@ class AiWindow(QDialog):
         return train_layout
 
     def set_trian_with_dir_radio_btn_layout(self):
-        trian_with_dir_radio_btn = QRadioButton("根据路径训练")
+        trian_with_dir_radio_btn = RadioButton("根据路径训练")
         trian_with_dir_radio_btn.toggled.connect(self.train_with_dir_radio_btn_toggled)
         trian_with_dir_radio_btn.setChecked(True)
 
@@ -129,7 +130,7 @@ class AiWindow(QDialog):
         return select_train_path_layout
 
     def set_trian_with_data_radio_btn_layout(self):
-        trian_with_data_radio_btn = QRadioButton("根据音频训练")
+        trian_with_data_radio_btn = RadioButton("根据音频训练")
         trian_with_data_radio_btn.toggled.connect(self.trian_with_data_radio_btn_toggled)
 
         trian_with_data_radio_btn_layout = QHBoxLayout()
@@ -139,14 +140,14 @@ class AiWindow(QDialog):
         return trian_with_data_radio_btn_layout
 
     def set_select_train_path_layout(self):
-        self.train_dir_lineedit = QLineEdit()
+        self.train_dir_lineedit = LineEdit()
         self.train_dir_lineedit.setStyleSheet("background-color: transparent; border: none;")
         self.train_dir_lineedit.setPlaceholderText("请选择训练数据路径")
         self.train_dir_lineedit.setText(self.train_dir)
         self.train_dir_lineedit.setReadOnly(True)
 
     def set_train_btn_and_label_layout(self):
-        self.train_btn = QPushButton(" 开始训练 ")
+        self.train_btn = PushButton(" 开始训练 ")
         self.train_btn.setStyleSheet("padding: 5px")
         self.train_btn.clicked.connect(self.train_btn_clicked)
 
@@ -191,13 +192,13 @@ class AiWindow(QDialog):
 
     def create_evaluate_group_box(self):
         evaluate_layout = self.set_evaluete_layout()
-        evaluate_group_box = QGroupBox("评估")
+        evaluate_group_box = GroupBox("评估")
         evaluate_group_box.setLayout(evaluate_layout)
 
         return evaluate_group_box
 
     def set_evaluete_layout(self):
-        self.select_evaluate_audio_data_btn = QPushButton(" 选择音频 ")
+        self.select_evaluate_audio_data_btn = PushButton(" 选择音频 ")
         self.select_evaluate_audio_data_btn.setDisabled(True)
         self.select_evaluate_audio_data_btn.setStyleSheet("padding: 5px")
         self.select_evaluate_audio_data_btn.clicked.connect(lambda: self.select_audio_data_btn_clicked("evaluate"))
@@ -219,7 +220,7 @@ class AiWindow(QDialog):
         return train_layout
 
     def set_evaluete_btn_and_label_layout(self):
-        self.evaluate_btn = QPushButton(" 开始评估 ")
+        self.evaluate_btn = PushButton(" 开始评估 ")
         self.evaluate_btn.setStyleSheet("padding: 5px")
         self.evaluate_btn.clicked.connect(self.evaluate_btn_clicked)
 
@@ -230,7 +231,7 @@ class AiWindow(QDialog):
         return layout
 
     def set_evaluete_with_dir_radio_btn_layout(self):
-        evaluete_with_dir_radio_btn = QRadioButton("根据路径评估")
+        evaluete_with_dir_radio_btn = RadioButton("根据路径评估")
         evaluete_with_dir_radio_btn.toggled.connect(self.evaluete_with_dir_radio_btn_toggled)
         evaluete_with_dir_radio_btn.setChecked(True)
 
@@ -245,7 +246,7 @@ class AiWindow(QDialog):
         return select_evaluete_path_layout
 
     def set_evaluete_with_data_radio_btn_layout(self):
-        evaluete_with_data_radio_btn = QRadioButton("根据音频评估")
+        evaluete_with_data_radio_btn = RadioButton("根据音频评估")
         evaluete_with_data_radio_btn.toggled.connect(self.evaluete_with_data_radio_btn_toggled)
 
         trian_with_data_radio_btn_layout = QHBoxLayout()
@@ -275,7 +276,7 @@ class AiWindow(QDialog):
             self.set_label_text(self.test_select_data_label, self.test_select_num[0], self.test_select_num[1])
 
     def set_select_evaluete_path_layout(self):
-        self.evaluate_dir_lineedit = QLineEdit()
+        self.evaluate_dir_lineedit = LineEdit()
         self.evaluate_dir_lineedit.setReadOnly(True)
         self.evaluate_dir_lineedit.setStyleSheet("background-color: transparent; border: none;")
         self.evaluate_dir_lineedit.setPlaceholderText("请选择测试数据路径")
@@ -541,8 +542,8 @@ class BaseModel(QWidget):
         It includes a combo box for selecting a model, a button for creating a new model,
         and a text edit area for displaying model information.
         """
-        base_model_box = QGroupBox("模型")
-        base_model_box_width = ui_style_const.scale_font_px(350)
+        base_model_box = GroupBox("模型")
+        base_model_box_width = ui_style_const.scale_size_px(350)
         base_model_box.setMinimumWidth(base_model_box_width)
         combobox_layout = self.create_model_combobox_layout()
         button_layout = self.create_btn_layout()
@@ -557,15 +558,15 @@ class BaseModel(QWidget):
         return base_model_box
 
     def create_model_combobox_layout(self):
-        base_model_label = QLabel("基础模型:")
-        self.base_model_combobox = QComboBox(self)
-        combobox_width = ui_style_const.scale_font_px(350)
+        base_model_label = Label("基础模型:")
+        self.base_model_combobox = ComboBox(self)
+        combobox_width = ui_style_const.scale_size_px(350)
         self.base_model_combobox.setMinimumWidth(combobox_width)
         self.update_base_model_combobox()
         self.base_model_combobox.currentIndexChanged.connect(self.combobox_clicked)
         self.set_default_model()
 
-        model_structure_btn = QPushButton(" 模型结构 ")
+        model_structure_btn = PushButton(" 模型结构 ")
         model_structure_btn.setStyleSheet("padding: 5px")
         model_structure_btn.clicked.connect(self.on_model_structure_btn_clicked)
 
@@ -581,7 +582,7 @@ class BaseModel(QWidget):
         return base_model_combo_layout
 
     def create_btn_layout(self):
-        model_manage_btn = QPushButton(" 模型管理 ")
+        model_manage_btn = PushButton(" 模型管理 ")
         model_manage_btn.setStyleSheet("padding: 5px")
         model_manage_btn.clicked.connect(self.on_model_manage_btn_clicked)
 

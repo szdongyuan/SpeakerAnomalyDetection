@@ -16,7 +16,6 @@ from PyQt5.QtWidgets import (
     QWidget
 )
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 # 确保这里导入的是你项目中正确的 ThresholdConfigWidget 路径
@@ -183,15 +182,6 @@ class FbaConfigWindow(QDialog):
         self.setLayout(main_layout)
         
         # --- 样式设置 ---
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qcombobox_style
-        )
         
         # --- 信号连接 ---
         self.strategy_combo.currentTextChanged.connect(self._on_strategy_changed)

@@ -1,7 +1,7 @@
 from PyQt5.QtGui import QIntValidator, QDoubleValidator
-from PyQt5.QtWidgets import QLineEdit, QFormLayout, QVBoxLayout, QDialog, QPushButton, QHBoxLayout
+from PyQt5.QtWidgets import QFormLayout, QVBoxLayout, QDialog, QHBoxLayout
 
-from consts import ui_style_const
+from ui.custom_ui_widget.widgets import LineEdit, PushButton
 
 
 class GenericFeatureParamsDialog(QDialog):
@@ -21,15 +21,15 @@ class GenericFeatureParamsDialog(QDialog):
         form_layout = QFormLayout()
 
         for name, definition in self.param_definitions.items():
-            default_value = self.current_values.get(name, definition.get('default'))
-            editor = QLineEdit(str(default_value))
+            default_value = self.current_values.get(name, definition.get("default"))
+            editor = LineEdit(str(default_value))
 
-            if 'validation' in definition:
-                validator = self.create_validator_from_def(definition['validation'])
+            if "validation" in definition:
+                validator = self.create_validator_from_def(definition["validation"])
                 if validator:
                     editor.setValidator(validator)
 
-            form_layout.addRow(definition['label'], editor)
+            form_layout.addRow(definition["label"], editor)
             self.editors[name] = editor
 
         button_layout = self.create_button()
@@ -37,20 +37,11 @@ class GenericFeatureParamsDialog(QDialog):
         self.main_layout.addLayout(form_layout)
         self.main_layout.addLayout(button_layout)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qdialog_style
-            + ui_style_const.qtextedit_style
-        )
-
 
     def create_button(self):
         button_layout = QHBoxLayout()
-        ok_button = QPushButton("确认")
-        cancel_button = QPushButton("取消")
+        ok_button = PushButton("确认")
+        cancel_button = PushButton("取消")
         ok_button.clicked.connect(self.accept)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
@@ -75,8 +66,8 @@ class GenericFeatureParamsDialog(QDialog):
     def get_params(self):
         params = {}
         for name, editor in self.editors.items():
-            param_type_str = self.param_definitions[name].get('type', 'str')
-            type_map = {'int': int, 'float': float, 'str': str}
+            param_type_str = self.param_definitions[name].get("type", "str")
+            type_map = {"int": int, "float": float, "str": str}
             param_type = type_map.get(param_type_str, str)
             params[name] = param_type(editor.text())
         return params

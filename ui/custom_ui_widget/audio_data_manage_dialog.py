@@ -33,18 +33,20 @@ from re import fullmatch
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
+from PyQt5.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout
 
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
-from consts import error_code, ui_style_const
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
+from ui.custom_ui_widget.widgets import PushButton, CheckBox, GroupBox, ComboBox
 
 
 class AudioDataManageDialog(DataManageDialog):
     filter_signal = pyqtSignal()
-    def __init__(self, logger: LogManager, hide_select_not_label = False):
+
+    def __init__(self, logger: LogManager, hide_select_not_label=False):
         super(AudioDataManageDialog, self).__init__()
 
         self.logger = logger
@@ -61,7 +63,7 @@ class AudioDataManageDialog(DataManageDialog):
         self.packaging_progress = None
         self.is_hide_select_not_label = hide_select_not_label
 
-        self.all_selected_checkbox = QCheckBox("全选")
+        self.all_selected_checkbox = CheckBox("全选")
 
         self.init_ui_layout(0, 7, [])
 
@@ -81,7 +83,7 @@ class AudioDataManageDialog(DataManageDialog):
         self.set_select_wave_num_text(0)
 
     def set_top_layout(self):
-        filter_btn = QPushButton(" 筛  选 ")
+        filter_btn = PushButton(" 筛  选 ")
 
         self.all_selected_checkbox.clicked.connect(self.on_all_selected_changed)
         filter_btn.clicked.connect(self.on_click_filter_btn)
@@ -280,17 +282,9 @@ class FilterAudioDialog(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qgroupbox_style
-        )
-
     def set_date_filter_groupbox(self):
-        date_groupbox = QGroupBox("日期")
-        data_filter_combobox = QComboBox()
+        date_groupbox = GroupBox("日期")
+        data_filter_combobox = ComboBox()
         data_filter_combobox.setEditable(True)
         data_filter_combobox.addItem("ALL")
         data_filter_combobox.setMinimumWidth(100)
@@ -310,9 +304,9 @@ class FilterAudioDialog(QDialog):
         return date_groupbox
 
     def set_sample_rate_filter_groupbox(self):
-        sample_rate_groupbox = QGroupBox("采样率")
-        select_44100_check_box = QCheckBox("44100")
-        select_48000_check_box = QCheckBox("48000")
+        sample_rate_groupbox = GroupBox("采样率")
+        select_44100_check_box = CheckBox("44100")
+        select_48000_check_box = CheckBox("48000")
 
         select_44100_check_box.toggled.connect(self.on_select_44100_check_box_toggled)
         select_48000_check_box.toggled.connect(self.on_select_48000_check_box_toggled)
@@ -326,16 +320,16 @@ class FilterAudioDialog(QDialog):
 
         self.sample_rate_filter_layout.addWidget(select_44100_check_box, 1)
         self.sample_rate_filter_layout.addWidget(select_48000_check_box, 1)
-        
+
         sample_rate_groupbox.setLayout(self.sample_rate_filter_layout)
 
         return sample_rate_groupbox
 
     def set_label_filter_groupbox(self):
-        label_filter_groupbox = QGroupBox("标签")
-        self.select_ok_check_box = QCheckBox("OK")
-        self.select_ng_check_box = QCheckBox("NG")
-        self.select_not_label_check_box = QCheckBox("未标记")
+        label_filter_groupbox = GroupBox("标签")
+        self.select_ok_check_box = CheckBox("OK")
+        self.select_ng_check_box = CheckBox("NG")
+        self.select_not_label_check_box = CheckBox("未标记")
 
         self.select_ng_check_box.toggled.connect(self.select_ng_check_box_toggled)
         self.select_ok_check_box.toggled.connect(self.select_ok_check_box_toggled)
@@ -358,7 +352,7 @@ class FilterAudioDialog(QDialog):
         label_filter_groupbox.setLayout(label_filter_layout)
 
         return label_filter_groupbox
-    
+
     def hide_select_not_label_check_box(self, is_hide: bool):
         if is_hide:
             self.select_not_label_check_box.hide()
@@ -369,8 +363,8 @@ class FilterAudioDialog(QDialog):
             self.select_not_label_check_box.show()
 
     def create_product_model_filter_groupbox(self):
-        product_model_filter_groupbox = QGroupBox("产品型号")
-        product_model_combobox = QComboBox()
+        product_model_filter_groupbox = GroupBox("产品型号")
+        product_model_combobox = ComboBox()
         product_model_combobox.setEditable(True)
         product_model_combobox.addItem("ALL")
         product_model_combobox.setMinimumWidth(100)
@@ -389,11 +383,11 @@ class FilterAudioDialog(QDialog):
         return product_model_filter_groupbox
 
     def create_btn_layout(self):
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        cancel_btn = QPushButton(" 取  消 ")
+        cancel_btn = PushButton(" 取  消 ")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
-        a = QPushButton()
+        a = PushButton()
         a.setVisible(False)
         a.setDefault(True)
 

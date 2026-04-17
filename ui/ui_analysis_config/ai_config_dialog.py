@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushB
 from PyQt5.QtWidgets import QLabel, QMessageBox, QComboBox, QSizePolicy
 
 from base.training_model_management import TrainingModelManagement
-from consts import ui_style_const, error_code
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
@@ -30,12 +30,6 @@ class AIConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-        )
 
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:

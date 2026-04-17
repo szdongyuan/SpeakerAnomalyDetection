@@ -1,0 +1,30 @@
+<!DOCTYPE RCC>
+
+<RCC version="1.0">
+    <qresource prefix="/ui">
+        <file>icon/blank_icon.png</file>
+        <file>icon/bottom.png</file>
+        <file>icon/clear_icon.png</file>
+        <file>icon/data.png</file>
+        <file>icon/down.png</file>
+        <file>icon/folder-s.png</file>
+        <file>icon/fork.png</file>
+        <file>icon/green_circle.png</file>
+        <file>icon/maximize.png</file>
+        <file>icon/minus.png</file>
+        <file>icon/network.png</file>
+        <file>icon/pause.png</file>
+        <file>icon/play.png</file>
+        <file>icon/red_circle.png</file>
+        <file>icon/replay.png</file>
+        <file>icon/restore.png</file>
+        <file>icon/right_arrow.png</file>
+        <file>icon/splash_screen.png</file>
+        <file>icon/star.png</file>
+        <file>icon/ting.ico</file>
+        <file>icon/top.png</file>
+        <file>icon/ui_login_icon.png</file>
+        <file>icon/up.png</file>
+        <file>style/dongyuan_style.qss</file>
+    </qresource>
+</RCC>

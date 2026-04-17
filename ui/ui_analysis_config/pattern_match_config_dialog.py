@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import QFileDialog
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.load_config import LoadUiConfig
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_clip_extraction_dialog import AudioClipExtractionDialog
 from ui.custom_ui_widget.custom_table_widget import DataView
@@ -70,18 +69,6 @@ class PatternMatchConfigWindow(QDialog):
         self.main_layout.addLayout(btn_layout)
 
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qdialog_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qtextedit_style
-            + ui_style_const.qtableview_style
-        )
 
     def create_pattern_group_box(self):
         self.data_view = DataView(len(self.pattern_list), 2, [])

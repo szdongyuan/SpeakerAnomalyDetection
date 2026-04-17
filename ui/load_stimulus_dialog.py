@@ -2,13 +2,14 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItem
-from PyQt5.QtWidgets import QApplication, QPushButton, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from base.log_manager import LogManager
 from base.stimulus_signal_management import StimulusSignalManagement
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from consts import error_code
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
+from ui.custom_ui_widget.widgets import PushButton
 
 
 class LoadStimulusDialog(DataManageDialog):
@@ -86,9 +87,9 @@ class LoadStimulusDialog(DataManageDialog):
         self.layout().setContentsMargins(13, 20, 13, 13)
 
     def set_bottom_layout(self):
-        del_config_btn = QPushButton("删除配置")
-        cancel_btn = QPushButton(" 取  消 ")
-        ok_btn = QPushButton(" 确  定 ")
+        del_config_btn = PushButton("删除配置")
+        cancel_btn = PushButton(" 取  消 ")
+        ok_btn = PushButton(" 确  定 ")
 
         del_config_btn.clicked.connect(self.del_config)
         ok_btn.clicked.connect(self.ok_btn_clicked)

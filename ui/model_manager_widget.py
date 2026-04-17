@@ -5,16 +5,16 @@ import sys
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QStandardItemModel, QIcon
-from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGroupBox, QLabel, QLineEdit, QMessageBox
-from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QHBoxLayout, QComboBox, QSizePolicy
+from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QMessageBox, QVBoxLayout, QHBoxLayout, QSizePolicy
 
 from base.file_ops import FileOps
 from base.training_model_management import TrainingModelManagement
 from base.log_manager import LogManager
-from consts import error_code, ui_style_const
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from machine_learning.model_builder import build_and_save_model_from_config
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
+from ui.custom_ui_widget.widgets import PushButton, ComboBox, LineEdit, Label, GroupBox
 
 
 def setdata(model, index, value, role=Qt.EditRole):
@@ -52,10 +52,10 @@ class ModelInfoList(DataManageDialog):
         self.load_model_info_from_db()
 
     def create_btn_layout(self):
-        ok_btn = QPushButton(" 确  定 ")
-        set_new_model_btn = QPushButton("新建模型")
-        register_model_btn = QPushButton("注册模型")
-        del_model_btn = QPushButton("删除模型")
+        ok_btn = PushButton(" 确  定 ")
+        set_new_model_btn = PushButton("新建模型")
+        register_model_btn = PushButton("注册模型")
+        del_model_btn = PushButton("删除模型")
 
         del_model_btn.clicked.connect(self.del_model_info)
         register_model_btn.clicked.connect(self.register_model_info)
@@ -99,9 +99,9 @@ class ModelInfoList(DataManageDialog):
 
     def get_model_config(self, model_name: str, action_type: str = None):
         dim_dict = None
-        is_new = (action_type == "new")
+        is_new = action_type == "new"
 
-        enable_widgets = (action_type == "new" or action_type == "register")
+        enable_widgets = action_type == "new" or action_type == "register"
 
         if not enable_widgets:
             if self.select_model_row is None:
@@ -116,10 +116,7 @@ class ModelInfoList(DataManageDialog):
             dim_dict["config_path"] = os.path.basename(config_path_from_db).split(".yml")[0]
 
         model_obj_data = SetModelConfig(
-            model_info=self.model_info,
-            model_name=model_name,
-            dim=dim_dict,
-            is_new_model=is_new
+            model_info=self.model_info, model_name=model_name, dim=dim_dict, is_new_model=is_new
         )
 
         model_obj_data.model_input_dim_box.setEnabled(enable_widgets)
@@ -140,9 +137,7 @@ class ModelInfoList(DataManageDialog):
 
     def register_model_info(self):
         home_directory = os.path.expanduser("~")
-        model_path = QFileDialog.getOpenFileName(
-            self, "选择模型文件", home_directory, "KERAS Files (*.keras)"
-        )[0]
+        model_path = QFileDialog.getOpenFileName(self, "选择模型文件", home_directory, "KERAS Files (*.keras)")[0]
         if os.path.isfile(model_path):
             model_name = os.path.basename(model_path)
             model_name = model_name.split(".")[0]
@@ -154,7 +149,7 @@ class ModelInfoList(DataManageDialog):
         self.select_model_row = None
 
     def update_model_info(
-            self, model_path: str, model_name: str = None, model_type: str = "keras", action_type: str = None
+        self, model_path: str, model_name: str = None, model_type: str = "keras", action_type: str = None
     ):
         if not model_path or not os.path.exists(model_path):
             QMessageBox.warning(self, "警告", f"模型路径无效或不存在：{model_path}")
@@ -166,11 +161,7 @@ class ModelInfoList(DataManageDialog):
 
         new_model_name = model_config["model_name"]
         relative_config_path = model_config["config_path"]
-        copy_code = self.copy_file(
-            source_path=model_path,
-            model_name=new_model_name,
-            model_type=model_type
-        )
+        copy_code = self.copy_file(source_path=model_path, model_name=new_model_name, model_type=model_type)
 
         if copy_code != error_code.OK:
             self.logger.error(f"文件复制失败，无法注册 {new_model_name}")
@@ -180,12 +171,8 @@ class ModelInfoList(DataManageDialog):
 
         is_success_register = self.register_model_info_to_db(
             model_name=new_model_name,
-            model_config={
-                **model_config,
-                "model_path": relative_model_path,
-                "config_path": relative_config_path
-            },
-            model_type=model_type
+            model_config={**model_config, "model_path": relative_model_path, "config_path": relative_config_path},
+            model_type=model_type,
         )
 
         if is_success_register:
@@ -210,7 +197,7 @@ class ModelInfoList(DataManageDialog):
             output_dim=output_dim,
             model_description=model_description,
             model_type=model_type,
-            model_path=model_path
+            model_path=model_path,
         )
         if code == error_code.OK:
             return True
@@ -219,10 +206,7 @@ class ModelInfoList(DataManageDialog):
             return False
 
     def set_new_model_info(self):
-        model_config_dialog = SetModelConfig(
-            model_info=self.model_info,
-            is_new_model=True
-        )
+        model_config_dialog = SetModelConfig(model_info=self.model_info, is_new_model=True)
         model_config_result = model_config_dialog.exec()
         if not model_config_result:
             return
@@ -236,10 +220,7 @@ class ModelInfoList(DataManageDialog):
             QMessageBox.warning(self, "警告", "请先选择YML配置文件！")
             return
         try:
-            new_model = build_and_save_model_from_config(
-                config_path=yml_config_path,
-                compile_model=True
-            )
+            new_model = build_and_save_model_from_config(config_path=yml_config_path, compile_model=True)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"模型构建失败：{str(e)}")
             self.logger.error(f"Model build failed: {e}")
@@ -257,15 +238,9 @@ class ModelInfoList(DataManageDialog):
         relative_model_path = FileOps.get_relative_path(save_path, DEFAULT_DIR)
         relative_config_path = FileOps.get_relative_path(yml_config_path, DEFAULT_DIR)
 
-        db_config = {
-            **model_config,
-            "model_path": relative_model_path,
-            "config_path": relative_config_path
-        }
+        db_config = {**model_config, "model_path": relative_model_path, "config_path": relative_config_path}
         is_success_register = self.register_model_info_to_db(
-            model_name=model_name,
-            model_config=db_config,
-            model_type="keras"
+            model_name=model_name, model_config=db_config, model_type="keras"
         )
         if is_success_register:
             QMessageBox.information(self, "成功", "模型新建成功！")
@@ -351,12 +326,7 @@ class ModelInfoList(DataManageDialog):
 class SetModelConfig(QDialog):
     def __init__(self, model_info: list, model_name: str = None, dim: dict = None, is_new_model: bool = False):
         super().__init__()
-        self.config = {
-            "model_name": model_name,
-            "output_dim": None,
-            "save_path": "",
-            "yml_config_path": None
-        }
+        self.config = {"model_name": model_name, "output_dim": None, "save_path": "", "yml_config_path": None}
         self.model_name = model_name
         self.dim = dim
         self.input_dim_left: str = None
@@ -411,13 +381,6 @@ class SetModelConfig(QDialog):
 
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-        )
 
     def check_model_name(self, model_name: str):
         input_str = model_name
@@ -434,9 +397,9 @@ class SetModelConfig(QDialog):
         return True
 
     def create_model_name_box(self):
-        model_name_box = QGroupBox("基本信息")
-        model_name_label = QLabel("模型名称:")
-        self.model_name_edit = QLineEdit()
+        model_name_box = GroupBox("基本信息")
+        model_name_label = Label("模型名称:")
+        self.model_name_edit = LineEdit()
         self.model_name_edit.setText(self.model_name)
         self.model_name_edit.setPlaceholderText("请输入模型名称")
         self.model_name_edit.editingFinished.connect(self.on_model_name_edit_finished)
@@ -450,11 +413,11 @@ class SetModelConfig(QDialog):
         return model_name_box
 
     def create_input_dim_box(self):
-        input_dim_box = QGroupBox()
-        input_dim_label = QLabel("输入维度:")
-        input_dim_edit_left = QLineEdit()
-        label = QLabel("x")
-        input_dim_edit_right = QLineEdit()
+        input_dim_box = GroupBox()
+        input_dim_label = Label("输入维度:")
+        input_dim_edit_left = LineEdit()
+        label = Label("x")
+        input_dim_edit_right = LineEdit()
 
         input_dim_edit_left.setText(str(self.input_dim_left))
         input_dim_edit_right.setText(str(self.input_dim_right))
@@ -471,9 +434,9 @@ class SetModelConfig(QDialog):
         return input_dim_box
 
     def create_output_dim_box(self):
-        output_dim_box = QGroupBox()
-        output_dim_label = QLabel("输出维度:")
-        output_dim_edit = QLineEdit()
+        output_dim_box = GroupBox()
+        output_dim_label = Label("输出维度:")
+        output_dim_edit = LineEdit()
         output_dim_edit.setText(str(self.config["output_dim"]))
         output_dim_edit.editingFinished.connect(self.on_output_dim_edit_finished)
 
@@ -485,9 +448,9 @@ class SetModelConfig(QDialog):
         return output_dim_box
 
     def create_model_config_box(self):
-        model_config_box = QGroupBox()
-        model_config_label = QLabel("模型配置:")
-        self.model_config_combobox = QComboBox()
+        model_config_box = GroupBox()
+        model_config_label = Label("模型配置:")
+        self.model_config_combobox = ComboBox()
         size_policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.model_config_combobox.setSizePolicy(size_policy)
         self.model_config_combobox.currentTextChanged.connect(self.on_combobox_clicked)
@@ -519,9 +482,9 @@ class SetModelConfig(QDialog):
             self.save_path_edit.setText(os.path.join(save_dir, f"{self.config['model_name']}.keras"))
 
     def create_model_description_box(self):
-        model_description_box = QGroupBox()
-        model_description_label = QLabel("模型备注:")
-        model_description_edit = QLineEdit()
+        model_description_box = GroupBox()
+        model_description_label = Label("模型备注:")
+        model_description_edit = LineEdit()
         model_description_edit.setPlaceholderText("No description")
         model_description_edit.editingFinished.connect(self.on_model_description_edit_finished)
         model_description_layout = QHBoxLayout()
@@ -532,13 +495,13 @@ class SetModelConfig(QDialog):
         return model_description_box
 
     def create_yml_config_box(self):
-        yml_box = QGroupBox("配置文件")
-        yml_label = QLabel("YML文件路径:")
-        self.yml_path_edit = QLineEdit()
+        yml_box = GroupBox("配置文件")
+        yml_label = Label("YML文件路径:")
+        self.yml_path_edit = LineEdit()
         self.yml_path_edit.setPlaceholderText("请选择一个YML配置文件")
         self.yml_path_edit.setReadOnly(True)
 
-        browse_btn = QPushButton("浏览")
+        browse_btn = PushButton("浏览")
         browse_btn.clicked.connect(self.on_browse_yml)
 
         yml_layout = QHBoxLayout()
@@ -553,8 +516,7 @@ class SetModelConfig(QDialog):
         os.makedirs(default_yml_dir, exist_ok=True)
 
         yml_config_path = QFileDialog.getOpenFileName(
-            self, "选择模型YML配置文件", default_yml_dir,
-            "YML Files (*.yml)"
+            self, "选择模型YML配置文件", default_yml_dir, "YML Files (*.yml)"
         )[0]
         if not yml_config_path:
             return
@@ -562,13 +524,13 @@ class SetModelConfig(QDialog):
         self.config["yml_config_path"] = yml_config_path
 
     def create_save_path_box(self):
-        save_path_box = QGroupBox("模型保存路径")
-        save_path_label = QLabel("保存路径:")
-        self.save_path_edit = QLineEdit()
+        save_path_box = GroupBox("模型保存路径")
+        save_path_label = Label("保存路径:")
+        self.save_path_edit = LineEdit()
         self.save_path_edit.setPlaceholderText("请选择模型保存路径")
         default_save_dir = os.path.join(DEFAULT_DIR, "models/")
         os.makedirs(default_save_dir, exist_ok=True)
-        browse_btn = QPushButton("浏览")
+        browse_btn = PushButton("浏览")
         browse_btn.clicked.connect(self.on_browse_save_path)
 
         save_path_layout = QHBoxLayout()
@@ -591,7 +553,7 @@ class SetModelConfig(QDialog):
 
     def create_btn_layout(self):
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("确定")
+        ok_btn = PushButton("确定")
         ok_btn.clicked.connect(self.on_close)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)

@@ -1,0 +1,123 @@
+/* 整体的控件样式 */
+
+QFrame {
+    color: rgb(173, 173, 173);
+}
+
+QPushButton {
+    border-left: 1px solid rgb(128, 128, 128);
+    border-top: 1px solid rgb(128, 128, 128);
+    border-right: 3px solid rgb(128, 128, 128);
+    border-bottom: 3px solid rgb(128, 128, 128);
+    background-color: rgb(225, 225, 225);
+    border-radius: 3px;
+    padding: 3px;
+}
+QPushButton:hover {
+    background-color: #5099ccff;
+    color: black;
+    border-color: #803333ff;
+}
+QPushButton:pressed {
+    background-color: #8099ccff;
+    border-color: #3333ff;
+}
+
+QLineEdit {
+    border: 1px solid rgb(122, 122, 122);
+    border-radius: 3px;
+    padding: 3px;
+}
+QLineEdit:disabled {
+    background-color: #d3d3d3;
+    color: #808080;
+}
+
+QComboBox {
+    border: 1px solid rgb(173, 173, 173);
+    background-color: rgb(225, 225, 225);
+    border-radius: 3px;
+    padding: 3px;
+}
+
+QGroupBox {
+    background: transparent;
+}
+QGroupBox::title {
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    padding-left: 0px;
+    padding-top: 0px;
+    margin-top: 0px;
+}
+
+QSpinBox {
+    background-color: rgb(225, 225, 225);
+    border: 1px solid rgb(173, 173, 173);
+    border-radius: 3px;
+    padding: 3px;
+}
+QSpinBox::up-button {
+    width: 20px;
+}
+QSpinBox::down-button {
+    width: 20px;
+}
+
+QDoubleSpinBox {
+    background-color: rgb(225, 225, 225);
+    border: 1px solid rgb(173, 173, 173);
+    border-radius: 3px;
+    padding: 3px;
+}
+QDoubleSpinBox::up-button {
+    width: 20px;
+}
+QDoubleSpinBox::down-button {
+    width: 20px;
+}
+
+QDialog {
+    border-radius: 20px;
+}
+
+QLabel {
+    color: black;
+}
+
+QMenuBar {
+    background-color:transparent;
+}
+QMenu::item {
+    padding-left: 30px;
+    padding-right: 10px;
+}
+QMenu::item:selected {
+    background-color: #8099ccff;
+}
+
+
+QCheckBox:focus { outline: none; }
+
+QMainWindow  {
+    background-color: #f0f0f0;
+    border: 1px solid rgb(0, 0, 0);
+}
+
+QTextEdit{
+    background-color: white;
+    font-family: 'SimSun';
+    font-size: 30px;
+}
+    QTextEdit:disabled {
+    color: rgb(0, 0, 0);
+}
+
+
+QTableView::item {
+    border-top: 1px solid rgb(130, 135, 144);
+    color: black;
+}
+QTableView::item:selected {
+    background-color: rgb(0, 120, 215);
+}

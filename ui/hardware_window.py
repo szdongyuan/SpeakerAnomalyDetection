@@ -1,12 +1,12 @@
 import sys
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon
-from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QGroupBox, QHBoxLayout, QLabel, QListView, QFrame
-from PyQt5.QtWidgets import QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout, QComboBox
+from PyQt5.QtWidgets import QApplication, QAbstractItemView, QDialog, QHBoxLayout, QFrame, QVBoxLayout
 
 from base.sound_device_manager import SoundDeviceManager
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, Label, GroupBox, ComboBox, ListView
+
 
 class HardwareWindow(QDialog):
 
@@ -24,18 +24,16 @@ class HardwareWindow(QDialog):
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("硬件设置")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         speaker_box = self.create_speaker_box()
         mic_box = self.create_mic_box()
         btn_layout = QHBoxLayout()
-        h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        refresh_btn = QPushButton(" 刷  新 ")
+        refresh_btn = PushButton(" 刷  新 ")
         refresh_btn.clicked.connect(self.refresh_device_display)
-        ok_btn = QPushButton(" 确  定 ")
+        ok_btn = PushButton(" 确  定 ")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         btn_layout.addWidget(refresh_btn)
-        btn_layout.addItem(h_spacer)
+        btn_layout.addStretch()
         btn_layout.setContentsMargins(0, 0, 11, 0)
         btn_layout.addWidget(ok_btn)
         layout = QVBoxLayout()
@@ -43,29 +41,21 @@ class HardwareWindow(QDialog):
         layout.addWidget(mic_box)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qgroupbox_style +
-                           ui_style_const.qlabel_style)
 
     def create_speaker_box(self):
         speaker_label_layout = QVBoxLayout()
-        self.speaker_label = QLabel(" " * 30)
-        self.speaker_channel_label = QLabel(" " * 30)
+        self.speaker_label = Label(" " * 30)
+        self.speaker_channel_label = Label(" " * 30)
 
         speaker_label_layout.addWidget(self.speaker_label)
         speaker_label_layout.addWidget(self.speaker_channel_label)
 
         speaker_btn_layout = QHBoxLayout()
-        select_speaker_btn = QPushButton("选择扬声器")
+        select_speaker_btn = PushButton("选择扬声器")
         select_speaker_btn.clicked.connect(self.select_speaker_btn_clicked)
-        h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        # calibrate_speaker_btn = QPushButton("输出校准")
-        # calibrate_speaker_btn.clicked.connect(self.calibrate_speaker_btn_clicked)
         speaker_btn_layout.addWidget(select_speaker_btn)
-        speaker_btn_layout.addItem(h_spacer)
-        # speaker_btn_layout.addWidget(calibrate_speaker_btn)
-        speaker_box = QGroupBox("扬声器")
+        speaker_btn_layout.addStretch()
+        speaker_box = GroupBox("扬声器")
         layout = QVBoxLayout()
         layout.addLayout(speaker_label_layout)
         layout.addLayout(speaker_btn_layout)
@@ -74,19 +64,18 @@ class HardwareWindow(QDialog):
 
     def create_mic_box(self):
         mic_label_layout = QVBoxLayout()
-        self.mic_label = QLabel(" " * 30)
-        self.mic_channel_label = QLabel(" " * 30)
+        self.mic_label = Label(" " * 30)
+        self.mic_channel_label = Label(" " * 30)
 
         mic_label_layout.addWidget(self.mic_label)
         mic_label_layout.addWidget(self.mic_channel_label)
 
         mic_btn_layout = QHBoxLayout()
-        select_mic_btn = QPushButton("选择麦克风")
+        select_mic_btn = PushButton("选择麦克风")
         select_mic_btn.clicked.connect(self.select_mic_btn_clicked)
-        h_spacer = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
         mic_btn_layout.addWidget(select_mic_btn)
-        mic_btn_layout.addItem(h_spacer)
-        mic_box = QGroupBox("麦克风")
+        mic_btn_layout.addStretch()
+        mic_box = GroupBox("麦克风")
         layout = QVBoxLayout()
         layout.addLayout(mic_label_layout)
         layout.addLayout(mic_btn_layout)
@@ -132,11 +121,14 @@ class HardwareWindow(QDialog):
         if not speaker_list:
             self.speaker = None
         else:
-            if last_speaker and any(d['name'] == last_speaker['name'] for d in speaker_list):
+            if last_speaker and any(d["name"] == last_speaker["name"] for d in speaker_list):
                 self.speaker = next(
-                    (d for d in speaker_list
-                    if d['name'] == last_speaker['name'] and d['hostapi'] == last_speaker['hostapi']),
-                    default_speaker
+                    (
+                        d
+                        for d in speaker_list
+                        if d["name"] == last_speaker["name"] and d["hostapi"] == last_speaker["hostapi"]
+                    ),
+                    default_speaker,
                 )
             else:
                 self.speaker = default_speaker
@@ -144,11 +136,10 @@ class HardwareWindow(QDialog):
         if not mic_list:
             self.mic = None
         else:
-            if last_mic and any(d['name'] == last_mic['name'] for d in mic_list):
+            if last_mic and any(d["name"] == last_mic["name"] for d in mic_list):
                 self.mic = next(
-                    (d for d in mic_list
-                    if d['name'] == last_mic['name'] and d['hostapi'] == last_mic['hostapi']),
-                    default_mic
+                    (d for d in mic_list if d["name"] == last_mic["name"] and d["hostapi"] == last_mic["hostapi"]),
+                    default_mic,
                 )
             else:
                 self.mic = default_mic
@@ -204,8 +195,8 @@ class DeviceListWindow(QDialog):
         self.item_model = QStandardItemModel()
         self.updating_checks = False
 
-        self.api_combo_box = QComboBox()
-        self.list_view = QListView()
+        self.api_combo_box = ComboBox()
+        self.list_view = ListView()
         self.init_ui()
 
     def init_ui(self):
@@ -214,7 +205,7 @@ class DeviceListWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         api_layout = QHBoxLayout()
-        api_label = QLabel("选择驱动")
+        api_label = Label("选择驱动")
         self.api_combo_box.addItems([api for api in self.api_info])
         self.api_combo_box.currentTextChanged.connect(self.update_api_device)
         current_api_name = SoundDeviceManager.get_device_hostapi_name(self.current_device)
@@ -228,31 +219,25 @@ class DeviceListWindow(QDialog):
         self.list_view.setModel(self.item_model)
         self.item_model.itemChanged.connect(self.on_item_changed)
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        cancel_btn = QPushButton(" 取  消 ")
+        cancel_btn = PushButton(" 取  消 ")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
         btn_layout.addWidget(cancel_btn)
         btn_layout.addWidget(ok_btn)
         btn_layout.setSpacing(105)
         btn_layout.setContentsMargins(30, 0, 30, 0)
 
-        item_spacer = QSpacerItem(7, 15, QSizePolicy.Minimum, QSizePolicy.Minimum)
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFixedHeight(20)
-        line.setStyleSheet(ui_style_const.hardware_qframe_style)
         layout = QVBoxLayout()
         layout.addLayout(api_layout)
         layout.addWidget(line)
         layout.addWidget(self.list_view)
-        layout.addItem(item_spacer)
+        layout.addSpacing(15)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style +
-                           ui_style_const.qlabel_style +
-                           ui_style_const.qcombobox_style +
-                           ui_style_const.qlistview_style)
         self.update_api_device()
 
     def update_api_device(self):
@@ -285,8 +270,10 @@ class DeviceListWindow(QDialog):
         self.set_checked_device(target_device)
         target_index = next(
             (
-                row for row, device in enumerate(self.device_list)
-                if device.get("name") == target_device.get("name") and device.get("hostapi") == target_device.get("hostapi")
+                row
+                for row, device in enumerate(self.device_list)
+                if device.get("name") == target_device.get("name")
+                and device.get("hostapi") == target_device.get("hostapi")
             ),
             -1,
         )

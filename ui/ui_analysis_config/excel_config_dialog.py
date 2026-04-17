@@ -18,7 +18,6 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
@@ -173,14 +172,6 @@ class ExcelConfigWindow(QDialog):
         layout.addLayout(self.create_btn())
 
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qspinbox_style
-        )
 
     def _get_available_analysis_items(self) -> list[str]:
         """

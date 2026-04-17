@@ -3,14 +3,14 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit
-from PyQt5.QtWidgets import QMessageBox, QPushButton, QSpacerItem, QSizePolicy, QVBoxLayout
+from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QMessageBox, QSpacerItem, QSizePolicy, QVBoxLayout
 
 from base.db_manager import DataSave
 from base.system_intervction.hardware_intervction import get_mac_address
 from base.log_manager import LogManager
-from consts import error_code, model_consts, ui_style_const
+from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, ComboBox, LineEdit, Label
 
 ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
 
@@ -34,7 +34,7 @@ class LoginWindow(QDialog):
         self.setAutoFillBackground(True)
 
         label_background_layout = QHBoxLayout()
-        self.label_background_image = QLabel(self)
+        self.label_background_image = Label(self)
         self.label_background_image.setFixedHeight(200)
         self.label_background_image.setScaledContents(True)
         label_background_layout.addWidget(self.label_background_image)
@@ -43,8 +43,8 @@ class LoginWindow(QDialog):
         self.login_layout = QVBoxLayout()
 
         self.access_layout = QHBoxLayout()
-        self.label_access = QLabel("权 限：")
-        self.access_selection = QComboBox()
+        self.label_access = Label("权 限：")
+        self.access_selection = ComboBox()
         self.access_selection.addItem("管理员")
         self.access_selection.addItem("工程师")
         self.access_selection.addItem("操作员")
@@ -54,34 +54,32 @@ class LoginWindow(QDialog):
         self.access_selection.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         user_layout = QHBoxLayout()
-        self.label_user = QLabel("账 号：")
-        self.username_input = QLineEdit()
+        self.label_user = Label("账 号：")
+        self.username_input = LineEdit()
         self.username_input.setPlaceholderText("请输入你的账号")
-        self.add_account_botton = QPushButton("添加账号")
+        self.add_account_botton = PushButton("添加账号")
         self.add_account_botton.clicked.connect(self.add_account_click)
         user_layout.addWidget(self.label_user)
         user_layout.addWidget(self.username_input)
         user_layout.addWidget(self.add_account_botton)
 
         pwd_layout = QHBoxLayout()
-        self.label_pwd = QLabel("密 码：")
-        self.password_input = QLineEdit()
+        self.label_pwd = Label("密 码：")
+        self.password_input = LineEdit()
         self.password_input.setPlaceholderText("请输入账号密码")
-        self.password_input.setEchoMode(QLineEdit.Password)
-        self.change_pwd_botton = QPushButton("修改密码")
+        self.password_input.setEchoMode(LineEdit.Password)
+        self.change_pwd_botton = PushButton("修改密码")
         self.change_pwd_botton.clicked.connect(self.change_pwd_click)
         pwd_layout.addWidget(self.label_pwd)
         pwd_layout.addWidget(self.password_input)
         pwd_layout.addWidget(self.change_pwd_botton)
 
         button_layout = QHBoxLayout()
-        self.login_button = QPushButton(" 登  录 ")
+        self.login_button = PushButton(" 登  录 ")
         self.login_button.clicked.connect(self.login_click)
-        h_spacer_login_i = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        button_layout.addItem(h_spacer_login_i)
+        button_layout.addStretch()
         button_layout.addWidget(self.login_button)
-        h_spacer_login_ii = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        button_layout.addItem(h_spacer_login_ii)
+        button_layout.addStretch()
 
         self.login_layout.addLayout(self.access_layout)
         self.login_layout.addLayout(user_layout)
@@ -98,13 +96,6 @@ class LoginWindow(QDialog):
 
         self.setLayout(layout)
         self.login_button.setDefault(True)
-
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qlabel_style
-        )
 
     def access_add_account(self):
         if self.access_selection.currentText() != "管理员":
@@ -220,8 +211,8 @@ class AddAccountWindow(QDialog):
         layout = QVBoxLayout()
 
         access_layout = QHBoxLayout()
-        label_access = QLabel("权    限：")
-        self.access_selection = QComboBox()
+        label_access = Label("权    限：")
+        self.access_selection = ComboBox()
         self.access_selection.addItem("工程师")
         self.access_selection.addItem("操作员")
         access_layout.addWidget(label_access)
@@ -229,22 +220,22 @@ class AddAccountWindow(QDialog):
         self.access_selection.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         user_layout = QHBoxLayout()
-        label_user = QLabel("新建账号：")
-        self.username_input = QLineEdit()
+        label_user = Label("新建账号：")
+        self.username_input = LineEdit()
         user_layout.addWidget(label_user)
         user_layout.addWidget(self.username_input)
         self.username_input.setPlaceholderText("请输入用户账号")
 
         pwd_layout = QHBoxLayout()
-        label_pwd = QLabel("输入密码：")
-        self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        label_pwd = Label("输入密码：")
+        self.password_input = LineEdit()
+        self.password_input.setEchoMode(LineEdit.Password)
         pwd_layout.addWidget(label_pwd)
         pwd_layout.addWidget(self.password_input)
         self.password_input.setPlaceholderText("请输入用户密码")
 
         info_layout = QHBoxLayout()
-        self.info = QLabel("")
+        self.info = Label("")
         self.info.setStyleSheet("color: red; font-size: 15px")
         self.info.setAlignment(Qt.AlignCenter)
         self.info.setMaximumHeight(15)
@@ -252,9 +243,9 @@ class AddAccountWindow(QDialog):
         info_layout.addWidget(self.info)
 
         button_layout = QHBoxLayout()
-        add_user_button = QPushButton("添加账号")
+        add_user_button = PushButton("添加账号")
         add_user_button.clicked.connect(self.add_user_click)
-        exit_button = QPushButton(" 退  出 ")
+        exit_button = PushButton(" 退  出 ")
         exit_button.clicked.connect(self.exit_click)
         button_layout.addWidget(add_user_button)
         button_layout.addWidget(exit_button)
@@ -268,13 +259,6 @@ class AddAccountWindow(QDialog):
         layout.setContentsMargins(25, 10, 25, 10)
 
         self.setLayout(layout)
-
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qlabel_style
-        )
 
     def add_user_click(self):
         username = self.username_input.text()
@@ -334,34 +318,32 @@ class ChangePwdWindow(QDialog):
 
         layout = QVBoxLayout()
 
-        self.info = QLabel("账    号： " + self.user_name)
+        self.info = Label("账    号： " + self.user_name)
         self.info.setMaximumHeight(25)
         self.info.setMinimumHeight(10)
 
         pwd_layout = QHBoxLayout()
-        label_pwd = QLabel("新建密码：")
-        self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        label_pwd = Label("新建密码：")
+        self.password_input = LineEdit()
+        self.password_input.setEchoMode(LineEdit.Password)
         pwd_layout.addWidget(label_pwd)
         pwd_layout.addWidget(self.password_input)
         self.password_input.setPlaceholderText("请输入新的密码")
 
         confirm_pwd_layout = QHBoxLayout()
-        label_confirm_pwd = QLabel("确认密码：")
-        self.confirm_password_input = QLineEdit()
-        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        label_confirm_pwd = Label("确认密码：")
+        self.confirm_password_input = LineEdit()
+        self.confirm_password_input.setEchoMode(LineEdit.Password)
         confirm_pwd_layout.addWidget(label_confirm_pwd)
         confirm_pwd_layout.addWidget(self.confirm_password_input)
         self.confirm_password_input.setPlaceholderText("请再次输入密码")
 
         button_layout = QHBoxLayout()
-        change_pwd_button = QPushButton("修改密码")
+        change_pwd_button = PushButton("修改密码")
         change_pwd_button.clicked.connect(self.change_pwd_click)
-        h_spacer_change_pwd_i = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        h_spacer_change_pwd_ii = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        button_layout.addItem(h_spacer_change_pwd_i)
+        button_layout.addStretch()
         button_layout.addWidget(change_pwd_button)
-        button_layout.addItem(h_spacer_change_pwd_ii)
+        button_layout.addStretch()
         button_layout.setContentsMargins(0, 10, 0, 0)
 
         layout.addWidget(self.info)
@@ -372,13 +354,6 @@ class ChangePwdWindow(QDialog):
         layout.setContentsMargins(25, 10, 25, 10)
 
         self.setLayout(layout)
-
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlabel_style
-        )
 
     def change_pwd_click(self):
         if not self.password_input.text():
