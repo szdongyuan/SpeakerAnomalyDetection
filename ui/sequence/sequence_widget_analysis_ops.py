@@ -23,7 +23,6 @@ from base.play_and_record import (
     stream_record_without_play,
 )
 
-from base.save_data import save_recorded_data_to_json
 from base.streaming_file_writer import StreamingWavWriter
 from base.temp_tcp_client import TempTcpClient
 
@@ -67,38 +66,24 @@ class SequenceWidgetAnalysisOpsMixin:
             return normalize_direction(getattr(self, "_current_trigger_direction", ""))
         return ""
 
-    def _reserve_recorded_count_for_run(self) -> int:
+    @staticmethod
+    def _generate_recording_token() -> str:
+        # Keep token human-readable and non-count-based.
+        return datetime.now().strftime("%H%M%S%f")
+
+    def _reserve_recorded_count_for_run(self) -> str:
         direction = self._get_recording_direction()
-        self._current_run_incremented_recorded_count = False
-
         if direction in ("forward", "reverse"):
-            cycle_count = getattr(self, "_current_cycle_recorded_count", None)
-            if cycle_count in (None, ""):
-                self.current_recorded_count += 1
-                cycle_count = self.current_recorded_count
-                self._current_cycle_recorded_count = cycle_count
-                self._current_run_incremented_recorded_count = True
-                save_recorded_data_to_json(
-                    self.lineedit_type.text(),
-                    str(self.current_recorded_count),
-                    self.lineedit_s_or_n.text(),
-                    self.barcode_scanner_box.isChecked(),
-                )
-            self.lineedit_count.setText(str(cycle_count))
-            self.last_play_count = int(cycle_count)
-            return int(cycle_count)
+            cycle_token = str(getattr(self, "_current_cycle_recorded_count", "") or "")
+            if not cycle_token:
+                cycle_token = self._generate_recording_token()
+                self._current_cycle_recorded_count = cycle_token
+            self.last_play_count = cycle_token
+            return cycle_token
 
-        self.current_recorded_count += 1
-        self._current_run_incremented_recorded_count = True
-        self.lineedit_count.setText(str(self.current_recorded_count))
-        self.last_play_count = self.current_recorded_count
-        save_recorded_data_to_json(
-            self.lineedit_type.text(),
-            str(self.current_recorded_count),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
-        )
-        return int(self.current_recorded_count)
+        run_token = self._generate_recording_token()
+        self.last_play_count = run_token
+        return run_token
 
     def _resolve_recording_name_suffix(self) -> str:
         direction = self._get_recording_direction()
@@ -437,7 +422,7 @@ class SequenceWidgetAnalysisOpsMixin:
         if self._analysis_result_summary_window:
             self._analysis_result_summary_window = None
 
-        self._reserve_recorded_count_for_run()
+        self._current_run_recording_token = self._reserve_recorded_count_for_run()
 
         # Record with new count
         self.judge_play_and_record(label, is_replay=False)
@@ -472,12 +457,15 @@ class SequenceWidgetAnalysisOpsMixin:
         self._excel_export_cache = None
         self._excel_exported_record_id = None
 
-        # Use provided count if available (for replay), otherwise use lineedit value
-        count_str = str(count) if count is not None else self.lineedit_count.text()
+        # Use provided token if available (for replay), otherwise use current run token.
+        recording_token = str(count) if count is not None else str(getattr(self, "_current_run_recording_token", "") or "")
+        if not recording_token:
+            recording_token = self._generate_recording_token()
+            self._current_run_recording_token = recording_token
 
         name_suffix = self._resolve_recording_name_suffix()
         self.recorded_path, self.recorded_signal_info = get_recorded_info(
-            self.lineedit_type.text(), count_str, self.lineedit_s_or_n.text(), label, name_suffix=name_suffix
+            self.lineedit_type.text(), recording_token, self.lineedit_s_or_n.text(), label, name_suffix=name_suffix
         )
         if name_suffix:
             self.recorded_signal_info["record_name_suffix"] = name_suffix
@@ -594,11 +582,6 @@ class SequenceWidgetAnalysisOpsMixin:
                 recorded_dict, sample_rate = self.reset_work_pram(label)
         except Exception as e:
             self.default_logger.error(f"reset_work_pram_error: {e}")
-            if not is_replay and bool(getattr(self, "_current_run_incremented_recorded_count", False)):
-                # rollback the increment done in start_this_play()
-                self.current_recorded_count -= 1
-                self.lineedit_count.setText(str(self.current_recorded_count))
-                self._current_run_incremented_recorded_count = False
             self.player_status_flag = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
@@ -620,7 +603,6 @@ class SequenceWidgetAnalysisOpsMixin:
 
             # Start polling timer to process queue and detect completion
             self.streaming_poll_timer.start(50)  # Poll every 50ms
-            self._current_run_incremented_recorded_count = False
         except Exception as e:
             self.default_logger.error(f"start_streaming_error: {e}")
             self._cleanup_streaming_resources()

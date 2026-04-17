@@ -32,19 +32,17 @@ def save_audio_simple(save_path, audio, sr=44100):
     wavfile.write(save_path, int(sr), audio_arr)
 
 
-def save_recorded_data_to_json(product_model, current_recorded_count, scanner_barcode, scanner_barcode_check):
+def save_recorded_data_to_json(product_model, scanner_barcode, scanner_barcode_check):
     """
-    Save the recorded number to a text file.
+    Persist lightweight sequence-page UI state.
 
-    This function writes the current recorded number and the current date to a specified text file.
-    If the file exists and the date matches, it updates the recorded number.
-    If the file does not exist or the date does not match, it creates a new file and writes the initial recorded number.
+    The sequence page no longer exposes or stores a manual record count, so we only
+    keep the product model, scanner barcode state, and current date in the config file.
     """
     file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.json"
     current_time = datetime.now().strftime("%Y-%m-%d")
     data = {
         "product_model": product_model,
-        "current_recorded_count": int(current_recorded_count),
         "scanner_barcode": scanner_barcode,
         "scanner_barcode_check": scanner_barcode_check,
         "datetime": current_time,

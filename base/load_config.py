@@ -297,22 +297,21 @@ class LoadUiConfig(object):
     @staticmethod
     def load_recorded_num_from_json(logger):
         """
-        Load the recorded number from a text file.
+        Load persisted sequence-page UI state from disk.
 
-        This method reads a recorded number and the last recorded date from a specified text file.
-        If the file exists and the last recorded date matches the current date, it returns the recorded number;
-        otherwise, it returns None.
+        The sequence page no longer stores a manual record count, but some legacy callers
+        still expect this helper to return a `(count, barcode)` tuple. We keep that shape
+        for compatibility and always return `None` for the removed count field.
 
         Returns:
-            int or None: The recorded number if the file exists and the date matches; otherwise, None.
+            tuple: `(None, scanner_barcode)` for today, otherwise `(None, None)`.
         """
         result = LoadUiConfig().load_last_recorded_info(logger)
         if result:
             last_datetime = result.get("datetime")
-            recorded_count = result.get("current_recorded_count")
             scanner_barcode = result.get("scanner_barcode")
             if last_datetime == datetime.now().strftime("%Y-%m-%d"):
-                return recorded_count, scanner_barcode
+                return None, scanner_barcode
 
         return None, None
 

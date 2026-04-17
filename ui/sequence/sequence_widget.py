@@ -82,10 +82,9 @@ class SequenceWindow(
         self.tcp_flag = False
         self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
         self.mode = None
-        self.current_recorded_count = None
-        self.last_play_count = None  # Cache last play count for replay
+        self.last_play_count = None  # Cache last run token for replay overwrite
         self._current_cycle_recorded_count = None
-        self._current_run_incremented_recorded_count = False
+        self._current_run_recording_token = ""
 
         self.default_logger = LogManager.set_log_handler("core")
         self._missing_config_prompted = False

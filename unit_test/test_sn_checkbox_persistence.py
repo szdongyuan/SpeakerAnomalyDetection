@@ -59,11 +59,9 @@ class _DummyWidget(SequenceWidgetBarcodeOpsMixin):
         self.barcode_scanner_box = QCheckBox()
         self.lineedit_s_or_n = QLineEdit()
         self.lineedit_type = QLineEdit()
-        self.lineedit_count = QLineEdit()
         self.default_logger = _DummyLogger()
         self.hw_manager = _DummyHardwareManager()
         self.lineedit_type.setText("MODEL")
-        self.lineedit_count.setText("7")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -146,6 +144,6 @@ def test_clicked_scanner_persists_checkbox_state(monkeypatch):
     widget.clicked_scanner()
 
     assert save_calls == [
-        ("MODEL", "7", "", True),
-        ("MODEL", "7", "", False),
+        ("MODEL", "", True),
+        ("MODEL", "", False),
     ]

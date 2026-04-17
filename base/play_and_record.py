@@ -26,8 +26,14 @@ def get_recorded_info(product_model, product_number, barcode, label, name_suffix
     recording_time_for_name = now.strftime("%Y-%m-%d-%H-%M-%S")
     mac_address = get_mac_address()
     mac_address = mac_address.replace(":", "") if mac_address else None
-    product_number = "{:03}".format(int(product_number))
-    recorded_name = product_model + "_" + recording_time_for_name + "_" + mac_address + "_" + product_number
+    product_token = str(product_number or "").strip()
+    if not product_token:
+        product_token = now.strftime("%H%M%S%f")
+    sanitized_token = "".join(ch for ch in product_token if ch.isalnum() or ch in ("-", "_"))
+    if not sanitized_token:
+        sanitized_token = now.strftime("%H%M%S%f")
+
+    recorded_name = product_model + "_" + recording_time_for_name + "_" + mac_address + "_" + sanitized_token
     if barcode:
         recorded_name = recorded_name + "_BC" + barcode
     else:

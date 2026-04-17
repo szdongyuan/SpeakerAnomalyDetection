@@ -30,11 +30,11 @@ class SequenceWidgetConfigOpsMixin:
 
         # 键盘事件捕获（扫码枪键盘楔入模式）
         try:
-            # 型号/计数：单击进入编辑态（默认只读）
+            # 型号：单击进入编辑态（默认只读）
             # 设计：只读时单击解锁；编辑时单击不反向上锁（否则用户无法用鼠标定位光标）。
             # 回到只读：依赖失去焦点（lineedit_*_lose_focus 已处理）。
             if event.type() == QEvent.MouseButtonPress:
-                if obj is self.lineedit_type or obj is self.lineedit_count:
+                if obj is self.lineedit_type:
                     try:
                         if isinstance(obj, QLineEdit) and obj.isReadOnly():
                             obj.setReadOnly(False)
@@ -50,13 +50,12 @@ class SequenceWidgetConfigOpsMixin:
 
                 # 如果 HID 模式刚刚接收到条码，忽略所有键盘输入（避免 HID 和键盘模式同时工作的重复问题）
                 ch = event.text()
-                # "最简焦点方案"下，型号/计数输入框永远不拦截（保证手动输入不受影响）
+                # "最简焦点方案"下，型号输入框永远不拦截（保证手动输入不受影响）
                 if (
                     ch
                     and ch.isprintable()
                     and now < self._hid_mode_active_until
                     and fw is not self.lineedit_type
-                    and fw is not self.lineedit_count
                 ):
                     return True  # 吞掉事件
 

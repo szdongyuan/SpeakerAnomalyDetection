@@ -103,8 +103,6 @@ class SequenceWidgetUiOpsMixin:
         self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record(is_replay=True))
         self.data_btn.clicked.connect(lambda: self.run(show_windows=True))
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
-        self.lineedit_count.editingFinished.connect(lambda: self.lineedit_count_lose_focus(self.lineedit_count))
-        self.lineedit_count.returnPressed.connect(lambda: self.validate_count(self.lineedit_count, True))
 
         # 扫码键盘楔入模式：信号交给 BarcodeRouter 处理
         self.lineedit_s_or_n.returnPressed.connect(self._barcode_router.on_barcode_return_pressed)
@@ -152,17 +150,9 @@ class SequenceWidgetUiOpsMixin:
         except Exception:
             pass
 
-        result, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
-        if result is None:
-            self.current_recorded_count = 1
-        else:
-            self.current_recorded_count = result
-
-        self.lineedit_count.setText(str(self.current_recorded_count))
-        try:
-            self.lineedit_count.setReadOnly(True)
-        except Exception:
-            pass
+        # Manual count is removed from workflow; keep the hidden widget inert.
+        self.lineedit_count.setText("")
+        self.lineedit_count.setReadOnly(True)
 
         if getattr(self, "left_panel", None) is not None:
             self.left_panel.set_current_barcode(self.lineedit_s_or_n.text())
@@ -216,10 +206,9 @@ class SequenceWidgetUiOpsMixin:
         return self.toolsbar.serial_trigger_code_label
 
     def lineedit_count_lose_focus(self, lineedit):
-        self.current_recorded_count = int(lineedit.text())
+        lineedit.setText("")
         save_recorded_data_to_json(
             self.lineedit_type.text(),
-            self.lineedit_count.text(),
             self.lineedit_s_or_n.text(),
             self.barcode_scanner_box.isChecked(),
         )
@@ -230,13 +219,11 @@ class SequenceWidgetUiOpsMixin:
             pass
         lineedit.clearFocus()
         if lineedit.text() == "":
-            result_count, _ = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
-            lineedit.setText(str(result_count))
+            lineedit.setText("")
 
     def lineedit_type_lose_focus(self, lineedit):
         save_recorded_data_to_json(
             self.lineedit_type.text(),
-            self.lineedit_count.text(),
             self.lineedit_s_or_n.text(),
             self.barcode_scanner_box.isChecked(),
         )

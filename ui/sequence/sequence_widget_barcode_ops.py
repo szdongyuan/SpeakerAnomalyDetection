@@ -19,7 +19,6 @@ class SequenceWidgetBarcodeOpsMixin:
     def _persist_scanner_checkbox_state(self) -> None:
         save_recorded_data_to_json(
             self.lineedit_type.text(),
-            self.lineedit_count.text(),
             self.lineedit_s_or_n.text(),
             self.barcode_scanner_box.isChecked(),
         )

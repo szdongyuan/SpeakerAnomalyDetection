@@ -75,9 +75,9 @@ class SequenceToolsBar(QWidget):
         vertical_line_5.setFrameShape(QFrame.VLine)
 
         mode_type_layout = self.create_mode_type_layout()
-        mode_count_layout = self.create_mode_count_layout()
         barcode_scanner_layout = self.create_barcode_scanner_layout()
         using_file_combobox_layout = self.create_using_file_combobox()
+
         layout = QHBoxLayout()
         layout.addWidget(self.player_btn)
         layout.addWidget(vertical_line_1)
@@ -92,10 +92,10 @@ class SequenceToolsBar(QWidget):
         layout.addWidget(vertical_line_5)
         layout.addLayout(using_file_combobox_layout)
         layout.addLayout(mode_type_layout)
-        layout.addLayout(mode_count_layout)
         layout.addLayout(barcode_scanner_layout)
 
-        layout.addStretch()
+        # layout.addStretch()
+        layout.addSpacing(50)
         layout.setContentsMargins(5, 0, 5, 0)
 
         return layout
@@ -142,13 +142,12 @@ class SequenceToolsBar(QWidget):
         type_label = QLabel(" 使用配置：")
         type_label.setFixedHeight(40)
         self.using_file_combobox.setFixedHeight(35)
-        self.using_file_combobox.setMinimumWidth(100)
         vertical_line = QFrame()
         vertical_line.setFrameShape(QFrame.VLine)
 
         using_file_combobox_layout = self.create_part_layout()
         using_file_combobox_layout.addWidget(type_label)
-        using_file_combobox_layout.addWidget(self.using_file_combobox)
+        using_file_combobox_layout.addWidget(self.using_file_combobox, 1)
         using_file_combobox_layout.addSpacing(10)
         using_file_combobox_layout.addWidget(vertical_line)
 
@@ -174,7 +173,7 @@ class SequenceToolsBar(QWidget):
 
         mode_type_layout = self.create_part_layout()
         mode_type_layout.addWidget(type_label)
-        mode_type_layout.addWidget(self.lineedit_type)
+        mode_type_layout.addWidget(self.lineedit_type, 1)
         mode_type_layout.addSpacing(10)
         mode_type_layout.addWidget(vertical_line)
 
@@ -190,7 +189,7 @@ class SequenceToolsBar(QWidget):
 
         barcode_scanner_layout = self.create_part_layout()
         barcode_scanner_layout.addWidget(self.barcode_scanner_box)
-        barcode_scanner_layout.addWidget(self.lineedit_s_or_n)
+        barcode_scanner_layout.addWidget(self.lineedit_s_or_n, 1)
         barcode_scanner_layout.addSpacing(10)
         barcode_scanner_layout.addWidget(vertical_line)
 
