@@ -97,9 +97,6 @@ class ExcelConfigWindow(QDialog):
         max_points_layout.addWidget(self.max_points_spin)
         basic_layout.addLayout(max_points_layout)
 
-        basic_box.setLayout(basic_layout)
-        layout.addWidget(basic_box)
-
         # Item selection
         select_box = QGroupBox("选择需要保存的分析项")
         select_layout = QVBoxLayout()
@@ -134,7 +131,43 @@ class ExcelConfigWindow(QDialog):
         scroll.setWidget(scroll_content)
         select_layout.addWidget(scroll)
         select_box.setLayout(select_layout)
-        layout.addWidget(select_box)
+        basic_layout.addWidget(select_box)
+
+        basic_box.setLayout(basic_layout)
+        layout.addWidget(basic_box)
+
+        mes_box = QGroupBox("MES 保存设置")
+        mes_layout = QVBoxLayout()
+
+        self.mes_chk = QCheckBox("保存MES结果")
+        self.mes_chk.setChecked(bool(self.load_config.get("save_mes_enabled", False)))
+        mes_layout.addWidget(self.mes_chk)
+
+        mes_dir_layout = QHBoxLayout()
+        mes_dir_layout.addWidget(QLabel("MES目录:"))
+        self.mes_file_base_edit = QLineEdit()
+        if "mes_file_base" in self.load_config:
+            self.mes_file_base_edit.setText(self.load_config.get("mes_file_base") or "")
+        else:
+            self.mes_file_base_edit.setText("D:/dataMES")
+        mes_browse_btn = QPushButton("浏览…")
+        mes_browse_btn.clicked.connect(self.on_browse_mes_dir)
+        mes_dir_layout.addWidget(self.mes_file_base_edit)
+        mes_dir_layout.addWidget(mes_browse_btn)
+        mes_layout.addLayout(mes_dir_layout)
+
+        mes_name_layout = QHBoxLayout()
+        mes_name_layout.addWidget(QLabel("MES文件名:"))
+        self.mes_file_name_edit = QLineEdit()
+        if "mes_file_name" in self.load_config:
+            self.mes_file_name_edit.setText(self.load_config.get("mes_file_name") or "")
+        else:
+            self.mes_file_name_edit.setText("Results")
+        mes_name_layout.addWidget(self.mes_file_name_edit)
+        mes_layout.addLayout(mes_name_layout)
+
+        mes_box.setLayout(mes_layout)
+        layout.addWidget(mes_box)
 
         layout.addStretch()
         layout.addLayout(self.create_btn())
@@ -210,6 +243,42 @@ class ExcelConfigWindow(QDialog):
 
         return True, ""
 
+    def _validate_mes_file_name_text(self, text: str) -> tuple[bool, str]:
+        raw = "" if text is None else str(text)
+        trimmed = raw.strip()
+        if not trimmed:
+            return False, "MES 文件名不能为空"
+        if raw[-1] in {" ", "."}:
+            return False, "MES 文件名不能以空格或点结尾"
+        if any(ord(ch) < 32 for ch in raw):
+            return False, "MES 文件名不能包含控制字符"
+        drive, _tail = os.path.splitdrive(raw)
+        if drive:
+            return False, "MES 文件名不能包含盘符或绝对路径"
+        if trimmed in {".", ".."}:
+            return False, "MES 文件名不能包含路径"
+        if any(ch in raw for ch in '<>:"/\\|?*'):
+            return False, "MES 文件名不能包含非法字符"
+        normalized_basename = trimmed.split(".", 1)[0].rstrip(" .").upper()
+        if os.path.basename(raw) != raw:
+            return False, "MES 文件名不能包含路径"
+        if any(sep in raw for sep in ("/", "\\")):
+            return False, "MES 文件名不能包含路径"
+        return True, ""
+
+    def _validate_mes_config(self) -> tuple[bool, str]:
+        if not self.mes_chk.isChecked():
+            return True, ""
+
+        mes_file_base = normalize_mes_file_base(self.mes_file_base_edit.text())
+        mes_file_name = self.mes_file_name_edit.text()
+        if not mes_file_base:
+            return False, "MES 保存目录不能为空"
+        ok, msg = self._validate_save_dir_text(mes_file_base, create=True)
+        if not ok:
+            return False, msg
+        return self._validate_mes_file_name_text(mes_file_name)
+
     def on_save_dir_editing_finished(self):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=False)
         if ok:
@@ -272,4 +341,3 @@ class ExcelConfigWindow(QDialog):
         config_data = self.get_default_config()
         self.accept()
         return config_data
-
