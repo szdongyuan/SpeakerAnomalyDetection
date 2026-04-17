@@ -276,7 +276,7 @@ class ExcelConfigWindow(QDialog):
         if not self.mes_chk.isChecked():
             return True, ""
 
-        mes_file_base = normalize_mes_file_base(self.mes_file_base_edit.text())
+        mes_file_base = self.mes_file_base_edit.text()
         mes_file_name = self.mes_file_name_edit.text()
         if not mes_file_base:
             return False, "MES 保存目录不能为空"
@@ -328,12 +328,19 @@ class ExcelConfigWindow(QDialog):
             "date_format": "%Y%m%d",
             "max_points": max_points,
             "save_items": save_items,
+            "save_mes_enabled": self.mes_chk.isChecked(),
+            "mes_file_base": self.mes_file_base_edit.text() or None,
+            "mes_file_name": self.mes_file_name_edit.text(),
         }
 
     def on_default_btn_clicked(self):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)
         if not ok:
             QMessageBox.warning(self, "保存目录不可用", msg)
+            return
+        ok, msg = self._validate_mes_config()
+        if not ok:
+            QMessageBox.warning(self, "MES配置不可用", msg)
             return
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("Excel", config_data)
@@ -343,6 +350,10 @@ class ExcelConfigWindow(QDialog):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)
         if not ok:
             QMessageBox.warning(self, "保存目录不可用", msg)
+            return None
+        ok, msg = self._validate_mes_config()
+        if not ok:
+            QMessageBox.warning(self, "MES配置不可用", msg)
             return None
         config_data = self.get_default_config()
         self.accept()
