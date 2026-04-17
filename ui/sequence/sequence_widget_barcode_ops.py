@@ -4,11 +4,64 @@ from datetime import datetime
 from PyQt5.QtCore import QSignalBlocker
 from PyQt5.QtWidgets import QMessageBox, QApplication
 
+from base.load_config import LoadUiConfig
+from base.save_data import save_recorded_data_to_json
 from consts import error_code
 
 
 class SequenceWidgetBarcodeOpsMixin:
     _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
+
+    @staticmethod
+    def _normalize_saved_scanner_checkbox_state(value) -> bool:
+        return value if isinstance(value, bool) else False
+
+    def _persist_scanner_checkbox_state(self) -> None:
+        save_recorded_data_to_json(
+            self.lineedit_type.text(),
+            self.lineedit_count.text(),
+            self.lineedit_s_or_n.text(),
+            self.barcode_scanner_box.isChecked(),
+        )
+
+    def _apply_scanner_enabled_state(self, enabled: bool, persist: bool = True) -> None:
+        enabled = bool(enabled)
+        self.barcode_scanner_box.setChecked(enabled)
+
+        if enabled:
+            # 配置文件加载失败不再致命：扫码枪可进入自动识别模式（支持热插拔）。
+            # 注意：光电开关仍依赖 hotkey 配置。
+            if not self.hw_manager.ensure_config_loaded():
+                self.default_logger.warning(
+                    "无法加载扫码枪/光电开关配置，将进入扫码枪自动识别模式（光电开关可能不可用）。"
+                )
+
+            self.lineedit_s_or_n.setEnabled(True)
+            # 键盘楔入模式依赖“输入框有焦点”，开启后把焦点给 S/N 输入框
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
+            except Exception:
+                pass
+            if self.hw_manager.start_scanner_and_sensor_listeners():
+                self.default_logger.info("硬件监听已启动")
+            else:
+                self.default_logger.warning("硬件初始化失败，已静默降级为普通键盘输入模式")
+        else:
+            self.lineedit_s_or_n.clear()
+            self.lineedit_s_or_n.setDisabled(True)
+            self.hw_manager.stop_scanner_and_sensor_listeners()
+            self.default_logger.info("硬件监听已停止")
+
+        if persist:
+            self._persist_scanner_checkbox_state()
+
+    def restore_scanner_checkbox_state(self) -> None:
+        last_recorded_info = LoadUiConfig.load_last_recorded_info(self.default_logger)
+        if not isinstance(last_recorded_info, dict):
+            last_recorded_info = {}
+        saved_enabled = self._normalize_saved_scanner_checkbox_state(last_recorded_info.get("scanner_barcode_check"))
+        self._apply_scanner_enabled_state(saved_enabled, persist=False)
 
     @staticmethod
     def _normalize_trigger_direction(direction: str) -> str:
@@ -200,30 +253,7 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def clicked_scanner(self):
         """Checkbox 状态改变时的回调"""
-        if self.barcode_scanner_box.isChecked():
-            # 配置文件加载失败不再致命：扫码枪可进入自动识别模式（支持热插拔）。
-            # 注意：光电开关仍依赖 hotkey 配置。
-            if not self.hw_manager.ensure_config_loaded():
-                self.default_logger.warning(
-                    "无法加载扫码枪/光电开关配置，将进入扫码枪自动识别模式（光电开关可能不可用）。"
-                )
-
-            self.lineedit_s_or_n.setEnabled(True)
-            # 键盘楔入模式依赖“输入框有焦点”，开启后把焦点给 S/N 输入框
-            try:
-                self.lineedit_s_or_n.setFocus()
-                self.lineedit_s_or_n.selectAll()
-            except Exception:
-                pass
-            if self.hw_manager.start_scanner_and_sensor_listeners():
-                self.default_logger.info("硬件监听已启动")
-            else:
-                self.default_logger.warning("硬件初始化失败，已静默降级为普通键盘输入模式")
-        else:
-            self.lineedit_s_or_n.clear()
-            self.lineedit_s_or_n.setDisabled(True)
-            self.hw_manager.stop_scanner_and_sensor_listeners()
-            self.default_logger.info("硬件监听已停止")
+        self._apply_scanner_enabled_state(self.barcode_scanner_box.isChecked(), persist=True)
 
     def on_barcode_received(self, barcode):
         """处理扫码枪信号（HID 模式）"""

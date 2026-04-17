@@ -176,3 +176,4 @@ class SequenceWindow(
         self.init_lineedit_text()
         self.init_ui()
         self._serial_trigger_runtime_initialized = False
+        self.restore_scanner_checkbox_state()
