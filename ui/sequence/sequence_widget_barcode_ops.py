@@ -604,3 +604,35 @@ class SequenceWidgetBarcodeOpsMixin:
             except Exception:
                 pass
         self.update_player_btn_is_paused()
+
+    def _persist_current_test_audio_label(self, label: str, show_error: bool = True) -> bool:
+        """Persist the current test recording label without ending the workflow."""
+        if label not in ("OK", "NG"):
+            return False
+        if not isinstance(getattr(self, "recorded_signal_info", None), dict):
+            return False
+
+        previous_recorded_path = getattr(self, "recorded_path", "")
+        previous_signal_info = dict(self.recorded_signal_info or {})
+        previous_label = str(previous_signal_info.get("labels", "not_labeled") or "not_labeled")
+        if previous_label == label:
+            try:
+                self._update_current_recent_session_result(label)
+            except Exception:
+                pass
+            return True
+
+        self.recorded_signal_info["labels"] = label
+        save_code, save_msg = self.update_recorded_signal_info_to_db()
+        if save_code != error_code.OK:
+            self.recorded_path = previous_recorded_path
+            self.recorded_signal_info = previous_signal_info
+            if show_error:
+                QMessageBox.warning(self, "提示", f"更新音频标签失败: {save_msg}")
+            return False
+
+        try:
+            self._update_current_recent_session_result(label)
+        except Exception:
+            pass
+        return True

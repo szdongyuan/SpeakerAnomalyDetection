@@ -13,8 +13,8 @@ def get_recorded_info(product_model, product_number, barcode, label, name_suffix
     """
         Generate recorded information.
 
-        This function generates a unique recording file name based on the current date, MAC address, product model,
-    and product number.
+        This function generates a recording file name based on the current date, MAC address, product model,
+    barcode, and direction suffix.
         It also constructs the path for the recording file. Additionally, it creates a dictionary containing the
     recording file path and product information.
 
@@ -26,14 +26,8 @@ def get_recorded_info(product_model, product_number, barcode, label, name_suffix
     recording_time_for_name = now.strftime("%Y-%m-%d-%H-%M-%S")
     mac_address = get_mac_address()
     mac_address = mac_address.replace(":", "") if mac_address else None
-    product_token = str(product_number or "").strip()
-    if not product_token:
-        product_token = now.strftime("%H%M%S%f")
-    sanitized_token = "".join(ch for ch in product_token if ch.isalnum() or ch in ("-", "_"))
-    if not sanitized_token:
-        sanitized_token = now.strftime("%H%M%S%f")
 
-    recorded_name = product_model + "_" + recording_time_for_name + "_" + mac_address + "_" + sanitized_token
+    recorded_name = product_model + "_" + recording_time_for_name + "_" + mac_address
     if barcode:
         recorded_name = recorded_name + "_BC" + barcode
     else:

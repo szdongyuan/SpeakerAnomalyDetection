@@ -273,6 +273,32 @@ class SequenceWidgetAnalysisOpsMixin:
         if self.recent_session_panel is not None:
             self.recent_session_panel.reset_sessions()
 
+    def _discard_current_recent_session(self) -> None:
+        """Drop the placeholder recent-session row inserted at recording start.
+
+        Used when the recording is rejected before analysis (currently only by
+        the audio-quality validation gate) so the operator does not see a
+        stale "等待测试完成" row that will never resolve, and so the
+        directional cycle can be retried cleanly from scratch.
+        """
+        session_id = getattr(self, "_current_recent_session_id", None)
+        self._pending_recent_session_append = False
+        if not session_id:
+            return
+        try:
+            self.recent_test_sessions.remove(session_id)
+        except ValueError:
+            pass
+        self.recent_test_session_by_id.pop(session_id, None)
+        if self.recent_session_panel is not None:
+            try:
+                self.recent_session_panel.remove_session(session_id)
+            except Exception as e:
+                self.default_logger.warning(
+                    f"remove_recent_session_panel_row_failed id={session_id} err={e}"
+                )
+        self._current_recent_session_id = None
+
     def _begin_recent_session_for_current_run(self):
         self._current_recent_session_id = None
         self._append_recent_session_from_current_run(self._RECENT_SESSION_WAITING_TEXT)
@@ -762,8 +788,13 @@ class SequenceWidgetAnalysisOpsMixin:
                             )
                         auto_label = None
                     if directional_cycle_active and auto_label in ("OK", "NG"):
-                        # Each directional session row should show its own AI label.
-                        self._update_current_recent_session_result(auto_label)
+                        # Persist the current directional audio with its own AI label
+                        # before the cycle-level forward/reverse summary is decided.
+                        persist_current_test_audio_label = getattr(self, "_persist_current_test_audio_label", None)
+                        if callable(persist_current_test_audio_label):
+                            persist_current_test_audio_label(auto_label, show_error=True)
+                        else:
+                            self._update_current_recent_session_result(auto_label)
                     if directional_cycle_active:
                         auto_label = cycle_final_label
                     if auto_label not in ("OK", "NG"):
