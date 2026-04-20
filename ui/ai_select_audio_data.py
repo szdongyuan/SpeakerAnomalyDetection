@@ -14,14 +14,14 @@
 """
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QPushButton
 
 from base.log_manager import LogManager
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
+from ui.custom_ui_widget.widgets import PushButton
 
 
 class SelectAudioDataView(AudioDataManageDialog):
-    def __init__(self, logger: LogManager, select_data_list: list = list(), hide_select_not_label = True):
+    def __init__(self, logger: LogManager, select_data_list: list = list(), hide_select_not_label=True):
         super(SelectAudioDataView, self).__init__(logger, hide_select_not_label)
 
         self.logger = logger
@@ -79,9 +79,9 @@ class SelectAudioDataView(AudioDataManageDialog):
             self.all_select_flag = True
 
     def set_bottom_layout(self):
-        all_show_btn = QPushButton("全部显示")
-        ok_btn = QPushButton(" 确  定 ")
-        cancel_btn = QPushButton(" 取  消 ")
+        all_show_btn = PushButton("全部显示")
+        ok_btn = PushButton(" 确  定 ")
+        cancel_btn = PushButton(" 取  消 ")
 
         all_show_btn.clicked.connect(self.show_all_wave)
         ok_btn.clicked.connect(self.on_click_ok_btn)

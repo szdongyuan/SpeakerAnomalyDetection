@@ -3,19 +3,36 @@ import numpy as np
 
 from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtGui import QIcon, QStandardItem, QIntValidator, QDoubleValidator
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QFormLayout
-from PyQt5.QtWidgets import QLabel, QCheckBox, QComboBox, QLineEdit, QSplitter, QFrame, QRadioButton, QMessageBox
-from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QVBoxLayout,
+    QWidget,
+    QFormLayout,
+    QSplitter,
+    QFrame,
+    QFileDialog,
+)
 
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.load_config import LoadUiConfig
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_clip_extraction_dialog import AudioClipExtractionDialog
 from ui.custom_ui_widget.custom_table_widget import DataView
 from ui.generic_feature_params_dialog import GenericFeatureParamsDialog
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import (
+    GroupBox,
+    Label,
+    PushButton,
+    ComboBox,
+    LineEdit,
+    RadioButton,
+    CheckBox,
+    MessageBox,
+)
+from ui.ui_src import ui_resources
 
 
 class PatternMatchConfigWindow(QDialog):
@@ -45,9 +62,10 @@ class PatternMatchConfigWindow(QDialog):
         self.populate_ui_from_config()
 
     def init_ui(self):
+        self.setObjectName("PatternMatchConfigWindow")
         self.setWindowTitle("模式匹配参数配置")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(800, 750)
         self.resize(800, 750)
         self.main_layout = QVBoxLayout(self)
@@ -70,29 +88,17 @@ class PatternMatchConfigWindow(QDialog):
         self.main_layout.addLayout(btn_layout)
 
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qdialog_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qtextedit_style
-            + ui_style_const.qtableview_style
-        )
 
     def create_pattern_group_box(self):
         self.data_view = DataView(len(self.pattern_list), 2, [])
         self.data_view.set_h_header(["模板文件", "模板时长 (s)"])
-        extract_btn = QPushButton("提取模板")
+        extract_btn = PushButton("提取模板")
         extract_btn.clicked.connect(self.on_click_extract_btn)
-        add_btn = QPushButton("添加模板")
+        add_btn = PushButton("添加模板")
         add_btn.clicked.connect(self.on_click_add_btn)
-        remove_btn = QPushButton("删除模板")
+        remove_btn = PushButton("删除模板")
         remove_btn.clicked.connect(self.on_click_remove_btn)
-        self.n_chosen_pattern_label = QLabel("已加载模板： 0")
+        self.n_chosen_pattern_label = Label("已加载模板： 0")
 
         btn_layout = QVBoxLayout()
         btn_layout.addWidget(extract_btn)
@@ -103,7 +109,7 @@ class PatternMatchConfigWindow(QDialog):
         layout = QHBoxLayout()
         layout.addWidget(self.data_view)
         layout.addLayout(btn_layout)
-        group = QGroupBox("模板选择")
+        group = GroupBox("模板选择")
         group.setLayout(layout)
         return group
 
@@ -118,42 +124,43 @@ class PatternMatchConfigWindow(QDialog):
         return layout
 
     def create_processing_and_feature_group(self):
-        group = QGroupBox("特征与预处理")
+        group = GroupBox("特征与预处理")
         layout = QVBoxLayout()
 
-        feature_label = QLabel("<b>特征类型</b>")
+        feature_label = Label("<b>特征类型</b>")
         layout.addWidget(feature_label)
 
         combo_layout = QHBoxLayout()
-        self.feature_combo = QComboBox()
+        self.feature_combo = ComboBox()
         for key, info in self.feature_registry.items():
             self.feature_combo.addItem(info["display_name"], userData=key)
         self.feature_combo.currentIndexChanged.connect(self.on_feature_type_changed)
         combo_layout.addWidget(self.feature_combo)
 
-        self.feature_params_btn = QPushButton("特征参数")
+        self.feature_params_btn = PushButton("特征参数")
         self.feature_params_btn.clicked.connect(self.on_click_feature_params)
         combo_layout.addWidget(self.feature_params_btn)
         layout.addLayout(combo_layout)
 
         separator = QFrame()
+        separator.setObjectName("separator1")
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
         layout.addWidget(separator)
 
-        filter_label = QLabel("<b>带阻滤波</b>")
+        filter_label = Label("<b>带阻滤波</b>")
         layout.addWidget(filter_label)
-        self.filter_checkbox = QCheckBox("启用")
+        self.filter_checkbox = CheckBox("启用")
         self.filter_checkbox.toggled.connect(self.on_filter_toggled)
         layout.addWidget(self.filter_checkbox)
 
         filter_range_layout = QFormLayout()
-        self.low_freq_edit = QLineEdit("0")
+        self.low_freq_edit = LineEdit("0")
         self.low_freq_edit.setValidator(QIntValidator(0, 20000, self))
-        self.high_freq_edit = QLineEdit("5000")
+        self.high_freq_edit = LineEdit("5000")
         self.high_freq_edit.setValidator(QIntValidator(0, 20000, self))
-        low_freq_label = QLabel("最低频率 (Hz):")
-        high_freq_label = QLabel("最高频率 (Hz):")
+        low_freq_label = Label("最低频率 (Hz):")
+        high_freq_label = Label("最高频率 (Hz):")
         filter_range_layout.addRow(low_freq_label, self.low_freq_edit)
         filter_range_layout.addRow(high_freq_label, self.high_freq_edit)
 
@@ -164,12 +171,12 @@ class PatternMatchConfigWindow(QDialog):
         return group
 
     def create_strategy_group(self):
-        group = QGroupBox("匹配策略")
+        group = GroupBox("匹配策略")
         main_layout = QVBoxLayout()
 
         metric_layout = QHBoxLayout()
-        metric_label = QLabel("<b>相似度度量:</b>")
-        self.similarity_metric_combo = QComboBox()
+        metric_label = Label("<b>相似度度量:</b>")
+        self.similarity_metric_combo = ComboBox()
         self.similarity_metric_combo.addItem("欧氏距离 (Euclidean)", "euclidean")
         self.similarity_metric_combo.addItem("余弦相似度 (Cosine)", "cosine")
         metric_layout.addWidget(metric_label)
@@ -177,21 +184,22 @@ class PatternMatchConfigWindow(QDialog):
         main_layout.addLayout(metric_layout)
 
         separator = QFrame()
+        separator.setObjectName("separator2")
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
         main_layout.addWidget(separator)
 
-        return_label = QLabel("<b>匹配点返回策略:</b>")
+        return_label = Label("<b>匹配点返回策略:</b>")
         main_layout.addWidget(return_label)
         fixed_threshold_layout = QHBoxLayout()
-        self.fixed_threshold_radio = QRadioButton("固定阈值:")
+        self.fixed_threshold_radio = RadioButton("固定阈值:")
         self.fixed_threshold_radio.setChecked(True)
         self.fixed_threshold_radio.toggled.connect(self.on_strategy_radio_changed)
-        self.threshold_edit = QLineEdit("0.9")
+        self.threshold_edit = LineEdit("0.9")
         self.threshold_edit.setValidator(QDoubleValidator(0.0, 100, 5, self))
         fixed_threshold_layout.addWidget(self.fixed_threshold_radio)
         fixed_threshold_layout.addWidget(self.threshold_edit)
-        self.adaptive_threshold_radio = QRadioButton("自适应阈值")
+        self.adaptive_threshold_radio = RadioButton("自适应阈值")
         self.adaptive_threshold_radio.toggled.connect(self.on_strategy_radio_changed)
         main_layout.addLayout(fixed_threshold_layout)
         main_layout.addWidget(self.adaptive_threshold_radio)
@@ -201,9 +209,9 @@ class PatternMatchConfigWindow(QDialog):
 
     def create_btn_layout(self):
         layout = QHBoxLayout()
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        default_btn = QPushButton("设为默认")
+        default_btn = PushButton("设为默认")
         default_btn.clicked.connect(self.on_click_default_btn)
         layout.addWidget(default_btn)
         layout.addStretch()
@@ -244,7 +252,7 @@ class PatternMatchConfigWindow(QDialog):
     def on_click_feature_params(self):
         feature_key = self.feature_combo.currentData()
         if not feature_key or not self.feature_registry[feature_key].get("params"):
-            QMessageBox.information(self, "提示", "当前特征类型没有可配置的参数。")
+            MessageBox.information(self, "提示", "当前特征类型没有可配置的参数。")
             return
 
         param_definitions = self.feature_registry[feature_key]["params"]
@@ -367,7 +375,7 @@ class PatternMatchConfigWindow(QDialog):
         #     config["audio_file_path"] = FileOps.get_relative_path(self.audio_file_path, DEFAULT_DIR)
         #     config["pattern_save_path"] = FileOps.get_relative_path(self.pattern_save_path, DEFAULT_DIR)
         # except Exception as e:
-        #     QMessageBox.critical(self, "错误", f"保存模板文件失败:\n{e}")
+        #     MessageBox.critical(self, "错误", f"保存模板文件失败:\n{e}")
         #     return
 
         self.config_data = config
@@ -378,7 +386,7 @@ class PatternMatchConfigWindow(QDialog):
         if config["apply_filter"]:
             low, high = config["filter_range_hz"]
             if low is None or high is None or low >= high:
-                QMessageBox.warning(self, "提示", "输入的频率范围无效，最低频率必须小于最高频率。")
+                MessageBox.warning(self, "提示", "输入的频率范围无效，最低频率必须小于最高频率。")
                 return False
         return True
 

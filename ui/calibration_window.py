@@ -1,3 +1,4 @@
+from re import S
 import sys
 import threading
 from datetime import datetime
@@ -5,18 +6,8 @@ from datetime import datetime
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QApplication,
-    QDialog,
-    QDoubleSpinBox,
-    QGroupBox,
-    QGridLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QLabel,
-)
-from PyQt5.QtWidgets import QMessageBox, QTabWidget, QVBoxLayout, QPushButton, QSpacerItem
-from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QWidget, QRadioButton
+from PyQt5.QtWidgets import QApplication, QDialog, QGridLayout, QHBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout, QSpacerItem, QSizePolicy, QWidget
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
@@ -24,8 +15,20 @@ from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.play_and_record import stream_record_without_play
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
-from consts import ui_style_const, error_code
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import (
+    PushButton,
+    RadioButton,
+    SpinBox,
+    TabWidget,
+    Label,
+    LineEdit,
+    DoubleSpinBox,
+    GroupBox,
+    MessageBox,
+)
+from ui.ui_src import ui_resources
 
 
 class CalibrationWindow(QDialog):
@@ -40,9 +43,9 @@ class CalibrationWindow(QDialog):
         This function sets up the window icon, title, size, and layout,
         and creates tabs for output and input calibration.
         """
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setObjectName("CalibrationWindow")
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("校准窗口")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setMinimumSize(500, 550)
         self.setMaximumSize(600, 580)
@@ -50,7 +53,7 @@ class CalibrationWindow(QDialog):
 
         self.input_calibration_flag = False
 
-        self.tabwidget = QTabWidget()
+        self.tabwidget = TabWidget()
         self.output_cal_wnd = OutputCalibration()
         self.input_cal_wnd = InputCalibration()
         self.tabwidget.addTab(self.output_cal_wnd, "输出校准")
@@ -61,7 +64,6 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout.addWidget(self.tabwidget)
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style + ui_style_const.qtabwidget_style)
 
     def create_btn_box(self):
         """
@@ -71,11 +73,11 @@ class CalibrationWindow(QDialog):
         Spacers are used to adjust the spacing between the buttons in the layout.
         """
         btn_layout = QHBoxLayout()
-        self.cal_btn = QPushButton(" 校  准 ")
+        self.cal_btn = PushButton(" 校  准 ")
         self.cal_btn.clicked.connect(self.clicked_calibration_button)
-        reset_btn = QPushButton(" 重  置 ")
+        reset_btn = PushButton(" 重  置 ")
         reset_btn.clicked.connect(self.clicked_reset_button)
-        cancel_btn = QPushButton(" 退  出 ")
+        cancel_btn = PushButton(" 退  出 ")
         cancel_btn.clicked.connect(self.clicked_close_button)
         btn_layout.addWidget(self.cal_btn)
         btn_layout.addStretch()
@@ -184,28 +186,20 @@ class OutputCalibration(QWidget):
         layout.addStretch()
         layout.setContentsMargins(12, 20, 12, 25)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-        )
 
     def create_calibration_param_box(self):
         """
             Create calibration parameter box
 
-            This method creates a QGroupBox containing calibration parameter settings, allowing the user to set the
+            This method creates a GroupBox containing calibration parameter settings, allowing the user to set the
         number of calibrations.
             It includes a label, a spin box, and layout management.
             Return:
                 the created calibration parameter box
         """
-        calibration_param_box = QGroupBox("校准参数")
-        calibration_nums_label = QLabel("校准次数")
-        self.calibration_nums_box = QSpinBox()
+        calibration_param_box = GroupBox("校准参数")
+        calibration_nums_label = Label("校准次数")
+        self.calibration_nums_box = SpinBox()
         self.calibration_nums_box.setSuffix(" 次")
         self.calibration_nums_box.setRange(1, 20)
         self.calibration_nums_box.setValue(1)
@@ -227,18 +221,15 @@ class OutputCalibration(QWidget):
         Return:
             the created output voltage group box
         """
-        output_box = QGroupBox("输出电压")
+        output_box = GroupBox("输出电压")
         output_layout = QGridLayout()
-        self.play_label = QLabel(f"第 {self.current_count} 次 ")
-        self.play_btn = QPushButton(" 播  放 ")
+        self.play_label = Label(f"第 {self.current_count} 次 ")
+        self.play_btn = PushButton(" 播  放 ")
         self.play_btn.clicked.connect(self.play_btn_clicked)
-        self.countdown_label = QLabel(
+        self.countdown_label = Label(
             f"<span style='color: black;'>倒计时：</span>"
             f"<span style='color: red;'>{self.countdown} </span>"
             f"<span style='color: black;'>s</span>"
-        )
-        self.countdown_label.setStyleSheet(
-            "background-color: white;" "border: 1px solid rgb(122, 122, 122);" "border-radius: 3px;"
         )
 
         output_layout.addWidget(self.play_label, 0, 0)
@@ -247,12 +238,12 @@ class OutputCalibration(QWidget):
         output_layout.setColumnStretch(3, 1)
         output_layout.addWidget(self.play_btn, 0, 4)
 
-        output_voltage_label = QLabel("输出电压")
-        self.output_voltage_box = QDoubleSpinBox()
+        output_voltage_label = Label("输出电压")
+        self.output_voltage_box = DoubleSpinBox()
         self.output_voltage_box.setSuffix(" V")
         self.output_voltage_box.setRange(0, 100)
         self.output_voltage_box.setSingleStep(0.1)
-        self.save_btn = QPushButton(" 保  存 ")
+        self.save_btn = PushButton(" 保  存 ")
         self.save_btn.clicked.connect(self.save_btn_clicked)
         self.save_btn.setDisabled(True)
         output_layout.addWidget(output_voltage_label, 1, 0)
@@ -266,21 +257,21 @@ class OutputCalibration(QWidget):
 
     def create_test_box(self):
         """
-            Create a test QGroupBox with the necessary widgets and layout.
+            Create a test GroupBox with the necessary widgets and layout.
 
-            This function constructs a QGroupBox intended for testing purposes. It includes a label for the target
+            This function constructs a GroupBox intended for testing purposes. It includes a label for the target
         voltage, a double spin box to set the target voltage, and a test button to initiate the calibration test. The
         layout is managed using a horizontal box layout, with spacers added to maintain appropriate spacing between the
         widgets.
             Returns:
-                QGroupBox: A QGroupBox containing the test widgets and layout.
+                GroupBox: A GroupBox containing the test widgets and layout.
         """
-        test_box = QGroupBox("测    试")
-        target_V_label = QLabel("目标电压")
-        self.target_voltage_box = QDoubleSpinBox()
+        test_box = GroupBox("测    试")
+        target_V_label = Label("目标电压")
+        self.target_voltage_box = DoubleSpinBox()
         self.target_voltage_box.setMinimumWidth(134)
         self.target_voltage_box.setSuffix(" V")
-        test_btn = QPushButton(" 测  试 ")
+        test_btn = PushButton(" 测  试 ")
         test_btn.clicked.connect(self.test_calibration)
         test_layout = QHBoxLayout()
         test_layout.addWidget(target_V_label)
@@ -453,20 +444,20 @@ class OutputCalibration(QWidget):
         """
         Display a calibration test popup message.
 
-        This function creates a QMessageBox instance, sets its icon, text, title, and buttons,
+        This function creates a MessageBox instance, sets its icon, text, title, and buttons,
         then displays the message box and waits for user interaction.
         It returns whether the user clicked the OK button.
 
         Returns:
             bool: True if the user clicked OK, False otherwise.
         """
-        test_msg = QMessageBox(self)
-        test_msg.setIcon(QMessageBox.Warning)
+        test_msg = MessageBox(self)
+        test_msg.setIcon(MessageBox.Warning)
         test_msg.setText("目标电压过大，请重新输入!")
         test_msg.setWindowTitle("测试失败")
-        test_msg.setStandardButtons(QMessageBox.Ok)
+        test_msg.setStandardButtons(MessageBox.Ok)
         button = test_msg.exec_()
-        return button == QMessageBox.Ok
+        return button == MessageBox.Ok
 
     def reset_btn_clicked(self):
         """
@@ -532,16 +523,16 @@ class OutputCalibration(QWidget):
         Parameters:
         - success_flag: Boolean indicating whether the calibration was successful. Default value is True.
         """
-        cal_msg = QMessageBox(self)
+        cal_msg = MessageBox(self)
         if success_flag:
-            cal_msg.setIcon(QMessageBox.Information)
+            cal_msg.setIcon(MessageBox.Information)
             cal_msg.setText("校准成功")
             cal_msg.setWindowTitle("校准成功")
         else:
-            cal_msg.setIcon(QMessageBox.Critical)
+            cal_msg.setIcon(MessageBox.Critical)
             cal_msg.setText("校准失败，请重试")
             cal_msg.setWindowTitle("校准失败")
-        cal_msg.setStandardButtons(QMessageBox.Ok)
+        cal_msg.setStandardButtons(MessageBox.Ok)
         cal_msg.exec_()
 
     def keyPressEvent(self, event):
@@ -598,33 +589,22 @@ class InputCalibration(QWidget):
         layout.setContentsMargins(12, 20, 12, 25)
 
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qradiobutton_style
-        )
 
     def create_v2pa_factor_box(self):
         """
-        Create a QGroupBox to display the sound pressure v2pa_factor.
+        Create a GroupBox to display the sound pressure v2pa_factor.
 
-        This method creates a QGroupBox containing a label and a read-only line edit
+        This method creates a GroupBox containing a label and a read-only line edit
         to show the sound pressure v2pa_factor from the calibration results. The layout
         uses a horizontal box layout to arrange the elements horizontally.
 
         Returns:
-            QGroupBox: A QGroupBox containing the sound pressure v2pa_factor label and line edit.
+            GroupBox: A GroupBox containing the sound pressure v2pa_factor label and line edit.
         """
-        v2pa_factor_box = QGroupBox("校准结果")
-        v2pa_factor_label = QLabel("校准系数（V/Pa）：")
-        self.v2pa_factor_lineedit = QLineEdit()
-        self.v2pa_factor_lineedit.setStyleSheet("background-color: white;")
-        self.v2pa_factor_lineedit.setDisabled(True)
+        v2pa_factor_box = GroupBox("校准结果")
+        v2pa_factor_label = Label("校准系数（V/Pa）：")
+        self.v2pa_factor_lineedit = LineEdit()
+        self.v2pa_factor_lineedit.setReadOnly(True)
 
         standard_v2pa_factor_layout = QHBoxLayout()
         h_spacer_v2pa_factor_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -637,24 +617,20 @@ class InputCalibration(QWidget):
 
     def create_recorded_box(self):
         """
-        Create a QGroupBox to display recorded audio information.
+        Create a GroupBox to display recorded audio information.
 
         Returns:
-            QGroupBox: A QGroupBox containing the recorded time information.
+            GroupBox: A GroupBox containing the recorded time information.
         """
-        recorded_box = QGroupBox("录制音频")
-        recorded_label = QLabel("录制时间：")
-        self.recorded_label = QLabel()
+        recorded_box = GroupBox("录制音频")
+        recorded_label = Label("录制时间：")
+        self.recorded_label = Label()
         self.recorded_label.setMinimumWidth(70)
         self.recorded_label.resize(70, 30)
         self.recorded_label.setAlignment(Qt.AlignCenter)
         self.recorded_time = 10
         self.recorded_label.setText(
             f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
-        )
-
-        self.recorded_label.setStyleSheet(
-            "background-color: white;" "border: 1px solid rgb(122, 122, 122);" "border-radius: 3px;"
         )
 
         recorded_layout = QHBoxLayout()
@@ -670,17 +646,17 @@ class InputCalibration(QWidget):
         """
         Create a group box containing standard sound pressure options.
 
-        This method generates a QGroupBox widget that includes two QRadioButton options,
+        This method generates a GroupBox widget that includes two RadioButton options,
         representing 94 dB and 114 dB standard sound pressure levels. When a different sound
         pressure level is selected, the set_standard_spl method is triggered to handle the logic.
 
         Returns:
-            QGroupBox: Group box containing standard sound pressure options.
+            GroupBox: Group box containing standard sound pressure options.
         """
-        standard_spl_box = QGroupBox("标准声压")
+        standard_spl_box = GroupBox("标准声压")
 
-        self.standard_spl_i = QRadioButton("94  dB")
-        self.standard_spl_ii = QRadioButton("114 dB")
+        self.standard_spl_i = RadioButton("94  dB")
+        self.standard_spl_ii = RadioButton("114 dB")
         self.standard_spl_i.clicked.connect(self.set_standard_spl)
         self.standard_spl_ii.clicked.connect(self.set_standard_spl)
         self.standard_spl_i.setChecked(True)
@@ -827,16 +803,16 @@ class InputCalibration(QWidget):
         Parameters:
         - success_flag: Boolean indicating whether the calibration was successful. Default is True.
         """
-        cal_msg = QMessageBox(self)
+        cal_msg = MessageBox(self)
         if success_flag:
-            cal_msg.setIcon(QMessageBox.Information)
+            cal_msg.setIcon(MessageBox.Information)
             cal_msg.setText("校准成功")
             cal_msg.setWindowTitle("校准成功")
         else:
-            cal_msg.setIcon(QMessageBox.Critical)
+            cal_msg.setIcon(MessageBox.Critical)
             cal_msg.setText("校准失败，请重试")
             cal_msg.setWindowTitle("校准失败")
-        cal_msg.setStandardButtons(QMessageBox.Ok)
+        cal_msg.setStandardButtons(MessageBox.Ok)
         cal_msg.exec_()
 
     def calculate_average_spl(self, recorded_dict):

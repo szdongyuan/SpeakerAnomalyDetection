@@ -1,10 +1,11 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpinBox
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import GroupBox, Label, PushButton, SpinBox
+from ui.ui_src import ui_resources
 
 
 class LPConfigWindow(QDialog):
@@ -17,7 +18,7 @@ class LPConfigWindow(QDialog):
 
     def init_ui(self):
         self.setMinimumSize(350, 350)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         layout = QVBoxLayout()
         lp_config_box = self.create_lp_config_box()
         btn_layout = self.create_btn_layout()
@@ -25,15 +26,9 @@ class LPConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qgroupbox_style
-        )
 
     def create_lp_config_box(self):
-        lp_config_box = QGroupBox("松散颗粒参数配置")
+        lp_config_box = GroupBox("松散颗粒参数配置")
         lp_config_box_layout = QVBoxLayout()
         trigger_threshold_layout = self.create_trigger_threshold_layout()
         comfirm_threshold_layout = self.create_confirm_threshold_layout()
@@ -59,8 +54,8 @@ class LPConfigWindow(QDialog):
         return lp_config_box
 
     def create_trigger_threshold_layout(self):
-        trigger_threshold_label = QLabel("触发阈值:")
-        self.trigger_threshold_spinbox = QSpinBox()
+        trigger_threshold_label = Label("触发阈值:")
+        self.trigger_threshold_spinbox = SpinBox()
         self.trigger_threshold_spinbox.setSuffix(" dB")
         self.trigger_threshold_spinbox.setValue(self.load_config.get("trigger_threshold", 0))
         self.trigger_threshold_spinbox.setAlignment(Qt.AlignRight)
@@ -71,8 +66,8 @@ class LPConfigWindow(QDialog):
         return trigger_threshold_layout
 
     def create_confirm_threshold_layout(self):
-        confirm_threshold_label = QLabel("确认区间:")
-        self.hysterests_threshold_spinbox = QSpinBox()
+        confirm_threshold_label = Label("确认区间:")
+        self.hysterests_threshold_spinbox = SpinBox()
         self.hysterests_threshold_spinbox.setSuffix(" dB")
         self.hysterests_threshold_spinbox.setValue(self.load_config.get("hysterests_threshold", 0))
         self.hysterests_threshold_spinbox.setAlignment(Qt.AlignRight)
@@ -83,8 +78,8 @@ class LPConfigWindow(QDialog):
         return confirm_threshold_layout
 
     def create_min_check_duration_layout(self):
-        min_check_duration_label = QLabel("最小检测时长:")
-        self.min_check_duration_spinbox = QSpinBox()
+        min_check_duration_label = Label("最小检测时长:")
+        self.min_check_duration_spinbox = SpinBox()
         self.min_check_duration_spinbox.setSuffix(" ms")
         self.min_check_duration_spinbox.setValue(self.load_config.get("min_check_duration", 0))
         self.min_check_duration_spinbox.setRange(0, 1000)
@@ -96,8 +91,8 @@ class LPConfigWindow(QDialog):
         return min_check_duration_layout
 
     def create_max_check_duration_layout(self):
-        max_check_duration_label = QLabel("最大检测时长:")
-        self.max_check_duration_spinbox = QSpinBox()
+        max_check_duration_label = Label("最大检测时长:")
+        self.max_check_duration_spinbox = SpinBox()
         self.max_check_duration_spinbox.setSuffix(" ms")
         self.max_check_duration_spinbox.setValue(self.load_config.get("max_check_duration", 0))
         self.max_check_duration_spinbox.setRange(0, 1000)
@@ -109,8 +104,8 @@ class LPConfigWindow(QDialog):
         return max_check_duration_layout
 
     def create_loose_particle_num_layout(self):
-        loose_particle_num_label = QLabel("允许松散颗粒数量:")
-        self.loose_particle_num_spinbox = QSpinBox()
+        loose_particle_num_label = Label("允许松散颗粒数量:")
+        self.loose_particle_num_spinbox = SpinBox()
         self.loose_particle_num_spinbox.setValue(self.load_config.get("loose_particle_num", 0))
         self.loose_particle_num_spinbox.setAlignment(Qt.AlignRight)
         loose_particle_num_layout = QHBoxLayout()
@@ -120,8 +115,8 @@ class LPConfigWindow(QDialog):
         return loose_particle_num_layout
 
     def create_stimulus_max_frequency_layout(self):
-        stimulus_max_frequency_label = QLabel("信号最大频率:")
-        self.stimulus_max_frequency_spinbox = QSpinBox()
+        stimulus_max_frequency_label = Label("信号最大频率:")
+        self.stimulus_max_frequency_spinbox = SpinBox()
         self.stimulus_max_frequency_spinbox.setSuffix(" Hz")
         self.stimulus_max_frequency_spinbox.setRange(10, 24000)
         self.stimulus_max_frequency_spinbox.setValue(self.load_config.get("cutoff_freq", 0))
@@ -135,8 +130,8 @@ class LPConfigWindow(QDialog):
 
     def create_btn_layout(self):
         btn_layout = QHBoxLayout()
-        default_btn = QPushButton("设为默认")
-        ok_btn = QPushButton(" 确  定 ")
+        default_btn = PushButton("设为默认")
+        ok_btn = PushButton(" 确  定 ")
         default_btn.clicked.connect(self.on_click_default_btn)
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addWidget(default_btn)

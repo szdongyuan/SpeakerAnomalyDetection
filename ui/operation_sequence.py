@@ -7,17 +7,7 @@ from datetime import datetime
 
 from PyQt5.QtCore import Qt, QModelIndex, QSize
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import (
-    QDialog,
-    QLabel,
-    QListView,
-    QVBoxLayout,
-    QCheckBox,
-    QHBoxLayout,
-    QPushButton,
-    QTreeView,
-)
-from PyQt5.QtWidgets import QApplication, QMenu, QAction, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QApplication, QFileDialog
 from time import time
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -38,6 +28,7 @@ from ui.acquisition_config_window import (
     ImportStimulusAudioConfigWindow,
 )
 
+from ui.custom_ui_widget.widgets import Menu, Label, CheckBox, ListView, TreeView, PushButton, Action, MessageBox
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
 from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
@@ -52,6 +43,7 @@ from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+from ui.ui_src import ui_resources
 
 
 class AnalysisModelSelect(QDialog):
@@ -67,14 +59,12 @@ class AnalysisModelSelect(QDialog):
         # without touching main window's using_config_path registry.
         self._new_target_path_selected = False
 
-        self.analysis_list = QTreeView()
-        self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
+        self.analysis_list = TreeView()
+        self.analysis_list.setSelectionMode(TreeView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
-        self.select_list = OptionList(
-            self.default_logger, using_config_path, mic=mic, speaker=speaker
-        )
-        self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
-        self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
+        self.select_list = OptionList(self.default_logger, using_config_path, mic=mic, speaker=speaker)
+        self.analysis_list.setEditTriggers(TreeView.NoEditTriggers)
+        self.select_list.setEditTriggers(TreeView.NoEditTriggers)
 
         self.drag_drop_function()
         self.init_ui()
@@ -107,10 +97,10 @@ class AnalysisModelSelect(QDialog):
         self.current_config_label.setText(f"当前配置：{name}")
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("测试队列")
 
-        self.current_config_label = QLabel()
+        self.current_config_label = Label()
         self.current_config_label.setText("当前配置：")
         self.current_config_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         current_config_layout = QHBoxLayout()
@@ -122,13 +112,11 @@ class AnalysisModelSelect(QDialog):
         btn_layout = self.create_btn_layout()
         move_btn_layout = self.move_item_btn_layout()
 
-        add_analysis_btn = QPushButton()
+        add_analysis_btn = PushButton()
+        add_analysis_btn.setObjectName("addanalysisbtn")
         add_analysis_btn.setDisabled(True)
         add_analysis_btn.setToolTip("添加分析")
-        add_analysis_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        add_analysis_btn.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/right_arrow.svg")
-        )
+        add_analysis_btn.setIcon(QIcon(":/ui/icon/right_arrow.png"))
         # add_analysis_btn.setFixedSize(50, 50)
         add_analysis_btn.setIconSize(QSize(40, 40))
         add_analysis_btn.clicked.connect(self.add_analysis_btn_clicked)
@@ -146,24 +134,16 @@ class AnalysisModelSelect(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qlistview_style
-            + ui_style_const.qtreeview_style
-        )
         self._update_current_config_label()
-        window_width = ui_style_const.scale_font_px(740)
-        window_height = ui_style_const.scale_font_px(540)
+        window_width = ui_style_const.scale_size_px(740)
+        window_height = ui_style_const.scale_size_px(540)
         self.resize(window_width, window_height)
 
     def add_analysis_btn_clicked(self):
         if self.analysis_list.currentIndex().row() != -1:
             index = self.analysis_list.currentIndex()
             if not index.parent().isValid():
-                QMessageBox.information(self, "提示", "请选择要添加的子项")
+                MessageBox.information(self, "提示", "请选择要添加的子项")
                 return
             text = index.data()
             self.select_list.set_new_analysis_config(text)
@@ -172,16 +152,16 @@ class AnalysisModelSelect(QDialog):
     def drag_drop_function(self):
         self.analysis_list.setDragEnabled(True)
         self.analysis_list.setAcceptDrops(False)
-        self.analysis_list.setDragDropMode(QTreeView.DragOnly)
+        self.analysis_list.setDragDropMode(TreeView.DragOnly)
         self.analysis_list.setDefaultDropAction(Qt.CopyAction)
 
         self.select_list.setDragEnabled(True)
-        self.select_list.setDragDropMode(QListView.DragDrop)
+        self.select_list.setDragDropMode(ListView.DragDrop)
         self.select_list.setDefaultDropAction(Qt.MoveAction)
         self.select_list.setDropIndicatorShown(True)
         self.select_list.setDragDropOverwriteMode(False)
-        self.select_list.setMovement(QListView.Snap)
-        self.select_list.setFlow(QListView.TopToBottom)
+        self.select_list.setMovement(ListView.Snap)
+        self.select_list.setFlow(ListView.TopToBottom)
 
     def up_btn_clicked(self):
         self.select_list.itemmove("up")
@@ -196,7 +176,7 @@ class AnalysisModelSelect(QDialog):
         self.select_list.itemmove("bottom")
 
     def create_analysis_list_layout(self):
-        analysis_label = QLabel("测试项目")
+        analysis_label = Label("测试项目")
 
         self.analysis_model = AnalysisModel()
         sound_item = QStandardItem("音频设置")
@@ -241,23 +221,19 @@ class AnalysisModelSelect(QDialog):
         return layout
 
     def move_item_btn_layout(self):
-        up_btn = QPushButton()
-        down_btn = QPushButton()
-        top_btn = QPushButton()
-        bottom_btn = QPushButton()
-        icon_size = ui_style_const.scale_font_px(20)
+        up_btn = PushButton()
+        down_btn = PushButton()
+        top_btn = PushButton()
+        bottom_btn = PushButton()
+        icon_size = ui_style_const.scale_size_px(20)
 
-        up_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/up.svg"))
+        up_btn.setIcon(QIcon(":/ui/icon/up.png"))
         up_btn.setIconSize(QSize(icon_size, icon_size))
-        down_btn.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/down.svg")
-        )
+        down_btn.setIcon(QIcon(":/ui/icon/down.png"))
         down_btn.setIconSize(QSize(icon_size, icon_size))
-        top_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/top.svg"))
+        top_btn.setIcon(QIcon(":/ui/icon/top.png"))
         top_btn.setIconSize(QSize(icon_size, icon_size))
-        bottom_btn.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/bottom.svg")
-        )
+        bottom_btn.setIcon(QIcon(":/ui/icon/bottom.png"))
         bottom_btn.setIconSize(QSize(icon_size, icon_size))
 
         up_btn.clicked.connect(self.up_btn_clicked)
@@ -265,12 +241,10 @@ class AnalysisModelSelect(QDialog):
         top_btn.clicked.connect(self.top_btn_clicked)
         bottom_btn.clicked.connect(self.bottom_btn_clicked)
 
-        clear_btn = QPushButton()
+        clear_btn = PushButton()
         clear_btn.setToolTip("清空")
-        clear_btn.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/clear_icon.png")
-        )
-        clear_icon_size = ui_style_const.scale_font_px(26)
+        clear_btn.setIcon(QIcon(":/ui/icon/clear_icon.png"))
+        clear_icon_size = ui_style_const.scale_size_px(26)
         clear_btn.setIconSize(QSize(clear_icon_size, clear_icon_size))
         clear_btn.clicked.connect(self.select_list.clear_option_list)
 
@@ -286,8 +260,8 @@ class AnalysisModelSelect(QDialog):
         return layout
 
     def create_select_list_layout(self):
-        select_analysis_label = QLabel("测试序列")
-        self.auto_analysis_box = QCheckBox("自动分析")
+        select_analysis_label = Label("测试序列")
+        self.auto_analysis_box = CheckBox("自动分析")
         if self.select_list.config:
             self.auto_analysis_box.setChecked(self.select_list.config[0].auto_analysis)
         self.auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
@@ -304,19 +278,19 @@ class AnalysisModelSelect(QDialog):
         return layout
 
     def create_btn_layout(self):
-        new_btn = QPushButton("新建")
+        new_btn = PushButton("新建")
         new_btn.clicked.connect(self.new_btn_clicked)
         new_btn.setMinimumWidth(100)
 
-        record_golden_btn = QPushButton("录制黄金样本")
+        record_golden_btn = PushButton("录制黄金样本")
         record_golden_btn.clicked.connect(self.record_golden_sample_btn_clicked)
         record_golden_btn.setMinimumWidth(140)
 
-        load_btn = QPushButton("导入")
+        load_btn = PushButton("导入")
         load_btn.clicked.connect(self.load_btn_clicked)
-        save_btn = QPushButton("另存为")
+        save_btn = PushButton("另存为")
         save_btn.clicked.connect(self.save_btn_clicked)
-        ok_btn = QPushButton("保存")
+        ok_btn = PushButton("保存")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         ok_btn.setDefault(True)
         load_btn.setMinimumWidth(100)
@@ -343,7 +317,7 @@ class AnalysisModelSelect(QDialog):
         - Store that JSON path into analysis_list['golden_sample_result_path'] (persisted on confirm/save)
         """
         if not self.select_list.config:
-            QMessageBox.warning(self, "提示", "请先配置测试序列")
+            MessageBox.warning(self, "提示", "请先配置测试序列")
             return
 
         seq = self.select_list.config[0]
@@ -355,7 +329,7 @@ class AnalysisModelSelect(QDialog):
         analysis_cfg = getattr(seq, "analysis_list", {}) or {}
         item_sort_list = analysis_cfg.get("display_sequence", [])
         if not item_sort_list:
-            QMessageBox.warning(self, "提示", "当前序列没有可分析项目")
+            MessageBox.warning(self, "提示", "当前序列没有可分析项目")
             return
         has_any_golden_checked = False
         for key in item_sort_list:
@@ -370,7 +344,7 @@ class AnalysisModelSelect(QDialog):
             has_any_golden_checked = True
             break
         if not has_any_golden_checked:
-            QMessageBox.warning(self, "提示", "没有勾选任何“使用黄金样本”的分析项")
+            MessageBox.warning(self, "提示", "没有勾选任何“使用黄金样本”的分析项")
             return
 
         try:
@@ -382,15 +356,13 @@ class AnalysisModelSelect(QDialog):
                 logger=self.default_logger,
             )
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"加载激励失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"加载激励失败: {str(e)[:200]}")
             return
 
         try:
-            stimulus_dict, recorded_dict = (
-                LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(data_struct)
-            )
+            stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(data_struct)
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")
             return
 
         # Prepare default save locations
@@ -401,22 +373,18 @@ class AnalysisModelSelect(QDialog):
         except Exception:
             pass
 
-        recorded_wav_path = os.path.join(golden_dir, f"golden_record_{ts}.wav").replace(
-            "\\", "/"
-        )
+        recorded_wav_path = os.path.join(golden_dir, f"golden_record_{ts}.wav").replace("\\", "/")
 
         # Blocking play+record (also saves wav)
         try:
             sap = SoundcardAudioProcessor()
-            record_code, aligned_data = sap.sd_play_rec(
-                recorded_dict, stimulus_dict, recorded_wav_path
-            )
+            record_code, aligned_data = sap.sd_play_rec(recorded_dict, stimulus_dict, recorded_wav_path)
             if record_code != 0 or aligned_data is None:
-                QMessageBox.warning(self, "提示", "录制黄金样本失败")
+                MessageBox.warning(self, "提示", "录制黄金样本失败")
                 return
             data_struct.store_wave_data = aligned_data
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
             return
 
         # Collect only checked items
@@ -461,14 +429,10 @@ class AnalysisModelSelect(QDialog):
 
                 items_out[key] = {"type": item_type, "result": result}
             except Exception as e:
-                self.default_logger.error(
-                    f"Golden sample analysis failed for {key}: {e}"
-                )
+                self.default_logger.error(f"Golden sample analysis failed for {key}: {e}")
                 continue
 
-        default_json_path = os.path.join(
-            golden_dir, f"golden_baseline_{ts}.json"
-        ).replace("\\", "/")
+        default_json_path = os.path.join(golden_dir, f"golden_baseline_{ts}.json").replace("\\", "/")
         json_path, _ = QFileDialog.getSaveFileName(
             self,
             "保存黄金样本分析结果",
@@ -490,16 +454,14 @@ class AnalysisModelSelect(QDialog):
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"保存黄金样本文件失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"保存黄金样本文件失败: {str(e)[:200]}")
             return
 
         # Store path into sequence analysis config; persisted when user clicks 保存/确定
         analysis_cfg["golden_sample_result_path"] = json_path.replace("\\", "/")
 
     def load_btn_clicked(self):
-        default_dir = os.path.normpath(
-            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
-        )
+        default_dir = os.path.normpath(os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config"))
         try:
             os.makedirs(default_dir, exist_ok=True)
         except Exception:
@@ -520,14 +482,10 @@ class AnalysisModelSelect(QDialog):
                 self._update_current_config_label()
                 LoadUiConfig.append_sequence_config_registry_entry(file_path)
             except Exception as e:
-                self.default_logger.error(
-                    f"Unable to parse JSON data in {file_path}. {e}"
-                )
+                self.default_logger.error(f"Unable to parse JSON data in {file_path}. {e}")
 
     def new_btn_clicked(self):
-        default_dir = os.path.normpath(
-            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
-        )
+        default_dir = os.path.normpath(os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config"))
         try:
             os.makedirs(default_dir, exist_ok=True)
         except Exception:
@@ -570,12 +528,10 @@ class AnalysisModelSelect(QDialog):
     def save_btn_clicked(self):
         save_config = self.format_config_data(self.select_list.config)
         if not save_config:
-            QMessageBox.warning(self, "警告", "没有配置测试内容")
+            MessageBox.warning(self, "警告", "没有配置测试内容")
             return
 
-        default_dir = os.path.normpath(
-            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
-        )
+        default_dir = os.path.normpath(os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config"))
         try:
             os.makedirs(default_dir, exist_ok=True)
         except Exception:
@@ -588,7 +544,7 @@ class AnalysisModelSelect(QDialog):
         )
         if file_path:
             if not LoadUiConfig.save_sequence_config_to_json(save_config, file_path):
-                QMessageBox.warning(self, "警告", "保存配置文件失败")
+                MessageBox.warning(self, "警告", "保存配置文件失败")
                 self.close()
                 return
             # Append the saved config path into registry json (filename as key)
@@ -598,16 +554,14 @@ class AnalysisModelSelect(QDialog):
         save_config = self.format_config_data(self.select_list.config)
 
         if not save_config:
-            QMessageBox.warning(self, "警告", "没有配置测试内容")
+            MessageBox.warning(self, "警告", "没有配置测试内容")
             return
 
         if not self._new_target_path_selected:
             # If registry contains only using_config_path (no saved/imported entries),
             # add the built-in default config mapping on confirm.
             registry = LoadUiConfig._load_sequence_config_registry()
-            other_keys = [
-                k for k in (registry or {}).keys() if k != "using_config_path"
-            ]
+            other_keys = [k for k in (registry or {}).keys() if k != "using_config_path"]
 
             if len(other_keys) == 0:
                 if self.select_list.config:
@@ -615,16 +569,10 @@ class AnalysisModelSelect(QDialog):
                         "默认配置",
                         DEFAULT_DIR + "ui/ui_config/sequence_config.json",
                     )
-                    LoadUiConfig.update_using_config_path(
-                        DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-                    )
-                    self.using_config_path = (
-                        DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-                    )
-        if not LoadUiConfig.save_sequence_config_to_json(
-            save_config, self.using_config_path
-        ):
-            QMessageBox.warning(self, "警告", "保存配置文件失败")
+                    LoadUiConfig.update_using_config_path(DEFAULT_DIR + "ui/ui_config/sequence_config.json")
+                    self.using_config_path = DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+        if not LoadUiConfig.save_sequence_config_to_json(save_config, self.using_config_path):
+            MessageBox.warning(self, "警告", "保存配置文件失败")
             self.close()
             return
         # If the target path was chosen via “新建”, register it for future selection,
@@ -637,9 +585,7 @@ class AnalysisModelSelect(QDialog):
         self.close()
 
     @staticmethod
-    def set_data_struct_stimulus_signal(
-        data_struct, detail, using_config_path: str = None, logger=None
-    ):
+    def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str = None, logger=None):
         return _safe_set_data_struct_stimulus_signal(
             data_struct,
             detail,
@@ -650,7 +596,7 @@ class AnalysisModelSelect(QDialog):
     # NOTE: removed update_test_file_current_model (no current model field in test log anymore)
 
 
-class OptionList(QListView):
+class OptionList(ListView):
 
     def __init__(self, logger, using_config_path, mic=None, speaker=None):
         super().__init__()
@@ -689,9 +635,7 @@ class OptionList(QListView):
         item_index = self.model().index(self.index_num, 0)
         text = self.model().itemFromIndex(item_index).text()
         new_item = QStandardItem(text)
-        new_item.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png")
-        )
+        new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
         if index == "top":
             if self.index_num == 0:
                 return
@@ -724,11 +668,7 @@ class OptionList(QListView):
                 self.index_num - 1,
             )
             self.index_num -= 1
-        elif (
-            index == "down"
-            and self.index_num != self.model().rowCount() - 1
-            and self.index_num != 0
-        ):
+        elif index == "down" and self.index_num != self.model().rowCount() - 1 and self.index_num != 0:
             self.update_at_itemmove(
                 self.index_num + 2,
                 new_item,
@@ -740,9 +680,7 @@ class OptionList(QListView):
             self.index_num += 1
         self.setCurrentIndex(self.model().index(self.index_num, 0))
 
-    def update_at_itemmove(
-        self, insert_index, new_item, pop_index, list: list, old_item_num, new_item_num
-    ):
+    def update_at_itemmove(self, insert_index, new_item, pop_index, list: list, old_item_num, new_item_num):
         self.model().insertRow(insert_index, new_item)
         self.model().removeRow(pop_index)
         self.swap_list_index(list, old_item_num, new_item_num)
@@ -750,13 +688,12 @@ class OptionList(QListView):
     def show_context_menu(self, pos):
         index = self.indexAt(pos)
         if index.isValid():
-            menu = QMenu(self)
-            menu.setStyleSheet(ui_style_const.main_window_menubar_style)
-            open_action = QAction("打开", self)
+            menu = Menu(self)
+            open_action = Action("打开", self)
             open_action.triggered.connect(lambda: self.show_dialog(index.data()))
-            delete_action = QAction("删除", self)
+            delete_action = Action("删除", self)
             delete_action.triggered.connect(lambda: self.delete_item(index))
-            rename_action = QAction("重命名", self)
+            rename_action = Action("重命名", self)
             rename_action.triggered.connect(lambda: self.rename_item(index))
 
             self.old_name = index.data()
@@ -784,24 +721,19 @@ class OptionList(QListView):
         model = QDialog(self)
         if name == self.config[0].name:
             if "播放与录制" in self.config[0].name:
-                model = PlayRecordConfigWindow(
-                    self.config[0].detail, mic=self.mic, speaker=self.speaker
-                )
+                model = PlayRecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             elif "录制音频" in self.config[0].name:
                 model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
             elif "导入音频" in self.config[0].name:
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
             elif "导入激励与音频" in self.config[0].name:
-                model = ImportStimulusAudioConfigWindow(
-                    self.config[0].detail, mic=self.mic, speaker=self.speaker
-                )
+                model = ImportStimulusAudioConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
                 if "播放与录制" in name or "导入激励与音频" in name:
                     self.signal_len = int(
-                        result["stimulus_info"]["total_time"]
-                        * result["stimulus_info"]["sample_rate"]
+                        result["stimulus_info"]["total_time"] * result["stimulus_info"]["sample_rate"]
                     )
                 elif "录制音频" in name:
                     self.signal_len = int(result["total_time"] * result["sample_rate"])
@@ -816,9 +748,7 @@ class OptionList(QListView):
             if self.config[0].analysis_list.get(name):
                 config_manager.config = self.config[0].analysis_list
                 model_type = name
-            model = self.create_config_dialog(
-                model, config_manager, model_type, type, self.signal_len
-            )
+            model = self.create_config_dialog(model, config_manager, model_type, type, self.signal_len)
             model.setWindowTitle(name)
             if model.exec_() == QDialog.Accepted:
                 config_data = model.on_click_ok_btn()
@@ -833,9 +763,7 @@ class OptionList(QListView):
             self.default_logger.error(f"load default stimulus config error {data}")
             return False, {}
 
-    def create_config_dialog(
-        self, model: QDialog, config_manager: ConfigManager, name, type, signal_len
-    ):
+    def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type, signal_len):
         if type == "SPL":
             model = SplConfigWindow(config_manager, name)
         elif type == "SPLF":
@@ -869,9 +797,7 @@ class OptionList(QListView):
     def init_config_info(self, config_file):
         code, config_info = LoadUiConfig.load_data_from_json(config_file)
         if code != 0:
-            self.default_logger.error(
-                f"Failed to load the default config file. {config_info}"
-            )
+            self.default_logger.error(f"Failed to load the default config file. {config_info}")
             return
         if config_info:
             for i in config_info:
@@ -883,19 +809,15 @@ class OptionList(QListView):
                 sequence_config.detail = value.get("acq", {}).get("detail", {})
 
                 i_analysis_list = value.get("analysis_list", {})
-                sequence_config.display_sequence = i_analysis_list.pop(
-                    "display_sequence", []
-                )
-                sequence_config.auto_analysis = i_analysis_list.pop(
-                    "auto_analysis", False
-                )
+                sequence_config.display_sequence = i_analysis_list.pop("display_sequence", [])
+                sequence_config.auto_analysis = i_analysis_list.pop("auto_analysis", False)
 
                 sequence_config.analysis_list.update(i_analysis_list)
                 self.config.append(sequence_config)
                 if sequence_config.mode != "IMPORT_AUDIO":
-                    self.signal_len = sequence_config.detail.get(
-                        "total_time", 4.0
-                    ) * sequence_config.detail.get("sample_rate", 44100)
+                    self.signal_len = sequence_config.detail.get("total_time", 4.0) * sequence_config.detail.get(
+                        "sample_rate", 44100
+                    )
                 else:
                     self.signal_len = 0
 
@@ -909,9 +831,7 @@ class OptionList(QListView):
     def load_model_config(self, config_path):
         if not config_path or not isinstance(config_path, (str, bytes, os.PathLike)):
             # Keep the dialog usable even when no config is currently selected in main window.
-            self.default_logger.warning(
-                f"Invalid config_path for OptionList.load_model_config: {config_path!r}"
-            )
+            self.default_logger.warning(f"Invalid config_path for OptionList.load_model_config: {config_path!r}")
             self.clear_option_list()
             return
         if os.path.exists(config_path):
@@ -924,27 +844,16 @@ class OptionList(QListView):
         for config in self.config:
             if config.mode:
                 mode_item = QStandardItem(config.name)
-                mode_item.setIcon(
-                    QIcon(
-                        DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"
-                    )
-                )
+                mode_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
                 self.model().appendRow(mode_item)
             else:
                 continue
 
             model_item_list = self.config[0].display_sequence
             for item_name in model_item_list:
-                self.data_struct.add_stft_or_fft_count(
-                    self.config[0].analysis_list[item_name]["type"]
-                )
+                self.data_struct.add_stft_or_fft_count(self.config[0].analysis_list[item_name]["type"])
                 list_item = QStandardItem(item_name)
-                list_item.setIcon(
-                    QIcon(
-                        DEFAULT_DIR
-                        + "ui/ui_pic/select_analysis_model/blank_icon.png"
-                    )
-                )
+                list_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
                 self.model().appendRow(list_item)
 
     def add_config(self, class_name, config_data):
@@ -958,9 +867,7 @@ class OptionList(QListView):
             self.clear_option_list()
             return
         self.config[0].display_sequence.remove(index.data())
-        self.data_struct.minus_stft_or_fft_count(
-            self.config[0].analysis_list[index.data()]["type"]
-        )
+        self.data_struct.minus_stft_or_fft_count(self.config[0].analysis_list[index.data()]["type"])
         self.delete_item_config(index.data())
         model = self.model()
         model.removeRow(index.row())
@@ -1007,9 +914,7 @@ class OptionList(QListView):
                 self.model().insertRow(new_index, new_item)
             if step_index:
                 self.model().removeRow(old_index)
-                self.swap_list_index(
-                    config["display_sequence"], old_index, new_index - 1
-                )
+                self.swap_list_index(config["display_sequence"], old_index, new_index - 1)
                 self.start_row_number = new_index - 1
             else:
                 self.model().removeRow(old_index + 1)
@@ -1039,9 +944,7 @@ class OptionList(QListView):
                     continue
                 save_items = cfg.get("save_items")
                 if isinstance(save_items, list) and old_name in save_items:
-                    cfg["save_items"] = [
-                        new_name if x == old_name else x for x in save_items
-                    ]
+                    cfg["save_items"] = [new_name if x == old_name else x for x in save_items]
         except Exception:
             # Never block rename flow
             pass
@@ -1060,13 +963,11 @@ class OptionList(QListView):
         really_new_name = new_name.replace(" ", "")
         if new_name != self.old_name and really_new_name:
             if new_name in self.config[0].display_sequence:
-                QMessageBox.warning(self, "警告", "项目名称重复，请重新输入！")
+                MessageBox.warning(self, "警告", "项目名称重复，请重新输入！")
                 self.set_model_data(index, self.old_name)
                 return
             if self.is_update_config:
-                self.update_config_data(
-                    self.old_name, new_name, self.config[0].display_sequence
-                )
+                self.update_config_data(self.old_name, new_name, self.config[0].display_sequence)
                 self.is_update_config = False
             self.old_name = new_name
         else:
@@ -1112,9 +1013,7 @@ class OptionList(QListView):
         if self.darpflag:
             text = self.start_index.data()
             new_item = QStandardItem(text)
-            new_item.setIcon(
-                QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png")
-            )
+            new_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
             if row_number == -1:
                 self.update_model_list(
                     self.config[0].analysis_list,
@@ -1184,9 +1083,9 @@ class OptionList(QListView):
             text = event.mimeData().text().lstrip()
             if self.drop_is_accept is False:
                 if text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
-                    QMessageBox.warning(self, "警告", "已选择测试模式")
+                    MessageBox.warning(self, "警告", "已选择测试模式")
                 elif not self.config:
-                    QMessageBox.warning(self, "警告", "请选择测试模式")
+                    MessageBox.warning(self, "警告", "请选择测试模式")
                 elif text in [
                     "声压级-频率 (SPLF) ",
                     "频响 (FR) ",
@@ -1194,7 +1093,7 @@ class OptionList(QListView):
                     "高阶谐波失真 (RB) ",
                     "感知失真 (PRB) ",
                 ]:
-                    QMessageBox.warning(self, "警告", "当前模式不支持此功能")
+                    MessageBox.warning(self, "警告", "当前模式不支持此功能")
                 self.drop_is_accept = True
                 return
             elif text in ["播放与录制", "录制音频", "导入音频", "导入激励与音频"]:
@@ -1209,9 +1108,7 @@ class OptionList(QListView):
 
     def set_sound_item(self, item_text):
         list_item = QStandardItem(item_text)
-        list_item.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png")
-        )
+        list_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
         if self.config:
             seq_name_list = list()
             for key, value in self.config.items():
@@ -1232,18 +1129,14 @@ class OptionList(QListView):
             if flag:
                 seq_item.mode = "PLAY_AND_RECORD"
                 seq_item.detail = config
-                self.signal_len = seq_item.detail.get(
-                    "total_time", 4.0
-                ) * seq_item.detail.get("sample_rate", 44100)
+                self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
             else:
-                QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
+                MessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
             seq_item.detail = {"total_time": 4.0, "sample_rate": 44100}
-            self.signal_len = seq_item.detail.get(
-                "total_time", 4.0
-            ) * seq_item.detail.get("sample_rate", 44100)
+            self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
         elif item_text == "导入音频":
             seq_item.mode = "IMPORT_AUDIO"
             seq_item.detail = {"sample_rate": 44100}
@@ -1253,11 +1146,9 @@ class OptionList(QListView):
             if flag:
                 seq_item.mode = "IMPORT_STIMULUS_AUDIO"
                 seq_item.detail = config
-                self.signal_len = seq_item.detail.get(
-                    "total_time", 4.0
-                ) * seq_item.detail.get("sample_rate", 44100)
+                self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
             else:
-                QMessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
+                MessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
                 return
         self.config.append(seq_item)
 
@@ -1270,9 +1161,7 @@ class OptionList(QListView):
             count += 1
             item_exist = self.model().findItems(item_text + f"{count}")
         list_item = QStandardItem(item_text + f"{count}")
-        list_item.setIcon(
-            QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png")
-        )
+        list_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
         self.model().insertRow(self.model().rowCount(), list_item)
         list_item_text = list_item.text()
 

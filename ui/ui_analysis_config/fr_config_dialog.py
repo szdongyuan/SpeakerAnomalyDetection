@@ -4,12 +4,13 @@ FR (Frequency Response) 分析配置对话框
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
+from ui.custom_ui_widget.widgets import CheckBox, ComboBox, Label, PushButton
+from ui.ui_src import ui_resources
 
 
 class FrConfigWindow(QDialog):
@@ -35,7 +36,7 @@ class FrConfigWindow(QDialog):
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         # 默认高度偏小会把阈值绘图区域压缩得很矮
         self.setMinimumSize(380, 420)
         self.resize(380, 450)
@@ -43,7 +44,7 @@ class FrConfigWindow(QDialog):
         layout = QVBoxLayout()
 
         # Octave smoothing
-        self.smooth_combo_box = QComboBox()
+        self.smooth_combo_box = ComboBox()
         self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
 
         selected_oct = self.load_config.get("octave_smoothing", None)
@@ -58,7 +59,7 @@ class FrConfigWindow(QDialog):
         self.smooth_combo_box.setCurrentText(selected_label)
 
         # Golden sample checkbox (placed above threshold widget)
-        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box = CheckBox("使用黄金样本")
         self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
 
         # 使用通用阈值配置组件
@@ -70,7 +71,7 @@ class FrConfigWindow(QDialog):
 
         btn_layout = self.create_btn()
 
-        layout.addWidget(QLabel("平滑"))
+        layout.addWidget(Label("平滑"))
         layout.addWidget(self.smooth_combo_box)
         layout.addWidget(self.golden_chk_box)
         layout.addWidget(self.threshold_widget)
@@ -78,22 +79,11 @@ class FrConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qcombobox_style
-        )
-
     def create_btn(self):
         btn_layout = QHBoxLayout()
-        default_btn = QPushButton(" 设为默认 ")
+        default_btn = PushButton(" 设为默认 ")
         default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()

@@ -6,16 +6,7 @@ from datetime import datetime
 
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtGui import QStandardItem, QBrush, QColor
-from PyQt5.QtWidgets import (
-    QPushButton,
-    QProgressDialog,
-    QMessageBox,
-    QFileDialog,
-    QApplication,
-    QLabel,
-    QWidget,
-    QHBoxLayout,
-)
+from PyQt5.QtWidgets import QProgressDialog, QFileDialog, QApplication, QWidget, QHBoxLayout
 from scipy.io import wavfile as scipy_wavfile
 
 from base.file_ops import FileOps
@@ -24,6 +15,7 @@ from base.playback_controller import PlaybackController
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
+from ui.custom_ui_widget.widgets import Label, PushButton, MessageBox
 
 
 class ArchiveAudioDataDialog(AudioDataManageDialog):
@@ -45,7 +37,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._click_order = False
         # Base __init__ will trigger load_audio_data_to_view(), which may reset this label.
         # Create it early to avoid attribute access before init_ui() runs.
-        self.remaining_time_label = QLabel()
+        self.remaining_time_label = Label()
         self._is_switching_playback = False
         self._playback_poll_timer = None
         self.playback_controller = PlaybackController()
@@ -55,9 +47,9 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._playback_poll_timer.setInterval(150)
         self._playback_poll_timer.timeout.connect(self._on_playback_poll_timeout)
         # removed blink/flash logic for play column
-        self.order_btn = QPushButton(" 倒  序 ")
-        self.package_btn = QPushButton(" 打  包 ")
-        self.delete_btn = QPushButton(" 删  除 ")
+        self.order_btn = PushButton(" 倒  序 ")
+        self.package_btn = PushButton(" 打  包 ")
+        self.delete_btn = PushButton(" 删  除 ")
 
         self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放"])
 
@@ -84,8 +76,8 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._setup_status_row_with_remaining_label()
         self._set_remaining_label_idle()
 
-        window_width = ui_style_const.scale_font_px(1060)
-        window_height = ui_style_const.scale_font_px(700)
+        window_width = ui_style_const.scale_size_px(1060)
+        window_height = ui_style_const.scale_size_px(700)
         self.resize(window_width, window_height)
 
     def load_audio_data_to_view(self):
@@ -118,7 +110,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         return product_model_set, record_date_set
 
     def set_bottom_layout(self):
-        all_show_btn = QPushButton("全部显示")
+        all_show_btn = PushButton("全部显示")
 
         all_show_btn.clicked.connect(self.show_all_wave)
         self.order_btn.clicked.connect(self.on_clicked_order_btn)
@@ -316,11 +308,11 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         return super().eventFilter(watched, event)
 
     def _show_switch_playback_blocked_popup(self):
-        msg_box = QMessageBox(self)
+        msg_box = MessageBox(self)
         msg_box.setWindowTitle("提示")
         msg_box.setText("当前有音频正在播放，请先停止后再播放其他音频。")
-        msg_box.setIcon(QMessageBox.NoIcon)
-        msg_box.addButton("确定", QMessageBox.AcceptRole)
+        msg_box.setIcon(MessageBox.NoIcon)
+        msg_box.addButton("确定", MessageBox.AcceptRole)
         msg_box.exec_()
 
     def _clear_playing_state(self):
@@ -353,7 +345,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         try:
             row_path = self._resolve_row_file_path(row)
             if not row_path:
-                QMessageBox.warning(self, "提示", "未找到该行对应音频文件路径")
+                MessageBox.warning(self, "提示", "未找到该行对应音频文件路径")
                 self._clear_playing_state()
                 return
 
@@ -371,7 +363,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
             code, msg = self.playback_controller.start_audio_playback(row_path)
             if code != error_code.OK:
-                QMessageBox.warning(self, "提示", msg)
+                MessageBox.warning(self, "提示", msg)
                 self._clear_playing_state()
                 return
 
@@ -406,16 +398,16 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._update_current_playing_remaining_text()
 
     def _warn_cannot_close_while_playing(self):
-        QMessageBox.warning(self, "提示", "正在播放，请先停止播放后再退出")
+        MessageBox.warning(self, "提示", "正在播放，请先停止播放后再退出")
 
     def on_clicked_package_btn(self):
         self._stop_playback_if_needed()
         if not self.select_wave_data:
-            msg_box = QMessageBox(self)
+            msg_box = MessageBox(self)
             msg_box.setWindowTitle("提示")
             msg_box.setText("您未选择任何音频进行导出，程序将仅导出数据库，是否确定？")
-            confirm_btn = msg_box.addButton(" 确  认 ", QMessageBox.AcceptRole)
-            cancel_btn = msg_box.addButton(" 取  消 ", QMessageBox.RejectRole)
+            confirm_btn = msg_box.addButton(" 确  认 ", MessageBox.AcceptRole)
+            cancel_btn = msg_box.addButton(" 取  消 ", MessageBox.RejectRole)
             msg_box.exec_()
             if msg_box.clickedButton() != confirm_btn:
                 return
@@ -477,7 +469,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
                     is_delete_item_list.append(int(key))
                     will_delete_in_db_list.append(value[0])
                 except Exception as e:
-                    QMessageBox.warning(self, "警告", "%s" % str(e)[:40])
+                    MessageBox.warning(self, "警告", "%s" % str(e)[:40])
             else:
                 will_delete_in_db_list.append(value[0])
         code, result = self.recording_manager.delete_audio_at_id_list(will_delete_in_db_list)

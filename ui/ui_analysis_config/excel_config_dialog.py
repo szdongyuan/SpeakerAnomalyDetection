@@ -2,25 +2,12 @@ import os
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QCheckBox,
-    QDialog,
-    QFileDialog,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QScrollArea,
-    QSpinBox,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt5.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import PushButton, Label, GroupBox, CheckBox, LineEdit, SpinBox, MessageBox
+from ui.ui_src import ui_resources
 
 
 class ExcelConfigWindow(QDialog):
@@ -38,72 +25,72 @@ class ExcelConfigWindow(QDialog):
         self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
 
-        self._item_checkbox_by_name: dict[str, QCheckBox] = {}
+        self._item_checkbox_by_name: dict[str, CheckBox] = {}
 
         self.init_ui()
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(420, 420)
 
         layout = QVBoxLayout()
 
-        basic_box = QGroupBox("Excel 保存设置")
+        basic_box = GroupBox("Excel 保存设置")
         basic_layout = QVBoxLayout()
 
         # Save directory
         dir_layout = QHBoxLayout()
-        dir_layout.addWidget(QLabel("保存目录:"))
-        self.save_dir_edit = QLineEdit()
+        dir_layout.addWidget(Label("保存目录:"))
+        self.save_dir_edit = LineEdit()
         self.save_dir_edit.setText(self.load_config.get("save_dir") or "")
         self.save_dir_edit.editingFinished.connect(self.on_save_dir_editing_finished)
-        browse_btn = QPushButton("浏览…")
+        browse_btn = PushButton("浏览…")
         browse_btn.clicked.connect(self.on_browse_dir)
         dir_layout.addWidget(self.save_dir_edit)
         dir_layout.addWidget(browse_btn)
         basic_layout.addLayout(dir_layout)
 
         # Optional: add product model as a subdirectory under save_dir
-        self.add_model_dir_chk = QCheckBox("根据型号分类")
+        self.add_model_dir_chk = CheckBox("根据型号分类")
         self.add_model_dir_chk.setChecked(bool(self.load_config.get("add_model_dir", False)))
         basic_layout.addWidget(self.add_model_dir_chk)
 
         # File base name
         name_layout = QHBoxLayout()
-        name_layout.addWidget(QLabel("文件名:"))
-        self.file_base_edit = QLineEdit()
+        name_layout.addWidget(Label("文件名:"))
+        self.file_base_edit = LineEdit()
         self.file_base_edit.setText(self.load_config.get("file_base") or "analysis_results")
         name_layout.addWidget(self.file_base_edit)
         basic_layout.addLayout(name_layout)
 
         # Append date
-        self.append_date_chk = QCheckBox("文件名添加日期(每日新建)")
+        self.append_date_chk = CheckBox("文件名添加日期(每日新建)")
         self.append_date_chk.setChecked(bool(self.load_config.get("add_date", True)))
         basic_layout.addWidget(self.append_date_chk)
 
         # Runtime file lock (CSV spool + daily XLSX)
-        self.lock_files_chk = QCheckBox("运行中锁定CSV/Excel文件")
+        self.lock_files_chk = CheckBox("运行中锁定CSV/Excel文件")
         self.lock_files_chk.setChecked(bool(self.load_config.get("lock_files", True)))
         basic_layout.addWidget(self.lock_files_chk)
 
         # Max points
         max_points_layout = QHBoxLayout()
-        max_points_layout.addWidget(QLabel("最大保存点数:"))
-        self.max_points_spin = QSpinBox()
+        max_points_layout.addWidget(Label("最大保存点数:"))
+        self.max_points_spin = SpinBox()
         self.max_points_spin.setRange(10, 16382)  # Excel max columns 16384, reserve 2 cols for SN/日期
         self.max_points_spin.setValue(int(self.load_config.get("max_points", 2000) or 2000))
         max_points_layout.addWidget(self.max_points_spin)
         basic_layout.addLayout(max_points_layout)
 
         # Item selection
-        select_box = QGroupBox("选择需要保存的分析项")
+        select_box = GroupBox("选择需要保存的分析项")
         select_layout = QVBoxLayout()
 
         btn_row = QHBoxLayout()
-        select_all_btn = QPushButton("全选")
-        clear_all_btn = QPushButton("全不选")
+        select_all_btn = PushButton("全选")
+        clear_all_btn = PushButton("全不选")
         select_all_btn.clicked.connect(self.on_select_all)
         clear_all_btn.clicked.connect(self.on_clear_all)
         btn_row.addWidget(select_all_btn)
@@ -121,7 +108,7 @@ class ExcelConfigWindow(QDialog):
             selected = []
 
         for name in self._get_available_analysis_items():
-            cb = QCheckBox(name)
+            cb = CheckBox(name)
             cb.setChecked(name in selected)
             self._item_checkbox_by_name[name] = cb
             scroll_layout.addWidget(cb)
@@ -136,29 +123,29 @@ class ExcelConfigWindow(QDialog):
         basic_box.setLayout(basic_layout)
         layout.addWidget(basic_box)
 
-        mes_box = QGroupBox("MES 保存设置")
+        mes_box = GroupBox("MES 保存设置")
         mes_layout = QVBoxLayout()
 
-        self.mes_chk = QCheckBox("保存MES结果")
+        self.mes_chk = CheckBox("保存MES结果")
         self.mes_chk.setChecked(bool(self.load_config.get("save_mes_enabled", False)))
         mes_layout.addWidget(self.mes_chk)
 
         mes_dir_layout = QHBoxLayout()
-        mes_dir_layout.addWidget(QLabel("MES目录:"))
-        self.mes_file_base_edit = QLineEdit()
+        mes_dir_layout.addWidget(Label("MES目录:"))
+        self.mes_file_base_edit = LineEdit()
         if "mes_file_base" in self.load_config:
             self.mes_file_base_edit.setText(self.load_config.get("mes_file_base") or "")
         else:
             self.mes_file_base_edit.setText("D:/dataMES")
-        mes_browse_btn = QPushButton("浏览…")
+        mes_browse_btn = PushButton("浏览…")
         mes_browse_btn.clicked.connect(self.on_browse_mes_dir)
         mes_dir_layout.addWidget(self.mes_file_base_edit)
         mes_dir_layout.addWidget(mes_browse_btn)
         mes_layout.addLayout(mes_dir_layout)
 
         mes_name_layout = QHBoxLayout()
-        mes_name_layout.addWidget(QLabel("MES文件名:"))
-        self.mes_file_name_edit = QLineEdit()
+        mes_name_layout.addWidget(Label("MES文件名:"))
+        self.mes_file_name_edit = LineEdit()
         if "mes_file_name" in self.load_config:
             self.mes_file_name_edit.setText(self.load_config.get("mes_file_name") or "")
         else:
@@ -173,14 +160,6 @@ class ExcelConfigWindow(QDialog):
         layout.addLayout(self.create_btn())
 
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qspinbox_style
-        )
 
     def _get_available_analysis_items(self) -> list[str]:
         """
@@ -289,7 +268,7 @@ class ExcelConfigWindow(QDialog):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=False)
         if ok:
             return
-        QMessageBox.warning(self, "保存目录不可用", msg)
+        MessageBox.warning(self, "保存目录不可用", msg)
 
     def on_select_all(self):
         for cb in self._item_checkbox_by_name.values():
@@ -301,9 +280,9 @@ class ExcelConfigWindow(QDialog):
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
-        default_btn = QPushButton("设为默认")
+        default_btn = PushButton("设为默认")
         default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = QPushButton("确定")
+        ok_btn = PushButton("确定")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()
@@ -336,11 +315,11 @@ class ExcelConfigWindow(QDialog):
     def on_default_btn_clicked(self):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)
         if not ok:
-            QMessageBox.warning(self, "保存目录不可用", msg)
+            MessageBox.warning(self, "保存目录不可用", msg)
             return
         ok, msg = self._validate_mes_config()
         if not ok:
-            QMessageBox.warning(self, "MES配置不可用", msg)
+            MessageBox.warning(self, "MES配置不可用", msg)
             return
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("Excel", config_data)
@@ -349,11 +328,11 @@ class ExcelConfigWindow(QDialog):
     def on_click_ok_btn(self):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)
         if not ok:
-            QMessageBox.warning(self, "保存目录不可用", msg)
+            MessageBox.warning(self, "保存目录不可用", msg)
             return None
         ok, msg = self._validate_mes_config()
         if not ok:
-            QMessageBox.warning(self, "MES配置不可用", msg)
+            MessageBox.warning(self, "MES配置不可用", msg)
             return None
         config_data = self.get_default_config()
         self.accept()

@@ -1,0 +1,351 @@
+/* 整体的控件样式 */
+
+QPushButton {
+    border-left: 1px solid rgb(128, 128, 128);
+    border-top: 1px solid rgb(128, 128, 128);
+    border-right: 3px solid rgb(128, 128, 128);
+    border-bottom: 3px solid rgb(128, 128, 128);
+    background-color: rgb(225, 225, 225);
+    border-radius: 3px;
+    padding: 3px;
+}
+QPushButton:hover {
+    background-color: #5099ccff;
+    color: black;
+    border-color: #803333ff;
+}
+QPushButton:pressed {
+    background-color: #8099ccff;
+    border-color: #3333ff;
+}
+
+QLineEdit {
+    border: 1px solid rgb(122, 122, 122);
+    border-radius: 3px;
+    padding: 3px;
+}
+QLineEdit:disabled {
+    background-color: #d3d3d3;
+    color: #808080;
+}
+
+QComboBox {
+    border: 1px solid rgb(173, 173, 173);
+    background-color: rgb(225, 225, 225);
+    border-radius: 3px;
+    padding: 3px;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 18px;
+    border: none;
+    background: transparent;
+    border-radius: 0px;
+}
+
+QComboBox::down-arrow {
+    image: url(:/ui/icon/down.png);
+    width: 10px;
+    height: 10px;
+}
+
+QGroupBox {
+    background: transparent;
+    color: rgb(0, 0, 0);
+}
+QGroupBox:disabled {
+    color: rgb(162, 162, 162);
+}
+QGroupBox::title {
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    padding-left: 0px;
+    padding-top: 0px;
+    margin-top: 0px;
+}
+
+QSpinBox,
+QDoubleSpinBox {
+    background-color: rgb(225, 225, 225);
+    border: 1px solid rgb(173, 173, 173);
+    border-radius: 3px;
+    padding: 3px;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+    width: 18px;
+    border: none;
+    background: transparent;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: url(:/ui/icon/up.png);
+    width: 10px;
+    height: 10px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: url(:/ui/icon/down.png);
+    width: 10px;
+    height: 10px;
+}
+
+QDialog {
+    border-radius: 20px;
+}
+
+QLabel {
+    color: black;
+}
+
+QMenuBar {
+    background-color:transparent;
+}
+QMenu::item {
+    padding-left: 30px;
+    padding-right: 10px;
+}
+QMenu::item:selected {
+    background-color: #8099ccff;
+}
+
+
+QCheckBox:focus { outline: none; }
+
+QMainWindow  {
+    background-color: #f0f0f0;
+    border: 1px solid rgb(0, 0, 0);
+}
+
+QTextEdit{
+    background-color: white;
+    font-family: 'SimSun';
+    font-size: 30px;
+}
+    QTextEdit:disabled {
+    color: rgb(0, 0, 0);
+}
+
+
+QTableView::item {
+    border-top: 1px solid rgb(130, 135, 144);
+}
+QTableView::item:selected {
+    background-color: rgb(0, 120, 215);
+}
+
+/* main_window style */
+QWidget#TitleWidget QPushButton {
+    border: None;
+    background-color: transparent;
+}
+
+QWidget#TitleWidget QLabel {
+    background-color: transparent;
+}
+
+QDialog#AiWindow QLineEdit {
+    background-color: transparent;
+    border: none;
+}
+
+QDialog#CalibrationWindow QLabel {
+    background-color: white;
+    border: 1px solid rgb(122, 122, 122);
+    border-radius: 3px;
+}
+
+/* signal analysis windew style */
+QLabel#overallResultLabel[resultState="ok"] {
+    color: rgb(0, 128, 0);
+}
+
+QLabel#overallResultLabel[resultState="ng"] {
+    color: rgb(200, 0, 0);
+}
+
+QTextEdit#resultDisplay {
+    font-size:20px;
+}
+
+QWidget#LooseParticle {
+    font-size: 20px;
+}
+
+QWidget#PeakDetection {
+    font-size: 16px;
+}
+
+/* login window style */
+QLabel#infoLabel {
+    color: red;
+    font-size: 15px
+}
+
+/* stimulus window style */
+QDialog#StimulusWindow QLabel,
+QDialog#StimulusWindow QPushButton {
+    color: rgb(0, 0, 0);
+}
+
+QDialog#StimulusWindow QLabel:disabled,
+QDialog#StimulusWindow QPushButton:disabled {
+    color: rgb(162, 162, 162);
+}
+
+/* traypopuppanel style */
+QFrame#trayPopupCard {
+    background: rgb(245, 248, 250);
+    border-radius: 12px;
+    border: 1px solid #d9d9d9;
+}
+
+QToolButton#TrayPopupButton {
+    border: None;
+}
+QToolButton#TrayPopupButton:hover {
+    background-color: #5099ccff
+}
+
+
+/* sequencement_count_coard style */
+QWidget#SequenceCountBoard QFrame {
+    color: gray;
+}
+
+QWidget#SequenceCountBoard QLabel {
+    color: black;
+}
+QPushButton#testbtn,
+QPushButton#markbtn {
+    background-color: #E0E0E0;
+    color: #666666;
+    border: none;
+}
+
+QPushButton#testbtn:disabled,
+QPushButton#markbtn:disabled {
+    background-color: #007BFF;
+    color: white;
+    border: none;
+}
+
+QPushButton#okbtn,
+QPushButton#ngbtn {
+    background-color: #d0ceca;
+    color: black;
+    font-family: 'SimSun';
+    font-size: 70px;
+    border-radius: 20px;
+    border: 3px solid rgb(128, 128, 128);
+    padding-left: 0px;
+}
+
+QPushButton#okbtn:hover,
+QPushButton#ngbtn:hover {
+    border-color: #0080ff;
+}
+
+QPushButton#okbtn:pressed,
+QPushButton#ngbtn:pressed {
+    background-color: #aba8a0;
+    border-color: #3333ff;
+}
+
+/* fba config dialog */
+QLabel#custhelp {
+    color: #666;
+}
+
+/* pipline pd pm config style */
+QLabel#arrowlabel {
+    color: rgb(120,120,120);
+}
+
+
+/* spec config dialog style */
+QLabel#bottomlimitlabel,
+QLabel#toplimitlabel {
+    color: rgb(0, 0, 0);
+}
+
+QLabel#bottomlimitlabel:disabled,
+QLabel#toplimitlabel:disabled {
+    color: rgb(162, 162, 162);
+}
+
+/* hd config dialog style */
+QDialog#HdConfigWindow QScrollArea {
+    color: rgb(0, 0, 0);
+}
+
+QDialog#HdConfigWindow QScrollArea:disabled {
+    color: rgb(162, 162, 162);
+}
+
+QDialog#HdConfigWindow QLabel {
+    background-color: transparent;
+}
+
+QDialog#HdConfigWindow QLabel:hover {
+    background-color: #5099ccff;
+}
+
+/* rb config dialog style */
+QDialog#RbConfigWindow QScrollArea {
+    color: rgb(0, 0, 0);
+}
+
+QDialog#RbConfigWindow QScrollArea:disabled {
+    color: rgb(162, 162, 162);
+}
+
+QDialog#RbConfigWindow QLabel {
+    background-color: transparent;
+}
+
+QDialog#RbConfigWindow QLabel:hover {
+    background-color: #5099ccff;
+}
+
+/* sequence tools bar style */
+QWidget#SequenceToolsBar QPushButton {
+    border: None;
+    background-color: transparent;
+}
+
+QWidget#SequenceToolsBar QPushButton:hover {
+    background-color: #5099ccff;
+}
+
+QWidget#SequenceToolsBar QFrame {
+    color: rgb(173, 173, 173);
+}
+
+QWidget#SequenceToolsBar QLabel {
+    color: black;
+}
+
+/* pattern match config dialog */
+QFrame#separator1,
+QFrame#separator2 {
+    color: rgb(173, 173, 173);
+}
+
+/* hardware window style */
+QFrame#hardwareframe {
+    color: rgb(173, 173, 173);
+}
+
+/* operation sequence style */
+QPushButton#addanalysisbtn {
+    border:None;
+    background-color:transparent;
+}

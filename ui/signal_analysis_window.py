@@ -44,6 +44,7 @@ from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
+from ui.ui_src import ui_resources
 
 
 def get_class_mapping():
@@ -158,9 +159,10 @@ class AnalysisResultSummaryWindow(QWidget):
     def __init__(self, result_dict: dict[str, bool], title: str = "分析结果汇总"):
         super().__init__()
         self.setWindowTitle(title)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         self._overall_label = QLabel(self)
+        self._overall_label.setObjectName("overallResultLabel")
         overall_font = QFont()
         overall_font.setPixelSize(22)
         self._overall_label.setFont(overall_font)
@@ -204,11 +206,15 @@ class AnalysisResultSummaryWindow(QWidget):
             if not bool(ok):
                 overall_ok = False
                 break
+        # set_results 里
         overall_text = "OK" if overall_ok else "NG"
         self._overall_label.setText(f"最终结果：{overall_text}")
-        self._overall_label.setStyleSheet(
-            "color: rgb(0, 128, 0);" if overall_ok else "color: rgb(200, 0, 0);"
-        )
+        self._overall_label.setProperty("resultState", "ok" if overall_ok else "ng")
+
+        # 动态属性变更后，触发重新应用 QSS
+        self._overall_label.style().unpolish(self._overall_label)
+        self._overall_label.style().polish(self._overall_label)
+        self._overall_label.update()
 
         self._table.setRowCount(len(items))
         for row, (name, (ok, deviation)) in enumerate(items):
@@ -253,7 +259,7 @@ class AnalysisGraphWidget(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         self.analysis_plot.setBackground("white")
 
@@ -262,7 +268,7 @@ class AnalysisGraphWidget(QWidget):
         self.setLayout(layout)
 
     def set_plot_font_size(self, font_size: int):
-        font_size = ui_style_const.scale_font_px(font_size)
+        font_size = ui_style_const.scale_size_px(font_size)
         font = QFont()
         font.setPixelSize(font_size)
 
@@ -1444,7 +1450,7 @@ class AI(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         ai_analyse_layout = self.create_ai_analyse_layout()
         self.setLayout(ai_analyse_layout)
 
@@ -1455,7 +1461,6 @@ class AI(QWidget):
         self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_textedit.setDisabled(True)
 
-        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_style)
         analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
         analyse_score_layout.setContentsMargins(20, 0, 20, 0)
 
@@ -1562,7 +1567,7 @@ class Spectrogram(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
 
         self.plot_container = QWidget()
@@ -1716,6 +1721,7 @@ class Spectrogram(QWidget):
 class LooseParticle(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
+        self.setObjectName("LooseParticle")
         self.data_struct = DataDealStruct()
         self.result = None
         self.analysis_config = None
@@ -1725,7 +1731,6 @@ class LooseParticle(AnalysisGraphWidget):
         self.threshould = None
         self.setWindowTitle(title_name)
         self.add_label_to_layout()
-        self.setStyleSheet("font-size: 20px;")
 
     def add_label_to_layout(self):
         lp_num_layout = QHBoxLayout()
@@ -1851,6 +1856,7 @@ class LooseParticle(AnalysisGraphWidget):
 class PeakDetection(AnalysisGraphWidget):
     def __init__(self, title_name):
         super().__init__()
+        self.setObjectName("PeakDetection")
         self.data_struct = DataDealStruct()
         self.analysis_config = None
         self.result = None
@@ -1866,8 +1872,6 @@ class PeakDetection(AnalysisGraphWidget):
         pd_num_layout.addWidget(self.PD_num_label)
         pd_num_layout.setSpacing(20)
         self.layout().insertLayout(0, pd_num_layout)
-
-        self.setStyleSheet("font-size: 16px;")
 
     def _update_fonts(self):
         # only adjust the font size of the upper time series plot
@@ -1945,16 +1949,13 @@ class PatternMatch(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
         self.result_display = QTextEdit()
         self.result_display.setReadOnly(True)
 
         self.main_layout.addWidget(self.result_display)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
-        )
 
     def calculate_pattern_match(self, target_data=None, analysis_config=None):
         if target_data is not None:
@@ -2098,7 +2099,7 @@ class PipelinePdPm(QWidget):
         return seg_len, left_point, right_point
 
     def _init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
         # plot area for summary
         self.plot_widget = pg.PlotWidget(background="white")
@@ -2107,6 +2108,7 @@ class PipelinePdPm(QWidget):
         self.plot_widget.setLabel("bottom", "Time (s)")
 
         self.result_display = QTextEdit()
+        self.result_display.setObjectName("resultDisplay")
         self.result_display.setReadOnly(True)
         # match result table
         self.table_widget = QTableWidget()
@@ -2126,11 +2128,7 @@ class PipelinePdPm(QWidget):
         content_layout.setStretch(1, 2)
         self.main_layout.addLayout(content_layout)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style + ui_style_const.qlineedit_style + ui_style_const.qtextedit_style
-        )
 
-        self.result_display.setStyleSheet("font-size:20px;")
         self._right_view = None
         self._bars_item = None
         self._last_spl_series = None

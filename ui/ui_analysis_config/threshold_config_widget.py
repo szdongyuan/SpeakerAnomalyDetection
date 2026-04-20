@@ -13,10 +13,12 @@ import numpy as np
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QWidget, QCheckBox, QGroupBox, QLineEdit, QFileDialog, QVBoxLayout, QMessageBox
+from PyQt5.QtWidgets import QWidget, QFileDialog, QVBoxLayout
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox
+from ui.ui_src import ui_resources
 
 
 class ThresholdConfigWidget(QWidget):
@@ -55,17 +57,17 @@ class ThresholdConfigWidget(QWidget):
 
     def _init_ui(self):
         """初始化 UI 组件"""
+        self
         # 创建阈值复选框
-        self.limit_checkbox = QCheckBox("阈值", self)
+        self.limit_checkbox = CheckBox("阈值", self)
         self.limit_checkbox.setChecked(self.load_config.get("limit_checked", False))
         self.limit_checkbox.stateChanged.connect(self._on_limit_checkbox_changed)
 
         # 创建阈值选项组
-        self.limit_group_box = QGroupBox("选择阈值", self)
+        self.limit_group_box = GroupBox("选择阈值", self)
         self.limit_group_box.setMinimumSize(180, 180)
         if not self.limit_checkbox.isChecked():
             self.limit_group_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
         # 配置数据展示
         self.limit_graph = PlotWidget()
@@ -93,15 +95,15 @@ class ThresholdConfigWidget(QWidget):
 
     def _create_config_dir(self) -> None:
         """创建配置文件选择布局"""
-        self.config_dir_box = QLineEdit()
+        self.config_dir_box = LineEdit()
         self.config_dir_box.setReadOnly(True)
         if not self.limit_checkbox.isChecked():
             self.config_dir_box.setDisabled(True)
         self.config_dir_box.textChanged.connect(self.config_changed.emit)
 
-        icon_path = DEFAULT_DIR + "ui/ui_pic/folder/folder-s.png"
+        icon_path = ":/ui/icon/folder-s.png"
         config_dir_icon = QIcon(icon_path)
-        config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
+        config_dir_action = self.config_dir_box.addAction(config_dir_icon, LineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self._on_config_dir_btn_clicked)
 
@@ -114,11 +116,9 @@ class ThresholdConfigWidget(QWidget):
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
             self.config_dir_box.setDisabled(False)
-            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
         else:
             self.limit_group_box.setDisabled(True)
             self.config_dir_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -200,7 +200,7 @@ class ThresholdConfigWidget(QWidget):
         """
         if self.limit_checkbox.isChecked():
             if not self.limit_data:
-                QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+                MessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
                 return False
         return True
 
@@ -216,7 +216,7 @@ class ThresholdConfigWidget(QWidget):
     @staticmethod
     def load_excel_limit(excel_path):
         if not excel_path:
-            QMessageBox.warning(None, "提示", f"未选择配置文件，请选择一个配置文件！")
+            MessageBox.warning(None, "提示", f"未选择配置文件，请选择一个配置文件！")
             return None
         ext = os.path.splitext(excel_path)[1].lower()
         if ext == ".csv":
@@ -224,11 +224,11 @@ class ThresholdConfigWidget(QWidget):
                 reader = csv.reader(f)
                 rows = list(reader)
         else:
-            QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
+            MessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
             return None
 
         if not rows or len(rows) == 0:
-            QMessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
+            MessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
             return None
 
         csv_duration_list, csv_upper_list, csv_lower_list = [], [], []
@@ -242,7 +242,7 @@ class ThresholdConfigWidget(QWidget):
         elif lenth == 2 and rows[0][1] == "lowerbound":
             upperbound = False
         else:
-            QMessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
+            MessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
             return None
         for index, row in enumerate(rows[1:], start=2):
             csv_line_no = index
@@ -252,7 +252,7 @@ class ThresholdConfigWidget(QWidget):
                     uval = float(row[1])
                     lval = float(row[2])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_duration_list.append(fval)
                 csv_upper_list.append(uval)
@@ -263,7 +263,7 @@ class ThresholdConfigWidget(QWidget):
                     uval = float(row[2])
                     lval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_duration_list.append(fval)
                 csv_upper_list.append(uval)
@@ -273,7 +273,7 @@ class ThresholdConfigWidget(QWidget):
                     fval = float(row[0])
                     uval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_duration_list.append(fval)
                 csv_upper_list.append(uval)
@@ -283,7 +283,7 @@ class ThresholdConfigWidget(QWidget):
                     fval = float(row[0])
                     lval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_duration_list.append(fval)
                 csv_upper_list.append(np.nan)
@@ -291,7 +291,7 @@ class ThresholdConfigWidget(QWidget):
         for i, (x, u, l) in enumerate(zip(csv_duration_list, csv_upper_list, csv_lower_list)):
             if (u is not None) and (l is not None) and (not np.isnan(u)) and (not np.isnan(l)):
                 if l > u:
-                    QMessageBox.warning(
+                    MessageBox.warning(
                         None,
                         "提示",
                         f"CSV 上下限配置错误：下限不能大于上限。\n"

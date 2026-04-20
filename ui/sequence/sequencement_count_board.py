@@ -3,11 +3,13 @@ from datetime import datetime
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QWidget, QStackedWidget, QMessageBox
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QFrame, QWidget, QStackedWidget
 
 from base.save_data import ensure_test_result_file
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, LineEdit, Label, MarkPushButton, MessageBox
+from ui.ui_src import ui_resources
 
 
 class SequenceCountBoard(QWidget):
@@ -15,31 +17,35 @@ class SequenceCountBoard(QWidget):
     def __init__(self, analysis_config, parent=None):
         super(SequenceCountBoard, self).__init__(parent)
 
-        self.btn_height = ui_style_const.scale_font_px(80)
-        self.btn_width = ui_style_const.scale_font_px(180)
-        self.lineedit_width = ui_style_const.scale_font_px(130)
-        self.lineedit_height = ui_style_const.scale_font_px(35)
-        self.label_width = ui_style_const.scale_font_px(100)
-        self.icon_size = ui_style_const.scale_font_px(24)
+        self.btn_height = ui_style_const.scale_size_px(80)
+        self.btn_width = ui_style_const.scale_size_px(180)
+        self.lineedit_width = ui_style_const.scale_size_px(130)
+        self.lineedit_height = ui_style_const.scale_size_px(35)
+        self.label_width = ui_style_const.scale_size_px(100)
+        self.icon_size = ui_style_const.scale_size_px(24)
 
         self.analysis_config = analysis_config
         self.mode = str()
         self._test_available = True
         self._test_unavailable_reason = ""
 
-        self.test_btn = QPushButton("测试")
-        self.mark_btn = QPushButton("标记")
-        self.total_line_edit = QLineEdit()
-        self.ok_line_edit = QLineEdit()
-        self.ng_line_edit = QLineEdit()
-        self.yield_line_edit = QLineEdit()
-        self.datatime_line_edit = QLineEdit()
-        self.mark_total_edit = QLineEdit("0")
-        self.mark_ok_edit = QLineEdit("0")
-        self.mark_ng_edit = QLineEdit("0")
-        self.ok_btn = QPushButton(" OK ")
-        self.ng_btn = QPushButton(" NG ")
-        self.reset_btn = QPushButton("重置统计")
+        self.test_btn = PushButton("测试")
+        self.mark_btn = PushButton("标记")
+        self.test_btn.setObjectName("testbtn")
+        self.mark_btn.setObjectName("markbtn")
+        self.total_line_edit = LineEdit()
+        self.ok_line_edit = LineEdit()
+        self.ng_line_edit = LineEdit()
+        self.yield_line_edit = LineEdit()
+        self.datatime_line_edit = LineEdit()
+        self.mark_total_edit = LineEdit("0")
+        self.mark_ok_edit = LineEdit("0")
+        self.mark_ng_edit = LineEdit("0")
+        self.ok_btn = MarkPushButton(" OK ")
+        self.ng_btn = MarkPushButton(" NG ")
+        self.ok_btn.setObjectName("okbtn")
+        self.ng_btn.setObjectName("ngbtn")
+        self.reset_btn = PushButton("重置统计")
 
         self.set_lineedit()
         self.set_btn()
@@ -50,12 +56,12 @@ class SequenceCountBoard(QWidget):
         # Do NOT force switch to test mode during init.
 
     def init_ui(self):
+        self.setObjectName("SequenceCountBoard")
         mode_btn_layout = self.create_mode_btn_layout()
 
         separator_line = QFrame()
         separator_line.setFrameShape(QFrame.HLine)
         separator_line.setFrameShadow(QFrame.Sunken)
-        separator_line.setStyleSheet("color: gray;")
         separator_line.setFixedHeight(2)
 
         test_widget = self.set_test_widget()
@@ -77,7 +83,7 @@ class SequenceCountBoard(QWidget):
         self.set_mark_text()
 
     def create_horizontal_layout(self, label_str, item):
-        label = QLabel(label_str)
+        label = Label(label_str)
 
         layout = QHBoxLayout()
         layout.addWidget(label)
@@ -114,18 +120,15 @@ class SequenceCountBoard(QWidget):
         self.mark_ng_edit.setFixedSize(self.lineedit_width, self.lineedit_height)
 
     def set_btn(self):
-        self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
-        self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
+        self.ok_btn.setIcon(QIcon(":/ui/icon/green_circle.png"))
         self.ok_btn.setFixedSize(self.btn_width, self.btn_height)
         self.ok_btn.setIconSize(QSize(self.icon_size, self.icon_size))
-        self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(ui_style_const.sequence_qpushbutton_style)
+        self.ng_btn.setIcon(QIcon(":/ui/icon/red_circle.png"))
         self.ng_btn.setFixedSize(self.btn_width, self.btn_height)
         self.ng_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def create_mode_btn_layout(self):
-        mode_label = QLabel("模式：")
+        mode_label = Label("模式：")
         self.test_btn.setFixedSize(self.label_width, self.lineedit_height)
         self.mark_btn.setFixedSize(self.label_width, self.lineedit_height)
         self.test_btn.clicked.connect(self.on_test_btn_clicked)
@@ -192,11 +195,9 @@ class SequenceCountBoard(QWidget):
 
     def on_test_btn_clicked(self):
         if not self._test_available:
-            QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
+            MessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
             self.on_mark_btn_clicked()
             return
-        self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-        self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
         self.test_btn.setEnabled(False)
         self.mark_btn.setEnabled(True)
         self.stacked_widget.setCurrentIndex(0)
@@ -205,8 +206,6 @@ class SequenceCountBoard(QWidget):
     def on_mark_btn_clicked(self):
         self.stacked_widget.setCurrentIndex(1)
         self.mode = "mark"
-        self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-        self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
         self.mark_btn.setEnabled(False)
         self.test_btn.setEnabled(bool(self._test_available))
 
@@ -303,4 +302,3 @@ class SequenceCountBoard(QWidget):
         data["datatime"] = datatime
         with open(mark_result_path, "w") as f:
             json.dump(data, f, indent=4)
-
