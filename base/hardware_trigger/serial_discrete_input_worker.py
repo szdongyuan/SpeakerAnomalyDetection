@@ -146,6 +146,7 @@ class SerialDiscreteInputWorker(QThread):
                 self._emit_status(
                     running=True,
                     connected=True,
+                    has_response=True,
                     message="收到串口响应",
                     raw_hex=raw_hex,
                     value=state_value or "",
