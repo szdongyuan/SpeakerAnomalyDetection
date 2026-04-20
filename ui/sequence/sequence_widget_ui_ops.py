@@ -14,6 +14,46 @@ from consts.running_consts import DEFAULT_DIR
 
 class SequenceWidgetUiOpsMixin:
 
+    @staticmethod
+    def _normalize_saved_sequence_mode(mode_value):
+        mode = str(mode_value or "").strip().lower()
+        return mode if mode in ("test", "mark") else ""
+
+    def _persist_sequence_page_state(self, sequence_mode=None):
+        """
+        Persist product_model / scanner_barcode (and optionally sequence_mode).
+
+        We intentionally do NOT write ``scanner_barcode_check`` here; that field is
+        owned exclusively by the S/N checkbox click handler so unrelated callers
+        (mode switch, type/edit lose-focus) can never overwrite it with a stale
+        UI value.
+        """
+        normalized_mode = self._normalize_saved_sequence_mode(sequence_mode)
+        save_recorded_data_to_json(
+            product_model=self.lineedit_type.text(),
+            scanner_barcode=self.lineedit_s_or_n.text(),
+            sequence_mode=normalized_mode or None,
+        )
+
+    def _restore_last_sequence_mode(self):
+        if self.count_board is None:
+            return
+        last_recorded_info = LoadUiConfig.load_last_recorded_info(self.default_logger)
+        if not isinstance(last_recorded_info, dict):
+            return
+        saved_mode = self._normalize_saved_sequence_mode(last_recorded_info.get("sequence_mode"))
+        if saved_mode == "mark":
+            self.count_board.on_mark_btn_clicked()
+            return
+        if saved_mode != "test":
+            return
+        mode_state = self.count_board.get_mode_state() if hasattr(self.count_board, "get_mode_state") else {}
+        can_enter_test_mode = bool((mode_state or {}).get("test_available", True))
+        if can_enter_test_mode:
+            self.count_board.on_test_btn_clicked()
+        else:
+            self.count_board.on_mark_btn_clicked()
+
     def showEvent(self, event):
         """
         MainWindow shows SequenceWindow only after login success.
@@ -207,11 +247,7 @@ class SequenceWidgetUiOpsMixin:
 
     def lineedit_count_lose_focus(self, lineedit):
         lineedit.setText("")
-        save_recorded_data_to_json(
-            self.lineedit_type.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
-        )
+        self._persist_sequence_page_state()
         # 退出编辑态：回到只读
         try:
             lineedit.setReadOnly(True)
@@ -222,11 +258,7 @@ class SequenceWidgetUiOpsMixin:
             lineedit.setText("")
 
     def lineedit_type_lose_focus(self, lineedit):
-        save_recorded_data_to_json(
-            self.lineedit_type.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
-        )
+        self._persist_sequence_page_state()
         # 退出编辑态：回到只读
         try:
             lineedit.setReadOnly(True)

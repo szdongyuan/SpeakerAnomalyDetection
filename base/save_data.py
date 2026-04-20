@@ -32,21 +32,45 @@ def save_audio_simple(save_path, audio, sr=44100):
     wavfile.write(save_path, int(sr), audio_arr)
 
 
-def save_recorded_data_to_json(product_model, scanner_barcode, scanner_barcode_check):
+def save_recorded_data_to_json(
+    product_model=None,
+    scanner_barcode=None,
+    scanner_barcode_check=None,
+    sequence_mode=None,
+):
     """
-    Persist lightweight sequence-page UI state.
+    Persist lightweight sequence-page UI state with merge semantics.
 
-    The sequence page no longer exposes or stores a manual record count, so we only
-    keep the product model, scanner barcode state, and current date in the config file.
+    Each parameter is optional: pass None to leave the corresponding field
+    untouched on disk. This avoids unrelated callers (e.g. mode switch,
+    type/edit lose-focus) accidentally overwriting fields they don't own
+    (most importantly ``scanner_barcode_check``).
     """
     file_path = DEFAULT_DIR + "ui/ui_config/recorded_number.json"
-    current_time = datetime.now().strftime("%Y-%m-%d")
-    data = {
-        "product_model": product_model,
-        "scanner_barcode": scanner_barcode,
-        "scanner_barcode_check": scanner_barcode_check,
-        "datetime": current_time,
-    }
+
+    data = {}
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = {}
+
+    if product_model is not None:
+        data["product_model"] = product_model
+    if scanner_barcode is not None:
+        data["scanner_barcode"] = scanner_barcode
+    if scanner_barcode_check is not None:
+        data["scanner_barcode_check"] = bool(scanner_barcode_check)
+    if sequence_mode is not None:
+        normalized_mode = str(sequence_mode).strip().lower()
+        if normalized_mode in ("test", "mark"):
+            data["sequence_mode"] = normalized_mode
+
+    data["datetime"] = datetime.now().strftime("%Y-%m-%d")
+
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 

@@ -172,6 +172,12 @@ class SequenceWindow(
         self.streaming_poll_timer = QTimer(self)
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
 
+        # Startup baseline: history is empty after relaunch, so clear both summaries too.
+        self.reset_statistics_on_startup()
+
+        # Restore persisted mode before UI callbacks are registered to avoid startup side effects.
+        self._restore_last_sequence_mode()
+
         self.set_member_connect()
         self.bind_hw_signals()
         self.init_lineedit_text()

@@ -588,6 +588,28 @@ class SequenceWidgetStreamingOpsMixin:
         except Exception:
             pass
 
+    def reset_statistics_on_startup(self):
+        """
+        Clear both test/mark summary counters at startup.
+
+        Recent-session history is in-memory and starts empty on each launch, so
+        we reset both summary panels as well to keep startup state consistent.
+        """
+        try:
+            self.reset_test_reord()
+        except Exception as e:
+            try:
+                self.default_logger.error(f"reset_test_statistics_on_startup_error: {e}")
+            except Exception:
+                pass
+        try:
+            self._reset_mark_record()
+        except Exception as e:
+            try:
+                self.default_logger.error(f"reset_mark_statistics_on_startup_error: {e}")
+            except Exception:
+                pass
+
     def update_recorded_signal_info_to_db(self):
         if self.recorded_signal_info["labels"] == "not_labeled":
             return error_code.OK, ""
@@ -615,6 +637,9 @@ class SequenceWidgetStreamingOpsMixin:
             self._reset_statistics_for_mode(mode)
         self._last_recent_session_mode = mode
         self.recent_session_panel.set_result_editable(mode == "mark")
+        persist_sequence_page_state = getattr(self, "_persist_sequence_page_state", None)
+        if callable(persist_sequence_page_state):
+            persist_sequence_page_state(mode)
 
     def _reset_runtime_state_for_mode_switch(self):
         # When switching mode mid-cycle (e.g. after only forward is recorded), do not

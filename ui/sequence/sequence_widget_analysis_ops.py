@@ -790,7 +790,8 @@ class SequenceWidgetAnalysisOpsMixin:
         if show_windows:
             # Show summary window at the end (also in test mode), only if dict is not empty
             self._maybe_show_analysis_result_summary(width, height)
-        if getattr(self.count_board, "mode", "") != "test":
+        current_mode = str(getattr(self.count_board, "mode", "") or "")
+        if current_mode not in ("test", "view"):
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"
             self._update_current_recent_session_result(result_label=result_label)
 
