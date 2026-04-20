@@ -1,12 +1,13 @@
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
-from PyQt5.QtWidgets import QLabel, QMessageBox, QComboBox, QSizePolicy
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QSizePolicy
 
 from base.training_model_management import TrainingModelManagement
-from consts import ui_style_const, error_code
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import PushButton, ComboBox, Label, GroupBox, MessageBox
+from ui.ui_src import ui_resources
 
 
 class AIConfigWindow(QDialog):
@@ -21,7 +22,7 @@ class AIConfigWindow(QDialog):
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(200, 300)
         layout = QVBoxLayout()
         model_box = self.create_model_layout()
@@ -30,22 +31,16 @@ class AIConfigWindow(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-        )
 
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:
-            QMessageBox.warning(self, "设置警告", "没有可用的AI模型选型,请检查配置!")
+            MessageBox.warning(self, "设置警告", "没有可用的AI模型选型,请检查配置!")
 
     def create_model_layout(self):
-        model_box = QGroupBox("模型")
+        model_box = GroupBox("模型")
         model_box.setMinimumSize(150, 150)
-        analyse_model_label = QLabel("分析模型:")
-        self.analyse_model_combo_box = QComboBox(self)
+        analyse_model_label = Label("分析模型:")
+        self.analyse_model_combo_box = ComboBox(self)
         self.analyse_model_combo_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.analyse_model_combo_box.setFixedHeight(30)
         for model_name in self.model_list:
@@ -76,9 +71,9 @@ class AIConfigWindow(QDialog):
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
-        default_btn = QPushButton(" 设为默认 ")
+        default_btn = PushButton(" 设为默认 ")
         default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()

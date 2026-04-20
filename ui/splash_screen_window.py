@@ -5,6 +5,7 @@ from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
 from PyQt5.QtWidgets import QWidget, QProgressBar, QLabel
 from consts.running_consts import DEFAULT_DIR, MODULES_LOAD
 from PyQt5.QtGui import QPixmap
+from ui.ui_src import ui_resources
 
 
 class Splash(QWidget):
@@ -28,7 +29,7 @@ class Splash(QWidget):
 
         self.label = QLabel(self)
         self.label.setGeometry(QRect(20, 0, 591, 411))
-        img_path = DEFAULT_DIR + "ui/ui_pic/splash_screen/splash_screen.png"
+        img_path = ":/ui/icon/splash_screen.png"
         pixmap = QPixmap(img_path)
         self.label.setPixmap(pixmap)
         self.label.setScaledContents(True)
@@ -36,7 +37,6 @@ class Splash(QWidget):
 
         self.lab = QLabel(self)
         self.lab.setGeometry(QRect(30, 340, 200, 16))
-        self.lab.setStyleSheet("color: rgb(0, 0, 0);")
         self.lab.setObjectName("lab")
         self.lab.setText("正在初始化...0%")
 

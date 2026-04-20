@@ -1,9 +1,11 @@
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QColor
-from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QFrame, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import CheckBox, ComboBox, LineEdit, Label, PushButton
+from ui.ui_src import ui_resources
 
 
 class SequenceToolsBar(QWidget):
@@ -12,27 +14,28 @@ class SequenceToolsBar(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
 
-        self.icon_size = ui_style_const.scale_font_px(35)
-        self.button_width = ui_style_const.scale_font_px(80)
-        self.label_height = ui_style_const.scale_font_px(40)
-        self.lineedit_height = ui_style_const.scale_font_px(35)
-        self.lineedit_width = ui_style_const.scale_font_px(100)
-        self.lineedit_margin = ui_style_const.scale_font_px(10)
-        self.lineedit_spacing = ui_style_const.scale_font_px(10)
+        self.icon_size = ui_style_const.scale_size_px(35)
+        self.button_width = ui_style_const.scale_size_px(80)
+        self.label_height = ui_style_const.scale_size_px(40)
+        self.lineedit_height = ui_style_const.scale_size_px(35)
+        self.lineedit_width = ui_style_const.scale_size_px(100)
+        self.lineedit_margin = ui_style_const.scale_size_px(10)
+        self.lineedit_spacing = ui_style_const.scale_size_px(10)
 
-        self.player_btn = QPushButton()
-        self.replayer_btn = QPushButton()
-        self.tcp_btn = QPushButton()
-        self.data_btn = QPushButton()
-        self.using_file_combobox = QComboBox()
-        self.lineedit_type = QLineEdit()
-        self.lineedit_count = QLineEdit()
-        self.lineedit_s_or_n = QLineEdit()
-        self.barcode_scanner_box = QCheckBox("S/N：")
+        self.player_btn = PushButton()
+        self.replayer_btn = PushButton()
+        self.tcp_btn = PushButton()
+        self.data_btn = PushButton()
+        self.using_file_combobox = ComboBox()
+        self.lineedit_type = LineEdit()
+        self.lineedit_count = LineEdit()
+        self.lineedit_s_or_n = LineEdit()
+        self.barcode_scanner_box = CheckBox("S/N：")
 
         self.init_ui()
 
     def init_ui(self):
+        self.setObjectName("SequenceToolsBar")
         self.set_play_btn()
         self.set_replay_btn()
         self.set_data_btn()
@@ -104,8 +107,7 @@ class SequenceToolsBar(QWidget):
         self.player_btn.setFixedHeight(self.label_height)
         self.player_btn.setMinimumWidth(80)
         self.player_btn.setToolTip("开始录制")
-        self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
+        self.player_btn.setIcon(QIcon(":/ui/icon/play.png"))
         self.player_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def set_replay_btn(self):
@@ -113,9 +115,8 @@ class SequenceToolsBar(QWidget):
         self.replayer_btn.setMinimumWidth(80)
         self.replayer_btn.setToolTip("重新录制")
         self.replayer_btn.setDisabled(True)
-        self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
-        size = ui_style_const.scale_font_px(30)
+        self.replayer_btn.setIcon(QIcon(":/ui/icon/replay.png"))
+        size = ui_style_const.scale_size_px(30)
         self.replayer_btn.setIconSize(QSize(size, size))
 
     def set_data_btn(self):
@@ -123,20 +124,18 @@ class SequenceToolsBar(QWidget):
         self.data_btn.setMinimumWidth(80)
         self.data_btn.setToolTip("分析")
         self.data_btn.setEnabled(False)
-        self.data_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
+        self.data_btn.setIcon(QIcon(":/ui/icon/data.png"))
         self.data_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def set_tcp_btn(self):
         self.tcp_btn.setFixedHeight(self.label_height)
         self.tcp_btn.setMinimumWidth(80)
         self.tcp_btn.setToolTip("tcp配置")
-        self.tcp_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.tcp_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/network.png"))
+        self.tcp_btn.setIcon(QIcon(":/ui/icon/network.png"))
         self.tcp_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
     def create_using_file_combobox(self):
-        type_label = QLabel(" 使用配置：")
+        type_label = Label(" 使用配置：")
         type_label.setFixedHeight(self.label_height)
         self.using_file_combobox.setFixedHeight(self.lineedit_height)
         self.using_file_combobox.setMinimumWidth(self.lineedit_width)
@@ -152,7 +151,7 @@ class SequenceToolsBar(QWidget):
         return using_file_combobox_layout
 
     def create_mode_type_layout(self):
-        type_label = QLabel(" 型 号：")
+        type_label = Label(" 型 号：")
         type_label.setFixedHeight(self.label_height)
         self.lineedit_type.setFixedHeight(self.lineedit_height)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
@@ -184,7 +183,7 @@ class SequenceToolsBar(QWidget):
         return barcode_scanner_layout
 
     def create_mode_count_layout(self):
-        label_count = QLabel(" 计 数：")
+        label_count = Label(" 计 数：")
         label_count.setFixedHeight(self.label_height)
         self.lineedit_count.setFixedHeight(self.lineedit_height)
         self.lineedit_count.setAlignment(Qt.AlignCenter)

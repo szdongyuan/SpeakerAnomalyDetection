@@ -6,22 +6,13 @@ import re
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QRadioButton,
-    QVBoxLayout,
-    QPushButton,
-)
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, Label, PushButton, ComboBox, RadioButton
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
+from ui.ui_src import ui_resources
 
 
 class SplConfigWindow(QDialog):
@@ -47,7 +38,7 @@ class SplConfigWindow(QDialog):
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         # 默认高度偏小会把阈值绘图区域压缩得很矮，导致“显示不完整”的观感
         height = 570 if self.model_type == "SPLF" else 430
         self.setMinimumSize(380, height)
@@ -58,16 +49,16 @@ class SplConfigWindow(QDialog):
         # SPL: time-domain smoothing checkbox
         self.smooth_chk_box = None
         if self.model_type != "SPLF":
-            self.smooth_chk_box = QCheckBox("平滑")
+            self.smooth_chk_box = CheckBox("平滑")
             self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
             self.smooth_chk_box.stateChanged.connect(self.get_default_config)
 
         # SPLF: calculation mode (fundamental-only vs total RMS SPL)
         self.splf_mode_group_box = None
         if self.model_type == "SPLF":
-            self.splf_mode_group_box = QGroupBox("SPLF 计算方式")
-            self.radio_fundamental = QRadioButton("仅基频")
-            self.radio_total = QRadioButton("总SPL")
+            self.splf_mode_group_box = GroupBox("SPLF 计算方式")
+            self.radio_fundamental = RadioButton("仅基频")
+            self.radio_total = RadioButton("总SPL")
 
             mode = str(self.load_config.get("splf_calc_mode", "fundamental") or "fundamental").lower()
             if mode == "total":
@@ -81,7 +72,7 @@ class SplConfigWindow(QDialog):
             self.splf_mode_group_box.setLayout(mode_layout)
 
             # SPLF: octave smoothing dropdown (frequency-domain)
-            self.smooth_combo_box = QComboBox()
+            self.smooth_combo_box = ComboBox()
             self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
             selected_oct = self.load_config.get("octave_smoothing", None)
             if selected_oct is None:
@@ -96,7 +87,7 @@ class SplConfigWindow(QDialog):
         # SPLF only: golden sample checkbox (placed above threshold widget)
         self.golden_chk_box = None
         if self.model_type == "SPLF":
-            self.golden_chk_box = QCheckBox("使用黄金样本")
+            self.golden_chk_box = CheckBox("使用黄金样本")
             self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
 
         self.threshold_widget = ThresholdConfigWidget(
@@ -105,8 +96,8 @@ class SplConfigWindow(QDialog):
             model_type=self.model_type,
         )
 
-        weighting_label = QLabel("计权方式:")
-        self.weighting_combo = QComboBox()
+        weighting_label = Label("计权方式:")
+        self.weighting_combo = ComboBox()
         self.weighting_combo.addItems(["Z（None）", "A", "B", "C", "D"])
         weighting_value = self.load_config.get("weighting", "Z（None）")
         if weighting_value in ["None", "Z"]:
@@ -129,7 +120,7 @@ class SplConfigWindow(QDialog):
             layout.addWidget(self.splf_mode_group_box)
 
             smooth_layout = QHBoxLayout()
-            smooth_layout.addWidget(QLabel("平滑"))
+            smooth_layout.addWidget(Label("平滑"))
             smooth_layout.addWidget(self.smooth_combo_box)
             layout.addLayout(smooth_layout)
         elif self.smooth_chk_box is not None:
@@ -142,22 +133,11 @@ class SplConfigWindow(QDialog):
         layout.setSpacing(10)
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qcombobox_style
-        )
-
     def create_btn(self):
         btn_layout = QHBoxLayout()
-        default_btn = QPushButton(" 设为默认 ")
+        default_btn = PushButton(" 设为默认 ")
         default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()

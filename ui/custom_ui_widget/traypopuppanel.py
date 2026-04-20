@@ -2,9 +2,9 @@ import sys
 
 from PyQt5.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QParallelAnimationGroup, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
-from consts import ui_style_const
+from ui.custom_ui_widget.widgets import ToolButton, Label
 
 
 class TrayPopupPanel(QFrame):
@@ -31,18 +31,17 @@ class TrayPopupPanel(QFrame):
         self._card.setObjectName("trayPopupCard")
         self._card.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        self.in_device: QLabel = None
-        self.out_device: QLabel = None
+        self.in_device: Label = None
+        self.out_device: Label = None
 
         self._build_ui()
-        self._apply_style()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self._card)
-        self.in_device = QLabel()
-        self.out_device = QLabel()
+        self.in_device = Label()
+        self.out_device = Label()
 
         card_layout = QVBoxLayout(self._card)
         card_layout.setContentsMargins(16, 14, 16, 14)
@@ -50,13 +49,13 @@ class TrayPopupPanel(QFrame):
 
         in_device_layout = QHBoxLayout()
         in_device_layout.setSpacing(8)
-        in_device_layout.addWidget(QLabel("输入设备："))
+        in_device_layout.addWidget(Label("输入设备："))
         in_device_layout.addWidget(self.in_device)
         in_device_layout.addStretch()
 
         out_device_layout = QHBoxLayout()
         out_device_layout.setSpacing(8)
-        out_device_layout.addWidget(QLabel("输出设备："))
+        out_device_layout.addWidget(Label("输出设备："))
         out_device_layout.addWidget(self.out_device)
         out_device_layout.addStretch()
 
@@ -71,29 +70,17 @@ class TrayPopupPanel(QFrame):
         self._card.setFixedSize(card_size)
         self.setFixedSize(card_size)
 
-    def _apply_style(self):
-        self.setStyleSheet(
-            """
-            QFrame#trayPopupCard {
-                background: rgb(245, 248, 250);
-                border-radius: 12px;
-                border: 1px solid #d9d9d9;
-            }
-            """
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-        )
-
     def hideEvent(self, event):
         super().hideEvent(event)
         self.closed.emit()
 
 
-class TrayPopupButton(QToolButton):
+class TrayPopupButton(ToolButton):
     """点击后弹出 TrayPopupPanel 的按钮（定位到按钮下方，并做屏幕边界修正）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("TrayPopupButton")
         self.setText("设备")
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
 
@@ -109,7 +96,6 @@ class TrayPopupButton(QToolButton):
         self._hover_sync_timer.setInterval(50)
         self._hover_sync_timer.timeout.connect(self._refresh_hot_state)
         self.setProperty("hot", False)
-        self.setStyleSheet(ui_style_const.qtoolbutton_style)
 
     def toggle_popup(self):
         if self._panel.isVisible():
@@ -255,21 +241,16 @@ class TrayPopupButton(QToolButton):
         self._panel.out_device.setText(device)
         self._panel.refresh_size_from_content()
 
+
 def main():
     app = QApplication(sys.argv)
 
     w = QWidget()
     w.setWindowTitle("托盘弹出面板按钮 Demo")
-    # w.setStyleSheet("background: #f2f2f2;")
 
     layout = QVBoxLayout(w)
     layout.setContentsMargins(24, 24, 24, 24)
     layout.setSpacing(12)
-
-    tip = QLabel("点击下面按钮")
-    tip.setWordWrap(True)
-    tip.setStyleSheet("color: #333;")
-    layout.addWidget(tip)
 
     btn = TrayPopupButton()
     btn.setFixedWidth(120)

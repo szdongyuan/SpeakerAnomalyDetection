@@ -7,23 +7,19 @@ from functools import partial
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
-    QCheckBox,
     QDialog,
-    QGroupBox,
     QHBoxLayout,
     QVBoxLayout,
-    QMessageBox,
-    QPushButton,
-    QLabel,
     QSizePolicy,
     QScrollArea,
     QWidget,
 )
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, Label, PushButton, MessageBox
+from ui.ui_src import ui_resources
 
 
 class HdConfigWindow(QDialog):
@@ -40,20 +36,21 @@ class HdConfigWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
+        self.setObjectName("HdConfigWindow")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(320, 480)
         self.resize(380, 620)
 
         layout = QVBoxLayout()
 
         # 谐波选择组
-        harmonic_group_box = QGroupBox("谐波失真")
+        harmonic_group_box = GroupBox("谐波失真")
         harmonic_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         harmonic_slider_layout = self.create_harmonic_slider_layout()
         harmonic_slider_layout.setSpacing(12)
-        self.select_all_check = QCheckBox("全选")
+        self.select_all_check = CheckBox("全选")
         self.select_all_check.setChecked(self.load_config.get("all_checked", False))
         self.select_all_check.stateChanged.connect(self.on_select_all_changed)
         harmonic_slider_layout.addStretch()
@@ -61,7 +58,7 @@ class HdConfigWindow(QDialog):
         harmonic_group_box.setLayout(harmonic_slider_layout)
 
         # Golden sample checkbox (placed above threshold widget)
-        self.golden_chk_box = QCheckBox("使用黄金样本")
+        self.golden_chk_box = CheckBox("使用黄金样本")
         self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
 
         # 阈值配置组件
@@ -80,31 +77,19 @@ class HdConfigWindow(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qradiobutton_style
-            + ui_style_const.qdoublespinbox_style
-        )
-
     def create_harmonic_slider_layout(self):
         harmonic_slider_layout = QVBoxLayout()
         self.scroll_area = QScrollArea()
         self.scroll_area.setFixedSize(120, 150)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         box_container = QWidget()
         self.box_layout = QVBoxLayout()
         for i in range(2, 36):
-            label = QLabel("  " + str(i))
+            label = Label("  " + str(i))
             label.setFixedSize(90, 25)
             label.setAlignment(Qt.AlignLeft)
-            label.setStyleSheet("QLabel:focus { outline: none; }")
             label.setAutoFillBackground(True)
             label.mousePressEvent = partial(self.on_label_click, label)
-            label.enterEvent = partial(self.on_label_enter, label)
-            label.leaveEvent = partial(self.on_label_leave, label)
             if i in self.selected_labels:
                 label.setText("\u2713" + label.text().strip())
             self.box_layout.addWidget(label)
@@ -120,7 +105,6 @@ class HdConfigWindow(QDialog):
         self.get_default_config()
         if state == Qt.Checked:
             self.scroll_area.setDisabled(True)
-            self.scroll_area.setStyleSheet("color: rgb(162, 162, 162);")
             self.selected_labels = list(range(2, 36))
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
@@ -129,7 +113,6 @@ class HdConfigWindow(QDialog):
                     label.setText("\u2713" + text)
         else:
             self.scroll_area.setDisabled(False)
-            self.scroll_area.setStyleSheet("color: rgb(0, 0, 0);")
             self.selected_labels = []
             for i in range(self.box_layout.count()):
                 label = self.box_layout.itemAt(i).widget()
@@ -152,17 +135,11 @@ class HdConfigWindow(QDialog):
             label.setText(checked_box + label.text().strip())
         self.selected_labels_changed.emit()
 
-    def on_label_enter(self, label, event):
-        label.setStyleSheet("background-color: #5099ccff;")
-
-    def on_label_leave(self, label, event):
-        label.setStyleSheet("background-color: transparent;")
-
     def create_btn(self):
         btn_layout = QHBoxLayout()
-        default_btn = QPushButton(" 设为默认 ")
+        default_btn = PushButton(" 设为默认 ")
         default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()
@@ -188,7 +165,7 @@ class HdConfigWindow(QDialog):
 
     def on_click_ok_btn(self):
         if not self.selected_labels:
-            QMessageBox.warning(self, "设置警告", "请选择谐波失真阶数")
+            MessageBox.warning(self, "设置警告", "请选择谐波失真阶数")
         else:
             config_data = self.get_default_config()
             if not self.threshold_widget.validate():

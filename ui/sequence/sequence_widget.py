@@ -14,7 +14,6 @@ from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtS
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
     QFileDialog,
@@ -59,11 +58,13 @@ from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import MessageBox
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
+from ui.ui_src import ui_resources
 
 
 class SequenceWindow(QWidget):
@@ -204,7 +205,7 @@ class SequenceWindow(QWidget):
         super().showEvent(event)
         self._missing_config_prompt_enabled = True
         if not self.sequence_config and not self._missing_config_prompted:
-            QMessageBox.warning(
+            MessageBox.warning(
                 self,
                 "提示",
                 "当前未找到可用配置文件。\n"
@@ -221,7 +222,7 @@ class SequenceWindow(QWidget):
         by adding toolbar and waveform layouts. It also connects button click events to
         their respective handlers and applies style sheets to the widgets.
         """
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumHeight(600)
         waveform_layout = self.create_waveform_layout()
 
@@ -241,14 +242,6 @@ class SequenceWindow(QWidget):
         sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
         # Register this instance as current target for TCP callbacks
         SequenceWindow._active_instance_ref = weakref.ref(self)
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qframe_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcheckbox_style
-        )
 
     @pyqtSlot(str)
     def _tcp_run_test(self, label: str = "not_labeled"):
@@ -473,7 +466,7 @@ class SequenceWindow(QWidget):
         layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground("white")
-        axis_font_px = ui_style_const.scale_font_px(20)
+        axis_font_px = ui_style_const.scale_size_px(20)
         self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.showGrid(x=True, y=True)
@@ -638,7 +631,7 @@ class SequenceWindow(QWidget):
         if has_invalid:
             unique_chars = sorted(set(invalid_chars))
             chars_display = "  ".join(repr(ch) for ch in unique_chars)
-            QMessageBox.warning(
+            MessageBox.warning(
                 self,
                 "条形码包含特殊字符",
                 f"扫描到的内容包含无法用于文件名的特殊字符：\n\n"
@@ -704,8 +697,8 @@ class SequenceWindow(QWidget):
 
     def on_shortcut_triggered(self):
         """处理快捷键触发信号（F2）"""
-        # 防止重入：QMessageBox 嵌套事件循环中可能再次处理队列中的 F2 信号，
-        # 导致递归雪崩（多层 QMessageBox 堆叠 → 栈溢出 → 崩溃）。
+        # 防止重入：MessageBox 嵌套事件循环中可能再次处理队列中的 F2 信号，
+        # 导致递归雪崩（多层 MessageBox 堆叠 → 栈溢出 → 崩溃）。
         if self._shortcut_processing:
             return
         if not getattr(self, "_record_workflow_busy", False):
@@ -750,12 +743,12 @@ class SequenceWindow(QWidget):
             if not failures:
                 break
 
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Warning)
+            msg_box = MessageBox(self)
+            msg_box.setIcon(MessageBox.Warning)
             msg_box.setWindowTitle("Excel同步失败")
             msg_box.setText("无法将数据同步到Excel文件，可能是文件被占用或权限不足。\n请关闭相关Excel文件后重试。")
-            retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
-            msg_box.addButton("忽略", QMessageBox.RejectRole)
+            retry_btn = msg_box.addButton("重试", MessageBox.AcceptRole)
+            msg_box.addButton("忽略", MessageBox.RejectRole)
             msg_box.setDefaultButton(retry_btn)
             msg_box.exec_()
 
@@ -1110,15 +1103,15 @@ class SequenceWindow(QWidget):
             or self.data_struct.store_wave_data is None
             or len(self.data_struct.store_wave_data) == 0
         ):
-            QMessageBox.warning(self, "警告", "请先录制声音！")
+            MessageBox.warning(self, "警告", "请先录制声音！")
             return
         if self.sequence_config:
             if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
-                QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
+                MessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
                 return
 
             if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
-                QMessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
+                MessageBox.warning(self, "警告", "当前为导入激励信号与音频模式，无需点击 OK/NG 按钮。")
                 return
         self.update_audio_label_info()
         self._maybe_export_excel_results()
@@ -1199,7 +1192,7 @@ class SequenceWindow(QWidget):
 
     def on_clicked_player_btn(self, label="not_labeled"):
         if not self.sequence_config:
-            QMessageBox.warning(
+            MessageBox.warning(
                 self,
                 "提示",
                 "未找到可用配置。\n"
@@ -1258,7 +1251,7 @@ class SequenceWindow(QWidget):
 
         if self.clicked_player_flag is False:
             if self.tcp_flag and SequenceWindow.tcp_server.client_address is None:
-                QMessageBox.warning(self, "提示", "TCP链接异常")
+                MessageBox.warning(self, "提示", "TCP链接异常")
                 return
 
         if self.analysis_window:
@@ -1293,7 +1286,7 @@ class SequenceWindow(QWidget):
 
     def checked_work_status_message(self):
         if not self.sequence_config:
-            QMessageBox.warning(
+            MessageBox.warning(
                 self,
                 "提示",
                 "未找到可用配置。\n"
@@ -1303,10 +1296,10 @@ class SequenceWindow(QWidget):
             return True
 
         if not self.mic:
-            QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
+            MessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return True
         if not self.speaker:
-            QMessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
+            MessageBox.warning(self, "提示", "未找到扬声器，请在硬件中设置")
             return True
 
         return False
@@ -1347,7 +1340,7 @@ class SequenceWindow(QWidget):
         out_dev = recorded_dict.get("output_device")
         if in_dev and out_dev:
             if in_dev.get("hostapi") != out_dev.get("hostapi"):
-                QMessageBox.warning(
+                MessageBox.warning(
                     self,
                     "设备组合不支持",
                     "播放+录制需要选择同一驱动类型（Host API）的输入/输出设备。\n"
@@ -1364,7 +1357,7 @@ class SequenceWindow(QWidget):
         if self.checked_work_status_message():
             return
         if is_replay and self.last_play_count is None:
-            QMessageBox.warning(self, "提示", "请先进行录音")
+            MessageBox.warning(self, "提示", "请先进行录音")
             return
 
         if self.analysis_window:
@@ -1414,7 +1407,7 @@ class SequenceWindow(QWidget):
             self.player_status_flag = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
-            QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
+            MessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
 
         if stimulus_dict is None:
@@ -1462,7 +1455,7 @@ class SequenceWindow(QWidget):
                 self.player_status_flag = False
                 self._record_workflow_busy = False
                 self.update_player_btn_is_paused()
-                QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
+                MessageBox.warning(self, "提示", f"启动录音失败: {e}")
                 return
 
             # Return immediately - completion will be handled by _on_streaming_complete()
@@ -1482,7 +1475,7 @@ class SequenceWindow(QWidget):
                 self.player_status_flag = False
                 self._record_workflow_busy = False
                 self.update_player_btn_is_paused()
-                QMessageBox.warning(self, "提示", f"录音失败: {e}")
+                MessageBox.warning(self, "提示", f"录音失败: {e}")
                 return
 
         self.player_status_flag = False  # Recording complete, allow hardware access
@@ -1520,7 +1513,7 @@ class SequenceWindow(QWidget):
                 self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate")
             )
             if self.data_struct.audio_lenth != stimulus_length:
-                QMessageBox.warning(
+                MessageBox.warning(
                     self,
                     "音频长度校验失败",
                     f"导入音频长度({self.data_struct.audio_lenth})\n"
@@ -1534,8 +1527,8 @@ class SequenceWindow(QWidget):
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
-        window_width = ui_style_const.scale_font_px(600)
-        window_height = ui_style_const.scale_font_px(500)
+        window_width = ui_style_const.scale_size_px(600)
+        window_height = ui_style_const.scale_size_px(500)
         if self.analysis_config:
             item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
@@ -1610,7 +1603,7 @@ class SequenceWindow(QWidget):
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 can_output, _reason = self._can_output_ok_ng()
                 if not can_output:
-                    QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
+                    MessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
                 else:
                     _passed, label = self._summarize_ok_ng()
                     try:
@@ -1967,8 +1960,8 @@ class SequenceWindow(QWidget):
                 break
 
             # If there are failures, show retry dialog
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Warning)
+            msg_box = MessageBox(self)
+            msg_box.setIcon(MessageBox.Warning)
             msg_box.setWindowTitle("数据保存失败")
             msg_box.setText("无法保存数据到文件，可能是文件被占用、保存目录不可达或权限不足。\n请检查保存目录或关闭相关文件后重试。")
             try:
@@ -1979,8 +1972,8 @@ class SequenceWindow(QWidget):
                     msg_box.setInformativeText("\n".join(detail_lines))
             except Exception:
                 pass
-            retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
-            msg_box.addButton("忽略", QMessageBox.RejectRole)
+            retry_btn = msg_box.addButton("重试", MessageBox.AcceptRole)
+            msg_box.addButton("忽略", MessageBox.RejectRole)
             msg_box.setDefaultButton(retry_btn)
             msg_box.exec_()
 
@@ -2297,7 +2290,7 @@ class SequenceWindow(QWidget):
         # `text` may temporarily be empty which would otherwise resolve to None.
         if self.player_status_flag:
             self.restore_previous_configuration()
-            QMessageBox.warning(self, "警告", "正在录音，请稍后...")
+            MessageBox.warning(self, "警告", "正在录音，请稍后...")
             return
 
         path = None
@@ -2371,7 +2364,7 @@ class SequenceWindow(QWidget):
             if getattr(self, "_missing_config_prompt_enabled", False) and not getattr(
                 self, "_missing_config_prompted", False
             ):
-                QMessageBox.warning(
+                MessageBox.warning(
                     self,
                     "提示",
                     "当前未找到可用配置文件。\n"
@@ -2648,12 +2641,12 @@ class SequenceWindow(QWidget):
         self.streaming_mode = None
 
     def update_player_btn_is_playing(self):
-        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
+        self.player_btn.setIcon(QIcon(":/ui/icon/pause.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.setDisabled(True)
 
     def update_player_btn_is_paused(self):
-        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
+        self.player_btn.setIcon(QIcon(":/ui/icon/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         can_start = bool(getattr(self, "sequence_config", None))
         can_start = can_start and not getattr(self, "player_status_flag", False)

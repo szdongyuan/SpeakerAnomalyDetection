@@ -75,11 +75,12 @@
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QTableView, QMessageBox, QLabel
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QTableView, QLabel
 
 from base.log_manager import LogManager
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import MessageBox
+from ui.ui_src import ui_resources
 
 
 class DataManageDialog(QDialog):
@@ -96,7 +97,7 @@ class DataManageDialog(QDialog):
         self.column_alignment = dict()
 
     def init_ui_layout(self, row: int, column: int, editable_column: list[int]):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.resize(900, 350)
 
@@ -110,16 +111,6 @@ class DataManageDialog(QDialog):
         layout.addLayout(self.bottom_layout)
 
         self.setLayout(layout)
-
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qtableview_style
-            + ui_style_const.qlineedit_style
-        )
 
     def set_select_data_num_text(self, text: str, list_num: tuple[int]):
         status_text = text % list_num
@@ -218,7 +209,7 @@ class DataView(QTableView):
                     if model.data(index, Qt.CheckStateRole) is not None:
                         model.setData(index, Qt.Checked if checked else Qt.Unchecked, Qt.CheckStateRole)
             else:
-                QMessageBox.warning(self, "错误", "请选择可勾选列")
+                MessageBox.warning(self, "错误", "请选择可勾选列")
                 return
 
     def on_item_changed(self, item):

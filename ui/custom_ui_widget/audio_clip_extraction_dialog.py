@@ -4,29 +4,28 @@ import librosa
 import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QCursor, QIcon
-from PyQt5.QtWidgets import (
-    QDialog, QPushButton, QHBoxLayout, QLineEdit, QToolTip, QVBoxLayout, QCheckBox,
-    QDoubleSpinBox, QApplication, QFileDialog, QMessageBox
-)
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QToolTip, QVBoxLayout, QApplication, QFileDialog
 import pyqtgraph as pg
 
 from base.file_ops import FileOps
 from base.save_data import save_audio_simple
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import PushButton, LineEdit, CheckBox, DoubleSpinBox, MessageBox
 from ui.graph_widget import DraggablePlotWidget
+from ui.ui_src import ui_resources
 
 
 class AudioClipExtractionDialog(QDialog):
 
-    def __init__(self,
-                 source_file=None,
-                 source_audio=None,
-                 clip_len=None,
-                 sample_rate=None,
-                 save_clip=False,
-                 save_clip_path=None,
-                 dialog_title="提取音频片段",
+    def __init__(
+        self,
+        source_file=None,
+        source_audio=None,
+        clip_len=None,
+        sample_rate=None,
+        save_clip=False,
+        save_clip_path=None,
+        dialog_title="提取音频片段",
     ):
         super(AudioClipExtractionDialog, self).__init__()
         self.source_file = source_file
@@ -45,7 +44,7 @@ class AudioClipExtractionDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle(self.dialog_title)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.open_file_layout = self.create_open_file_layout()
         self.plot_widget = self.create_plot_widget()
@@ -59,21 +58,12 @@ class AudioClipExtractionDialog(QDialog):
 
         self.setLayout(main_layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qdoublespinbox_style
-        )
-
     def create_open_file_layout(self):
         layout = QHBoxLayout()
-        open_file_btn = QPushButton("加载音频")
+        open_file_btn = PushButton("加载音频")
         open_file_btn.clicked.connect(self.open_audio_file)
 
-        self.file_path_edit = QLineEdit()
+        self.file_path_edit = LineEdit()
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setPlaceholderText("请上传源音频文件...")
         layout.addWidget(open_file_btn)
@@ -81,9 +71,10 @@ class AudioClipExtractionDialog(QDialog):
         return layout
 
     def create_plot_widget(self):
-        self.plot_curve = pg.PlotDataItem(pen='k')
-        self.region = pg.LinearRegionItem(values=[0, 0], brush=(50, 150, 250, 50),
-                                          pen={'color': (0, 0, 255), 'width': 2})
+        self.plot_curve = pg.PlotDataItem(pen="k")
+        self.region = pg.LinearRegionItem(
+            values=[0, 0], brush=(50, 150, 250, 50), pen={"color": (0, 0, 255), "width": 2}
+        )
         self.region.setZValue(10)
         self.region.sigRegionChanged.connect(self.on_region_changed)
 
@@ -103,8 +94,8 @@ class AudioClipExtractionDialog(QDialog):
         return plot_widget
 
     def create_option_layout(self):
-        self.fixed_len_checkbox = QCheckBox("固定片段时长")
-        self.clip_len_spinbox = QDoubleSpinBox()
+        self.fixed_len_checkbox = CheckBox("固定片段时长")
+        self.clip_len_spinbox = DoubleSpinBox()
         self.clip_len_spinbox.setRange(0.01, 10)
         self.clip_len_spinbox.setDecimals(3)
         self.clip_len_spinbox.setSingleStep(0.1)
@@ -123,7 +114,7 @@ class AudioClipExtractionDialog(QDialog):
 
     def create_btn_layout(self):
         layout = QHBoxLayout()
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         layout.addStretch()
         layout.addWidget(ok_btn)
@@ -147,7 +138,7 @@ class AudioClipExtractionDialog(QDialog):
             self.region.setBounds([0, time_array[-1]])
             self.plot_widget.setActive(True)
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"加载音频文件失败:\n{e}")
+            MessageBox.critical(self, "错误", f"加载音频文件失败:\n{e}")
             self.audio_data, self.sample_rate = None, None
             self.plot_curve.clear()
             self.plot_widget.setActive(False)
@@ -200,7 +191,7 @@ class AudioClipExtractionDialog(QDialog):
             self.return_value = (clip_data, relative_path, len(clip_data))
             self.close()
         else:
-            QMessageBox.warning(self, "提示", "请选择音频片段")
+            MessageBox.warning(self, "提示", "请选择音频片段")
 
     def on_exec(self):
         self.exec()

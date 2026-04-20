@@ -1,9 +1,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
-from PyQt5.QtWidgets import QLabel, QCheckBox, QMessageBox, QSpinBox
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
@@ -15,6 +13,8 @@ from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfig
 from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+from ui.custom_ui_widget.widgets import GroupBox, Label, PushButton, CheckBox, SpinBox, MessageBox
+from ui.ui_src import ui_resources
 
 
 class PipelineConfigWindow(QDialog):
@@ -41,25 +41,23 @@ class PipelineConfigWindow(QDialog):
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(720, 360)
         self.resize(760, 380)
 
         root_layout = QVBoxLayout()
 
         # two buttons (set by subclass)
-        select_group = QGroupBox("管道节点配置")
+        select_group = GroupBox("管道节点配置")
         col_btns = QVBoxLayout()
-        self.btn_head_cfg = QPushButton("配置前项…")
-        self.btn_tail_cfg = QPushButton("配置后项…")
+        self.btn_head_cfg = PushButton("配置前项…")
+        self.btn_tail_cfg = PushButton("配置后项…")
         self.btn_head_cfg.setEnabled(False)
         self.btn_tail_cfg.setEnabled(False)
-        arrow_label = QLabel("↓")
+        arrow_label = Label("↓")
+        arrow_label.setObjectName("arrowlabel")
+        arrow_label.set_font_size(22)
         arrow_label.setAlignment(Qt.AlignCenter)
-        try:
-            arrow_label.setStyleSheet("font-size: 22px; color: rgb(120,120,120);")
-        except Exception:
-            pass
         col_btns.addStretch()
         col_btns.addWidget(self.btn_head_cfg, 0, Qt.AlignCenter)
         col_btns.addWidget(arrow_label, 0, Qt.AlignCenter)
@@ -72,7 +70,7 @@ class PipelineConfigWindow(QDialog):
 
         # bottom buttons
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton(" 确  认 ")
+        ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
@@ -82,14 +80,6 @@ class PipelineConfigWindow(QDialog):
         root_layout.addLayout(btn_layout)
 
         self.setLayout(root_layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qcheckbox_style
-        )
 
         # local storage (only used inside the pipeline)
         self.head_local_type = None
@@ -212,7 +202,7 @@ class PipelineConfigWindow(QDialog):
         # 按类型打开，名称使用临时占位
         a_type = self.head_local_type if slot == "head" else self.tail_local_type
         if not a_type:
-            QMessageBox.information(self, "提示", "未设置该节点的分析类型。请在子类中调用 set_types 设置。")
+            MessageBox.information(self, "提示", "未设置该节点的分析类型。请在子类中调用 set_types 设置。")
             return
         self._open_and_capture_local(a_type, slot)
 
@@ -275,12 +265,12 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         root_layout = self.layout()
         if not root_layout:
             return
-        pass_group = QGroupBox("通过条件")
+        pass_group = GroupBox("通过条件")
         row = QHBoxLayout()
-        label_prefix = QLabel("通过条件：")
-        label_mid = QLabel("≤ 匹配点数 ≤")
-        self._n1_spin = QSpinBox()
-        self._n2_spin = QSpinBox()
+        label_prefix = Label("通过条件：")
+        label_mid = Label("≤ 匹配点数 ≤")
+        self._n1_spin = SpinBox()
+        self._n2_spin = SpinBox()
         for sp in (self._n1_spin, self._n2_spin):
             sp.setRange(0, 1000000)
             sp.setSingleStep(1)
@@ -330,15 +320,15 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         root_layout = self.layout()
         if not root_layout:
             return
-        length_group = QGroupBox("长度控制")
+        length_group = GroupBox("长度控制")
         vbox = QVBoxLayout()
 
         # first row: left/right grid points (include peak point)
         row1 = QHBoxLayout()
-        lbl_l = QLabel("左侧格点数")
-        lbl_r = QLabel("右侧格点数")
-        self._left_grid_spin = QSpinBox()
-        self._right_grid_spin = QSpinBox()
+        lbl_l = Label("左侧格点数")
+        lbl_r = Label("右侧格点数")
+        self._left_grid_spin = SpinBox()
+        self._right_grid_spin = SpinBox()
         for sp in (self._left_grid_spin, self._right_grid_spin):
             sp.setRange(0, 9999999)
             sp.setSingleStep(1)
@@ -351,7 +341,7 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
 
         # second row: auto match template length
         row2 = QHBoxLayout()
-        self._auto_equal_chk = QCheckBox("自动匹配模板长度（对齐模板峰值）")
+        self._auto_equal_chk = CheckBox("自动匹配模板长度（对齐模板峰值）")
         row2.addWidget(self._auto_equal_chk)
         row2.addStretch()
 
@@ -408,7 +398,7 @@ class PipelinePdPmConfigWindow(PipelineConfigWindow):
         n1 = int(self._n1_spin.value()) if hasattr(self, "_n1_spin") else 1
         n2 = int(self._n2_spin.value()) if hasattr(self, "_n2_spin") else 1
         if n2 < n1:
-            QMessageBox.warning(self, "设置警告", "n2 应该大于等于 n1")
+            MessageBox.warning(self, "设置警告", "n2 应该大于等于 n1")
             return None
         config_data = self.get_default_config()
         self.accept()

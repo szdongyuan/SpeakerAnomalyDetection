@@ -2,13 +2,14 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItem
-from PyQt5.QtWidgets import QApplication, QPushButton, QMessageBox
+from PyQt5.QtWidgets import QApplication
 
 from base.log_manager import LogManager
 from base.stimulus_signal_management import StimulusSignalManagement
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from consts import error_code
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
+from ui.custom_ui_widget.widgets import PushButton, MessageBox
 
 
 class LoadStimulusDialog(DataManageDialog):
@@ -86,9 +87,9 @@ class LoadStimulusDialog(DataManageDialog):
         self.layout().setContentsMargins(13, 20, 13, 13)
 
     def set_bottom_layout(self):
-        del_config_btn = QPushButton("删除配置")
-        cancel_btn = QPushButton(" 取  消 ")
-        ok_btn = QPushButton(" 确  定 ")
+        del_config_btn = PushButton("删除配置")
+        cancel_btn = PushButton(" 取  消 ")
+        ok_btn = PushButton(" 确  定 ")
 
         del_config_btn.clicked.connect(self.del_config)
         ok_btn.clicked.connect(self.ok_btn_clicked)
@@ -232,7 +233,7 @@ class LoadStimulusDialog(DataManageDialog):
         if col == 1:
             new_name = str(new_text).strip()
             if new_name == "":
-                QMessageBox.warning(self, "提示", "配置名称不能为空")
+                MessageBox.warning(self, "提示", "配置名称不能为空")
                 revert_to_previous()
                 return
             stimulus_id = self.loaded_stimulus[row].get("stimulus_id")
@@ -243,7 +244,7 @@ class LoadStimulusDialog(DataManageDialog):
                 self.logger.info(msg)
             else:
                 self.logger.error(msg)
-                QMessageBox.warning(self, "重命名失败", msg)
+                MessageBox.warning(self, "重命名失败", msg)
                 revert_to_previous()
             return
 
@@ -292,12 +293,12 @@ class LoadStimulusDialog(DataManageDialog):
             else:
                 return
         except ValueError as ve:
-            QMessageBox.warning(self, "输入无效", str(ve))
+            MessageBox.warning(self, "输入无效", str(ve))
             revert_to_previous()
             return
         except (TypeError, AttributeError) as e:
             self.logger.error(f"Unexpected error in on_data_changed: {e}")
-            QMessageBox.warning(self, "输入无效", "请输入有效的数值")
+            MessageBox.warning(self, "输入无效", "请输入有效的数值")
             revert_to_previous()
             return
 
@@ -326,7 +327,7 @@ class LoadStimulusDialog(DataManageDialog):
         code, msg = StimulusSignalManagement().update_stimulus_params_to_db(stimulus_id, {field: value})
         if code != error_code.OK:
             self.logger.error(msg)
-            QMessageBox.warning(self, "保存失败", msg)
+            MessageBox.warning(self, "保存失败", msg)
             revert_to_previous()
             return
 
@@ -356,9 +357,12 @@ class LoadStimulusDialog(DataManageDialog):
             return f"{float(value):.1f}"
         if field == "voltage":
             return f"{float(value):.2f}"
-        return str(int(value)) if isinstance(value, int) or field in {
-            "repeat_times", "start_freq", "stop_freq", "sample_rate", "num_steps"
-        } else str(value)
+        return (
+            str(int(value))
+            if isinstance(value, int)
+            or field in {"repeat_times", "start_freq", "stop_freq", "sample_rate", "num_steps"}
+            else str(value)
+        )
 
     def _get_display_value_for_cell(self, row: int, col: int):
         field_by_col = {
@@ -381,7 +385,7 @@ class LoadStimulusDialog(DataManageDialog):
 
     def ok_btn_clicked(self):
         if self.select_stimulus_row is None:
-            QMessageBox.warning(self, "提示", "请选择要加载的激励信号配置")
+            MessageBox.warning(self, "提示", "请选择要加载的激励信号配置")
             return
         self.is_clicked_ok = True
         self.close()
@@ -395,9 +399,9 @@ class LoadStimulusDialog(DataManageDialog):
             if code != error_code.OK:
                 # Check for foreign key constraint (case-insensitive, supports Chinese and English)
                 if "FOREIGN KEY" in msg.upper() or "外键" in msg:
-                    QMessageBox.warning(self, "提示", "请先删除该激励信号下的所有数据")
+                    MessageBox.warning(self, "提示", "请先删除该激励信号下的所有数据")
                 else:
-                    QMessageBox.warning(self, "删除失败", msg)
+                    MessageBox.warning(self, "删除失败", msg)
                     self.logger.error("delete stimulus config %s failed: %s" % (stimulus_name, msg))
                 return
 
