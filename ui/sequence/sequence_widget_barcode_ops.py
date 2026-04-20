@@ -14,14 +14,22 @@ class SequenceWidgetBarcodeOpsMixin:
 
     @staticmethod
     def _normalize_saved_scanner_checkbox_state(value) -> bool:
-        return value if isinstance(value, bool) else False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "enabled"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "disabled", ""}:
+                return False
+        return False
 
     def _persist_scanner_checkbox_state(self) -> None:
-        save_recorded_data_to_json(
-            self.lineedit_type.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
-        )
+        # Only this path owns scanner_barcode_check. We intentionally avoid writing
+        # product_model / scanner_barcode here so unrelated UI state is preserved.
+        save_recorded_data_to_json(scanner_barcode_check=bool(self.barcode_scanner_box.isChecked()))
 
     def _apply_scanner_enabled_state(self, enabled: bool, persist: bool = True) -> None:
         enabled = bool(enabled)
