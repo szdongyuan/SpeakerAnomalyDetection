@@ -125,7 +125,6 @@ class SnRegexManageDialog(DataManageDialog):
 
         self.add_rule_btn = PushButton("新增规则")
         self.delete_rule_btn = PushButton("删除规则")
-        self.refresh_btn = PushButton("刷新")
         self.close_btn = PushButton("关闭")
 
         self.init_ui_layout(0, 3, [])
@@ -154,7 +153,6 @@ class SnRegexManageDialog(DataManageDialog):
         self.top_layout.addStretch()
         self.top_layout.addWidget(self.add_rule_btn)
         self.top_layout.addWidget(self.delete_rule_btn)
-        self.top_layout.addWidget(self.refresh_btn)
 
         self.bottom_layout.addStretch()
         self.bottom_layout.addWidget(self.close_btn)
@@ -163,7 +161,6 @@ class SnRegexManageDialog(DataManageDialog):
         self.set_view_checked_changed(self.on_rule_checked_changed)
         self.add_rule_btn.clicked.connect(self.on_click_add_rule_btn)
         self.delete_rule_btn.clicked.connect(self.on_click_delete_rule_btn)
-        self.refresh_btn.clicked.connect(lambda: self.reload_rules())
         self.close_btn.clicked.connect(self.accept)
 
     def reload_rules(self, focus_rule_id=None):
