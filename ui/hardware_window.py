@@ -488,6 +488,7 @@ class HardwareSelectionController:
         result = self.view.on_exec()
         if result == QDialog.Accepted:
             return (
+                True,
                 self.model.state.speaker_device,
                 list(self.model.state.speaker_channels),
                 self.model.state.mic_device,
@@ -495,6 +496,7 @@ class HardwareSelectionController:
             )
         # 取消：返回初始状态（与 HardwareWindow 一致的“回退”语义）
         return (
+            False,
             self._initial_state.speaker_device,
             list(self._initial_state.speaker_channels),
             self._initial_state.mic_device,
@@ -548,6 +550,7 @@ def open_hardware_selection_window(
     - driver：Host API 名称（例如 WASAPI/ASIO/MME 等）
     - speaker_device / mic_device：sounddevice 设备 dict
     - speaker_channels / mic_channels：通道索引（0-based int）或显示字符串（Out1/In1）
+    - 返回值：``(accepted, speaker_device, speaker_channels, mic_device, mic_channels)``
     """
 
     initial_state = HardwareSelectionState(

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, 
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
+from base.hardware_selection import restore_or_default, save_if_changed
 from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
@@ -28,10 +29,19 @@ class MainWindow(QMainWindow):
         self.user_name = None
         self.access_lvl = None
         self.refresh_stimulus_flag = None
-        _, self.mic = SoundDeviceManager().get_default_device("mic")
-        _, self.speaker = SoundDeviceManager().get_default_device("speaker")
-        self.mic_channels = SoundDeviceManager().get_default_device_all_channels("mic")
-        self.speaker_channels = SoundDeviceManager().get_default_device_all_channels("speaker")
+        # Restore the operator's last hardware choice from
+        # ``configs/hardware_selection.json``. Each side falls back
+        # independently when the saved device cannot be matched against
+        # current hardware: missing mic -> OS default + In1 only
+        # (PaError-9998 safety); missing speaker -> OS default + all
+        # channels. Any I/O failure degrades to the same all-defaults
+        # path, so a corrupt file can never block startup.
+        (
+            self.mic,
+            self.speaker,
+            self.mic_channels,
+            self.speaker_channels,
+        ) = restore_or_default()
 
         # set mouse drog date
         self.resize_direction = None
@@ -324,13 +334,26 @@ class MainWindow(QMainWindow):
         except Exception:
             driver_name = None
 
-        self.speaker, self.speaker_channels, self.mic, self.mic_channels = open_hardware_selection_window(
+        (
+            accepted,
+            self.speaker,
+            self.speaker_channels,
+            self.mic,
+            self.mic_channels,
+        ) = open_hardware_selection_window(
             driver=driver_name,
             speaker_device=self.speaker,
             speaker_channels=self.speaker_channels,
             mic_device=self.mic,
             mic_channels=self.mic_channels,
         )
+        # Only persist on explicit OK. Cancel must be a strict no-op for
+        # disk state, even when the JSON is currently missing/corrupt and
+        # the in-memory state differs from what is on disk.
+        if accepted:
+            save_if_changed(
+                self.mic, self.speaker, self.mic_channels, self.speaker_channels
+            )
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
