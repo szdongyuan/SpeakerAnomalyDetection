@@ -16,6 +16,7 @@ DEFAULT_LOG_FORMATTER = "[%(asctime)s][%(name)s] - [%(levelname)s] - [%(message)
 
 SEQUENCE_CONFIG_REGISTRY_PATH = DEFAULT_DIR + "ui/ui_config/sequence_config_registry.json"
 AUDIO_DEVICE_CONFIG_PATH = os.path.join(DEFAULT_DIR, "ui", "ui_config", "last_audio_devices.json")
+SN_REGEX_RULES_JSON_PATH = os.path.join(DEFAULT_DIR, "ui", "ui_config", "sn_regex_rules.json")
 
 DEFAULT_LOG = {
     "log_name": LOG_DIR + "main.log",

@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QAction,
     QPlainTextEdit,
     QMessageBox,
+    QTableWidget,
 )
 
 from consts.ui_style_const import scale_size_px
@@ -181,6 +182,11 @@ class TextEdit(QTextEdit):
         self.font.setPixelSize(self.font_size)
         self.setFont(self.font)
 
+    def set_font_size(self, font_size):
+        self.font_size = scale_size_px(font_size)
+        self.font.setPixelSize(self.font_size)
+        self.setFont(self.font)
+
 
 class TableView(QTableView):
     def __init__(self, parent=None):
@@ -190,6 +196,8 @@ class TableView(QTableView):
         self.font.setFamily("SimSun")
         self.font.setPixelSize(self.font_size)
         self.setFont(self.font)
+        self.horizontalHeader().setFont(self.font)
+        self.verticalHeader().setFont(self.font)
 
 
 class TreeView(QTreeView):
@@ -231,6 +239,7 @@ class PlainTextEdit(QPlainTextEdit):
         self.font.setPixelSize(self.font_size)
         self.setFont(self.font)
 
+
 class MessageBox(QMessageBox):
     def __init__(self, *args):
         super(MessageBox, self).__init__(*args)
@@ -256,8 +265,9 @@ class MessageBox(QMessageBox):
                 button.setObjectName("cancelbtn")
 
     @classmethod
-    def _show_static_message(cls, icon, parent, title, text,
-                             buttons=QMessageBox.Ok, defaultButton=QMessageBox.NoButton):
+    def _show_static_message(
+        cls, icon, parent, title, text, buttons=QMessageBox.Ok, defaultButton=QMessageBox.NoButton
+    ):
         """
         Keep QMessageBox static-call style, but route through MessageBox instance so
         custom font settings still apply.
@@ -288,6 +298,27 @@ class MessageBox(QMessageBox):
         return cls._show_static_message(QMessageBox.Critical, parent, title, text, buttons, defaultButton)
 
     @classmethod
-    def question(cls, parent, title, text, buttons=QMessageBox.StandardButtons(QMessageBox.Yes | QMessageBox.No),
-                 defaultButton=QMessageBox.NoButton):
+    def question(
+        cls,
+        parent,
+        title,
+        text,
+        buttons=QMessageBox.StandardButtons(QMessageBox.Yes | QMessageBox.No),
+        defaultButton=QMessageBox.NoButton,
+    ):
         return cls._show_static_message(QMessageBox.Question, parent, title, text, buttons, defaultButton)
+
+
+class TableWidget(QTableWidget):
+    def __init__(self, parent=None):
+        super(TableWidget, self).__init__(parent)
+        self.font_size = scale_size_px(20)
+        self.font = QFont()
+        self.font.setFamily("SimSun")
+        self.font.setPixelSize(self.font_size)
+        self.setFont(self.font)
+
+    def set_font_size(self, font_size):
+        self.font_size = scale_size_px(font_size)
+        self.font.setPixelSize(self.font_size)
+        self.setFont(self.font)

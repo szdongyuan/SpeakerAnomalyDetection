@@ -75,11 +75,11 @@
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QTableView, QLabel
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView
 
 from base.log_manager import LogManager
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.widgets import MessageBox
+from ui.custom_ui_widget.widgets import MessageBox, TableView, Label
 from ui.ui_src import ui_resources
 
 
@@ -89,7 +89,7 @@ class DataManageDialog(QDialog):
         super(DataManageDialog, self).__init__()
         self.data_view = None
 
-        self.select_data_num = QLabel()
+        self.select_data_num = Label()
         self.top_layout = QHBoxLayout()
         self.bottom_layout = QHBoxLayout()
 
@@ -175,7 +175,7 @@ class DataManageDialog(QDialog):
             model.item(row, column_num).setTextAlignment(alignment)
 
 
-class DataView(QTableView):
+class DataView(TableView):
     view_checked_changed = pyqtSignal(QStandardItem, bool)
 
     def __init__(self, row: int, column: int, editable_column: list[int]):

@@ -1,0 +1,96 @@
+/* 整体的控件样式 */
+QLineEdit {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+QLineEdit:focus {
+  border: 1px solid #93c5fd;
+  background: white;
+}
+
+QTextEdit {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  color: #111827;
+  padding: 8px;
+}
+
+QComboBox {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+QComboBox::drop-down {
+  border: 0px;
+  width: 28px;
+}
+
+QComboBox QAbstractItemView {
+  background: #ffffff;
+  color: #111827;
+  selection-background-color: rgba(37, 99, 235, 0.18);
+  selection-color: #111827;
+  outline: 0px;
+}
+
+QPushButton {
+  border: 1px solid #d1d5db;
+  background: white;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+QPushButton:hover {
+  background: #f8fafc;
+}
+
+QPushButton:pressed {
+  background: #eef2ff;
+}
+
+QTableWidget {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  gridline-color: #e5e7eb;
+}
+
+QHeaderView::section {
+  background: #f1f5f9;
+  padding: 6px 8px;
+  border: 0px;
+  color: #334155;
+  font-weight: 700;
+}
+
+QTableView::item {
+  padding: 6px 8px;
+}
+
+QMainWindow {
+  background-color: rgb(243, 245, 248);
+  border: 1px solid rgb(0, 0, 0);
+}
+
+
+/* main window style */
+QWidget#TitleWidget {
+  background-color: rgb(255, 255, 255);
+  border-top: 1px solid rgb(0, 0, 0);
+  border-left: 1px solid rgb(0, 0, 0);
+  border-right: 1px solid rgb(0, 0, 0);
+}
+
+/* sequence count board style */
+QWidget#SequenceCountBoard {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}

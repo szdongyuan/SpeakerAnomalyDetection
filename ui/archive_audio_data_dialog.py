@@ -189,7 +189,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         font.setBold(False)
         item.setFont(font)
         item.setToolTip("")
-        item.setData(QBrush(QColor(193, 236, 250)), Qt.ForegroundRole)
+        item.setData(QBrush(QColor(0, 123, 255)), Qt.ForegroundRole)
         item.setData(None, Qt.BackgroundRole)
 
     def _resolve_row_file_path(self, row):

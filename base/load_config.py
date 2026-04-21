@@ -1,11 +1,14 @@
 import json
 import os
+import re
+import tempfile
 import yaml
 
 from datetime import datetime
+from re import _parser as re_parser
 
 from consts import error_code
-from consts.running_consts import DEFAULT_DIR, SEQUENCE_CONFIG_REGISTRY_PATH
+from consts.running_consts import DEFAULT_DIR, SEQUENCE_CONFIG_REGISTRY_PATH, SN_REGEX_RULES_JSON_PATH
 from base.log_manager import LogManager
 
 
@@ -36,6 +39,313 @@ def load_config(config_path, module_name=None):
 
 
 class LoadUiConfig(object):
+
+    @staticmethod
+    def _get_default_sn_regex_rule():
+        return {
+            "id": "default-match-all",
+            "name": "默认全匹配",
+            "pattern": "^.+$",
+            "is_default": True,
+        }
+
+    @staticmethod
+    def _get_sn_regex_rules_logger():
+        return LogManager.set_log_handler("core")
+
+    @staticmethod
+    def _log_sn_regex_rules(level, message):
+        try:
+            logger = LoadUiConfig._get_sn_regex_rules_logger()
+            log_method = getattr(logger, level, None)
+            if callable(log_method):
+                log_method(message)
+        except Exception:
+            pass
+
+    @staticmethod
+    def build_default_sn_regex_rules_payload():
+        default_rule = LoadUiConfig._get_default_sn_regex_rule()
+        return {
+            "version": 1,
+            "selected_rule_id": default_rule["id"],
+            "rules": [default_rule],
+        }
+
+    @staticmethod
+    def _resolve_sn_regex_rules_json_path(json_file_path=None):
+        if json_file_path:
+            return os.fspath(json_file_path)
+        return SN_REGEX_RULES_JSON_PATH
+
+    @staticmethod
+    def _normalize_sn_regex_rules_payload(config_data):
+        default_payload = LoadUiConfig.build_default_sn_regex_rules_payload()
+        default_rule_id = default_payload["selected_rule_id"]
+        builtin_default_rule = LoadUiConfig._get_default_sn_regex_rule()
+        fallback_required = False
+        normalization_reasons = []
+
+        if not isinstance(config_data, dict):
+            return default_payload, True, ["rules payload is not a dict"]
+
+        rules = config_data.get("rules")
+        if not isinstance(rules, list) or not rules:
+            return default_payload, True, ["rules list is missing or empty"]
+
+        normalized_rules = []
+        seen_rule_ids = set()
+        for rule in rules:
+            if not isinstance(rule, dict):
+                fallback_required = True
+                normalization_reasons.append("ignored non-dict rule entry")
+                continue
+
+            rule_id = rule.get("id")
+            if not isinstance(rule_id, str) or not rule_id:
+                fallback_required = True
+                normalization_reasons.append("ignored rule with invalid id")
+                continue
+            if rule_id == default_rule_id:
+                if rule_id in seen_rule_ids:
+                    fallback_required = True
+                    normalization_reasons.append("ignored duplicate default rule entry")
+                    continue
+
+                if (
+                    rule.get("name") != builtin_default_rule["name"]
+                    or rule.get("pattern") != builtin_default_rule["pattern"]
+                    or bool(rule.get("is_default", False)) != builtin_default_rule["is_default"]
+                ):
+                    fallback_required = True
+                    normalization_reasons.append("restored built-in default rule definition")
+
+                normalized_rules.append(dict(builtin_default_rule))
+                seen_rule_ids.add(default_rule_id)
+                continue
+
+            rule_name = rule.get("name")
+            pattern = rule.get("pattern")
+            if not isinstance(rule_name, str) or not rule_name:
+                fallback_required = True
+                normalization_reasons.append(f"ignored rule '{rule_id}' with invalid name")
+                continue
+            if not isinstance(pattern, str) or not pattern:
+                fallback_required = True
+                normalization_reasons.append(f"ignored rule '{rule_id}' with invalid pattern")
+                continue
+            if not LoadUiConfig.can_compile_sn_regex_pattern(pattern):
+                fallback_required = True
+                normalization_reasons.append(f"ignored rule '{rule_id}' with invalid regex")
+                continue
+            if LoadUiConfig.is_pure_literal_sn_regex_pattern(pattern):
+                fallback_required = True
+                normalization_reasons.append(f"ignored rule '{rule_id}' with literal-only regex")
+                continue
+            if rule_id in seen_rule_ids:
+                fallback_required = True
+                normalization_reasons.append(f"ignored duplicate rule id '{rule_id}'")
+                continue
+
+            if bool(rule.get("is_default", False)):
+                fallback_required = True
+                normalization_reasons.append(f"reset non-default rule '{rule_id}' is_default flag")
+
+            normalized_rules.append(
+                {
+                    "id": rule_id,
+                    "name": rule_name,
+                    "pattern": pattern,
+                    "is_default": False,
+                }
+            )
+            seen_rule_ids.add(rule_id)
+
+        if not normalized_rules:
+            return default_payload, True, normalization_reasons + ["no valid rules remained after normalization"]
+
+        default_rule = None
+        for rule in normalized_rules:
+            if rule["id"] == default_rule_id:
+                default_rule = rule
+                break
+
+        if default_rule is None:
+            default_rule = LoadUiConfig._get_default_sn_regex_rule()
+            normalized_rules.insert(0, default_rule)
+            seen_rule_ids.add(default_rule_id)
+            fallback_required = True
+            normalization_reasons.append("reinserted missing built-in default rule")
+        if not default_rule["is_default"]:
+            default_rule["is_default"] = True
+            fallback_required = True
+            normalization_reasons.append("restored default rule is_default flag")
+
+        selected_rule_id = config_data.get("selected_rule_id")
+        if not isinstance(selected_rule_id, str) or selected_rule_id not in seen_rule_ids:
+            selected_rule_id = default_rule_id
+            fallback_required = True
+            normalization_reasons.append("reset selected rule to built-in default")
+
+        version = config_data.get("version", default_payload["version"])
+        if not isinstance(version, int):
+            version = default_payload["version"]
+            fallback_required = True
+            normalization_reasons.append("reset invalid rules payload version")
+
+        normalized_payload = {
+            "version": version,
+            "selected_rule_id": selected_rule_id,
+            "rules": normalized_rules,
+        }
+        if normalized_payload != config_data:
+            fallback_required = True
+            normalization_reasons.append("persisted normalized SN regex rules payload")
+        return normalized_payload, fallback_required, normalization_reasons
+
+    @staticmethod
+    def _is_valid_sn_regex_rules_payload(config_data):
+        normalized_payload, should_persist, _ = LoadUiConfig._normalize_sn_regex_rules_payload(config_data)
+        if should_persist:
+            return False
+        for rule in normalized_payload["rules"]:
+            if not LoadUiConfig.can_compile_sn_regex_pattern(rule["pattern"]):
+                return False
+            if LoadUiConfig.is_pure_literal_sn_regex_pattern(rule["pattern"]):
+                return False
+        return True
+
+    @staticmethod
+    def load_sn_regex_rules_from_json(json_file_path=None):
+        json_file_path = LoadUiConfig._resolve_sn_regex_rules_json_path(json_file_path)
+        default_payload = LoadUiConfig.build_default_sn_regex_rules_payload()
+        try:
+            if not os.path.exists(json_file_path):
+                if not LoadUiConfig.save_sn_regex_rules_to_json(default_payload, json_file_path):
+                    LoadUiConfig._log_sn_regex_rules(
+                        "error",
+                        f"Failed to persist recovered default SN regex rules to {json_file_path}.",
+                    )
+                return default_payload
+            with open(json_file_path, "r", encoding="utf-8") as json_file:
+                config_data = json.load(json_file)
+        except Exception as exc:
+            LoadUiConfig._log_sn_regex_rules(
+                "warning",
+                f"Failed to load SN regex rules from {json_file_path}; recovered default payload. {exc}",
+            )
+            if not LoadUiConfig.save_sn_regex_rules_to_json(default_payload, json_file_path):
+                LoadUiConfig._log_sn_regex_rules(
+                    "error",
+                    f"Failed to persist recovered default SN regex rules to {json_file_path}.",
+                )
+            return default_payload
+
+        normalized_payload, should_persist, normalization_reasons = LoadUiConfig._normalize_sn_regex_rules_payload(
+            config_data
+        )
+        if should_persist:
+            LoadUiConfig._log_sn_regex_rules(
+                "warning",
+                f"Normalized SN regex rules from {json_file_path}: {'; '.join(normalization_reasons)}",
+            )
+            if not LoadUiConfig.save_sn_regex_rules_to_json(normalized_payload, json_file_path):
+                LoadUiConfig._log_sn_regex_rules(
+                    "error",
+                    f"Failed to persist normalized SN regex rules to {json_file_path}.",
+                )
+        return normalized_payload
+
+    @staticmethod
+    def save_sn_regex_rules_to_json(config_data, json_file_path=None):
+        json_file_path = LoadUiConfig._resolve_sn_regex_rules_json_path(json_file_path)
+        if not LoadUiConfig._is_valid_sn_regex_rules_payload(config_data):
+            return False
+        return LoadUiConfig._write_json_atomically(config_data, json_file_path)
+
+    @staticmethod
+    def _write_json_atomically(config_data, json_file_path):
+        target_path = os.path.abspath(json_file_path)
+        parent_dir = os.path.dirname(target_path)
+        temp_file_fd = None
+        temp_file_path = None
+        try:
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            temp_file_fd, temp_file_path = tempfile.mkstemp(
+                prefix=f".{os.path.basename(target_path)}.",
+                suffix=".tmp",
+                dir=parent_dir,
+            )
+            with os.fdopen(temp_file_fd, "w", encoding="utf-8") as json_file:
+                temp_file_fd = None
+                json.dump(config_data, json_file, indent=6, ensure_ascii=False)
+                json_file.flush()
+                os.fsync(json_file.fileno())
+            os.replace(temp_file_path, target_path)
+            return True
+        except Exception:
+            return False
+        finally:
+            if temp_file_fd is not None:
+                try:
+                    os.close(temp_file_fd)
+                except OSError:
+                    pass
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def get_selected_sn_regex_rule(config_data):
+        normalized_payload, _, _ = LoadUiConfig._normalize_sn_regex_rules_payload(config_data)
+        selected_rule_id = normalized_payload["selected_rule_id"]
+        for rule in normalized_payload["rules"]:
+            if rule["id"] == selected_rule_id:
+                return dict(rule)
+        return LoadUiConfig._get_default_sn_regex_rule()
+
+    @staticmethod
+    def can_compile_sn_regex_pattern(pattern):
+        if not isinstance(pattern, str) or not pattern:
+            return False
+        try:
+            re.compile(pattern)
+            return True
+        except re.error:
+            return False
+
+    @staticmethod
+    def _is_literal_only_sn_regex_subpattern(parsed_subpattern):
+        allowed_anchor_tokens = {
+            re_parser.AT_BEGINNING,
+            re_parser.AT_BEGINNING_LINE,
+            re_parser.AT_BEGINNING_STRING,
+            re_parser.AT_END,
+            re_parser.AT_END_LINE,
+            re_parser.AT_END_STRING,
+        }
+        for token_type, token_value in parsed_subpattern:
+            if token_type == re_parser.LITERAL:
+                continue
+            if token_type == re_parser.AT and token_value in allowed_anchor_tokens:
+                continue
+            if token_type == re_parser.SUBPATTERN and LoadUiConfig._is_literal_only_sn_regex_subpattern(token_value[-1]):
+                continue
+            return False
+        return True
+
+    @staticmethod
+    def is_pure_literal_sn_regex_pattern(pattern):
+        if not isinstance(pattern, str) or not pattern:
+            return False
+        try:
+            parsed_pattern = re_parser.parse(pattern, 0)
+        except re.error:
+            return False
+        return LoadUiConfig._is_literal_only_sn_regex_subpattern(parsed_pattern)
 
     @staticmethod
     def load_sequence_config_from_json(json_file_path):

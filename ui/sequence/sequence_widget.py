@@ -1,6 +1,8 @@
 import json
 import os
+from pdb import line_prefix
 import re
+from statistics import linear_regression
 import threading
 import weakref
 from datetime import datetime
@@ -61,6 +63,7 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
+from ui.sequence.sn_regex_manage_dialog import SnRegexManageDialog
 from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
@@ -109,6 +112,7 @@ class SequenceWindow(QWidget):
         # True while a record run is still processing (record -> analysis -> save -> count updates).
         # Used to prevent starting a new recording before the full workflow completes.
         self._record_workflow_busy = False
+        self._barcode_scanner_box_enabled_before_recording = None
         self.recorded_signal_info = {}
         self.ip_format = True
         self.port_format = True
@@ -124,9 +128,9 @@ class SequenceWindow(QWidget):
         # Only show missing-config prompt after the window is shown (i.e. after login success).
         self._missing_config_prompt_enabled = False
 
-        self._barcode_debounce_ms = 120
+        self._barcode_debounce_ms = 50
         self._barcode_fast_input_max_seconds = 0.4  # 首字符到末字符的总耗时，小于该值更像扫码（扫码枪通常 < 0.2秒）
-        self._barcode_min_length_for_auto_commit = 4  # 条码最小长度，太短容易误触发（可按实际条码规则调整）
+        self._barcode_min_length_for_auto_commit = 7  # 条码最小长度，太短容易误触发（可按实际条码规则调整）
 
         # 扫码逻辑委托到 BarcodeRouter（需先创建，再连接定时器/信号）
         self._barcode_router = BarcodeRouter(self)
@@ -222,6 +226,7 @@ class SequenceWindow(QWidget):
         by adding toolbar and waveform layouts. It also connects button click events to
         their respective handlers and applies style sheets to the widgets.
         """
+        self.setObjectName("SequenceWindow")
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumHeight(600)
         waveform_layout = self.create_waveform_layout()
@@ -346,6 +351,7 @@ class SequenceWindow(QWidget):
         self.lineedit_s_or_n.returnPressed.connect(self._barcode_router.on_barcode_return_pressed)
         self.lineedit_s_or_n.textChanged.connect(self._barcode_router.on_barcode_text_changed)
 
+        self.sn_regex_manage_btn.clicked.connect(self.open_sn_regex_manage_dialog)
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
@@ -416,6 +422,28 @@ class SequenceWindow(QWidget):
     def lineedit_s_or_n(self):
         return self.toolsbar.lineedit_s_or_n
 
+    def _set_sn_input_recording_read_only(self, is_read_only):
+        """Keep S/N editing controls locked only for the active play/record lifecycle."""
+        try:
+            self.lineedit_s_or_n.setReadOnly(is_read_only)
+        except Exception:
+            pass
+        try:
+            if is_read_only:
+                if self._barcode_scanner_box_enabled_before_recording is None:
+                    self._barcode_scanner_box_enabled_before_recording = self.barcode_scanner_box.isEnabled()
+                self.barcode_scanner_box.setEnabled(False)
+            else:
+                if self._barcode_scanner_box_enabled_before_recording is not None:
+                    self.barcode_scanner_box.setEnabled(self._barcode_scanner_box_enabled_before_recording)
+                self._barcode_scanner_box_enabled_before_recording = None
+        except Exception:
+            pass
+
+    @property
+    def sn_regex_manage_btn(self):
+        return self.toolsbar.sn_regex_manage_btn
+
     @property
     def barcode_scanner_box(self):
         return self.toolsbar.barcode_scanner_box
@@ -464,12 +492,17 @@ class SequenceWindow(QWidget):
                 QHBoxLayout: The configured wavefrom layout object.
         """
         layout = QHBoxLayout()
+        linear_graph_widget = QWidget()
+        linear_graph_widget.setObjectName("LinearGraphWidget")
+        linear_graph_layout = QHBoxLayout()
         self.line_graph = pg.PlotWidget()
         self.line_graph.setBackground("white")
         axis_font_px = ui_style_const.scale_size_px(20)
         self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": f"{axis_font_px}px"})
         self.line_graph.showGrid(x=True, y=True)
+        linear_graph_layout.addWidget(self.line_graph)
+        linear_graph_widget.setLayout(linear_graph_layout)
 
         font = QFont()
         font.setPixelSize(axis_font_px)
@@ -482,9 +515,8 @@ class SequenceWindow(QWidget):
 
         layout.addWidget(self.count_board, stretch=1)
         layout.addSpacing(20)
-        layout.addWidget(self.line_graph, stretch=8)
+        layout.addWidget(linear_graph_widget, stretch=8)
         layout.setContentsMargins(40, 20, 40, 20)
-        layout.setSpacing(30)
         return layout
 
     def init_fft_and_stft_flag(self):
@@ -586,6 +618,37 @@ class SequenceWindow(QWidget):
         found = [ch for ch in barcode if ch in self._INVALID_FILENAME_CHARS]
         return (bool(found), found)
 
+    def _clear_barcode_input_safely(self):
+        try:
+            with QSignalBlocker(self.lineedit_s_or_n):
+                self.lineedit_s_or_n.clear()
+        except Exception:
+            self.lineedit_s_or_n.clear()
+
+    def _reset_barcode_dedup_state(self):
+        self._last_committed_barcode = None
+        self._last_committed_barcode_time = 0.0
+
+    def _reset_barcode_commit_state(self, clear_dedup: bool = False):
+        self._barcode_debounce_timer.stop()
+        self._barcode_first_char_ts = None
+        self._barcode_last_char_ts = None
+        self._barcode_capture_buffer = ""
+        self._barcode_capture_first_ts = None
+        self._barcode_capture_last_ts = None
+        self._barcode_capture_target_lineedit = None
+        self._barcode_capture_target_text = None
+        self._barcode_capture_target_cursor_pos = None
+        if clear_dedup:
+            self._reset_barcode_dedup_state()
+
+    def _load_selected_sn_regex_rule(self):
+        rules_payload = LoadUiConfig.load_sn_regex_rules_from_json()
+        return LoadUiConfig.get_selected_sn_regex_rule(rules_payload)
+
+    def open_sn_regex_manage_dialog(self):
+        SnRegexManageDialog().exec_()
+
     def _commit_barcode(self, barcode: str, source: str = "wedge"):
         """
         统一条码提交入口：
@@ -600,6 +663,11 @@ class SequenceWindow(QWidget):
         if not self.barcode_scanner_box.isChecked():
             return
 
+        if getattr(self, "_record_workflow_busy", False) or getattr(self, "player_status_flag", False):
+            self.default_logger.debug(f"录音/播放忙碌中，忽略扫码提交 (source={source}): {barcode}")
+            self._reset_barcode_commit_state()
+            return
+
         # 条码提交去重：防止 HID 模式和键盘楔入模式同时触发导致重复提交
         now = time.monotonic()
         if (
@@ -607,13 +675,7 @@ class SequenceWindow(QWidget):
             and (now - self._last_committed_barcode_time) < self._barcode_commit_dedup_window_sec
         ):
             self.default_logger.debug(f"忽略重复条码提交 (去重窗口内, source={source}): {barcode}")
-            # 清理键盘楔入模式的缓冲状态，避免残留数据
-            self._barcode_capture_buffer = ""
-            self._barcode_capture_first_ts = None
-            self._barcode_capture_last_ts = None
-            self._barcode_capture_target_lineedit = None
-            self._barcode_capture_target_text = None
-            self._barcode_capture_target_cursor_pos = None
+            self._reset_barcode_commit_state()
             return
         # 更新去重记录
         self._last_committed_barcode = barcode
@@ -640,19 +702,28 @@ class SequenceWindow(QWidget):
                 f"请检查条形码内容，或使用不含特殊字符的条形码。\n"
                 f"关闭此窗口后可重新扫码。",
             )
-            # 清空输入框，让用户可以重新扫码
-            try:
-                with QSignalBlocker(self.lineedit_s_or_n):
-                    self.lineedit_s_or_n.clear()
-            except Exception:
-                self.lineedit_s_or_n.clear()
-            # 重置状态
-            self._barcode_first_char_ts = None
-            self._barcode_last_char_ts = None
-            self._barcode_capture_buffer = ""
-            self._barcode_capture_first_ts = None
-            self._barcode_capture_last_ts = None
+            self._clear_barcode_input_safely()
+            self._reset_barcode_commit_state(clear_dedup=True)
             return  # 不开始录音
+
+        selected_rule = self._load_selected_sn_regex_rule()
+        if re.fullmatch(selected_rule["pattern"], barcode) is None:
+            self.default_logger.warning(
+                "SN regex validation failed. "
+                f"rule={selected_rule['name']}, pattern={selected_rule['pattern']}, barcode={barcode}"
+            )
+            MessageBox.warning(
+                self,
+                "SN 正则校验失败",
+                f"当前扫码内容不符合已启用规则：\n\n"
+                f"规则名称：{selected_rule['name']}\n"
+                f"规则表达式：{selected_rule['pattern']}\n"
+                f"实际扫码内容：{barcode}\n\n"
+                f"请检查扫码内容或切换正确规则后重新扫码。",
+            )
+            self._clear_barcode_input_safely()
+            self._reset_barcode_commit_state(clear_dedup=True)
+            return
 
         # 写回输入框（避免触发 textChanged 的二次提交）
         try:
@@ -662,14 +733,7 @@ class SequenceWindow(QWidget):
             self.lineedit_s_or_n.setText(barcode)
 
         # 重置键盘楔入模式的输入统计
-        self._barcode_first_char_ts = None
-        self._barcode_last_char_ts = None
-        self._barcode_capture_buffer = ""
-        self._barcode_capture_first_ts = None
-        self._barcode_capture_last_ts = None
-        self._barcode_capture_target_lineedit = None
-        self._barcode_capture_target_text = None
-        self._barcode_capture_target_cursor_pos = None
+        self._reset_barcode_commit_state()
 
         # 自动开始测试
         if not getattr(self, "_record_workflow_busy", False):
@@ -982,6 +1046,9 @@ class SequenceWindow(QWidget):
         """
         s_or_n_count = lineedit.text()
         result_count, result_scanner_barcode = LoadUiConfig.load_recorded_num_from_json(self.default_logger)
+        sn_locked_for_recording = getattr(self, "_record_workflow_busy", False) or getattr(
+            self, "player_status_flag", False
+        )
         reg = None
         if is_s_or_n:
             reg = r"^[0-9]*$"
@@ -994,7 +1061,7 @@ class SequenceWindow(QWidget):
             else:
                 lineedit.setText(str(result_scanner_barcode))
         elif s_or_n_count != "":
-            if is_s_or_n:
+            if is_s_or_n and not sn_locked_for_recording:
                 self.lineedit_s_or_n.setText("")
         if s_or_n_count == "":
             if is_s_or_n:
@@ -1258,7 +1325,6 @@ class SequenceWindow(QWidget):
             self.analysis_window = []
         if self._analysis_result_summary_window:
             self._analysis_result_summary_window = None
-
         # Increment count BEFORE recording (so display count = file count)
         self.current_recorded_count += 1
         self.lineedit_count.setText(str(self.current_recorded_count))
@@ -1366,6 +1432,7 @@ class SequenceWindow(QWidget):
             self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
+        self._set_sn_input_recording_read_only(True)
 
         self.line_graph.clear()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
@@ -1406,6 +1473,7 @@ class SequenceWindow(QWidget):
                 self.lineedit_count.setText(str(self.current_recorded_count))
             self.player_status_flag = False
             self._record_workflow_busy = False
+            self._set_sn_input_recording_read_only(False)
             self.update_player_btn_is_paused()
             MessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
@@ -1417,6 +1485,7 @@ class SequenceWindow(QWidget):
                 self.lineedit_count.setText(str(self.current_recorded_count))
             self.player_status_flag = False
             self._record_workflow_busy = False
+            self._set_sn_input_recording_read_only(False)
             self.update_player_btn_is_paused()
             return
 
@@ -1454,6 +1523,7 @@ class SequenceWindow(QWidget):
                 self._cleanup_streaming_resources()
                 self.player_status_flag = False
                 self._record_workflow_busy = False
+                self._set_sn_input_recording_read_only(False)
                 self.update_player_btn_is_paused()
                 MessageBox.warning(self, "提示", f"启动录音失败: {e}")
                 return
@@ -1474,11 +1544,14 @@ class SequenceWindow(QWidget):
                 self.default_logger.error(f"blocking_record_error: {e}")
                 self.player_status_flag = False
                 self._record_workflow_busy = False
+                self._set_sn_input_recording_read_only(False)
                 self.update_player_btn_is_paused()
                 MessageBox.warning(self, "提示", f"录音失败: {e}")
                 return
 
         self.player_status_flag = False  # Recording complete, allow hardware access
+        self._record_workflow_busy = False
+        self._set_sn_input_recording_read_only(False)
         self.data_btn.setEnabled(True)
         self.replayer_btn.setEnabled(True)
 
@@ -1494,7 +1567,6 @@ class SequenceWindow(QWidget):
 
         if self.analysis_config["auto_analysis"]:
             self.run()
-        self._record_workflow_busy = False
         self.update_player_btn_is_paused()
 
     def run(self):
@@ -1963,7 +2035,9 @@ class SequenceWindow(QWidget):
             msg_box = MessageBox(self)
             msg_box.setIcon(MessageBox.Warning)
             msg_box.setWindowTitle("数据保存失败")
-            msg_box.setText("无法保存数据到文件，可能是文件被占用、保存目录不可达或权限不足。\n请检查保存目录或关闭相关文件后重试。")
+            msg_box.setText(
+                "无法保存数据到文件，可能是文件被占用、保存目录不可达或权限不足。\n请检查保存目录或关闭相关文件后重试。"
+            )
             try:
                 if failed_exports:
                     detail_lines = [f"{name}: {msg}" for name, msg in failed_exports[:5]]
@@ -2028,6 +2102,8 @@ class SequenceWindow(QWidget):
             if event.type() == QEvent.MouseButtonPress:
                 if obj is self.lineedit_type or obj is self.lineedit_count:
                     try:
+                        if getattr(self, "_record_workflow_busy", False) or getattr(self, "player_status_flag", False):
+                            return True
                         if isinstance(obj, QLineEdit) and obj.isReadOnly():
                             obj.setReadOnly(False)
                             obj.setFocus()
@@ -2207,7 +2283,7 @@ class SequenceWindow(QWidget):
         Retrieves the sequence configuration from the registry.
         """
         registry = LoadUiConfig._load_sequence_config_registry()
-          # IMPORTANT: Do not auto-add "默认配置" into registry.
+        # IMPORTANT: Do not auto-add "默认配置" into registry.
         # The combobox should either never show it, or always show it if it already exists in registry.
         user_keys = [k for k in (registry or {}).keys() if k not in ("using_config_path", "默认配置")]
         using_config_path = registry.get("using_config_path", None)
@@ -2559,7 +2635,10 @@ class SequenceWindow(QWidget):
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            # Recording has fully ended; release S/N input and busy gating before any follow-up analysis/UI work.
             self.player_status_flag = False  # Recording complete, allow hardware access
+            self._record_workflow_busy = False
+            self._set_sn_input_recording_read_only(False)
 
             # Enable buttons for replay and data analysis
             self.data_btn.setEnabled(True)
@@ -2580,7 +2659,6 @@ class SequenceWindow(QWidget):
                 self.run()
 
             # Update player button state
-            self._record_workflow_busy = False
             self.update_player_btn_is_paused()
 
             self.default_logger.info("Streaming recording completed successfully")
@@ -2601,6 +2679,7 @@ class SequenceWindow(QWidget):
             self._awaiting_ok_ng = False
             self._sn_clear_on_next_scan = False
             self._record_workflow_busy = False
+            self._set_sn_input_recording_read_only(False)
             self.update_player_btn_is_paused()
 
     def _cleanup_streaming_resources(self):
