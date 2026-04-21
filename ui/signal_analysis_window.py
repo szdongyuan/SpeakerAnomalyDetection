@@ -14,13 +14,9 @@ from PyQt5.QtCore import Qt, QModelIndex
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
-    QTextEdit,
     QHBoxLayout,
     QVBoxLayout,
     QWidget,
-    QLabel,
-    QMessageBox,
-    QTableWidget,
     QTableWidgetItem,
     QHeaderView,
 )
@@ -36,13 +32,16 @@ from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.core_algorithm.response.frequency_band_analyzer import (
-    FrequencyBandAnalyzer, BandAnalysisResult, Threshold as BandThreshold,
+    FrequencyBandAnalyzer,
+    BandAnalysisResult,
+    Threshold as BandThreshold,
 )
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
 from ui.ui_src import ui_resources
 
@@ -146,7 +145,7 @@ def _abs_deviation_curve(x_current, y_current, x_base, y_base):
     interp = np.interp(x_c, x_b, y_b)
     in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
     interp = np.where(in_range, interp, np.nan)
-    return (y_c - interp)
+    return y_c - interp
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -161,28 +160,23 @@ class AnalysisResultSummaryWindow(QWidget):
         self.setWindowTitle(title)
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
-        self._overall_label = QLabel(self)
+        self._overall_label = Label(self)
         self._overall_label.setObjectName("overallResultLabel")
         overall_font = QFont()
         overall_font.setPixelSize(22)
         self._overall_label.setFont(overall_font)
         self._overall_label.setAlignment(Qt.AlignCenter)
 
-        self._table = QTableWidget(self)
-        font = QFont()
-        font.setPixelSize(20)
-        self._table.setFont(font)
-        self._table.horizontalHeader().setFont(font)
-        self._table.verticalHeader().setFont(font)
+        self._table = TableWidget(self)
         self._table.setColumnCount(3)
         self._table.setHorizontalHeaderLabels(["分析项", "偏差值", "结果"])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self._table.verticalHeader().setVisible(False)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        self._table.setEditTriggers(TableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(TableWidget.SelectRows)
+        self._table.setSelectionMode(TableWidget.SingleSelection)
         # Avoid default focus/selection highlight on show
 
         layout = QVBoxLayout()
@@ -393,7 +387,7 @@ class Distortion(AnalysisGraphWidget):
                     except Exception:
                         pass
             else:
-                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
+                MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
         # Plot the results with threshold support
         self.plot_graph(freq_value, thd, self.analysis_config)
@@ -450,8 +444,11 @@ class Distortion(AnalysisGraphWidget):
                 # Use common function for plot setup
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
-                    freq_value, thd,
-                    csv_freq_list, csv_upper_list, csv_lower_list,
+                    freq_value,
+                    thd,
+                    csv_freq_list,
+                    csv_upper_list,
+                    csv_lower_list,
                     x_label="Frequency (Hz)",
                     y_label="Distortion(%)",
                     log_x=True,
@@ -705,7 +702,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                     except Exception:
                         pass
             else:
-                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
+                MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
         # Plot the results with threshold support (Y-axis will be in phons)
         self.plot_graph(freq_value, perceptual_loudness, self.analysis_config)
@@ -763,8 +760,11 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 # 1) Plot main curve + limit curves (same as THD)
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
-                    freq_value, perceptual_loudness,
-                    csv_freq_list, csv_upper_list, csv_lower_list,
+                    freq_value,
+                    perceptual_loudness,
+                    csv_freq_list,
+                    csv_upper_list,
+                    csv_lower_list,
                     x_label="Frequency (Hz)",
                     y_label=self._prb_y_label,
                     log_x=True,
@@ -772,15 +772,12 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 )
 
                 if self.selected_label is not None:
-                    self.analysis_plot.setTitle(
-                        f"Perceived Loudness of {self.selected_label.text()} order"
-                    )
+                    self.analysis_plot.setTitle(f"Perceived Loudness of {self.selected_label.text()} order")
 
                 # 2) Use parent's _highlight_out_of_range_curve() for limit check + highlight
                 #    This uses nearest-neighbor matching and highlights on original data points
                 self._highlight_out_of_range_curve(
-                    freq_value, perceptual_loudness,
-                    csv_freq_list, csv_upper_list, csv_lower_list
+                    freq_value, perceptual_loudness, csv_freq_list, csv_upper_list, csv_lower_list
                 )
                 return
 
@@ -835,7 +832,9 @@ class Spl(AnalysisGraphWidget):
         window_size = 1201
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
         if weighting and weighting.upper() not in ["NONE", "Z"]:
-            recorded_signal = apply_weighting_filter(recorded_signal, sample_rate, weighting=weighting, zero_phase=False)
+            recorded_signal = apply_weighting_filter(
+                recorded_signal, sample_rate, weighting=weighting, zero_phase=False
+            )
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             recorded_signal,
             reference_pressure,
@@ -897,8 +896,11 @@ class Spl(AnalysisGraphWidget):
         # Note: SPL time-domain uses linear scale (log_x=False), Y label is dynamic
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            signal_duration, signal_spl,
-            csv_time_list, csv_upper_list, csv_lower_list,
+            signal_duration,
+            signal_spl,
+            csv_time_list,
+            csv_upper_list,
+            csv_lower_list,
             x_label="Time (s)",
             y_label=self._get_spl_label(),
             log_x=False,
@@ -998,7 +1000,7 @@ class SplFrequency(AnalysisGraphWidget):
                 splf_calc_mode=analysis_config.get("splf_calc_mode", "fundamental"),
             )
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"声压级-频率计算失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"声压级-频率计算失败: {str(e)[:200]}")
             self.plot_spl_frequency([], [])
             self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
             return self.result
@@ -1017,7 +1019,6 @@ class SplFrequency(AnalysisGraphWidget):
 
         if octave_smoothing in {1, 3, 6, 12, 24, 48} and spl_db.size > 1:
             try:
-
 
                 freq = np.asarray(frequency_list, dtype=float)
                 val = np.asarray(spl_db, dtype=float)
@@ -1050,7 +1051,7 @@ class SplFrequency(AnalysisGraphWidget):
                     except Exception:
                         pass
             else:
-                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
+                MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
@@ -1110,8 +1111,11 @@ class SplFrequency(AnalysisGraphWidget):
         # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            freq_valid, spl_valid,
-            csv_freq_list, csv_upper_list, csv_lower_list,
+            freq_valid,
+            spl_valid,
+            csv_freq_list,
+            csv_upper_list,
+            csv_lower_list,
             x_label="Frequency (Hz)",
             y_label="SPL (dB)",
             log_x=True,
@@ -1227,7 +1231,7 @@ class Frequency(AnalysisGraphWidget):
                 except Exception:
                     pass
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"频响计算失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"频响计算失败: {str(e)[:200]}")
             self.plot_fr([], [])
             self.result = {"fr": [], "frequency_list": [], "fr_raw": []}
             return self.result
@@ -1247,7 +1251,7 @@ class Frequency(AnalysisGraphWidget):
                     except Exception:
                         pass
             else:
-                QMessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
+                MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
             limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
@@ -1278,7 +1282,7 @@ class Frequency(AnalysisGraphWidget):
     @staticmethod
     def load_excel_limit(excel_path):
         if not excel_path:
-            QMessageBox.warning(None, "提示", f"Excel路径为空, 请选择一个Excel文件路径！")
+            MessageBox.warning(None, "提示", f"Excel路径为空, 请选择一个Excel文件路径！")
             return None
         ext = os.path.splitext(excel_path)[1].lower()
         if ext == ".csv":
@@ -1286,11 +1290,11 @@ class Frequency(AnalysisGraphWidget):
                 reader = csv.reader(f)
                 rows = list(reader)
         else:
-            QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
+            MessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
             return None
 
         if not rows or len(rows) == 0:
-            QMessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
+            MessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
             return None
 
         csv_freq_list, csv_upper_list, csv_lower_list = [], [], []
@@ -1304,7 +1308,7 @@ class Frequency(AnalysisGraphWidget):
         elif lenth == 2 and rows[0][1] == "lowerbound":
             upperbound = False
         else:
-            QMessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
+            MessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
             return None
         for index, row in enumerate(rows[1:], start=2):
             csv_line_no = index
@@ -1314,7 +1318,7 @@ class Frequency(AnalysisGraphWidget):
                     uval = float(row[1])
                     lval = float(row[2])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
@@ -1325,7 +1329,7 @@ class Frequency(AnalysisGraphWidget):
                     uval = float(row[2])
                     lval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
@@ -1335,7 +1339,7 @@ class Frequency(AnalysisGraphWidget):
                     fval = float(row[0])
                     uval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(uval)
@@ -1345,7 +1349,7 @@ class Frequency(AnalysisGraphWidget):
                     fval = float(row[0])
                     lval = float(row[1])
                 except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
+                    MessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
                     return None
                 csv_freq_list.append(fval)
                 csv_upper_list.append(np.nan)
@@ -1353,7 +1357,7 @@ class Frequency(AnalysisGraphWidget):
         for i, (x, u, l) in enumerate(zip(csv_freq_list, csv_upper_list, csv_lower_list)):
             if (u is not None) and (l is not None) and (not np.isnan(u)) and (not np.isnan(l)):
                 if l > u:
-                    QMessageBox.warning(
+                    MessageBox.warning(
                         None,
                         "提示",
                         f"CSV 上下限配置错误：下限不能大于上限。\n"
@@ -1401,8 +1405,11 @@ class Frequency(AnalysisGraphWidget):
         # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            freq_valid, fr_valid,
-            csv_freq_list, csv_upper_list, csv_lower_list,
+            freq_valid,
+            fr_valid,
+            csv_freq_list,
+            csv_upper_list,
+            csv_lower_list,
             x_label="Frequency (Hz)",
             y_label="Amplitude (dB)",
             log_x=True,
@@ -1457,7 +1464,7 @@ class AI(QWidget):
     def create_ai_analyse_layout(self):
         ai_analyse_layout = QVBoxLayout()
         analyse_score_layout = QHBoxLayout()
-        self.ai_analyse_score_textedit = QTextEdit()
+        self.ai_analyse_score_textedit = TextEdit()
         self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
         self.ai_analyse_score_textedit.setDisabled(True)
 
@@ -1725,8 +1732,8 @@ class LooseParticle(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.result = None
         self.analysis_config = None
-        self.lp_num_label = QLabel("LP 数量: %s" % self.result)
-        self.status_label = QLabel()
+        self.lp_num_label = Label("LP 数量: %s" % self.result)
+        self.status_label = Label()
         self.v2pa_factor = None
         self.threshould = None
         self.setWindowTitle(title_name)
@@ -1864,8 +1871,8 @@ class PeakDetection(AnalysisGraphWidget):
         self.setWindowTitle(title_name)
 
         # top status bar
-        self.status_label = QLabel()
-        self.PD_num_label = QLabel("PD 数量: -")
+        self.status_label = Label()
+        self.PD_num_label = Label("PD 数量: -")
         pd_num_layout = QHBoxLayout()
         pd_num_layout.addStretch()
         pd_num_layout.addWidget(self.status_label)
@@ -1951,7 +1958,7 @@ class PatternMatch(QWidget):
     def init_ui(self):
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
-        self.result_display = QTextEdit()
+        self.result_display = TextEdit()
         self.result_display.setReadOnly(True)
 
         self.main_layout.addWidget(self.result_display)
@@ -2107,11 +2114,12 @@ class PipelinePdPm(QWidget):
         self.plot_widget.setLabel("left", "SPL (dB)")
         self.plot_widget.setLabel("bottom", "Time (s)")
 
-        self.result_display = QTextEdit()
+        self.result_display = TextEdit()
+        self.result_display.set_font_size(20)
         self.result_display.setObjectName("resultDisplay")
         self.result_display.setReadOnly(True)
         # match result table
-        self.table_widget = QTableWidget()
+        self.table_widget = TableWidget()
         self.table_widget.setColumnCount(5)
         self.table_widget.setHorizontalHeaderLabels(["序号", "时间(s)", "长度(ms)", "相似度", "SPL(dB)"])
         header = self.table_widget.horizontalHeader()
@@ -2431,7 +2439,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             try:
                 custom_edges = self._parse_custom_bands_text(custom_bands_text)
             except Exception as e:
-                QMessageBox.warning(self, "提示", f"自定义频段解析失败: {str(e)[:200]}")
+                MessageBox.warning(self, "提示", f"自定义频段解析失败: {str(e)[:200]}")
                 return False
 
         try:
@@ -2451,7 +2459,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 v2pa_factor=self.v2pa_factor or 1.0,
             )
         except Exception as e:
-            QMessageBox.warning(self, "提示", f"频段能量分析失败: {str(e)[:200]}")
+            MessageBox.warning(self, "提示", f"频段能量分析失败: {str(e)[:200]}")
             return False
 
         limit_checked = config.get("limit_checked", False)
@@ -2474,7 +2482,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             else:
                 limit_data = config.get("limit_data", None)
                 if not limit_data:
-                    QMessageBox.warning(self, "提示", "已启用阈值，但未加载 CSV 配置文件。")
+                    MessageBox.warning(self, "提示", "已启用阈值，但未加载 CSV 配置文件。")
                     return False
                 csv_x_list, csv_upper_list, csv_lower_list = limit_data
                 csv_x = np.asarray(csv_x_list, dtype=np.float64)
@@ -2486,7 +2494,11 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 csv_u = csv_u[sort_idx]
                 csv_l = csv_l[sort_idx]
 
-                upper_limits = np.interp(centers, csv_x, csv_u, left=csv_u[0], right=csv_u[-1]) if csv_x.size else np.full(n, np.nan)
+                upper_limits = (
+                    np.interp(centers, csv_x, csv_u, left=csv_u[0], right=csv_u[-1])
+                    if csv_x.size
+                    else np.full(n, np.nan)
+                )
                 # lower 可能是全 NaN（仅上限），保持 NaN 即可
                 if np.all(np.isnan(csv_l)) or (not np.any(np.isfinite(csv_l))):
                     lower_limits = np.full(n, np.nan, dtype=np.float64)
@@ -2600,7 +2612,10 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 brushes[int(idx)] = pg.mkBrush(exceed_color)
 
         bar_item = pg.BarGraphItem(
-            x=x, height=levels, width=bar_width, brushes=brushes,
+            x=x,
+            height=levels,
+            width=bar_width,
+            brushes=brushes,
             pen=pg.mkPen("w", width=0.5),
         )
         self.analysis_plot.addItem(bar_item)
@@ -2609,9 +2624,11 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             u = np.asarray(upper_limits, dtype=np.float64)
             if u.size == n and np.any(np.isfinite(u)):
                 self.analysis_plot.plot(
-                    x, u,
+                    x,
+                    u,
                     pen=mkPen(color=(0, 188, 212), width=2),
-                    symbol="o", symbolSize=4,
+                    symbol="o",
+                    symbolSize=4,
                     symbolBrush=(0, 188, 212),
                     name="Upper Limit",
                 )
@@ -2619,9 +2636,11 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             l = np.asarray(lower_limits, dtype=np.float64)
             if l.size == n and np.any(np.isfinite(l)):
                 self.analysis_plot.plot(
-                    x, l,
+                    x,
+                    l,
                     pen=mkPen(color=(63, 81, 181), width=2),
-                    symbol="t", symbolSize=6,
+                    symbol="t",
+                    symbolSize=6,
                     symbolBrush=(63, 81, 181),
                     name="Lower Limit",
                 )

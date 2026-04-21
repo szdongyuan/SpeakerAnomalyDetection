@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from re import L
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
@@ -8,6 +9,7 @@ from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QFrame, QWidget, QStackedW
 from base.save_data import ensure_test_result_file
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.custom_ui_widget import widgets
 from ui.custom_ui_widget.widgets import PushButton, LineEdit, Label, MarkPushButton, MessageBox
 from ui.ui_src import ui_resources
 
@@ -75,9 +77,16 @@ class SequenceCountBoard(QWidget):
         layout.addLayout(mode_btn_layout)
         layout.addWidget(separator_line)
         layout.addWidget(self.stacked_widget)
-        layout.addStretch()
 
-        self.setLayout(layout)
+        widget = QWidget()
+        widget.setLayout(layout)
+        widget.setObjectName("SequenceCountBoard")
+
+        layout_main = QVBoxLayout()
+        layout_main.addWidget(widget)
+        layout_main.addStretch()
+
+        self.setLayout(layout_main)
 
         self.set_test_text()
         self.set_mark_text()

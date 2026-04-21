@@ -31,23 +31,21 @@ class SequenceToolsBar(QWidget):
         self.lineedit_count = LineEdit()
         self.lineedit_s_or_n = LineEdit()
         self.barcode_scanner_box = CheckBox("S/N：")
+        self.sn_regex_manage_btn = PushButton("校验规则")
 
         self.init_ui()
 
     def init_ui(self):
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName("SequenceToolsBar")
         self.set_play_btn()
         self.set_replay_btn()
         self.set_data_btn()
         self.set_tcp_btn()
+        self.set_sn_regex_manage_btn()
         tools_layout = self.create_tools_layout()
 
         self.setLayout(tools_layout)
-
-        palette = self.palette()
-        palette.setColor(self.backgroundRole(), QColor(208, 206, 202))
-        self.setPalette(palette)
-        self.setAutoFillBackground(True)
 
     def create_tools_layout(self):
         line_top = QFrame()
@@ -134,6 +132,11 @@ class SequenceToolsBar(QWidget):
         self.tcp_btn.setIcon(QIcon(":/ui/icon/network.png"))
         self.tcp_btn.setIconSize(QSize(self.icon_size, self.icon_size))
 
+    def set_sn_regex_manage_btn(self):
+        self.sn_regex_manage_btn.setFixedHeight(self.lineedit_height)
+        self.sn_regex_manage_btn.setMinimumWidth(self.button_width)
+        self.sn_regex_manage_btn.setToolTip("SN 正则规则管理")
+
     def create_using_file_combobox(self):
         type_label = Label(" 使用配置：")
         type_label.setFixedHeight(self.label_height)
@@ -177,6 +180,8 @@ class SequenceToolsBar(QWidget):
         barcode_scanner_layout = self.create_part_layout()
         barcode_scanner_layout.addWidget(self.barcode_scanner_box)
         barcode_scanner_layout.addWidget(self.lineedit_s_or_n)
+        barcode_scanner_layout.addSpacing(10)
+        barcode_scanner_layout.addWidget(self.sn_regex_manage_btn)
         barcode_scanner_layout.addSpacing(10)
         barcode_scanner_layout.addWidget(vertical_line)
 

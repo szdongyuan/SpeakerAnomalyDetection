@@ -26,5 +26,6 @@
         <file>icon/ui_login_icon.png</file>
         <file>icon/up.png</file>
         <file>style/dongyuan_style.qss</file>
+        <file>style/jingcheng_style.qss</file>
     </qresource>
 </RCC>

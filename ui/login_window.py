@@ -238,6 +238,7 @@ class AddAccountWindow(QDialog):
 
         info_layout = QHBoxLayout()
         self.info = Label("")
+        self.info.set_font_size(15)
         self.info.setObjectName("infoLabel")
         self.info.setAlignment(Qt.AlignCenter)
         self.info.setMaximumHeight(15)

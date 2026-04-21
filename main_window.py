@@ -1,7 +1,7 @@
 import sys
 
 from PyQt5.QtCore import Qt, QPoint, QTimer, QUrl
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
+from PyQt5.QtGui import QIcon, QPixmap, QDesktopServices
 from PyQt5.QtWidgets import QApplication, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QDialog
 
@@ -162,12 +162,12 @@ class MainWindow(QMainWindow):
     def init_sequence_widget(self):
         # create sequence widget, and set main window layout
         main_window = QWidget()
+        main_window.setObjectName("MainWindow")
         layout = QVBoxLayout()
         self.sequence_window = SequenceWindow()
         menu_bar = self.init_menu()
         title_widget = self.set_title()
         layout.addWidget(title_widget)
-        layout.addSpacing(5)
         layout.addWidget(menu_bar)
         layout.addSpacing(1)
         layout.addWidget(self.sequence_window)
@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
         self.update_statusbar()
 
         statusbar = QStatusBar()
+        statusbar.setObjectName("StatusBar")
         statusbar.setSizeGripEnabled(False)
         statusbar.addWidget(self.user_label)
         statusbar.addPermanentWidget(self.tray_popup_button)
@@ -504,19 +505,6 @@ class MainWindow(QMainWindow):
             # Determine whether you can drag the window size, If so, record the drag direction and set the cursor stutle
             self.updata_cursor_base_direction(left, top, right, bottom)
         event.accept()
-
-    def paintEvent(self, event):
-        # Set the window Background-color
-        painter = QPainter(self)
-        width = self.width()
-        height = self.height()
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(208, 206, 202))
-        painter.drawRect(1, 1, width - 2, 31)
-        painter.setBrush(QColor(208, 206, 202, 124))
-        painter.drawRect(1, 31, width - 2, 41)
-        painter.drawRect(1, height - 24, width - 2, 23)
-        painter.end()
 
 
 if __name__ == "__main__":
