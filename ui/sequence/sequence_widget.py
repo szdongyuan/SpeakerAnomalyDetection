@@ -246,13 +246,13 @@ class SequenceWindow(QWidget):
         # Register this instance as current target for TCP callbacks
         SequenceWindow._active_instance_ref = weakref.ref(self)
 
-    @pyqtSlot(str)
-    def _tcp_run_test(self, label: str = "not_labeled"):
+    @pyqtSlot(str, bool)
+    def _tcp_run_test(self, label: str = "not_labeled", skip_sn_regex_validation: bool = False):
         """
         TCP 回调线程通过 QueuedConnection 投递到 Qt 主线程的入口。
         直接调用 start_this_play 可能发生跨线程 UI 操作风险，因此统一走这里。
         """
-        self.start_this_play(label)
+        self.start_this_play(label, skip_sn_regex_validation=skip_sn_regex_validation)
 
     def on_sequence_config_updated(self, *_):
         """
@@ -644,6 +644,51 @@ class SequenceWindow(QWidget):
         rules_payload = LoadUiConfig.load_sn_regex_rules_from_json()
         return LoadUiConfig.get_selected_sn_regex_rule(rules_payload)
 
+    def _validate_sn_regex_before_start(
+        self,
+        sn_text=None,
+        value_label="实际 SN 内容",
+        retry_hint=None,
+        skip_sn_regex_validation: bool = False,
+    ):
+        if skip_sn_regex_validation:
+            return True
+        if not self.barcode_scanner_box.isChecked():
+            return True
+
+        if sn_text is None:
+            try:
+                sn_text = self.lineedit_s_or_n.text()
+            except Exception:
+                sn_text = ""
+        if sn_text is None:
+            sn_text = ""
+        else:
+            sn_text = str(sn_text)
+
+        selected_rule = self._load_selected_sn_regex_rule()
+        if re.fullmatch(selected_rule["pattern"], sn_text) is not None:
+            return True
+
+        if retry_hint is None:
+            retry_hint = "请检查当前 SN 内容或切换正确规则后重试。"
+
+        sn_display = sn_text if sn_text else "（空）"
+        self.default_logger.warning(
+            "SN regex validation failed. "
+            f"rule={selected_rule['name']}, pattern={selected_rule['pattern']}, sn={sn_text}"
+        )
+        MessageBox.warning(
+            self,
+            "SN 正则校验失败",
+            f"当前 SN 内容不符合已启用规则：\n\n"
+            f"规则名称：{selected_rule['name']}\n"
+            f"规则表达式：{selected_rule['pattern']}\n"
+            f"{value_label}：{sn_display}\n\n"
+            f"{retry_hint}",
+        )
+        return False
+
     def open_sn_regex_manage_dialog(self):
         SnRegexManageDialog().exec_()
 
@@ -704,21 +749,11 @@ class SequenceWindow(QWidget):
             self._reset_barcode_commit_state(clear_dedup=True)
             return  # 不开始录音
 
-        selected_rule = self._load_selected_sn_regex_rule()
-        if re.fullmatch(selected_rule["pattern"], barcode) is None:
-            self.default_logger.warning(
-                "SN regex validation failed. "
-                f"rule={selected_rule['name']}, pattern={selected_rule['pattern']}, barcode={barcode}"
-            )
-            MessageBox.warning(
-                self,
-                "SN 正则校验失败",
-                f"当前扫码内容不符合已启用规则：\n\n"
-                f"规则名称：{selected_rule['name']}\n"
-                f"规则表达式：{selected_rule['pattern']}\n"
-                f"实际扫码内容：{barcode}\n\n"
-                f"请检查扫码内容或切换正确规则后重新扫码。",
-            )
+        if not self._validate_sn_regex_before_start(
+            barcode,
+            value_label="实际扫码内容",
+            retry_hint="请检查扫码内容或切换正确规则后重新扫码。",
+        ):
             self._clear_barcode_input_safely()
             self._reset_barcode_commit_state(clear_dedup=True)
             return
@@ -1130,7 +1165,13 @@ class SequenceWindow(QWidget):
             else:
                 try:
                     # 必须用 QueuedConnection 投递到 inst 所在线程（Qt 主线程），避免跨线程 UI 调用
-                    QMetaObject.invokeMethod(inst, "_tcp_run_test", Qt.QueuedConnection, Q_ARG(str, str(label)))
+                    QMetaObject.invokeMethod(
+                        inst,
+                        "_tcp_run_test",
+                        Qt.QueuedConnection,
+                        Q_ARG(str, str(label)),
+                        Q_ARG(bool, True),
+                    )
                 except Exception as e:
                     try:
                         LogManager.set_log_handler("core").error(f"TCP dispatch RUN_TEST failed: {e}")
@@ -1306,10 +1347,12 @@ class SequenceWindow(QWidget):
         if self.analysis_config.get("auto_analysis"):
             self.run()
 
-    def start_this_play(self, label="not_labeled"):
+    def start_this_play(self, label="not_labeled", skip_sn_regex_validation: bool = False):
         if getattr(self, "_record_workflow_busy", False):
             return
         if getattr(self, "player_status_flag", False):
+            return
+        if not self._validate_sn_regex_before_start(skip_sn_regex_validation=skip_sn_regex_validation):
             return
         if self.checked_work_status_message():
             return
@@ -1417,6 +1460,8 @@ class SequenceWindow(QWidget):
 
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if getattr(self, "_record_workflow_busy", False):
+            return
+        if is_replay and not self._validate_sn_regex_before_start():
             return
         if self.checked_work_status_message():
             return

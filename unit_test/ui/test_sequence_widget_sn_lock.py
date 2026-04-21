@@ -10,9 +10,12 @@ TARGET_METHODS = {
     "_normalize_barcode",
     "_barcode_has_invalid_chars",
     "_reset_barcode_commit_state",
+    "_validate_sn_regex_before_start",
+    "_tcp_run_test",
     "_commit_barcode",
     "_set_sn_input_recording_read_only",
     "validate_count",
+    "start_this_play",
     "judge_play_and_record",
     "_on_streaming_complete",
     "eventFilter",
@@ -74,6 +77,7 @@ def _build_method_namespace():
     namespace = {
         "QApplication": DummyApplication,
         "QSignalBlocker": DummySignalBlocker,
+        "pyqtSlot": lambda *args, **kwargs: (lambda func: func),
         "MessageBox": DummyMessageBox,
         "LoadUiConfig": DummyLoadUiConfig,
         "QEvent": DummyEventType,
@@ -90,6 +94,8 @@ def _build_method_namespace():
         "SplitRepeatSignal": lambda: types.SimpleNamespace(split_repeat_signal=lambda data, sample_rate, **kwargs: []),
         "error_code": types.SimpleNamespace(OK="OK"),
         "save_audio_simple": lambda *args, **kwargs: None,
+        "save_recorded_data_to_json": lambda *args, **kwargs: None,
+        "TempTcpClient": lambda *args, **kwargs: None,
         "np": types.SimpleNamespace(linspace=lambda start, end, size: [0] * size),
         "re": re,
         "time": types.SimpleNamespace(monotonic=lambda: 1000.0),
@@ -345,14 +351,17 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
         )
     window.run = _run_stub
     window._close_analysis_windows = lambda: setattr(window, "close_analysis_calls", window.close_analysis_calls + 1)
-    window.start_this_play = lambda label: window.start_calls.append(label)
+    window.start_this_play = lambda label, skip_sn_regex_validation=False: window.start_calls.append(label)
     window._load_selected_sn_regex_rule = lambda: {"name": "default", "pattern": r"SN\d+"}
     window._normalize_barcode = _bind_method(window, namespace, "_normalize_barcode")
     window._barcode_has_invalid_chars = _bind_method(window, namespace, "_barcode_has_invalid_chars")
     window._reset_barcode_commit_state = _bind_method(window, namespace, "_reset_barcode_commit_state")
+    window._validate_sn_regex_before_start = _bind_method(window, namespace, "_validate_sn_regex_before_start")
+    window._tcp_run_test = _bind_method(window, namespace, "_tcp_run_test")
     window._commit_barcode = _bind_method(window, namespace, "_commit_barcode")
     window._set_sn_input_recording_read_only = _bind_method(window, namespace, "_set_sn_input_recording_read_only")
     window.validate_count = _bind_method(window, namespace, "validate_count")
+    window._real_start_this_play = _bind_method(window, namespace, "start_this_play")
     window.judge_play_and_record = _bind_method(window, namespace, "judge_play_and_record")
     window._on_streaming_complete = _bind_method(window, namespace, "_on_streaming_complete")
     window.eventFilter = _bind_method(window, namespace, "eventFilter")
@@ -669,6 +678,66 @@ def test_commit_barcode_when_idle_still_updates_sn_and_starts_test():
     assert window.close_analysis_calls == 1
     assert window._last_committed_barcode == "SN-123"
     assert window._last_committed_barcode_time == 1000.0
+
+
+def test_start_this_play_blocks_invalid_sn_for_non_scan_entry():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.start_this_play = window._real_start_this_play
+    window.lineedit_s_or_n = FakeLineEdit("BAD-SN")
+    window._load_selected_sn_regex_rule = lambda: {"name": "sn-rule", "pattern": r"SN-\d{3}"}
+    judge_calls = []
+    window.judge_play_and_record = lambda label, is_replay=False: judge_calls.append((label, is_replay))
+
+    window.start_this_play("not_labeled")
+
+    assert judge_calls == []
+    assert window.current_recorded_count == 1
+    assert window.lineedit_count.text() == "1"
+    warnings = namespace["MessageBox"].warnings
+    assert len(warnings) == 1
+    assert "规则名称：sn-rule" in warnings[0][0][2]
+    assert "规则表达式：SN-\\d{3}" in warnings[0][0][2]
+    assert "实际 SN 内容：BAD-SN" in warnings[0][0][2]
+
+
+def test_tcp_run_test_allows_invalid_sn_when_validation_is_explicitly_skipped():
+    namespace = _build_method_namespace()
+    namespace["SequenceWindow"] = types.SimpleNamespace(
+        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.start_this_play = window._real_start_this_play
+    window.lineedit_s_or_n = FakeLineEdit("BAD-SN")
+    window.barcode_scanner_box = FakeCheckBox(checked=True)
+    window._load_selected_sn_regex_rule = lambda: {"name": "sn-rule", "pattern": r"SN-\d{3}"}
+    window.tcp_flag = True
+    judge_calls = []
+    window.judge_play_and_record = lambda label, is_replay=False: judge_calls.append((label, is_replay))
+
+    window._tcp_run_test("not_labeled", skip_sn_regex_validation=True)
+
+    assert judge_calls == [("not_labeled", False)]
+    assert window.current_recorded_count == 2
+    assert window.lineedit_count.text() == "2"
+    assert namespace["MessageBox"].warnings == []
+
+
+def test_replay_path_blocks_invalid_sn_before_recording():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.lineedit_s_or_n = FakeLineEdit("BAD-SN")
+    window.last_play_count = 3
+    window._load_selected_sn_regex_rule = lambda: {"name": "sn-rule", "pattern": r"SN-\d{3}"}
+
+    window.judge_play_and_record(is_replay=True)
+
+    assert window._record_workflow_busy is False
+    assert window.player_status_flag is False
+    assert window.cleanup_calls == 0
+    warnings = namespace["MessageBox"].warnings
+    assert len(warnings) == 1
+    assert "实际 SN 内容：BAD-SN" in warnings[0][0][2]
 
 
 def test_busy_count_path_keeps_sn_locked():
