@@ -152,6 +152,7 @@ class SequenceWindow(QWidget):
             app.installEventFilter(self)
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
+        self._sn_textchange_manual_guard = False
 
         # 条码提交去重机制：防止 HID 模式和键盘楔入模式同时触发导致重复提交
         self._last_committed_barcode = None
@@ -746,6 +747,7 @@ class SequenceWindow(QWidget):
                 f"关闭此窗口后可重新扫码。",
             )
             self._clear_barcode_input_safely()
+            self._sn_textchange_manual_guard = False
             self._reset_barcode_commit_state(clear_dedup=True)
             return  # 不开始录音
 
@@ -755,10 +757,12 @@ class SequenceWindow(QWidget):
             retry_hint="请检查扫码内容或切换正确规则后重新扫码。",
         ):
             self._clear_barcode_input_safely()
+            self._sn_textchange_manual_guard = False
             self._reset_barcode_commit_state(clear_dedup=True)
             return
 
         # 写回输入框（避免触发 textChanged 的二次提交）
+        self._sn_textchange_manual_guard = False
         try:
             with QSignalBlocker(self.lineedit_s_or_n):
                 self.lineedit_s_or_n.setText(barcode)
@@ -2177,6 +2181,37 @@ class SequenceWindow(QWidget):
                     if ch and ch.isprintable() and now < self._hid_mode_active_until:
                         return True  # 吞掉事件
 
+                    if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_Z:
+                        return True
+
+                    key = event.key()
+                    manual_edit_keys = {
+                        Qt.Key_Backspace,
+                        Qt.Key_Delete,
+                        Qt.Key_Left,
+                        Qt.Key_Right,
+                        Qt.Key_Up,
+                        Qt.Key_Down,
+                        Qt.Key_Home,
+                        Qt.Key_End,
+                        Qt.Key_PageUp,
+                        Qt.Key_PageDown,
+                    }
+                    if key in manual_edit_keys:
+                        self._sn_textchange_manual_guard = True
+                        self._reset_barcode_commit_state()
+                        return super().eventFilter(obj, event)
+
+                    if ch and ch.isprintable() and not ch.isspace():
+                        try:
+                            current_text = self.lineedit_s_or_n.text()
+                            selected_text = self.lineedit_s_or_n.selectedText()
+                        except Exception:
+                            current_text = ""
+                            selected_text = ""
+                        if not current_text or (selected_text and len(selected_text) == len(current_text)):
+                            self._sn_textchange_manual_guard = False
+
                     # 在"待确认"状态下，下一次扫码先清空旧内容，避免拼接
                     if (
                         self._sn_clear_on_next_scan
@@ -2191,6 +2226,7 @@ class SequenceWindow(QWidget):
                             self._barcode_first_char_ts = None
                             self._barcode_last_char_ts = None
                             self._barcode_debounce_timer.stop()
+                            self._sn_textchange_manual_guard = False
                             self._sn_clear_on_next_scan = False
                         except Exception:
                             pass
