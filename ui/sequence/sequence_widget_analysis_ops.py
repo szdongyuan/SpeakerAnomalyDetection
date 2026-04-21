@@ -20,6 +20,8 @@ from base.load_config import LoadUiConfig
 
 from base.play_and_record import (
     get_recorded_info,
+    resolve_monitor_fade_in_samples,
+    resolve_startup_trim_samples,
     stream_record_without_play,
 )
 
@@ -503,6 +505,37 @@ class SequenceWidgetAnalysisOpsMixin:
         _, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(self.data_struct, total_time)
         # Keep both keys for compatibility across legacy/streaming code paths.
         recorded_dict["sample_rate"] = sample_rate
+
+        # Startup-trim compensation: if the product config opts into
+        # startup-pop trimming (``startup_trim_ms`` set in ``acq.detail``),
+        # the same sample count drives three places so the pop is
+        # suppressed everywhere it could be heard or stored:
+        #
+        # 1. ``num_frames`` is extended so the streaming-completion
+        #    handler can drop the leading pop and still hand analysis a
+        #    buffer that is exactly ``total_time`` seconds long (keeps
+        #    fixed-length AI models stable).
+        # 2. ``monitor_mute_leading_samples`` is forwarded to the
+        #    processor so the duplex monitor output stays silent during
+        #    the pop window -- otherwise the operator would hear the
+        #    captured pop live through the speakers regardless of the
+        #    post-recording WAV trim.
+        # 3. The post-recording handler uses the same value again to
+        #    trim the in-memory buffer and rewrite the WAV on disk.
+        startup_trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
+        if startup_trim_samples > 0:
+            recorded_dict["num_frames"] = (
+                int(recorded_dict.get("num_frames", 0) or 0) + startup_trim_samples
+            )
+            recorded_dict["monitor_mute_leading_samples"] = startup_trim_samples
+            # Fade-in length is only forwarded when there is actually a
+            # mute window; without a mute window the processor never
+            # ramps anything, so resolving the fade would be wasted work
+            # and could mask a config typo (operator setting a fade
+            # length on a product that has trimming disabled).
+            recorded_dict["monitor_fade_in_samples"] = (
+                resolve_monitor_fade_in_samples(acq_detail, sample_rate)
+            )
 
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic

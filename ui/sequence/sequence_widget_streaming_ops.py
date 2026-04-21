@@ -6,6 +6,11 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel, QSplitter
 
+from base.play_and_record import resolve_startup_trim_samples
+from base.recording_settings import (
+    merge_audio_validation_thresholds,
+    validate_recorded_audio,
+)
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
     resolve_excel_output_path,
@@ -837,6 +842,63 @@ class SequenceWidgetStreamingOpsMixin:
                 self.streaming_wav_writer.finalize()
                 self.streaming_wav_writer = None
 
+            try:
+                acq_detail = (
+                    (self.sequence_config[0]["seq1"].get("acq", {}) or {}).get("detail", {}) or {}
+                )
+            except Exception:
+                acq_detail = {}
+
+            # Startup pop trim: drop the leading samples that capture the
+            # sound-card / DAC power-on transient before the quality gate
+            # sees them, so a pop cannot keep an otherwise-dead recording
+            # above threshold. The just-finalized WAV is rewritten so the
+            # file on disk matches the in-memory buffer used by the AI /
+            # plotting / DB. The trim is opt-in: configs without
+            # ``startup_trim_ms`` (or with it set to 0) record verbatim.
+            trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
+            if 0 < trim_samples < recorded_multi.shape[0]:
+                recorded_multi = recorded_multi[trim_samples:]
+                self.data_struct.store_wave_data_multi = recorded_multi
+                self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(
+                    np.float32, copy=False
+                )
+                self._rewrite_recorded_wav(recorded_multi, sample_rate)
+                self.default_logger.info(
+                    f"startup_trim_applied samples={trim_samples} "
+                    f"ms={trim_samples * 1000.0 / sample_rate:.1f}"
+                )
+            elif trim_samples >= recorded_multi.shape[0]:
+                # Config asked for more trim than the recording has; skip
+                # (leave the untrimmed WAV on disk) and warn loudly instead
+                # of producing an empty buffer.
+                self.default_logger.warning(
+                    f"startup_trim_skipped_too_large samples={trim_samples} "
+                    f"recording_samples={recorded_multi.shape[0]}"
+                )
+
+            # Audio quality gate: reject silent / flat recordings before they
+            # reach analysis. A device that is not powered on, an unplugged
+            # microphone or a stuck audio stream would otherwise pollute the
+            # recent-session history, the audio database and (in mark mode)
+            # any future training/export pipeline.
+            quality_ok, quality_reason, quality_detail = validate_recorded_audio(
+                recorded_multi, merge_audio_validation_thresholds(acq_detail)
+            )
+            if not quality_ok:
+                # Keep the dialog short; the measured values + thresholds go
+                # to the log so an offline analyst can still distinguish a
+                # genuine hardware fault from an over-tight threshold.
+                if quality_detail:
+                    self.default_logger.warning(
+                        f"audio_validation_failed {quality_detail}"
+                    )
+                self.streaming_processor = None
+                self.streaming_stimulus_data = None
+                self.streaming_mode = None
+                self._handle_invalid_recording(quality_reason)
+                return
+
             # Update plots with final multi-channel data using the direction fixed when this run started.
             active_direction = self._resolve_active_recording_waveform_direction(fallback="")
             self.plot_waveform_to_workspace(recorded_multi, sample_rate, direction=active_direction or None)
@@ -933,6 +995,115 @@ class SequenceWidgetStreamingOpsMixin:
             except Exception:
                 self._last_committed_barcode = None
                 self._last_committed_barcode_time = 0.0
+
+    def _rewrite_recorded_wav(self, samples, sample_rate) -> None:
+        """Overwrite the just-finalized WAV file with trimmed ``samples``.
+
+        Called after :meth:`_on_streaming_complete` drops the leading
+        startup transient so the file on disk matches the in-memory buffer
+        used by the AI pipeline / plotting / DB. Any failure is logged but
+        not raised: the in-memory data is still the source of truth for
+        analysis and DB, and the untrimmed-but-otherwise-valid WAV on disk
+        can be retrimmed later if needed.
+        """
+        wav_path = str(getattr(self, "recorded_path", "") or "")
+        if not wav_path:
+            return
+        try:
+            import soundfile as sf
+
+            data = np.asarray(samples, dtype=np.float32)
+            if data.ndim == 2 and data.shape[1] == 1:
+                data = data.reshape(-1)
+            sf.write(wav_path, data, int(sample_rate), subtype="FLOAT")
+        except Exception as e:
+            self.default_logger.warning(
+                f"startup_trim_rewrite_wav_failed path={wav_path} err={e}"
+            )
+
+    def _handle_invalid_recording(self, reason: str) -> None:
+        """Abort the current recording cycle when the captured audio is invalid.
+
+        Removes the just-finalized WAV file, drops the placeholder
+        recent-session row inserted at recording start, resets the
+        directional cycle / waveform state, re-enables the play & replay
+        buttons and shows a warning popup. Skips DB persistence and AI
+        analysis entirely so the bad audio cannot pollute downstream
+        statistics or training data.
+        """
+        bad_path = str(getattr(self, "recorded_path", "") or "")
+        if bad_path:
+            try:
+                if os.path.isfile(bad_path):
+                    os.remove(bad_path)
+            except OSError as e:
+                self.default_logger.warning(
+                    f"remove_invalid_recording_failed path={bad_path} err={e}"
+                )
+
+        discard_recent_session = getattr(self, "_discard_current_recent_session", None)
+        if callable(discard_recent_session):
+            try:
+                discard_recent_session()
+            except Exception as e:
+                self.default_logger.warning(
+                    f"discard_recent_session_after_invalid_recording_failed: {e}"
+                )
+
+        clear_cycle_runtime = getattr(self, "_clear_ai_cycle_runtime_state", None)
+        if callable(clear_cycle_runtime):
+            try:
+                clear_cycle_runtime()
+            except Exception as e:
+                self.default_logger.warning(
+                    f"clear_cycle_runtime_after_invalid_recording_failed: {e}"
+                )
+
+        clear_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+        if callable(clear_waveforms):
+            try:
+                clear_waveforms()
+            except Exception as e:
+                self.default_logger.warning(
+                    f"clear_waveforms_after_invalid_recording_failed: {e}"
+                )
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is not None:
+            try:
+                left_panel.set_current_stage("录音异常，循环已作废", tone="ng")
+                left_panel.set_forward_result("待检测", tone="pending")
+                if hasattr(left_panel, "set_forward_scores"):
+                    left_panel.set_forward_scores(None, None)
+                left_panel.set_reverse_result("待检测", tone="pending")
+                if hasattr(left_panel, "set_reverse_scores"):
+                    left_panel.set_reverse_scores(None, None)
+                left_panel.set_final_result("已作废", tone="ng")
+            except Exception as e:
+                self.default_logger.warning(
+                    f"reset_left_panel_after_invalid_recording_failed: {e}"
+                )
+
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
+        self._pending_recent_session_append = False
+        self.player_status_flag = False
+        try:
+            self.data_btn.setEnabled(True)
+            self.replayer_btn.setEnabled(True)
+        except Exception:
+            pass
+        self._record_workflow_busy = False
+        try:
+            self.update_player_btn_is_paused()
+        except Exception:
+            pass
+
+        self.default_logger.warning(f"invalid_recording_discarded reason={reason}")
+        try:
+            QMessageBox.warning(self, "录音异常", reason)
+        except Exception:
+            pass
 
     def _cleanup_streaming_resources(self):
         """

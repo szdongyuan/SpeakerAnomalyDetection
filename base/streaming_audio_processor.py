@@ -39,6 +39,56 @@ class StreamingAudioProcessor:
         self.error_occurred = False
         self.error_message = ""
         self._rec_in_sel = []
+        # Number of leading samples to mute on the monitor output so the
+        # sound-card / DAC power-on pop is not played back through the
+        # speakers when ``monitor_playback`` is enabled. The post-recording
+        # WAV trim alone would not help here because the operator hears
+        # the duplex passthrough in real time. Driven from the same
+        # ``startup_trim_ms`` config as the WAV trim.
+        self._monitor_mute_leading_samples = 0
+        self._monitor_samples_emitted = 0
+        # Fade-in length used at the tail of the mute window. Captured
+        # once at ``start_streaming_rec`` so the duplex callback (which
+        # runs on a real-time audio thread) does not have to consult any
+        # config or do any allocation per chunk. Resolved by the caller
+        # via :func:`base.play_and_record.resolve_monitor_fade_in_samples`
+        # so this class stays free of config-loading concerns and unit
+        # tests can drive any sample count they want.
+        self._monitor_fade_in_samples = 0
+
+    def _apply_monitor_startup_mute(
+        self, play: np.ndarray, fade_len: int
+    ) -> np.ndarray:
+        """Suppress the leading pop on a monitor-output chunk.
+
+        Replaces the first ``self._monitor_mute_leading_samples`` emitted
+        samples with silence, followed by a ``fade_len`` linear 0 -> 1 ramp
+        at the tail of the window. Subsequent chunks are returned
+        unchanged. Tracks progress across chunk boundaries via
+        ``self._monitor_samples_emitted`` so the mute respects whatever
+        blocksize the sound driver hands us.
+
+        Returns the (possibly modified) chunk. When no mute is configured
+        or the window has already been consumed, the input is returned
+        as-is without allocation; otherwise a copy is made so the caller's
+        upstream buffer (typically the raw captured ``mono_in``) is not
+        mutated.
+        """
+        mute_total = self._monitor_mute_leading_samples
+        emitted_before = self._monitor_samples_emitted
+        if mute_total > 0 and emitted_before < mute_total:
+            remaining_mute = mute_total - emitted_before
+            play = play.copy()
+            hard_mute = min(remaining_mute, len(play))
+            play[:hard_mute] = 0.0
+            if hard_mute < len(play) and fade_len > 0:
+                ramp_len = min(fade_len, len(play) - hard_mute)
+                ramp = np.linspace(
+                    0.0, 1.0, ramp_len, endpoint=False, dtype=np.float32
+                )
+                play[hard_mute : hard_mute + ramp_len] *= ramp
+        self._monitor_samples_emitted = emitted_before + len(play)
+        return play
 
     @staticmethod
     def _normalize_channel_selection(channels: Any) -> List[int]:
@@ -204,6 +254,8 @@ class StreamingAudioProcessor:
         output_channels: Any = None,
         monitor_playback: bool = False,
         monitor_gain_db: float = 0.0,
+        monitor_mute_leading_samples: int = 0,
+        monitor_fade_in_samples: int = 0,
     ):
         """
         Start streaming audio recording (record-only mode).
@@ -230,6 +282,9 @@ class StreamingAudioProcessor:
         self.accumulated_multi_chunks = []
         self.is_recording = True
         self.error_occurred = False
+        self._monitor_mute_leading_samples = max(int(monitor_mute_leading_samples or 0), 0)
+        self._monitor_samples_emitted = 0
+        self._monitor_fade_in_samples = max(int(monitor_fade_in_samples or 0), 0)
 
         input_device = device  # legacy alias
         in_sel = self._normalize_channel_selection(input_channels or [0])
@@ -278,6 +333,16 @@ class StreamingAudioProcessor:
                 elif output_device:
                     device_selector = (None, int(output_device["index"]))
 
+                # Linear fade-in applied at the tail of the monitor-mute
+                # window so the transition from silence to live signal
+                # does not produce a click. Length is provided by the
+                # caller (resolved from ``monitor_fade_in_ms`` in
+                # :mod:`base.recording_settings`) instead of being
+                # hardcoded here, so a deployment that needs a longer
+                # ramp for unusual hardware can tune it without touching
+                # this real-time path.
+                fade_len = self._monitor_fade_in_samples
+
                 def monitor_duplex_callback(indata, outdata, frames, time_info, status):
                     if status:
                         self.logger.warning(f"Duplex status: {status}")
@@ -299,6 +364,13 @@ class StreamingAudioProcessor:
                     else:
                         play = mono_in
                     play = np.clip(play * monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
+
+                    # Startup-pop suppression on the monitor output:
+                    # mutes the leading samples (with a short linear
+                    # fade-in at the tail of the window) so the operator
+                    # does not hear the captured pop in real time
+                    # regardless of the post-recording WAV trim.
+                    play = self._apply_monitor_startup_mute(play, fade_len)
 
                     for ch in out_sel:
                         if ch < outdata.shape[1]:
