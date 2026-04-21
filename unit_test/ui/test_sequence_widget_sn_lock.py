@@ -74,6 +74,20 @@ def _build_method_namespace():
     class DummyLineEdit:
         pass
 
+    class DummyQt:
+        ControlModifier = 0x04000000
+        Key_Backspace = "backspace"
+        Key_Delete = "delete"
+        Key_Left = "left"
+        Key_Right = "right"
+        Key_Up = "up"
+        Key_Down = "down"
+        Key_Home = "home"
+        Key_End = "end"
+        Key_PageUp = "page_up"
+        Key_PageDown = "page_down"
+        Key_Z = "z"
+
     namespace = {
         "QApplication": DummyApplication,
         "QSignalBlocker": DummySignalBlocker,
@@ -81,6 +95,7 @@ def _build_method_namespace():
         "MessageBox": DummyMessageBox,
         "LoadUiConfig": DummyLoadUiConfig,
         "QEvent": DummyEventType,
+        "Qt": DummyQt,
         "QLineEdit": DummyLineEdit,
         "StreamingWavWriter": None,
         "stream_play_and_record": None,
@@ -136,6 +151,7 @@ class FakeLineEdit:
         self.select_all_calls = 0
         self.set_text_calls = []
         self.clear_calls = 0
+        self._selected_text = ""
 
     def setReadOnly(self, value):
         self.read_only = value
@@ -148,10 +164,12 @@ class FakeLineEdit:
 
     def setText(self, value):
         self._text = value
+        self._selected_text = ""
         self.set_text_calls.append(value)
 
     def clear(self):
         self._text = ""
+        self._selected_text = ""
         self.clear_calls += 1
 
     def setFocus(self):
@@ -159,6 +177,13 @@ class FakeLineEdit:
 
     def selectAll(self):
         self.select_all_calls += 1
+        self._selected_text = self._text
+
+    def selectedText(self):
+        return self._selected_text
+
+    def setSelectedText(self, value):
+        self._selected_text = value
 
 
 class FakeMouseEvent:
@@ -167,6 +192,26 @@ class FakeMouseEvent:
 
     def type(self):
         return self._event_type
+
+
+class FakeKeyEvent:
+    def __init__(self, event_type, key, text="", modifiers=0):
+        self._event_type = event_type
+        self._key = key
+        self._text = text
+        self._modifiers = modifiers
+
+    def type(self):
+        return self._event_type
+
+    def key(self):
+        return self._key
+
+    def text(self):
+        return self._text
+
+    def modifiers(self):
+        return self._modifiers
 
 
 class FakeButton:
@@ -313,6 +358,7 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window.barcode_scanner_box = FakeCheckBox()
     window._awaiting_ok_ng = False
     window._sn_clear_on_next_scan = False
+    window._sn_textchange_manual_guard = False
     window._INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
     window._barcode_first_char_ts = 1.0
     window._barcode_last_char_ts = 2.0
@@ -327,6 +373,7 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._last_committed_barcode = None
     window._last_committed_barcode_time = 0.0
     window._barcode_commit_dedup_window_sec = 0.8
+    window._hid_mode_active_until = 0.0
     window.run_called = False
     window.run_invocations = []
     window.start_calls = []
@@ -776,3 +823,64 @@ def test_idle_count_path_still_unlocks_and_clears_sn():
     assert window.lineedit_count.focus_calls == 1
     assert window.lineedit_count.select_all_calls == 1
     assert window.lineedit_s_or_n.text() == ""
+
+
+def test_sn_backspace_marks_manual_edit_guard_and_resets_barcode_state():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.lineedit_s_or_n = FakeLineEdit("SN-1234567")
+    window._barcode_first_char_ts = 11.0
+    window._barcode_last_char_ts = 11.2
+    window._barcode_debounce_timer.active = True
+
+    namespace["QApplication"].focusWidget = staticmethod(lambda: window.lineedit_s_or_n)
+    try:
+        window.eventFilter(
+            window.lineedit_s_or_n,
+            FakeKeyEvent(namespace["QEvent"].KeyPress, namespace["Qt"].Key_Backspace),
+        )
+    except RuntimeError as exc:
+        assert "__class__ cell not found" in str(exc)
+
+    assert window._sn_textchange_manual_guard is True
+    assert window._barcode_first_char_ts is None
+    assert window._barcode_last_char_ts is None
+    assert window._barcode_debounce_timer.isActive() is False
+
+
+def test_sn_full_selection_rearms_textchange_auto_commit():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.lineedit_s_or_n = FakeLineEdit("SN-OLD")
+    window.lineedit_s_or_n.setSelectedText("SN-OLD")
+    window._sn_textchange_manual_guard = True
+
+    namespace["QApplication"].focusWidget = staticmethod(lambda: window.lineedit_s_or_n)
+    try:
+        window.eventFilter(
+            window.lineedit_s_or_n,
+            FakeKeyEvent(namespace["QEvent"].KeyPress, "S", text="S"),
+        )
+    except RuntimeError as exc:
+        assert "__class__ cell not found" in str(exc)
+
+    assert window._sn_textchange_manual_guard is False
+
+
+def test_sn_ctrl_z_is_swallowed_without_breaking_startup_logic():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.lineedit_s_or_n = FakeLineEdit("SN-OLD")
+
+    namespace["QApplication"].focusWidget = staticmethod(lambda: window.lineedit_s_or_n)
+    handled = window.eventFilter(
+        window.lineedit_s_or_n,
+        FakeKeyEvent(
+            namespace["QEvent"].KeyPress,
+            namespace["Qt"].Key_Z,
+            text="z",
+            modifiers=namespace["Qt"].ControlModifier,
+        ),
+    )
+
+    assert handled is True

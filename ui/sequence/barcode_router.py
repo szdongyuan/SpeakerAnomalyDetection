@@ -79,6 +79,13 @@ class BarcodeRouter(QObject):
             return
         if not ctx.lineedit_s_or_n.isEnabled():
             return
+        if getattr(ctx, "_sn_textchange_manual_guard", False):
+            ctx._barcode_debounce_timer.stop()
+            ctx._barcode_first_char_ts = None
+            ctx._barcode_last_char_ts = None
+            if not self.normalize_barcode(ctx.lineedit_s_or_n.text()):
+                ctx._sn_textchange_manual_guard = False
+            return
         now = time.monotonic()
         if ctx._barcode_first_char_ts is None:
             ctx._barcode_first_char_ts = now
@@ -124,6 +131,7 @@ class BarcodeRouter(QObject):
         if not text:
             ctx._barcode_first_char_ts = None
             ctx._barcode_last_char_ts = None
+            ctx._sn_textchange_manual_guard = False
             return
         if ctx._barcode_first_char_ts is None or ctx._barcode_last_char_ts is None:
             return
