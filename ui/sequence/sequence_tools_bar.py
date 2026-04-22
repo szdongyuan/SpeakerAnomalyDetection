@@ -1,5 +1,5 @@
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon, QColor
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QHBoxLayout, QFrame, QVBoxLayout, QWidget
 
 from consts import ui_style_const
