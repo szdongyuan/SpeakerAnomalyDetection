@@ -423,11 +423,9 @@ class SequenceWindow(QWidget):
 
     def _set_sn_input_recording_read_only(self, is_read_only):
         """Keep S/N editing controls locked only for the active play/record lifecycle."""
-        try:
+        if not self.tcp_flag:
             self.lineedit_s_or_n.setReadOnly(is_read_only)
-        except Exception:
-            pass
-        try:
+
             if is_read_only:
                 if self._barcode_scanner_box_enabled_before_recording is None:
                     self._barcode_scanner_box_enabled_before_recording = self.barcode_scanner_box.isEnabled()
@@ -436,8 +434,7 @@ class SequenceWindow(QWidget):
                 if self._barcode_scanner_box_enabled_before_recording is not None:
                     self.barcode_scanner_box.setEnabled(self._barcode_scanner_box_enabled_before_recording)
                 self._barcode_scanner_box_enabled_before_recording = None
-        except Exception:
-            pass
+
 
     @property
     def sn_regex_manage_btn(self):
@@ -703,6 +700,9 @@ class SequenceWindow(QWidget):
         if not barcode:
             return
 
+        if self.tcp_flag:
+            return
+
         # 只在开启扫码枪功能时自动处理，避免影响用户正常输入
         if not self.barcode_scanner_box.isChecked():
             return
@@ -792,6 +792,7 @@ class SequenceWindow(QWidget):
         """处理光电开关触发信号"""
         if not getattr(self, "_record_workflow_busy", False):
             self.default_logger.info("光电触发响应: 开始测试")
+            self.clicked_player_flag = True
             self.start_this_play("not_labeled")
         else:
             self.default_logger.info("正在测试中，忽略光电触发")
@@ -806,6 +807,7 @@ class SequenceWindow(QWidget):
             self._shortcut_processing = True
             try:
                 self.default_logger.info(f"快捷键触发响应: 开始测试 ({ShortcutTriggerManager.HOTKEY})")
+                self.clicked_player_flag = True
                 self.start_this_play("not_labeled")
             finally:
                 self._shortcut_processing = False
@@ -1109,6 +1111,7 @@ class SequenceWindow(QWidget):
     def swap_tcp_status(self):
         if self.tcp_flag:
             self.barcode_scanner_box.setEnabled(False)
+            self.lineedit_s_or_n.setReadOnly(True)
             self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
@@ -1117,6 +1120,7 @@ class SequenceWindow(QWidget):
             SequenceWindow.tcp_server.start()
         else:
             self.barcode_scanner_box.setEnabled(True)
+            self.lineedit_s_or_n.setReadOnly(False)
             if hasattr(self, "tcp_server") and SequenceWindow.tcp_server:
                 SequenceWindow.tcp_server.stop()
                 SequenceWindow.tcp_server = None
@@ -1356,8 +1360,9 @@ class SequenceWindow(QWidget):
             return
         if getattr(self, "player_status_flag", False):
             return
-        if not self._validate_sn_regex_before_start(skip_sn_regex_validation=skip_sn_regex_validation):
-            return
+        if not self.tcp_flag:
+            if not self._validate_sn_regex_before_start(skip_sn_regex_validation=skip_sn_regex_validation):
+                return
         if self.checked_work_status_message():
             return
 
@@ -1465,8 +1470,9 @@ class SequenceWindow(QWidget):
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if getattr(self, "_record_workflow_busy", False):
             return
-        if is_replay and not self._validate_sn_regex_before_start():
-            return
+        if not self.tcp_flag:
+            if is_replay and not self._validate_sn_regex_before_start():
+                return
         if self.checked_work_status_message():
             return
         if is_replay and self.last_play_count is None:
