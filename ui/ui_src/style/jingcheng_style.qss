@@ -1,9 +1,13 @@
 /* 整体的控件样式 */
+QDialog {
+  background-color: rgb(241, 245, 249);
+}
+
 QLineEdit {
   background: #f8fafc;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 5px 8px;
 }
 
 QLineEdit:focus {
@@ -16,7 +20,7 @@ QTextEdit {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   color: #111827;
-  padding: 8px;
+  padding: 5px 8px;
 }
 
 QComboBox {
@@ -24,12 +28,22 @@ QComboBox {
   color: #111827;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 5px 8px;
 }
 
 QComboBox::drop-down {
-  border: 0px;
-  width: 28px;
+  subcontrol-origin: padding;
+  subcontrol-position: top right;
+  width: 18px;
+  border: none;
+  background: transparent;
+  border-radius: 0px;
+}
+
+QComboBox::down-arrow {
+  image: url(:/ui/icon/down.png);
+  width: 10px;
+  height: 10px;
 }
 
 QComboBox QAbstractItemView {
@@ -40,11 +54,43 @@ QComboBox QAbstractItemView {
   outline: 0px;
 }
 
+QSpinBox,
+QDoubleSpinBox {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+  width: 18px;
+  border: none;
+  background: transparent;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+  image: url(:/ui/icon/up.png);
+  width: 10px;
+  height: 10px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+  image: url(:/ui/icon/down.png);
+  width: 10px;
+  height: 10px;
+}
+
 QPushButton {
   border: 1px solid #d1d5db;
   background: white;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 5px 8px;
 }
 
 QPushButton:hover {
@@ -64,21 +110,110 @@ QTableWidget {
 
 QHeaderView::section {
   background: #f1f5f9;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border: 0px;
   color: #334155;
   font-weight: 700;
 }
 
 QTableView::item {
-  padding: 6px 8px;
+  padding: 5px 8px;
 }
 
 QMainWindow {
-  background-color: rgb(243, 245, 248);
+  background-color: rgb(245, 247, 247);
   border: 1px solid rgb(0, 0, 0);
 }
 
+QMenuBar {
+  background-color: rgb(248, 250, 252);
+  border-left: 1px solid rgb(0, 0, 0);
+  border-right: 1px solid rgb(0, 0, 0);
+}
+
+QMenu {
+  background: white;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  padding: 5px;
+}
+
+QMenu::item {
+  background: transparent;
+  padding: 6px 20px 6px 28px;
+}
+
+QMenu::item:selected {
+  background: rgba(37, 99, 235, 0.10);
+  color: #1d4ed8;
+}
+
+QMenu::separator {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 4px 12px 4px 28px;    /* 和 item 的文字起点对齐 */
+}
+
+QStatusBar {
+  background-color: rgb(248, 250, 252);
+  border-left: 1px solid rgb(0, 0, 0);
+  border-right: 1px solid rgb(0, 0, 0);
+  border-bottom: 1px solid rgb(0, 0, 0);
+}
+
+QGroupBox {
+  background-color:rgb(245, 247, 247);
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  margin-top: 10px;
+}
+
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  left: -10px;
+  padding: 0 6px;
+}
+
+QScrollArea > QWidget > QWidget {
+  background: white;
+}
+
+QScrollArea {
+  background-color: white;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+  height: 0px;
+}
+
+QScrollBar:vertical {
+  background-color: rgb(241, 245, 249);
+  width: 8px;
+  border-radius: 4px;
+}
+
+QScrollBar::handle:vertical {
+  background-color: #555555;
+  border-radius: 4px;
+  min-height: 30px;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+  width: 0px;
+}
+QScrollBar:horizontal {
+  background-color: rgb(241, 245, 249);
+  height: 8px;
+  border-radius: 4px;
+}
+QScrollBar::handle:horizontal {
+  background-color: #555555;
+  border-radius: 4px;
+  min-width: 30px;
+}
 
 /* main window style */
 QWidget#TitleWidget {
@@ -88,9 +223,125 @@ QWidget#TitleWidget {
   border-right: 1px solid rgb(0, 0, 0);
 }
 
+QWidget#TitleWidget QPushButton{
+  background-color: transparent;
+  border: none;
+}
+
 /* sequence count board style */
 QWidget#SequenceCountBoard {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
+}
+
+QPushButton#TestBtn {
+  background-color: rgb(241, 245, 249);
+  color: #666666;
+  border: none;
+  border-top-left-radius: 5px;
+  border-bottom-left-radius: 5px;
+  border-top-right-radius: 0px;
+  border-bottom-right-radius: 0px;
+}
+
+QPushButton#MarkBtn {
+  background-color: rgb(241, 245, 249);
+  color: #666666;
+  border: none;
+  border-top-left-radius: 0px;
+  border-bottom-left-radius: 0px;
+  border-top-right-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
+QPushButton#TestBtn[available="true"]:disabled,
+QPushButton#MarkBtn:disabled {
+  background-color: #007BFF;
+  color: white;
+  border: none;
+}
+
+QPushButton#TestBtn[available="false"]:disabled {
+  background-color: rgb(241, 245, 249);
+  color: #999999;
+  border: none;
+}
+
+QWidget#SequenceCountBoard QFrame {
+  color: gray;
+}
+
+QWidget#SequenceCountBoard QLabel {
+  color: black;
+}
+
+QPushButton#OkBtn,
+QPushButton#NgBtn {
+  background-color: rgb(245, 247, 247);
+}
+
+QPushButton#OkBtn:hover,
+QPushButton#NgBtn:hover {
+  background: #eef2ff;
+}
+
+QPushButton#OkBtn:pressed,
+QPushButton#NgBtn:pressed {
+  background: rgba(37, 99, 235, 0.20);
+}
+
+/* sequence tools bar style */
+QWidget#SequenceToolsBar {
+  background-color: rgb(241, 245, 249);
+}
+
+QWidget#SequenceToolsBar QFrame {
+  color: transparent;
+}
+
+QWidget#SequenceToolsBar QLabel {
+  color: black;
+}
+
+/* sequence widget style */
+QWidget#LinearGraphWidget {
+  background-color: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+/* traypopuppanel style */
+QFrame#trayPopupCard {
+  background: rgb(245, 248, 250);
+  border-radius: 12px;
+  border: 1px solid #d9d9d9;
+}
+
+QToolButton#TrayPopupButton {
+  border: None;
+}
+QToolButton#TrayPopupButton:hover {
+  background-color: #5099ccff;
+}
+
+/* operation sequence style */
+QDialog#OperationSequenceDialog {
+  background-color:rgb(245, 247, 247);
+}
+
+QPushButton#AddAnalysisBtn {
+  background-color: transparent;
+  border:None;
+}
+
+/* stimulus window style */
+QDialog#StimulusWindow QLabel {
+  background: transparent;
+  border: none;
+}
+
+QDialog#StimulusWindow QCheckBox {
+  background: transparent;
+  border: none;
 }

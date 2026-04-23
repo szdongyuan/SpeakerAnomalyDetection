@@ -88,7 +88,6 @@ class HdConfigWindow(QDialog):
             label = Label("  " + str(i))
             label.setFixedSize(90, 25)
             label.setAlignment(Qt.AlignLeft)
-            label.setAutoFillBackground(True)
             label.mousePressEvent = partial(self.on_label_click, label)
             if i in self.selected_labels:
                 label.setText("\u2713" + label.text().strip())

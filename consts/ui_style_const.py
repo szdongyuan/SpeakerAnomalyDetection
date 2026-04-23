@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import QApplication
 
 _BASE_SCREEN_HEIGHT = 1080
 _MIN_FONT_SCALE = 0.70
-_MAX_FONT_SCALE = 1.30
+_MAX_FONT_SCALE = 1.50
 
 
 def _get_font_scale():

@@ -1,6 +1,5 @@
 import json
 from datetime import datetime
-from re import L
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
@@ -9,7 +8,6 @@ from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QFrame, QWidget, QStackedW
 from base.save_data import ensure_test_result_file
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget import widgets
 from ui.custom_ui_widget.widgets import PushButton, LineEdit, Label, MarkPushButton, MessageBox
 from ui.ui_src import ui_resources
 
@@ -33,8 +31,8 @@ class SequenceCountBoard(QWidget):
 
         self.test_btn = PushButton("测试")
         self.mark_btn = PushButton("标记")
-        self.test_btn.setObjectName("testbtn")
-        self.mark_btn.setObjectName("markbtn")
+        self.test_btn.setObjectName("TestBtn")
+        self.mark_btn.setObjectName("MarkBtn")
         self.total_line_edit = LineEdit()
         self.ok_line_edit = LineEdit()
         self.ng_line_edit = LineEdit()
@@ -45,9 +43,10 @@ class SequenceCountBoard(QWidget):
         self.mark_ng_edit = LineEdit("0")
         self.ok_btn = MarkPushButton(" OK ")
         self.ng_btn = MarkPushButton(" NG ")
-        self.ok_btn.setObjectName("okbtn")
-        self.ng_btn.setObjectName("ngbtn")
+        self.ok_btn.setObjectName("OkBtn")
+        self.ng_btn.setObjectName("NgBtn")
         self.reset_btn = PushButton("重置统计")
+        self.reset_btn.setObjectName("ResrtBtn")
 
         self.set_lineedit()
         self.set_btn()
@@ -85,6 +84,7 @@ class SequenceCountBoard(QWidget):
         layout_main = QVBoxLayout()
         layout_main.addWidget(widget)
         layout_main.addStretch()
+        layout_main.setContentsMargins(0, 0, 0, 0)
 
         self.setLayout(layout_main)
 
@@ -225,6 +225,10 @@ class SequenceCountBoard(QWidget):
         self._test_available = bool(available)
         self._test_unavailable_reason = str(reason or "")
         try:
+            self.test_btn.setProperty("available", "true" if self._test_available else "false")
+            self.test_btn.style().unpolish(self.test_btn)
+            self.test_btn.style().polish(self.test_btn)
+            self.test_btn.update()
             self.test_btn.setEnabled(bool(self._test_available) and self.mode != "test")
             self.test_btn.setToolTip(self._test_unavailable_reason if not self._test_available else "")
         except Exception:

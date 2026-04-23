@@ -4,8 +4,8 @@ import sys
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 
-DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
-# DEFAULT_DIR = os.path.dirname(os.path.realpath(sys.argv[0])).replace("\\", "/") + "/"
+# DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
+DEFAULT_DIR = os.path.dirname(os.path.realpath(sys.argv[0])).replace("\\", "/") + "/"
 
 MODEL_PATH = DEFAULT_DIR + "models/model_name.keras"
 CONFIG_PATH = "configs/ai_model_config/config.yml"

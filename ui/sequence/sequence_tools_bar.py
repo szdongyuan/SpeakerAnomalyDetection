@@ -15,10 +15,10 @@ class SequenceToolsBar(QWidget):
         self.setMouseTracking(True)
 
         self.icon_size = ui_style_const.scale_size_px(35)
-        self.button_width = ui_style_const.scale_size_px(80)
+        self.button_width = ui_style_const.scale_size_px(100)
         self.label_height = ui_style_const.scale_size_px(40)
         self.lineedit_height = ui_style_const.scale_size_px(35)
-        self.lineedit_width = ui_style_const.scale_size_px(100)
+        self.lineedit_width = ui_style_const.scale_size_px(110)
         self.lineedit_margin = ui_style_const.scale_size_px(10)
         self.lineedit_spacing = ui_style_const.scale_size_px(10)
 
@@ -138,7 +138,7 @@ class SequenceToolsBar(QWidget):
         self.sn_regex_manage_btn.setToolTip("SN 正则规则管理")
 
     def create_using_file_combobox(self):
-        type_label = Label(" 使用配置：")
+        type_label = Label("使用配置：")
         type_label.setFixedHeight(self.label_height)
         self.using_file_combobox.setFixedHeight(self.lineedit_height)
         self.using_file_combobox.setMinimumWidth(self.lineedit_width)

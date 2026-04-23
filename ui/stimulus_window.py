@@ -95,7 +95,6 @@ class StimulusWindow(QDialog):
         self.setObjectName("StimulusWindow")
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("激励信号")
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         if ui_style_const._FONT_SCALE < 0.8:
             self.setFixedSize(
