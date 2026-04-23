@@ -15,7 +15,7 @@ from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.play_and_record import stream_record_without_play
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
-from consts import error_code
+from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import (
     PushButton,
@@ -571,9 +571,13 @@ class InputCalibration(QWidget):
         self.standard_spl_flag = True
         self.recorded_flag = False
 
+        min_height = ui_style_const.scale_size_px(70)
         standard_spl_box = self.create_standard_spl_box()
+        standard_spl_box.setMinimumHeight(min_height)
         recorded_box = self.create_recorded_box()
+        recorded_box.setMinimumHeight(min_height)
         v2pa_factor_box = self.create_v2pa_factor_box()
+        v2pa_factor_box.setMinimumHeight(min_height)
 
         v_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
         v_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)

@@ -97,7 +97,9 @@ class AnalysisModelSelect(QDialog):
         self.current_config_label.setText(f"当前配置：{name}")
 
     def init_ui(self):
+        self.setObjectName("OperationSequenceDialog")
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowTitle("测试队列")
 
         self.current_config_label = Label()
@@ -113,7 +115,7 @@ class AnalysisModelSelect(QDialog):
         move_btn_layout = self.move_item_btn_layout()
 
         add_analysis_btn = PushButton()
-        add_analysis_btn.setObjectName("addanalysisbtn")
+        add_analysis_btn.setObjectName("AddAnalysisBtn")
         add_analysis_btn.setDisabled(True)
         add_analysis_btn.setToolTip("添加分析")
         add_analysis_btn.setIcon(QIcon(":/ui/icon/right_arrow.png"))

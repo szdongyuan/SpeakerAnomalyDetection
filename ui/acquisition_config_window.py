@@ -37,7 +37,6 @@ class BaseConfigWindow(QDialog):
         self.setup_ui()
 
     def setup_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(200, 270)

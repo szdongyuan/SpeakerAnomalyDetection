@@ -1,7 +1,7 @@
 import sys
 
 from PyQt5.QtCore import QThread, QFile, QTextStream
-from PyQt5.QtWidgets import QApplication, QSplashScreen
+from PyQt5.QtWidgets import QApplication
 from ui.splash_screen_window import Splash, LoaderThread
 
 from ui.custom_ui_widget.widgets import MessageBox
@@ -31,7 +31,8 @@ class MainWindowLauncher(object):
         self.loader.finished.connect(self.loader_thread.deleteLater)
 
     def load_qss(self):
-        path = ":/ui/style/dongyuan_style.qss"
+        # path = ":/ui/style/dongyuan_style.qss"
+        path = ":/ui/style/jingcheng_style.qss"
         file = QFile(path)
         if not file.open(QFile.ReadOnly | QFile.Text):
             raise RuntimeError(f"Failed to open QSS: {path}")

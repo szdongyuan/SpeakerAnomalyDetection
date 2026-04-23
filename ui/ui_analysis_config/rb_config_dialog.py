@@ -100,7 +100,6 @@ class RbConfigWindow(QDialog):
             label.setMinimumWidth(90)
             label.setMinimumHeight(25)
             label.setAlignment(Qt.AlignLeft)
-            label.setAutoFillBackground(True)
             label.mousePressEvent = partial(self.on_label_click, label)
             if i in self.selected_labels:
                 label.setText("\u2713" + label.text().strip())
