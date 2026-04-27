@@ -23,8 +23,11 @@ class MotorDetectionLeftPanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        self.setFixedWidth(380)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # The two inner sections are normally moved into outer QSplitters
+        # via take_split_sections(), so the panel itself only needs a sensible
+        # minimum so it does not collapse if it ever gets shown standalone.
+        self.setMinimumWidth(340)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.setStyleSheet(ui_style_const.motor_left_panel_style)
 
         self.content_widget = QWidget(self)
