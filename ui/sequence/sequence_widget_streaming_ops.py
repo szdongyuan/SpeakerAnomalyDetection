@@ -322,13 +322,23 @@ class SequenceWidgetStreamingOpsMixin:
         if summary_panel is not None:
             summary_panel.setMinimumWidth(340)
 
+        # Compute initial splitter sizes from the current screen so the layout
+        # does not stay glued to a small left column on high-DPI / large screens.
+        screen_width, screen_height = self._resolve_workspace_screen_size()
+        # Keep ratios close to the original 380 : 920 (~29 : 71) and 450 : 550 (~45 : 55),
+        # but scale them with the actual screen size.
+        h_left = max(380, int(screen_width * 0.22))
+        h_right = max(900, screen_width - h_left)
+        v_top = max(450, int(screen_height * 0.45))
+        v_bottom = max(500, int(screen_height * 0.55))
+
         top_row_splitter = QSplitter(Qt.Horizontal)
         top_row_splitter.addWidget(ai_result_panel)
         top_row_splitter.addWidget(self.channel_workspace)
         top_row_splitter.setChildrenCollapsible(False)
         top_row_splitter.setStretchFactor(0, 4)
         top_row_splitter.setStretchFactor(1, 9)
-        top_row_splitter.setSizes([380, 920])
+        top_row_splitter.setSizes([h_left, h_right])
 
         bottom_row_splitter = QSplitter(Qt.Horizontal)
         bottom_row_splitter.addWidget(summary_panel)
@@ -336,7 +346,7 @@ class SequenceWidgetStreamingOpsMixin:
         bottom_row_splitter.setChildrenCollapsible(False)
         bottom_row_splitter.setStretchFactor(0, 4)
         bottom_row_splitter.setStretchFactor(1, 9)
-        bottom_row_splitter.setSizes([380, 920])
+        bottom_row_splitter.setSizes([h_left, h_right])
 
         main_splitter = QSplitter(Qt.Vertical)
         main_splitter.addWidget(top_row_splitter)
@@ -344,12 +354,35 @@ class SequenceWidgetStreamingOpsMixin:
         main_splitter.setChildrenCollapsible(False)
         main_splitter.setStretchFactor(0, 9)
         main_splitter.setStretchFactor(1, 11)
-        main_splitter.setSizes([450, 550])
+        main_splitter.setSizes([v_top, v_bottom])
 
         layout.addWidget(main_splitter)
         layout.setContentsMargins(40, 20, 40, 20)
         layout.setSpacing(0)
         return layout
+
+    def _resolve_workspace_screen_size(self):
+        """Return (width, height) of the screen this window will live on.
+
+        Falls back to a 1600x900 baseline if no QApplication / screen is
+        available (headless tests, very early init), so callers can always
+        do simple percentage math without guarding for None.
+        """
+        try:
+            screen = None
+            if self.window() is not None and hasattr(self.window(), "screen"):
+                screen = self.window().screen()
+            app = QApplication.instance() if screen is None else None
+            if screen is None and app is not None:
+                screen = app.primaryScreen()
+            if screen is not None:
+                geo = screen.availableGeometry()
+                width = int(geo.width()) if geo.width() > 0 else 1600
+                height = int(geo.height()) if geo.height() > 0 else 900
+                return width, height
+        except Exception:
+            pass
+        return 1600, 900
 
     def init_fft_and_stft_flag(self):
         model_item_list = self.analysis_config.get("display_sequence", "")

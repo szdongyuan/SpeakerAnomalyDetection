@@ -127,17 +127,25 @@ class SequenceCountBoard(QWidget):
         self.mark_yield_edit.setDisabled(True)
         self.mark_datatime_edit.setDisabled(True)
 
-        self.total_line_edit.setFixedSize(130, 32)
-        self.ok_line_edit.setFixedSize(130, 32)
-        self.ng_line_edit.setFixedSize(130, 32)
-        self.yield_line_edit.setFixedSize(130, 32)
-        self.datatime_line_edit.setFixedSize(130, 32)
-        self.mark_total_edit.setFixedSize(130, 32)
-        self.mark_ok_edit.setFixedSize(130, 32)
-        self.mark_ng_edit.setFixedSize(130, 32)
-        self.mark_not_labeled_edit.setFixedSize(130, 32)
-        self.mark_yield_edit.setFixedSize(130, 32)
-        self.mark_datatime_edit.setFixedSize(130, 32)
+        # Keep height fixed (32 px) for visual consistency, but let width grow
+        # with the parent panel so larger screens / wider splitter sections
+        # don't leave a narrow 130 px column floating in white space.
+        for edit in (
+            self.total_line_edit,
+            self.ok_line_edit,
+            self.ng_line_edit,
+            self.yield_line_edit,
+            self.datatime_line_edit,
+            self.mark_total_edit,
+            self.mark_ok_edit,
+            self.mark_ng_edit,
+            self.mark_not_labeled_edit,
+            self.mark_yield_edit,
+            self.mark_datatime_edit,
+        ):
+            edit.setMinimumSize(130, 32)
+            edit.setMaximumSize(260, 32)
+            edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
@@ -162,7 +170,9 @@ class SequenceCountBoard(QWidget):
             }
             """
         )
-        self.ok_btn.setFixedSize(148, 56)
+        self.ok_btn.setMinimumSize(148, 56)
+        self.ok_btn.setMaximumSize(260, 56)
+        self.ok_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.ok_btn.setIconSize(QSize(20, 20))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
         self.ng_btn.setStyleSheet(
@@ -185,7 +195,9 @@ class SequenceCountBoard(QWidget):
             }
             """
         )
-        self.ng_btn.setFixedSize(148, 56)
+        self.ng_btn.setMinimumSize(148, 56)
+        self.ng_btn.setMaximumSize(260, 56)
+        self.ng_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.ng_btn.setIconSize(QSize(20, 20))
 
     def create_mode_btn_layout(self):
