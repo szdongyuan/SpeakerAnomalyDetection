@@ -11,11 +11,78 @@ from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 
 
+_VALID_BARCODE_SOURCES = ("wedge", "hid", "serial")
+_DEFAULT_BARCODE_SOURCE = "hid"
+
+
+def _safe_dict(obj):
+    """Return ``obj`` if it's a dict, else an empty dict.
+
+    All configuration getters in this module go through this helper so a
+    malformed JSON (e.g. ``"scanner": null`` or ``"scanner": "none"``)
+    can never raise ``AttributeError`` from a ``.get()`` call.
+    """
+    return obj if isinstance(obj, dict) else {}
+
+
+def _safe_str(obj, default=""):
+    """Coerce ``obj`` to a stripped string, tolerating non-string input."""
+    if isinstance(obj, str):
+        return obj.strip()
+    if obj is None:
+        return default
+    try:
+        return str(obj).strip()
+    except Exception:
+        return default
+
+
+def _safe_bool(obj, default):
+    """Parse a JSON-ish value into a bool without raising.
+
+    Accepts native bools, numerics, and common string forms
+    (``"true"``/``"false"``, ``"yes"``/``"no"``, ``"1"``/``"0"``,
+    ``"on"``/``"off"``, ``"enabled"``/``"disabled"``). Anything else,
+    including ``None``, returns ``default`` so a typo in the JSON never
+    silently flips a gate to the wrong side.
+    """
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, (int, float)):
+        return bool(obj)
+    if isinstance(obj, str):
+        v = obj.strip().lower()
+        if v in ("true", "1", "yes", "on", "enabled"):
+            return True
+        if v in ("false", "0", "no", "off", "disabled", ""):
+            return False
+    return default
+
+
+def _parse_vid_pid(hid_dict, label, logger):
+    """Return ``(vid, pid)`` as ints, or ``None`` if the pair is missing/invalid.
+
+    Keeps the caller free of ``ValueError`` handling - on any parse
+    failure we log a warning and pretend the pair was not configured,
+    which matches how "no VID/PID" is handled elsewhere in this module.
+    """
+    vid_raw = _safe_str(hid_dict.get("vid"))
+    pid_raw = _safe_str(hid_dict.get("pid"))
+    if not vid_raw or not pid_raw:
+        return None
+    try:
+        return (int(vid_raw, 16), int(pid_raw, 16))
+    except (ValueError, TypeError) as e:
+        logger.warning(f"[{label}] VID/PID 解析失败 ({vid_raw}, {pid_raw}): {e}")
+        return None
+
+
 class UnifiedHardwareManager(QObject):
     """
     统一硬件管理器
-    - 扫码枪：HID（pywinusb）中断回调 + Qt 信号槽
-    - 光电开关：全局键盘热键（keyboard 库）监听
+    - 扫码枪：按 ``barcode_source`` 分发到 HID / 键盘楔入 / 串口三种路径之一
+    - 光电开关：全局键盘热键监听 (由 ``sensor.enabled`` 独立开关)
+    - 串口离散输入：独立入口, 与上面两条线无关
     """
 
     DEFAULT_CONFIG = DEFAULT_DIR + "configs/scanner_barcode_config/scanner_hid_config.json"
@@ -39,9 +106,15 @@ class UnifiedHardwareManager(QObject):
 
         # 配置缓存
         self.config_path = self.DEFAULT_CONFIG
+        self.barcode_source = _DEFAULT_BARCODE_SOURCE
         self.scanner_conf = None
+        self.scanner_serial_conf = {}
+        self.sensor_enabled = True
         self.sensor_conf = None
         self.sensor_hotkey = None
+
+        # 串口扫码枪 worker (barcode_source=serial 时启用)
+        self.serial_barcode_worker = None
 
         # 扫码枪自动识别/热插拔
         self._scanner_enabled = False
@@ -123,42 +196,113 @@ class UnifiedHardwareManager(QObject):
         except Exception as e:
             self.logger.warning(f"扫码枪记忆保存失败: {e}")
 
-    def ensure_config_loaded(self, config_path=None):
-        """已加载则直接返回 True"""
-        if self.scanner_conf or self.sensor_conf:
+    def ensure_config_loaded(self, config_path=None, force_reload=False):
+        """Load + parse scanner_hid_config.json on demand.
+
+        Returns ``True`` once a parse has succeeded, even if the parsed
+        result is "everything empty" -- an intentionally blank config
+        should not keep re-reading from disk on every checkbox toggle.
+        Only an actual load failure (file missing / unreadable) returns
+        ``False`` so the caller can fall back to the keyboard path.
+
+        Set ``force_reload=True`` to skip the cache and re-read the JSON
+        from disk. The UI passes this every time the scanner checkbox
+        is turned on so operators can edit
+        ``scanner_hid_config.json`` (e.g. flip ``barcode_source`` from
+        ``hid`` to ``serial``) and see it take effect with a simple
+        off-then-on toggle -- no app restart required.
+
+        On a forced-reload *failure* (file vanished / unreadable mid-edit)
+        we intentionally keep the previously-parsed in-memory state.
+        That way a transient save issue doesn't wipe a working config,
+        and the caller gets the same ``False`` signal to warn the user.
+        """
+        if not force_reload and self._config_parsed():
             return True
 
         path = config_path or self.config_path
-        err_code, config_data = LoadUiConfig.load_data_from_json(path)
-        if err_code != error_code.OK:
-            self.logger.warning(f"HID 配置加载失败 (code={err_code}): {config_data}")
+        err_code_val, config_data = LoadUiConfig.load_data_from_json(path)
+        if err_code_val != error_code.OK:
+            self.logger.warning(f"HID 配置加载失败 (code={err_code_val}): {config_data}")
             return False
 
         self.parse_config(config_data)
         return True
 
+    def _config_parsed(self):
+        """Tell whether parse_config has ever produced anything usable.
+
+        Any of these counts as "parsed": a HID scanner is configured, a
+        serial scanner port is set, a sensor hotkey is registered, or
+        ``barcode_source`` has been explicitly overridden away from the
+        default. This is strictly a cache-hit check -- we never re-parse
+        on its own merit.
+        """
+        return (
+            self.scanner_conf is not None
+            or bool(self.scanner_serial_conf.get("port"))
+            or self.sensor_conf is not None
+            or bool(self.sensor_hotkey)
+            or self.barcode_source != _DEFAULT_BARCODE_SOURCE
+        )
+
     def parse_config(self, config_data):
-        """解析配置 JSON"""
-        if not config_data or not isinstance(config_data, dict):
-            self.logger.warning("HID 配置格式错误, 期望字典")
-            return
+        """Parse scanner_hid_config.json into in-memory state.
 
-        scanner = config_data.get("scanner") or {}
-        vid, pid = scanner.get("vid"), scanner.get("pid")
-        if vid and pid:
-            self.scanner_conf = (int(vid, 16), int(pid, 16))
-            self.logger.info(f"扫码枪配置: VID={vid}, PID={pid}")
+        Tolerates malformed JSON wholesale: wrong types, missing fields,
+        invalid VID/PID strings, unknown ``barcode_source`` values --
+        each is logged and replaced with a safe default so startup
+        cannot fail here. Legacy flat layouts (``scanner.vid/pid``
+        without the ``scanner.hid`` wrapper) are upgraded by
+        ``normalize_scanner_config`` before they reach us.
+        """
+        merged = LoadUiConfig.normalize_scanner_config(config_data)
 
-        sensor = config_data.get("sensor") or {}
-        vid, pid = sensor.get("vid"), sensor.get("pid")
-        if vid and pid:
-            self.sensor_conf = (int(vid, 16), int(pid, 16))
+        # --- barcode_source (strict allow-list, fallback + warning) -----
+        raw_source = _safe_str(merged.get("barcode_source")).lower()
+        if raw_source in _VALID_BARCODE_SOURCES:
+            self.barcode_source = raw_source
+        else:
+            if raw_source:
+                self.logger.warning(
+                    f"barcode_source 非法值 '{raw_source}', 已回退为 '{_DEFAULT_BARCODE_SOURCE}'. "
+                    f"合法值: {'/'.join(_VALID_BARCODE_SOURCES)}"
+                )
+            self.barcode_source = _DEFAULT_BARCODE_SOURCE
 
-        self.sensor_hotkey = sensor.get("hotkey")
+        # --- scanner ----------------------------------------------------
+        scanner = _safe_dict(merged.get("scanner"))
+        self.scanner_conf = _parse_vid_pid(
+            _safe_dict(scanner.get("hid")), "scanner.hid", self.logger
+        )
+        self.scanner_serial_conf = _safe_dict(scanner.get("serial"))
+
+        if self.scanner_conf:
+            self.logger.info(
+                f"扫码枪 HID 配置: VID={hex(self.scanner_conf[0])}, "
+                f"PID={hex(self.scanner_conf[1])}"
+            )
+
+        # --- sensor (photoelectric hotkey) ------------------------------
+        sensor = _safe_dict(merged.get("sensor"))
+        self.sensor_enabled = _safe_bool(sensor.get("enabled"), default=True)
+        self.sensor_conf = _parse_vid_pid(
+            _safe_dict(sensor.get("hid")), "sensor.hid", self.logger
+        )
+        self.sensor_hotkey = _safe_str(sensor.get("hotkey")) or None
+
         if self.sensor_hotkey:
             self.logger.info(f"光电开关热键: {self.sensor_hotkey}")
-        elif sensor:
+        elif self.sensor_conf:
             self.logger.warning("光电开关缺少 hotkey, 光电触发将不可用")
+
+        self.logger.info(
+            f"硬件配置解析: barcode_source={self.barcode_source}, "
+            f"scanner_hid={'OK' if self.scanner_conf else 'N/A'}, "
+            f"scanner_serial_port='{_safe_str(self.scanner_serial_conf.get('port'))}', "
+            f"sensor_enabled={self.sensor_enabled}, "
+            f"sensor_hotkey={'OK' if self.sensor_hotkey else 'N/A'}"
+        )
 
     def _emit_serial_status(self, **kwargs):
         status = dict(self.serial_listener_status or {})
@@ -181,31 +325,132 @@ class UnifiedHardwareManager(QObject):
         return dict(self.serial_listener_status or {})
 
     def start_scanner_and_sensor_listeners(self):
-        """
-        仅启动扫码枪和光电热键监听。
-        串口离散输入触发有自己的独立入口，不从这里拉起。
-        """
-        self.ensure_config_loaded()
+        """Dispatch barcode + sensor listeners based on parsed config.
 
+        Scanner path is chosen from :attr:`barcode_source`:
+          * ``"hid"``   - start the pywinusb HID polling loop (legacy path).
+          * ``"wedge"`` - do nothing here; the keyboard wedge router in
+                          ``barcode_router.py`` is always mounted at UI
+                          level and will start routing as soon as the
+                          checkbox is enabled.
+          * ``"serial"`` - spin up :class:`SerialBarcodeWorker` if a port
+                           is configured; otherwise log and skip.
+
+        Sensor hotkey registration is gated by
+        :attr:`sensor_enabled` independently, so disabling the sensor
+        via JSON does not affect the scanner path (and vice-versa).
+
+        Returns ``True`` on a clean start, ``False`` on a hard failure.
+        A ``False`` return lets the UI fall back to plain keyboard input
+        per :meth:`_apply_scanner_enabled_state`.
+        """
+        self.logger.info(
+            "[scanner][manager] start_scanner_and_sensor_listeners 被调用"
+        )
+        try:
+            self.ensure_config_loaded()
+            self._start_scanner_by_source()
+            self._start_sensor_hotkey_if_enabled()
+            return True
+        except Exception as e:
+            # Last-resort guard: a crash here must not kill the UI --
+            # the checkbox handler treats False as "degrade to keyboard".
+            self.logger.exception(f"硬件监听启动异常，已降级为纯键盘输入: {e}")
+            return False
+
+    def _start_scanner_by_source(self):
+        """Start exactly one scanner path according to ``barcode_source``."""
+        source = self.barcode_source
+
+        if source == "hid":
+            self._start_hid_scanner()
+            return
+
+        if source == "wedge":
+            # The keyboard-wedge path lives entirely in ``barcode_router``
+            # and is driven by the UI checkbox, not by us. We just need to
+            # make sure no HID polling is running underneath that would
+            # race the keystrokes.
+            self._stop_hid_scanner_internal()
+            self.logger.info("barcode_source=wedge: 不启动 HID, 使用键盘楔入路径")
+            return
+
+        if source == "serial":
+            self._stop_hid_scanner_internal()
+            self._start_serial_barcode_worker()
+            return
+
+        # Defensive: should be unreachable because parse_config clamps.
+        self.logger.warning(
+            f"barcode_source={source} 未知, 已跳过扫码枪启动"
+        )
+
+    def _start_hid_scanner(self):
+        """HID polling path (unchanged behavior from the legacy code)."""
         self._scanner_enabled = True
         self._auto_mode = not bool(self.scanner_conf)
 
-        if self.scanner_conf:
-            self._poll_hid_devices()
-        else:
-            self.logger.info("扫码枪未配置 VID/PID，进入自动识别模式：开启后插入扫码枪即可使用。")
-            self._poll_hid_devices()
-
-        if self.sensor_hotkey:
-            self._register_hotkey(self.sensor_hotkey)
-        elif self.sensor_conf:
-            self.logger.warning("光电开关已配置 VID/PID，但未配置 hotkey，光电监听未启用")
+        if not self.scanner_conf:
+            self.logger.info(
+                "扫码枪未配置 VID/PID, 进入自动识别模式: 开启后插入扫码枪即可使用。"
+            )
+        self._poll_hid_devices()
 
         if self._scanner_enabled and not self._hid_poll_timer.isActive():
             self._hid_poll_timer.start()
-        return True
 
-    def stop_scanner_and_sensor_listeners(self):
+    def _start_serial_barcode_worker(self):
+        """Start the serial-barcode QThread if a port is configured.
+
+        An empty/missing port is a very common "I don't have a serial
+        scanner right now" case in the field, so we treat it as a
+        no-op with an info log instead of an error. pyserial errors
+        surface via the worker's status signal and a logger.error.
+        """
+        if self.serial_barcode_worker is not None:
+            self.logger.info("串口扫码枪 worker 已在运行, 跳过重复启动")
+            return
+
+        port = _safe_str(self.scanner_serial_conf.get("port"))
+        if not port:
+            self.logger.info(
+                "barcode_source=serial 但 scanner.serial.port 未配置, 监听未启动"
+            )
+            return
+
+        try:
+            from base.hardware_trigger.serial_barcode_worker import SerialBarcodeWorker
+        except Exception as e:
+            self.logger.error(f"SerialBarcodeWorker 模块加载失败: {e}")
+            return
+
+        try:
+            worker = SerialBarcodeWorker(self.scanner_serial_conf)
+            worker.sig_barcode_received.connect(self._on_serial_barcode_received)
+            worker.start()
+            self.serial_barcode_worker = worker
+            self.logger.info(
+                f"串口扫码枪监听已启动: port={port}, "
+                f"baudrate={self.scanner_serial_conf.get('baudrate', 9600)}"
+            )
+        except Exception as e:
+            self.logger.error(f"串口扫码枪启动失败: {e}")
+            self.serial_barcode_worker = None
+
+    def _start_sensor_hotkey_if_enabled(self):
+        """Register the photoelectric hotkey, gated by ``sensor.enabled``."""
+        if not self.sensor_enabled:
+            self.logger.info("光电开关已通过配置禁用 (sensor.enabled=false)")
+            return
+        if self.sensor_hotkey:
+            self._register_hotkey(self.sensor_hotkey)
+        elif self.sensor_conf:
+            self.logger.warning(
+                "光电开关已配置 VID/PID, 但未配置 hotkey, 光电监听未启用"
+            )
+
+    def _stop_hid_scanner_internal(self):
+        """Tear down HID polling state. Safe to call when nothing is running."""
         self._scanner_enabled = False
         self._scanner_locked_device_id = None
         self._auto_mode = False
@@ -219,13 +464,82 @@ class UnifiedHardwareManager(QObject):
         for key in list(self.hid_handles.keys()):
             self.close_hid_device(key)
 
+    def _stop_serial_barcode_worker(self):
+        """Stop the serial-barcode QThread if any, swallowing errors."""
+        worker = self.serial_barcode_worker
+        if worker is None:
+            self.logger.info(
+                "[serial-barcode][manager] _stop_serial_barcode_worker: worker 不存在, 跳过"
+            )
+            return
+        self.logger.info(
+            "[serial-barcode][manager] _stop_serial_barcode_worker: 即将停止 worker"
+        )
+        try:
+            worker.sig_barcode_received.disconnect(self._on_serial_barcode_received)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            worker.stop()
+        except Exception as e:
+            self.logger.warning(f"串口扫码枪停止异常: {e}")
+        self.serial_barcode_worker = None
+
+    def _on_serial_barcode_received(self, barcode):
+        """Route a serial-scanned barcode through the shared dedup+emit path.
+
+        Reusing the same ``_last_barcode`` window as the HID path means
+        a mixed deployment (serial scanner + lingering HID keystrokes
+        during the 1 s suppression window) still only surfaces one
+        commit per physical scan.
+        """
+        self.logger.info(
+            f"[serial-barcode][manager] 收到 worker 信号: '{barcode}' "
+            f"(type={type(barcode).__name__})"
+        )
+        text = _safe_str(barcode)
+        if not text:
+            self.logger.info(
+                "[serial-barcode][manager] 规范化后为空字符串, 丢弃"
+            )
+            return
+        now = time.monotonic()
+        if (
+            self._last_barcode == text
+            and (now - self._last_barcode_time) < self._barcode_dedup_window_sec
+        ):
+            self.logger.info(
+                f"[serial-barcode][manager] 去重窗口内重复条码, 丢弃: '{text}' "
+                f"(elapsed={now - self._last_barcode_time:.3f}s, "
+                f"window={self._barcode_dedup_window_sec}s)"
+            )
+            return
+        self._last_barcode = text
+        self._last_barcode_time = now
+        self.logger.info(
+            f"[serial-barcode][manager] sig_barcode.emit -> UI: '{text}'"
+        )
+        self.sig_barcode.emit(text)
+
+    def stop_scanner_and_sensor_listeners(self):
+        """Stop every path this manager might have started.
+
+        Called both on the UI-checkbox-off path and on final shutdown.
+        Each teardown is independently try/except'd so a failure in one
+        (e.g. keyboard unhook) cannot leave the others leaking threads.
+        """
+        self.logger.info("[scanner][manager] stop_scanner_and_sensor_listeners 被调用")
+        self._stop_hid_scanner_internal()
+        self._stop_serial_barcode_worker()
+
         if self.hotkey_registered:
             try:
                 keyboard.unhook_all_hotkeys()
-                self.hotkey_registered = False
                 self.logger.info(f"光电热键已移除: {self.hotkey_string}")
             except Exception as e:
                 self.logger.warning(f"热键移除异常: {e}")
+            finally:
+                self.hotkey_registered = False
 
     def start_serial_discrete_input_listener(self, config_data=None):
         if self.serial_worker is not None and self.serial_worker.isRunning():

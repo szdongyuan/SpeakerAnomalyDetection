@@ -157,6 +157,15 @@ class BarcodeRouter(QObject):
             return
         if self.should_auto_commit_barcode(text, ctx._barcode_first_char_ts, ctx._barcode_last_char_ts):
             ctx._commit_barcode(text, source="wedge_debounce")
+        else:
+            # The text in S/N didn't look like a fast scan (too short, too
+            # slow, or partial manual typing). Clear the per-keystroke
+            # timestamps so the *next* burst is judged on its own merit;
+            # otherwise ``first_char_ts`` keeps growing older forever and
+            # ``should_auto_commit_barcode`` can never return True again
+            # until the user manually empties S/N.
+            ctx._barcode_first_char_ts = None
+            ctx._barcode_last_char_ts = None
 
     # -----------------------------
     # 复用/搬迁：eventFilter 主逻辑（仅处理 KeyPress）
@@ -233,38 +242,46 @@ class BarcodeRouter(QObject):
                 ctx._barcode_capture_buffer += ch
                 ctx._barcode_debounce_timer.start()
                 return True
-            elif ctx._barcode_capture_buffer and not is_fast_input:
-                ctx._barcode_capture_buffer = ""
-                ctx._barcode_capture_first_ts = None
-                ctx._barcode_capture_last_ts = None
-                ctx._barcode_debounce_timer.stop()
-                ctx._barcode_capture_first_ts = now
-                ctx._barcode_capture_last_ts = now
-                ctx._barcode_capture_buffer = ch
-                ctx._barcode_debounce_timer.start()
-                return True
-            else:
-                # 第一个字符：开始收集
-                ctx._barcode_capture_first_ts = now
-                ctx._barcode_capture_last_ts = now
-                ctx._barcode_capture_buffer = ch
 
-                # 若当前焦点在其它 QLineEdit（非三大输入框），记住原文本/光标，后续恢复避免污染
-                try:
-                    if isinstance(fw, QLineEdit):
-                        ctx._barcode_capture_target_lineedit = fw
-                        ctx._barcode_capture_target_text = fw.text()
-                        ctx._barcode_capture_target_cursor_pos = fw.cursorPosition()
-                    else:
-                        ctx._barcode_capture_target_lineedit = None
-                        ctx._barcode_capture_target_text = None
-                        ctx._barcode_capture_target_cursor_pos = None
-                except Exception:
-                    pass
-
-                ctx._barcode_debounce_timer.start()
-                return True
+            # Either the buffer is empty (truly first char) or the previous
+            # capture went stale (gap > 50 ms). Both cases are semantically
+            # "start a new capture from this character" -- the elif branch
+            # used to forget to refresh the target lineedit/text/cursor and
+            # would later restore the WRONG text box. Funnel through one
+            # helper so the two paths can never drift apart again.
+            self._begin_global_capture(ctx, ch, now, fw)
+            return True
 
         return None
+
+    def _begin_global_capture(self, ctx, ch, now, fw):
+        """Start a fresh global capture window with ``ch`` as the first byte.
+
+        Always re-snapshots the focus widget's text/cursor so a later
+        debounce restore writes back the *currently* focused lineedit
+        rather than whichever one was first focused several scans ago.
+        Any non-QLineEdit focus clears the snapshot so we don't try to
+        restore something we never captured.
+        """
+        ctx._barcode_debounce_timer.stop()
+        ctx._barcode_capture_first_ts = now
+        ctx._barcode_capture_last_ts = now
+        ctx._barcode_capture_buffer = ch
+
+        try:
+            if isinstance(fw, QLineEdit):
+                ctx._barcode_capture_target_lineedit = fw
+                ctx._barcode_capture_target_text = fw.text()
+                ctx._barcode_capture_target_cursor_pos = fw.cursorPosition()
+            else:
+                ctx._barcode_capture_target_lineedit = None
+                ctx._barcode_capture_target_text = None
+                ctx._barcode_capture_target_cursor_pos = None
+        except Exception:
+            ctx._barcode_capture_target_lineedit = None
+            ctx._barcode_capture_target_text = None
+            ctx._barcode_capture_target_cursor_pos = None
+
+        ctx._barcode_debounce_timer.start()
 
 

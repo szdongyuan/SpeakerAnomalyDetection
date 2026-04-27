@@ -31,34 +31,113 @@ class SequenceWidgetBarcodeOpsMixin:
         # product_model / scanner_barcode here so unrelated UI state is preserved.
         save_recorded_data_to_json(scanner_barcode_check=bool(self.barcode_scanner_box.isChecked()))
 
+    # ---------- S/N lock during a directional cycle ----------
+    # When the operator is using serial-discrete-input triggers, one logical
+    # "cycle" spans both the forward and reverse recordings. The same product
+    # must keep the same barcode for both legs, otherwise forward + reverse
+    # results end up tagged to different S/N. We lock the S/N field as soon
+    # as the forward leg starts and only release it when the cycle is torn
+    # down (normal finish, mode switch, invalid recording, or scanner off).
+
+    def _is_serial_directional_trigger_enabled(self) -> bool:
+        config = getattr(self, "_serial_trigger_config", {}) or {}
+        return bool(config.get("enabled", False))
+
+    def _is_test_mode(self) -> bool:
+        """True only when the count board is currently in 'test' mode.
+
+        The S/N lock-during-cycle policy intentionally applies to test mode
+        only. Mark mode keeps the historical behaviour: S/N stays editable
+        throughout the forward+reverse cycle, is not auto-cleared by OK/NG,
+        and retains selectAll highlight so the operator can overwrite it by
+        simply scanning again when they are ready.
+        """
+        count_board = getattr(self, "count_board", None)
+        if count_board is None:
+            return False
+        try:
+            return str(getattr(count_board, "mode", "") or "").strip().lower() == "test"
+        except Exception:
+            return False
+
+    def _should_lock_sn_for_cycle(self) -> bool:
+        """Gate for the directional-cycle S/N lock.
+
+        Lock only when BOTH conditions hold:
+          * serial-discrete-input triggers are driving the cycle; and
+          * the count board is in test mode (automated production flow).
+        Mark mode never locks, even when serial triggers are enabled.
+        """
+        return self._is_serial_directional_trigger_enabled() and self._is_test_mode()
+
+    def _is_sn_locked_for_cycle(self) -> bool:
+        return bool(getattr(self, "_sn_locked_for_cycle", False))
+
+    def _lock_sn_for_cycle(self) -> None:
+        if self._is_sn_locked_for_cycle():
+            return
+        self._sn_locked_for_cycle = True
+        try:
+            self.lineedit_s_or_n.setReadOnly(True)
+            self.lineedit_s_or_n.setToolTip("正反转循环进行中，条码已锁定，循环结束后可重新扫码")
+        except Exception:
+            pass
+
+    def _unlock_sn_for_cycle(self) -> None:
+        if not self._is_sn_locked_for_cycle():
+            return
+        self._sn_locked_for_cycle = False
+        try:
+            self.lineedit_s_or_n.setReadOnly(False)
+            self.lineedit_s_or_n.setToolTip("")
+        except Exception:
+            pass
+
     def _apply_scanner_enabled_state(self, enabled: bool, persist: bool = True) -> None:
         enabled = bool(enabled)
         self.barcode_scanner_box.setChecked(enabled)
 
         if enabled:
-            # 配置文件加载失败不再致命：扫码枪可进入自动识别模式（支持热插拔）。
-            # 注意：光电开关仍依赖 hotkey 配置。
-            if not self.hw_manager.ensure_config_loaded():
+            # Force-reload on every enable so operators can edit
+            # scanner_hid_config.json (flip barcode_source, change
+            # VID/PID, adjust serial port) and see it take effect with
+            # a plain off/on toggle -- no app restart needed.
+            #
+            # A missing/corrupt JSON is best-effort: ``force_reload``
+            # keeps the previously-parsed state on failure, and the
+            # default ``barcode_source=hid`` with no VID/PID still
+            # works because HID auto-detect handles hot-plug. The
+            # keyboard wedge router is always mounted at UI level and
+            # starts routing as soon as the checkbox is enabled. Only
+            # the sensor hotkey genuinely needs a readable config.
+            if not self.hw_manager.ensure_config_loaded(force_reload=True):
                 self.default_logger.warning(
-                    "无法加载扫码枪/光电开关配置，将进入扫码枪自动识别模式（光电开关可能不可用）。"
+                    "扫码枪/光电开关配置加载失败，将按默认 HID 自动识别模式启动（光电热键不可用）。"
                 )
 
             self.lineedit_s_or_n.setEnabled(True)
-            # 键盘楔入模式依赖“输入框有焦点”，开启后把焦点给 S/N 输入框
+            # The keyboard-wedge path needs S/N to own focus so fast scans
+            # land in the right edit box; safe to do for HID/serial too.
             try:
                 self.lineedit_s_or_n.setFocus()
                 self.lineedit_s_or_n.selectAll()
             except Exception:
                 pass
             if self.hw_manager.start_scanner_and_sensor_listeners():
-                self.default_logger.info("硬件监听已启动")
+                source = getattr(self.hw_manager, "barcode_source", "hid")
+                self.default_logger.info(
+                    f"扫码监听已启动 (barcode_source={source})"
+                )
             else:
-                self.default_logger.warning("硬件初始化失败，已静默降级为普通键盘输入模式")
+                self.default_logger.warning("硬件初始化异常，已静默降级为普通键盘输入模式")
         else:
+            # Defensive unlock so the read-only / tooltip from a previous
+            # cycle does not leak across a scanner off->on toggle.
+            self._unlock_sn_for_cycle()
             self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
             self.hw_manager.stop_scanner_and_sensor_listeners()
-            self.default_logger.info("硬件监听已停止")
+            self.default_logger.info("扫码监听已停止")
 
         if persist:
             self._persist_scanner_checkbox_state()
@@ -162,6 +241,16 @@ class SequenceWidgetBarcodeOpsMixin:
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._current_cycle_recorded_count = None
         self._pending_serial_trigger_direction = ""
+        # Cycle is over from any path (normal finish, mode switch, invalid
+        # recording, manual reset). Always release the S/N lock AND clear
+        # the field so the next cycle starts from a clean state. Clearing an
+        # already-empty QLineEdit is a no-op, which is fine for the normal
+        # test-mode path where _finalize_test_run already cleared it.
+        self._unlock_sn_for_cycle()
+        try:
+            self.lineedit_s_or_n.clear()
+        except Exception:
+            pass
 
     def _reset_ai_cycle_panel_state(self):
         self._ai_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -191,6 +280,13 @@ class SequenceWidgetBarcodeOpsMixin:
             self._current_cycle_recorded_count = None
             self._reset_ai_cycle_panel_state()
             self._manual_direction_fallback_next_direction = "reverse"
+            # Lock S/N for the whole forward+reverse cycle in TEST mode only,
+            # so neither operator typing nor a re-scan can change the barcode
+            # mid-cycle on the automated production path. Mark mode keeps the
+            # historical behaviour: S/N stays editable across the cycle and is
+            # not auto-cleared by OK/NG.
+            if self._should_lock_sn_for_cycle():
+                self._lock_sn_for_cycle()
         else:
             if not getattr(self, "_ai_cycle_started_at", ""):
                 self._reset_ai_cycle_panel_state()
@@ -322,9 +418,21 @@ class SequenceWidgetBarcodeOpsMixin:
         self._apply_scanner_enabled_state(self.barcode_scanner_box.isChecked(), persist=True)
 
     def on_barcode_received(self, barcode):
-        """处理扫码枪信号（HID 模式）"""
-        # 设置 HID 模式激活标志，在接下来 1 秒内忽略键盘楔入模式的输入
-        # 这样可以避免 HID 模式和键盘模式同时工作导致的重复
+        """处理扫码枪 manager 层统一分发过来的条码信号。
+
+        Fires for both HID and serial-mode scanners (HardwareManager
+        routes both into the same ``sig_barcode`` signal). Still
+        honors the HID-mode keyboard-wedge suppression window because
+        HID keystrokes can linger briefly after the HID report, and
+        the serial path simply benefits from the dedup.
+        """
+        try:
+            self.default_logger.info(
+                f"[barcode][ui] on_barcode_received: '{barcode}' "
+                f"(scanner_enabled={bool(self.barcode_scanner_box.isChecked())})"
+            )
+        except Exception:
+            pass
         self._hid_mode_active_until = time.monotonic() + 1.0
         # 清空键盘楔入模式的缓冲区，防止残留数据干扰
         self._barcode_capture_buffer = ""
@@ -348,19 +456,76 @@ class SequenceWidgetBarcodeOpsMixin:
         return (bool(found), found)
 
     def _commit_barcode(self, barcode: str, source: str = "wedge"):
+        raw_in = barcode
         barcode = self._normalize_barcode(barcode)
+        try:
+            self.default_logger.info(
+                f"[barcode][ui] _commit_barcode enter: source={source}, "
+                f"raw='{raw_in}', normalized='{barcode}'"
+            )
+        except Exception:
+            pass
         if not barcode:
+            try:
+                self.default_logger.info(
+                    "[barcode][ui] _commit_barcode drop: 规范化后为空"
+                )
+            except Exception:
+                pass
             return
         if not self.barcode_scanner_box.isChecked():
+            try:
+                self.default_logger.info(
+                    "[barcode][ui] _commit_barcode drop: 扫码 checkbox 未启用"
+                )
+            except Exception:
+                pass
             return
         if getattr(self, "_record_workflow_busy", False):
+            try:
+                self.default_logger.info(
+                    "[barcode][ui] _commit_barcode drop: 当前正在录音 (busy=True)"
+                )
+            except Exception:
+                pass
             return
+        # Cycle-level gate (TEST mode only): once the directional cycle has
+        # actually entered a recording leg (forward / reverse), refuse every
+        # source - including fresh scans - so the S/N stays pinned to what
+        # the forward leg saw. Before that point we allow re-scans so the
+        # operator can correct a mis-scan. The matching setReadOnly happens
+        # in _start_directional_workflow("forward") and is itself guarded by
+        # the same test-mode check, so lock + gate stay in sync.
+        #
+        # Mark mode skips this gate entirely: the operator is in charge and
+        # may overwrite the S/N at any point in the cycle by simply scanning
+        # again; the most recently scanned value wins.
+        if self._should_lock_sn_for_cycle():
+            cur_direction = self._normalize_trigger_direction(
+                getattr(self, "_current_trigger_direction", "")
+            )
+            if cur_direction in ("forward", "reverse"):
+                try:
+                    self.default_logger.info(
+                        f"S/N 已锁定（正反转循环进行中），忽略新条码: {barcode} (source={source})"
+                    )
+                except Exception:
+                    pass
+                return
 
         now = time.monotonic()
         if (
             self._last_committed_barcode == barcode
             and (now - self._last_committed_barcode_time) < self._barcode_commit_dedup_window_sec
         ):
+            try:
+                self.default_logger.info(
+                    f"[barcode][ui] _commit_barcode drop: 去重窗口内重复: '{barcode}' "
+                    f"(elapsed={now - self._last_committed_barcode_time:.3f}s, "
+                    f"window={self._barcode_commit_dedup_window_sec}s)"
+                )
+            except Exception:
+                pass
             self._barcode_capture_buffer = ""
             self._barcode_capture_first_ts = None
             self._barcode_capture_last_ts = None
@@ -381,10 +546,17 @@ class SequenceWidgetBarcodeOpsMixin:
         if has_invalid:
             unique_chars = sorted(set(invalid_chars))
             chars_display = "  ".join(repr(ch) for ch in unique_chars)
+            try:
+                self.default_logger.info(
+                    f"[barcode][ui] _commit_barcode drop: 条码含非法字符 "
+                    f"chars={unique_chars}, barcode='{barcode}'"
+                )
+            except Exception:
+                pass
             QMessageBox.warning(
                 self,
-                "????????",
-                f"??????????:\n\n{chars_display}\n\n??: {barcode}",
+                "条码包含非法字符",
+                f"条码中包含以下文件名非法字符:\n\n{chars_display}\n\n条码: {barcode}",
             )
             try:
                 with QSignalBlocker(self.lineedit_s_or_n):
@@ -403,6 +575,19 @@ class SequenceWidgetBarcodeOpsMixin:
                 self.lineedit_s_or_n.setText(barcode)
         except Exception:
             self.lineedit_s_or_n.setText(barcode)
+        try:
+            self.default_logger.info(
+                f"[barcode][ui] _commit_barcode setText 成功: '{barcode}' (source={source})"
+            )
+        except Exception:
+            pass
+
+        # Intentionally do NOT lock S/N here. Locking on the first scan would
+        # immediately make the field read-only, which under Qt semantics blocks
+        # wedge-mode scanners (they "type" keystrokes) from re-scanning to
+        # correct a mis-scan. The lock is applied later in
+        # _start_directional_workflow("forward"), i.e. right when the cycle
+        # actually starts recording.
 
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None
@@ -502,7 +687,18 @@ class SequenceWidgetBarcodeOpsMixin:
         self.data_btn.setEnabled(False)
         self.player_status_flag = False
         self.signal_info.clear()
-        self.lineedit_s_or_n.clear()
+
+        # Mark mode OK/NG policy: do NOT clear the S/N field and do NOT touch
+        # the lock state here. The operator is free to either keep the current
+        # barcode (e.g. continue into the reverse leg of a serial-discrete
+        # cycle) or overwrite it by scanning again - selectAll() below makes
+        # the next scan replace the contents cleanly.
+        #
+        # The test-mode automated path does not route through this handler
+        # for cycle teardown; _finalize_test_run + _clear_ai_cycle_runtime_state
+        # own that flow and they release the lock themselves when the cycle
+        # actually completes.
+
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()
@@ -518,6 +714,8 @@ class SequenceWidgetBarcodeOpsMixin:
             self.replayer_btn.setDisabled(True)
             self.data_btn.setEnabled(False)
 
+        # Keep the historical UX: when the scanner is active, focus S/N and
+        # selectAll so the next scan (or manual typing) overwrites the field.
         if self.barcode_scanner_box.isChecked():
             try:
                 self.lineedit_s_or_n.setFocus()
