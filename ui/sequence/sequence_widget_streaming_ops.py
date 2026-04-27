@@ -387,10 +387,20 @@ class SequenceWidgetStreamingOpsMixin:
 
     def closeEvent(self, event):
         """窗口关闭时释放硬件资源，并强制等待Excel同步完成"""
-        # Skip sync dialog if window was never shown (startup close)
+        # Startup-close trick: ``MainWindow.init_ui`` constructs the
+        # sequence window and immediately calls ``close()`` on it as a
+        # UI-reset step *before* it is ever shown. In that path we must
+        # NOT tear down hardware listeners:
+        #   * ``restore_scanner_checkbox_state`` runs during the widget's
+        #     __init__ and, if the last saved state was "enabled", will
+        #     have already spun up the serial/HID scanner worker.
+        #   * If we stop them here, the window is subsequently shown with
+        #     the checkbox still visually checked, but the worker is
+        #     dead and never restarted -- scans silently go nowhere.
+        # The real shutdown path goes through the visible branch below
+        # (or the outer MainWindow.closeEvent) and will ``hw_manager.stop()``
+        # there, so skipping it here does not leak anything on exit.
         if not self.isVisible():
-            if hasattr(self, "hw_manager"):
-                self.hw_manager.stop()
             super().closeEvent(event)
             return
 
@@ -941,8 +951,13 @@ class SequenceWidgetStreamingOpsMixin:
                     if callable(append_mark_result_file):
                         append_mark_result_file(current_label)
                         self.count_board.set_mark_text()
-            # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
-            if self.barcode_scanner_box.isChecked():
+            # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）。
+            # 在串口 directional 循环中 S/N 被 pinned（readOnly + lock），
+            # 不应抢焦点和 selectAll —— 否则只读状态下的"高亮选中"会让
+            # 操作员误以为可以重新输入。直接跳过即可。
+            is_sn_locked_for_cycle = getattr(self, "_is_sn_locked_for_cycle", None)
+            sn_locked = callable(is_sn_locked_for_cycle) and is_sn_locked_for_cycle()
+            if self.barcode_scanner_box.isChecked() and not sn_locked:
                 try:
                     self.lineedit_s_or_n.setFocus()
                     self.lineedit_s_or_n.selectAll()

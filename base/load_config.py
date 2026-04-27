@@ -367,6 +367,87 @@ class LoadUiConfig(object):
             return ip, port
 
     @staticmethod
+    def get_default_scanner_config():
+        """Canonical default for ``scanner_hid_config.json``.
+
+        Shape matches the new layout: ``barcode_source`` at top level,
+        ``scanner.hid`` / ``scanner.serial`` split by protocol, and
+        ``sensor.enabled`` as an explicit on/off for the photoelectric
+        hotkey path. Old flat ``scanner.vid/pid`` / ``sensor.vid/pid``
+        files are upgraded by :meth:`normalize_scanner_config` and keep
+        working without manual edits.
+        """
+        return {
+            "barcode_source": "hid",
+            "scanner": {
+                "hid": {
+                    "vid": "",
+                    "pid": "",
+                },
+                "serial": {
+                    "port": "",
+                    "baudrate": 9600,
+                    "bytesize": 8,
+                    "parity": "N",
+                    "stopbits": 1,
+                    "timeout": 0.1,
+                    "terminator": "\r\n",
+                    "encoding": "utf-8",
+                },
+            },
+            "sensor": {
+                "enabled": True,
+                "hid": {
+                    "vid": "",
+                    "pid": "",
+                },
+                "hotkey": "",
+            },
+        }
+
+    @staticmethod
+    def normalize_scanner_config(config_data):
+        """Merge ``config_data`` onto the scanner defaults.
+
+        Also upgrades the legacy flat structure (``scanner.vid/pid``,
+        ``sensor.vid/pid``) into the nested ``scanner.hid`` /
+        ``sensor.hid`` layout so downstream code only has to handle one
+        shape. Any non-dict input degrades to pure defaults.
+        """
+        defaults = LoadUiConfig.get_default_scanner_config()
+        if not isinstance(config_data, dict):
+            return defaults
+
+        upgraded = {k: v for k, v in config_data.items()}
+
+        scanner = upgraded.get("scanner")
+        if isinstance(scanner, dict):
+            # Legacy flat: {"scanner": {"vid": "...", "pid": "..."}} -> nest under scanner.hid
+            if "hid" not in scanner and ("vid" in scanner or "pid" in scanner):
+                scanner = {
+                    "hid": {
+                        "vid": scanner.get("vid", ""),
+                        "pid": scanner.get("pid", ""),
+                    },
+                }
+                upgraded["scanner"] = scanner
+
+        sensor = upgraded.get("sensor")
+        if isinstance(sensor, dict):
+            if "hid" not in sensor and ("vid" in sensor or "pid" in sensor):
+                legacy_hotkey = sensor.get("hotkey", "")
+                sensor = {
+                    "hid": {
+                        "vid": sensor.get("vid", ""),
+                        "pid": sensor.get("pid", ""),
+                    },
+                    "hotkey": legacy_hotkey,
+                }
+                upgraded["sensor"] = sensor
+
+        return LoadUiConfig._merge_dict_with_defaults(defaults, upgraded)
+
+    @staticmethod
     def get_serial_discrete_input_config_path():
         return DEFAULT_DIR + "configs/scanner_barcode_config/serial_discrete_input.json"
 

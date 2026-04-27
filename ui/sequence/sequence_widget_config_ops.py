@@ -61,6 +61,27 @@ class SequenceWidgetConfigOpsMixin:
 
                 # 焦点在 S/N 输入框
                 if fw is self.lineedit_s_or_n:
+                    # 循环已进入录音阶段（正转或反转）-> 吞掉任何可打印键盘输入。
+                    # 原因：下面的 _sn_clear_on_next_scan 分支会主动调 clear()
+                    # 来 "为下一次扫码腾空间"，那条路径绕过 setReadOnly，所以
+                    # 必须在这里挡住，否则正转录完后 wedge 模式的二次扫码会
+                    # 把循环中 pinned 的 S/N 清空。HID/serial 已在 _commit_barcode
+                    # 的 Stage 2 gate 拒绝写入，不走这条分支。
+                    #
+                    # 刻意只在 forward/reverse 时吞键：扫码后尚未触发录音的
+                    # "间隔期" 允许 wedge 重扫覆盖，方便操作员纠正误扫。
+                    cur_direction_raw = getattr(self, "_current_trigger_direction", "") or ""
+                    cycle_in_progress = str(cur_direction_raw).strip().lower() in ("forward", "reverse")
+                    is_sn_locked = getattr(self, "_is_sn_locked_for_cycle", None)
+                    if (
+                        callable(is_sn_locked)
+                        and is_sn_locked()
+                        and cycle_in_progress
+                        and ch
+                        and ch.isprintable()
+                    ):
+                        return True  # 吞掉事件
+
                     # HID 模式激活窗口内，吞掉键盘输入（避免 HID + 键盘模式重复导致 S/N 内容翻倍）
                     if ch and ch.isprintable() and now < self._hid_mode_active_until:
                         return True  # 吞掉事件
