@@ -478,6 +478,10 @@ class SequenceWidgetAnalysisOpsMixin:
             QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return True
 
+        validate_barcode = getattr(self, "_validate_current_barcode_before_recording", None)
+        if callable(validate_barcode) and not validate_barcode():
+            return True
+
         return False
 
     def reset_work_pram(self, label, count=None):
