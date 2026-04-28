@@ -970,6 +970,9 @@ class SequenceWidgetStreamingOpsMixin:
             self._awaiting_ok_ng = True
             self._sn_clear_on_next_scan = True
             self._pending_recent_session_append = True
+            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn_after_recording):
+                unlock_sn_after_recording()
             try:
                 current_label = (self.recorded_signal_info or {}).get("labels", "not_labeled")
             except Exception:
@@ -1036,6 +1039,9 @@ class SequenceWidgetStreamingOpsMixin:
             self._awaiting_ok_ng = False
             self._sn_clear_on_next_scan = False
             self._pending_recent_session_append = False
+            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn_after_recording):
+                unlock_sn_after_recording()
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
             try:
@@ -1135,6 +1141,9 @@ class SequenceWidgetStreamingOpsMixin:
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
         self._pending_recent_session_append = False
+        unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+        if callable(unlock_sn_after_recording):
+            unlock_sn_after_recording()
         self.player_status_flag = False
         try:
             self.data_btn.setEnabled(True)
