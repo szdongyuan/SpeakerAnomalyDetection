@@ -517,10 +517,42 @@ class SequenceWidgetBarcodeOpsMixin:
         return str(text).strip()
 
     def _barcode_has_invalid_chars(self, barcode: str) -> tuple:
-        """检查条形码是否包含无法用于文件名的特殊字符，返回 (是否有, 特殊字符列表)"""
+        """检查条形码是否包含无法用于文件名/单条码输入的字符，返回 (是否有, 特殊字符列表)"""
         invalid_chars_set = getattr(self, "_INVALID_FILENAME_CHARS", set('\\/:*?"<>|'))
-        found = [ch for ch in barcode if ch in invalid_chars_set]
+        found = [ch for ch in barcode if ch in invalid_chars_set or ch.isspace() or ord(ch) < 32 or ord(ch) == 127]
         return (bool(found), found)
+
+    def _warn_invalid_barcode(self, barcode: str, invalid_chars) -> None:
+        unique_chars = sorted(set(invalid_chars), key=lambda ch: (ord(ch), ch))
+        chars_display = "  ".join(repr(ch) for ch in unique_chars)
+        try:
+            self.default_logger.info(
+                f"[barcode][ui] 条码格式异常 chars={unique_chars}, barcode={barcode!r}"
+            )
+        except Exception:
+            pass
+        QMessageBox.warning(
+            self,
+            "条码格式异常",
+            "条码只能包含一个连续条码，不能包含换行、回车、制表符、空格或文件名非法字符。\n\n"
+            f"异常字符: {chars_display}\n\n"
+            "请重新扫码后再开始录音。",
+        )
+
+    def _validate_current_barcode_before_recording(self) -> bool:
+        barcode = self._normalize_barcode(self.lineedit_s_or_n.text())
+        if not barcode:
+            return True
+        has_invalid, invalid_chars = self._barcode_has_invalid_chars(barcode)
+        if not has_invalid:
+            return True
+        self._warn_invalid_barcode(barcode, invalid_chars)
+        try:
+            self.lineedit_s_or_n.setFocus()
+            self.lineedit_s_or_n.selectAll()
+        except Exception:
+            pass
+        return False
 
     def _commit_barcode(self, barcode: str, source: str = "wedge"):
         raw_in = barcode
@@ -623,20 +655,7 @@ class SequenceWidgetBarcodeOpsMixin:
 
         has_invalid, invalid_chars = self._barcode_has_invalid_chars(barcode)
         if has_invalid:
-            unique_chars = sorted(set(invalid_chars))
-            chars_display = "  ".join(repr(ch) for ch in unique_chars)
-            try:
-                self.default_logger.info(
-                    f"[barcode][ui] _commit_barcode drop: 条码含非法字符 "
-                    f"chars={unique_chars}, barcode='{barcode}'"
-                )
-            except Exception:
-                pass
-            QMessageBox.warning(
-                self,
-                "条码包含非法字符",
-                f"条码中包含以下文件名非法字符:\n\n{chars_display}\n\n条码: {barcode}",
-            )
+            self._warn_invalid_barcode(barcode, invalid_chars)
             try:
                 with QSignalBlocker(self.lineedit_s_or_n):
                     self.lineedit_s_or_n.clear()
