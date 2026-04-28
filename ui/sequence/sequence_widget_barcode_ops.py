@@ -60,6 +60,15 @@ class SequenceWidgetBarcodeOpsMixin:
         except Exception:
             return False
 
+    def _is_mark_mode(self) -> bool:
+        count_board = getattr(self, "count_board", None)
+        if count_board is None:
+            return False
+        try:
+            return str(getattr(count_board, "mode", "") or "").strip().lower() == "mark"
+        except Exception:
+            return False
+
     def _should_lock_sn_for_cycle(self) -> bool:
         """Gate for the directional-cycle S/N lock.
 
@@ -72,6 +81,23 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def _is_sn_locked_for_cycle(self) -> bool:
         return bool(getattr(self, "_sn_locked_for_cycle", False))
+
+    def _suppress_barcode_commits_temporarily(self, milliseconds: int, reason: str = "") -> None:
+        try:
+            duration = max(0, int(milliseconds)) / 1000.0
+        except (TypeError, ValueError):
+            duration = 0.0
+        if duration <= 0:
+            return
+        self._barcode_commit_suppressed_until = time.monotonic() + duration
+        self._barcode_commit_suppressed_reason = str(reason or "temporary_suppression")
+
+    def _is_barcode_commit_temporarily_suppressed(self) -> bool:
+        try:
+            until = float(getattr(self, "_barcode_commit_suppressed_until", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return False
+        return time.monotonic() < until
 
     def _lock_sn_for_cycle(self) -> None:
         if self._is_sn_locked_for_cycle():
@@ -90,6 +116,35 @@ class SequenceWidgetBarcodeOpsMixin:
         try:
             self.lineedit_s_or_n.setReadOnly(False)
             self.lineedit_s_or_n.setToolTip("")
+        except Exception:
+            pass
+
+    def _lock_sn_for_recording_if_needed(self) -> None:
+        """Temporarily make S/N read-only while mark-mode recording is active."""
+        if not self._is_mark_mode():
+            return
+        if bool(getattr(self, "_sn_locked_for_recording", False)):
+            return
+        try:
+            self._sn_readonly_before_recording = bool(self.lineedit_s_or_n.isReadOnly())
+            self._sn_tooltip_before_recording = self.lineedit_s_or_n.toolTip()
+            self.lineedit_s_or_n.setReadOnly(True)
+            self.lineedit_s_or_n.setToolTip("录音中，条码暂时不可修改")
+            self._sn_locked_for_recording = True
+        except Exception:
+            self._sn_locked_for_recording = False
+
+    def _unlock_sn_after_recording_if_needed(self) -> None:
+        if not bool(getattr(self, "_sn_locked_for_recording", False)):
+            return
+        self._sn_locked_for_recording = False
+        if self._is_sn_locked_for_cycle():
+            return
+        try:
+            restore_readonly = bool(getattr(self, "_sn_readonly_before_recording", False))
+            restore_tooltip = str(getattr(self, "_sn_tooltip_before_recording", "") or "")
+            self.lineedit_s_or_n.setReadOnly(restore_readonly)
+            self.lineedit_s_or_n.setToolTip(restore_tooltip)
         except Exception:
             pass
 
@@ -233,6 +288,15 @@ class SequenceWidgetBarcodeOpsMixin:
         cancel_pending_serial_trigger_delay = getattr(self, "_cancel_pending_serial_trigger_delay", None)
         if callable(cancel_pending_serial_trigger_delay):
             cancel_pending_serial_trigger_delay()
+        suppress_queued_barcode = (
+            self._should_lock_sn_for_cycle()
+            and (
+                self._is_sn_locked_for_cycle()
+                or self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", "")) in ("forward", "reverse")
+            )
+        )
+        if suppress_queued_barcode:
+            self._suppress_barcode_commits_temporarily(1500, reason="test_directional_cycle_teardown")
         self._current_trigger_direction = ""
         self._clear_active_recording_direction()
         self._reset_mark_cycle_summary_state()
@@ -310,6 +374,8 @@ class SequenceWidgetBarcodeOpsMixin:
         direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
         if not direction:
             return
+        if self._is_serial_directional_trigger_enabled():
+            self._suppress_barcode_commits_temporarily(1500, reason="directional_recording_completed")
         if getattr(self, "left_panel", None) is None:
             return
 
@@ -442,7 +508,8 @@ class SequenceWidgetBarcodeOpsMixin:
         self._barcode_capture_target_text = None
         self._barcode_capture_target_cursor_pos = None
         self._barcode_debounce_timer.stop()
-        self._commit_barcode(barcode, source="hid")
+        source = getattr(getattr(self, "hw_manager", None), "barcode_source", "hid")
+        self._commit_barcode(barcode, source=source)
 
     def _normalize_barcode(self, text: str) -> str:
         if text is None:
@@ -477,6 +544,18 @@ class SequenceWidgetBarcodeOpsMixin:
             try:
                 self.default_logger.info(
                     "[barcode][ui] _commit_barcode drop: 扫码 checkbox 未启用"
+                )
+            except Exception:
+                pass
+            return
+        if self._is_barcode_commit_temporarily_suppressed():
+            try:
+                reason = getattr(self, "_barcode_commit_suppressed_reason", "")
+                until = float(getattr(self, "_barcode_commit_suppressed_until", 0.0) or 0.0)
+                remaining_ms = max(0.0, (until - time.monotonic()) * 1000.0)
+                self.default_logger.info(
+                    f"[barcode][ui] _commit_barcode drop: 临时抑制窗口内 "
+                    f"reason={reason}, remaining_ms={remaining_ms:.0f}, barcode='{barcode}', source={source}"
                 )
             except Exception:
                 pass

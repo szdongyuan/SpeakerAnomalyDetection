@@ -609,6 +609,10 @@ class SequenceWidgetAnalysisOpsMixin:
         elif callable(clear_active_recording_direction):
             clear_active_recording_direction()
 
+        lock_sn_for_recording = getattr(self, "_lock_sn_for_recording_if_needed", None)
+        if callable(lock_sn_for_recording):
+            lock_sn_for_recording()
+
         self._clear_plot_area()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
         # This prevents device conflicts and freezing when replay is clicked multiple times
@@ -641,6 +645,9 @@ class SequenceWidgetAnalysisOpsMixin:
                 recorded_dict, sample_rate = self.reset_work_pram(label)
         except Exception as e:
             self.default_logger.error(f"reset_work_pram_error: {e}")
+            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn_after_recording):
+                unlock_sn_after_recording()
             self.player_status_flag = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
@@ -664,6 +671,9 @@ class SequenceWidgetAnalysisOpsMixin:
             self.streaming_poll_timer.start(50)  # Poll every 50ms
         except Exception as e:
             self.default_logger.error(f"start_streaming_error: {e}")
+            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn_after_recording):
+                unlock_sn_after_recording()
             self._cleanup_streaming_resources()
             self.player_status_flag = False
             self._record_workflow_busy = False
