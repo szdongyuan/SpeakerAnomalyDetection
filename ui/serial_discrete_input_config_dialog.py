@@ -26,6 +26,28 @@ class SerialDiscreteInputConfigDialog(QDialog):
     COMMON_BAUDRATES = ["1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"]
     NO_PORTS_TEXT = "未检测到可用串口"
 
+    # Explicit contract: dotted paths in the saved config that the user can
+    # actually change through this dialog. UnifiedHardwareManager uses this
+    # list to decide whether the running serial worker needs to be restarted
+    # after the operator clicks 确定:
+    #   * any listed path differs between the new and currently-running
+    #     config -> stop + start the worker with the new config
+    #   * none of the listed paths differ -> keep the worker running and
+    #     only refresh self.serial_config in place
+    #
+    # If you add a new control to this dialog that influences how the worker
+    # opens or polls the serial port, ALSO append the matching dotted path
+    # here, otherwise the change will be saved to disk but won't take effect
+    # until the app is restarted. The companion unit test
+    # ``unit_test/ui/test_serial_discrete_input_config_dialog.py`` locks
+    # this list against ``_build_config()``'s output so drift fails fast.
+    EDITABLE_PATHS = (
+        "enabled",
+        "device_model",
+        "serial_settings.port",
+        "serial_settings.baudrate",
+    )
+
     def __init__(self, config: dict, runtime_status: dict = None, test_connection_callback=None, parent=None):
         super().__init__(parent)
         self.config = dict(config or {})

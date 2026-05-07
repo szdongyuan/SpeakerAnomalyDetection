@@ -37,6 +37,43 @@ def _safe_str(obj, default=""):
         return default
 
 
+def _dig_dotted(d, dotted_path):
+    """Walk ``d`` following a dotted path (e.g. ``serial_settings.port``).
+
+    Returns ``None`` whenever any intermediate node is missing or not a
+    dict, so callers can compare results without juggling KeyError /
+    AttributeError. We keep this loose on purpose: the dialog's
+    ``_build_config()`` always carries the editable keys, so a ``None``
+    here only happens when the running worker's stored config is
+    structurally older than the dialog's contract.
+    """
+    cur = d if isinstance(d, dict) else {}
+    for part in str(dotted_path or "").split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _diff_config_paths(new_cfg, current_cfg, paths):
+    """Return the dotted paths whose value changed between two configs.
+
+    Comparison is done via ``str()`` so semantically equivalent values
+    that differ only in type (e.g. ``9600`` vs ``"9600"``) are not
+    counted as a change. ``paths`` is the explicit whitelist owned by
+    the dialog (``SerialDiscreteInputConfigDialog.EDITABLE_PATHS``); we
+    deliberately do NOT walk the full dict, because non-editable fields
+    like ``state_maps`` should never trigger a worker restart.
+    """
+    diffs = []
+    for path in paths or ():
+        v_new = _dig_dotted(new_cfg, path)
+        v_cur = _dig_dotted(current_cfg, path)
+        if str(v_new) != str(v_cur):
+            diffs.append(path)
+    return diffs
+
+
 def _safe_bool(obj, default):
     """Parse a JSON-ish value into a bool without raising.
 
@@ -542,19 +579,46 @@ class UnifiedHardwareManager(QObject):
                 self.hotkey_registered = False
 
     def start_serial_discrete_input_listener(self, config_data=None):
-        if self.serial_worker is not None and self.serial_worker.isRunning():
-            self._debug_print("start 请求被忽略: 监听已在运行")
-            self._emit_serial_status(message="串口离散输入监听已在运行")
-            return {"ok": True, "message": "already running"}
-
         if config_data is not None:
-            self.serial_config = LoadUiConfig.normalize_serial_discrete_input_config(config_data)
+            next_config = LoadUiConfig.normalize_serial_discrete_input_config(config_data)
         else:
-            ok, loaded = self.load_serial_discrete_input_config()
-            if not ok:
+            err_code, loaded = LoadUiConfig.load_serial_discrete_input_config()
+            if err_code != error_code.OK or not isinstance(loaded, dict):
                 msg = f"串口离散输入配置加载失败: {loaded}"
                 self._emit_serial_status(enabled=False, running=False, connected=False, message=msg, error=str(loaded))
                 return {"ok": False, "message": msg}
+            next_config = LoadUiConfig.normalize_serial_discrete_input_config(loaded)
+
+        worker_running = bool(self.serial_worker is not None and self.serial_worker.isRunning())
+        if worker_running:
+            # Lazy import: importing the dialog at module load would pull
+            # the entire UI graph into a base-layer module. The dialog is
+            # cheap to load, has no Qt window construction at import time,
+            # and is the single source of truth for "what does the user
+            # actually edit", so we read its EDITABLE_PATHS contract here.
+            from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
+
+            diffs = _diff_config_paths(
+                next_config,
+                self.serial_config or {},
+                SerialDiscreteInputConfigDialog.EDITABLE_PATHS,
+            )
+            if not diffs:
+                # No worker restart needed, but still refresh the cached
+                # config so any non-dialog-editable fields edited via
+                # other paths (e.g. state_maps changed on disk and
+                # reloaded) take effect on subsequent serial events.
+                self.serial_config = next_config
+                self._debug_print("start 请求被忽略: 监听已在运行且对话框可编辑字段未变化")
+                self._emit_serial_status(message="串口离散输入监听已在运行")
+                return {"ok": True, "message": "already running"}
+
+            self._debug_print(
+                f"检测到串口离散输入对话框可编辑字段变化: {diffs}, 重启监听"
+            )
+            self.stop_serial_discrete_input_listener()
+
+        self.serial_config = next_config
 
         if not self.serial_config.get("enabled", False):
             self.serial_trigger_armed = True
