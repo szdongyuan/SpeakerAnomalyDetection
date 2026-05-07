@@ -132,6 +132,17 @@ class SerialDiscreteInputWorker(QThread):
                     if (now - self._last_no_response_log_time) >= 1.0:
                         self._last_no_response_log_time = now
                         self._debug_print("轮询已发送，但当前未收到设备响应")
+                        if self.last_raw_hex is not None:
+                            self._emit_status(
+                                running=True,
+                                connected=True,
+                                has_response=False,
+                                message="串口已打开，但设备无响应",
+                                raw_hex="",
+                                value="",
+                                mode=decoder_mode,
+                            )
+                            self.last_raw_hex = None
                     continue
 
                 received_bytes = self.serial_port.read(waiting)
