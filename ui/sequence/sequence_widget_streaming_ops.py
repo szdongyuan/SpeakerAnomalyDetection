@@ -22,7 +22,7 @@ from base.save_data import ensure_test_result_file, save_audio_simple
 from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
-from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.recent_session_panel import RecentSessionPanel
 
 
@@ -255,37 +255,29 @@ class SequenceWidgetStreamingOpsMixin:
     def _configure_direction_waveform_workspace(self):
         if self.channel_workspace is None:
             return
-        self.channel_workspace.set_preserve_positions(False)
-        self.channel_workspace.set_forced_columns(2)
-        self.channel_workspace.set_channels([0, 1])
-        self.channel_workspace.set_window_titles(
-            [self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER]
+        self.channel_workspace.set_direction_titles(
+            {key: self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER}
         )
         self._refresh_direction_waveform_workspace()
 
     def _refresh_direction_waveform_workspace(self):
         if self.channel_workspace is None:
             return
-        wins = self.channel_workspace.subwindows()
-        if not wins:
-            return
-        self.channel_workspace.set_window_titles(
-            [self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER]
+        self.channel_workspace.set_direction_titles(
+            {key: self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER}
         )
-        for index, direction in enumerate(self._DIRECTION_WAVEFORM_ORDER):
-            if index >= len(wins):
-                break
+        for direction in self._DIRECTION_WAVEFORM_ORDER:
             waveform_entry = (getattr(self, "_direction_waveform_cache", {}) or {}).get(direction)
             if not waveform_entry:
-                wins[index].clear_plot()
+                self.channel_workspace.clear_direction(direction)
                 continue
             waveform, sample_rate = waveform_entry
             waveform = self._normalize_waveform_signal(waveform)
             if waveform is None:
-                wins[index].clear_plot()
+                self.channel_workspace.clear_direction(direction)
                 continue
             time_axis = np.arange(waveform.shape[0]) / float(sample_rate or 1.0)
-            wins[index].set_data(time_axis, waveform)
+            self.channel_workspace.set_direction_data(direction, time_axis, waveform)
 
     def create_waveform_layout(self):
         """
@@ -299,7 +291,7 @@ class SequenceWidgetStreamingOpsMixin:
                 QVBoxLayout: The configured layout object.
         """
         layout = QVBoxLayout()
-        self.channel_workspace = ChannelPlotWorkspace(self)
+        self.channel_workspace = DirectionWaveformPanel(self)
         self.recent_session_panel = RecentSessionPanel(
             on_play_session=self._resolve_recent_session,
             on_view_session=self._show_recent_session_analysis_by_id,
@@ -310,10 +302,6 @@ class SequenceWidgetStreamingOpsMixin:
         self.recent_session_panel.set_result_editable(self._last_recent_session_mode == "mark")
         if self.count_board is not None:
             self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
-        # try:
-        #     self.refresh_channel_windows()
-        # except Exception:
-        #     self.channel_workspace.set_channels([0])
         self._configure_direction_waveform_workspace()
 
         ai_result_panel, summary_panel = self.left_panel.take_split_sections()
