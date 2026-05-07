@@ -1,9 +1,12 @@
+import os
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
 from PyQt5.QtWidgets import QLabel, QMessageBox, QComboBox, QSizePolicy
 from typing import List, Optional
 
+from base.load_config import load_config
+from base.model_runtime_validation import resolve_effective_signal_length
 from base.training_model_management import TrainingModelManagement
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
@@ -95,17 +98,58 @@ class AIConfigWindow(QDialog):
 
     def load_model_name_from_db(self):
         model_list = []
-        query_code, query_result = TrainingModelManagement().get_all_model_name_from_db()
+        query_code, query_result = TrainingModelManagement().get_all_model_info_from_db()
         if query_code == error_code.OK:
-            for idx, name in enumerate(query_result):
-                query_result_idx = query_result[idx]
-                input_dim = int(query_result_idx[1].split(" ")[0])
-                if not self.signal_len:
-                    model_list.append(query_result_idx[0])
-                else:
-                    if input_dim == self.signal_len:
-                        model_list.append(query_result_idx[0])
+            for model_info in query_result:
+                model_name = model_info[0]
+                input_dim = model_info[1]
+                config_path = model_info[5] if len(model_info) > 5 else ""
+                if self._model_matches_signal_len(input_dim, config_path):
+                    model_list.append(model_name)
         return model_list
+
+    @staticmethod
+    def _parse_input_length(input_dim):
+        try:
+            return int(float(str(input_dim or "").split("x")[0].strip()))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _resolve_model_config_path(config_path):
+        normalized = str(config_path or "").strip()
+        if not normalized:
+            return ""
+        if os.path.isabs(normalized):
+            return normalized
+        return os.path.join(DEFAULT_DIR, normalized)
+
+    def _load_model_preprocess_config(self, config_path):
+        normalized = self._resolve_model_config_path(config_path)
+        if not normalized or not os.path.exists(normalized):
+            return {}
+        try:
+            result = load_config(config_path=normalized, module_name="preprocess")
+            return result if isinstance(result, dict) else {}
+        except Exception:
+            return {}
+
+    def _model_matches_signal_len(self, input_dim, config_path):
+        if not self.signal_len:
+            return True
+
+        input_length = self._parse_input_length(input_dim)
+        if input_length is None:
+            return False
+
+        try:
+            raw_length = int(float(self.signal_len))
+        except (TypeError, ValueError):
+            return input_length == self.signal_len
+
+        preprocess_config = self._load_model_preprocess_config(config_path)
+        effective_length = resolve_effective_signal_length(raw_length, preprocess_config)
+        return input_length == effective_length
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
