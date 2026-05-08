@@ -27,8 +27,6 @@ class SoundcardAudioProcessor(object):
     def sd_play(stimulus_params):
         try:
             data = stimulus_params.get("data") * stimulus_params.get("amplitude")
-            print(stimulus_params.get("amplitude"))
-            print(data)
             sr = stimulus_params.get("sr")
             blocking = stimulus_params.get("blocking", True)
             device = stimulus_params.get("device", None)
