@@ -192,13 +192,12 @@ class RecordingManager(object):
             err_msg = "The query operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_QUERY, err_msg
 
-    def delete_audio_at_id_list(self, id_list: list):
+    def delete_audio_at_id_list(self, id_list: list, progress_callback=None):
         if not id_list:
             return error_code.INVALID_DELETE, "Field list is empty, cannot perform delete operation."
         try:
             with DataSave(self.db_path) as database:
-                database.delete_by_fields("audio_data_table", "audio_data_id", id_list)
-            return error_code.OK, "The file is deleted successfully."
+                return database.delete_by_fields("audio_data_table", "audio_data_id", id_list, progress_callback)
         except Exception as e:
             err_msg = "Failed to delete the file. Error: {}".format(e)
             return error_code.INVALID_DELETE, err_msg

@@ -425,22 +425,31 @@ class DataSave(object):
             self.logger.error(err_msg)
             return error_code.INVALID_DELETE, err_msg
 
-    def delete_by_fields(self, table_name, column_name, field_list):
+    def delete_by_fields(self, table_name, column_name, field_list, progress_callback=None):
         try:
-            placeholders = ", ".join(["?"] * len(field_list))
-            sql = f"DELETE FROM {table_name} WHERE {column_name} IN ({placeholders})"
-
-            self.cursor.execute(sql, field_list)
+            batch_size = 500
+            deleted_count = 0
+            processed_count = 0
+            for start in range(0, len(field_list), batch_size):
+                batch = field_list[start:start + batch_size]
+                placeholders = ", ".join(["?"] * len(batch))
+                sql = f"DELETE FROM {table_name} WHERE {column_name} IN ({placeholders})"
+                self.cursor.execute(sql, batch)
+                deleted_count += self.cursor.rowcount
+                processed_count += len(batch)
+                if progress_callback is not None:
+                    progress_callback(processed_count, len(field_list))
             self.connection.commit()
 
-            if self.cursor.rowcount > 0:
-                self.logger.info(f"Successfully deleted {self.cursor.rowcount} records from {table_name}.")
-                return error_code.OK, f"Successfully deleted {self.cursor.rowcount} records."
+            if deleted_count > 0:
+                self.logger.info(f"Successfully deleted {deleted_count} records from {table_name}.")
+                return error_code.OK, f"Successfully deleted {deleted_count} records."
             else:
                 self.logger.warning(f"No records matched the condition in {table_name}.")
                 return error_code.INVALID_DELETE, "No records matched the condition. No data was deleted."
 
         except Exception as e:
+            self.connection.rollback()
             err_msg = f"Failed to delete data from the table. {str(e)[:40]}"
             self.logger.error(err_msg)
             return error_code.INVALID_DELETE, err_msg

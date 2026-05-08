@@ -232,10 +232,11 @@ class AudioDataManageDialog(DataManageDialog):
     def delete_audio_data_with_id(self, id_list: list):
         if not id_list:
             return
-        self.all_audio_data = [item for item in self.all_audio_data if item[0] not in id_list]
+        id_set = set(id_list)
+        self.all_audio_data = [item for item in self.all_audio_data if item[0] not in id_set]
 
         if self.is_filter_flag is True:
-            self.filter_audio_data = [item for item in self.filter_audio_data if item[0] not in id_list]
+            self.filter_audio_data = [item for item in self.filter_audio_data if item[0] not in id_set]
 
     def update_packaging_progress(self, progress, total):
         self.packaging_progress.setValue(progress)
