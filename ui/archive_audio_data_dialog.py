@@ -647,7 +647,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
                 self._playback_poll_timer.start()
             self._refresh_play_button_states()
         except Exception as e:
-            print(e)
+            self.logger.error(e)
         finally:
             self._is_switching_playback = False
 
