@@ -2,11 +2,12 @@ import os
 import time
 import sys
 import wave
+import copy
 from datetime import datetime
 
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtGui import QStandardItem, QBrush, QColor
-from PyQt5.QtWidgets import QProgressDialog, QFileDialog, QApplication, QWidget, QHBoxLayout
+from PyQt5.QtWidgets import QProgressDialog, QFileDialog, QApplication, QWidget, QHBoxLayout, QSpinBox
 from scipy.io import wavfile as scipy_wavfile
 
 from base.file_ops import FileOps
@@ -14,13 +15,22 @@ from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
+from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog, FilterAudioDialog
 from ui.custom_ui_widget.widgets import Label, PushButton, MessageBox
 
 
 class ArchiveAudioDataDialog(AudioDataManageDialog):
+    PAGE_SIZE = 100
 
     def __init__(self, logger: LogManager):
+        self._current_page_index = 0
+        self._selected_audio_data_by_id = dict()
+        self.prev_page_btn = None
+        self.next_page_btn = None
+        self.page_status_label = None
+        self.page_jump_spinbox = None
+        self.page_jump_btn = None
+        self._pagination_row_widget = None
         self._play_btn_col = 6
         self._play_text = "\u64ad\u653e"
         self._stop_text = "\u505c\u6b62"
@@ -50,6 +60,11 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.order_btn = PushButton(" 倒  序 ")
         self.package_btn = PushButton(" 打  包 ")
         self.delete_btn = PushButton(" 删  除 ")
+        self.prev_page_btn = PushButton(" 上一页 ")
+        self.next_page_btn = PushButton(" 下一页 ")
+        self.page_status_label = Label()
+        self.page_jump_spinbox = QSpinBox()
+        self.page_jump_btn = PushButton(" 跳  转 ")
 
         self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放"])
 
@@ -61,6 +76,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._rebuild_play_buttons()
         self._update_order_button_text()
         self.init_ui()
+        self._update_page_buttons()
 
     def _on_data_view_clicked(self, index):
         if not index.isValid():
@@ -74,6 +90,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         self.set_bottom_layout()
         self._setup_status_row_with_remaining_label()
+        self._setup_pagination_row()
         self._set_remaining_label_idle()
 
         window_width = ui_style_const.scale_size_px(1060)
@@ -82,13 +99,50 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
     def load_audio_data_to_view(self):
         self._stop_playback_if_needed()
-        super().load_audio_data_to_view()
+        self._clamp_current_page()
+        if self.is_filter_flag:
+            self.load_audio_data_to_model(self.filter_audio_data, self.stimulus_name)
+        else:
+            result = self.load_audio_data_to_model(self.all_audio_data, self.stimulus_name)
+            self.product_model_set, self.record_date_set = result
+        self._rebuild_select_wave_data()
+        self._restore_current_page_checked_states()
+        self.set_select_wave_num_text(len(self.select_wave_data))
+        self._update_page_buttons()
         self._rebuild_play_buttons()
 
     def show_all_wave(self):
+        should_clear_selection = self.is_filter_flag is True and len(self.all_audio_data) != len(self.filter_audio_data)
+        self._current_page_index = 0
         self._stop_playback_if_needed()
         super().show_all_wave()
+        if should_clear_selection:
+            self._clear_selected_audio_data()
+        self._rebuild_select_wave_data()
+        self._restore_current_page_checked_states()
+        self.set_select_wave_num_text(len(self.select_wave_data))
+        self._update_page_buttons()
         self._rebuild_play_buttons()
+
+    def filter_audio_data_at_filter_config(self, filter_config: dict):
+        self._current_page_index = 0
+        super().filter_audio_data_at_filter_config(filter_config)
+
+    def on_click_filter_btn(self):
+        filter_config = copy.deepcopy(self.filter_config)
+        dlg = FilterAudioDialog(self.product_model_set, self.record_date_set, filter_config)
+        dlg.hide_select_not_label_check_box(self.is_hide_select_not_label)
+        flag, filter_config = dlg.exec()
+        if flag == 1:
+            self.filter_config = filter_config
+            self.filter_audio_data_at_filter_config(self.filter_config)
+            self.is_filter_flag = True
+            self._clear_selected_audio_data()
+            self.load_audio_data_to_view()
+            self.filter_signal.emit()
+        elif flag == 2:
+            self.show_all_wave()
+            self.filter_signal.emit()
 
     def load_audio_data_to_model(self, audio_data, stimulus_name):
         self.setRowCount(0)
@@ -101,6 +155,8 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             product_model_set.add(item[2])
             record_date_set.add(item[4])
 
+        page_start, page_end = self._get_page_bounds(audio_data)
+        for item in audio_data[page_start:page_end]:
             file_name = item[1].split("/")[-1]
             row_data_list = [None, file_name, item[2], item[5], item[3], item[4], None]
             self.add_row_data(row_data_list)
@@ -122,6 +178,53 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.bottom_layout.addStretch()
         self.bottom_layout.addWidget(self.package_btn)
         self.bottom_layout.addWidget(self.delete_btn)
+
+    def _setup_pagination_row(self):
+        root_layout = self.layout()
+        if root_layout is None:
+            return
+        if self._pagination_row_widget is not None:
+            return
+        if (
+            self.page_status_label is None
+            or self.page_jump_spinbox is None
+            or self.page_jump_btn is None
+            or self.prev_page_btn is None
+            or self.next_page_btn is None
+        ):
+            return
+
+        self.prev_page_btn.clicked.connect(self.on_clicked_prev_page_btn)
+        self.next_page_btn.clicked.connect(self.on_clicked_next_page_btn)
+        self.page_jump_btn.clicked.connect(self.on_clicked_jump_page_btn)
+
+        self.page_jump_spinbox.setRange(1, 1)
+        self.page_jump_spinbox.setValue(1)
+
+        self._pagination_row_widget = QWidget(self)
+        pagination_layout = QHBoxLayout(self._pagination_row_widget)
+        pagination_layout.setContentsMargins(0, 0, 0, 0)
+        pagination_layout.addWidget(self.page_status_label)
+        pagination_layout.addStretch()
+        pagination_layout.addWidget(Label("跳转到"))
+        pagination_layout.addWidget(self.page_jump_spinbox)
+        pagination_layout.addWidget(Label("页"))
+        pagination_layout.addWidget(self.page_jump_btn)
+        pagination_layout.addSpacing(12)
+        pagination_layout.addWidget(self.prev_page_btn)
+        pagination_layout.addWidget(self.next_page_btn)
+
+        bottom_layout_index = -1
+        for idx in range(root_layout.count()):
+            item = root_layout.itemAt(idx)
+            if item is not None and item.layout() is self.bottom_layout:
+                bottom_layout_index = idx
+                break
+
+        if bottom_layout_index >= 0:
+            root_layout.insertWidget(bottom_layout_index, self._pagination_row_widget)
+        else:
+            root_layout.addWidget(self._pagination_row_widget)
 
     def _setup_status_row_with_remaining_label(self):
         root_layout = self.layout()
@@ -161,6 +264,168 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
     def _update_order_button_text(self):
         self.order_btn.setText(" 正  序 " if self._is_desc_order else " 倒  序 ")
 
+    def _get_active_audio_data(self):
+        return self.filter_audio_data if self.is_filter_flag else self.all_audio_data
+
+    def _get_page_count(self, audio_data=None):
+        active_audio_data = self._get_active_audio_data() if audio_data is None else audio_data
+        if not active_audio_data:
+            return 1
+        return ((len(active_audio_data) - 1) // self.PAGE_SIZE) + 1
+
+    def _clamp_current_page(self):
+        page_count = self._get_page_count()
+        self._current_page_index = max(0, min(self._current_page_index, page_count - 1))
+
+    def _get_page_bounds(self, audio_data=None):
+        active_audio_data = self._get_active_audio_data() if audio_data is None else audio_data
+        page_count = self._get_page_count(active_audio_data)
+        current_page = max(0, min(self._current_page_index, page_count - 1))
+        start = current_page * self.PAGE_SIZE
+        end = min(start + self.PAGE_SIZE, len(active_audio_data))
+        return start, end
+
+    def _get_current_page_audio_data(self):
+        audio_data = self._get_active_audio_data()
+        start, end = self._get_page_bounds(audio_data)
+        return audio_data[start:end]
+
+    def _get_source_index_for_visible_row(self, row):
+        if row is None:
+            return None
+        audio_data = self._get_active_audio_data()
+        start, end = self._get_page_bounds(audio_data)
+        source_index = start + row
+        if row < 0 or source_index < start or source_index >= end:
+            return None
+        return source_index
+
+    def _get_audio_data_by_visible_row(self, row):
+        source_index = self._get_source_index_for_visible_row(row)
+        if source_index is None:
+            return None
+        audio_data = self._get_active_audio_data()
+        if source_index < 0 or source_index >= len(audio_data):
+            return None
+        return audio_data[source_index]
+
+    def _get_audio_data_id(self, audio_data):
+        if not audio_data:
+            return None
+        return str(audio_data[0])
+
+    def _rebuild_select_wave_data(self):
+        audio_data_by_id = {self._get_audio_data_id(item): item for item in self.all_audio_data}
+        self._selected_audio_data_by_id = {
+            audio_data_id: audio_data_by_id[audio_data_id]
+            for audio_data_id in self._selected_audio_data_by_id
+            if audio_data_id in audio_data_by_id
+        }
+        self.select_wave_data = dict(self._selected_audio_data_by_id)
+
+    def _clear_selected_audio_data(self):
+        self._selected_audio_data_by_id.clear()
+        self.select_wave_data.clear()
+
+    def _restore_current_page_checked_states(self):
+        model = self.model()
+        if model is None:
+            return
+        old_is_send_signal = self.data_view.is_send_signal
+        self.data_view.is_send_signal = False
+        try:
+            page_audio_data = self._get_current_page_audio_data()
+            for row, item_data in enumerate(page_audio_data):
+                item = model.item(row, 0)
+                if item is None:
+                    continue
+                item.setCheckState(
+                    Qt.Checked
+                    if self._get_audio_data_id(item_data) in self._selected_audio_data_by_id
+                    else Qt.Unchecked
+                )
+        finally:
+            self.data_view.is_send_signal = old_is_send_signal
+        self._update_all_selected_checkbox_state()
+
+    def _update_all_selected_checkbox_state(self):
+        active_audio_data = self._get_active_audio_data()
+        is_all_selected = bool(active_audio_data) and all(
+            self._get_audio_data_id(item) in self._selected_audio_data_by_id for item in active_audio_data
+        )
+        self.all_select_flag = is_all_selected
+        self.all_selected_checkbox.setChecked(is_all_selected)
+
+    def _update_page_buttons(self):
+        if self.prev_page_btn is None or self.next_page_btn is None:
+            return
+        self._clamp_current_page()
+        page_count = self._get_page_count()
+        has_multiple_pages = len(self._get_active_audio_data()) > self.PAGE_SIZE
+        if self.page_status_label is not None:
+            self.page_status_label.setText(f"第 {self._current_page_index + 1} / {page_count} 页")
+        if self.page_jump_spinbox is not None:
+            old_is_blocked = self.page_jump_spinbox.blockSignals(True)
+            try:
+                self.page_jump_spinbox.setRange(1, page_count)
+                self.page_jump_spinbox.setValue(self._current_page_index + 1)
+            finally:
+                self.page_jump_spinbox.blockSignals(old_is_blocked)
+        self.prev_page_btn.setEnabled(has_multiple_pages and self._current_page_index > 0)
+        self.next_page_btn.setEnabled(has_multiple_pages and self._current_page_index < page_count - 1)
+
+    def on_clicked_prev_page_btn(self):
+        if self._current_page_index <= 0:
+            return
+        self._current_page_index -= 1
+        self.load_audio_data_to_view()
+
+    def on_clicked_next_page_btn(self):
+        if self._current_page_index >= self._get_page_count() - 1:
+            return
+        self._current_page_index += 1
+        self.load_audio_data_to_view()
+
+    def on_clicked_jump_page_btn(self):
+        page_number = self.page_jump_spinbox.value() if self.page_jump_spinbox is not None else 1
+        page_count = self._get_page_count()
+        if page_number < 1 or page_number > page_count:
+            MessageBox.warning(self, "提示", "请输入有效页码")
+            self._update_page_buttons()
+            return
+        self._current_page_index = page_number - 1
+        self.load_audio_data_to_view()
+
+    def on_all_selected_changed(self):
+        active_audio_data = self._get_active_audio_data()
+        if self.all_select_flag:
+            for item in active_audio_data:
+                self._selected_audio_data_by_id.pop(self._get_audio_data_id(item), None)
+        else:
+            for item in active_audio_data:
+                self._selected_audio_data_by_id[self._get_audio_data_id(item)] = item
+        self._rebuild_select_wave_data()
+        self._restore_current_page_checked_states()
+        self.set_select_wave_num_text(len(self.select_wave_data))
+
+    def set_select_wave_num_text(self, select_num):
+        super().set_select_wave_num_text(select_num)
+
+    def on_row_checkbox_toggled(self, item, is_checked):
+        audio_data = self._get_audio_data_by_visible_row(item.row())
+        audio_data_id = self._get_audio_data_id(audio_data)
+        if audio_data_id is None:
+            return
+
+        if is_checked is True:
+            self._selected_audio_data_by_id[audio_data_id] = audio_data
+        elif is_checked is False:
+            self._selected_audio_data_by_id.pop(audio_data_id, None)
+
+        self._rebuild_select_wave_data()
+        self._update_all_selected_checkbox_state()
+        self.set_select_wave_num_text(len(self.select_wave_data))
+
     def _get_mirror_index(self, index, capacity):
         if capacity <= 0:
             raise ValueError("capacity must be > 0")
@@ -170,15 +435,20 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
     def on_clicked_order_btn(self):
         self._click_order = True
-        if self._current_playing_row is not None:
-            self._current_playing_row = self._get_mirror_index(self._current_playing_row, len(self.all_audio_data))
+        playing_audio_data = self._get_audio_data_by_visible_row(self._current_playing_row)
+        playing_audio_data_id = self._get_audio_data_id(playing_audio_data)
 
         self.all_audio_data.reverse()
         self.filter_audio_data.reverse()
+        if playing_audio_data_id is not None:
+            for source_index, item in enumerate(self._get_active_audio_data()):
+                if self._get_audio_data_id(item) == playing_audio_data_id:
+                    self._current_page_index = source_index // self.PAGE_SIZE
+                    self._current_playing_row = source_index % self.PAGE_SIZE
+                    break
+        else:
+            self._current_page_index = 0
         self.load_audio_data_to_view()
-        self.all_selected_checkbox.setChecked(False)
-        self.all_select_flag = False
-        self.set_select_wave_num_text(0)
         self._is_desc_order = not self._is_desc_order
         self._update_order_button_text()
         self._click_order = False
@@ -193,10 +463,10 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         item.setData(None, Qt.BackgroundRole)
 
     def _resolve_row_file_path(self, row):
-        audio_data = self.filter_audio_data if self.is_filter_flag else self.all_audio_data
-        if row < 0 or row >= len(audio_data):
+        audio_data = self._get_audio_data_by_visible_row(row)
+        if audio_data is None:
             return None
-        raw_path = audio_data[row][1]
+        raw_path = audio_data[1]
         if not raw_path:
             return None
         if os.path.isabs(raw_path):
@@ -437,53 +707,108 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         FileOps.create_zip_with_files(file_path_list, file_path, progress_callback=self.update_packaging_progress)
 
-        self.set_all_checkboxes_checked([0], False)
+        self._selected_audio_data_by_id.clear()
+        self._rebuild_select_wave_data()
+        self._restore_current_page_checked_states()
+        self.set_select_wave_num_text(len(self.select_wave_data))
         self.packaging_progress.close()
         self.packaging_progress = None
 
     def on_clicked_delete_btn(self):
         current_file = self.playback_controller.get_current_playing_file()
-        if current_file and self.select_wave_data:
-            selected_paths = []
-            for value in self.select_wave_data.values():
-                selected_path = value[1]
-                if os.path.isabs(selected_path):
-                    selected_paths.append(os.path.abspath(selected_path))
-                else:
-                    selected_paths.append(os.path.abspath(os.path.join(DEFAULT_DIR, selected_path)))
-            if os.path.abspath(current_file) in selected_paths:
-                self._stop_playback_if_needed()
-
-        is_delete_item_list = list()
-        will_delete_in_db_list = list()
-        for key, value in self.select_wave_data.items():
-            raw_path = value[1]
-            if os.path.isabs(raw_path):
-                file_path = os.path.abspath(raw_path)
-            else:
-                file_path = os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
-            self._audio_duration_cache.pop(os.path.abspath(file_path), None)
-            if os.path.isfile(file_path):
-                try:
-                    os.remove(file_path)
-                    is_delete_item_list.append(int(key))
-                    will_delete_in_db_list.append(value[0])
-                except Exception as e:
-                    MessageBox.warning(self, "警告", "%s" % str(e)[:40])
-            else:
-                will_delete_in_db_list.append(value[0])
-        code, result = self.recording_manager.delete_audio_at_id_list(will_delete_in_db_list)
-        if code == error_code.OK:
-            self.logger.info("success delete audio with will_delete_in_db_list")
-        else:
-            self.logger.error(result)
+        selected_audio_data = list(self.select_wave_data.values())
+        selected_count = len(selected_audio_data)
+        if not selected_count:
             return
-        self.data_view.del_model_row_with_list(is_delete_item_list)
-        self.select_wave_data = dict()
-        self.delete_audio_data_with_id(will_delete_in_db_list)
-        self.set_select_wave_num_text(0)
-        self.update_filter_sets_after_deletion()
-        self._rebuild_play_buttons()
+
+        batch_count = max(1, (selected_count + 499) // 500)
+        progress_total = selected_count + batch_count + 4
+        delete_progress = QProgressDialog("正在删除音频数据...", None, 0, progress_total, self)
+        delete_progress.setWindowTitle("删除进度")
+        delete_progress.setWindowModality(Qt.WindowModal)
+        delete_progress.setWindowFlags(delete_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
+        delete_progress.show()
+        QApplication.processEvents()
+
+        progress_value = 0
+
+        def update_delete_progress(value, text=None):
+            nonlocal progress_value
+            progress_value = min(value, progress_total)
+            if text:
+                delete_progress.setLabelText(text)
+            delete_progress.setValue(progress_value)
+            QApplication.processEvents()
+
+        try:
+            if current_file:
+                current_file_abs = os.path.abspath(current_file)
+                for value in selected_audio_data:
+                    selected_path = value[1]
+                    if os.path.isabs(selected_path):
+                        selected_path_abs = os.path.abspath(selected_path)
+                    else:
+                        selected_path_abs = os.path.abspath(os.path.join(DEFAULT_DIR, selected_path))
+                    if current_file_abs == selected_path_abs:
+                        self._stop_playback_if_needed()
+                        break
+
+            will_delete_in_db_list = list()
+            for index, value in enumerate(selected_audio_data, start=1):
+                raw_path = value[1]
+                if os.path.isabs(raw_path):
+                    file_path = os.path.abspath(raw_path)
+                else:
+                    file_path = os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
+                self._audio_duration_cache.pop(os.path.abspath(file_path), None)
+                if os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                        will_delete_in_db_list.append(value[0])
+                    except Exception as e:
+                        MessageBox.warning(self, "警告", "%s" % str(e)[:40])
+                else:
+                    will_delete_in_db_list.append(value[0])
+                if index % 100 == 0 or index == selected_count:
+                    update_delete_progress(index, f"正在处理文件... {index}/{selected_count}")
+
+            db_progress_base = selected_count
+            db_batch_count = max(1, (len(will_delete_in_db_list) + 499) // 500)
+
+            def update_db_delete_progress(processed_count, total_count):
+                batch_index = min(db_batch_count, (processed_count + 499) // 500)
+                update_delete_progress(
+                    db_progress_base + batch_index,
+                    f"正在删除数据库记录... {processed_count}/{total_count}",
+                )
+
+            code, result = self.recording_manager.delete_audio_at_id_list(
+                will_delete_in_db_list, progress_callback=update_db_delete_progress
+            )
+            if code == error_code.OK:
+                self.logger.info("success delete audio with will_delete_in_db_list")
+            else:
+                self.logger.error(result)
+                MessageBox.warning(self, "警告", result)
+                return
+
+            update_delete_progress(selected_count + db_batch_count + 1, "正在更新选择状态...")
+            self._selected_audio_data_by_id.clear()
+            self._rebuild_select_wave_data()
+            self.delete_audio_data_with_id(will_delete_in_db_list)
+            self._clamp_current_page()
+
+            update_delete_progress(selected_count + db_batch_count + 2, "正在更新筛选条件...")
+            self.update_filter_sets_after_deletion()
+
+            update_delete_progress(selected_count + db_batch_count + 3, "正在刷新列表...")
+            self.load_audio_data_to_view()
+            self.set_select_wave_num_text(len(self.select_wave_data))
+            self._rebuild_play_buttons()
+
+            update_delete_progress(progress_total, "删除完成")
+        finally:
+            delete_progress.close()
 
     def closeEvent(self, event):
         if self.playback_controller.is_audio_playing():
