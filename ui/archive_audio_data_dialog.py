@@ -653,7 +653,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         file_path = audio_data[1] if isinstance(audio_data, (list, tuple)) and len(audio_data) > 1 else audio_data
         return str(file_path).split("/")[-1].split("\\")[-1]
 
-    def _write_package_delete_failure_report(
+    def _build_package_delete_failure_report(
         self,
         output_zip_path,
         package_failed,
@@ -663,32 +663,45 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         if not package_failed and not source_delete_failed and not archive_deleted_before_failure:
             return None, None
 
+        lines = [
+            "失败清单",
+            "生成时间：%s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "",
+        ]
+        if package_failed:
+            lines.append("打包失败：%s 个" % len(package_failed))
+            for item in package_failed:
+                lines.append(self._get_audio_data_file_name(item))
+            lines.append("")
+        if source_delete_failed:
+            lines.append("原文件删除失败：%s 个" % len(source_delete_failed))
+            for item in source_delete_failed:
+                lines.append(self._get_audio_data_file_name(item))
+            lines.append("")
+        if archive_deleted_before_failure:
+            lines.append("压缩包最终写入失败前已删除源文件：%s 个" % len(archive_deleted_before_failure))
+            for item in archive_deleted_before_failure:
+                lines.append(self._get_audio_data_file_name(item))
+
+        report_name = os.path.basename(os.path.splitext(output_zip_path)[0] + "_failures.txt")
+        return report_name, "\n".join(lines)
+
+    def _write_failure_report_to_file(self, output_zip_path, report_content):
         report_path = os.path.splitext(output_zip_path)[0] + "_failures.txt"
         try:
             with open(report_path, "w", encoding="utf-8") as report_file:
-                report_file.write("打包失败清单\n")
-                report_file.write("生成时间：%s\n\n" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                report_file.write("打包失败：%s 个\n" % len(package_failed))
-                for item in package_failed:
-                    report_file.write("%s\n" % self._get_audio_data_file_name(item))
-                report_file.write("\n原文件删除失败：%s 个\n" % len(source_delete_failed))
-                for item in source_delete_failed:
-                    report_file.write("%s\n" % self._get_audio_data_file_name(item))
-                if archive_deleted_before_failure:
-                    report_file.write("\n压缩包最终写入失败前已删除源文件：%s 个\n" % len(archive_deleted_before_failure))
-                    for item in archive_deleted_before_failure:
-                        report_file.write("%s\n" % self._get_audio_data_file_name(item))
+                report_file.write(report_content)
             return report_path, None
         except Exception as e:
             self.logger.error(e)
             return None, e
 
-    def _add_failure_report_to_zip(self, output_zip_path, report_path):
-        if not report_path:
+    def _add_failure_report_to_zip(self, output_zip_path, report_name, report_content):
+        if not report_name or not report_content:
             return None
         try:
             with ZipFile(output_zip_path, "a", compression=ZIP_DEFLATED) as zip_file:
-                zip_file.write(report_path, os.path.basename(report_path))
+                zip_file.writestr(report_name, report_content)
             return None
         except Exception as e:
             self.logger.error(e)
@@ -706,6 +719,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         failure_report_path=None,
         failure_report_error=None,
         failure_report_zip_error=None,
+        failure_report_zip_name=None,
     ):
         if database_package_error:
             title = "打包失败"
@@ -739,10 +753,10 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             lines.append("原文件删除失败：%s 个" % len(source_delete_failed))
         if db_delete_error:
             lines.append("数据库删除失败：%s" % str(db_delete_error)[:120])
+        if failure_report_zip_name:
+            lines.append("失败清单已加入压缩包：%s" % failure_report_zip_name)
         if failure_report_path:
             lines.append("失败清单已保存：%s" % failure_report_path)
-            if failure_report_zip_error is None:
-                lines.append("失败清单已加入压缩包")
         if failure_report_error:
             lines.append("失败清单保存失败：%s" % str(failure_report_error)[:120])
         if failure_report_zip_error:
@@ -760,14 +774,15 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         failure_report_path=None,
         failure_report_error=None,
         failure_report_zip_error=None,
+        failure_report_zip_name=None,
     ):
         if not package_failed and not failure_report_error and not failure_report_zip_error:
             return
         lines = ["打包完成", "打包失败：%s 个" % len(package_failed)]
+        if failure_report_zip_name:
+            lines.append("失败清单已加入压缩包：%s" % failure_report_zip_name)
         if failure_report_path:
             lines.append("失败清单已保存：%s" % failure_report_path)
-            if failure_report_zip_error is None:
-                lines.append("失败清单已加入压缩包")
         if failure_report_error:
             lines.append("失败清单保存失败：%s" % str(failure_report_error)[:120])
         if failure_report_zip_error:
@@ -978,15 +993,31 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         finally:
             package_delete_progress.close()
 
-        failure_report_path, failure_report_error = self._write_package_delete_failure_report(
+        failure_report_name, failure_report_content = self._build_package_delete_failure_report(
             file_path,
             package_failed,
             source_delete_failed,
             packaged_deleted if archive_finalize_error else None,
         )
+        failure_report_path = None
+        failure_report_error = None
         failure_report_zip_error = None
-        if failure_report_path:
-            failure_report_zip_error = self._add_failure_report_to_zip(file_path, failure_report_path)
+        failure_report_zip_name = None
+        if failure_report_content:
+            if archive_finalize_error:
+                failure_report_path, failure_report_error = self._write_failure_report_to_file(
+                    file_path, failure_report_content
+                )
+            else:
+                failure_report_zip_error = self._add_failure_report_to_zip(
+                    file_path, failure_report_name, failure_report_content
+                )
+                if failure_report_zip_error:
+                    failure_report_path, failure_report_error = self._write_failure_report_to_file(
+                        file_path, failure_report_content
+                    )
+                else:
+                    failure_report_zip_name = failure_report_name
 
         self._show_package_delete_summary(
             packaged_deleted,
@@ -999,6 +1030,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             failure_report_path=failure_report_path,
             failure_report_error=failure_report_error,
             failure_report_zip_error=failure_report_zip_error,
+            failure_report_zip_name=failure_report_zip_name,
         )
 
     def on_clicked_package_btn(self):
@@ -1045,19 +1077,29 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.set_select_wave_num_text(len(self.select_wave_data))
         self.packaging_progress.close()
         self.packaging_progress = None
-        failure_report_path, failure_report_error = self._write_package_delete_failure_report(
+        failure_report_name, failure_report_content = self._build_package_delete_failure_report(
             file_path,
             package_failed,
             [],
         )
+        failure_report_path = None
+        failure_report_error = None
         failure_report_zip_error = None
-        if failure_report_path:
-            failure_report_zip_error = self._add_failure_report_to_zip(file_path, failure_report_path)
+        failure_report_zip_name = None
+        if failure_report_content:
+            failure_report_zip_error = self._add_failure_report_to_zip(file_path, failure_report_name, failure_report_content)
+            if failure_report_zip_error:
+                failure_report_path, failure_report_error = self._write_failure_report_to_file(
+                    file_path, failure_report_content
+                )
+            else:
+                failure_report_zip_name = failure_report_name
         self._show_package_failure_summary(
             package_failed,
             failure_report_path=failure_report_path,
             failure_report_error=failure_report_error,
             failure_report_zip_error=failure_report_zip_error,
+            failure_report_zip_name=failure_report_zip_name,
         )
 
     def on_clicked_delete_btn(self):
