@@ -5,8 +5,6 @@ os.environ["SD_ENABLE_ASIO"] = "1"
 
 import sounddevice as sd
 
-sd.default.samplerate = 48000
-
 from consts import error_code
 from consts.running_consts import AUDIO_DEVICE_CONFIG_PATH
 
