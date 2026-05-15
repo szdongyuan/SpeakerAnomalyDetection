@@ -4,9 +4,13 @@ import textwrap
 import types
 from pathlib import Path
 
+import numpy as np
+
 
 SOURCE_PATH = Path(__file__).resolve().parents[2] / "ui" / "sequence" / "sequence_widget.py"
 TARGET_METHODS = {
+    "_get_mode_display_name",
+    "_ensure_external_trigger_mode_supported",
     "_normalize_barcode",
     "_barcode_has_invalid_chars",
     "_reset_barcode_commit_state",
@@ -280,8 +284,9 @@ class FakeTimer:
 
 
 class FakeStreamingProcessor:
-    def __init__(self, recorded_data=None, raise_on_get=None):
+    def __init__(self, recorded_data=None, recorded_data_multi=None, raise_on_get=None):
         self.recorded_data = list(recorded_data or [0.1, 0.2, 0.3])
+        self.recorded_data_multi = recorded_data_multi
         self.raise_on_get = raise_on_get
         self.is_recording = True
         self.target_samples = len(self.recorded_data)
@@ -294,14 +299,20 @@ class FakeStreamingProcessor:
             raise self.raise_on_get
         return self.recorded_data
 
+    def get_recorded_data_multi(self):
+        if self.recorded_data_multi is None:
+            return None
+        return self.recorded_data_multi
+
     def stop_streaming(self):
         self.is_recording = False
 
 
 class FakeWavWriter:
-    def __init__(self, path, sample_rate):
+    def __init__(self, path, sample_rate, **kwargs):
         self.path = path
         self.sample_rate = sample_rate
+        self.kwargs = kwargs
         self.finalized = False
 
     def finalize(self):
@@ -329,11 +340,13 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._analysis_window_key_by_obj = {}
     window._record_workflow_busy = False
     window._barcode_scanner_box_enabled_before_recording = None
+    window.tcp_flag = False
     window.player_status_flag = False
     window.clicked_player_flag = False
     window.current_recorded_count = 1
     window.last_play_count = 1
     window.sequence_config = [{"seq1": {"acq": {"mode": mode}}}]
+    window.mode = mode
     window.use_streaming = use_streaming
     window.line_graph = FakeGraph()
     window.replayer_btn = FakeButton()
@@ -384,6 +397,7 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window.checked_work_status_message = lambda: False
     window.reset_work_pram = lambda label, count=None: reset_result
     window._cleanup_streaming_resources = lambda: setattr(window, "cleanup_calls", window.cleanup_calls + 1)
+    window._clear_plot_area = lambda: window.line_graph.clear()
     window.update_player_btn_is_playing = lambda: setattr(window, "playing_updates", window.playing_updates + 1)
     window.update_player_btn_is_paused = lambda: setattr(window, "paused_updates", window.paused_updates + 1)
     window.plot_line_graph = lambda *args, **kwargs: setattr(window, "plot_called", True)
@@ -405,6 +419,10 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._reset_barcode_commit_state = _bind_method(window, namespace, "_reset_barcode_commit_state")
     window._validate_sn_regex_before_start = _bind_method(window, namespace, "_validate_sn_regex_before_start")
     window._tcp_run_test = _bind_method(window, namespace, "_tcp_run_test")
+    window._get_mode_display_name = _bind_method(window, namespace, "_get_mode_display_name")
+    window._ensure_external_trigger_mode_supported = _bind_method(
+        window, namespace, "_ensure_external_trigger_mode_supported"
+    )
     window._commit_barcode = _bind_method(window, namespace, "_commit_barcode")
     window._set_sn_input_recording_read_only = _bind_method(window, namespace, "_set_sn_input_recording_read_only")
     window.validate_count = _bind_method(window, namespace, "validate_count")
@@ -442,6 +460,34 @@ def test_streaming_mode_keeps_sn_locked_until_completion():
     assert window.replayer_btn.enabled is True
     assert window.lineedit_s_or_n.focus_calls == 1
     assert window.lineedit_s_or_n.select_all_calls == 1
+
+
+def test_record_only_streaming_completion_stores_mono_and_multi_recorded_data():
+    namespace = _build_method_namespace()
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: ("OK", "saved")
+    )
+    mono_data = [0.1, 0.2, 0.3]
+    multi_data = np.array(
+        [
+            [0.1, 1.1],
+            [0.2, 1.2],
+            [0.3, 1.3],
+        ],
+        dtype=np.float32,
+    )
+
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.streaming_mode = "record_only"
+    window.streaming_processor = FakeStreamingProcessor(
+        recorded_data=mono_data,
+        recorded_data_multi=multi_data,
+    )
+
+    window._on_streaming_complete()
+
+    assert window.data_struct.store_wave_data == mono_data
+    np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, multi_data)
 
 
 def test_streaming_start_failure_restores_sn_editability():
@@ -768,6 +814,38 @@ def test_tcp_run_test_allows_invalid_sn_when_validation_is_explicitly_skipped():
     assert window.current_recorded_count == 2
     assert window.lineedit_count.text() == "2"
     assert namespace["MessageBox"].warnings == []
+
+
+def test_tcp_run_test_allows_play_and_record_mode():
+    namespace = _build_method_namespace()
+    namespace["SequenceWindow"] = types.SimpleNamespace(
+        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="PLAY_AND_RECORD")
+    window.start_this_play = lambda label, skip_sn_regex_validation=False: window.start_calls.append(
+        (label, skip_sn_regex_validation)
+    )
+
+    window._tcp_run_test("OK", skip_sn_regex_validation=True)
+
+    assert window.start_calls == [("OK", True)]
+    assert namespace["MessageBox"].warnings == []
+
+
+def test_tcp_run_test_blocks_unsupported_mode_with_friendly_message():
+    namespace = _build_method_namespace()
+    namespace["SequenceWindow"] = types.SimpleNamespace(
+        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="IMPORT_AUDIO")
+
+    window._tcp_run_test("OK", skip_sn_regex_validation=True)
+
+    assert window.start_calls == []
+    warnings = namespace["MessageBox"].warnings
+    assert len(warnings) == 1
+    assert "导入音频" in warnings[0][0][2]
+    assert "不支持TCP启动工作流" in warnings[0][0][2]
 
 
 def test_replay_path_blocks_invalid_sn_before_recording():
