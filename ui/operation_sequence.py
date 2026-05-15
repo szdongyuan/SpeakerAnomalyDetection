@@ -14,7 +14,7 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
-from base.soundcard_calibration_manager import get_mic_v2pa_factor
+from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.stimulus_resolver import (
     set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal,
 )
@@ -38,6 +38,7 @@ from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
 from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
 from ui.ui_analysis_config.pipeline_pd_pm_config import PipelinePdPmConfigWindow
 from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
+from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpectrumConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
@@ -45,10 +46,12 @@ from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_src import ui_resources
 
+GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA = {"SPLF", "HD", "RB", "PRB"}
+
 
 class AnalysisModelSelect(QDialog):
 
-    def __init__(self, using_config_path, mic=None, speaker=None):
+    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None):
         super().__init__()
         # When main window has no active config selected ("无配置"), using_config_path can be None.
         # Fall back to the built-in default sequence config so the test-queue window can still open.
@@ -58,11 +61,18 @@ class AnalysisModelSelect(QDialog):
         # When user selects a target path via “新建”, confirm should save to that path
         # without touching main window's using_config_path registry.
         self._new_target_path_selected = False
+        self.config_saved = False
 
         self.analysis_list = TreeView()
         self.analysis_list.setSelectionMode(TreeView.SingleSelection)
         self.default_logger = LogManager.set_log_handler("core")
-        self.select_list = OptionList(self.default_logger, using_config_path, mic=mic, speaker=speaker)
+        self.select_list = OptionList(
+            self.default_logger,
+            using_config_path,
+            mic=mic,
+            speaker=speaker,
+            mic_channels=mic_channels,
+        )
         self.analysis_list.setEditTriggers(TreeView.NoEditTriggers)
         self.select_list.setEditTriggers(TreeView.NoEditTriggers)
 
@@ -194,6 +204,7 @@ class AnalysisModelSelect(QDialog):
             "声压级 (SPL) ",
             "声压级-频率 (SPLF) ",
             "频谱分析 (Spec) ",
+            "参考频谱对比 (RSC) ",
             "频响 (FR) ",
             "频段能量 (FBA) ",
             "谐波失真 (HD) ",
@@ -416,7 +427,22 @@ class AnalysisModelSelect(QDialog):
 
                 instance = cls_map(key)
                 instance.analysis_config = params
-                instance.v2pa_factor = get_mic_v2pa_factor()
+                raw_channel = 0
+                try:
+                    raw_channel = int(params.get("analysis_channel", 0) or 0)
+                except (TypeError, ValueError):
+                    raw_channel = 0
+                if raw_channel < 0:
+                    raw_channel = 0
+                if item_type in GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA:
+                    try:
+                        instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+                            raw_channel,
+                            warn_callback=lambda msg: MessageBox.warning(self, "提示", msg),
+                        )
+                    except ValueError as e:
+                        MessageBox.warning(self, "提示", str(e))
+                        continue
 
                 result = None
                 if hasattr(instance, "calculate_spl"):
@@ -584,7 +610,8 @@ class AnalysisModelSelect(QDialog):
 
         # No forced mode switch / model sync here.
         # Main window will refresh the active config after this dialog closes.
-        self.close()
+        self.config_saved = True
+        self.accept()
 
     @staticmethod
     def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str = None, logger=None):
@@ -600,7 +627,7 @@ class AnalysisModelSelect(QDialog):
 
 class OptionList(ListView):
 
-    def __init__(self, logger, using_config_path, mic=None, speaker=None):
+    def __init__(self, logger, using_config_path, mic=None, speaker=None, mic_channels=None):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.select_analysis_model = QStandardItemModel()
@@ -612,6 +639,7 @@ class OptionList(ListView):
         self.default_logger = logger
         self.mic = mic
         self.speaker = speaker
+        self.mic_channels = self._normalize_channels(mic_channels)
         self.row_num = None
         self.darpflag = None
         self.sound_item_type = None
@@ -630,6 +658,19 @@ class OptionList(ListView):
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
         self.dropEvent = self.dropevent
+
+    @staticmethod
+    def _normalize_channels(channels):
+        out = []
+        try:
+            for ch in channels or []:
+                out.append(int(ch))
+        except Exception:
+            out = []
+        out = sorted(set(out))
+        if not out:
+            out = [0]
+        return out
 
     def itemmove(self, index):
         if self.index_num is None or not index:
@@ -720,16 +761,23 @@ class OptionList(ListView):
         ai_list.append(name)
 
     def show_dialog(self, name):
-        model = QDialog(self)
+        model = None
         if name == self.config[0].name:
             if "播放与录制" in self.config[0].name:
                 model = PlayRecordConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
             elif "录制音频" in self.config[0].name:
-                model = RecordConfigWindow(self.config[0].detail, mic=self.mic)
+                model = RecordConfigWindow(
+                    self.config[0].detail,
+                    mic=self.mic,
+                    speaker=self.speaker,
+                    available_channels=self.mic_channels,
+                )
             elif "导入音频" in self.config[0].name:
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
             elif "导入激励与音频" in self.config[0].name:
                 model = ImportStimulusAudioConfigWindow(self.config[0].detail, mic=self.mic, speaker=self.speaker)
+            if model is None:
+                return
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
@@ -765,9 +813,41 @@ class OptionList(ListView):
             self.default_logger.error(f"load default stimulus config error {data}")
             return False, {}
 
+    @staticmethod
+    def _normalize_record_only_detail(detail):
+        detail = detail or {}
+        try:
+            total_time = float(detail.get("total_time", 4.0))
+        except (TypeError, ValueError):
+            total_time = 4.0
+        try:
+            sample_rate = int(detail.get("sample_rate", 44100))
+        except (TypeError, ValueError):
+            sample_rate = 44100
+        try:
+            monitor_input_channel = int(detail.get("monitor_input_channel", 0))
+        except (TypeError, ValueError):
+            monitor_input_channel = 0
+        if monitor_input_channel < 0:
+            monitor_input_channel = 0
+        try:
+            monitor_gain_db = float(detail.get("monitor_gain_db", 0.0))
+        except (TypeError, ValueError):
+            monitor_gain_db = 0.0
+        return {
+            "total_time": total_time,
+            "sample_rate": sample_rate,
+            "monitor_playback": bool(detail.get("monitor_playback", False)),
+            "monitor_input_channel": monitor_input_channel,
+            "monitor_gain_db": monitor_gain_db,
+        }
+
     def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type, signal_len):
+        available_channels = None
+        if getattr(self.config[0], "mode", None) == "RECORD_ONLY":
+            available_channels = list(self.mic_channels or [0])
         if type == "SPL":
-            model = SplConfigWindow(config_manager, name)
+            model = SplConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "SPLF":
             model = SplConfigWindow(config_manager, name)
         elif type == "FR":
@@ -779,11 +859,13 @@ class OptionList(ListView):
         elif type == "PRB":
             model = PerceptualRbConfigWindow(config_manager, name)
         elif type == "AI":
-            model = AIConfigWindow(config_manager, name, signal_len)
+            model = AIConfigWindow(config_manager, name, signal_len, available_channels=available_channels)
         elif type == "Spec":
-            model = SpecConfigWindow(config_manager, name)
+            model = SpecConfigWindow(config_manager, name, available_channels=available_channels)
+        elif type == "RSC":
+            model = ReferenceSpectrumConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "LP":
-            model = LPConfigWindow(config_manager, name)
+            model = LPConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "PD":
             model = PDConfigWindow(config_manager, name)
         elif type == "ED":
@@ -791,7 +873,7 @@ class OptionList(ListView):
         elif type == "PM":
             model = PatternMatchConfigWindow(config_manager, name)
         elif type == "FBA":
-            model = FbaConfigWindow(config_manager, name)
+            model = FbaConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         return model
@@ -809,6 +891,14 @@ class OptionList(ListView):
                 sequence_config.mode = value.get("acq", {}).get("mode", None)
                 self.sound_item_type = sequence_config.name.lstrip()
                 sequence_config.detail = value.get("acq", {}).get("detail", {})
+                if sequence_config.mode == "RECORD_ONLY":
+                    sequence_config.detail = self._normalize_record_only_detail(sequence_config.detail)
+                elif sequence_config.mode == "IMPORT_AUDIO":
+                    sequence_config.detail = {
+                        "sample_rate": int(sequence_config.detail.get("sample_rate", 44100))
+                    }
+
+                self.sound_item_type = sequence_config.name.lstrip()
 
                 i_analysis_list = value.get("analysis_list", {})
                 sequence_config.display_sequence = i_analysis_list.pop("display_sequence", [])
@@ -1131,13 +1221,20 @@ class OptionList(ListView):
             if flag:
                 seq_item.mode = "PLAY_AND_RECORD"
                 seq_item.detail = config
+                seq_item.detail["monitor_playback"] = False
                 self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
             else:
                 MessageBox.warning(self, "提示", "窗口配置错误，请检查配置!")
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
-            seq_item.detail = {"total_time": 4.0, "sample_rate": 44100}
+            seq_item.detail = {
+                "total_time": 4.0,
+                "sample_rate": 44100,
+                "monitor_playback": False,
+                "monitor_input_channel": 0,
+                "monitor_gain_db": 0.0,
+            }
             self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
         elif item_text == "导入音频":
             seq_item.mode = "IMPORT_AUDIO"

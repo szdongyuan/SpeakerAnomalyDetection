@@ -285,6 +285,10 @@ class MessageBox(QMessageBox):
         self._sync_buttons_style_and_text()
         return super().exec_()
 
+    def open(self):
+        self._sync_buttons_style_and_text()
+        return super().open()
+
     @classmethod
     def warning(cls, parent, title, text, buttons=QMessageBox.Ok, defaultButton=QMessageBox.NoButton):
         return cls._show_static_message(QMessageBox.Warning, parent, title, text, buttons, defaultButton)

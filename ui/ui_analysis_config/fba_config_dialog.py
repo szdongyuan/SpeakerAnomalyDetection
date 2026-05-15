@@ -1,4 +1,5 @@
 import re
+from typing import List, Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QSizePolicy, QWidget
@@ -27,17 +28,44 @@ class FbaConfigWindow(QDialog):
         "自定义",
     ]
 
-    def __init__(self, config_manager, model_type):
+    def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__()
         self.config_manager = config_manager
         # 提取模型类型中的字母部分，例如 "FBA"
         self.model_type_str = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "FBA"
+        self.show_channel_selector = available_channels is not None
+        self.available_channels = self._normalize_available_channels(available_channels)
 
         # 加载配置
         full_config = self.config_manager.load_config()
         self.load_config = full_config.get(model_type, {})
 
         self.init_ui()
+
+    @staticmethod
+    def _normalize_available_channels(available_channels):
+        channels = []
+        try:
+            channels = sorted({int(ch) for ch in (available_channels or [])})
+        except Exception:
+            channels = []
+        if not channels:
+            channels = [0]
+        return channels
+
+    def _create_channel_layout(self):
+        channel_layout = QHBoxLayout()
+        channel_layout.addWidget(Label("通道:"))
+        self.channel_combo_box = ComboBox()
+        for ch in self.available_channels:
+            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
+        saved_channel = self.load_config.get("analysis_channel", None)
+        if saved_channel is None or int(saved_channel) not in self.available_channels:
+            saved_channel = int(self.available_channels[0])
+        idx = self.channel_combo_box.findData(int(saved_channel))
+        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
+        channel_layout.addWidget(self.channel_combo_box, 1)
+        return channel_layout
 
     def init_ui(self):
         # --- 窗口基本设置 ---
@@ -54,6 +82,9 @@ class FbaConfigWindow(QDialog):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
+
+        if self.show_channel_selector:
+            main_layout.addLayout(self._create_channel_layout())
 
         # =========================================================
         # 1. 频段划分策略 (GroupBox)
@@ -274,6 +305,9 @@ class FbaConfigWindow(QDialog):
             "f_min": int(self.f_min_spin.value()),
             "f_max": int(self.f_max_spin.value()),
             "bandwidth": int(self.bandwidth_spin.value()),
+            "analysis_channel": int(self.channel_combo_box.currentData())
+            if self.show_channel_selector and hasattr(self, "channel_combo_box")
+            else int(self.load_config.get("analysis_channel", 0) or 0),
         }
         if self.strategy_combo.currentText() == "自定义":
             config["custom_bands_text"] = self.custom_bands_edit.toPlainText()
