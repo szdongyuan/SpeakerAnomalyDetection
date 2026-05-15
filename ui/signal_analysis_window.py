@@ -43,6 +43,7 @@ from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
+from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_src import ui_resources
 
 
@@ -60,6 +61,7 @@ def get_class_mapping():
         "SPL": Spl,
         "SPLF": SplFrequency,
         "FR": Frequency,
+        "RSC": ReferenceSpectrumCompareWindow,
         "HD": Distortion,
         "RB": RubAndBuzz,  # Rub & Buzz (high-order 10th-35th harmonic distortion)
         "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (2nd-35th harmonics, psychoacoustic loudness in phons)
@@ -113,6 +115,41 @@ def _load_golden_baseline_result(analysis_config: dict, title_name: str):
         return None
     result = item.get("result")
     return result if isinstance(result, dict) else None
+
+
+def resolve_analysis_channel_signal(
+    data_struct: DataDealStruct, analysis_config: dict, title_name: str, strict: bool = True
+):
+    cfg = analysis_config if isinstance(analysis_config, dict) else {}
+    channel = int(cfg.get("analysis_channel", 0) or 0)
+
+    multi = getattr(data_struct, "store_wave_data_multi", None)
+    if multi is not None:
+        arr = np.asarray(multi)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        if arr.ndim != 2:
+            raise ValueError(f"[{title_name}] invalid multi-channel data shape: {arr.shape}")
+        n_channels = int(arr.shape[1])
+        if channel < 0 or channel >= n_channels:
+            if strict:
+                raise ValueError(
+                    f"[{title_name}] analysis_channel={channel} out of range; recorded channels={n_channels}"
+                )
+            channel = 0
+        return np.asarray(arr[:, channel], dtype=np.float32)
+
+    mono = getattr(data_struct, "store_wave_data", None)
+    if mono is None:
+        raise ValueError(f"[{title_name}] missing recorded signal")
+    arr = np.asarray(mono)
+    if arr.ndim != 1:
+        arr = arr.reshape(-1)
+    if strict and channel != 0:
+        raise ValueError(
+            f"[{title_name}] analysis_channel={channel} requires multi-channel recording, but only mono data available"
+        )
+    return np.asarray(arr, dtype=np.float32)
 
 
 def _abs_deviation_curve(x_current, y_current, x_base, y_base):
@@ -217,6 +254,8 @@ class AnalysisResultSummaryWindow(QWidget):
                 deviation = f"{deviation:.2f} dB"
             elif "FR" in name:
                 deviation = f"{deviation:.2f} dB"
+            elif "RSC" in name:
+                deviation = f"{deviation:.2f} dB"
             elif "PRB" in name:
                 deviation = f"{deviation:.2f} phon"
             elif "HD" in name or "RB" in name:
@@ -319,7 +358,13 @@ class Distortion(AnalysisGraphWidget):
             return self.result
 
         # Get signals and metadata from data_struct
-        recorded_signal = self.data_struct.store_wave_data
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": [], "thd_raw": []}
+            return self.result
         sample_rate = self.data_struct.sample_rate
         stimulus_info = self.data_struct.stimulus_info
 
@@ -603,7 +648,13 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         prb_method = "sc"
 
         # Get signals and metadata from data_struct
-        recorded_signal = self.data_struct.store_wave_data
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": [], "thd_raw": []}
+            return self.result
         sample_rate = self.data_struct.sample_rate
         stimulus_info = self.data_struct.stimulus_info
 
@@ -826,7 +877,11 @@ class Spl(AnalysisGraphWidget):
 
     def calculate_spl(self):
         # calculate Sound Pressure Level according to recorded_signal
-        recorded_signal = self.data_struct.store_wave_data
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            return False
         sample_rate = self.data_struct.sample_rate
         reference_pressure = 20e-6
         window_size = 1201
@@ -964,7 +1019,13 @@ class SplFrequency(AnalysisGraphWidget):
         self.setWindowTitle(title_name)
 
     def calculate_spl(self):
-        recorded_signal = self.data_struct.store_wave_data
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            self.plot_spl_frequency([], [])
+            self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
+            return self.result
         sample_rate = self.data_struct.sample_rate
         stimulus_info = self.data_struct.stimulus_info or {}
         analysis_config = self.analysis_config or {}
@@ -1164,7 +1225,13 @@ class Frequency(AnalysisGraphWidget):
 
     def calculate_fr(self):
         stimulus_signal = self.data_struct.stimulus_data
-        recorded_signal = self.data_struct.store_wave_data
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            self.plot_fr([], [])
+            self.result = {"fr": [], "frequency_list": [], "fr_raw": []}
+            return self.result
         sr = self.data_struct.sample_rate
         stimulus_info = self.data_struct.stimulus_info or {}
         analysis_config = self.analysis_config or {}
@@ -1494,11 +1561,17 @@ class AI(QWidget):
 
     def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
+        try:
+            ai_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            self.ai_analyse_score_textedit.setPlainText(str(e))
+            return
+
         if acq_mode in ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"]:
             query_code, query_result = TrainingModelManagement().get_input_dim_info_by_name(model_name)
             if query_code == error_code.OK:
                 input_dim = str(query_result).split("x")[0].strip()
-                if input_dim != str(len(self.data_struct.store_wave_data)):
+                if input_dim != str(len(ai_signal)):
                     self.ai_analyse_score_textedit.setPlainText("模型与音频时长不匹配")
                     return
                 else:
@@ -1512,13 +1585,15 @@ class AI(QWidget):
         else:
             model_path, config_path = result
             kwargs = {"config_path": config_path}
-            result_text = self.model_predict(model_path, model_name, **kwargs)
+            result_text = self.model_predict(model_path, model_name, signal_data=ai_signal, **kwargs)
             self.ai_analyse_score_textedit.setPlainText(result_text)
             self.highlight_keywords("ng", self.ai_analyse_score_textedit)
 
-    def model_predict(self, model_path, model_name, **kwargs):
+    def model_predict(self, model_path, model_name, signal_data=None, **kwargs):
+        if signal_data is None:
+            signal_data = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
         ret_str, pred_config = predict_from_audio(
-            signals=[np.array(self.data_struct.store_wave_data, dtype=np.float32)],
+            signals=[np.array(signal_data, dtype=np.float32)],
             file_names=["modelpredict.wav"],
             fs=[self.data_struct.sample_rate],
             load_model_path=model_path,
@@ -1566,6 +1641,7 @@ class Spectrogram(QWidget):
         self.data_struct = DataDealStruct()
         self.v2pa_factor = None
         self.analysis_config = None
+        self.title_name = title_name
         self.current_plot_widget = None
         self.stft_plot_widget = None
         self.img_item = None
@@ -1617,7 +1693,7 @@ class Spectrogram(QWidget):
             # color_bar_axis.setStyle(tickTextOffset=10)
 
     def calculate_spec(self):
-        recorded_signal = self.data_struct.store_wave_data
+        recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
         sample_rate = self.data_struct.sample_rate
 
         n_fft = self.analysis_config.get("n_fft", 2048)
@@ -1732,6 +1808,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.data_struct = DataDealStruct()
         self.result = None
         self.analysis_config = None
+        self.title_name = title_name
         self.lp_num_label = Label("LP 数量: %s" % self.result)
         self.status_label = Label()
         self.v2pa_factor = None
@@ -1749,7 +1826,7 @@ class LooseParticle(AnalysisGraphWidget):
         self.layout().insertLayout(0, lp_num_layout)
 
     def calculate_loose_particle(self):
-        recorded_signal = self.data_struct.store_wave_data
+        recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
             recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67, self.v2pa_factor
         )
@@ -2412,11 +2489,14 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
 
     def calculate_fba(self):
         """执行频段能量分析并绘图"""
-        recorded_signal = self.data_struct.store_wave_data
-        sample_rate = self.data_struct.sample_rate
         config = self.analysis_config or {}
-
-        if recorded_signal is None or sample_rate is None:
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            return False
+        sample_rate = self.data_struct.sample_rate
+        if sample_rate is None:
             return False
 
         strategy_label = config.get("band_strategy", "1/3 倍频程")

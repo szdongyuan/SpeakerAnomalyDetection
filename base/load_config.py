@@ -332,7 +332,9 @@ class LoadUiConfig(object):
                 continue
             if token_type == re_parser.AT and token_value in allowed_anchor_tokens:
                 continue
-            if token_type == re_parser.SUBPATTERN and LoadUiConfig._is_literal_only_sn_regex_subpattern(token_value[-1]):
+            if token_type == re_parser.SUBPATTERN and LoadUiConfig._is_literal_only_sn_regex_subpattern(
+                token_value[-1]
+            ):
                 continue
             return False
         return True
