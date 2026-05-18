@@ -65,8 +65,6 @@ from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
 from ui.ui_src import ui_resources
 
-ANALYSIS_TYPES_REQUIRING_V2PA = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"}
-
 
 class SequenceWindow(QWidget):
     tcp_server = None
@@ -81,6 +79,7 @@ class SequenceWindow(QWidget):
         self.toolsbar = SequenceToolsBar()
 
         self.v2pa_factor = None
+        self.analysis_types_requiring_v2pa = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"}
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
@@ -2199,7 +2198,7 @@ class SequenceWindow(QWidget):
         and adds it to the analysis window list.
         """
         class_mapping = get_class_mapping()
-        requires_v2pa = type in ANALYSIS_TYPES_REQUIRING_V2PA
+        requires_v2pa = type in self.analysis_types_requiring_v2pa
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
