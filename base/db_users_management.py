@@ -1,10 +1,11 @@
-from base.db_manager import DataSave
+from base.db_manager import DataSave, ensure_system_database_ready
 from consts import error_code, model_consts
 
 
 class UsersManagement(object):
     def __init__(self):
-        self.db_path = model_consts.DATABASE_PATH
+        self.db_path = model_consts.SYSTEM_DATABASE_PATH
+        ensure_system_database_ready()
 
     def create_user(self, register_user_info: dict):
         if not register_user_info:

@@ -24,7 +24,9 @@ STORED_PACKAGE_PATH = DEFAULT_DIR + "audio_data/stored_data/package"
 STORED_STIMULUS_PATH = DEFAULT_DIR + "audio_data/stimulus"
 JSON_DIR_PATH = DEFAULT_DIR + "ui/ui_config"
 
-DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"
+SYSTEM_DATABASE_PATH = DEFAULT_DIR + "database/system_data.db"
+AUDIO_DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"
+DATABASE_PATH = AUDIO_DATABASE_PATH
 
 SAMPLE_RATE = 44100
 POSITIVE_SAMPLE_LABEL = "OK"
