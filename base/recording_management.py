@@ -3,14 +3,15 @@ import shutil
 import os
 import uuid
 
-from base.db_manager import DataSave
+from base.db_manager import DataSave, ensure_audio_database_ready
 from base.save_data import save_audio_simple
 from consts import error_code, model_consts, running_consts
 
 
 class RecordingManager(object):
     def __init__(self):
-        self.db_path = model_consts.DATABASE_PATH
+        self.db_path = model_consts.AUDIO_DATABASE_PATH
+        ensure_audio_database_ready()
 
     def save_recording_to_wav(self, audio_info: dict, stimulus_parameter: dict):
         try:
