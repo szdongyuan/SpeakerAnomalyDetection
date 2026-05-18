@@ -3,7 +3,7 @@ import shutil
 
 import numpy as np
 
-from base.db_manager import DataSave
+from base.db_manager import DataSave, ensure_audio_database_ready
 from base.file_ops import FileOps
 from base.load_config import load_config
 from consts import error_code, model_consts
@@ -110,7 +110,8 @@ def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
                                       dest_test_dir=model_consts.TEST_PATH, over_write=True):
     try:
         data_load_config = load_config("data_load")
-        with DataSave(model_consts.DATABASE_PATH) as database:
+        ensure_audio_database_ready()
+        with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
             query_data = database.query_conditions()
         if over_write:
             for dest_dir in [dest_train_dir, dest_test_dir]:

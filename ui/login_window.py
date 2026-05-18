@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QSizePolicy, QVBoxLayout
 
-from base.db_manager import DataSave
+from base.db_manager import DataSave, ensure_system_database_ready
 from base.system_intervction.hardware_intervction import get_mac_address
 from base.log_manager import LogManager
 from consts import error_code, model_consts
@@ -174,7 +174,8 @@ class LoginWindow(QDialog):
 
     @staticmethod
     def get_user_info_from_db(user_name):
-        with DataSave(model_consts.DATABASE_PATH) as database:
+        ensure_system_database_ready()
+        with DataSave(model_consts.SYSTEM_DATABASE_PATH) as database:
             query_code, query_data = database.query(
                 "users_table", ["user_name", "access_level", "password"], {"user_name": user_name}
             )
@@ -283,7 +284,8 @@ class AddAccountWindow(QDialog):
             self.logger.error("Username, password, and access level cannot be empty.")
             return False
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_system_database_ready()
+            with DataSave(model_consts.SYSTEM_DATABASE_PATH) as database:
                 result = database.query_matching_data([(username,)], "users_table", ["user_name"], ["user_id"])
                 if not result:
                     insert_code, msg = database.insert_data_into_db(
@@ -373,7 +375,8 @@ class ChangePwdWindow(QDialog):
 
     def change_pwd_in_db(self, user_name, enc_pwd):
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_system_database_ready()
+            with DataSave(model_consts.SYSTEM_DATABASE_PATH) as database:
                 result = database.query_matching_data([(user_name,)], "users_table", ["user_name"], ["password"])
                 if result:
                     new_password_data = {"password": enc_pwd}

@@ -7,9 +7,10 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QStatusBar, QWidget, QVBo
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QDialog
 
 from base.log_manager import LogManager
-from base.db_manager import DataSave
+from base.db_manager import DataSave, ensure_system_database_ready
 from base.sound_device_manager import SoundDeviceManager
-from consts.model_consts import DATABASE_PATH
+from consts.model_consts import SYSTEM_DATABASE_PATH
+from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, MenuBar, Label, Action, MessageBox
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
@@ -117,7 +118,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def get_current_version():
-        with DataSave(DATABASE_PATH) as db:
+        ensure_system_database_ready()
+        with DataSave(SYSTEM_DATABASE_PATH) as db:
             current_version = db.query_matching_data([("current_version",)], "system_info_table", ["name"], ["value"])
             return current_version[0][0]
 

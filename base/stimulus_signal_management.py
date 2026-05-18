@@ -1,7 +1,7 @@
 import json
 import os
 
-from base.db_manager import DataSave
+from base.db_manager import DataSave, ensure_audio_database_ready
 from consts import model_consts, error_code, running_consts
 
 
@@ -9,7 +9,8 @@ class StimulusSignalManagement(object):
     @staticmethod
     def update_stimulus_default(stimulus_id, is_default):
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 query_code, query_data = database.query("stimulus_signal_table", ["is_default"],
                                                         {"stimulus_id": stimulus_id})
                 if query_code != error_code.OK or not query_data:
@@ -36,7 +37,8 @@ class StimulusSignalManagement(object):
     @staticmethod
     def query_default_stimulus_info():
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 query_code, query_data = database.query("stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS,
                                                         {"is_default": 1})
             if query_code == error_code.OK and query_data:
@@ -50,7 +52,8 @@ class StimulusSignalManagement(object):
     @staticmethod
     def query_all_stimulus_info():
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 query_code, query_data = database.query("stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS)
             if query_code == error_code.OK and query_data:
                 return error_code.OK, query_data
@@ -63,7 +66,8 @@ class StimulusSignalManagement(object):
     @staticmethod
     def save_stimulus_info_to_db(stimulus_info: dict):
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 normalized_info = stimulus_info.copy()
                 normalized_info.setdefault('num_steps', None)
                 normalized_info.setdefault('voltage_type', 'RMS')
@@ -101,7 +105,8 @@ class StimulusSignalManagement(object):
     def delete_stimulus_info_from_db(stimulus_name: str):
         delete_condition = {"stimulus_name": stimulus_name}
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 delete_code, msg = database.delete_with_condition("stimulus_signal_table", delete_condition)
                 return delete_code, msg
         except Exception as e:
@@ -111,7 +116,8 @@ class StimulusSignalManagement(object):
     @staticmethod
     def update_stimulus_info_to_db(stimulus_info: dict):
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 result = database.query_matching_data([(stimulus_info.get("stimulus_id"),)], "stimulus_signal_table", ["stimulus_id"],
                                                       ['stimulus_id'])
                 if result:
@@ -164,7 +170,8 @@ class StimulusSignalManagement(object):
         if not update_data:
             return error_code.INVALID_UPDATE, "No valid parameters to update."
         try:
-            with DataSave(model_consts.DATABASE_PATH) as database:
+            ensure_audio_database_ready()
+            with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
                 # Ensure record exists
                 result = database.query_matching_data(
                     [(stimulus_id,)], "stimulus_signal_table", ["stimulus_id"], ["stimulus_id"]
