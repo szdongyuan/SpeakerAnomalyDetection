@@ -511,7 +511,7 @@ class StreamingAudioProcessor:
             # ONE duplex stream instead of OutputStream + InputStream
             self.stream = sd.Stream(
                 samplerate=sample_rate,
-                channels=(max_input_channels, 1),          # (in_channels, out_channels)
+                channels=(max_input_channels, 1),  # (in_channels, out_channels)
                 callback=duplex_callback,
                 blocksize=2048,
                 device=device,
