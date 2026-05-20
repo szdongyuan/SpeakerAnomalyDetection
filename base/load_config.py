@@ -71,6 +71,9 @@ class LoadUiConfig(object):
             },
             "trigger_settings": {
                 "delay_seconds": 0.5,
+                "direction_cycle_policy": {
+                    "test_mode": "forward_then_reverse",
+                },
             },
             "decoder": {
                 "_comment": "mode 可以是 'full_frame' 或 'state_byte'",

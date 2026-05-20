@@ -217,6 +217,40 @@ class SequenceWidgetBarcodeOpsMixin:
         return self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", "")) in ("forward", "reverse")
 
     @staticmethod
+    def _normalize_direction_cycle_policy(policy: str) -> str:
+        value = str(policy or "").strip().lower()
+        if value in ("forward_then_reverse", "any_order_pair"):
+            return value
+        return "forward_then_reverse"
+
+    def _get_direction_cycle_policy_for_current_mode(self) -> str:
+        # 标记模式硬回退：始终走旧的"先正转再反转"策略，
+        # 即使配置文件里被人为加上 mark_mode 字段也不生效，
+        # 用来保证标记模式的 UI 提示和实际计数逻辑一致。
+        if not self._is_test_mode():
+            return "forward_then_reverse"
+        config = getattr(self, "_serial_trigger_config", {}) or {}
+        trigger_settings = config.get("trigger_settings", {}) or {}
+        policy_config = trigger_settings.get("direction_cycle_policy", {}) or {}
+        return self._normalize_direction_cycle_policy(policy_config.get("test_mode"))
+
+    def _is_direction_cycle_complete(self, first_direction: str, current_direction: str) -> bool:
+        first = self._normalize_trigger_direction(first_direction)
+        current = self._normalize_trigger_direction(current_direction)
+        policy = self._get_direction_cycle_policy_for_current_mode()
+        if policy == "any_order_pair":
+            return first in ("forward", "reverse") and current in ("forward", "reverse") and first != current
+        return first == "forward" and current == "reverse"
+
+    @staticmethod
+    def _opposite_direction(direction: str) -> str:
+        if direction == "forward":
+            return "reverse"
+        if direction == "reverse":
+            return "forward"
+        return ""
+
+    @staticmethod
     def _normalize_mark_cycle_label(label: str) -> str:
         lowered = str(label or "").strip().lower()
         if lowered == "ok":
@@ -302,6 +336,7 @@ class SequenceWidgetBarcodeOpsMixin:
         self._reset_mark_cycle_summary_state()
         self._manual_direction_fallback_next_direction = "forward"
         self._ai_cycle_started_at = ""
+        self._current_cycle_first_direction = ""
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._current_cycle_recorded_count = None
         self._pending_serial_trigger_direction = ""
@@ -318,6 +353,7 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def _reset_ai_cycle_panel_state(self):
         self._ai_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._current_cycle_first_direction = ""
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._reset_mark_cycle_summary_state()
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
@@ -338,11 +374,17 @@ class SequenceWidgetBarcodeOpsMixin:
         if not direction:
             return
 
+        policy = self._get_direction_cycle_policy_for_current_mode() if self._is_test_mode() else "forward_then_reverse"
+        first_direction = self._normalize_trigger_direction(getattr(self, "_current_cycle_first_direction", ""))
+        forward_is_second_leg = policy == "any_order_pair" and first_direction == "reverse" and direction == "forward"
+
         if direction == "forward":
-            # Start of a new directional cycle: release previous cycle count reservation
-            # so each forward leg can reserve (+1) exactly once.
-            self._current_cycle_recorded_count = None
-            self._reset_ai_cycle_panel_state()
+            if not forward_is_second_leg:
+                # Start of a new directional cycle: release previous cycle count reservation
+                # so each forward leg can reserve (+1) exactly once.
+                self._current_cycle_recorded_count = None
+                self._reset_ai_cycle_panel_state()
+                self._current_cycle_first_direction = "forward"
             self._manual_direction_fallback_next_direction = "reverse"
             # Lock S/N for the whole forward+reverse cycle in TEST mode only,
             # so neither operator typing nor a re-scan can change the barcode
@@ -354,7 +396,10 @@ class SequenceWidgetBarcodeOpsMixin:
         else:
             if not getattr(self, "_ai_cycle_started_at", ""):
                 self._reset_ai_cycle_panel_state()
+                self._current_cycle_first_direction = "reverse"
             self._manual_direction_fallback_next_direction = "forward"
+            if policy == "any_order_pair" and self._should_lock_sn_for_cycle() and not first_direction:
+                self._lock_sn_for_cycle()
 
         self._current_trigger_direction = direction
         # Bind waveform routing to the direction that started this recording.
@@ -396,6 +441,10 @@ class SequenceWidgetBarcodeOpsMixin:
         result_cache[direction] = label
         self._ai_cycle_direction_results = result_cache
         left_panel = getattr(self, "left_panel", None)
+        first_direction = self._normalize_trigger_direction(getattr(self, "_current_cycle_first_direction", ""))
+        if not first_direction:
+            first_direction = direction
+            self._current_cycle_first_direction = first_direction
 
         if direction == "forward":
             if left_panel is not None:
@@ -405,19 +454,28 @@ class SequenceWidgetBarcodeOpsMixin:
                         ai_scores.get("ok_score"),
                         ai_scores.get("ng_score"),
                     )
-                left_panel.set_current_stage("等待反转", tone="pending")
+        else:
+            if left_panel is not None:
+                left_panel.set_reverse_result(label)
+                if hasattr(left_panel, "set_reverse_scores"):
+                    left_panel.set_reverse_scores(
+                        ai_scores.get("ok_score"),
+                        ai_scores.get("ng_score"),
+                    )
+
+        if not self._is_direction_cycle_complete(first_direction, direction):
+            if self._get_direction_cycle_policy_for_current_mode() == "any_order_pair":
+                waiting_direction = self._opposite_direction(first_direction)
+                waiting_stage = "等待正转" if waiting_direction == "forward" else "等待反转"
+            else:
+                waiting_stage = "等待反转"
+            if left_panel is not None:
+                left_panel.set_current_stage(waiting_stage, tone="pending")
                 left_panel.set_final_result("待判定", tone="pending")
             return None
 
         forward_label = result_cache.get("forward")
         reverse_label = result_cache.get("reverse")
-        if left_panel is not None:
-            left_panel.set_reverse_result(label)
-            if hasattr(left_panel, "set_reverse_scores"):
-                left_panel.set_reverse_scores(
-                    ai_scores.get("ok_score"),
-                    ai_scores.get("ng_score"),
-                )
         if forward_label in ("OK", "NG") and reverse_label in ("OK", "NG"):
             final_label = "OK" if forward_label == "OK" and reverse_label == "OK" else "NG"
             final_tone = "ok" if final_label == "OK" else "ng"
