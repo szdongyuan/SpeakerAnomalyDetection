@@ -118,7 +118,9 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     num_frames = recorded_dict.get("num_frames", 441000)
     device = recorded_dict.get("device")
     output_device = recorded_dict.get("output_device")
+    input_channels = recorded_dict.get("input_channels")
     monitor_playback = recorded_dict.get("monitor_playback", False)
+    monitor_input_channel = recorded_dict.get("monitor_input_channel")
     monitor_gain_db = float(recorded_dict.get("monitor_gain_db", 0.0))
 
     # Create streaming processor
@@ -130,7 +132,9 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         target_samples=num_frames,  # Use exact sample count instead of duration
         device=device,
         output_device=output_device,
+        input_channels=input_channels,
         monitor_playback=monitor_playback,
+        monitor_input_channel=monitor_input_channel,
         monitor_gain_db=monitor_gain_db,
     )
 

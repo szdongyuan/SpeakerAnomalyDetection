@@ -160,11 +160,20 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
 
 class RecordConfigWindow(BaseConfigWindow):
-    def __init__(self, input_data, mic=None, speaker=None):
+    def __init__(self, input_data, mic=None, speaker=None, available_channels=None):
         super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("录制音频")
         self.input_data = input_data
+        self.available_channels = self._normalize_available_channels(available_channels)
         self.init_ui()
+
+    @staticmethod
+    def _normalize_available_channels(available_channels):
+        try:
+            channels = sorted({int(ch) for ch in (available_channels or [])})
+        except Exception:
+            channels = []
+        return channels or [0]
 
     def init_ui(self):
         in_group_box = self.create_in_group()
@@ -212,6 +221,20 @@ class RecordConfigWindow(BaseConfigWindow):
         self.monitor_gain_db_input.setValue(float(self.input_data.get("monitor_gain_db", 0.0)))
         self.monitor_checkbox.toggled.connect(self._on_monitor_toggled)
 
+        label_monitor_channel = Label("监听通道:")
+        self.monitor_channel_combo = ComboBox()
+        for ch in self.available_channels:
+            self.monitor_channel_combo.addItem(f"In{int(ch) + 1}", int(ch))
+        saved_channel = self.input_data.get("monitor_input_channel", self.available_channels[0])
+        try:
+            saved_channel = int(saved_channel)
+        except (TypeError, ValueError):
+            saved_channel = self.available_channels[0]
+        if saved_channel not in self.available_channels:
+            saved_channel = self.available_channels[0]
+        idx = self.monitor_channel_combo.findData(saved_channel)
+        self.monitor_channel_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
         max_out = 0
         try:
             if self.speaker:
@@ -236,6 +259,8 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.monitor_checkbox, 3, 1)
         grid_layout.addWidget(label_monitor_gain, 4, 0)
         grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
+        grid_layout.addWidget(label_monitor_channel, 5, 0)
+        grid_layout.addWidget(self.monitor_channel_combo, 5, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -246,11 +271,14 @@ class RecordConfigWindow(BaseConfigWindow):
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
+            "monitor_input_channel": int(self.monitor_channel_combo.currentData()),
         }
         self.accept()
 
     def _on_monitor_toggled(self, checked: bool):
         self.monitor_gain_db_input.setEnabled(bool(checked))
+        if hasattr(self, "monitor_channel_combo"):
+            self.monitor_channel_combo.setEnabled(bool(checked))
 
 
 class ImportAudioConfigWindow(BaseConfigWindow):

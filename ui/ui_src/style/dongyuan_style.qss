@@ -12,7 +12,6 @@ QPushButton {
 QPushButton:hover {
     background-color: #5099ccff;
     color: black;
-    border-color: #803333ff;
 }
 QPushButton:pressed {
     background-color: #8099ccff;
@@ -163,10 +162,6 @@ QDialog#AiWindow QLineEdit {
     border: none;
 }
 
-QDialog#CalibrationWindow QLabel {
-    background-color: white;
-    border-radius: 3px;
-}
 
 QStatusBar {
     background-color: rgb(226, 226, 225);
@@ -179,6 +174,12 @@ QMenuBar {
     background-color: rgb(226, 226, 225);
     border-left: 1px solid rgb(0, 0, 0);
     border-right: 1px solid rgb(0, 0, 0);
+}
+
+/* CalibrationWindow style */
+QDialog#CalibrationWindow QLabel {
+    background-color: transparent;
+    border-radius: 3px;
 }
 
 /* signal analysis windew style */
@@ -274,11 +275,6 @@ QDialog#RbConfigWindow QLabel {
 
 QDialog#RbConfigWindow QLabel:hover {
     background-color: #5099ccff;
-}
-
-/* sequence_widget style */
-QWidget#LinearGraphWidget {
-    background-color: transparent;
 }
 
 /* sequencement_count_coard style */
@@ -380,4 +376,38 @@ QFrame#hardwareframe {
 QPushButton#AddAnalysisBtn {
     border:None;
     background-color:transparent;
+}
+
+/* channel plot workspace */
+QWidget#ChannelPlotTitleBar {
+    background-color: #2f5aa8;
+}
+
+QWidget#ChannelPlotTitleBar QPushButton {
+    border: none;
+    background: transparent;
+}
+
+QWidget#ChannelPlotTitleBar QPushButton:hover {
+    background-color: #5099ccff;
+}
+
+QWidget#ChannelPlotTitleBar QLabel {
+    color: black;
+    font-weight: 500;
+}
+
+QFrame#ChannelPlotSubWindow {
+    background: white;
+    border: 1px solid #9aa7bd;
+    border-radius: 2px;
+}
+
+QScrollArea#ChannelPlotWorkspaceScrollArea > QWidget {
+    background-color: #e9eef6;
+}
+
+QWidget#ChannelPlotCanvas {
+    background-color: #f6f8fc;
+    border: 1px solid #c9d3e3;
 }

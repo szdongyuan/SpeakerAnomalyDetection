@@ -4,10 +4,11 @@ import sys
 import wave
 import copy
 from datetime import datetime
+from zipfile import ZipFile, ZIP_DEFLATED
 
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtGui import QStandardItem, QBrush, QColor
-from PyQt5.QtWidgets import QProgressDialog, QFileDialog, QApplication, QWidget, QHBoxLayout, QSpinBox
+from PyQt5.QtWidgets import QProgressDialog, QFileDialog, QApplication, QWidget, QHBoxLayout
 from scipy.io import wavfile as scipy_wavfile
 
 from base.file_ops import FileOps
@@ -16,7 +17,7 @@ from base.playback_controller import PlaybackController
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog, FilterAudioDialog
-from ui.custom_ui_widget.widgets import Label, PushButton, MessageBox
+from ui.custom_ui_widget.widgets import Label, PushButton, MessageBox, SpinBox
 
 
 class ArchiveAudioDataDialog(AudioDataManageDialog):
@@ -58,12 +59,13 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._playback_poll_timer.timeout.connect(self._on_playback_poll_timeout)
         # removed blink/flash logic for play column
         self.order_btn = PushButton(" 倒  序 ")
+        self.package_delete_btn = PushButton(" 打包并删除 ")
         self.package_btn = PushButton(" 打  包 ")
         self.delete_btn = PushButton(" 删  除 ")
         self.prev_page_btn = PushButton(" 上一页 ")
         self.next_page_btn = PushButton(" 下一页 ")
         self.page_status_label = Label()
-        self.page_jump_spinbox = QSpinBox()
+        self.page_jump_spinbox = SpinBox()
         self.page_jump_btn = PushButton(" 跳  转 ")
 
         self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放"])
@@ -170,12 +172,14 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         all_show_btn.clicked.connect(self.show_all_wave)
         self.order_btn.clicked.connect(self.on_clicked_order_btn)
+        self.package_delete_btn.clicked.connect(self.on_clicked_package_delete_btn)
         self.package_btn.clicked.connect(self.on_clicked_package_btn)
         self.delete_btn.clicked.connect(self.on_clicked_delete_btn)
 
         self.bottom_layout.addWidget(all_show_btn)
         self.bottom_layout.addWidget(self.order_btn)
         self.bottom_layout.addStretch()
+        self.bottom_layout.addWidget(self.package_delete_btn)
         self.bottom_layout.addWidget(self.package_btn)
         self.bottom_layout.addWidget(self.delete_btn)
 
@@ -374,17 +378,29 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.prev_page_btn.setEnabled(has_multiple_pages and self._current_page_index > 0)
         self.next_page_btn.setEnabled(has_multiple_pages and self._current_page_index < page_count - 1)
 
+    def _reset_table_scroll_to_top_left(self):
+        if self.data_view is None:
+            return
+        vertical_scroll_bar = self.data_view.verticalScrollBar()
+        horizontal_scroll_bar = self.data_view.horizontalScrollBar()
+        if vertical_scroll_bar is not None:
+            vertical_scroll_bar.setValue(vertical_scroll_bar.minimum())
+        if horizontal_scroll_bar is not None:
+            horizontal_scroll_bar.setValue(horizontal_scroll_bar.minimum())
+
     def on_clicked_prev_page_btn(self):
         if self._current_page_index <= 0:
             return
         self._current_page_index -= 1
         self.load_audio_data_to_view()
+        self._reset_table_scroll_to_top_left()
 
     def on_clicked_next_page_btn(self):
         if self._current_page_index >= self._get_page_count() - 1:
             return
         self._current_page_index += 1
         self.load_audio_data_to_view()
+        self._reset_table_scroll_to_top_left()
 
     def on_clicked_jump_page_btn(self):
         page_number = self.page_jump_spinbox.value() if self.page_jump_spinbox is not None else 1
@@ -395,6 +411,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             return
         self._current_page_index = page_number - 1
         self.load_audio_data_to_view()
+        self._reset_table_scroll_to_top_left()
 
     def on_all_selected_changed(self):
         active_audio_data = self._get_active_audio_data()
@@ -602,6 +619,190 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             self.playback_controller.stop_audio_playback()
             self._clear_playing_state()
 
+    def _get_package_save_path(self):
+        file_name = "audio_data_export_%s" % datetime.now().strftime("%Y%m%d")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "选择保存位置",
+            os.path.join(model_consts.STORED_PACKAGE_PATH, file_name),
+            "压缩文件 (*.zip)",
+        )
+        if not file_path:
+            return None
+        if not file_path.endswith(".zip"):
+            file_path += ".zip"
+        return os.path.normpath(file_path)
+
+    def _resolve_audio_data_file_path(self, audio_data):
+        raw_path = audio_data[1]
+        if os.path.isabs(raw_path):
+            return os.path.abspath(raw_path)
+        return os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
+
+    def _stop_playback_if_selected(self, selected_audio_data):
+        current_file = self.playback_controller.get_current_playing_file()
+        if not current_file:
+            return
+        current_file_abs = os.path.abspath(current_file)
+        for item in selected_audio_data:
+            if current_file_abs == self._resolve_audio_data_file_path(item):
+                self._stop_playback_if_needed()
+                return
+
+    def _get_audio_data_file_name(self, audio_data):
+        file_path = audio_data[1] if isinstance(audio_data, (list, tuple)) and len(audio_data) > 1 else audio_data
+        return str(file_path).split("/")[-1].split("\\")[-1]
+
+    def _build_package_delete_failure_report(
+        self,
+        output_zip_path,
+        package_failed,
+        source_delete_failed,
+        archive_deleted_before_failure=None,
+    ):
+        if not package_failed and not source_delete_failed and not archive_deleted_before_failure:
+            return None, None
+
+        lines = [
+            "失败清单",
+            "生成时间：%s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "",
+        ]
+        if package_failed:
+            lines.append("打包失败：%s 个" % len(package_failed))
+            for item in package_failed:
+                lines.append(self._get_audio_data_file_name(item))
+            lines.append("")
+        if source_delete_failed:
+            lines.append("原文件删除失败：%s 个" % len(source_delete_failed))
+            for item in source_delete_failed:
+                lines.append(self._get_audio_data_file_name(item))
+            lines.append("")
+        if archive_deleted_before_failure:
+            lines.append("压缩包最终写入失败前已删除源文件：%s 个" % len(archive_deleted_before_failure))
+            for item in archive_deleted_before_failure:
+                lines.append(self._get_audio_data_file_name(item))
+
+        report_name = os.path.basename(os.path.splitext(output_zip_path)[0] + "_failures.txt")
+        return report_name, "\n".join(lines)
+
+    def _write_failure_report_to_file(self, output_zip_path, report_content):
+        report_path = os.path.splitext(output_zip_path)[0] + "_failures.txt"
+        try:
+            with open(report_path, "w", encoding="utf-8") as report_file:
+                report_file.write(report_content)
+            return report_path, None
+        except Exception as e:
+            self.logger.error(e)
+            return None, e
+
+    def _add_failure_report_to_zip(self, output_zip_path, report_name, report_content):
+        if not report_name or not report_content:
+            return None
+        try:
+            with ZipFile(output_zip_path, "a", compression=ZIP_DEFLATED) as zip_file:
+                zip_file.writestr(report_name, report_content)
+            return None
+        except Exception as e:
+            self.logger.error(e)
+            return e
+
+    def _show_package_delete_summary(
+        self,
+        packaged_deleted,
+        package_failed,
+        source_delete_failed,
+        db_deleted_count,
+        db_delete_error=None,
+        database_package_error=None,
+        archive_finalize_error=None,
+        failure_report_path=None,
+        failure_report_error=None,
+        failure_report_zip_error=None,
+        failure_report_zip_name=None,
+    ):
+        if database_package_error:
+            title = "打包失败"
+            lines = [
+                "数据库快照写入失败，未删除任何音频或数据库记录。",
+                "错误信息：%s" % str(database_package_error)[:120],
+            ]
+        elif archive_finalize_error:
+            title = "打包并删除异常"
+            if packaged_deleted:
+                lines = [
+                    "压缩包最终写入失败，压缩包可能不完整或不可用。",
+                    "已删除源文件：%s 个" % len(packaged_deleted),
+                    "数据库删除：0 条（数据库记录已保留）",
+                ]
+            else:
+                lines = [
+                    "压缩包创建或写入失败，未删除任何源音频。",
+                    "数据库删除：0 条（数据库记录已保留）",
+                ]
+        else:
+            title = "打包并删除结果"
+            lines = [
+                "打包并删除完成",
+                "成功打包并删除原文件：%s 个" % len(packaged_deleted),
+                "数据库删除：%s 条" % db_deleted_count,
+            ]
+        if package_failed:
+            lines.append("打包失败：%s 个" % len(package_failed))
+        if source_delete_failed:
+            lines.append("原文件删除失败：%s 个" % len(source_delete_failed))
+        if db_delete_error:
+            lines.append("数据库删除失败：%s" % str(db_delete_error)[:120])
+        if failure_report_zip_name:
+            lines.append("失败清单已加入压缩包：%s" % failure_report_zip_name)
+        if failure_report_path:
+            lines.append("失败清单已保存：%s" % failure_report_path)
+        if failure_report_error:
+            lines.append("失败清单保存失败：%s" % str(failure_report_error)[:120])
+        if failure_report_zip_error:
+            lines.append("失败清单加入压缩包失败：%s" % str(failure_report_zip_error)[:120])
+
+        msg_box = MessageBox(self)
+        msg_box.setIcon(MessageBox.Information)
+        msg_box.setWindowTitle(title)
+        msg_box.setText("\n".join(lines))
+        msg_box.exec_()
+
+    def _show_package_failure_summary(
+        self,
+        package_failed,
+        failure_report_path=None,
+        failure_report_error=None,
+        failure_report_zip_error=None,
+        failure_report_zip_name=None,
+    ):
+        if not package_failed and not failure_report_error and not failure_report_zip_error:
+            return
+        lines = ["打包完成", "打包失败：%s 个" % len(package_failed)]
+        if failure_report_zip_name:
+            lines.append("失败清单已加入压缩包：%s" % failure_report_zip_name)
+        if failure_report_path:
+            lines.append("失败清单已保存：%s" % failure_report_path)
+        if failure_report_error:
+            lines.append("失败清单保存失败：%s" % str(failure_report_error)[:120])
+        if failure_report_zip_error:
+            lines.append("失败清单加入压缩包失败：%s" % str(failure_report_zip_error)[:120])
+        msg_box = MessageBox(self)
+        msg_box.setIcon(MessageBox.Information)
+        msg_box.setWindowTitle("打包结果")
+        msg_box.setText("\n".join(lines))
+        msg_box.exec_()
+
+    def _refresh_after_audio_data_deleted(self, deleted_id_list):
+        self._selected_audio_data_by_id.clear()
+        self._rebuild_select_wave_data()
+        self.delete_audio_data_with_id(deleted_id_list)
+        self._clamp_current_page()
+        self.update_filter_sets_after_deletion()
+        self.load_audio_data_to_view()
+        self.set_select_wave_num_text(len(self.select_wave_data))
+        self._rebuild_play_buttons()
+
     def _on_play_button_clicked(self, row):
         now = time.monotonic()
         if now - float(self._play_col_last_action_ts or 0.0) < (float(self._play_col_debounce_ms) / 1000.0):
@@ -670,6 +871,168 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
     def _warn_cannot_close_while_playing(self):
         MessageBox.warning(self, "提示", "正在播放，请先停止播放后再退出")
 
+    def on_clicked_package_delete_btn(self):
+        selected_audio_data = list(self.select_wave_data.values())
+        selected_count = len(selected_audio_data)
+        if not selected_count:
+            self.on_clicked_package_btn()
+            return
+
+        self._stop_playback_if_selected(selected_audio_data)
+
+        file_path = self._get_package_save_path()
+        if not file_path:
+            return
+
+        db_snapshot_path = os.path.join(DEFAULT_DIR, "database/audio_data.db")
+        db_delete_step_count = max(1, (selected_count + 499) // 500)
+        progress_total = 1 + selected_count + db_delete_step_count + 1
+        package_delete_progress = QProgressDialog("正在打包并删除音频数据...", None, 0, progress_total, self)
+        package_delete_progress.setWindowTitle("打包并删除进度")
+        package_delete_progress.setWindowModality(Qt.WindowModal)
+        package_delete_progress.setWindowFlags(package_delete_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
+        package_delete_progress.show()
+        QApplication.processEvents()
+
+        packaged_deleted = list()
+        package_failed = list()
+        source_delete_failed = list()
+        will_delete_in_db_list = list()
+        db_deleted_count = 0
+        db_delete_error = None
+        database_package_error = None
+        archive_finalize_error = None
+        progress_value = 0
+
+        def update_package_delete_progress(value, text=None):
+            nonlocal progress_value
+            progress_value = min(value, progress_total)
+            if text:
+                package_delete_progress.setLabelText(text)
+            package_delete_progress.setValue(progress_value)
+            QApplication.processEvents()
+
+        try:
+            try:
+                with ZipFile(file_path, "w", compression=ZIP_DEFLATED) as zip_file:
+                    try:
+                        zip_file.write(
+                            db_snapshot_path,
+                            FileOps.get_zip_arcname(db_snapshot_path, base_dir=DEFAULT_DIR),
+                        )
+                        update_package_delete_progress(1, "已写入数据库快照")
+                    except Exception as e:
+                        database_package_error = e
+                        self.logger.error(e)
+
+                    if not database_package_error:
+                        for index, audio_data in enumerate(selected_audio_data, start=1):
+                            result = FileOps.write_audio_to_zip_and_delete_source(
+                                zip_file, audio_data, base_dir=DEFAULT_DIR
+                            )
+                            status = result.get("status")
+                            if status == "packaged_deleted":
+                                packaged_deleted.append(audio_data)
+                                will_delete_in_db_list.append(result.get("db_delete_id") or audio_data[0])
+                                self._audio_duration_cache.pop(self._resolve_audio_data_file_path(audio_data), None)
+                            elif status == "source_delete_failed":
+                                source_delete_failed.append(audio_data)
+                                self.logger.error(result.get("error"))
+                            else:
+                                package_failed.append(audio_data)
+                                self.logger.error(result.get("error"))
+
+                            if index % 100 == 0 or index == selected_count:
+                                update_package_delete_progress(
+                                    1 + index,
+                                    f"正在打包并删除源文件... {index}/{selected_count}",
+                                )
+            except Exception as e:
+                if database_package_error is None:
+                    archive_finalize_error = e
+                    self.logger.error(e)
+                else:
+                    self.logger.error(e)
+
+            if database_package_error is None and archive_finalize_error is None:
+                db_progress_base = 1 + selected_count
+                if will_delete_in_db_list:
+
+                    def update_db_delete_progress(processed_count, total_count):
+                        batch_index = min(db_delete_step_count, (processed_count + 499) // 500)
+                        update_package_delete_progress(
+                            db_progress_base + batch_index,
+                            f"正在删除数据库记录... {processed_count}/{total_count}",
+                        )
+
+                    code, result = self.recording_manager.delete_audio_at_id_list(
+                        will_delete_in_db_list, progress_callback=update_db_delete_progress
+                    )
+                    if code == error_code.OK:
+                        db_deleted_count = len(will_delete_in_db_list)
+                        self.logger.info("success delete audio with package delete workflow")
+                        update_package_delete_progress(
+                            progress_total - 1,
+                            "正在刷新列表...",
+                        )
+                        self._refresh_after_audio_data_deleted(will_delete_in_db_list)
+                    else:
+                        db_delete_error = result
+                        self.logger.error(result)
+                        update_package_delete_progress(
+                            progress_total - 1,
+                            "数据库记录删除失败",
+                        )
+                else:
+                    update_package_delete_progress(
+                        progress_total - 1,
+                        "无可删除的数据库记录",
+                    )
+
+                update_package_delete_progress(progress_total, "打包并删除完成")
+        finally:
+            package_delete_progress.close()
+
+        failure_report_name, failure_report_content = self._build_package_delete_failure_report(
+            file_path,
+            package_failed,
+            source_delete_failed,
+            packaged_deleted if archive_finalize_error else None,
+        )
+        failure_report_path = None
+        failure_report_error = None
+        failure_report_zip_error = None
+        failure_report_zip_name = None
+        if failure_report_content:
+            if archive_finalize_error:
+                failure_report_path, failure_report_error = self._write_failure_report_to_file(
+                    file_path, failure_report_content
+                )
+            else:
+                failure_report_zip_error = self._add_failure_report_to_zip(
+                    file_path, failure_report_name, failure_report_content
+                )
+                if failure_report_zip_error:
+                    failure_report_path, failure_report_error = self._write_failure_report_to_file(
+                        file_path, failure_report_content
+                    )
+                else:
+                    failure_report_zip_name = failure_report_name
+
+        self._show_package_delete_summary(
+            packaged_deleted,
+            package_failed,
+            source_delete_failed,
+            db_deleted_count,
+            db_delete_error=db_delete_error,
+            database_package_error=database_package_error,
+            archive_finalize_error=archive_finalize_error,
+            failure_report_path=failure_report_path,
+            failure_report_error=failure_report_error,
+            failure_report_zip_error=failure_report_zip_error,
+            failure_report_zip_name=failure_report_zip_name,
+        )
+
     def on_clicked_package_btn(self):
         self._stop_playback_if_needed()
         if not self.select_wave_data:
@@ -682,19 +1045,9 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             if msg_box.clickedButton() != confirm_btn:
                 return
 
-        file_name = "audio_data_export_%s" % datetime.now().strftime("%Y%m%d")
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "选择保存位置",
-            os.path.join(model_consts.STORED_PACKAGE_PATH, file_name),
-            "压缩文件 (*.zip)",
-        )
-
+        file_path = self._get_package_save_path()
         if not file_path:
             return
-
-        if not file_path.endswith(".zip"):
-            file_path += ".zip"
 
         file_path_list = [i[1] for i in self.select_wave_data.values()]
         file_path_list.append("database/audio_data.db")
@@ -705,7 +1058,18 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.packaging_progress.show()
         QApplication.processEvents()
 
-        FileOps.create_zip_with_files(file_path_list, file_path, progress_callback=self.update_packaging_progress)
+        package_failed = list()
+
+        def record_package_failure(path, error):
+            package_failed.append(path)
+            self.logger.error("Failed to package file [%s]. %s" % (path, error))
+
+        FileOps.create_zip_with_files(
+            file_path_list,
+            file_path,
+            progress_callback=self.update_packaging_progress,
+            failure_callback=record_package_failure,
+        )
 
         self._selected_audio_data_by_id.clear()
         self._rebuild_select_wave_data()
@@ -713,9 +1077,32 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.set_select_wave_num_text(len(self.select_wave_data))
         self.packaging_progress.close()
         self.packaging_progress = None
+        failure_report_name, failure_report_content = self._build_package_delete_failure_report(
+            file_path,
+            package_failed,
+            [],
+        )
+        failure_report_path = None
+        failure_report_error = None
+        failure_report_zip_error = None
+        failure_report_zip_name = None
+        if failure_report_content:
+            failure_report_zip_error = self._add_failure_report_to_zip(file_path, failure_report_name, failure_report_content)
+            if failure_report_zip_error:
+                failure_report_path, failure_report_error = self._write_failure_report_to_file(
+                    file_path, failure_report_content
+                )
+            else:
+                failure_report_zip_name = failure_report_name
+        self._show_package_failure_summary(
+            package_failed,
+            failure_report_path=failure_report_path,
+            failure_report_error=failure_report_error,
+            failure_report_zip_error=failure_report_zip_error,
+            failure_report_zip_name=failure_report_zip_name,
+        )
 
     def on_clicked_delete_btn(self):
-        current_file = self.playback_controller.get_current_playing_file()
         selected_audio_data = list(self.select_wave_data.values())
         selected_count = len(selected_audio_data)
         if not selected_count:
@@ -741,25 +1128,11 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             QApplication.processEvents()
 
         try:
-            if current_file:
-                current_file_abs = os.path.abspath(current_file)
-                for value in selected_audio_data:
-                    selected_path = value[1]
-                    if os.path.isabs(selected_path):
-                        selected_path_abs = os.path.abspath(selected_path)
-                    else:
-                        selected_path_abs = os.path.abspath(os.path.join(DEFAULT_DIR, selected_path))
-                    if current_file_abs == selected_path_abs:
-                        self._stop_playback_if_needed()
-                        break
+            self._stop_playback_if_selected(selected_audio_data)
 
             will_delete_in_db_list = list()
             for index, value in enumerate(selected_audio_data, start=1):
-                raw_path = value[1]
-                if os.path.isabs(raw_path):
-                    file_path = os.path.abspath(raw_path)
-                else:
-                    file_path = os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
+                file_path = self._resolve_audio_data_file_path(value)
                 self._audio_duration_cache.pop(os.path.abspath(file_path), None)
                 if os.path.isfile(file_path):
                     try:

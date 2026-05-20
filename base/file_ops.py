@@ -150,7 +150,14 @@ class FileOps(object):
         return output_zip
 
     @staticmethod
-    def create_zip_with_files(file_path_list, output_zip_path=None, base_dir=DEFAULT_DIR, categorize=True, progress_callback=None):
+    def create_zip_with_files(
+        file_path_list,
+        output_zip_path=None,
+        base_dir=DEFAULT_DIR,
+        categorize=True,
+        progress_callback=None,
+        failure_callback=None,
+    ):
         """
         Create a zip archive that contains the given files. zip archive will contains OK/NG/not_labeled subfolders originally
 
@@ -192,32 +199,61 @@ class FileOps(object):
         total_files = len(file_path_list)
         progressed = 0
 
-        category_rules = {"NG": "NG", "OK": "OK", "not_labeled": "not_labeled"} if categorize else {}
-
         with ZipFile(output_zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
             for path in file_path_list:
                 full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
-                rel_path = os.path.relpath(full_path, base_dir)
-
-                arcname = os.path.basename(rel_path)
-                for key, folder in category_rules.items():
-                    if key in rel_path:
-                        arcname = os.path.join(folder, os.path.basename(rel_path))
-                        break
-
-                if rel_path.endswith(".db"):
-                    arcname = os.path.basename(rel_path)
+                arcname = FileOps.get_zip_arcname(path, base_dir=base_dir, categorize=categorize)
 
                 if os.path.exists(full_path):
-                    zip_file.write(full_path, arcname)
+                    try:
+                        zip_file.write(full_path, arcname)
+                    except Exception as e:
+                        if failure_callback:
+                            failure_callback(path, e)
                 else:
-                    pass
+                    if failure_callback:
+                        failure_callback(path, FileNotFoundError(full_path))
 
                 progressed += 1
                 if progress_callback:
                     progress_callback(progressed, total_files)
 
         return output_zip_path
+
+    @staticmethod
+    def get_zip_arcname(path, base_dir=DEFAULT_DIR, categorize=True):
+        full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+        rel_path = os.path.relpath(full_path, base_dir)
+
+        arcname = os.path.basename(rel_path)
+        if rel_path.endswith(".db"):
+            return arcname
+
+        if categorize:
+            category_rules = {"NG": "NG", "OK": "OK", "not_labeled": "not_labeled"}
+            for key, folder in category_rules.items():
+                if key in rel_path:
+                    return os.path.join(folder, os.path.basename(rel_path))
+
+        return arcname
+
+    @staticmethod
+    def write_audio_to_zip_and_delete_source(zip_file, audio_data, base_dir=DEFAULT_DIR, remove_func=os.remove):
+        full_path = audio_data[1] if os.path.isabs(audio_data[1]) else os.path.join(base_dir, audio_data[1])
+        full_path = os.path.abspath(full_path)
+        try:
+            if not os.path.isfile(full_path):
+                raise FileNotFoundError(full_path)
+            zip_file.write(full_path, FileOps.get_zip_arcname(full_path, base_dir=base_dir))
+        except Exception as e:
+            return {"status": "package_failed", "audio_data": audio_data, "db_delete_id": None, "error": e}
+
+        try:
+            remove_func(full_path)
+        except Exception as e:
+            return {"status": "source_delete_failed", "audio_data": audio_data, "db_delete_id": None, "error": e}
+
+        return {"status": "packaged_deleted", "audio_data": audio_data, "db_delete_id": audio_data[0], "error": None}
 
     @staticmethod
     def delete_directory(dir_path):
@@ -245,7 +281,7 @@ class FileOps(object):
                 return error_code.OK, f"Directory does not exist: '{dir_path}'"
         except Exception as e:
             return error_code.INVALID_DELETE, f"Failed to delete directory: {str(e)[:40]}"
-            
+
     @staticmethod
     def move_wav_to_dir(recorded_path, label):
         """

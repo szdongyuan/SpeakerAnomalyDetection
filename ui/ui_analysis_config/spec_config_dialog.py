@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
@@ -9,11 +11,39 @@ from ui.ui_src import ui_resources
 
 
 class SpecConfigWindow(QDialog):
-    def __init__(self, config_manager, model_type):
+    def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__()
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.show_channel_selector = available_channels is not None
+        self.available_channels = self._normalize_available_channels(available_channels)
         self.init_ui()
+
+    @staticmethod
+    def _normalize_available_channels(available_channels):
+        channels = []
+        try:
+            channels = sorted({int(ch) for ch in (available_channels or [])})
+        except Exception:
+            channels = []
+        if not channels:
+            channels = [0]
+        return channels
+
+    def _create_channel_layout(self):
+        channel_layout = QHBoxLayout()
+        channel_layout.addWidget(Label("通道:"))
+        self.channel_combo_box = ComboBox()
+        for ch in self.available_channels:
+            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
+        saved_channel = self.load_config.get("analysis_channel", None)
+        if saved_channel is None or int(saved_channel) not in self.available_channels:
+            saved_channel = int(self.available_channels[0])
+        idx = self.channel_combo_box.findData(int(saved_channel))
+        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
+        channel_layout.addWidget(self.channel_combo_box)
+        channel_layout.addStretch()
+        return channel_layout
 
     def init_ui(self):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
@@ -22,6 +52,8 @@ class SpecConfigWindow(QDialog):
         self.setMinimumSize(350, 350)
         self.resize(350, 420)
         layout = QVBoxLayout()
+        if self.show_channel_selector:
+            layout.addLayout(self._create_channel_layout())
         spec_param_group_box = GroupBox("频谱图参数配置")
         param_layout = self.create_spec_param()
         spec_param_group_box.setLayout(param_layout)
@@ -158,6 +190,9 @@ class SpecConfigWindow(QDialog):
             "top_limit": self.top_limit_spinbox.value(),
             "bottom_limit": self.bottom_limit_spinbox.value(),
             "custom_limit": self.custom_limit_checkbox.isChecked(),
+            "analysis_channel": int(self.channel_combo_box.currentData())
+            if self.show_channel_selector and hasattr(self, "channel_combo_box")
+            else int(self.load_config.get("analysis_channel", 0) or 0),
         }
         if default_config["custom_limit"] and default_config["top_limit"] <= default_config["bottom_limit"]:
             MessageBox.warning(self, "设置警告", "上下限配置数据错误，请检查配置!")

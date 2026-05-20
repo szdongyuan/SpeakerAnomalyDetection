@@ -8,8 +8,7 @@ import time
 
 import librosa
 import numpy as np
-import pyqtgraph as pg
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
 from PyQt5.QtWidgets import (
     QApplication,
@@ -41,15 +40,13 @@ from base.load_config import LoadUiConfig
 from ui.sequence.barcode_router import BarcodeRouter
 from base.log_manager import LogManager
 from base.play_and_record import (
-    play_last_stimulus_wave,
-    record_without_play,
     get_recorded_info,
     stream_play_and_record,
     stream_record_without_play,
 )
 from base.recording_management import RecordingManager
 from base.save_data import ensure_test_result_file, save_recorded_data_to_json, save_audio_simple
-from base.soundcard_calibration_manager import get_mic_v2pa_factor
+from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
@@ -60,6 +57,7 @@ from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox
 from ui.operation_sequence import AnalysisModelSelect
+from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sn_regex_manage_dialog import SnRegexManageDialog
 from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
@@ -80,7 +78,8 @@ class SequenceWindow(QWidget):
         self.count_board = None
         self.toolsbar = SequenceToolsBar()
 
-        self.v2pa_factor = get_mic_v2pa_factor()
+        self.v2pa_factor = None
+        self.analysis_types_requiring_v2pa = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"}
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
@@ -125,6 +124,7 @@ class SequenceWindow(QWidget):
         self._missing_config_prompted = False
         # Only show missing-config prompt after the window is shown (i.e. after login success).
         self._missing_config_prompt_enabled = False
+        self._external_trigger_mode_warning_box = None
 
         self._barcode_debounce_ms = 50
         self._barcode_fast_input_max_seconds = 0.4  # 首字符到末字符的总耗时，小于该值更像扫码（扫码枪通常 < 0.2秒）
@@ -163,14 +163,15 @@ class SequenceWindow(QWidget):
         self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
 
         # Streaming state variables
-        self.streaming_buffer = []
-        self.streaming_time_data = []
+        self.streaming_buffer_multi = []
         self.streaming_plot_item = None  # Persistent plot item for zoom preservation
         self.streaming_wav_writer = None  # WAV file writer for incremental saving
         self.streaming_processor = None  # StreamingAudioProcessor instance
         self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
         self.streaming_mode = None  # "play_record" or "record_only"
-        self.use_streaming = True  # Set to True to use streaming, False for legacy blocking mode
+        self._active_input_channels = [0]
+        self.channel_workspace = None
+        self._streaming_first_chunk_logged = False
 
         # Analysis window geometry persistence (per analysis item key)
         self._analysis_window_key_by_obj = weakref.WeakKeyDictionary()
@@ -253,7 +254,60 @@ class SequenceWindow(QWidget):
         TCP 回调线程通过 QueuedConnection 投递到 Qt 主线程的入口。
         直接调用 start_this_play 可能发生跨线程 UI 操作风险，因此统一走这里。
         """
+        if not self._ensure_external_trigger_mode_supported("TCP"):
+            return
         self.start_this_play(label, skip_sn_regex_validation=skip_sn_regex_validation)
+
+    def _get_mode_display_name(self, mode: str) -> str:
+        mode_names = {
+            "RECORD_ONLY": "仅录制",
+            "PLAY_AND_RECORD": "播放录制",
+            "IMPORT_AUDIO": "导入音频",
+            "IMPORT_STIMULUS_AUDIO": "导入激励与音频",
+        }
+        return mode_names.get(mode, mode or "未配置")
+
+    def _show_external_trigger_mode_warning(self, trigger_source: str, current_mode: str) -> None:
+        text = (
+            f"当前工作模式为 {current_mode}，不支持{trigger_source}启动工作流。\n"
+            f"仅【仅录制】和【播放录制】模式支持该功能。"
+        )
+        msg_box = self._external_trigger_mode_warning_box
+        if msg_box is not None and msg_box.isVisible():
+            msg_box.raise_()
+            msg_box.activateWindow()
+            return
+
+        msg_box = MessageBox(self)
+        msg_box.setIcon(MessageBox.Warning)
+        msg_box.setWindowTitle("提示")
+        msg_box.setText(text)
+        msg_box.setStandardButtons(MessageBox.Ok)
+        msg_box.finished.connect(lambda *_: setattr(self, "_external_trigger_mode_warning_box", None))
+        self._external_trigger_mode_warning_box = msg_box
+        msg_box.open()
+
+    def _clear_sn_for_external_trigger_rejection(self, trigger_source: str) -> None:
+        if "扫码枪" not in str(trigger_source or ""):
+            return
+        try:
+            with QSignalBlocker(self.lineedit_s_or_n):
+                self.lineedit_s_or_n.clear()
+        except Exception:
+            self.lineedit_s_or_n.clear()
+
+    def _ensure_external_trigger_mode_supported(self, trigger_source: str) -> bool:
+        supported_modes = {"RECORD_ONLY", "PLAY_AND_RECORD"}
+        if self.mode in supported_modes:
+            return True
+
+        current_mode = self._get_mode_display_name(self.mode)
+        self.default_logger.warning(
+            f"{trigger_source} 自动启动被阻止：当前工作模式 {current_mode} 不支持外部自动启动工作流"
+        )
+        self._clear_sn_for_external_trigger_rejection(trigger_source)
+        self._show_external_trigger_mode_warning(trigger_source, current_mode)
+        return False
 
     def on_sequence_config_updated(self, *_):
         """
@@ -263,10 +317,24 @@ class SequenceWindow(QWidget):
         main window immediately reflects newly saved/imported entries.
         """
         try:
+            old_mode = self.mode
+            preserved_sample_rate = getattr(self.data_struct, "sample_rate", None)
             self.update_using_file_combobox()
             self.get_sequence_config_from_json()
+            new_mode = self.mode
+            mode_changed = old_mode != new_mode
+
+            if mode_changed:
+                self._clear_plot_area()
+                self.data_struct.clear_data()
+                self.refresh_channel_windows()
             self.init_data_struct_stimulus_config()
             self.init_fft_and_stft_flag()
+
+            if not mode_changed:
+                if preserved_sample_rate is not None:
+                    self.data_struct.sample_rate = preserved_sample_rate
+
             if self.count_board:
                 self.count_board.analysis_config = self.analysis_config
                 self._refresh_test_mode_availability()
@@ -287,7 +355,7 @@ class SequenceWindow(QWidget):
                 self.count_board.set_test_available(False, "无法判定是否具备OK/NG输出能力")
 
     def update_v2pa_factor(self):
-        self.v2pa_factor = get_mic_v2pa_factor()
+        self.v2pa_factor = None
 
     def _summarize_ok_ng(self):
         """
@@ -362,7 +430,8 @@ class SequenceWindow(QWidget):
 
     def on_mark_btn_clicked(self):
         self.data_struct.store_wave_data = None
-        self.line_graph.clear()
+        self.data_struct.store_wave_data_multi = None
+        self._clear_plot_area()
         self._close_analysis_windows()
         self.player_btn.setDisabled(False)
         self.replayer_btn.setDisabled(True)
@@ -435,7 +504,6 @@ class SequenceWindow(QWidget):
                     self.barcode_scanner_box.setEnabled(self._barcode_scanner_box_enabled_before_recording)
                 self._barcode_scanner_box_enabled_before_recording = None
 
-
     @property
     def sn_regex_manage_btn(self):
         return self.toolsbar.sn_regex_manage_btn
@@ -488,30 +556,12 @@ class SequenceWindow(QWidget):
                 QHBoxLayout: The configured wavefrom layout object.
         """
         layout = QHBoxLayout()
-        linear_graph_widget = QWidget()
-        linear_graph_widget.setObjectName("LinearGraphWidget")
-        linear_graph_layout = QHBoxLayout()
-        self.line_graph = pg.PlotWidget()
-        self.line_graph.setBackground("white")
-        axis_font_px = ui_style_const.scale_size_px(20)
-        self.line_graph.setLabel("left", "Amplitude(V)", **{"font-size": f"{axis_font_px}px"})
-        self.line_graph.setLabel("bottom", "Time(s)", **{"font-size": f"{axis_font_px}px"})
-        self.line_graph.showGrid(x=True, y=True)
-        linear_graph_layout.addWidget(self.line_graph)
-        linear_graph_widget.setLayout(linear_graph_layout)
 
-        font = QFont()
-        font.setPixelSize(axis_font_px)
-        b_axis = self.line_graph.getAxis("bottom")
-        l_axis = self.line_graph.getAxis("left")
-        b_axis.setTickFont(font)
-        l_axis.setTickFont(font)
-        b_axis.setTextPen("black")
-        l_axis.setTextPen("black")
+        self.channel_workspace = ChannelPlotWorkspace(self)
 
         layout.addWidget(self.count_board, stretch=1)
         layout.addSpacing(20)
-        layout.addWidget(linear_graph_widget, stretch=8)
+        layout.addWidget(self.channel_workspace, stretch=8)
         layout.setContentsMargins(40, 20, 40, 20)
         return layout
 
@@ -707,6 +757,10 @@ class SequenceWindow(QWidget):
         if not self.barcode_scanner_box.isChecked():
             return
 
+        if not self._ensure_external_trigger_mode_supported("扫码枪"):
+            self._reset_barcode_commit_state()
+            return
+
         if getattr(self, "_record_workflow_busy", False) or getattr(self, "player_status_flag", False):
             self.default_logger.debug(f"录音/播放忙碌中，忽略扫码提交 (source={source}): {barcode}")
             self._reset_barcode_commit_state()
@@ -790,6 +844,8 @@ class SequenceWindow(QWidget):
 
     def on_sensor_triggered(self):
         """处理光电开关触发信号"""
+        if not self._ensure_external_trigger_mode_supported("扫码枪/光电"):
+            return
         if not getattr(self, "_record_workflow_busy", False):
             self.default_logger.info("光电触发响应: 开始测试")
             self.clicked_player_flag = True
@@ -1021,6 +1077,8 @@ class SequenceWindow(QWidget):
             # Clear cached wave so “分析”不会对旧数据误操作
             if hasattr(self.data_struct, "store_wave_data"):
                 self.data_struct.store_wave_data = None
+            if hasattr(self.data_struct, "store_wave_data_multi"):
+                self.data_struct.store_wave_data_multi = None
         except Exception:
             pass
         try:
@@ -1234,12 +1292,13 @@ class SequenceWindow(QWidget):
 
         self.mark_result()
         self.data_struct.store_wave_data = None
+        self.data_struct.store_wave_data_multi = None
         self.replayer_btn.setEnabled(False)
         self.data_btn.setEnabled(False)
         self.player_status_flag = False
         self.signal_info.clear()
         self.lineedit_s_or_n.clear()
-        self.line_graph.clear()
+        self._clear_plot_area()
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
 
@@ -1342,15 +1401,21 @@ class SequenceWindow(QWidget):
             pass
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         sample_rate = acq_detail.get("sample_rate", 44100)
-        y, _ = load_audio_simple(file_path, sample_rate)
+        audio_multi, _ = librosa.load(file_path, sr=sample_rate, mono=False)
+        audio_multi = np.asarray(audio_multi, dtype=np.float32)
+        if audio_multi.ndim == 1:
+            audio_multi = audio_multi.reshape(1, -1)
+        audio_multi = audio_multi.T
+        self.data_struct.store_wave_data_multi = audio_multi
 
-        self.data_struct.store_wave_data = y
+        # not recommended for metadata analysis, as it may cause inaccurate data
+        self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(np.float32, copy=False)
+
         self.data_struct.sample_rate = sample_rate
         audio_y, _ = librosa.load(file_path, sr=None)
         self.data_struct.audio_lenth = len(audio_y)
-        self.line_graph.clear()
-        self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, self.data_struct.sample_rate)
-
+        self._clear_plot_area()
+        self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
         self.data_btn.setEnabled(True)
         if self.analysis_config.get("auto_analysis"):
             self.run()
@@ -1432,9 +1497,13 @@ class SequenceWindow(QWidget):
             self.lineedit_type.text(), count_str, self.lineedit_s_or_n.text(), label
         )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+        if acq_mode in ["RECORD_ONLY", "IMPORT_AUDIO"]:
+            self.data_struct.sample_rate = int(acq_detail.get("sample_rate", self.data_struct.sample_rate or 44100))
         total_time = float(acq_detail.get("total_time", 5.0))
         monitor_playback = acq_detail.get("monitor_playback", False)
         monitor_gain_db = float(acq_detail.get("monitor_gain_db", 0.0))
+        acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
         sample_rate = self.data_struct.sample_rate
         stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
             self.data_struct, total_time
@@ -1443,14 +1512,29 @@ class SequenceWindow(QWidget):
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
         recorded_dict["input_device"] = self.mic
-        if self.sequence_config[0]["seq1"]["acq"]["mode"] == "PLAY_AND_RECORD":
+
+        input_channels = list(getattr(self, "mic_channels", []) or [0])
+
+        recorded_dict["input_channels"] = input_channels
+        recorded_dict["channels"] = max(1, len(input_channels))
+
+        if acq_mode == "PLAY_AND_RECORD":
             recorded_dict["output_device"] = self.speaker
-        elif monitor_playback:
+        elif acq_mode == "RECORD_ONLY" and monitor_playback:
+            try:
+                monitor_input_channel = int(acq_detail.get("monitor_input_channel", input_channels[0]))
+            except (TypeError, ValueError):
+                monitor_input_channel = input_channels[0]
+            if monitor_input_channel not in input_channels:
+                monitor_input_channel = input_channels[0]
             recorded_dict["monitor_playback"] = True
+            recorded_dict["monitor_input_channel"] = monitor_input_channel
             recorded_dict["monitor_gain_db"] = monitor_gain_db
             recorded_dict["output_device"] = self.speaker
         else:
             recorded_dict["output_device"] = None
+
+        self._active_input_channels = [int(x) for x in input_channels]
 
         in_dev = recorded_dict.get("input_device")
         out_dev = recorded_dict.get("output_device")
@@ -1487,7 +1571,7 @@ class SequenceWindow(QWidget):
         self._record_workflow_busy = True
         self._set_sn_input_recording_read_only(True)
 
-        self.line_graph.clear()
+        self._clear_plot_area()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
         # This prevents device conflicts and freezing when replay is clicked multiple times
         self._cleanup_streaming_resources()
@@ -1496,10 +1580,9 @@ class SequenceWindow(QWidget):
 
         # Clear plot and reset streaming state for NEW recording
         if self.player_status_flag:
-            self.line_graph.clear()
+            self._clear_plot_area()
 
-        self.streaming_buffer = []
-        self.streaming_time_data = []
+        self.streaming_buffer_multi = []
         self.streaming_plot_item = None  # Reset plot item for new recording
 
         self.player_status_flag = True
@@ -1542,85 +1625,47 @@ class SequenceWindow(QWidget):
             self.update_player_btn_is_paused()
             return
 
-        # Choose streaming or blocking(Not in use now) mode
-        if self.use_streaming:
-            try:
-                # Use modern streaming approach with true real-time updates (non-blocking)
-                if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                    # Start streaming play+record (non-blocking)
-                    # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
-                    temp_path = self.recorded_path.replace(".wav", "_temp.wav")
-                    self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
-                    self.streaming_temp_path = temp_path
+        try:
+            # Use modern streaming approach with true real-time updates (non-blocking)
+            nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
+            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+                # Start streaming play+record (non-blocking)
+                # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
+                temp_path = self.recorded_path.replace(".wav", "_temp.wav")
+                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
+                self.streaming_temp_path = temp_path
 
-                    self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                        stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
-                    )
-                    self.streaming_mode = "play_record"
+                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
+                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+                )
+                self.streaming_mode = "play_record"
 
-                else:
-                    # Start streaming record-only (non-blocking)
-                    # Create WAV file writer for streaming saves (useful for long recordings)
-                    self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate)
+            else:
+                # Start streaming record-only (non-blocking)
+                # Create WAV file writer for streaming saves (useful for long recordings)
+                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
 
-                    self.streaming_processor, _ = stream_record_without_play(
-                        recorded_dict, self.recorded_path, self.recorded_signal_info
-                    )
-                    self.streaming_mode = "record_only"
-                    self.streaming_stimulus_data = None
+                self.streaming_processor, _ = stream_record_without_play(
+                    recorded_dict, self.recorded_path, self.recorded_signal_info
+                )
+                self.streaming_mode = "record_only"
+                self.streaming_stimulus_data = None
 
-                # Start polling timer to process queue and detect completion
-                self.streaming_poll_timer.start(50)  # Poll every 50ms
-            except Exception as e:
-                self.default_logger.error(f"start_streaming_error: {e}")
-                self._cleanup_streaming_resources()
-                self.player_status_flag = False
-                self._record_workflow_busy = False
-                self._set_sn_input_recording_read_only(False)
-                self.update_player_btn_is_paused()
-                MessageBox.warning(self, "提示", f"启动录音失败: {e}")
-                return
-
-            # Return immediately - completion will be handled by _on_streaming_complete()
-            # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
+            # Start polling timer to process queue and detect completion
+            self.streaming_poll_timer.start(50)  # Poll every 50ms
+        except Exception as e:
+            self.default_logger.error(f"start_streaming_error: {e}")
+            self._cleanup_streaming_resources()
+            self.player_status_flag = False
+            self._record_workflow_busy = False
+            self._set_sn_input_recording_read_only(False)
+            self.update_player_btn_is_paused()
+            MessageBox.warning(self, "提示", f"启动录音失败: {e}")
             return
 
-        else:
-            # Use legacy blocking approach
-            try:
-                if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                    play_last_stimulus_wave(stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info)
-                else:
-                    record_without_play(recorded_dict, self.recorded_path, self.recorded_signal_info)
-                self.plot_line_graph(self.data_struct.store_wave_data, self.line_graph, sample_rate)
-            except Exception as e:
-                self.default_logger.error(f"blocking_record_error: {e}")
-                self.player_status_flag = False
-                self._record_workflow_busy = False
-                self._set_sn_input_recording_read_only(False)
-                self.update_player_btn_is_paused()
-                MessageBox.warning(self, "提示", f"录音失败: {e}")
-                return
-
-        self.player_status_flag = False  # Recording complete, allow hardware access
-        self._record_workflow_busy = False
-        self._set_sn_input_recording_read_only(False)
-        self.data_btn.setEnabled(True)
-        self.replayer_btn.setEnabled(True)
-
-        self._awaiting_ok_ng = True
-        self._sn_clear_on_next_scan = True
-        # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）
-        if self.barcode_scanner_box.isChecked():
-            try:
-                self.lineedit_s_or_n.setFocus()
-                self.lineedit_s_or_n.selectAll()
-            except Exception:
-                pass
-
-        if self.analysis_config["auto_analysis"]:
-            self.run()
-        self.update_player_btn_is_paused()
+        # Return immediately - completion will be handled by _on_streaming_complete()
+        # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
+        return
 
     def run(self):
         """
@@ -1665,6 +1710,10 @@ class SequenceWindow(QWidget):
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
+                mismatch_info = getattr(instance, "_channel_mismatch_info", None)
+                if getattr(instance, "_channel_mismatch", False):
+                    self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
+                    continue
                 if hasattr(instance, "calculate_spl"):
                     result = instance.calculate_spl()
                     if not result:
@@ -1685,6 +1734,11 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
+                    instance.show()
+                elif hasattr(instance, "calculate_reference_spectrum"):
+                    result = instance.calculate_reference_spectrum()
+                    if not result:
+                        continue
                     instance.show()
                 elif hasattr(instance, "calculate_peak_detection"):
                     instance.calculate_peak_detection()
@@ -2109,19 +2163,114 @@ class SequenceWindow(QWidget):
             else:
                 break
 
+    def _show_channel_mismatch_warning(self, analysis_name: str, err: Exception = None, mismatch_info: dict = None):
+        configured_channel_text = "未知"
+        active_channels_text = "未知"
+        if isinstance(mismatch_info, dict):
+            raw_channel = mismatch_info.get("raw_channel")
+            active_channels = mismatch_info.get("active_input_channels", [])
+            try:
+                configured_channel_text = f"In{int(raw_channel) + 1}"
+            except Exception:
+                configured_channel_text = str(raw_channel)
+            try:
+                active_channels_text = ", ".join([f"In{int(ch) + 1}" for ch in active_channels]) or "无"
+            except Exception:
+                active_channels_text = str(active_channels)
+
+        detail_text = ""
+        if err is not None:
+            detail_text = f"\n\n详细信息: {err}"
+
+        MessageBox.warning(
+            self,
+            "通道配置不匹配",
+            f"{analysis_name} 配置通道与本次录制通道不一致。\n"
+            f"当前配置通道: {configured_channel_text}\n"
+            f"本次录制通道: {active_channels_text}\n"
+            f"请在分析参数中重新选择通道后再分析。"
+            f"{detail_text}",
+        )
+
     def instance_analysis_class(self, key, type, params):
         """
         Instantiates and configures an analysis class based on the given type and parameters,
         and adds it to the analysis window list.
         """
         class_mapping = get_class_mapping()
+        requires_v2pa = type in self.analysis_types_requiring_v2pa
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
+                if self.mode == "RECORD_ONLY":
+                    mapped_channel = 0
+                    raw_channel = 0
+                    if isinstance(params, dict):
+                        try:
+                            raw_channel = int(params.get("analysis_channel", 0) or 0)
+                        except (TypeError, ValueError):
+                            raw_channel = 0
+                    if raw_channel < 0:
+                        raw_channel = 0
+                    channel_mismatch = False
+                    active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", None) or [0])]
+                    if raw_channel in active_input_channels:
+                        mapped_channel = int(active_input_channels.index(raw_channel))
+                    else:
+                        channel_mismatch = True
+                    display_key = f"{key}--通道{raw_channel + 1}"
+                    class_instance = cls_map(display_key)
+                    class_instance.data_struct = self.data_struct
+                    # Bind analysis key for geometry restore/persist
+                    setattr(class_instance, "_sequence_analysis_key", key)
+                    setattr(class_instance, "_channel_mismatch", channel_mismatch)
+                    setattr(
+                        class_instance,
+                        "_channel_mismatch_info",
+                        {
+                            "raw_channel": raw_channel,
+                            "active_input_channels": list(active_input_channels),
+                        },
+                    )
+                    if requires_v2pa and not channel_mismatch:
+                        try:
+                            class_instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+                                raw_channel,
+                                warn_callback=lambda msg: MessageBox.warning(self, "提示", msg),
+                            )
+                        except ValueError as err:
+                            MessageBox.warning(self, "提示", str(err))
+                            return
+                    runtime_params = dict(params) if isinstance(params, dict) else {}
+                    runtime_params["analysis_channel"] = mapped_channel
+                    # Inject sequence-level golden baseline path into per-item params
+                    if isinstance(getattr(self, "analysis_config", None), dict):
+                        golden_path = self.analysis_config.get("golden_sample_result_path")
+                        if golden_path:
+                            runtime_params["golden_sample_result_path"] = golden_path
+                    class_instance.analysis_config = runtime_params
+                    self.analysis_window.append(class_instance)
+                    return
                 class_instance = cls_map(key)
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
-                class_instance.v2pa_factor = self.v2pa_factor
+                raw_channel = 0
+                if isinstance(params, dict):
+                    try:
+                        raw_channel = int(params.get("analysis_channel", 0) or 0)
+                    except (TypeError, ValueError):
+                        raw_channel = 0
+                if raw_channel < 0:
+                    raw_channel = 0
+                if requires_v2pa:
+                    try:
+                        class_instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+                            raw_channel,
+                            warn_callback=lambda msg: MessageBox.warning(self, "提示", msg),
+                        )
+                    except ValueError as err:
+                        MessageBox.warning(self, "提示", str(err))
+                        return
                 # Inject sequence-level golden baseline path into per-item params
                 if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
                     golden_path = self.analysis_config.get("golden_sample_result_path")
@@ -2465,11 +2614,13 @@ class SequenceWindow(QWidget):
         self.using_config_path = path
         LoadUiConfig.update_using_config_path(self.using_config_path)
         self.get_sequence_config_from_json()
+        self.refresh_channel_windows()
         self.init_data_struct_stimulus_config()
         self.update_player_btn_is_paused()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setDisabled(True)
         self.data_struct.store_wave_data = None
+        self.data_struct.store_wave_data_multi = None
 
         # 1. 强制清除下拉框焦点
         self.using_file_combobox.clearFocus()
@@ -2510,6 +2661,7 @@ class SequenceWindow(QWidget):
             seq = self.sequence_config[0]["seq1"]
             self.analysis_config = seq.get("analysis_list", {})
             mode = seq["acq"]["mode"]
+            self.mode = mode
             if mode == "IMPORT_AUDIO":
                 self.replayer_btn.setDisabled(True)
             if self.count_board:
@@ -2520,6 +2672,7 @@ class SequenceWindow(QWidget):
         else:
             self.sequence_config = []
             self.analysis_config = dict()
+            self.mode = None
             self._set_sequence_config_available_state(False)
             # Only show prompt after login success (window shown).
             if getattr(self, "_missing_config_prompt_enabled", False) and not getattr(
@@ -2550,22 +2703,13 @@ class SequenceWindow(QWidget):
             # During early init some widgets may not be ready; ignore safely.
             pass
 
-    @staticmethod
-    def plot_line_graph(recorded_signal, line_graph, sample_rate):
-        """
-        Plot a line graph of the recorded signal.
-
-        Parameters:
-        recorded_signal (list or numpy.array): The recorded signal data to be plotted.
-        line_graph (matplotlib.axes.Axes): The Axes object used for plotting the line graph.
-        sample_rate (int or float): The sample rate of the signal, used to calculate the duration of the signal.
-        """
-        line_graph.clear()
-        # Use np.arange for correct sample time stamps (0, 1/fs, 2/fs, ..., (N-1)/fs)
-        signal_duration = np.arange(len(recorded_signal)) / sample_rate
-        line_graph.plot(signal_duration, recorded_signal, pen=pg.mkPen("k", width=2))
-
     def on_audio_chunk_received(self, chunk):
+        if self.streaming_mode == "play_record":
+            self.on_audio_chunk_received_playrec(chunk)
+        elif self.streaming_mode == "record_only":
+            self.on_audio_chunk_received_rec(chunk)
+
+    def on_audio_chunk_received_playrec(self, payload):
         """
         Handle streaming audio chunk for real-time waveform display.
 
@@ -2573,13 +2717,42 @@ class SequenceWindow(QWidget):
         Also writes chunk to file via connected wav_writer.
 
         Args:
-            chunk (np.ndarray): Audio chunk received from streaming processor
+            chunk (np.ndarray | dict): Audio chunk received from streaming processor
         """
-        # Append chunk to streaming buffer
-        self.streaming_buffer.append(chunk)
+        if isinstance(payload, dict):
+            mono_source = payload.get("mono")
+            multi_source = payload.get("multi")
+            if multi_source is not None:
+                multi_chunk = np.asarray(multi_source, dtype=np.float32)
+                if multi_chunk.ndim == 0:
+                    multi_chunk = multi_chunk.reshape(1, 1)
+                elif multi_chunk.ndim == 1:
+                    multi_chunk = multi_chunk.reshape(-1, 1)
+
+                wav_chunk = multi_chunk
+                if mono_source is None:
+                    if multi_chunk.shape[1] == 1:
+                        plot_chunk = multi_chunk[:, 0]
+                    else:
+                        plot_chunk = multi_chunk.mean(axis=1).astype(np.float32, copy=False)
+                else:
+                    plot_chunk = np.asarray(mono_source, dtype=np.float32)
+            elif mono_source is not None:
+                plot_chunk = np.asarray(mono_source, dtype=np.float32)
+            else:
+                plot_chunk = np.array([], dtype=np.float32)
+        else:
+            plot_chunk = np.asarray(payload, dtype=np.float32)
+
+        if plot_chunk.ndim > 1:
+            plot_chunk = plot_chunk[:, 0]
+
+        # Append mono display chunk to streaming buffer
+        mono = plot_chunk.reshape(-1)
+        self.streaming_buffer_multi.append(mono)
 
         # Calculate accumulated audio data
-        accumulated_audio = np.concatenate(self.streaming_buffer)
+        accumulated_audio = np.concatenate(self.streaming_buffer_multi)
 
         # Calculate time axis for accumulated data
         # Use np.arange to ensure fixed time stamps for each sample point
@@ -2588,17 +2761,67 @@ class SequenceWindow(QWidget):
         time_axis = np.arange(len(accumulated_audio)) / sample_rate
 
         # Update plot - preserve zoom/pan by updating existing PlotDataItem
+        wins = self.channel_workspace.all_subwindows()
+        wins[0].set_data(time_axis, accumulated_audio)
         if self.streaming_plot_item is None:
             # First chunk - create new plot item
-            self.streaming_plot_item = self.line_graph.plot(time_axis, accumulated_audio, pen="k")
-        else:
-            # Subsequent chunks - update existing item (preserves zoom/pan) incrementally
-            self.streaming_plot_item.setData(time_axis, accumulated_audio)
+            self.streaming_plot_item = wins[0]
 
         # Write chunk to file (if wav_writer is connected)
         if self.streaming_wav_writer:
             try:
-                self.streaming_wav_writer.write_chunk(chunk)
+                self.streaming_wav_writer.write_chunk(mono)
+            except Exception as e:
+                self.default_logger.error(f"Error writing audio chunk to file: {e}")
+
+    def on_audio_chunk_received_rec(self, payload):
+        """
+        Handle streaming audio chunk for real-time waveform display.
+        Args:
+            payload (dict): {"mono": 1D ndarray, "multi": 2D ndarray}
+        """
+        if not isinstance(payload, dict):
+            return
+        multi = payload.get("multi")
+        if multi is None:
+            return
+        multi_arr = np.asarray(multi, dtype=np.float32)
+        if multi_arr.ndim == 1:
+            multi_arr = multi_arr.reshape(-1, 1)
+        if multi_arr.ndim != 2 or multi_arr.shape[0] <= 0:
+            return
+
+        if not getattr(self, "_streaming_first_chunk_logged", False):
+            try:
+                self.default_logger.info(f"First streaming chunk received: multi shape={multi_arr.shape}")
+            except Exception:
+                pass
+            self._streaming_first_chunk_logged = True
+
+        self.streaming_buffer_multi.append(multi_arr)
+        if len(self.streaming_buffer_multi) == 1:
+            accumulated = self.streaming_buffer_multi[0]
+        else:
+            accumulated = np.concatenate(self.streaming_buffer_multi, axis=0)
+
+        sample_rate = float(self.data_struct.sample_rate or 1.0)
+        time_axis = np.arange(accumulated.shape[0]) / sample_rate
+
+        if self.channel_workspace is not None:
+            wins = self.channel_workspace.all_subwindows()
+        else:
+            wins = []
+
+        ch_n = int(accumulated.shape[1])
+        for i, w in enumerate(wins):
+            if i < ch_n:
+                w.set_data(time_axis, accumulated[:, i])
+            else:
+                w.clear_plot()
+
+        if self.streaming_wav_writer:
+            try:
+                self.streaming_wav_writer.write_chunk(multi_arr)
             except Exception as e:
                 self.default_logger.error(f"Error writing audio chunk to file: {e}")
 
@@ -2635,6 +2858,9 @@ class SequenceWindow(QWidget):
         try:
             # Get the complete recorded data
             recorded_data = self.streaming_processor.get_recorded_data()
+            recorded_data_multi = None
+            if self.streaming_mode == "record_only":
+                recorded_data_multi = self.streaming_processor.get_recorded_data_multi()
             sample_rate = self.data_struct.sample_rate
 
             # VERIFICATION: Check if we captured the expected number of samples
@@ -2661,13 +2887,12 @@ class SequenceWindow(QWidget):
 
                 # Update plot with aligned data (refresh display)
                 final_time_axis = np.linspace(0, len(aligned_data) / sample_rate, len(aligned_data))
-                if self.streaming_plot_item:
-                    self.streaming_plot_item.setData(final_time_axis, aligned_data)
-                else:
-                    self.streaming_plot_item = self.line_graph.plot(final_time_axis, aligned_data, pen="k")
+                if self.streaming_plot_item is not None:
+                    self.streaming_plot_item.set_data(final_time_axis, aligned_data)
 
                 # Store aligned data
                 self.data_struct.store_wave_data = aligned_data
+                self.data_struct.store_wave_data_multi = np.asarray(aligned_data, dtype=np.float32).reshape(-1, 1)
 
                 # Save aligned data to final file
                 save_audio_simple(self.recorded_path, aligned_data, sample_rate)
@@ -2692,7 +2917,31 @@ class SequenceWindow(QWidget):
 
             else:
                 # Record-only mode - no alignment needed
-                self.data_struct.store_wave_data = recorded_data
+                if recorded_data_multi is not None:
+                    recorded_array = np.asarray(recorded_data_multi, dtype=np.float32)
+                else:
+                    recorded_array = np.asarray(recorded_data, dtype=np.float32)
+                if recorded_array.ndim == 2:
+                    actual_input_channels = list(getattr(self.streaming_processor, "_rec_in_sel", []) or [])
+                    if not actual_input_channels:
+                        actual_input_channels = list(getattr(self, "_active_input_channels", []) or [])
+                    if actual_input_channels:
+                        self._active_input_channels = [int(ch) for ch in actual_input_channels[: recorded_array.shape[1]]]
+                    if len(getattr(self, "_active_input_channels", []) or []) != recorded_array.shape[1]:
+                        self._active_input_channels = list(range(recorded_array.shape[1]))
+                    self.data_struct.store_wave_data_multi = recorded_array
+                    if recorded_array.shape[1] == 1:
+                        mono_recorded_data = recorded_array[:, 0]
+                    elif recorded_array.shape[1] > 1:
+                        mono_recorded_data = recorded_array.mean(axis=1).astype(np.float32, copy=False)
+                    else:
+                        mono_recorded_data = np.array([], dtype=np.float32)
+                else:
+                    mono_recorded_data = recorded_array.reshape(-1)
+                    actual_input_channels = list(getattr(self.streaming_processor, "_rec_in_sel", []) or [])
+                    self._active_input_channels = [int(actual_input_channels[0])] if actual_input_channels else [0]
+                    self.data_struct.store_wave_data_multi = mono_recorded_data.reshape(-1, 1)
+                self.data_struct.store_wave_data = mono_recorded_data
 
                 # Finalize WAV file (for record-only, this is the final file)
                 if self.streaming_wav_writer:
@@ -2816,6 +3065,85 @@ class SequenceWindow(QWidget):
         can_start = can_start and not getattr(self, "player_status_flag", False)
         can_start = can_start and not getattr(self, "_record_workflow_busy", False)
         self.player_btn.setDisabled(not can_start)
+
+    def refresh_channel_windows(self) -> None:
+        """
+        Refresh plot subwindows based on current mic_channels selection.
+
+        MainWindow assigns mic_channels after SequenceWindow construction, so this should be
+        called at least once after the window is shown, and again after hardware selection changes.
+        """
+        channels = []
+        try:
+            channels = list(getattr(self, "mic_channels", []) or [])
+        except Exception:
+            channels = []
+        if not channels:
+            channels = [0]
+
+        self._active_input_channels = [int(x) for x in channels]
+
+        if (not self.sequence_config) or self.mode in (
+            "PLAY_AND_RECORD",
+            "IMPORT_STIMULUS_AUDIO",
+            "IMPORT_AUDIO",
+        ):
+            self.channel_workspace.set_single_canvas_mode(channel_index=0)
+            self.default_logger.info(f"Single-canvas mode activated for mode {self.mode}")
+        else:
+            if self.channel_workspace is not None:
+                self.channel_workspace.set_channels(self._active_input_channels)
+            self.default_logger.info(f"Plot workspace channels: {self._active_input_channels}")
+
+    def _clear_plot_area(self) -> None:
+        if self.channel_workspace is not None:
+            self.channel_workspace.clear_plots()
+
+    def plot_waveform_to_workspace(self, recorded_signal, sample_rate: float) -> None:
+        """
+        Plot waveform data to the channel subwindows.
+
+        - If recorded_signal is 2D: shape (frames, channels), each channel plots to its own subwindow.
+        - If recorded_signal is 1D: plot the same waveform to all subwindows (best-effort fallback).
+        """
+        if self.channel_workspace is None:
+            return
+
+        wins = self.channel_workspace.all_subwindows()
+        if not wins:
+            return
+
+        if recorded_signal is None:
+            self._clear_plot_area()
+            return
+
+        y = np.asarray(recorded_signal)
+        if y.ndim == 1:
+            frames = int(y.shape[0])
+            if frames <= 0:
+                self._clear_plot_area()
+                return
+            t = np.arange(frames) / float(sample_rate or 1.0)
+            for w in wins:
+                w.set_data(t, y)
+            return
+
+        if y.ndim == 2:
+            frames = int(y.shape[0])
+            if frames <= 0:
+                self._clear_plot_area()
+                return
+            t = np.arange(frames) / float(sample_rate or 1.0)
+            ch_n = int(y.shape[1])
+            for i, w in enumerate(wins):
+                if i < ch_n:
+                    w.set_data(t, y[:, i])
+                else:
+                    w.clear_plot()
+            return
+
+        # Unexpected shape -> clear for safety
+        self._clear_plot_area()
 
     def _close_analysis_windows(self):
         """

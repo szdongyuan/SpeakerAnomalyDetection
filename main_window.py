@@ -1,4 +1,5 @@
 import sys
+from time import sleep
 
 from PyQt5.QtCore import Qt, QPoint, QTimer, QUrl
 from PyQt5.QtGui import QIcon, QPixmap, QDesktopServices
@@ -14,7 +15,8 @@ from ui.custom_ui_widget.widgets import PushButton, MenuBar, Label, Action, Mess
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
-from ui.hardware_window import HardwareWindow
+
+from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_widget import SequenceWindow
@@ -33,6 +35,7 @@ class MainWindow(QMainWindow):
         startup_devices = SoundDeviceManager().get_startup_devices()
         self.mic = startup_devices.get("mic")
         self.speaker = startup_devices.get("speaker")
+        self.mic_channels = startup_devices.get("mic_channels", [])
         self.startup_device_fallback_targets = startup_devices.get("fallback_targets", [])
         self.startup_device_notice_message = startup_devices.get("startup_notice_message")
 
@@ -83,6 +86,7 @@ class MainWindow(QMainWindow):
         self.on_login_window_init()
         if self.startup_device_notice_message or self.startup_device_fallback_targets:
             QTimer.singleShot(0, self.show_startup_device_warning)
+        self.sequence_window.refresh_channel_windows()
 
     def set_title(self):
         # hide the window title bar and reset the window title bar
@@ -105,6 +109,7 @@ class MainWindow(QMainWindow):
         title_layout.addLayout(title_btn_layout)
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
+        self.get_current_version()
 
         title_widget = QWidget()
         title_widget.setObjectName("TitleWidget")
@@ -181,6 +186,7 @@ class MainWindow(QMainWindow):
         # transmit the mic and speaker to sequence widget
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
+        self.sequence_window.mic_channels = self.mic_channels
 
     def init_menu(self):
         # create menu bar, and link the menu bar to action
@@ -233,11 +239,16 @@ class MainWindow(QMainWindow):
     def analysis_model_select(self):
         # Test items for configuring speakers
         analysis_model_select_dialog = AnalysisModelSelect(
-            self.sequence_window.using_config_path, mic=self.mic, speaker=self.speaker
+            self.sequence_window.using_config_path,
+            mic=self.mic,
+            speaker=self.speaker,
+            mic_channels=self.mic_channels,
         )
         analysis_model_select_dialog.exec()
-        # Refresh active sequence config without forcing mode switch
-        self.sequence_window.on_sequence_config_updated()
+        if not hasattr(analysis_model_select_dialog, "config_saved") or analysis_model_select_dialog.config_saved:
+            sleep(0.1)
+            # Refresh active sequence config only after a successful save.
+            self.sequence_window.on_sequence_config_updated()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
@@ -311,12 +322,27 @@ class MainWindow(QMainWindow):
         if self.sequence_window.player_status_flag:
             MessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
+        # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
+        driver_name = None
+        try:
+            if self.speaker and self.speaker.get("hostapi") is not None:
+                driver_name = SoundDeviceManager.get_api_info(int(self.speaker.get("hostapi"))).get("name")
+            elif self.mic and self.mic.get("hostapi") is not None:
+                driver_name = SoundDeviceManager.get_api_info(int(self.mic.get("hostapi"))).get("name")
+        except Exception:
+            driver_name = None
 
-        dlg = HardwareWindow(self.speaker, self.mic)
-        self.speaker, self.mic = dlg.on_exec()
+        self.speaker, self.mic, self.mic_channels = open_hardware_selection_window(
+            driver=driver_name,
+            speaker_device=self.speaker,
+            mic_device=self.mic,
+            mic_channels=self.mic_channels,
+        )
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
+        self.sequence_window.mic_channels = self.mic_channels
+        self.sequence_window.refresh_channel_windows()
 
     def show_startup_device_warning(self):
         if self.startup_device_notice_message:
