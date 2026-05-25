@@ -6,7 +6,7 @@ from base.system_intervction.hardware_intervction import get_mac_address
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.recording_management import RecordingManager
 from base.save_data import save_audio_simple
-from base.soundcard_audio_processor import SoundcardAudioProcessor
+from base.soundcard_audio_processor import SoundcardAudioProcessor, _alignment_reference_from_stimulus
 from base.streaming_audio_processor import StreamingAudioProcessor
 from consts import error_code, model_consts
 
@@ -196,6 +196,6 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
     if record_code == error_code.OK:
         # Return processor and stimulus data for UI to manage (don't block!)
         # UI will perform alignment after recording completes
-        return processor, stimulus_data, sample_rate
+        return processor, _alignment_reference_from_stimulus(stimulus_dict), sample_rate
     else:
         raise RuntimeError(f"Failed to start streaming play+record: {msg}")

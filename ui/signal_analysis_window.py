@@ -31,6 +31,7 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
+from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
     FrequencyBandAnalyzer,
     BandAnalysisResult,
@@ -171,7 +172,28 @@ def _abs_deviation_curve(x_current, y_current, x_base, y_base):
     if x_b.size < 2:
         return y_c
 
-    sort_idx = np.argsort(x_b)
+    if np.unique(x_b).size != x_b.size and x_c.size == y_c.size:
+        x_c_flat = np.ravel(x_c)
+        y_c_flat = np.ravel(y_c)
+        current_mask = np.isfinite(x_c_flat) & np.isfinite(y_c_flat)
+        if int(np.count_nonzero(current_mask)) == x_b.size:
+            current_order = np.argsort(x_c_flat[current_mask], kind="stable")
+            baseline_order = np.argsort(x_b, kind="stable")
+            current_sorted_x = x_c_flat[current_mask][current_order]
+            baseline_sorted_x = x_b[baseline_order]
+            if current_sorted_x.shape == baseline_sorted_x.shape and np.allclose(
+                current_sorted_x,
+                baseline_sorted_x,
+                rtol=1e-9,
+                atol=1e-9,
+            ):
+                paired_deviation = y_c_flat[current_mask][current_order] - y_b[baseline_order]
+                deviation = np.asarray(y_c_flat, dtype=float).copy()
+                current_indices = np.flatnonzero(current_mask)
+                deviation[current_indices[current_order]] = paired_deviation
+                return deviation.reshape(y_c.shape)
+
+    sort_idx = np.argsort(x_b, kind="stable")
     x_b = x_b[sort_idx]
     y_b = y_b[sort_idx]
     x_b, uniq_idx = np.unique(x_b, return_index=True)
@@ -183,6 +205,59 @@ def _abs_deviation_curve(x_current, y_current, x_base, y_base):
     in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
     interp = np.where(in_range, interp, np.nan)
     return y_c - interp
+
+
+def _analysis_stimulus_metadata(stimulus_info: dict, sample_rate):
+    stimulus_info = stimulus_info or {}
+    stimulus_method = analysis_stimulus_method(stimulus_info.get("stimulus_method", "steps"))
+    metadata = {
+        "stimulus_method": stimulus_method,
+        "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
+        "start_freq": stimulus_info.get("start_freq"),
+        "stop_freq": stimulus_info.get("stop_freq"),
+        "num_steps": stimulus_info.get("num_steps"),
+        "total_time": stimulus_info.get("total_time"),
+        "repeat_times": stimulus_info.get("repeat_times"),
+        "sample_rate": sample_rate,
+    }
+    if stimulus_method != "frequency_stepped":
+        return metadata
+
+    passthrough_keys = (
+        "frequency_mode",
+        "frequencies",
+        "segments",
+        "step_durations",
+        "min_duration",
+        "min_cycles",
+        "repeat_times",
+        "schedule_sample_rate",
+        "schedule_provenance",
+        "schedule_algorithm",
+        "per_repetition_sample_count",
+        "alignment_sample_count",
+        "playback_sample_count",
+        "effective_start_freq",
+        "effective_stop_freq",
+        "resolution",
+        "transition_hz",
+        "safe_max_freq",
+        "frequency_clamped",
+    )
+    for key in passthrough_keys:
+        if key in stimulus_info:
+            metadata[key] = stimulus_info[key]
+    metadata["stimulus_type"] = stimulus_info.get("stimulus_type", metadata.get("frequency_mode", "custom_linear"))
+    metadata["frequency_mode"] = stimulus_info.get("frequency_mode", metadata["stimulus_type"])
+    return metadata
+
+
+def _has_duplicate_finite_frequency_points(frequencies) -> bool:
+    freq = np.asarray(frequencies, dtype=float)
+    freq = freq[np.isfinite(freq)]
+    if freq.size <= 1:
+        return False
+    return np.unique(freq).size != freq.size
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -371,24 +446,9 @@ class Distortion(AnalysisGraphWidget):
         if recorded_signal is None or sample_rate is None or stimulus_info is None:
             raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
 
-        # Convert stimulus_info to stimulus_metadata format
-        # Handle naming differences: "chirp" -> "chirps", normalize method names
-        stimulus_method = stimulus_info.get("stimulus_method", "steps")
-        if stimulus_method == "chirp":
-            stimulus_method = "chirps"
-        elif stimulus_method == "step":
-            stimulus_method = "steps"
-
-        stimulus_metadata = {
-            "stimulus_method": stimulus_method,
-            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
-            "start_freq": stimulus_info.get("start_freq"),
-            "stop_freq": stimulus_info.get("stop_freq"),
-            "num_steps": stimulus_info.get("num_steps"),
-            "total_time": stimulus_info.get("total_time"),
-            "repeat_times": stimulus_info.get("repeat_times"),
-            "sample_rate": sample_rate,
-        }
+        # Convert stimulus_info to stimulus_metadata format.
+        stimulus_metadata = _analysis_stimulus_metadata(stimulus_info, sample_rate)
+        stimulus_method = stimulus_metadata["stimulus_method"]
 
         # Call the new three-phase architecture
         atfra = AudioThdFrequencyResponseAnalysis()
@@ -661,23 +721,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         if recorded_signal is None or sample_rate is None or stimulus_info is None:
             raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
 
-        # Convert stimulus_info to stimulus_metadata format
-        stimulus_method = stimulus_info.get("stimulus_method", "steps")
-        if stimulus_method == "chirp":
-            stimulus_method = "chirps"
-        elif stimulus_method == "step":
-            stimulus_method = "steps"
-
-        stimulus_metadata = {
-            "stimulus_method": stimulus_method,
-            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
-            "start_freq": stimulus_info.get("start_freq"),
-            "stop_freq": stimulus_info.get("stop_freq"),
-            "num_steps": stimulus_info.get("num_steps"),
-            "total_time": stimulus_info.get("total_time"),
-            "repeat_times": stimulus_info.get("repeat_times"),
-            "sample_rate": sample_rate,
-        }
+        # Convert stimulus_info to stimulus_metadata format.
+        stimulus_metadata = _analysis_stimulus_metadata(stimulus_info, sample_rate)
+        stimulus_method = stimulus_metadata["stimulus_method"]
 
         # Call the PERCEPTUAL three-phase architecture
         v2pa_factor = self.v2pa_factor
@@ -1035,22 +1081,8 @@ class SplFrequency(AnalysisGraphWidget):
             self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
             return self.result
 
-        stimulus_method = stimulus_info.get("stimulus_method", "steps")
-        if stimulus_method == "chirp":
-            stimulus_method = "chirps"
-        elif stimulus_method == "step":
-            stimulus_method = "steps"
-
-        stimulus_metadata = {
-            "stimulus_method": stimulus_method,
-            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
-            "start_freq": stimulus_info.get("start_freq"),
-            "stop_freq": stimulus_info.get("stop_freq"),
-            "num_steps": stimulus_info.get("num_steps"),
-            "total_time": stimulus_info.get("total_time"),
-            "repeat_times": stimulus_info.get("repeat_times"),
-            "sample_rate": sample_rate,
-        }
+        stimulus_metadata = _analysis_stimulus_metadata(stimulus_info, sample_rate)
+        stimulus_method = stimulus_metadata["stimulus_method"]
 
         try:
             analyzer = SplFrequencyAnalyzer(sample_rate=int(sample_rate))
@@ -1078,7 +1110,10 @@ class SplFrequency(AnalysisGraphWidget):
         except Exception:
             octave_smoothing = 0
 
-        if octave_smoothing in {1, 3, 6, 12, 24, 48} and spl_db.size > 1:
+        skip_smoothing_for_duplicates = (
+            stimulus_method == "frequency_stepped" and _has_duplicate_finite_frequency_points(frequency_list)
+        )
+        if octave_smoothing in {1, 3, 6, 12, 24, 48} and spl_db.size > 1 and not skip_smoothing_for_duplicates:
             try:
 
                 freq = np.asarray(frequency_list, dtype=float)
@@ -1242,22 +1277,7 @@ class Frequency(AnalysisGraphWidget):
             return self.result
 
         # Convert stimulus_info to metadata (shared convention with harmonic distortion pipeline).
-        stimulus_method = stimulus_info.get("stimulus_method", "steps")
-        if stimulus_method == "chirp":
-            stimulus_method = "chirps"
-        elif stimulus_method == "step":
-            stimulus_method = "steps"
-
-        stimulus_metadata = {
-            "stimulus_method": stimulus_method,
-            "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
-            "start_freq": stimulus_info.get("start_freq"),
-            "stop_freq": stimulus_info.get("stop_freq"),
-            "num_steps": stimulus_info.get("num_steps"),
-            "total_time": stimulus_info.get("total_time"),
-            "repeat_times": stimulus_info.get("repeat_times"),
-            "sample_rate": sr,
-        }
+        stimulus_metadata = _analysis_stimulus_metadata(stimulus_info, sr)
 
         try:
             analyzer = FrequencyResponseAnalyzer(sample_rate=int(sr))

@@ -3,10 +3,13 @@ import math
 
 import pytest
 
+import base.soundcard_calibration_manager as calibration_store
 from base.soundcard_calibration_manager import (
     MicChannelCalibrationResult,
+    clear_mic_channel_v2pa_factors,
     format_input_channel_label,
     load_mic_channel_v2pa_factors,
+    replace_mic_channel_v2pa_factors,
     resolve_analysis_v2pa_factor_for_channel,
     resolve_mic_channel_v2pa_factor,
     save_mic_channel_v2pa_factor,
@@ -32,6 +35,114 @@ def test_save_preserves_existing_valid_channels(tmp_path):
     save_mic_channel_v2pa_factor(1, 1.5, standard_spl=114, file_path=path)
 
     assert load_mic_channel_v2pa_factors(file_path=path) == {1: 1.5, 3: 3.0}
+
+
+def test_clear_channel_v2pa_factors_writes_empty_payload(tmp_path):
+    path = tmp_path / "mic_channel_calibration.json"
+    save_mic_channel_v2pa_factor(1, 2.5, standard_spl=94, file_path=path)
+
+    clear_mic_channel_v2pa_factors(file_path=path)
+
+    assert load_mic_channel_v2pa_factors(file_path=path) == {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload == {"version": 1, "channels": {}}
+
+
+def test_clear_channel_v2pa_factors_preserves_existing_payload_when_write_fails(tmp_path, monkeypatch):
+    path = tmp_path / "mic_channel_calibration.json"
+    save_mic_channel_v2pa_factor(1, 2.5, standard_spl=94, file_path=path)
+    original_payload = path.read_text(encoding="utf-8")
+
+    def failing_dump(payload, fp, *args, **kwargs):
+        fp.write('{"version": 1, "channels": {"broken": ')
+        raise OSError("simulated dump failure")
+
+    monkeypatch.setattr(calibration_store.json, "dump", failing_dump)
+
+    with pytest.raises(OSError, match="simulated dump failure"):
+        clear_mic_channel_v2pa_factors(file_path=path)
+
+    assert path.read_text(encoding="utf-8") == original_payload
+    assert load_mic_channel_v2pa_factors(file_path=path) == {1: 2.5}
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_replace_channel_v2pa_factors_writes_complete_set_and_preserves_reused_spl(tmp_path):
+    path = tmp_path / "mic_channel_calibration.json"
+    save_mic_channel_v2pa_factor(0, 1.25, standard_spl=94, file_path=path)
+    save_mic_channel_v2pa_factor(4, 4.25, standard_spl=114, file_path=path)
+
+    replace_mic_channel_v2pa_factors(
+        {0: 1.5, 2: 2.5},
+        channel_standard_spl={2: 114},
+        file_path=path,
+    )
+
+    assert load_mic_channel_v2pa_factors(file_path=path) == {0: 1.5, 2: 2.5}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(payload["channels"]) == {"0", "2"}
+    assert payload["channels"]["0"]["standard_spl"] == 94
+    assert payload["channels"]["2"]["standard_spl"] == 114
+    assert payload["channels"]["0"]["calibrated_at"]
+    assert payload["channels"]["2"]["calibrated_at"]
+
+
+def test_replace_channel_v2pa_factors_preserves_existing_payload_when_write_fails(tmp_path, monkeypatch):
+    path = tmp_path / "mic_channel_calibration.json"
+    save_mic_channel_v2pa_factor(0, 1.25, standard_spl=94, file_path=path)
+    original_payload = path.read_text(encoding="utf-8")
+
+    def failing_dump(payload, fp, *args, **kwargs):
+        fp.write('{"version": 1, "channels": {"broken": ')
+        raise OSError("simulated dump failure")
+
+    monkeypatch.setattr(calibration_store.json, "dump", failing_dump)
+
+    with pytest.raises(OSError, match="simulated dump failure"):
+        replace_mic_channel_v2pa_factors({0: 1.5, 2: 2.5}, file_path=path)
+
+    assert path.read_text(encoding="utf-8") == original_payload
+    assert load_mic_channel_v2pa_factors(file_path=path) == {0: 1.25}
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_replace_channel_v2pa_factors_normalizes_string_standard_spl_keys(tmp_path):
+    path = tmp_path / "mic_channel_calibration.json"
+
+    replace_mic_channel_v2pa_factors(
+        {2: 2.5},
+        channel_standard_spl={"2": 114},
+        file_path=path,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["channels"]["2"]["standard_spl"] == 114
+
+
+def test_replace_channel_v2pa_factors_rejects_invalid_standard_spl_channel_keys_before_writing(tmp_path):
+    path = tmp_path / "mic_channel_calibration.json"
+
+    with pytest.raises(ValueError, match="channel_index must be a non-negative integer"):
+        replace_mic_channel_v2pa_factors(
+            {0: 1.0},
+            channel_standard_spl={"bad": 94},
+            file_path=path,
+        )
+
+    assert not path.exists()
+
+
+def test_replace_channel_v2pa_factors_rejects_invalid_inputs(tmp_path):
+    path = tmp_path / "mic_channel_calibration.json"
+
+    with pytest.raises(ValueError):
+        replace_mic_channel_v2pa_factors({-1: 1.0}, file_path=path)
+    with pytest.raises(ValueError):
+        replace_mic_channel_v2pa_factors({0: 0}, file_path=path)
+    with pytest.raises(ValueError):
+        replace_mic_channel_v2pa_factors({0: 1.0}, channel_standard_spl={0: math.inf}, file_path=path)
+
+    assert not path.exists()
 
 
 def test_save_preserves_existing_channel_when_optional_metadata_is_corrupt(tmp_path):
@@ -60,6 +171,25 @@ def test_save_preserves_existing_channel_when_optional_metadata_is_corrupt(tmp_p
     assert payload["channels"]["3"]["calibrated_at"] == "2026-05-12"
     assert "standard_spl" not in payload["channels"]["3"]
     assert payload["channels"]["1"]["standard_spl"] == 114
+
+
+def test_save_channel_v2pa_factor_preserves_existing_payload_when_write_fails(tmp_path, monkeypatch):
+    path = tmp_path / "mic_channel_calibration.json"
+    save_mic_channel_v2pa_factor(1, 2.5, standard_spl=94, file_path=path)
+    original_payload = path.read_text(encoding="utf-8")
+
+    def failing_dump(payload, fp, *args, **kwargs):
+        fp.write('{"version": 1, "channels": {"broken": ')
+        raise OSError("simulated dump failure")
+
+    monkeypatch.setattr(calibration_store.json, "dump", failing_dump)
+
+    with pytest.raises(OSError, match="simulated dump failure"):
+        save_mic_channel_v2pa_factor(2, 3.5, standard_spl=114, file_path=path)
+
+    assert path.read_text(encoding="utf-8") == original_payload
+    assert load_mic_channel_v2pa_factors(file_path=path) == {1: 2.5}
+    assert list(tmp_path.iterdir()) == [path]
 
 
 def test_load_missing_corrupt_or_invalid_json_returns_empty_dict(tmp_path):

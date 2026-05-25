@@ -21,6 +21,7 @@ class DataSave(object):
             self.connection = sqlite3.connect(self.db_name)
             self.connection.execute("PRAGMA foreign_keys = ON;")
             self.cursor = self.connection.cursor()
+            self._ensure_stimulus_metadata_column()
             return error_code.OK, "Successfully connect to database."
         except Exception as e:
             err_msg = "Failed to connect to the database %s" % (str(e)[:40])
@@ -60,7 +61,8 @@ class DataSave(object):
             voltage_type TEXT NOT NULL DEFAULT 'RMS',
             voltage REAL NOT NULL DEFAULT 1.0,
             is_default INTEGER NOT NULL CHECK (is_default IN (0, 1)),
-            stimulus_name TEXT
+            stimulus_name TEXT,
+            stimulus_metadata_json TEXT
         );
         """
         create_training_model_table_sql = """
@@ -80,6 +82,7 @@ class DataSave(object):
         self.cursor.execute(create_stimulus_signal_table_sql)
         self.cursor.execute(create_training_model_table_sql)
         self._ensure_stimulus_voltage_columns()
+        self._ensure_stimulus_metadata_column()
 
     def _create_system_tables(self):
         create_users_table_sql = """
@@ -152,7 +155,7 @@ class DataSave(object):
             err_msg = "Failed to create system tables. %s" % (str(e)[:40])
             self.logger.error(err_msg)
             return error_code.INVALID_CREATE_TABLE, err_msg
-    
+
     # compatibility bridge for old version
     def create_table(self):
         try:
@@ -182,6 +185,21 @@ class DataSave(object):
                 self.connection.commit()
         except Exception as e:
             err_msg = "Failed to ensure stimulus voltage columns. %s" % (str(e)[:40])
+            self.logger.error(err_msg)
+            raise
+
+    def _ensure_stimulus_metadata_column(self):
+        try:
+            self.cursor.execute("PRAGMA table_info(stimulus_signal_table)")
+            table_info = self.cursor.fetchall()
+            if not table_info:
+                return
+            existing_columns = {row[1] for row in table_info}
+            if "stimulus_metadata_json" not in existing_columns:
+                self.cursor.execute("ALTER TABLE stimulus_signal_table ADD COLUMN stimulus_metadata_json TEXT")
+                self.connection.commit()
+        except Exception as e:
+            err_msg = "Failed to ensure stimulus metadata column. %s" % (str(e)[:40])
             self.logger.error(err_msg)
             raise
 
@@ -530,7 +548,7 @@ def ensure_system_database_ready():
 
 
 def ensure_audio_database_ready():
-    db_path = model_consts.AUDIO_DATABASE_PATH
+    db_path = model_consts.DATABASE_PATH
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)

@@ -14,6 +14,97 @@ from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
 from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
 from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
+from base.stimulus_signal.frequency_stepped import resolve_frequency_stepped_schedule
+
+
+def _cached_segment_bounds(segment_payload):
+    try:
+        start = int(segment_payload["start_sample"])
+        end = int(segment_payload["end_sample"])
+        sample_count = int(segment_payload["sample_count"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("frequency_stepped segment metadata is invalid") from None
+    if start < 0 or end < start or sample_count != end - start:
+        raise ValueError("frequency_stepped segment metadata is invalid")
+    return start, end
+
+
+def _validate_cached_frequency_stepped_segments(stimulus_metadata, signal_length, sample_rate):
+    segments = stimulus_metadata.get("segments")
+    if segments is None:
+        return
+    schedule_sample_rate = stimulus_metadata.get("schedule_sample_rate")
+    if schedule_sample_rate is not None:
+        try:
+            if int(schedule_sample_rate) != int(sample_rate):
+                return
+        except (TypeError, ValueError):
+            pass
+    if not isinstance(segments, (list, tuple)):
+        raise ValueError("frequency_stepped segments must be a list")
+
+    bounds = [_cached_segment_bounds(segment) for segment in segments]
+    previous_end = -1
+    for index, (start, end) in enumerate(bounds):
+        if start < previous_end:
+            raise ValueError("frequency_stepped segments overlap")
+        if end > signal_length:
+            has_later_recorded_segment = any(later_start < signal_length for later_start, _ in bounds[index + 1:])
+            if has_later_recorded_segment:
+                raise ValueError("frequency_stepped segment is non-trailing out of range")
+            return
+        previous_end = end
+
+
+def _frequency_stepped_analysis_segments(recorded_signal, stimulus_metadata, sample_rate):
+    recorded = np.asarray(recorded_signal, dtype=float)
+    if recorded.ndim != 1:
+        recorded = np.ravel(recorded)
+
+    _validate_cached_frequency_stepped_segments(stimulus_metadata, int(recorded.size), sample_rate)
+    schedule = resolve_frequency_stepped_schedule(stimulus_metadata, sample_rate)
+
+    segments = []
+    all_segments = list(schedule.segments)
+    for index, segment in enumerate(all_segments):
+        start = int(segment.start_sample)
+        end = int(segment.end_sample)
+        if start < 0 or end < start:
+            raise ValueError("frequency_stepped resolved segment metadata is invalid")
+        if end > recorded.size:
+            has_later_recorded_segment = any(int(later.start_sample) < recorded.size for later in all_segments[index + 1:])
+            if has_later_recorded_segment:
+                raise ValueError("frequency_stepped segment is non-trailing out of range")
+            break
+        if start >= recorded.size:
+            break
+        segment_signal = recorded[start:end]
+        if segment_signal.size != end - start:
+            raise ValueError("frequency_stepped segment slicing failed")
+        segments.append((segment, segment_signal))
+    return schedule, segments
+
+
+def _frequency_stepped_index_row(frequency_hz, sample_rate, n_fft, max_harmonic_order):
+    fft_freqs = np.fft.rfftfreq(int(n_fft), d=1.0 / float(sample_rate))
+    nyquist = float(sample_rate) / 2.0
+    index_row = np.zeros(int(max_harmonic_order) + 1, dtype=np.int32)
+    for harmonic_order in range(1, int(max_harmonic_order) + 1):
+        harmonic_freq = float(frequency_hz) * harmonic_order
+        if harmonic_freq < nyquist:
+            index_row[harmonic_order] = int(np.argmin(np.abs(fft_freqs - harmonic_freq))) + 1
+    return index_row, np.insert(fft_freqs, 0, 0.0)
+
+
+def _frequency_stepped_spectrum_column(segment_signal, analyzer, stft_window_type):
+    n_fft = int(np.asarray(segment_signal).size)
+    spectrum = analyzer._compute_stft(
+        np.asarray(segment_signal, dtype=float),
+        window_size=n_fft,
+        hop_size=n_fft,
+        window_type=stft_window_type,
+    )
+    return np.insert(spectrum, 0, 0.0, axis=0)
 
 
 class AudioThdFrequencyResponseAnalysis(object):
@@ -137,6 +228,16 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
         stimulus_metadata = thd_kwargs['stimulus_metadata']
         harmonic_orders = thd_kwargs.get('harmonic_orders', [2, 3, 4, 5])
+        stimulus_method = stimulus_metadata['stimulus_method']
+
+        if stimulus_method == 'frequency_stepped':
+            return self._calculate_frequency_stepped_thd(
+                recorded_signal=recorded_signal,
+                sample_rate=sr,
+                stimulus_metadata=stimulus_metadata,
+                harmonic_orders=harmonic_orders,
+                stft_window_type=thd_kwargs.get('stft_window_type', 'hann'),
+            )
 
         # ═══════════════════════════════════════════════════════════════════
         # PHASE 1A: Build Overall Index Matrix
@@ -231,6 +332,61 @@ class AudioThdFrequencyResponseAnalysis(object):
 
         return x, h, thd
 
+    def _calculate_frequency_stepped_thd(
+        self,
+        *,
+        recorded_signal,
+        sample_rate,
+        stimulus_metadata,
+        harmonic_orders,
+        stft_window_type='hann',
+    ):
+        schedule, segment_pairs = _frequency_stepped_analysis_segments(
+            recorded_signal,
+            stimulus_metadata,
+            int(sample_rate),
+        )
+        if not segment_pairs:
+            return np.array([]), np.zeros((6, 0)), np.array([])
+
+        max_harmonic_order = max([35, *[int(order) for order in harmonic_orders], 5])
+        builder = HarmonicIndexBuilder()
+        analyzer = StepSignalHD(sample_rate=int(sample_rate))
+
+        frequencies = []
+        thd_values = []
+        harmonic_columns = []
+        for segment, segment_signal in segment_pairs:
+            n_fft = int(segment_signal.size)
+            index_row, fft_freqs = _frequency_stepped_index_row(
+                segment.frequency_hz,
+                int(sample_rate),
+                n_fft,
+                max_harmonic_order,
+            )
+            index_matrix = index_row.reshape(1, -1)
+            spectrum = _frequency_stepped_spectrum_column(segment_signal, analyzer, stft_window_type)
+            mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
+            fundamental_bins = index_matrix[:, 1]
+            thd = analyzer.compute_thd_batch(spectrum, mask_matrix, fundamental_bins)
+
+            harmonic_column = np.zeros(6, dtype=float)
+            harmonic_column[0] = float(segment.frequency_hz)
+            for harmonic_order in range(1, 6):
+                bin_idx = int(index_row[harmonic_order])
+                if bin_idx > 0 and bin_idx < spectrum.shape[0]:
+                    harmonic_column[harmonic_order] = float(spectrum[bin_idx, 0])
+
+            frequencies.append(float(segment.frequency_hz))
+            thd_values.append(float(thd[0]))
+            harmonic_columns.append(harmonic_column)
+
+        x = np.asarray(frequencies, dtype=float)
+        thd = np.asarray(thd_values, dtype=float)
+        h = np.asarray(harmonic_columns, dtype=float).T
+        sort_idx = np.argsort(x, kind="stable")
+        return x[sort_idx], h[:, sort_idx], thd[sort_idx]
+
     def _calculate_perceptual_thd_three_phase(
         self,
         recorded_signal: np.ndarray,
@@ -283,6 +439,17 @@ class AudioThdFrequencyResponseAnalysis(object):
         builder = HarmonicIndexBuilder()
 
         stimulus_method = stimulus_metadata['stimulus_method']
+
+        if stimulus_method == 'frequency_stepped':
+            return self._calculate_frequency_stepped_perceptual_thd(
+                recorded_signal=recorded_signal,
+                sample_rate=analysis_sr,
+                stimulus_metadata=stimulus_metadata,
+                harmonic_orders=harmonic_orders,
+                masking_config=thd_kwargs.get('masking_config'),
+                v2pa_factor=v2pa_factor,
+                stft_window_type=thd_kwargs.get('stft_window_type', 'hann'),
+            )
 
         if stimulus_method == 'steps':
             # Calculate STFT parameters (full step duration - no trimming)
@@ -348,6 +515,61 @@ class AudioThdFrequencyResponseAnalysis(object):
         harmonic = np.array(harmonic_orders)
 
         return freq_value, harmonic, perceptual_loudness
+
+    def _calculate_frequency_stepped_perceptual_thd(
+        self,
+        *,
+        recorded_signal,
+        sample_rate,
+        stimulus_metadata,
+        harmonic_orders,
+        masking_config,
+        v2pa_factor,
+        stft_window_type='hann',
+    ):
+        schedule, segment_pairs = _frequency_stepped_analysis_segments(
+            recorded_signal,
+            stimulus_metadata,
+            int(sample_rate),
+        )
+        if not segment_pairs:
+            return np.array([]), np.asarray(harmonic_orders), np.array([])
+
+        max_harmonic_order = max([35, *[int(order) for order in harmonic_orders], 1])
+        builder = HarmonicIndexBuilder()
+        analyzer = PerceptualStepSignalHD(int(sample_rate))
+
+        frequencies = []
+        loudness_values = []
+        for segment, segment_signal in segment_pairs:
+            n_fft = int(segment_signal.size)
+            index_row, fft_freqs = _frequency_stepped_index_row(
+                segment.frequency_hz,
+                int(sample_rate),
+                n_fft,
+                max_harmonic_order,
+            )
+            index_matrix = index_row.reshape(1, -1)
+            spectrum = _frequency_stepped_spectrum_column(segment_signal, analyzer, stft_window_type)
+            mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
+            fundamental_bins = index_matrix[:, 1]
+            loudness = analyzer.compute_perceptual_thd_batch(
+                spectrum,
+                mask_matrix,
+                fundamental_bins,
+                np.asarray([float(segment.frequency_hz)], dtype=float),
+                masking_mask_matrix=None,
+                masking_config=masking_config,
+                v2pa_factor=v2pa_factor,
+                n_fft=n_fft,
+            )
+            frequencies.append(float(segment.frequency_hz))
+            loudness_values.append(float(np.asarray(loudness).reshape(-1)[0]))
+
+        freq_value = np.asarray(frequencies, dtype=float)
+        perceptual_loudness = np.asarray(loudness_values, dtype=float)
+        sort_idx = np.argsort(freq_value, kind="stable")
+        return freq_value[sort_idx], np.asarray(harmonic_orders), perceptual_loudness[sort_idx]
 
     @staticmethod
     def calculate_fundamental_freq(reference_signal, sr, **kwargs):

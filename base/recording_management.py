@@ -2,15 +2,38 @@ import numpy as np
 import shutil
 import os
 import uuid
+import json
 
 from base.db_manager import DataSave, ensure_audio_database_ready
 from base.save_data import save_audio_simple
+from base.stimulus_signal.methods import normalize_stimulus_method
+from base.stimulus_signal_management import (
+    _FREQUENCY_STEPPED_CANONICAL_METADATA_KEYS,
+    _frequency_stepped_insert_values,
+    _parse_frequency_stepped_row,
+    _stimulus_row_to_dict,
+)
 from consts import error_code, model_consts, running_consts
+
+
+_FREQUENCY_STEPPED_RECORDING_MATCH_KEYS = _FREQUENCY_STEPPED_CANONICAL_METADATA_KEYS | {
+    "voltage_type",
+    "voltage",
+}
+
+
+def _frequency_stepped_recording_match_identity(metadata):
+    return {key: metadata.get(key) for key in _FREQUENCY_STEPPED_RECORDING_MATCH_KEYS if key in metadata}
+
+
+def _frequency_stepped_insert_metadata(insert_values):
+    insert_data = dict(zip(model_consts.INERT_STIMULUS_RICH_CONFIG_COLUMNS, insert_values))
+    return json.loads(insert_data["stimulus_metadata_json"])
 
 
 class RecordingManager(object):
     def __init__(self):
-        self.db_path = model_consts.AUDIO_DATABASE_PATH
+        self.db_path = model_consts.DATABASE_PATH
         ensure_audio_database_ready()
 
     def save_recording_to_wav(self, audio_info: dict, stimulus_parameter: dict):
@@ -50,10 +73,14 @@ class RecordingManager(object):
                 audio_data = self.get_audio_info_to_db(audio_info, stimulus_data, database)
                 ret_msg = "Successfully saved the recording signals to the database."
                 if flag:
-                    name = stimulus_data[0][1] + "-" + stimulus_data[0][2] + "-" + stimulus_data[0][0].split("-")[0]
-                    stimulus_data[0] += (name,)
+                    if normalize_stimulus_method(stimulus_parameter.get("stimulus_method")) == "frequency_stepped":
+                        insert_columns = model_consts.DB_STIMULUS_COLUMNS
+                    else:
+                        name = stimulus_data[0][1] + "-" + stimulus_data[0][2] + "-" + stimulus_data[0][0].split("-")[0]
+                        stimulus_data[0] += (name,)
+                        insert_columns = model_consts.DB_STIMULUS_SCALAR_COLUMNS
                     database.insert_data_into_db(
-                        "stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS, stimulus_data
+                        "stimulus_signal_table", insert_columns, stimulus_data
                     )
                     ret_msg = "Successfully saved the recording and stimulus signals to the database."
                 database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
@@ -64,6 +91,9 @@ class RecordingManager(object):
 
     @staticmethod
     def get_stimulus_info_to_db(stimulus_parameter: dict, database):
+        if normalize_stimulus_method(stimulus_parameter.get("stimulus_method")) == "frequency_stepped":
+            return RecordingManager._get_frequency_stepped_stimulus_info_to_db(stimulus_parameter, database)
+
         flag = False
         normalized_parameter = stimulus_parameter.copy()
         normalized_parameter.setdefault("num_steps", None)
@@ -74,7 +104,7 @@ class RecordingManager(object):
             [stimulus_data],
             "stimulus_signal_table",
             model_consts.STIMULUS_CONFIG_COLUMNS,
-            model_consts.DB_STIMULUS_COLUMNS,
+            model_consts.DB_STIMULUS_SCALAR_COLUMNS,
         )
         if result:
             stimulus_data = result
@@ -84,6 +114,32 @@ class RecordingManager(object):
             flag = True
             stimulus_data = database.get_data_id([stimulus_data], 0)
         return stimulus_data, flag
+
+    @staticmethod
+    def _get_frequency_stepped_stimulus_info_to_db(stimulus_parameter: dict, database):
+        probe_values = _frequency_stepped_insert_values(stimulus_parameter, is_default=0)
+        probe_identity = _frequency_stepped_recording_match_identity(
+            _frequency_stepped_insert_metadata(probe_values)
+        )
+
+        query_code, rows = database.query(
+            "stimulus_signal_table",
+            model_consts.DB_STIMULUS_COLUMNS,
+            {"stimulus_method": "frequency_stepped"},
+        )
+        if query_code == error_code.OK:
+            for row in rows:
+                parsed = _parse_frequency_stepped_row(_stimulus_row_to_dict(row))
+                if parsed.get("step_sc_row_state") != "valid":
+                    continue
+                existing_identity = _frequency_stepped_recording_match_identity(parsed["stimulus_payload"])
+                if existing_identity == probe_identity:
+                    return [row], False
+
+        is_default = database.set_default("stimulus_signal_table")
+        stimulus_data = _frequency_stepped_insert_values(stimulus_parameter, is_default)
+        stimulus_data = database.get_data_id([stimulus_data], 0)
+        return stimulus_data, True
 
     @staticmethod
     def get_audio_info_to_db(audio_info: dict, stimulus_data: list[tuple], database):

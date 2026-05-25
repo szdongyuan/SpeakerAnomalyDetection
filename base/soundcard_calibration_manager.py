@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -71,6 +72,29 @@ def _load_mic_channel_calibration_payload(file_path=None):
     return payload if isinstance(payload, dict) else {}
 
 
+def _atomic_write_json_payload(path, payload):
+    directory = os.path.dirname(path)
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+
+    temp_directory = directory or "."
+    temp_prefix = f".{os.path.basename(path) or 'mic_channel_calibration.json'}."
+    fd, temp_path = tempfile.mkstemp(prefix=temp_prefix, suffix=".tmp", dir=temp_directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
 def load_mic_channel_v2pa_factors(file_path=None):
     payload = _load_mic_channel_calibration_payload(file_path=file_path)
     channels = payload.get("channels")
@@ -126,12 +150,56 @@ def save_mic_channel_v2pa_factor(channel_index, v2pa_factor, standard_spl=None, 
         channel_payload["standard_spl"] = normalized_standard_spl
     channels_payload[str(normalized_channel)] = channel_payload
 
-    directory = os.path.dirname(path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
+    _atomic_write_json_payload(path, {"version": 1, "channels": channels_payload})
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "channels": channels_payload}, f, ensure_ascii=False, indent=2)
+
+def clear_mic_channel_v2pa_factors(file_path=None):
+    path = _channel_calibration_path(file_path=file_path)
+    _atomic_write_json_payload(path, {"version": 1, "channels": {}})
+
+
+def replace_mic_channel_v2pa_factors(channel_factors, channel_standard_spl=None, file_path=None):
+    path = _channel_calibration_path(file_path=file_path)
+    channel_standard_spl = channel_standard_spl or {}
+
+    normalized_factors = {}
+    for channel_index, v2pa_factor in channel_factors.items():
+        normalized_channel = _normalize_channel_index(channel_index)
+        normalized_factors[normalized_channel] = _normalize_positive_factor(v2pa_factor)
+
+    normalized_standard_spl_by_channel = {}
+    for channel_index, standard_spl in channel_standard_spl.items():
+        normalized_channel = _normalize_channel_index(channel_index)
+        normalized_standard_spl_by_channel[normalized_channel] = _normalize_standard_spl(standard_spl)
+
+    existing_payload = _load_mic_channel_calibration_payload(file_path=path)
+    existing_channels = existing_payload.get("channels")
+    if not isinstance(existing_channels, dict):
+        existing_channels = {}
+
+    channels_payload = {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    for normalized_channel, normalized_factor in normalized_factors.items():
+        existing_channel_payload = existing_channels.get(str(normalized_channel))
+        if not isinstance(existing_channel_payload, dict):
+            existing_channel_payload = {}
+
+        channel_payload = {
+            "v2pa_factor": normalized_factor,
+            "calibrated_at": existing_channel_payload.get("calibrated_at") or today,
+        }
+        if normalized_channel in normalized_standard_spl_by_channel:
+            normalized_standard_spl = normalized_standard_spl_by_channel[normalized_channel]
+        else:
+            try:
+                normalized_standard_spl = _normalize_standard_spl(existing_channel_payload.get("standard_spl"))
+            except (TypeError, ValueError):
+                normalized_standard_spl = None
+        if normalized_standard_spl is not None:
+            channel_payload["standard_spl"] = normalized_standard_spl
+        channels_payload[str(normalized_channel)] = channel_payload
+
+    _atomic_write_json_payload(path, {"version": 1, "channels": channels_payload})
 
 
 def resolve_mic_channel_v2pa_factor(channel_index, file_path=None):
