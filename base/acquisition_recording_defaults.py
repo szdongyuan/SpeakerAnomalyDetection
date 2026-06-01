@@ -3,20 +3,12 @@ import os
 import tempfile
 from copy import deepcopy
 
-from consts.running_consts import DEFAULT_DIR
-
-
-DEFAULT_PLAY_AND_RECORD_DETAIL = {"use_streaming_recording": False}
-DEFAULT_RECORD_ONLY_DETAIL = {
-    "total_time": 4.0,
-    "sample_rate": 44100,
-    "monitor_playback": False,
-    "monitor_input_channel": 0,
-    "monitor_gain_db": 0.0,
-    "use_streaming_recording": False,
-}
-
-_VALID_MODES = {"PLAY_AND_RECORD", "RECORD_ONLY"}
+from consts.running_consts import (
+    DEFAULT_DIR,
+    DEFAULT_PLAY_AND_RECORD_DETAIL,
+    DEFAULT_RECORD_ONLY_DETAIL,
+    VALID_ACQUISITION_MODES,
+)
 
 
 def get_acquisition_default_config_path():
@@ -135,7 +127,7 @@ def load_acquisition_defaults(path=None, logger=None):
 
 
 def save_acquisition_default(mode, detail, path=None, logger=None):
-    if mode not in _VALID_MODES:
+    if mode not in VALID_ACQUISITION_MODES:
         _log(logger, "warning", f"Invalid acquisition default mode: {mode}")
         return False
     if not isinstance(detail, dict):

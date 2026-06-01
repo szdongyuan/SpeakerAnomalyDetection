@@ -8,11 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from base.acquisition_recording_defaults import (
-    DEFAULT_RECORD_ONLY_DETAIL,
-    load_acquisition_defaults,
-    save_acquisition_default,
-)
+from base.acquisition_recording_defaults import load_acquisition_defaults, save_acquisition_default
+from consts.running_consts import DEFAULT_RECORD_ONLY_DETAIL
 
 
 def test_load_acquisition_defaults_missing_file_uses_false(tmp_path):
