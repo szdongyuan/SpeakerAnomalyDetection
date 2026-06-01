@@ -1201,7 +1201,7 @@ class OptionList(ListView):
         if item_text == "播放与录制":
             flag, config = self.load_stimulus_config()
             if flag:
-                acquisition_defaults = load_acquisition_defaults()
+                acquisition_defaults = load_acquisition_defaults(logger=self.default_logger)
                 play_record_defaults = acquisition_defaults.get("PLAY_AND_RECORD", {})
                 use_streaming_recording = False
                 if isinstance(play_record_defaults, dict):
@@ -1216,7 +1216,7 @@ class OptionList(ListView):
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
-            acquisition_defaults = load_acquisition_defaults()
+            acquisition_defaults = load_acquisition_defaults(logger=self.default_logger)
             seq_item.detail = normalize_record_only_detail(acquisition_defaults.get("RECORD_ONLY", {}))
             self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
         elif item_text == "导入音频":
