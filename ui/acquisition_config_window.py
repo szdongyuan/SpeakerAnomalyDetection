@@ -1,6 +1,8 @@
 import sys
 from copy import deepcopy
 
+from base.log_manager import LogManager
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QApplication, QSizePolicy
@@ -30,6 +32,7 @@ from ui.ui_src import ui_resources
 class BaseConfigWindow(QDialog):
     def __init__(self, mic=None, speaker=None):
         super().__init__()
+        self.logger = LogManager.set_log_handler("core")
         self.final_data = None
         if mic is not None:
             self.mic = mic
@@ -162,9 +165,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return out_group_box
 
     def on_click_ok_btn(self):
-        self.stimulus_config_data["use_streaming_recording"] = bool(
-            self.streaming_recording_checkbox.isChecked()
-        )
+        self.stimulus_config_data["use_streaming_recording"] = bool(self.streaming_recording_checkbox.isChecked())
         self.final_data = self.stimulus_config_data
         self.accept()
 
@@ -172,6 +173,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         ok = save_acquisition_default(
             "PLAY_AND_RECORD",
             {"use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked())},
+            logger=self.logger,
         )
         self._show_default_save_result(ok)
 
@@ -324,7 +326,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.accept()
 
     def on_default_btn_clicked(self):
-        ok = save_acquisition_default("RECORD_ONLY", self._collect_record_detail())
+        ok = save_acquisition_default("RECORD_ONLY", self._collect_record_detail(), logger=self.logger)
         self._show_default_save_result(ok)
 
     def _on_monitor_toggled(self, checked: bool):
