@@ -10,6 +10,7 @@ import numpy as np
 SOURCE_PATH = Path(__file__).resolve().parents[2] / "ui" / "sequence" / "sequence_widget.py"
 TARGET_METHODS = {
     "_get_mode_display_name",
+    "_clear_sn_for_external_trigger_rejection",
     "_ensure_external_trigger_mode_supported",
     "_normalize_barcode",
     "_barcode_has_invalid_chars",
@@ -18,9 +19,16 @@ TARGET_METHODS = {
     "_tcp_run_test",
     "_commit_barcode",
     "_set_sn_input_recording_read_only",
+    "on_sequence_config_updated",
     "validate_count",
     "start_this_play",
     "judge_play_and_record",
+    "_should_use_streaming_recording",
+    "_start_streaming_recording",
+    "_normalize_blocking_recorded_data",
+    "_finish_recording_success",
+    "_finish_recording_failure",
+    "_start_blocking_recording",
     "_on_streaming_complete",
     "eventFilter",
 }
@@ -115,7 +123,8 @@ def _build_method_namespace():
         "save_audio_simple": lambda *args, **kwargs: None,
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
         "TempTcpClient": lambda *args, **kwargs: None,
-        "np": types.SimpleNamespace(linspace=lambda start, end, size: [0] * size),
+        "np": np,
+        "SoundcardAudioProcessor": None,
         "re": re,
         "time": types.SimpleNamespace(monotonic=lambda: 1000.0),
         "os": types.SimpleNamespace(
@@ -345,7 +354,10 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window.clicked_player_flag = False
     window.current_recorded_count = 1
     window.last_play_count = 1
-    window.sequence_config = [{"seq1": {"acq": {"mode": mode}}}]
+    acq_detail = {}
+    if use_streaming is not None:
+        acq_detail["use_streaming_recording"] = bool(use_streaming)
+    window.sequence_config = [{"seq1": {"acq": {"mode": mode, "detail": acq_detail}}}]
     window.mode = mode
     window.use_streaming = use_streaming
     window.line_graph = FakeGraph()
@@ -366,6 +378,7 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
         sample_rate=48000,
         stimulus_info={"repeat_times": 1},
         store_wave_data=[0.1, 0.2, 0.3],
+        store_wave_data_multi=np.asarray([[0.1], [0.2], [0.3]], dtype=np.float32),
         split_repeat_data=None,
     )
     window.barcode_scanner_box = FakeCheckBox()
@@ -401,6 +414,8 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window.update_player_btn_is_playing = lambda: setattr(window, "playing_updates", window.playing_updates + 1)
     window.update_player_btn_is_paused = lambda: setattr(window, "paused_updates", window.paused_updates + 1)
     window.plot_line_graph = lambda *args, **kwargs: setattr(window, "plot_called", True)
+    window.plot_calls = []
+    window.plot_waveform_to_workspace = lambda *args, **kwargs: window.plot_calls.append((args, kwargs))
     def _run_stub():
         window.run_called = True
         window.run_invocations.append(
@@ -420,14 +435,29 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._validate_sn_regex_before_start = _bind_method(window, namespace, "_validate_sn_regex_before_start")
     window._tcp_run_test = _bind_method(window, namespace, "_tcp_run_test")
     window._get_mode_display_name = _bind_method(window, namespace, "_get_mode_display_name")
+    window._clear_sn_for_external_trigger_rejection = _bind_method(
+        window, namespace, "_clear_sn_for_external_trigger_rejection"
+    )
+    window._show_external_trigger_mode_warning = lambda trigger_source, current_mode: namespace["MessageBox"].warning(
+        window,
+        "提示",
+        f"{current_mode} 不支持{trigger_source}启动工作流",
+    )
     window._ensure_external_trigger_mode_supported = _bind_method(
         window, namespace, "_ensure_external_trigger_mode_supported"
     )
     window._commit_barcode = _bind_method(window, namespace, "_commit_barcode")
     window._set_sn_input_recording_read_only = _bind_method(window, namespace, "_set_sn_input_recording_read_only")
+    window.on_sequence_config_updated = _bind_method(window, namespace, "on_sequence_config_updated")
     window.validate_count = _bind_method(window, namespace, "validate_count")
     window._real_start_this_play = _bind_method(window, namespace, "start_this_play")
     window.judge_play_and_record = _bind_method(window, namespace, "judge_play_and_record")
+    window._should_use_streaming_recording = _bind_method(window, namespace, "_should_use_streaming_recording")
+    window._start_streaming_recording = _bind_method(window, namespace, "_start_streaming_recording")
+    window._normalize_blocking_recorded_data = _bind_method(window, namespace, "_normalize_blocking_recorded_data")
+    window._finish_recording_success = _bind_method(window, namespace, "_finish_recording_success")
+    window._finish_recording_failure = _bind_method(window, namespace, "_finish_recording_failure")
+    window._start_blocking_recording = _bind_method(window, namespace, "_start_blocking_recording")
     window._on_streaming_complete = _bind_method(window, namespace, "_on_streaming_complete")
     window.eventFilter = _bind_method(window, namespace, "eventFilter")
     return window
@@ -486,7 +516,10 @@ def test_record_only_streaming_completion_stores_mono_and_multi_recorded_data():
 
     window._on_streaming_complete()
 
-    assert window.data_struct.store_wave_data == mono_data
+    np.testing.assert_array_equal(
+        window.data_struct.store_wave_data,
+        multi_data.mean(axis=1).astype(np.float32, copy=False),
+    )
     np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, multi_data)
 
 
@@ -509,6 +542,85 @@ def test_streaming_start_failure_restores_sn_editability():
     assert window._record_workflow_busy is False
     assert window.player_status_flag is False
     assert window.paused_updates == 1
+
+
+def test_missing_streaming_flag_uses_blocking_recording():
+    namespace = _build_method_namespace()
+    calls = {"stream": 0, "blocking": 0}
+    namespace["stream_record_without_play"] = lambda *args, **kwargs: calls.__setitem__(
+        "stream", calls["stream"] + 1
+    )
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            calls["blocking"] += 1
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+    namespace["save_audio_simple"] = lambda *args, **kwargs: None
+
+    window = _build_fake_window(namespace, use_streaming=None, mode="RECORD_ONLY")
+    window.sequence_config[0]["seq1"]["acq"]["detail"].pop("use_streaming_recording", None)
+
+    window.judge_play_and_record()
+
+    assert calls == {"stream": 0, "blocking": 1}
+    assert window.data_struct.store_wave_data.tolist() == [1.0, 2.0]
+    assert window._record_workflow_busy is False
+
+
+def test_streaming_flag_uses_streaming_recording():
+    namespace = _build_method_namespace()
+    calls = {"stream": 0, "blocking": 0}
+    namespace["StreamingWavWriter"] = FakeWavWriter
+    namespace["stream_record_without_play"] = lambda *args, **kwargs: (
+        calls.__setitem__("stream", calls["stream"] + 1) or FakeStreamingProcessor(),
+        None,
+    )
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            calls["blocking"] += 1
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+
+    window.judge_play_and_record()
+
+    assert calls == {"stream": 1, "blocking": 0}
+    assert window._record_workflow_busy is True
+
+
+def test_play_record_missing_streaming_flag_uses_blocking_recording():
+    namespace = _build_method_namespace()
+    calls = {"playrec": 0, "stream": 0}
+    namespace["stream_play_and_record"] = lambda *args, **kwargs: calls.__setitem__(
+        "stream", calls["stream"] + 1
+    )
+
+    class FakeSoundcardAudioProcessor:
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+            calls["playrec"] += 1
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+    window = _build_fake_window(namespace, use_streaming=None, mode="PLAY_AND_RECORD")
+    window.sequence_config[0]["seq1"]["acq"]["detail"].pop("use_streaming_recording", None)
+
+    window.judge_play_and_record()
+
+    assert calls == {"playrec": 1, "stream": 0}
+    assert window.data_struct.store_wave_data.tolist() == [1.0, 2.0]
 
 
 def test_reset_failure_and_empty_stimulus_restore_sn_editability():
@@ -571,8 +683,13 @@ def test_blocking_success_and_failure_restore_sn_editability():
     namespace["RecordingManager"] = lambda: types.SimpleNamespace(
         save_signal_info_to_db=lambda *args, **kwargs: ("OK", "saved")
     )
-    namespace["play_last_stimulus_wave"] = lambda *args, **kwargs: None
-    namespace["record_without_play"] = lambda *args, **kwargs: None
+
+    class SuccessSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+    namespace["SoundcardAudioProcessor"] = SuccessSoundcardAudioProcessor
 
     success_window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
     success_window.judge_play_and_record()
@@ -583,10 +700,12 @@ def test_blocking_success_and_failure_restore_sn_editability():
     assert success_window._awaiting_ok_ng is True
     assert success_window._sn_clear_on_next_scan is True
 
-    def _raise_blocking_error(*args, **kwargs):
-        raise RuntimeError("blocking failed")
+    class FailingSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            raise RuntimeError("blocking failed")
 
-    namespace["record_without_play"] = _raise_blocking_error
+    namespace["SoundcardAudioProcessor"] = FailingSoundcardAudioProcessor
     failure_window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
     failure_window.judge_play_and_record()
 
@@ -594,6 +713,148 @@ def test_blocking_success_and_failure_restore_sn_editability():
     assert failure_window.barcode_scanner_box.isEnabled() is True
     assert failure_window._record_workflow_busy is False
     assert failure_window.player_status_flag is False
+    assert failure_window._awaiting_ok_ng is False
+    assert failure_window._sn_clear_on_next_scan is False
+
+
+def test_blocking_processes_events_before_hardware_call():
+    namespace = _build_method_namespace()
+    events = []
+
+    class FakeApplication:
+        @staticmethod
+        def processEvents():
+            events.append("process_events")
+
+        @staticmethod
+        def focusWidget():
+            return None
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            events.append("hardware_call")
+            return namespace["error_code"].OK, np.array([1.0], dtype=np.float32)
+
+    namespace["QApplication"] = FakeApplication
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+
+    window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
+
+    window.judge_play_and_record()
+
+    assert events == ["process_events", "hardware_call"]
+
+
+def test_blocking_failure_does_not_save_or_run_analysis():
+    namespace = _build_method_namespace()
+    calls = {"save_db": 0}
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            return "INVALID_RECORD", None
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: calls.__setitem__("save_db", calls["save_db"] + 1)
+    )
+
+    window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
+    window.analysis_config = {"auto_analysis": True}
+
+    window.judge_play_and_record()
+
+    assert calls["save_db"] == 0
+    assert window.run_called is False
+    assert window._record_workflow_busy is False
+    assert window.player_status_flag is False
+    assert window.lineedit_s_or_n.isReadOnly() is False
+    assert window.data_btn.enabled is True
+    assert window.replayer_btn.enabled is True
+
+
+def test_blocking_record_only_multi_channel_stores_multi_and_mean_mono():
+    namespace = _build_method_namespace()
+    recorded = np.array([[1.0, 3.0], [2.0, 4.0]], dtype=np.float32)
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            return namespace["error_code"].OK, recorded
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+    saved_audio = []
+    namespace["save_audio_simple"] = lambda path, data, sample_rate: saved_audio.append(
+        (path, np.asarray(data), sample_rate)
+    )
+
+    window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
+    window._active_input_channels = [0, 1]
+
+    window.judge_play_and_record()
+
+    np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, recorded)
+    np.testing.assert_array_equal(window.data_struct.store_wave_data, np.array([2.0, 3.0], dtype=np.float32))
+    assert window.data_struct.store_wave_data_multi.shape == (2, 2)
+    np.testing.assert_array_equal(saved_audio[0][1], recorded)
+    assert window.plot_calls[0][0][0].shape == (2, 2)
+
+
+def test_blocking_play_record_normalizes_frames_by_channels_output():
+    namespace = _build_method_namespace()
+    recorded = np.array([[1.0, 3.0], [2.0, 4.0]], dtype=np.float32)
+
+    class FakeSoundcardAudioProcessor:
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+            return namespace["error_code"].OK, recorded
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+
+    window = _build_fake_window(namespace, use_streaming=False, mode="PLAY_AND_RECORD")
+    window._active_input_channels = [0, 1]
+
+    window.judge_play_and_record()
+
+    np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, recorded)
+    np.testing.assert_array_equal(window.data_struct.store_wave_data, np.array([2.0, 3.0], dtype=np.float32))
+    assert window.data_struct.store_wave_data_multi.shape == (2, 2)
+
+
+def test_blocking_play_record_transposes_channel_by_frames_output():
+    namespace = _build_method_namespace()
+    recorded_transposed = np.array([[1.0, 2.0, 3.0], [11.0, 12.0, 13.0]], dtype=np.float32)
+
+    class FakeSoundcardAudioProcessor:
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+            return namespace["error_code"].OK, recorded_transposed
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+
+    window = _build_fake_window(namespace, use_streaming=False, mode="PLAY_AND_RECORD")
+    window._active_input_channels = [0, 1]
+
+    window.judge_play_and_record()
+
+    expected_multi = recorded_transposed.T
+    np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, expected_multi)
+    np.testing.assert_array_equal(
+        window.data_struct.store_wave_data,
+        expected_multi.mean(axis=1).astype(np.float32, copy=False),
+    )
+    assert window.data_struct.store_wave_data_multi.shape == (3, 2)
 
 
 def test_sn_lock_restores_previously_disabled_scanner_checkbox_state():
@@ -614,8 +875,13 @@ def test_blocking_auto_analysis_releases_sn_lock_before_run():
     namespace["RecordingManager"] = lambda: types.SimpleNamespace(
         save_signal_info_to_db=lambda *args, **kwargs: ("OK", "saved")
     )
-    namespace["play_last_stimulus_wave"] = lambda *args, **kwargs: None
-    namespace["record_without_play"] = lambda *args, **kwargs: None
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
 
     window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
     window.analysis_config = {"auto_analysis": True}
@@ -729,6 +995,45 @@ def test_streaming_auto_analysis_unlock_event_happens_before_run():
 
     assert events == [("unlock", False, False), ("run", False, False)]
     assert window.run_called is True
+
+
+def test_sequence_config_update_keeps_reloaded_play_record_sample_rate():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="PLAY_AND_RECORD")
+    window.data_struct.sample_rate = 44100
+    window.sequence_config = [
+        {
+            "seq1": {
+                "acq": {
+                    "mode": "PLAY_AND_RECORD",
+                    "detail": {
+                        "stimulus_info": {
+                            "sample_rate": 48000,
+                            "total_time": 4.0,
+                            "amplitude": 1.0,
+                        },
+                    },
+                },
+            },
+        }
+    ]
+    window.count_board = None
+    window.update_using_file_combobox = lambda: None
+    window.get_sequence_config_from_json = lambda: None
+    window.init_fft_and_stft_flag = lambda: None
+    window.refresh_channel_windows = lambda: None
+    window._refresh_test_mode_availability = lambda: None
+
+    def _reload_stimulus_config():
+        window.data_struct.sample_rate = window.sequence_config[0]["seq1"]["acq"]["detail"]["stimulus_info"][
+            "sample_rate"
+        ]
+
+    window.init_data_struct_stimulus_config = _reload_stimulus_config
+
+    window.on_sequence_config_updated()
+
+    assert window.data_struct.sample_rate == 48000
 
 
 def test_commit_barcode_ignores_busy_scan_without_overwriting_sn():

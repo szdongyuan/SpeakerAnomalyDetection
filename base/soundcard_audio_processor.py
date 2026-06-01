@@ -11,13 +11,40 @@ class SoundcardAudioProcessor(object):
     def __init__(self):
         self.logger = LogManager.set_log_handler("soundcard_core")
 
+    @staticmethod
+    def _device_index(device):
+        if isinstance(device, dict):
+            return int(device["index"])
+        return device
+
+    @classmethod
+    def _playrec_device_selector(cls, record_dict):
+        input_device = record_dict.get("input_device") or record_dict.get("device")
+        output_device = record_dict.get("output_device")
+        input_index = cls._device_index(input_device)
+        output_index = cls._device_index(output_device)
+
+        if input_index is not None and output_index is not None:
+            if input_index == output_index:
+                return input_index
+            return input_index, output_index
+        if input_index is not None:
+            return input_index, None
+        if output_index is not None:
+            return None, output_index
+        return None
+
     def sd_play_rec(self, record_dict, stimulus_dict, recording_path):
         data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
         prepare_frames = record_dict.get("prepare_frames", 1000)
         prolong_frames = record_dict.get("prolong_frames", 10000)
         prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
         sr = stimulus_dict.get("sr")
-        rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
+        device = self._playrec_device_selector(record_dict)
+        if device is None:
+            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
+        else:
+            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True, device=device).T[0]
         align_frames = self.calculate_alignment(data, rec_data)
         aligned_data = rec_data[align_frames: align_frames + len(data)]
         save_audio_simple(recording_path, aligned_data, sr)
@@ -39,13 +66,42 @@ class SoundcardAudioProcessor(object):
     @staticmethod
     def sd_rec(recorded_dict):
         num_frames = recorded_dict.get("num_frames", 441000)
-        sample_rate = recorded_dict.get("sample_rate", 44100)
+        sample_rate = recorded_dict.get("sample_rate", recorded_dict.get("sr", 44100))
         channels = recorded_dict.get("channels", 1)
         blocking = recorded_dict.get("blocking", True)
         prolong_frames = recorded_dict.get("prolong_frames", 0)
-        recorded_data = sd.rec(frames=num_frames, samplerate=sample_rate, channels=channels, blocking=blocking).T[0]
+        device = recorded_dict.get("device") or recorded_dict.get("input_device")
+        device = SoundcardAudioProcessor._device_index(device)
+        input_channels = recorded_dict.get("input_channels")
+        selected_channels = []
+        if input_channels is not None:
+            if isinstance(input_channels, int):
+                selected_channels = [input_channels]
+            else:
+                selected_channels = list(input_channels)
+
+        record_channels = max(selected_channels) + 1 if selected_channels else channels
+        recorded_data = sd.rec(
+            frames=num_frames,
+            samplerate=sample_rate,
+            channels=record_channels,
+            device=device,
+            blocking=blocking,
+        )
+        recorded_data = np.asarray(recorded_data)
         if prolong_frames > 0:
-            recorded_data = recorded_data[prolong_frames:]
+            recorded_data = recorded_data[prolong_frames:, ...]
+
+        if recorded_data.ndim == 1:
+            return error_code.OK, recorded_data
+
+        if selected_channels:
+            if selected_channels == [0]:
+                recorded_data = recorded_data[:, 0]
+            else:
+                recorded_data = recorded_data[:, selected_channels]
+        elif channels == 1:
+            recorded_data = recorded_data[:, 0]
 
         return error_code.OK, recorded_data
 

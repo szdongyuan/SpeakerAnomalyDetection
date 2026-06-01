@@ -46,6 +46,7 @@ from base.play_and_record import (
 )
 from base.recording_management import RecordingManager
 from base.save_data import ensure_test_result_file, save_recorded_data_to_json, save_audio_simple
+from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.temp_tcp_client import TempTcpClient
@@ -318,7 +319,6 @@ class SequenceWindow(QWidget):
         """
         try:
             old_mode = self.mode
-            preserved_sample_rate = getattr(self.data_struct, "sample_rate", None)
             self.update_using_file_combobox()
             self.get_sequence_config_from_json()
             new_mode = self.mode
@@ -330,10 +330,6 @@ class SequenceWindow(QWidget):
                 self.refresh_channel_windows()
             self.init_data_struct_stimulus_config()
             self.init_fft_and_stft_flag()
-
-            if not mode_changed:
-                if preserved_sample_rate is not None:
-                    self.data_struct.sample_rate = preserved_sample_rate
 
             if self.count_board:
                 self.count_board.analysis_config = self.analysis_config
@@ -1551,6 +1547,160 @@ class SequenceWindow(QWidget):
 
         return stimulus_dict, recorded_dict, sample_rate
 
+    def _should_use_streaming_recording(self):
+        try:
+            detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
+        except Exception:
+            detail = {}
+        return bool(detail.get("use_streaming_recording", False))
+
+    def _start_streaming_recording(self, stimulus_dict, recorded_dict, sample_rate):
+        nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
+        if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
+            temp_path = self.recorded_path.replace(".wav", "_temp.wav")
+            self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
+            self.streaming_temp_path = temp_path
+
+            self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
+                stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+            )
+            self.streaming_mode = "play_record"
+
+        else:
+            self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
+
+            self.streaming_processor, _ = stream_record_without_play(
+                recorded_dict, self.recorded_path, self.recorded_signal_info
+            )
+            self.streaming_mode = "record_only"
+            self.streaming_stimulus_data = None
+
+        self.streaming_poll_timer.start(50)
+
+    def _normalize_blocking_recorded_data(self, recorded_data):
+        recorded_array = np.asarray(recorded_data, dtype=np.float32)
+        if recorded_array.size == 0:
+            raise ValueError("empty recorded data")
+
+        if recorded_array.ndim == 1:
+            mono = recorded_array.reshape(-1)
+            return mono, mono.reshape(-1, 1)
+
+        if recorded_array.ndim != 2:
+            mono = recorded_array.reshape(-1)
+            return mono, mono.reshape(-1, 1)
+
+        selected_channel_count = len(getattr(self, "_active_input_channels", []) or [])
+        if (
+            selected_channel_count > 0
+            and recorded_array.shape[0] == selected_channel_count
+            and recorded_array.shape[1] != selected_channel_count
+        ):
+            recorded_array = recorded_array.T
+
+        multi = np.asarray(recorded_array, dtype=np.float32)
+        if multi.shape[1] == 1:
+            mono = multi[:, 0]
+        else:
+            mono = multi.mean(axis=1).astype(np.float32, copy=False)
+        return mono.reshape(-1), multi
+
+    def _finish_recording_success(self, sample_rate):
+        self.player_status_flag = False
+        self._record_workflow_busy = False
+        self._set_sn_input_recording_read_only(False)
+
+        self.data_btn.setEnabled(True)
+        self.replayer_btn.setEnabled(True)
+
+        self._awaiting_ok_ng = True
+        self._sn_clear_on_next_scan = True
+        if self.barcode_scanner_box.isChecked():
+            try:
+                self.lineedit_s_or_n.setFocus()
+                self.lineedit_s_or_n.selectAll()
+            except Exception:
+                pass
+
+        if self.analysis_config.get("auto_analysis", False):
+            self.run()
+
+        self.update_player_btn_is_paused()
+
+    def _finish_recording_failure(self, error):
+        self.default_logger.error(f"blocking_recording_error: {error}")
+        self.player_status_flag = False
+        self._record_workflow_busy = False
+        self._set_sn_input_recording_read_only(False)
+        self.data_btn.setEnabled(True)
+        self.replayer_btn.setEnabled(True)
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
+        self.update_player_btn_is_paused()
+        MessageBox.warning(self, "提示", f"录音失败: {error}")
+
+    def _start_blocking_recording(self, stimulus_dict, recorded_dict, sample_rate):
+        try:
+            mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+            if mode == "PLAY_AND_RECORD":
+                record_code, recorded_data = SoundcardAudioProcessor().sd_play_rec(
+                    recorded_dict, stimulus_dict, self.recorded_path
+                )
+                if record_code != error_code.OK or recorded_data is None:
+                    raise RuntimeError(recorded_data if recorded_data is not None else record_code)
+
+                mono_data, multi_data = self._normalize_blocking_recorded_data(recorded_data)
+                self.data_struct.store_wave_data = mono_data
+                self.data_struct.store_wave_data_multi = multi_data
+                self.recorded_signal_info["sample_rate"] = sample_rate
+
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(
+                    self.recorded_signal_info, self.data_struct.stimulus_info
+                )
+                if save_code == error_code.OK:
+                    self.default_logger.info(f"Database save successful: {save_msg}")
+                else:
+                    self.default_logger.error(f"Database save failed: {save_msg}")
+
+                repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
+                if repeat_times > 1:
+                    kwargs = {"repeat_times": repeat_times}
+                    self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
+                        self.data_struct.store_wave_data, sample_rate, **kwargs
+                    )
+                self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, sample_rate)
+
+            elif mode == "RECORD_ONLY":
+                record_code, recorded_data = SoundcardAudioProcessor.sd_rec(recorded_dict)
+                if record_code != error_code.OK or recorded_data is None:
+                    raise RuntimeError(recorded_data if recorded_data is not None else record_code)
+
+                mono_data, multi_data = self._normalize_blocking_recorded_data(recorded_data)
+                self.data_struct.store_wave_data = mono_data
+                self.data_struct.store_wave_data_multi = multi_data
+                self.recorded_signal_info["sample_rate"] = sample_rate
+
+                if multi_data.shape[1] > 1:
+                    save_audio_simple(self.recorded_path, multi_data, sample_rate)
+                else:
+                    save_audio_simple(self.recorded_path, mono_data, sample_rate)
+
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+                if save_code == error_code.OK:
+                    self.default_logger.info(f"Database save successful: {save_msg}")
+                else:
+                    self.default_logger.error(f"Database save failed: {save_msg}")
+                self.plot_waveform_to_workspace(multi_data, sample_rate)
+
+            else:
+                raise RuntimeError(f"unsupported blocking recording mode: {mode}")
+
+            self._finish_recording_success(sample_rate)
+            self.default_logger.info("Blocking recording completed successfully")
+
+        except Exception as e:
+            self._finish_recording_failure(e)
+
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if getattr(self, "_record_workflow_busy", False):
             return
@@ -1625,46 +1775,23 @@ class SequenceWindow(QWidget):
             self.update_player_btn_is_paused()
             return
 
-        try:
-            # Use modern streaming approach with true real-time updates (non-blocking)
-            nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
-            if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-                # Start streaming play+record (non-blocking)
-                # Stream to TEMP file for safety - will be deleted after alignment+save succeeds
-                temp_path = self.recorded_path.replace(".wav", "_temp.wav")
-                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
-                self.streaming_temp_path = temp_path
-
-                self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                    stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
-                )
-                self.streaming_mode = "play_record"
-
-            else:
-                # Start streaming record-only (non-blocking)
-                # Create WAV file writer for streaming saves (useful for long recordings)
-                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
-
-                self.streaming_processor, _ = stream_record_without_play(
-                    recorded_dict, self.recorded_path, self.recorded_signal_info
-                )
-                self.streaming_mode = "record_only"
-                self.streaming_stimulus_data = None
-
-            # Start polling timer to process queue and detect completion
-            self.streaming_poll_timer.start(50)  # Poll every 50ms
-        except Exception as e:
-            self.default_logger.error(f"start_streaming_error: {e}")
-            self._cleanup_streaming_resources()
-            self.player_status_flag = False
-            self._record_workflow_busy = False
-            self._set_sn_input_recording_read_only(False)
-            self.update_player_btn_is_paused()
-            MessageBox.warning(self, "提示", f"启动录音失败: {e}")
+        if self._should_use_streaming_recording():
+            try:
+                self._start_streaming_recording(stimulus_dict, recorded_dict, sample_rate)
+            except Exception as e:
+                self.default_logger.error(f"start_streaming_error: {e}")
+                self._cleanup_streaming_resources()
+                self.player_status_flag = False
+                self._record_workflow_busy = False
+                self._set_sn_input_recording_read_only(False)
+                self.update_player_btn_is_paused()
+                MessageBox.warning(self, "提示", f"启动录音失败: {e}")
+                return
+            # Return immediately - completion will be handled by _on_streaming_complete()
+            # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
             return
 
-        # Return immediately - completion will be handled by _on_streaming_complete()
-        # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
+        self._start_blocking_recording(stimulus_dict, recorded_dict, sample_rate)
         return
 
     def run(self):

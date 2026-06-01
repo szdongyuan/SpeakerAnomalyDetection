@@ -6,6 +6,11 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QApplication, QSizePolicy
 
 
+from base.acquisition_recording_defaults import (
+    normalize_play_record_detail,
+    normalize_record_only_detail,
+    save_acquisition_default,
+)
 from base.sound_device_manager import SoundDeviceManager
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import (
@@ -43,7 +48,7 @@ class BaseConfigWindow(QDialog):
         self.resize(350, 350)
         self.main_layout = QVBoxLayout(self)
 
-    def create_cancel_ok_buttons(self):
+    def create_cancel_ok_buttons(self, include_default=False):
         btn_layout = QHBoxLayout()
         cancel_btn = PushButton(" 取  消 ")
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
@@ -53,6 +58,10 @@ class BaseConfigWindow(QDialog):
 
         btn_layout.addWidget(cancel_btn)
         btn_layout.addStretch()
+        if include_default:
+            default_btn = PushButton(" 设为默认 ")
+            default_btn.clicked.connect(self.on_default_btn_clicked)
+            btn_layout.addWidget(default_btn)
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -61,6 +70,15 @@ class BaseConfigWindow(QDialog):
 
     def on_click_cancel_btn(self):
         self.close()
+
+    def on_default_btn_clicked(self):
+        pass
+
+    def _show_default_save_result(self, ok):
+        if ok:
+            MessageBox.information(self, "保存配置", "默认配置保存成功.")
+        else:
+            MessageBox.warning(self, "保存配置", "默认配置保存失败.")
 
     def exec(self):
         super().exec()
@@ -71,7 +89,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
     def __init__(self, stimulus_config_data, mic=None, speaker=None):
         super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("播放与录制")
-        self.stimulus_config_data = deepcopy(stimulus_config_data)
+        self.stimulus_config_data = normalize_play_record_detail(stimulus_config_data)
         self.clicked_stimulus_btn_flag = False
         self.stimulus_signal = None
         self.init_ui()
@@ -79,7 +97,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
     def init_ui(self):
         in_group_box = self.create_in_group()
         out_group_box = self.create_out_group()
-        btn_layout = self.create_cancel_ok_buttons()
+        btn_layout = self.create_cancel_ok_buttons(include_default=True)
         self.main_layout.addWidget(in_group_box)
         self.main_layout.addStretch()
         self.main_layout.addWidget(out_group_box)
@@ -104,12 +122,19 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         if self.mic is None:
             MessageBox.warning(self, "设置警告", "请先连接输入设备!")
         self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
+        label_streaming_recording = Label("流式录制:")
+        self.streaming_recording_checkbox = CheckBox("启用")
+        self.streaming_recording_checkbox.setChecked(
+            bool(self.stimulus_config_data.get("use_streaming_recording", False))
+        )
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
 
         grid_layout.addWidget(label_input_device, 1, 0)
         grid_layout.addWidget(self.input_device_display, 1, 1)
+        grid_layout.addWidget(label_streaming_recording, 2, 0)
+        grid_layout.addWidget(self.streaming_recording_checkbox, 2, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -137,21 +162,35 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return out_group_box
 
     def on_click_ok_btn(self):
+        self.stimulus_config_data["use_streaming_recording"] = bool(
+            self.streaming_recording_checkbox.isChecked()
+        )
         self.final_data = self.stimulus_config_data
         self.accept()
 
+    def on_default_btn_clicked(self):
+        ok = save_acquisition_default(
+            "PLAY_AND_RECORD",
+            {"use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked())},
+        )
+        self._show_default_save_result(ok)
+
     def open_stimulus_window(self):
         self.clicked_stimulus_btn_flag = True
-        self.stimulus_window = StimulusWindow(stimulus_config_data=self.stimulus_config_data, speaker=self.speaker)
+        streaming_recording = bool(self.streaming_recording_checkbox.isChecked())
+        stimulus_config_data = deepcopy(self.stimulus_config_data)
+        stimulus_config_data.pop("use_streaming_recording", None)
+        self.stimulus_window = StimulusWindow(stimulus_config_data=stimulus_config_data, speaker=self.speaker)
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
-            self.stimulus_config_data = self.stimulus_window.final_save_data
+            self.stimulus_config_data = normalize_play_record_detail(self.stimulus_window.final_save_data)
+            self.stimulus_config_data["use_streaming_recording"] = streaming_recording
             self.stimulus_signal = self.stimulus_window.stimulus_data
             total_time = self.update_ui_total_time(self.stimulus_config_data["stimulus_info"])
             self.time_input.setText(f"{total_time:.1f} 秒")
 
     def update_ui_total_time(self, stimulus_info):
-        if stimulus_info["use_custom_stimulus"]:
+        if stimulus_info.get("use_custom_stimulus", True) or self.stimulus_signal is None:
             return stimulus_info["total_time"]
         else:
             total_time = len(self.stimulus_signal) / stimulus_info["sample_rate"]
@@ -163,7 +202,7 @@ class RecordConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None, speaker=None, available_channels=None):
         super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("录制音频")
-        self.input_data = input_data
+        self.input_data = normalize_record_only_detail(input_data)
         self.available_channels = self._normalize_available_channels(available_channels)
         self.init_ui()
 
@@ -177,7 +216,7 @@ class RecordConfigWindow(BaseConfigWindow):
 
     def init_ui(self):
         in_group_box = self.create_in_group()
-        btn_layout = self.create_cancel_ok_buttons()
+        btn_layout = self.create_cancel_ok_buttons(include_default=True)
         self.main_layout.addWidget(in_group_box)
         self.main_layout.addStretch()
         self.main_layout.addLayout(btn_layout)
@@ -212,6 +251,9 @@ class RecordConfigWindow(BaseConfigWindow):
         label_monitor = Label("实时监听播放:")
         self.monitor_checkbox = CheckBox("启用")
         self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
+        label_streaming_recording = Label("流式录制:")
+        self.streaming_recording_checkbox = CheckBox("启用")
+        self.streaming_recording_checkbox.setChecked(bool(self.input_data.get("use_streaming_recording", False)))
         label_monitor_gain = Label("监听增益:")
         self.monitor_gain_db_input = DoubleSpinBox()
         self.monitor_gain_db_input.setRange(-60.0, 50.0)
@@ -261,19 +303,29 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
         grid_layout.addWidget(label_monitor_channel, 5, 0)
         grid_layout.addWidget(self.monitor_channel_combo, 5, 1)
+        grid_layout.addWidget(label_streaming_recording, 6, 0)
+        grid_layout.addWidget(self.streaming_recording_checkbox, 6, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
-    def on_click_ok_btn(self):
-        self.final_data = {
+    def _collect_record_detail(self):
+        return {
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
             "monitor_input_channel": int(self.monitor_channel_combo.currentData()),
+            "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
         }
+
+    def on_click_ok_btn(self):
+        self.final_data = self._collect_record_detail()
         self.accept()
+
+    def on_default_btn_clicked(self):
+        ok = save_acquisition_default("RECORD_ONLY", self._collect_record_detail())
+        self._show_default_save_result(ok)
 
     def _on_monitor_toggled(self, checked: bool):
         self.monitor_gain_db_input.setEnabled(bool(checked))

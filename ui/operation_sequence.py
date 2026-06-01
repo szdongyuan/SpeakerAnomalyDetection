@@ -15,6 +15,11 @@ from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
+from base.acquisition_recording_defaults import (
+    load_acquisition_defaults,
+    normalize_play_record_detail,
+    normalize_record_only_detail,
+)
 from base.stimulus_resolver import (
     set_data_struct_stimulus_signal as _safe_set_data_struct_stimulus_signal,
 )
@@ -815,32 +820,7 @@ class OptionList(ListView):
 
     @staticmethod
     def _normalize_record_only_detail(detail):
-        detail = detail or {}
-        try:
-            total_time = float(detail.get("total_time", 4.0))
-        except (TypeError, ValueError):
-            total_time = 4.0
-        try:
-            sample_rate = int(detail.get("sample_rate", 44100))
-        except (TypeError, ValueError):
-            sample_rate = 44100
-        try:
-            monitor_input_channel = int(detail.get("monitor_input_channel", 0))
-        except (TypeError, ValueError):
-            monitor_input_channel = 0
-        if monitor_input_channel < 0:
-            monitor_input_channel = 0
-        try:
-            monitor_gain_db = float(detail.get("monitor_gain_db", 0.0))
-        except (TypeError, ValueError):
-            monitor_gain_db = 0.0
-        return {
-            "total_time": total_time,
-            "sample_rate": sample_rate,
-            "monitor_playback": bool(detail.get("monitor_playback", False)),
-            "monitor_input_channel": monitor_input_channel,
-            "monitor_gain_db": monitor_gain_db,
-        }
+        return normalize_record_only_detail(detail)
 
     def create_config_dialog(self, model: QDialog, config_manager: ConfigManager, name, type, signal_len):
         available_channels = None
@@ -893,6 +873,8 @@ class OptionList(ListView):
                 sequence_config.detail = value.get("acq", {}).get("detail", {})
                 if sequence_config.mode == "RECORD_ONLY":
                     sequence_config.detail = self._normalize_record_only_detail(sequence_config.detail)
+                elif sequence_config.mode == "PLAY_AND_RECORD":
+                    sequence_config.detail = normalize_play_record_detail(sequence_config.detail)
                 elif sequence_config.mode == "IMPORT_AUDIO":
                     sequence_config.detail = {
                         "sample_rate": int(sequence_config.detail.get("sample_rate", 44100))
@@ -1219,8 +1201,14 @@ class OptionList(ListView):
         if item_text == "播放与录制":
             flag, config = self.load_stimulus_config()
             if flag:
+                acquisition_defaults = load_acquisition_defaults()
+                play_record_defaults = acquisition_defaults.get("PLAY_AND_RECORD", {})
+                use_streaming_recording = False
+                if isinstance(play_record_defaults, dict):
+                    use_streaming_recording = bool(play_record_defaults.get("use_streaming_recording", False))
                 seq_item.mode = "PLAY_AND_RECORD"
-                seq_item.detail = config
+                seq_item.detail = normalize_play_record_detail(config)
+                seq_item.detail["use_streaming_recording"] = use_streaming_recording
                 seq_item.detail["monitor_playback"] = False
                 self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
             else:
@@ -1228,13 +1216,8 @@ class OptionList(ListView):
                 return
         elif item_text == "录制音频":
             seq_item.mode = "RECORD_ONLY"
-            seq_item.detail = {
-                "total_time": 4.0,
-                "sample_rate": 44100,
-                "monitor_playback": False,
-                "monitor_input_channel": 0,
-                "monitor_gain_db": 0.0,
-            }
+            acquisition_defaults = load_acquisition_defaults()
+            seq_item.detail = normalize_record_only_detail(acquisition_defaults.get("RECORD_ONLY", {}))
             self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
         elif item_text == "导入音频":
             seq_item.mode = "IMPORT_AUDIO"
