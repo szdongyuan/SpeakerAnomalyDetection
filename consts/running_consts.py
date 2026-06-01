@@ -18,6 +18,21 @@ SEQUENCE_CONFIG_REGISTRY_PATH = DEFAULT_DIR + "ui/ui_config/sequence_config_regi
 AUDIO_DEVICE_CONFIG_PATH = os.path.join(DEFAULT_DIR, "ui", "ui_config", "last_audio_devices.json")
 SN_REGEX_RULES_JSON_PATH = os.path.join(DEFAULT_DIR, "ui", "ui_config", "sn_regex_rules.json")
 
+VALID_ACQUISITION_MODES = {
+    "PLAY_AND_RECORD",
+    "RECORD_ONLY",
+}
+
+DEFAULT_PLAY_AND_RECORD_DETAIL = {"use_streaming_recording": False}
+DEFAULT_RECORD_ONLY_DETAIL = {
+    "total_time": 4.0,
+    "sample_rate": 44100,
+    "monitor_playback": False,
+    "monitor_input_channel": 0,
+    "monitor_gain_db": 0.0,
+    "use_streaming_recording": False,
+}
+
 DEFAULT_LOG = {
     "log_name": LOG_DIR + "main.log",
     "max_size": 2 * MB,
