@@ -15,14 +15,6 @@ def get_acquisition_default_config_path():
     return os.path.join(DEFAULT_DIR, "ui", "ui_config", "acquisition_default_config.json")
 
 
-def _log(logger, level, message):
-    if logger is None:
-        return
-    log_fn = getattr(logger, level, None)
-    if callable(log_fn):
-        log_fn(message)
-
-
 def _as_float(value, default):
     if isinstance(value, bool):
         return default
@@ -100,16 +92,16 @@ def _built_in_defaults():
 def _read_json(path, logger=None, missing_ok=True):
     if not os.path.exists(path):
         if not missing_ok:
-            _log(logger, "warning", f"Acquisition default config does not exist: {path}")
+            logger.warning(f"Acquisition default config does not exist: {path}")
         return None
     try:
         with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
     except Exception as exc:
-        _log(logger, "warning", f"Failed to load acquisition default config: {exc}")
+        logger.warning(f"Failed to load acquisition default config: {exc}")
         return None
     if not isinstance(data, dict):
-        _log(logger, "warning", "Acquisition default config must be a JSON object.")
+        logger.warning("Acquisition default config must be a JSON object.")
         return None
     return data
 
@@ -128,10 +120,10 @@ def load_acquisition_defaults(path=None, logger=None):
 
 def save_acquisition_default(mode, detail, path=None, logger=None):
     if mode not in VALID_ACQUISITION_MODES:
-        _log(logger, "warning", f"Invalid acquisition default mode: {mode}")
+        logger.warning(f"Invalid acquisition default mode: {mode}")
         return False
     if not isinstance(detail, dict):
-        _log(logger, "warning", "Acquisition default detail must be a dict.")
+        logger.warning("Acquisition default detail must be a dict.")
         return False
 
     target_path = os.fspath(path or get_acquisition_default_config_path())
@@ -167,5 +159,5 @@ def save_acquisition_default(mode, detail, path=None, logger=None):
             raise
         return True
     except Exception as exc:
-        _log(logger, "warning", f"Failed to save acquisition default config: {exc}")
+        logger.warning(f"Failed to save acquisition default config: {exc}")
         return False
