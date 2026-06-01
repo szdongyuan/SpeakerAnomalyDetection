@@ -442,8 +442,12 @@ class HardwareSelectionController:
 
         mic_idx = int(mic.get("index")) if mic else -1
         speaker_idx = int(speaker.get("index")) if speaker else -1
-        SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
-        SoundDeviceManager.save_selected_devices(mic, speaker, mic_channels)
+        try:
+            SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
+            SoundDeviceManager.save_selected_devices(mic, speaker, mic_channels)
+        except Exception as e:
+            MessageBox.warning(self.view, "提示", f"硬件配置保存失败，请检查权限或重试。\n{e}")
+            return None
 
         self.view.accept()
 

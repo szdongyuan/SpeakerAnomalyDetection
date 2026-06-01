@@ -111,6 +111,8 @@ class SequenceWindow(QWidget):
         # Used to prevent starting a new recording before the full workflow completes.
         self._record_workflow_busy = False
         self._barcode_scanner_box_enabled_before_recording = None
+        self.audio_devices_available = True
+        self.audio_devices_unavailable_message = ""
         self.recorded_signal_info = {}
         self.ip_format = True
         self.port_format = True
@@ -1461,6 +1463,11 @@ class SequenceWindow(QWidget):
                     SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
                 )
 
+    def set_audio_devices_available(self, available: bool, message: str = ""):
+        self.audio_devices_available = bool(available)
+        self.audio_devices_unavailable_message = message or ""
+        self.update_player_btn_is_paused()
+
     def checked_work_status_message(self):
         if not self.sequence_config:
             MessageBox.warning(
@@ -1469,6 +1476,15 @@ class SequenceWindow(QWidget):
                 "未找到可用配置。\n"
                 "请先在上方【使用配置】下拉框中选择配置；\n"
                 "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+            )
+            return True
+
+        if not getattr(self, "audio_devices_available", True):
+            MessageBox.warning(
+                self,
+                "提示",
+                getattr(self, "audio_devices_unavailable_message", "")
+                or "音频设备不可用，请检查设备连接或在【硬件-硬件选择】中重新选择设备。",
             )
             return True
 
@@ -3191,6 +3207,7 @@ class SequenceWindow(QWidget):
         can_start = bool(getattr(self, "sequence_config", None))
         can_start = can_start and not getattr(self, "player_status_flag", False)
         can_start = can_start and not getattr(self, "_record_workflow_busy", False)
+        can_start = can_start and getattr(self, "audio_devices_available", True)
         self.player_btn.setDisabled(not can_start)
 
     def refresh_channel_windows(self) -> None:

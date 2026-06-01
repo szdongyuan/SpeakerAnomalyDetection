@@ -133,6 +133,42 @@ class SoundDeviceManager(object):
         return valid_channels or [available_channels[0]]
 
     @staticmethod
+    def restore_saved_mic_channels_strict(mic, saved_channels):
+        available_channels = SoundDeviceManager.channels_for_device(mic, "mic")
+        if not available_channels or saved_channels is None:
+            return []
+
+        try:
+            saved_channel_items = list(saved_channels)
+        except TypeError:
+            saved_channel_items = [saved_channels]
+        if not saved_channel_items:
+            return []
+
+        normalized_channels = set()
+        for saved_channel in saved_channel_items:
+            if isinstance(saved_channel, bool):
+                return []
+            if isinstance(saved_channel, float) and not saved_channel.is_integer():
+                return []
+            try:
+                normalized_channel = int(saved_channel)
+            except (TypeError, ValueError):
+                return []
+            if normalized_channel < 0:
+                return []
+            normalized_channels.add(normalized_channel)
+
+        if not normalized_channels:
+            return []
+
+        available_set = set(available_channels)
+        if any(channel not in available_set for channel in normalized_channels):
+            return []
+
+        return [channel for channel in available_channels if channel in normalized_channels]
+
+    @staticmethod
     def save_selected_devices(mic, speaker, mic_channels=None):
         payload = {
             "mic": SoundDeviceManager.serialize_device(mic),
@@ -190,36 +226,55 @@ class SoundDeviceManager(object):
                 return device
         return None
 
-    def get_startup_devices(self):
-        self.refresh_available_device()
-        _, default_mic = self.get_default_device("mic", refresh=False)
-        _, default_speaker = self.get_default_device("speaker", refresh=False)
-        default_mic_channels = self.channels_for_device(default_mic, "mic")
+    @staticmethod
+    def _saved_devices_are_retryable(saved_devices):
+        if not isinstance(saved_devices, dict):
+            return False
+        return (
+            SoundDeviceManager._saved_device_descriptor_is_retryable(saved_devices.get("mic"))
+            and SoundDeviceManager._saved_device_descriptor_is_retryable(saved_devices.get("speaker"))
+        )
 
-        default_mic_idx = default_mic["index"] if default_mic else -1
-        default_speaker_idx = default_speaker["index"] if default_speaker else -1
+    @staticmethod
+    def _saved_device_descriptor_is_retryable(saved_device):
+        if not isinstance(saved_device, dict):
+            return False
 
-        def build_default_result(notice_message, fallback_targets=None):
-            self.change_default_device(default_mic_idx, default_speaker_idx)
-            self.save_selected_devices(default_mic, default_speaker, default_mic_channels)
-            if default_mic_idx == -1:
-                notice_message = "未找到输入设备，请检查设备连接是否正常。"
-            return {
-                "mic": default_mic,
-                "speaker": default_speaker,
-                "mic_channels": default_mic_channels,
-                "fallback_targets": fallback_targets or ["麦克风", "扬声器"],
-                "startup_notice_message": notice_message,
-            }
+        name = saved_device.get("name")
+        hostapi_name = saved_device.get("hostapi_name")
+        default_samplerate = saved_device.get("default_samplerate")
+        if not name or not hostapi_name or default_samplerate is None:
+            return False
 
-        if not os.path.exists(AUDIO_DEVICE_CONFIG_PATH):
-            return build_default_result("未找到已保存的音频设备配置，已改用系统默认麦克风和扬声器并完成保存。")
+        try:
+            float(default_samplerate)
+        except (TypeError, ValueError):
+            return False
 
-        saved_devices = self.load_selected_devices()
-        if not saved_devices:
-            return build_default_result("已保存的音频设备配置无效，已改用系统默认麦克风和扬声器并完成保存。")
+        return True
 
-        all_devices = self.get_device_info()
+    @staticmethod
+    def _build_unavailable_startup_result(reason, can_retry_saved_devices=False):
+        return {
+            "mic": None,
+            "speaker": None,
+            "mic_channels": [],
+            "fallback_targets": ["麦克风", "扬声器"],
+            "startup_notice_message": reason,
+            "startup_device_error_reason": reason,
+            "device_available": False,
+            "can_retry_saved_devices": bool(can_retry_saved_devices),
+        }
+
+    def _resolve_saved_startup_devices(self, saved_devices):
+        try:
+            all_devices = self.get_device_info()
+        except Exception as e:
+            return self._build_unavailable_startup_result(
+                f"音频设备枚举失败，请检查设备连接或重新选择设备。{e}",
+                can_retry_saved_devices=self._saved_devices_are_retryable(saved_devices),
+            )
+
         mic_devices = self._flatten_device_info(all_devices, "input")
         speaker_devices = self._flatten_device_info(all_devices, "output")
 
@@ -230,10 +285,19 @@ class SoundDeviceManager(object):
         mic = self._match_saved_device(saved_mic, mic_devices) if isinstance(saved_mic, dict) else None
         speaker = self._match_saved_device(saved_speaker, speaker_devices) if isinstance(saved_speaker, dict) else None
 
-        if saved_mic is None or saved_speaker is None or mic is None or speaker is None:
-            return build_default_result("已保存的音频设备不存在或配置无效，已改用系统默认麦克风和扬声器并完成保存。")
+        if mic is None or speaker is None:
+            return self._build_unavailable_startup_result(
+                "已保存的音频设备不存在或配置无效，请检查设备连接或重新选择设备。",
+                can_retry_saved_devices=True,
+            )
 
-        mic_channels = self.restore_mic_channels(mic, saved_mic_channels)
+        mic_channels = self.restore_saved_mic_channels_strict(mic, saved_mic_channels)
+        if not mic_channels:
+            return self._build_unavailable_startup_result(
+                "已保存的麦克风通道不存在或配置无效，请检查设备连接或重新选择设备。",
+                can_retry_saved_devices=True,
+            )
+
         self.change_default_device(mic["index"], speaker["index"])
         self.save_selected_devices(mic, speaker, mic_channels)
 
@@ -243,7 +307,35 @@ class SoundDeviceManager(object):
             "mic_channels": mic_channels,
             "fallback_targets": [],
             "startup_notice_message": None,
+            "startup_device_error_reason": None,
+            "device_available": True,
+            "can_retry_saved_devices": True,
         }
+
+    def get_startup_devices(self):
+        try:
+            self.refresh_available_device()
+        except Exception as e:
+            saved_devices = self.load_selected_devices()
+            return self._build_unavailable_startup_result(
+                f"音频设备枚举失败，请检查设备连接或重新选择设备。{e}",
+                can_retry_saved_devices=self._saved_devices_are_retryable(saved_devices),
+            )
+
+        if not os.path.exists(AUDIO_DEVICE_CONFIG_PATH):
+            return self._build_unavailable_startup_result(
+                "未找到已保存的音频设备配置，请检查设备连接或重新选择设备。",
+                can_retry_saved_devices=False,
+            )
+
+        saved_devices = self.load_selected_devices()
+        if not self._saved_devices_are_retryable(saved_devices):
+            return self._build_unavailable_startup_result(
+                "已保存的音频设备配置无效，请检查设备连接或重新选择设备。",
+                can_retry_saved_devices=False,
+            )
+
+        return self._resolve_saved_startup_devices(saved_devices)
 
     @staticmethod
     def get_device_info():
