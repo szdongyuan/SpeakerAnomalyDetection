@@ -38,6 +38,13 @@ class MainWindow(QMainWindow):
         self.mic_channels = startup_devices.get("mic_channels", [])
         self.startup_device_fallback_targets = startup_devices.get("fallback_targets", [])
         self.startup_device_notice_message = startup_devices.get("startup_notice_message")
+        self.device_workflow_available = bool(startup_devices.get("device_available", bool(self.mic and self.speaker)))
+        self.startup_device_error_reason = startup_devices.get("startup_device_error_reason")
+        self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
+        if not self.device_workflow_available:
+            self.mic = None
+            self.speaker = None
+            self.mic_channels = []
 
         # set mouse drog date
         self.resize_direction = None
@@ -79,13 +86,13 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         # initialize the window layout
         self.init_sequence_widget()
+        self._apply_startup_audio_devices_to_sequence()
         self.sequence_window.close()
         self.on_access_lvl_changed()
         self.show_statusbar_layout()
         self.showMaximized()
         self.on_login_window_init()
-        if self.startup_device_notice_message or self.startup_device_fallback_targets:
-            QTimer.singleShot(0, self.show_startup_device_warning)
+        self._schedule_startup_device_recovery_if_needed()
         self.sequence_window.refresh_channel_windows()
 
     def set_title(self):
@@ -187,6 +194,54 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
+        if hasattr(self.sequence_window, "set_audio_devices_available"):
+            self.sequence_window.set_audio_devices_available(
+                self.device_workflow_available, self.startup_device_error_reason or ""
+            )
+
+    def _apply_audio_devices(self, mic, speaker, mic_channels, available=True, message=""):
+        self.mic = mic
+        self.speaker = speaker
+        self.mic_channels = list(mic_channels or [])
+        self.device_workflow_available = bool(available)
+
+        if self.__dict__.get("tray_popup_button") is not None:
+            self.update_statusbar()
+
+        sequence_window = self.__dict__.get("sequence_window")
+        if sequence_window is None:
+            return
+
+        sequence_window.mic = self.mic
+        sequence_window.speaker = self.speaker
+        sequence_window.mic_channels = self.mic_channels
+        if hasattr(sequence_window, "set_audio_devices_available"):
+            sequence_window.set_audio_devices_available(bool(available), message or "")
+        if hasattr(sequence_window, "refresh_channel_windows"):
+            sequence_window.refresh_channel_windows()
+
+    def _apply_startup_audio_devices_to_sequence(self):
+        message = self.startup_device_error_reason or self.startup_device_notice_message or ""
+        self._apply_audio_devices(
+            self.mic,
+            self.speaker,
+            self.mic_channels,
+            available=self.device_workflow_available,
+            message=message if not self.device_workflow_available else "",
+        )
+
+    def _schedule_startup_device_recovery_if_needed(self):
+        if (
+            not self.device_workflow_available
+            or self.startup_device_error_reason
+            or self.startup_device_notice_message
+            or self.startup_device_fallback_targets
+        ):
+            QTimer.singleShot(0, self.show_startup_device_warning)
+
+    @staticmethod
+    def _audio_device_selection_complete(speaker, mic, mic_channels):
+        return bool(speaker and mic and mic_channels)
 
     def init_menu(self):
         # create menu bar, and link the menu bar to action
@@ -332,24 +387,86 @@ class MainWindow(QMainWindow):
         except Exception:
             driver_name = None
 
-        self.speaker, self.mic, self.mic_channels = open_hardware_selection_window(
+        previous_speaker = self.speaker
+        previous_mic = self.mic
+        previous_mic_channels = list(self.mic_channels or [])
+        was_available = bool(self.device_workflow_available)
+
+        speaker, mic, mic_channels = open_hardware_selection_window(
             driver=driver_name,
             speaker_device=self.speaker,
             mic_device=self.mic,
             mic_channels=self.mic_channels,
         )
-        self.update_statusbar()
-        self.sequence_window.mic = self.mic
-        self.sequence_window.speaker = self.speaker
-        self.sequence_window.mic_channels = self.mic_channels
-        self.sequence_window.refresh_channel_windows()
-
-    def show_startup_device_warning(self):
-        if self.startup_device_notice_message:
-            MessageBox.warning(self, "提示", self.startup_device_notice_message)
+        if self._audio_device_selection_complete(speaker, mic, mic_channels):
+            self.startup_device_error_reason = None
+            self.startup_device_notice_message = None
+            self._apply_audio_devices(mic, speaker, mic_channels, available=True)
             return
 
-        MessageBox.warning(self, "提示", "已保存的音频设备不存在或配置无效，正在使用系统默认麦克风和扬声器。")
+        if was_available:
+            self._apply_audio_devices(previous_mic, previous_speaker, previous_mic_channels, available=True)
+            return
+
+        message = self.startup_device_error_reason or "音频设备未完成选择，请在【硬件-硬件选择】中完成设置。"
+        self._apply_audio_devices(None, None, [], available=False, message=message)
+
+    def show_startup_device_warning(self):
+        message = self.startup_device_error_reason or self.startup_device_notice_message
+        if not message:
+            return
+
+        MessageBox.warning(
+            self,
+            "提示",
+            f"{message}\n请检查麦克风/扬声器连接，或重新选择设备。\n点击确认后将重新扫描设备。",
+        )
+        self._retry_or_select_startup_devices()
+
+    def _retry_or_select_startup_devices(self):
+        if not self.startup_can_retry_saved_devices:
+            try:
+                SoundDeviceManager().refresh_available_device()
+            except Exception:
+                pass
+            self._open_hardware_selection_for_recovery()
+            return
+
+        startup_devices = SoundDeviceManager().get_startup_devices()
+        self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
+        if startup_devices.get("device_available"):
+            self.startup_device_error_reason = None
+            self.startup_device_notice_message = None
+            self._apply_audio_devices(
+                startup_devices.get("mic"),
+                startup_devices.get("speaker"),
+                startup_devices.get("mic_channels", []),
+                available=True,
+            )
+            return
+
+        self.startup_device_error_reason = (
+            startup_devices.get("startup_device_error_reason") or self.startup_device_error_reason
+        )
+        self._open_hardware_selection_for_recovery()
+
+    def _open_hardware_selection_for_recovery(self):
+        speaker, mic, mic_channels = open_hardware_selection_window(
+            driver=None,
+            speaker_device=self.speaker,
+            mic_device=self.mic,
+            mic_channels=self.mic_channels,
+        )
+        if self._audio_device_selection_complete(speaker, mic, mic_channels):
+            self.startup_device_error_reason = None
+            self.startup_device_notice_message = None
+            self._apply_audio_devices(mic, speaker, mic_channels, available=True)
+            return
+
+        message = "音频设备未完成选择，请在【硬件-硬件选择】中完成设置。"
+        self.startup_device_error_reason = message
+        self._apply_audio_devices(None, None, [], available=False, message=message)
+        MessageBox.warning(self, "提示", message)
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker

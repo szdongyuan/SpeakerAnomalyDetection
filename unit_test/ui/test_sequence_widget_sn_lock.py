@@ -21,8 +21,11 @@ TARGET_METHODS = {
     "_set_sn_input_recording_read_only",
     "on_sequence_config_updated",
     "validate_count",
+    "set_audio_devices_available",
     "start_this_play",
+    "checked_work_status_message",
     "judge_play_and_record",
+    "update_player_btn_is_paused",
     "_should_use_streaming_recording",
     "_start_streaming_recording",
     "_normalize_blocking_recorded_data",
@@ -103,6 +106,8 @@ def _build_method_namespace():
     namespace = {
         "QApplication": DummyApplication,
         "QSignalBlocker": DummySignalBlocker,
+        "QIcon": lambda *args, **kwargs: ("icon", args, kwargs),
+        "QSize": lambda *args, **kwargs: ("size", args, kwargs),
         "pyqtSlot": lambda *args, **kwargs: (lambda func: func),
         "MessageBox": DummyMessageBox,
         "LoadUiConfig": DummyLoadUiConfig,
@@ -231,12 +236,22 @@ class FakeButton:
     def __init__(self):
         self.disabled = None
         self.enabled = None
+        self.disabled_values = []
+        self.icon_values = []
+        self.icon_size_values = []
 
     def setDisabled(self, value):
         self.disabled = value
+        self.disabled_values.append(bool(value))
 
     def setEnabled(self, value):
         self.enabled = value
+
+    def setIcon(self, value):
+        self.icon_values.append(value)
+
+    def setIconSize(self, value):
+        self.icon_size_values.append(value)
 
 
 class FakeCheckBox:
@@ -330,6 +345,90 @@ class FakeWavWriter:
 
 def _bind_method(obj, namespace, method_name):
     return namespace[method_name].__get__(obj, type(obj))
+
+
+def test_set_audio_devices_available_stores_state_and_refreshes_player_button():
+    namespace = _build_method_namespace()
+    obj = types.SimpleNamespace(
+        audio_devices_available=True,
+        audio_devices_unavailable_message="",
+        sequence_config=[{"seq1": {}}],
+        player_status_flag=False,
+        _record_workflow_busy=False,
+        player_btn=FakeButton(),
+    )
+    obj.update_player_btn_is_paused = _bind_method(obj, namespace, "update_player_btn_is_paused")
+
+    namespace["set_audio_devices_available"](obj, False, "设备不可用")
+
+    assert obj.audio_devices_available is False
+    assert obj.audio_devices_unavailable_message == "设备不可用"
+    assert obj.player_btn.disabled_values[-1] is True
+
+
+def test_external_workflow_entries_route_through_guarded_start_paths():
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "SequenceWindow")
+    methods = {node.name: node for node in cls.body if isinstance(node, ast.FunctionDef)}
+
+    expected_entries = {
+        "_tcp_run_test",
+        "_commit_barcode",
+        "on_sensor_triggered",
+        "on_shortcut_triggered",
+        "start_this_play",
+        "judge_play_and_record",
+    }
+    assert expected_entries.issubset(methods)
+
+    def calls(method_name, target_name):
+        for node in ast.walk(methods[method_name]):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr == target_name:
+                    return True
+                if isinstance(func, ast.Name) and func.id == target_name:
+                    return True
+        return False
+
+    assert calls("_tcp_run_test", "start_this_play")
+    assert calls("_commit_barcode", "start_this_play")
+    assert calls("on_sensor_triggered", "start_this_play")
+    assert calls("on_shortcut_triggered", "start_this_play")
+    assert calls("start_this_play", "checked_work_status_message")
+    assert calls("judge_play_and_record", "checked_work_status_message")
+
+
+def test_checked_work_status_message_blocks_when_audio_devices_unavailable():
+    namespace = _build_method_namespace()
+    namespace["MessageBox"].warnings.clear()
+    obj = types.SimpleNamespace(
+        sequence_config=[{"seq1": {}}],
+        audio_devices_available=False,
+        audio_devices_unavailable_message="设备不可用",
+        mic={"name": "Mic"},
+        speaker={"name": "Speaker"},
+    )
+
+    assert namespace["checked_work_status_message"](obj) is True
+    assert namespace["MessageBox"].warnings
+    assert "设备不可用" in namespace["MessageBox"].warnings[-1][0][2]
+
+
+def test_update_player_button_requires_audio_devices_available():
+    namespace = _build_method_namespace()
+    obj = types.SimpleNamespace(
+        sequence_config=[{"seq1": {}}],
+        audio_devices_available=False,
+        player_status_flag=False,
+        _record_workflow_busy=False,
+        player_btn=FakeButton(),
+    )
+
+    namespace["update_player_btn_is_paused"](obj)
+
+    assert obj.player_btn.disabled_values[-1] is True
 
 
 def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", reset_result=None):
