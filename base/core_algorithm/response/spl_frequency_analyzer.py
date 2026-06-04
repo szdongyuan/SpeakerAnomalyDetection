@@ -14,6 +14,8 @@ from typing import Dict, Optional
 
 import numpy as np
 
+from base.stimulus_signal.frequency_stepped import resolve_frequency_stepped_schedule
+
 
 class SplFrequencyMethod(str, Enum):
     """Supported SPL (dB SPL) vs frequency computation methods."""
@@ -71,6 +73,71 @@ def _instantaneous_frequency(time_s: np.ndarray, stimulus_metadata: Dict, single
     raise ValueError(f"Unsupported stimulus_type: {stimulus_type}")
 
 
+def _cached_segment_bounds(segment_payload):
+    try:
+        start = int(segment_payload["start_sample"])
+        end = int(segment_payload["end_sample"])
+        sample_count = int(segment_payload["sample_count"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("frequency_stepped segment metadata is invalid") from None
+    if start < 0 or end < start or sample_count != end - start:
+        raise ValueError("frequency_stepped segment metadata is invalid")
+    return start, end
+
+
+def _validate_cached_frequency_stepped_segments(stimulus_metadata: Dict, signal_length: int, sample_rate: int) -> None:
+    segments = stimulus_metadata.get("segments")
+    if segments is None:
+        return
+    schedule_sample_rate = stimulus_metadata.get("schedule_sample_rate")
+    if schedule_sample_rate is not None:
+        try:
+            if int(schedule_sample_rate) != int(sample_rate):
+                return
+        except (TypeError, ValueError):
+            pass
+    if not isinstance(segments, (list, tuple)):
+        raise ValueError("frequency_stepped segments must be a list")
+
+    bounds = [_cached_segment_bounds(segment) for segment in segments]
+    previous_end = -1
+    for index, (start, end) in enumerate(bounds):
+        if start < previous_end:
+            raise ValueError("frequency_stepped segments overlap")
+        if end > signal_length:
+            has_later_recorded_segment = any(later_start < signal_length for later_start, _ in bounds[index + 1:])
+            if has_later_recorded_segment:
+                raise ValueError("frequency_stepped segment is non-trailing out of range")
+            return
+        previous_end = end
+
+
+def _frequency_stepped_analysis_segments(recorded_signal: np.ndarray, stimulus_metadata: Dict, sample_rate: int):
+    recorded = _as_1d_float_array(recorded_signal)
+    _validate_cached_frequency_stepped_segments(stimulus_metadata, int(recorded.size), sample_rate)
+    schedule = resolve_frequency_stepped_schedule(stimulus_metadata, sample_rate)
+
+    segments = []
+    all_segments = list(schedule.segments)
+    for index, segment in enumerate(all_segments):
+        start = int(segment.start_sample)
+        end = int(segment.end_sample)
+        if start < 0 or end < start:
+            raise ValueError("frequency_stepped resolved segment metadata is invalid")
+        if end > recorded.size:
+            has_later_recorded_segment = any(int(later.start_sample) < recorded.size for later in all_segments[index + 1:])
+            if has_later_recorded_segment:
+                raise ValueError("frequency_stepped segment is non-trailing out of range")
+            break
+        if start >= recorded.size:
+            break
+        segment_signal = recorded[start:end]
+        if segment_signal.size != end - start:
+            raise ValueError("frequency_stepped segment slicing failed")
+        segments.append((segment, segment_signal))
+    return schedule, segments
+
+
 class SplFrequencyAnalyzer:
     """Compute output SPL (dB SPL) vs frequency for step/chirp stimuli."""
 
@@ -121,6 +188,15 @@ class SplFrequencyAnalyzer:
                     hop_length=hop_length,
                     eps=eps,
                 )
+            if stimulus_method == "frequency_stepped":
+                return self._frequency_stepped_output_spl(
+                    recorded_signal,
+                    stimulus_metadata=stimulus_metadata,
+                    v2pa_factor=v2pa_factor,
+                    reference_pressure_pa=reference_pressure_pa,
+                    splf_calc_mode=calc_mode,
+                    eps=eps,
+                )
             raise ValueError(f"Unsupported stimulus_method: {stimulus_method!r}")
 
         stimulus_method = stimulus_metadata.get("stimulus_method")
@@ -149,6 +225,64 @@ class SplFrequencyAnalyzer:
                 eps=eps,
             )
         raise ValueError(f"Unsupported method: {method_value!r}")
+
+    def _frequency_stepped_output_spl(
+        self,
+        recorded_signal: np.ndarray,
+        *,
+        stimulus_metadata: Dict,
+        v2pa_factor: Optional[float],
+        reference_pressure_pa: float,
+        splf_calc_mode: str,
+        eps: float,
+    ) -> SplFrequencyResult:
+        schedule, segment_pairs = _frequency_stepped_analysis_segments(
+            recorded_signal,
+            stimulus_metadata,
+            self.sample_rate,
+        )
+        if not segment_pairs:
+            return SplFrequencyResult(np.array([]), np.array([]))
+
+        v2pa_value = 1.0 if not v2pa_factor else float(v2pa_factor)
+        rms_sq_by_step: Dict[int, float] = {}
+        count_by_step: Dict[int, int] = {}
+        frequency_by_step: Dict[int, float] = {}
+
+        for segment, segment_signal_v in segment_pairs:
+            segment_signal_pa = np.asarray(segment_signal_v, dtype=np.float64) * v2pa_value
+            if segment_signal_pa.size <= 1:
+                continue
+
+            if splf_calc_mode == "fundamental":
+                n_idx = np.arange(segment_signal_pa.size, dtype=np.float64)
+                basis = np.exp(-1j * (2.0 * np.pi * float(segment.frequency_hz) / self.sample_rate) * n_idx)
+                y_k = np.dot(segment_signal_pa, basis)
+                peak_amp_pa = 2.0 * np.abs(y_k) / float(segment_signal_pa.size)
+                rms_pa = float(peak_amp_pa) / np.sqrt(2.0)
+            else:
+                y0 = segment_signal_pa - float(np.mean(segment_signal_pa))
+                rms_pa = float(np.sqrt(np.mean(y0 * y0)))
+
+            step_index = int(segment.step_index)
+            rms_sq_by_step[step_index] = rms_sq_by_step.get(step_index, 0.0) + rms_pa * rms_pa
+            count_by_step[step_index] = count_by_step.get(step_index, 0) + 1
+            frequency_by_step.setdefault(step_index, float(segment.frequency_hz))
+
+        if not count_by_step:
+            return SplFrequencyResult(np.array([]), np.array([]))
+
+        step_indices = sorted(count_by_step)
+        freqs = np.asarray([frequency_by_step[index] for index in step_indices], dtype=np.float64)
+        rms_pa = np.asarray(
+            [np.sqrt(rms_sq_by_step[index] / float(count_by_step[index])) for index in step_indices],
+            dtype=np.float64,
+        )
+        sort_idx = np.argsort(freqs, kind="stable")
+        freqs = freqs[sort_idx]
+        rms_pa = rms_pa[sort_idx]
+        spl_db = _spl_db_from_pa_rms(rms_pa + float(eps), reference_pressure_pa)
+        return SplFrequencyResult(freqs, spl_db)
 
     def _step_output_spl(
         self,

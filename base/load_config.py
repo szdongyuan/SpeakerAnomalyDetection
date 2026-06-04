@@ -10,6 +10,7 @@ from re import _parser as re_parser
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR, SEQUENCE_CONFIG_REGISTRY_PATH, SN_REGEX_RULES_JSON_PATH
 from base.log_manager import LogManager
+from base.stimulus_signal.methods import normalize_stimulus_method
 
 
 def load_config(config_path, module_name=None):
@@ -557,11 +558,19 @@ class LoadUiConfig(object):
         prolong = 0.5
         stimulus_dict = dict()
         if data_struct.stimulus_data is not None and len(data_struct.stimulus_data) > 0:
+            stimulus_info = data_struct.stimulus_info or {}
             stimulus_dict = {
                 "data": data_struct.stimulus_data,
-                "amplitude": data_struct.stimulus_info["amplitude"],
+                "amplitude": stimulus_info["amplitude"],
                 "sr": data_struct.sample_rate,
             }
+            method = normalize_stimulus_method(stimulus_info.get("stimulus_method", "chirp"))
+            if method == "frequency_stepped":
+                alignment_sample_count = getattr(data_struct, "alignment_sample_count", None)
+                if alignment_sample_count is None:
+                    alignment_sample_count = stimulus_info.get("alignment_sample_count")
+                if alignment_sample_count is not None:
+                    stimulus_dict["alignment_sample_count"] = alignment_sample_count
             num_frames = len(data_struct.stimulus_data) + int(prolong * data_struct.sample_rate)
             prolong_frames = int(prolong * data_struct.sample_rate)
         else:

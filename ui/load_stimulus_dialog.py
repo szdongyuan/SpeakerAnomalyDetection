@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QApplication
 
 from base.log_manager import LogManager
 from base.stimulus_signal_management import StimulusSignalManagement
+from base.stimulus_signal.methods import normalize_stimulus_method
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from consts import error_code
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
@@ -17,6 +18,7 @@ class LoadStimulusDialog(DataManageDialog):
     STIMULUS_DICT = {
         "chirp": "啁啾",
         "step": "步进",
+        "frequency_stepped": "step(sc)",
         "noise": "噪音",
     }
     # Mapping for stimulus signal chinese names
@@ -27,6 +29,9 @@ class LoadStimulusDialog(DataManageDialog):
         "mirror_linear": "线性镜像",
         "white_noise": "白噪音",
         "pink_noise": "粉噪音",
+        "octave": "倍频程",
+        "custom_linear": "自定义线性",
+        "custom_log": "自定义对数",
     }
 
     def __init__(self, logger: LogManager):
@@ -137,21 +142,26 @@ class LoadStimulusDialog(DataManageDialog):
         if query_code == error_code.OK:
             for idx, info in enumerate(query_data):
                 query_data_idx = query_data[idx]
-                stimulus = {
-                    "stimulus_id": query_data_idx[0],
-                    "stimulus_method": query_data_idx[1],
-                    "stimulus_type": query_data_idx[2],
-                    "start_freq": query_data_idx[4],
-                    "stop_freq": query_data_idx[5],
-                    "total_time": query_data_idx[7],
-                    "repeat_times": query_data_idx[3],
-                    "sample_rate": query_data_idx[6],
-                    "num_steps": query_data_idx[8],
-                    "voltage_type": query_data_idx[9],
-                    "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 0.1,
-                    "is_default": query_data_idx[11],
-                    "stimulus_name": query_data_idx[12],
-                }
+                if isinstance(query_data_idx, dict):
+                    stimulus = dict(query_data_idx)
+                    voltage = stimulus.get("voltage")
+                    stimulus["voltage"] = float(voltage) if voltage is not None else 0.1
+                else:
+                    stimulus = {
+                        "stimulus_id": query_data_idx[0],
+                        "stimulus_method": query_data_idx[1],
+                        "stimulus_type": query_data_idx[2],
+                        "start_freq": query_data_idx[4],
+                        "stop_freq": query_data_idx[5],
+                        "total_time": query_data_idx[7],
+                        "repeat_times": query_data_idx[3],
+                        "sample_rate": query_data_idx[6],
+                        "num_steps": query_data_idx[8],
+                        "voltage_type": query_data_idx[9],
+                        "voltage": float(query_data_idx[10]) if query_data_idx[10] is not None else 0.1,
+                        "is_default": query_data_idx[11],
+                        "stimulus_name": query_data_idx[12],
+                    }
                 stimulus_list.append(stimulus)
         return stimulus_list
 
@@ -178,10 +188,24 @@ class LoadStimulusDialog(DataManageDialog):
         if self.select_stimulus_row is None:
             return None
         # Create a copy to avoid mutating the original data
-        result = self.loaded_stimulus[self.select_stimulus_row].copy()
+        selected = self.loaded_stimulus[self.select_stimulus_row]
+        if selected.get("step_sc_row_state") == "invalid_metadata":
+            MessageBox.warning(self, "提示", "该 step(sc) 配置元数据无效，无法加载")
+            return None
+        if normalize_stimulus_method(selected.get("stimulus_method")) == "frequency_stepped":
+            payload = selected.get("stimulus_payload")
+            if not isinstance(payload, dict):
+                MessageBox.warning(self, "提示", "该 step(sc) 配置元数据无效，无法加载")
+                return None
+            result = payload.copy()
+        else:
+            result = selected.copy()
         result.pop("stimulus_name")
         result.pop("is_default")
         result.pop("stimulus_id")
+        result.pop("stimulus_metadata_json", None)
+        result.pop("stimulus_payload", None)
+        result.pop("step_sc_row_state", None)
         return result
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
@@ -246,6 +270,11 @@ class LoadStimulusDialog(DataManageDialog):
                 self.logger.error(msg)
                 MessageBox.warning(self, "重命名失败", msg)
                 revert_to_previous()
+            return
+
+        if normalize_stimulus_method(self.loaded_stimulus[row].get("stimulus_method")) == "frequency_stepped":
+            MessageBox.warning(self, "提示", "step(sc) 配置不支持在列表中直接编辑参数")
+            revert_to_previous()
             return
 
         # Map column to db field and validator
