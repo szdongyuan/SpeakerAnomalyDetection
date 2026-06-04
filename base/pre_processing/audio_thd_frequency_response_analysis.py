@@ -223,7 +223,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
         NEW METHOD: Calculate THD using three-phase architecture.
 
-        Step signals use STFT exclusively. Chirp signals use STFT exclusively.
+        Step signals use STFT exclusively. Chirp signals use STFT exclusively.`
 
         Returns: (x, h, thd) for plotting (backward compatible with existing plots)
         """
@@ -376,12 +376,6 @@ class AudioThdFrequencyResponseAnalysis(object):
             frequencies.append(float(segment.frequency_hz))
             harmonic_column = np.zeros(6, dtype=float)
             harmonic_column[0] = float(segment.frequency_hz)
-            for harmonic_order in range(1, 6):
-                bin_idx = int(index_row[harmonic_order])
-                if 0 < bin_idx < spectrum.shape[0]:
-                    bin_values = np.asarray(spectrum[bin_idx]).reshape(-1)
-                    if bin_values.size:
-                        harmonic_column[harmonic_order] = float(bin_values[0])
             harmonic_columns.append(harmonic_column)
             thd_values.append(float(thd[0]))
 

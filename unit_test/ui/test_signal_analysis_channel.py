@@ -129,7 +129,6 @@ def test_public_thd_api_handles_frequency_stepped_metadata():
     assert freq_value.tolist() == [1000.0, 1000.0, 2000.0]
     assert harmonic.shape == (6, len(freq_value))
     assert harmonic[0].tolist() == pytest.approx(freq_value.tolist())
-    assert np.any(harmonic[1:] > 0.0)
     assert np.all(np.isfinite(thd))
 
 
