@@ -10,13 +10,14 @@ from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.play_and_record import stream_record_without_play
-from base.sound_device_manager import SoundDeviceManager
+from base.sound_device_manager import SoundDeviceManager, sd
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import (
     SoundcardCalibrationManager,
+    clear_mic_channel_v2pa_factors,
     format_input_channel_label,
     load_mic_channel_v2pa_factors,
-    save_mic_channel_v2pa_factor,
+    replace_mic_channel_v2pa_factors,
 )
 from consts import error_code, ui_style_const
 from ui.custom_ui_widget.widgets import (
@@ -152,6 +153,18 @@ class CalibrationWindow(QDialog):
             if missing:
                 labels = self.input_cal_wnd._format_channel_labels(missing)
                 MessageBox.warning(self, "提示", f"以下输入通道未校准：{labels}\n请完成校准后再退出。")
+                return False
+            selected_dirty_channels = set(self.input_cal_wnd.selected_input_channels) & set(
+                self.input_cal_wnd.unsaved_session_channels
+            )
+            if selected_dirty_channels:
+                persistence_status = self.input_cal_wnd._persist_complete_selected_channel_factors_if_ready()
+                if persistence_status is None:
+                    self.input_cal_wnd.pending_persistence_failure = True
+            elif self.input_cal_wnd.pending_persistence_failure:
+                self.input_cal_wnd.pending_persistence_failure = False
+            if self.input_cal_wnd.pending_persistence_failure:
+                MessageBox.warning(self, "提示", "输入通道校准结果保存失败，请重新校准或重置后再退出。")
                 return False
             self.input_cal_wnd.stop_active_streaming_capture()
             return True
@@ -368,13 +381,193 @@ class OutputCalibration(QWidget):
                 f"<span style='color: black;'>s</span>"
             )
             self.timer.start(1000)
-            threading.Thread(target=sap.sd_play, args=(stimulus_dict,)).start()
+            if self._is_asio_output_playback():
+                stimulus_dict["blocking"] = False
+                self._play_stimulus_and_log_failure(sap, stimulus_dict)
+            else:
+                threading.Thread(target=self._play_stimulus_and_log_failure, args=(sap, stimulus_dict)).start()
         else:
             self.play_flag = False
             self.timer.stop()
             self.play_btn.setText(" 播  放 ")
             if self.current_count >= self.calibration_param["calibration_nums"]:
                 self.save_btn.setDisabled(True)
+
+    def _playback_device_hostapi_name(self, hostapi_index):
+        if hostapi_index is None:
+            return None
+        api_info = SoundDeviceManager.get_api_info(hostapi_index)
+        if isinstance(api_info, dict):
+            return api_info.get("name")
+        getter = getattr(api_info, "get", None)
+        if callable(getter):
+            return getter("name")
+        return getattr(api_info, "name", None)
+
+    def _selected_speaker_for_playback(self):
+        speaker = getattr(self, "speaker", None)
+        if speaker is not None:
+            return speaker
+        window = self.window()
+        if window is self:
+            return None
+        return getattr(window, "speaker", None)
+
+    def _is_asio_output_playback(self):
+        speaker = self._selected_speaker_for_playback()
+        if speaker is None:
+            return False
+        device_index = self._coerce_non_negative_int(self._speaker_field(speaker, "index"))
+        if device_index is None:
+            return False
+        hostapi_index = self._speaker_field(speaker, "hostapi")
+        try:
+            return self._playback_device_hostapi_name(hostapi_index) == "ASIO"
+        except Exception:
+            return False
+
+    @staticmethod
+    def _speaker_field(speaker, key):
+        if isinstance(speaker, dict):
+            return speaker.get(key)
+        getter = getattr(speaker, "get", None)
+        if callable(getter):
+            return getter(key)
+        return getattr(speaker, key, None)
+
+    @staticmethod
+    def _coerce_non_negative_int(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            try:
+                stripped = value.strip()
+                if stripped == "":
+                    return None
+                coerced = int(stripped, 10)
+            except ValueError:
+                return None
+            return coerced if coerced >= 0 else None
+        return None
+
+    @staticmethod
+    def _coerce_positive_int(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, str):
+            try:
+                stripped = value.strip()
+                if stripped == "":
+                    return None
+                coerced = int(stripped, 10)
+            except ValueError:
+                return None
+            return coerced if coerced > 0 else None
+        return None
+
+    @staticmethod
+    def _coerce_positive_sample_rate(value):
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            sample_rate = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(sample_rate) or sample_rate <= 0:
+            return None
+        if sample_rate.is_integer():
+            return int(sample_rate)
+        return sample_rate
+
+    @staticmethod
+    def _deduplicate_sample_rates(sample_rates):
+        deduplicated = []
+        seen = set()
+        for sample_rate in sample_rates:
+            key = float(sample_rate)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduplicated.append(sample_rate)
+        return deduplicated
+
+    @staticmethod
+    def _preferred_output_channels(max_output_channels):
+        channel_count = OutputCalibration._coerce_positive_int(max_output_channels)
+        if channel_count is None:
+            return None
+        if channel_count >= 2:
+            return 2
+        return 1
+
+    def _resolve_output_playback_params(self):
+        speaker = self._selected_speaker_for_playback()
+        if speaker is None:
+            return {"sample_rate": 44100}
+
+        default_sample_rate = self._coerce_positive_sample_rate(
+            self._speaker_field(speaker, "default_samplerate")
+        )
+        fallback_sample_rate = default_sample_rate if default_sample_rate is not None else 44100
+        device_index = self._coerce_non_negative_int(self._speaker_field(speaker, "index"))
+        preferred_channels = self._preferred_output_channels(
+            self._speaker_field(speaker, "max_output_channels")
+        )
+
+        if device_index is None:
+            return {"sample_rate": 44100}
+
+        sample_rate_candidates = []
+        if default_sample_rate is not None:
+            sample_rate_candidates.append(default_sample_rate)
+        sample_rate_candidates.extend([48000, 44100])
+        sample_rate_candidates = self._deduplicate_sample_rates(sample_rate_candidates)
+
+        if preferred_channels == 2:
+            channel_candidates = [2, 1]
+        elif preferred_channels == 1:
+            channel_candidates = [1]
+        else:
+            channel_candidates = [1]
+
+        for sample_rate in sample_rate_candidates:
+            for channels in channel_candidates:
+                try:
+                    if channels is None:
+                        sd.check_output_settings(device=device_index, samplerate=sample_rate)
+                    else:
+                        sd.check_output_settings(
+                            device=device_index, samplerate=sample_rate, channels=channels
+                        )
+                except Exception:
+                    continue
+                params = {"sample_rate": sample_rate, "device": device_index}
+                if channels is not None and channels > 0:
+                    params["output_channels"] = channels
+                return params
+
+        params = {"sample_rate": fallback_sample_rate, "device": device_index}
+        params["output_channels"] = preferred_channels if preferred_channels is not None else 1
+        return params
+
+    def _apply_output_playback_params(self, stimulus_dict, playback_params):
+        if "device" in playback_params:
+            stimulus_dict["device"] = playback_params["device"]
+        if "output_channels" in playback_params:
+            stimulus_dict["output_channels"] = playback_params["output_channels"]
+        return stimulus_dict
+
+    def _play_stimulus_and_log_failure(self, audio_processor, stimulus_dict):
+        result = audio_processor.sd_play(stimulus_dict)
+        if result is None:
+            return
+        play_code, msg = result
+        if play_code != error_code.OK:
+            self.default_logger.error(f"Failed to play the audio. {msg}")
 
     def create_current_count(self):
         """
@@ -419,15 +612,20 @@ class OutputCalibration(QWidget):
         }
 
     def create_signal(self):
+        playback_params = self._resolve_output_playback_params()
         data, sr = StimulusSignal().generate_chirps(
-            start_freq=800, stop_freq=800, total_time=10, sample_rate=44100, stimulus_type="linear"
+            start_freq=800,
+            stop_freq=800,
+            total_time=10,
+            sample_rate=playback_params["sample_rate"],
+            stimulus_type="linear",
         )
         stimulus_dict = {
             "data": data,
             "sr": sr,
             "amplitude": self.calibration_param["amplitude_list"][self.current_count - 1],
         }
-        return stimulus_dict
+        return self._apply_output_playback_params(stimulus_dict, playback_params)
 
     def test_calibration(self):
         """
@@ -454,10 +652,16 @@ class OutputCalibration(QWidget):
         if target_voltage > max_voltage:
             if self.test_calibration_popup():
                 return
+        playback_params = self._resolve_output_playback_params()
         data, sr = StimulusSignal().generate_chirps(
-            start_freq=800, stop_freq=800, total_time=10, sample_rate=44100, stimulus_type="linear"
+            start_freq=800,
+            stop_freq=800,
+            total_time=10,
+            sample_rate=playback_params["sample_rate"],
+            stimulus_type="linear",
         )
         test_stimulus_dict = {"data": data, "sr": sr, "amplitude": amplitude}
+        self._apply_output_playback_params(test_stimulus_dict, playback_params)
         sap = SoundcardAudioProcessor()
         speaker_code, msg = sap.sd_play(test_stimulus_dict)
         if speaker_code != error_code.OK:
@@ -576,6 +780,9 @@ class InputCalibration(QWidget):
         self.current_channel = None
         self.calibrated_channels = set()
         self.session_channel_factors = {}
+        self.session_channel_standard_spl = {}
+        self.unsaved_session_channels = set()
+        self.pending_persistence_failure = False
         self.active_capture_channel = None
         self.update_ui_timer = QTimer()
         self.update_ui_timer.setInterval(1000)
@@ -629,6 +836,42 @@ class InputCalibration(QWidget):
             return self.session_channel_factors[self.current_channel]
         return self._saved_channel_factors().get(self.current_channel)
 
+    def _complete_selected_channel_calibration_payload(self):
+        if not self.selected_input_channels:
+            return None, None
+
+        saved_factors = self._saved_channel_factors()
+        complete_factors = {}
+        session_standard_spl = {}
+        for channel in self.selected_input_channels:
+            if channel in self.session_channel_factors:
+                complete_factors[channel] = self.session_channel_factors[channel]
+                if channel in self.session_channel_standard_spl:
+                    session_standard_spl[channel] = self.session_channel_standard_spl[channel]
+            elif channel in saved_factors:
+                complete_factors[channel] = saved_factors[channel]
+            else:
+                return None, None
+        return complete_factors, session_standard_spl
+
+    def _persist_complete_selected_channel_factors_if_ready(self):
+        complete_factors, session_standard_spl = self._complete_selected_channel_calibration_payload()
+        if complete_factors is None:
+            return None
+
+        try:
+            replace_mic_channel_v2pa_factors(
+                complete_factors,
+                channel_standard_spl=session_standard_spl,
+            )
+        except Exception as exc:
+            self.pending_persistence_failure = True
+            self.default_logger.error(f"Failed to persist input channel calibration factors: {exc}")
+            return False
+        self.pending_persistence_failure = False
+        self.unsaved_session_channels.difference_update(complete_factors)
+        return True
+
     def _next_uncalibrated_channel(self, start_after_channel=None):
         channels = list(self.selected_input_channels or [])
         if not channels:
@@ -660,12 +903,11 @@ class InputCalibration(QWidget):
             self.channel_status_label.setText("未选择输入通道")
             return
 
-        channel_label = format_input_channel_label(self.current_channel)
         if self.active_capture_channel == self.current_channel:
             status = "录制中"
         else:
             status = "已校准" if self.current_channel in self._known_calibrated_channels() else "未校准"
-        self.channel_status_label.setText(f"当前校准通道: {channel_label}  状态: {status}")
+        self.channel_status_label.setText(f"状态: {status}")
 
     def _refresh_channel_selector(self, preferred_channel=None):
         available_channels = list(self.selected_input_channels or [])
@@ -971,17 +1213,22 @@ class InputCalibration(QWidget):
             if current_channel is None:
                 raise RuntimeError("Missing active input channel for calibration result.")
             standard_spl = 94 if self.standard_spl_flag else 114
-            save_mic_channel_v2pa_factor(current_channel, v2pa_factor, standard_spl=standard_spl)
             self.calibrated_channels.add(current_channel)
             self.session_channel_factors[current_channel] = float(v2pa_factor)
+            self.session_channel_standard_spl[current_channel] = standard_spl
+            self.unsaved_session_channels.add(current_channel)
             self.active_capture_channel = None
             self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=3)))
             self.default_logger.info("Calibration success.")
             self.calibration_popup(success_flag=True)
+            persistence_status = self._persist_complete_selected_channel_factors_if_ready()
 
-            next_channel = self._next_uncalibrated_channel(start_after_channel=current_channel)
-            if next_channel is not None:
-                self.current_channel = next_channel
+            if persistence_status is False:
+                self.current_channel = current_channel
+            else:
+                next_channel = self._next_uncalibrated_channel(start_after_channel=current_channel)
+                if next_channel is not None:
+                    self.current_channel = next_channel
             self._refresh_channel_selector(preferred_channel=self.current_channel)
             self._set_parent_calibration_button_enabled(True)
 
@@ -1128,13 +1375,23 @@ class InputCalibration(QWidget):
         self.stop_timer = False
         self.calibrated_channels.clear()
         self.session_channel_factors.clear()
+        self.session_channel_standard_spl.clear()
+        self.unsaved_session_channels.clear()
+        self.pending_persistence_failure = False
+
+        try:
+            clear_mic_channel_v2pa_factors()
+        except Exception as exc:
+            self.default_logger.error(f"Failed to clear input channel calibration factors: {exc}")
 
         self.recorded_time = 10
         self.recorded_label.setText(
             f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
         )
         self.v2pa_factor_lineedit.clear()
-        self._reload_selected_input_hardware()
+        self._load_selected_input_hardware()
+        first_channel = self.selected_input_channels[0] if self.selected_input_channels else None
+        self._refresh_channel_selector(preferred_channel=first_channel)
         self._set_parent_calibration_button_enabled(True)
 
 

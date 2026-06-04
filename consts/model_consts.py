@@ -55,6 +55,7 @@ DB_STIMULUS_COLUMNS = [
     "voltage",
     "is_default",
     "stimulus_name",
+    "stimulus_metadata_json",
 ]
 DB_MODEL_COLUMNS = [
     "model_id",
@@ -69,11 +70,13 @@ DB_MODEL_COLUMNS = [
 ]
 DB_USERS_COLUMNS = ["user_id", "user_name", "password", "access_level", "user_created_time", "user_updated_time"]
 AUDIO_COLUMNS = [col for col in DB_AUDIO_COLUMNS if col != "audio_data_id"]
-STIMULUS_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id", "stimulus_name"]]
+DB_STIMULUS_SCALAR_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col != "stimulus_metadata_json"]
+STIMULUS_COLUMNS = [col for col in DB_STIMULUS_SCALAR_COLUMNS if col not in ["stimulus_id", "stimulus_name"]]
 STIMULUS_CONFIG_COLUMNS = [
-    col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id", "stimulus_name", "is_default"]
+    col for col in DB_STIMULUS_SCALAR_COLUMNS if col not in ["stimulus_id", "stimulus_name", "is_default"]
 ]
-INERT_STIMULUS_CONFIG_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id"]]
+INERT_STIMULUS_CONFIG_COLUMNS = [col for col in DB_STIMULUS_SCALAR_COLUMNS if col not in ["stimulus_id"]]
+INERT_STIMULUS_RICH_CONFIG_COLUMNS = [col for col in DB_STIMULUS_COLUMNS if col not in ["stimulus_id"]]
 MODEL_COLUMNS = [col for col in DB_MODEL_COLUMNS if col not in ["model_id", "update_date", "model_description"]]
 INSERT_USERS_COLUMNS = [col for col in DB_USERS_COLUMNS if col != "user_id"]
 USERS_COLUMNS = ["user_name", "password", "access_level"]

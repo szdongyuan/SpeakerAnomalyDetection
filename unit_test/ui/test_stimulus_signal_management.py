@@ -1,3 +1,5 @@
+import json
+
 import mock
 import pytest
 
@@ -68,12 +70,71 @@ class TestStimulusSignalManagement(object):
         result = StimulusSignalManagement().query_default_stimulus_info()
         assert result == result_ret
 
+    @mock.patch("base.stimulus_signal_management.DataSave")
+    def test_query_all_stimulus_info_returns_dict_rows(self, mock_database):
+        metadata = {
+            "stimulus_method": "frequency_stepped",
+            "frequency_mode": "custom_linear",
+            "stimulus_type": "custom_linear",
+            "repeat_times": 1,
+            "sample_rate": 48000,
+            "frequencies": [1000, 2000],
+            "min_duration": 0.01,
+            "min_cycles": 4,
+        }
+        rows = [
+            ("12", "chirp", "log", 1, 10, 20, 44100, 3, 1, "RMS", "0", 0, "legacy_chirp", None),
+            (
+                "step-valid",
+                "frequency_stepped",
+                "custom_linear",
+                1,
+                1000,
+                2000,
+                48000,
+                1,
+                2,
+                "RMS",
+                1.0,
+                1,
+                "valid_step",
+                json.dumps(metadata),
+            ),
+            (
+                "step-invalid",
+                "frequency_stepped",
+                "custom_linear",
+                1,
+                1000,
+                2000,
+                48000,
+                1,
+                2,
+                "RMS",
+                1.0,
+                0,
+                "invalid_step",
+                "{bad-json",
+            ),
+        ]
+        mock_database.return_value.__enter__.return_value = mock.Mock()
+        mock_database.return_value.__enter__.return_value.query.side_effect = [(error_code.OK, rows)]
+
+        result = StimulusSignalManagement().query_all_stimulus_info()
+
+        assert result[0] == error_code.OK
+        loaded = {row["stimulus_name"]: row for row in result[1]}
+        assert loaded["legacy_chirp"]["stimulus_method"] == "chirp"
+        assert loaded["legacy_chirp"]["voltage"] == pytest.approx(0.0)
+        assert loaded["legacy_chirp"]["stimulus_metadata_json"] is None
+        assert "stimulus_payload" not in loaded["legacy_chirp"]
+        assert loaded["valid_step"]["step_sc_row_state"] == "valid"
+        assert loaded["valid_step"]["stimulus_payload"]["stimulus_id"] == "step-valid"
+        assert loaded["valid_step"]["stimulus_payload"]["frequencies"] == pytest.approx([1000, 2000])
+        assert loaded["invalid_step"]["step_sc_row_state"] == "invalid_metadata"
+        assert "stimulus_payload" not in loaded["invalid_step"]
+
     @pytest.mark.parametrize("database_ret, query_ret, result_ret", [
-        (mock.Mock(), [(error_code.OK, [('12', 'chirp', 'log', 1, 10, 20, 44100, 3, 1, 1),
-                                        ('13', 'step', 'log', 1, 10, 20, 44100, 3, 10, 0)])],
-         (error_code.OK, [('12', 'chirp', 'log', 1, 10, 20, 44100, 3, 1, 1),
-                          ('13', 'step', 'log', 1, 10, 20, 44100, 3, 10, 0)]),
-         ),
         (mock.Mock(), [(error_code.OK, [])],
          (error_code.INVALID_QUERY, "Failed to query stimulus signal info or no stimulus signal info."),
          ),
@@ -105,7 +166,7 @@ class TestStimulusSignalManagement(object):
                             "repeat_times": 1,
                             "num_steps": 1,
                             "sample_rate": 44100},
-          }, (error_code.INVALID_SAVE, "This stimulus signals info already exists.")
+          }, (error_code.INVALID_NAME, "This stimulus signals name info already exists.")
          ),
         ({"database_ret": mock.Mock(),
           "default_ret": 0,

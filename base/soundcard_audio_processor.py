@@ -6,6 +6,40 @@ from base.sound_device_manager import sd
 from consts import error_code
 
 
+def alignment_reference_from_stimulus(stimulus_dict):
+    data = np.asarray(stimulus_dict.get("data", []))
+    count = stimulus_dict.get("alignment_sample_count")
+    if count is None:
+        return data
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        return data
+    if count <= 0 or count > data.shape[0]:
+        return data
+    return data[:count]
+
+
+def bounded_aligned_recording_slice(recorded_signal, start_frame, sample_count):
+    recorded_signal = np.asarray(recorded_signal)
+    sample_count = int(sample_count)
+    if sample_count <= 0:
+        return recorded_signal[:0]
+
+    try:
+        start_frame = int(start_frame)
+    except (TypeError, ValueError):
+        start_frame = 0
+
+    start_frame = max(0, min(start_frame, recorded_signal.shape[0]))
+    end_frame = min(start_frame + sample_count, recorded_signal.shape[0])
+    copied_count = max(0, end_frame - start_frame)
+    aligned_data = np.zeros(sample_count, dtype=recorded_signal.dtype)
+    if copied_count:
+        aligned_data[:copied_count] = recorded_signal[start_frame:end_frame]
+    return aligned_data
+
+
 class SoundcardAudioProcessor(object):
 
     def __init__(self):
@@ -35,7 +69,13 @@ class SoundcardAudioProcessor(object):
         return None
 
     def sd_play_rec(self, record_dict, stimulus_dict, recording_path):
-        data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
+        data = np.asarray(stimulus_dict.get("data")) * stimulus_dict.get("amplitude")
+        alignment_reference = alignment_reference_from_stimulus(
+            {
+                "data": data,
+                "alignment_sample_count": stimulus_dict.get("alignment_sample_count"),
+            }
+        )
         prepare_frames = record_dict.get("prepare_frames", 1000)
         prolong_frames = record_dict.get("prolong_frames", 10000)
         prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
@@ -45,8 +85,10 @@ class SoundcardAudioProcessor(object):
             rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
         else:
             rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True, device=device).T[0]
-        align_frames = self.calculate_alignment(data, rec_data)
-        aligned_data = rec_data[align_frames: align_frames + len(data)]
+        align_frames = self.calculate_alignment(alignment_reference, rec_data)
+        aligned_data = bounded_aligned_recording_slice(
+            rec_data, align_frames, len(alignment_reference)
+        )
         save_audio_simple(recording_path, aligned_data, sr)
         return error_code.OK, aligned_data
 
@@ -54,6 +96,15 @@ class SoundcardAudioProcessor(object):
     def sd_play(stimulus_params):
         try:
             data = stimulus_params.get("data") * stimulus_params.get("amplitude")
+            output_channels = stimulus_params.get("output_channels")
+            if (
+                isinstance(output_channels, int)
+                and not isinstance(output_channels, bool)
+                and output_channels >= 2
+            ):
+                data = np.asarray(data)
+                if data.ndim == 1 or (data.ndim == 2 and data.shape[1] == 1):
+                    data = np.tile(data.reshape(-1, 1), (1, output_channels))
             sr = stimulus_params.get("sr")
             blocking = stimulus_params.get("blocking", True)
             device = stimulus_params.get("device", None)
