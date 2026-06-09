@@ -4227,7 +4227,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
     """突出比 (PR / Prominence Ratio) 分析窗口（双轨图）。
 
     需求书《笔记本电脑风扇噪音核心测试要求书》PR 频谱模块：
-    - 标题沿用“线性功率谱 + PR 值分布曲线”；上轨按需求纵轴定义绘制临界频带功率 dB。
+    - 上轨：线性功率谱曲线，红/蓝临界频带框内标注频带积分功率 dB。
     - 下轨：PR 值分布曲线 dB；横轴 Frequency (kHz)。
     - 默认计算口径：ECMA-74 Annex D / ECMA-418-1 标准临界带 + 线性(Z)/不计权功率。
       15% 固定比例仅按需求书作为图面划分线显示，不参与默认 PR 功率积分。
@@ -4244,7 +4244,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         self.title_name = title_name
         self.setWindowTitle(title_name)
 
-        # 下轨 PR 曲线（上轨复用基类 self.analysis_plot 作为临界带功率谱）
+        # 下轨 PR 曲线（上轨复用基类 self.analysis_plot 作为线性功率谱）
         self.pr_plot = pg.PlotWidget()
         self.pr_plot.setBackground("white")
         self.apply_plot_font_style(self.pr_plot, 20)
@@ -4546,20 +4546,42 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         if freq.size == 0:
             return
         f_khz = freq / 1000.0
-        band_power = np.asarray(res.band_power_db, dtype=float)
         pr = np.asarray(res.pr_db, dtype=float)
+        spectrum_freq = np.asarray(getattr(res, "fft_freq_hz", []), dtype=float)
+        spectrum_power = np.asarray(getattr(res, "fft_magnitude_db", []), dtype=float)
 
-        # ---- 上轨：临界频带功率 + 频带功率标注 ----
+        # ---- 上轨：线性功率谱 + 频带功率标注 ----
         # 谱可达数万点，pyqtgraph 宽线渲染极慢；先做峰值包络降采样（保留峰，渲染快约 10×）
         max_pts = int((self.analysis_config or {}).get("max_plot_points", 2000))
         f_lo_hz = self._finite_float(getattr(params, "f_min", 0.0), 0.0)
         configured_f_hi_hz = self._finite_float(getattr(params, "f_max", freq[-1]), float(freq[-1]))
         f_hi_hz = configured_f_hi_hz
-        band_valid = np.isfinite(band_power) & (freq >= f_lo_hz) & (freq <= f_hi_hz)
-        bx, by = _decimate_peak_envelope(f_khz[band_valid], band_power[band_valid], max_pts)
-        self.analysis_plot.plot(bx, by, pen=mkPen(color=(51, 196, 77), width=2), name="临界频带功率")
-        finite_upper = band_power[band_valid]
-        self.analysis_plot.setLabel("left", "临界频带功率 [dB]")
+        if spectrum_freq.size and spectrum_freq.size == spectrum_power.size:
+            spectrum_valid = (
+                np.isfinite(spectrum_freq)
+                & np.isfinite(spectrum_power)
+                & (spectrum_freq >= f_lo_hz)
+                & (spectrum_freq <= f_hi_hz)
+            )
+        else:
+            spectrum_valid = np.zeros(0, dtype=bool)
+        upper_label = "线性功率谱 [dB]"
+        if spectrum_freq.size and np.any(spectrum_valid):
+            sx, sy = _decimate_peak_envelope(
+                spectrum_freq[spectrum_valid] / 1000.0,
+                spectrum_power[spectrum_valid],
+                max_pts,
+            )
+            self.analysis_plot.plot(sx, sy, pen=mkPen(color=(51, 196, 77), width=2), name="线性功率谱")
+            finite_upper = spectrum_power[spectrum_valid]
+        else:
+            band_power = np.asarray(res.band_power_db, dtype=float)
+            band_valid = np.isfinite(band_power) & (freq >= f_lo_hz) & (freq <= f_hi_hz)
+            bx, by = _decimate_peak_envelope(f_khz[band_valid], band_power[band_valid], max_pts)
+            self.analysis_plot.plot(bx, by, pen=mkPen(color=(51, 196, 77), width=2), name="临界频带功率")
+            finite_upper = band_power[band_valid]
+            upper_label = "临界频带功率 [dB]"
+        self.analysis_plot.setLabel("left", upper_label)
         self.analysis_plot.showGrid(x=True, y=True)
         self.analysis_plot.setTitle("线性功率谱 + PR值分布曲线", size="12px", color="k")
 
