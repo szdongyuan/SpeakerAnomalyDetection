@@ -1,23 +1,6 @@
-import os
 import sys
-from pathlib import Path
 
-
-def ensure_qt_platform_plugin_path():
-    qt_plugins_path = (
-        Path(sys.prefix)
-        / "Lib"
-        / "site-packages"
-        / "PyQt5"
-        / "Qt5"
-        / "plugins"
-    )
-    qt_platforms_path = qt_plugins_path / "platforms"
-    if qt_plugins_path.exists():
-        os.environ.setdefault("QT_PLUGIN_PATH", str(qt_plugins_path))
-    if qt_platforms_path.exists():
-        os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", str(qt_platforms_path))
-
+from base.qt_environment import ensure_qt_platform_plugin_path
 
 ensure_qt_platform_plugin_path()
 

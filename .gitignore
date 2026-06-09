@@ -1,5 +1,8 @@
 /.venv
 *.pyc
+__pycache__/
+.pytest_cache/
+pytest-cache-files-*/
 /audio_data
 /log
 /models
