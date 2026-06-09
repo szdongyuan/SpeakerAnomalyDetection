@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -81,7 +82,10 @@ class SequenceWindow(QWidget):
         self.toolsbar = SequenceToolsBar()
 
         self.v2pa_factor = None
-        self.analysis_types_requiring_v2pa = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"}
+        self.analysis_types_requiring_v2pa = {
+            "SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA",
+            "LOUD", "SHRP", "ROUGH", "PR",
+        }
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
@@ -399,7 +403,7 @@ class SequenceWindow(QWidget):
             if t == "AI":
                 candidates.append(key)
                 continue
-            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB"):
+            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB", "LOUD", "SHRP", "ROUGH", "PR"):
                 if item_cfg.get("limit_checked"):
                     candidates.append(key)
 
@@ -1915,6 +1919,26 @@ class SequenceWindow(QWidget):
                     if not result:
                         continue
                     instance.show()
+                elif hasattr(instance, "calculate_pr"):
+                    result = instance.calculate_pr()
+                    if not result:
+                        continue
+                    instance.show()
+                elif hasattr(instance, "calculate_sharpness"):
+                    result = instance.calculate_sharpness()
+                    if not result:
+                        continue
+                    instance.show()
+                elif hasattr(instance, "calculate_roughness"):
+                    result = instance.calculate_roughness()
+                    if not result:
+                        continue
+                    instance.show()
+                elif hasattr(instance, "calculate_loudness"):
+                    result = instance.calculate_loudness()
+                    if not result:
+                        continue
+                    instance.show()
 
                 # Restore last geometry if available; otherwise fallback to default cascade
                 default_geo = {"x": width, "y": height, "w": window_width, "h": window_height}
@@ -2464,6 +2488,40 @@ class SequenceWindow(QWidget):
             f"{detail_text}",
         )
 
+    def _prepare_runtime_analysis_params(self, key, item_type, params):
+        runtime_params = copy.deepcopy(params) if isinstance(params, dict) else {}
+        if item_type == "SHRP":
+            upstream_loudness = self._resolve_sequence_loudness_config(
+                key,
+                loudness_type="LOUD",
+            )
+            if upstream_loudness:
+                runtime_params["upstream_loudness"] = upstream_loudness
+        return runtime_params
+
+    def _resolve_sequence_loudness_config(self, key, loudness_type="LOUD"):
+        cfg = self.analysis_config if isinstance(self.analysis_config, dict) else {}
+        display_sequence = list(cfg.get("display_sequence") or [])
+        try:
+            current_index = display_sequence.index(key)
+        except ValueError:
+            current_index = len(display_sequence)
+
+        ordered_keys = (
+            list(reversed(display_sequence[:current_index]))
+            + display_sequence[current_index + 1 :]
+            + [k for k in cfg.keys() if k != "display_sequence" and k not in display_sequence]
+        )
+
+        for item_key in ordered_keys:
+            item_cfg = cfg.get(item_key)
+            if isinstance(item_cfg, dict) and item_cfg.get("type") == loudness_type:
+                loud_cfg = copy.deepcopy(item_cfg)
+                loud_cfg.pop("type", None)
+                return loud_cfg
+
+        return {}
+
     def instance_analysis_class(self, key, type, params):
         """
         Instantiates and configures an analysis class based on the given type and parameters,
@@ -2479,12 +2537,13 @@ class SequenceWindow(QWidget):
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
+                runtime_params = self._prepare_runtime_analysis_params(key, type, params)
                 if self.mode == "RECORD_ONLY":
                     mapped_channel = 0
                     raw_channel = 0
-                    if isinstance(params, dict):
+                    if isinstance(runtime_params, dict):
                         try:
-                            raw_channel = int(params.get("analysis_channel", 0) or 0)
+                            raw_channel = int(runtime_params.get("analysis_channel", 0) or 0)
                         except (TypeError, ValueError):
                             raw_channel = 0
                     if raw_channel < 0:
@@ -2518,13 +2577,14 @@ class SequenceWindow(QWidget):
                         except ValueError as err:
                             MessageBox.warning(self, "提示", str(err))
                             return
-                    runtime_params = dict(params) if isinstance(params, dict) else {}
                     runtime_params["analysis_channel"] = mapped_channel
                     # Inject sequence-level golden baseline path into per-item params
                     if isinstance(getattr(self, "analysis_config", None), dict):
                         golden_path = self.analysis_config.get("golden_sample_result_path")
                         if golden_path:
                             runtime_params["golden_sample_result_path"] = golden_path
+                    if hasattr(class_instance, "recorded_path"):
+                        class_instance.recorded_path = self.recorded_path
                     class_instance.analysis_config = runtime_params
                     self.analysis_window.append(class_instance)
                     return
@@ -2532,9 +2592,9 @@ class SequenceWindow(QWidget):
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
                 raw_channel = 0
-                if isinstance(params, dict):
+                if isinstance(runtime_params, dict):
                     try:
-                        raw_channel = int(params.get("analysis_channel", 0) or 0)
+                        raw_channel = int(runtime_params.get("analysis_channel", 0) or 0)
                     except (TypeError, ValueError):
                         raw_channel = 0
                 if raw_channel < 0:
@@ -2548,12 +2608,14 @@ class SequenceWindow(QWidget):
                     except ValueError as err:
                         MessageBox.warning(self, "提示", str(err))
                         return
+                if hasattr(class_instance, "recorded_path"):
+                    class_instance.recorded_path = self.recorded_path
                 # Inject sequence-level golden baseline path into per-item params
-                if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
+                if isinstance(runtime_params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
                     golden_path = self.analysis_config.get("golden_sample_result_path")
                     if golden_path:
-                        params["golden_sample_result_path"] = golden_path
-                class_instance.analysis_config = params
+                        runtime_params["golden_sample_result_path"] = golden_path
+                class_instance.analysis_config = runtime_params
                 self.analysis_window.append(class_instance)
 
     def eventFilter(self, obj, event):

@@ -5,7 +5,7 @@ import json
 import copy
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QModelIndex, QSize
+from PyQt5.QtCore import Qt, QModelIndex, QSize, QTimer
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QApplication, QFileDialog
 from time import time
@@ -40,6 +40,9 @@ from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
 from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
+from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
+from ui.ui_analysis_config.roughness_config_dialog import RoughnessConfigWindow, default_roughness_config
+from ui.ui_analysis_config.sharpness_config_dialog import SharpnessConfigWindow, default_sharpness_config
 from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
 from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
 from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
@@ -51,6 +54,7 @@ from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.ui_analysis_config.mel_config_dialog import MelConfigWindow
 from ui.ui_analysis_config.modulation_config_dialog import ModulationConfigWindow
+from ui.ui_analysis_config.pr_config_dialog import PRConfigWindow, default_pr_config
 from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_analysis_config.pdf_config_dialog import PdfConfigWindow
@@ -219,6 +223,10 @@ class AnalysisModelSelect(QDialog):
             "参考频谱对比 (RSC) ",
             "频响 (FR) ",
             "频段能量 (FBA) ",
+            "突出比 (PR) ",
+            "响度 (LOUD) ",
+            "尖锐度 (SHRP) ",
+            "粗糙度 (ROUGH) ",
             "谐波失真 (HD) ",
             "高阶谐波失真 (RB) ",
             "感知失真 (PRB) ",
@@ -661,6 +669,7 @@ class OptionList(ListView):
         self.press_time = None
         self.is_edit_item = True
         self.index_num = None
+        self._config_dialog_opening = False
         self.config = list()
         self.drop_is_accept = True
         self.signal_len = 0
@@ -671,6 +680,7 @@ class OptionList(ListView):
         self.dragEnterEvent = self.dragenterevent
         self.dragMoveEvent = self.dragmoveevent
         self.dropEvent = self.dropevent
+        self.setEditTriggers(ListView.NoEditTriggers)
 
     @staticmethod
     def _normalize_channels(channels):
@@ -774,6 +784,15 @@ class OptionList(ListView):
         ai_list.append(name)
 
     def show_dialog(self, name):
+        if self._config_dialog_opening:
+            return
+        self._config_dialog_opening = True
+        try:
+            return self._show_dialog_impl(name)
+        finally:
+            self._config_dialog_opening = False
+
+    def _show_dialog_impl(self, name):
         model = None
         if name == self.config[0].name:
             if "播放与录制" in self.config[0].name:
@@ -814,7 +833,11 @@ class OptionList(ListView):
             model = self.create_config_dialog(model, config_manager, model_type, type, self.signal_len)
             model.setWindowTitle(name)
             if model.exec_() == QDialog.Accepted:
-                config_data = model.on_click_ok_btn()
+                config_data = getattr(model, "_accepted_config", None)
+                if config_data is None and hasattr(model, "get_default_config"):
+                    config_data = model.get_default_config()
+                if config_data is None:
+                    config_data = model.on_click_ok_btn()
                 self.add_config(name, config_data)
 
     def load_stimulus_config(self):
@@ -866,6 +889,14 @@ class OptionList(ListView):
             model = FbaConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "Modulation":
             model = ModulationConfigWindow(config_manager, name, available_channels=available_channels)
+        elif type == "PR":
+            model = PRConfigWindow(config_manager, name, available_channels=available_channels)
+        elif type == "LOUD":
+            model = LoudnessConfigWindow(config_manager, name)
+        elif type == "SHRP":
+            model = SharpnessConfigWindow(config_manager, name)
+        elif type == "ROUGH":
+            model = RoughnessConfigWindow(config_manager, name)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         elif type == "PDF":
@@ -1079,7 +1110,7 @@ class OptionList(ListView):
                 self.darpflag = True
                 self.start_index = index
                 self.start_row_number = index.row()
-        if Qt.RightButton == e.button():
+        elif Qt.RightButton == e.button():
             self.setCurrentIndex(self.indexAt(e.pos()))
             self.index_num = index.row()
         e.accept()
@@ -1131,13 +1162,35 @@ class OptionList(ListView):
             self.start_item_name = new_item.text()
             self.index_num = self.start_row_number
             self.darpflag = False
-        if self.row_num == row_number & row_number != -1:
-            name_str = self.model().itemFromIndex(index).text()
-            self.show_dialog(name_str)
-            self.row_num = None
-        else:
-            self.row_num = row_number
+        self.row_num = row_number
         e.accept()
+
+    def mouseDoubleClickEvent(self, e):
+        if Qt.LeftButton != e.button():
+            e.ignore()
+            return
+        index = self.indexAt(e.pos())
+        if not index.isValid():
+            e.ignore()
+            return
+        self.darpflag = False
+        self.row_num = None
+        item = self.model().itemFromIndex(index)
+        if item is None:
+            e.ignore()
+            return
+        name = item.text()
+        self.show_dialog(name)
+        e.accept()
+
+    def _open_item_config_from_index(self, index):
+        if not index.isValid():
+            return
+        item = self.model().itemFromIndex(index)
+        if item is None:
+            return
+        name = item.text()
+        QTimer.singleShot(0, lambda name=name: self.show_dialog(name))
 
     def dragenterevent(self, event):
         if event.mimeData().hasText():
@@ -1298,6 +1351,28 @@ class OptionList(ListView):
             default_of_type = default_modulation_config()
         elif type == "Mel" and not default_of_type:
             default_of_type = default_mel_config()
+        if type == "SHRP" and not default_of_type:
+            default_of_type = default_sharpness_config()
+        if type == "ROUGH" and not default_of_type:
+            default_of_type = default_roughness_config()
+        if type == "PR" and not default_of_type:
+            default_of_type = default_pr_config()
+        if type == "SHRP":
+            default_of_type.setdefault("limit_checked", False)
+            default_of_type.setdefault("limit_metric", "curve_y")
+            default_of_type.setdefault("curve_limit_unit", "acum")
+            default_of_type.setdefault("curve_upper_enabled", False)
+            default_of_type.setdefault("curve_upper_value", 0.0)
+            default_of_type.setdefault("curve_lower_enabled", False)
+            default_of_type.setdefault("curve_lower_value", 0.0)
+        if type == "ROUGH":
+            default_of_type.setdefault("limit_checked", False)
+            default_of_type.setdefault("limit_metric", "curve_y")
+            default_of_type.setdefault("curve_limit_unit", "asper")
+            default_of_type.setdefault("curve_upper_enabled", False)
+            default_of_type.setdefault("curve_upper_value", 0.0)
+            default_of_type.setdefault("curve_lower_enabled", False)
+            default_of_type.setdefault("curve_lower_value", 0.0)
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type
 
