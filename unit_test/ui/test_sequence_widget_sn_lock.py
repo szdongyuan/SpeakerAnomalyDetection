@@ -1,8 +1,10 @@
 import ast
+import json
 import re
 import textwrap
 import types
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 
@@ -22,6 +24,11 @@ TARGET_METHODS = {
     "on_sequence_config_updated",
     "validate_count",
     "set_audio_devices_available",
+    "_summarize_ok_ng",
+    "_get_tcp_callback_file_name",
+    "_get_tcp_callback_label",
+    "_build_tcp_analysis_result_payload",
+    "_send_tcp_analysis_result_callback",
     "start_this_play",
     "checked_work_status_message",
     "judge_play_and_record",
@@ -114,6 +121,8 @@ def _build_method_namespace():
         "QEvent": DummyEventType,
         "Qt": DummyQt,
         "QLineEdit": DummyLineEdit,
+        "datetime": datetime,
+        "json": json,
         "StreamingWavWriter": None,
         "stream_play_and_record": None,
         "stream_record_without_play": None,
@@ -133,7 +142,7 @@ def _build_method_namespace():
         "re": re,
         "time": types.SimpleNamespace(monotonic=lambda: 1000.0),
         "os": types.SimpleNamespace(
-            path=types.SimpleNamespace(exists=lambda path: False),
+            path=types.SimpleNamespace(exists=lambda path: False, basename=__import__("os").path.basename),
             remove=lambda path: None,
         ),
     }
@@ -1218,6 +1227,84 @@ def test_tcp_run_test_allows_invalid_sn_when_validation_is_explicitly_skipped():
     assert window.current_recorded_count == 2
     assert window.lineedit_count.text() == "2"
     assert namespace["MessageBox"].warnings == []
+
+
+def test_start_this_play_no_longer_sends_finish_callback():
+    namespace = _build_method_namespace()
+    tcp_sends = []
+    namespace["SequenceWindow"] = types.SimpleNamespace(
+        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+    )
+    namespace["TempTcpClient"] = lambda *args: tcp_sends.append(args)
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.start_this_play = window._real_start_this_play
+    window.tcp_flag = True
+    window.judge_play_and_record = lambda label, is_replay=False: None
+
+    window.start_this_play("not_labeled", skip_sn_regex_validation=True)
+
+    assert tcp_sends == []
+
+
+def test_tcp_analysis_result_payload_uses_summary_and_recorded_file_name():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.recorded_path = r"D:\audio\OH2P-001.wav"
+    window.data_struct.analysis_result_dict = {"SPL": (True, "ok"), "FR": (True, "ok")}
+    window._summarize_ok_ng = _bind_method(window, namespace, "_summarize_ok_ng")
+    window._get_tcp_callback_file_name = _bind_method(window, namespace, "_get_tcp_callback_file_name")
+    window._get_tcp_callback_label = _bind_method(window, namespace, "_get_tcp_callback_label")
+    window._build_tcp_analysis_result_payload = _bind_method(window, namespace, "_build_tcp_analysis_result_payload")
+
+    payload = window._build_tcp_analysis_result_payload()
+
+    assert set(payload) == {"TimeStamp", "Label", "FileName"}
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}$", payload["TimeStamp"])
+    assert payload["Label"] == "OK"
+    assert payload["FileName"] == "OH2P-001.wav"
+
+
+def test_tcp_analysis_result_payload_defaults_to_not_labeled_without_summary():
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.recorded_path = ""
+    window.recorded_signal_info = {"file_path": "stored_data/OH2P-002.wav"}
+    window.data_struct.analysis_result_dict = {}
+    window._summarize_ok_ng = _bind_method(window, namespace, "_summarize_ok_ng")
+    window._get_tcp_callback_file_name = _bind_method(window, namespace, "_get_tcp_callback_file_name")
+    window._get_tcp_callback_label = _bind_method(window, namespace, "_get_tcp_callback_label")
+    window._build_tcp_analysis_result_payload = _bind_method(window, namespace, "_build_tcp_analysis_result_payload")
+
+    payload = window._build_tcp_analysis_result_payload()
+
+    assert payload["Label"] == "not_labeled"
+    assert payload["FileName"] == "OH2P-002.wav"
+
+
+def test_tcp_analysis_result_callback_sends_json_to_client_address():
+    namespace = _build_method_namespace()
+    sends = []
+    namespace["SequenceWindow"] = types.SimpleNamespace(
+        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+    )
+    namespace["TempTcpClient"] = lambda *args: sends.append(args)
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.tcp_flag = True
+    window.recorded_path = "OH2P-003.wav"
+    window.data_struct.analysis_result_dict = {"SPL": (False, "ng")}
+    window._summarize_ok_ng = _bind_method(window, namespace, "_summarize_ok_ng")
+    window._get_tcp_callback_file_name = _bind_method(window, namespace, "_get_tcp_callback_file_name")
+    window._get_tcp_callback_label = _bind_method(window, namespace, "_get_tcp_callback_label")
+    window._build_tcp_analysis_result_payload = _bind_method(window, namespace, "_build_tcp_analysis_result_payload")
+    window._send_tcp_analysis_result_callback = _bind_method(window, namespace, "_send_tcp_analysis_result_callback")
+
+    window._send_tcp_analysis_result_callback()
+
+    assert len(sends) == 1
+    assert sends[0][0:2] == ("127.0.0.1", 5000)
+    sent_payload = json.loads(sends[0][2])
+    assert sent_payload["Label"] == "NG"
+    assert sent_payload["FileName"] == "OH2P-003.wav"
 
 
 def test_tcp_run_test_allows_play_and_record_mode():

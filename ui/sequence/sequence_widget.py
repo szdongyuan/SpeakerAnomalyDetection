@@ -374,6 +374,48 @@ class SequenceWindow(QWidget):
                 break
         return passed, ("OK" if passed else "NG")
 
+    def _get_tcp_callback_file_name(self):
+        file_path = getattr(self, "recorded_path", "") or ""
+        if not file_path and isinstance(getattr(self, "recorded_signal_info", None), dict):
+            file_path = self.recorded_signal_info.get("file_path") or ""
+        normalized_path = str(file_path).replace("\\", "/") if file_path else ""
+        return os.path.basename(normalized_path) if normalized_path else ""
+
+    def _get_tcp_callback_label(self):
+        result_dict = getattr(getattr(self, "data_struct", None), "analysis_result_dict", None)
+        if not isinstance(result_dict, dict) or not result_dict:
+            return "not_labeled"
+        try:
+            _passed, label = self._summarize_ok_ng()
+        except Exception as e:
+            self.default_logger.warning(f"tcp_callback_summary_error: {e}")
+            return "not_labeled"
+        return label if label in ("OK", "NG") else "not_labeled"
+
+    def _build_tcp_analysis_result_payload(self):
+        now = datetime.now()
+        return {
+            "TimeStamp": f"{now.strftime('%Y-%m-%d %H:%M:%S')},{now.microsecond // 1000:03d}",
+            "Label": self._get_tcp_callback_label(),
+            "FileName": self._get_tcp_callback_file_name(),
+        }
+
+    def _send_tcp_analysis_result_callback(self):
+        if not getattr(self, "tcp_flag", False):
+            return
+        try:
+            tcp_server = getattr(SequenceWindow, "tcp_server", None)
+            client_address = getattr(tcp_server, "client_address", None)
+            if not client_address:
+                self.default_logger.warning("tcp_callback_skip: no client address")
+                return
+            payload = self._build_tcp_analysis_result_payload()
+            message = json.dumps(payload, ensure_ascii=False)
+            TempTcpClient(client_address[0], client_address[1], message)
+            self.default_logger.info(f"tcp_callback_sent: {message}")
+        except Exception as e:
+            self.default_logger.error(f"tcp_callback_send_error: {e}")
+
     def _can_output_ok_ng(self):
         """
         Decide whether current analysis_config is expected to produce OK/NG output.
@@ -1457,11 +1499,6 @@ class SequenceWindow(QWidget):
 
         if self.clicked_player_flag is True:
             self.clicked_player_flag = False
-        elif self.clicked_player_flag is False:
-            if self.tcp_flag:
-                TempTcpClient(
-                    SequenceWindow.tcp_server.client_address[0], SequenceWindow.tcp_server.client_address[1], "finish"
-                )
 
     def set_audio_devices_available(self, available: bool, message: str = ""):
         self.audio_devices_available = bool(available)
@@ -1937,6 +1974,7 @@ class SequenceWindow(QWidget):
 
         # Show summary window at the end (also in test mode), only if dict is not empty
         self._maybe_show_analysis_result_summary(width, height)
+        self._send_tcp_analysis_result_callback()
 
     def _handle_post_analysis_exports(self):
         # Cache first so MES and Excel both read the same completed-analysis state.
