@@ -53,6 +53,7 @@ from ui.ui_analysis_config.mel_config_dialog import MelConfigWindow
 from ui.ui_analysis_config.modulation_config_dialog import ModulationConfigWindow
 from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+from ui.ui_analysis_config.pdf_config_dialog import PdfConfigWindow
 from ui.ui_src import ui_resources
 
 GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA = {"SPLF", "HD", "RB", "PRB"}
@@ -227,6 +228,7 @@ class AnalysisModelSelect(QDialog):
             "AI 分析 ",
             "事件检测 (ED) ",
             "结果导出 (Excel) ",
+            "结果导出 (PDF)",
         ]
         for item in analysis_items:
             list_item = QStandardItem(item.lstrip())
@@ -866,6 +868,8 @@ class OptionList(ListView):
             model = ModulationConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
+        elif type == "PDF":
+            model = PdfConfigWindow(config_manager, name)
         return model
 
     def init_config_info(self, config_file):
@@ -959,12 +963,12 @@ class OptionList(ListView):
     def delete_item_config(self, name):
         if not name:
             return
-        # Remove deleted items from any Excel export selection list to avoid stale references
+        # Remove deleted items from exporter selection lists to avoid stale references.
         try:
             for _, cfg in self.config[0].analysis_list.items():
                 if not isinstance(cfg, dict):
                     continue
-                if cfg.get("type") != "Excel":
+                if cfg.get("type") not in ("Excel", "PDF"):
                     continue
                 save_items = cfg.get("save_items")
                 if isinstance(save_items, list) and name in save_items:
@@ -1011,20 +1015,20 @@ class OptionList(ListView):
         self.is_edit_item = False
         self.model().setData(index, name)
 
-    def update_config_data(self, old_name, new_name, list):
-        if not new_name in list:
+    def update_config_data(self, old_name, new_name, display_sequence):
+        if new_name not in display_sequence:
             if old_name in self.config[0].analysis_list:
                 value = self.config[0].analysis_list.pop(old_name)
                 self.config[0].analysis_list[new_name] = value
-            index = list.index(old_name)
-            list[index] = new_name
+            index = display_sequence.index(old_name)
+            display_sequence[index] = new_name
 
-        # Keep Excel export item's selection in sync when other items are renamed
+        # Keep exporter item selections in sync when other items are renamed.
         try:
             for _, cfg in self.config[0].analysis_list.items():
                 if not isinstance(cfg, dict):
                     continue
-                if cfg.get("type") != "Excel":
+                if cfg.get("type") not in ("Excel", "PDF"):
                     continue
                 save_items = cfg.get("save_items")
                 if isinstance(save_items, list) and old_name in save_items:

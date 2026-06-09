@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from base.pdf_result_exporter import export_plot_widget_image
 from base.core_algorithm.response import ReferenceSpectrumAnalyzer, ReferenceSpectrumParams
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.reference_spectrum_cache import (
@@ -93,6 +94,27 @@ class ReferenceSpectrumCompareWindow(QWidget):
         self._refresh_axis_mode_button_text()
         if self._compare_results:
             self._render_all_channel_results()
+
+    def export_pdf_images(self, output_dir):
+        images = []
+        for index, plot_widget in enumerate(self.channel_plots):
+            image_path = export_plot_widget_image(
+                plot_widget,
+                output_dir,
+                f"reference_spectrum_channel_{index + 1}",
+            )
+            channel_title = self._channel_export_title(index)
+            images.append({"title": channel_title, "path": image_path})
+        return images
+
+    def _channel_export_title(self, index: int) -> str:
+        if index < len(self.channel_cards):
+            title_label = self.channel_cards[index].get("title_label")
+            title_text = title_label.text() if title_label is not None else ""
+            title_text = title_text.replace("通道：", "").strip()
+            if title_text:
+                return f"{self.title_name} {title_text}"
+        return f"{self.title_name} CH{index + 1}"
 
     def _apply_plot_style(self, plot_widget: pg.PlotWidget, font_size: int | None = None):
         effective_font_size = int(font_size or self._plot_font_size)

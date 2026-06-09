@@ -29,6 +29,7 @@ from base.excel_result_exporter import (
     resolve_excel_output_path,
     resolve_excel_spool_dir,
 )
+from base.pdf_result_exporter import export_analysis_to_pdf
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.mes_result_exporter import _validate_mes_runtime_config, select_mes_export_config, write_mes_result
@@ -92,6 +93,8 @@ class SequenceWindow(QWidget):
         self._analysis_result_summary_window = None
         self._excel_export_cache = None
         self._excel_exported_record_id = None
+        self._analysis_export_run_id = 0
+        self._pdf_exported_run_id = None
         self._excel_spool_build_delay_ms = 30_000
         self._excel_spool_build_timer = QTimer(self)
         self._excel_spool_build_timer.setSingleShot(True)
@@ -1501,6 +1504,7 @@ class SequenceWindow(QWidget):
         self.data_struct.clear_data()
         self._excel_export_cache = None
         self._excel_exported_record_id = None
+        self._pdf_exported_run_id = None
 
         # Use provided count if available (for replay), otherwise use lineedit value
         count_str = str(count) if count is not None else self.lineedit_count.text()
@@ -1837,6 +1841,7 @@ class SequenceWindow(QWidget):
             self.analysis_window = []
         if self._analysis_result_summary_window:
             self._analysis_result_summary_window = None
+        self._begin_analysis_export_run()
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
@@ -1950,7 +1955,7 @@ class SequenceWindow(QWidget):
 
     def _handle_post_analysis_exports(self):
         # Cache first so MES and Excel both read the same completed-analysis state.
-        self._capture_excel_export_cache()
+        self._capture_analysis_export_cache()
         try:
             self._maybe_write_mes_result()
         except Exception as e:
@@ -1959,6 +1964,10 @@ class SequenceWindow(QWidget):
             self._maybe_export_excel_results()
         except Exception as e:
             self.default_logger.warning(f"excel_export_error_after_mes: {e}")
+        try:
+            self._maybe_export_pdf_results()
+        except Exception as e:
+            self.default_logger.warning(f"pdf_export_error_after_analysis: {e}")
 
     @staticmethod
     def _validate_mes_summary_input(result_dict):
@@ -2068,9 +2077,18 @@ class SequenceWindow(QWidget):
         except Exception:
             pass
 
+    def _begin_analysis_export_run(self):
+        try:
+            self._analysis_export_run_id = int(getattr(self, "_analysis_export_run_id", 0) or 0) + 1
+        except Exception:
+            self._analysis_export_run_id = 1
+
     def _capture_excel_export_cache(self):
+        self._capture_analysis_export_cache()
+
+    def _capture_analysis_export_cache(self):
         """
-        Cache current analysis results for later Excel export.
+        Cache current analysis results for later result exporters.
 
         Export may be triggered immediately after analysis (and also on OK/NG click / test finalization),
         with per-record dedupe to avoid duplicate writes when users rerun analysis.
@@ -2096,6 +2114,7 @@ class SequenceWindow(QWidget):
                 product_model = ""
 
             analysis_items_data = {}
+            image_exporters = {}
             for inst in self.analysis_window or []:
                 key = getattr(inst, "_sequence_analysis_key", None)
                 if not key:
@@ -2104,25 +2123,55 @@ class SequenceWindow(QWidget):
                 if not isinstance(cfg, dict):
                     continue
                 t = cfg.get("type")
-                if not t or t == "Excel":
+                if not t or t in ("Excel", "PDF"):
                     continue
                 item = {"type": t, "result": getattr(inst, "result", None)}
                 detail = getattr(inst, "export_detail", None)
                 if isinstance(detail, dict):
                     item.update(detail)
                 analysis_items_data[key] = item
+                exporter = getattr(inst, "export_pdf_images", None)
+                if callable(exporter):
+                    image_exporters[key] = exporter
 
             self._excel_export_cache = {
                 "record_id": record_id,
+                "audio_path": record_id,
                 "sn": sn,
                 "product_model": product_model,
                 "date_text": date_text,
                 "analysis_items_data": analysis_items_data,
                 "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+                "image_exporters": image_exporters,
+                "run_id": getattr(self, "_analysis_export_run_id", None),
             }
         except Exception as e:
-            self.default_logger.error(f"capture_excel_export_cache_error: {e}")
+            self.default_logger.error(f"capture_analysis_export_cache_error: {e}")
             self._excel_export_cache = None
+
+    def _select_pdf_export_config(self):
+        cfg = self.analysis_config or {}
+        seq = cfg.get("display_sequence") or []
+        if not isinstance(seq, list):
+            seq = []
+
+        selected = None
+        for name in seq:
+            item_cfg = cfg.get(name)
+            if not isinstance(item_cfg, dict) or item_cfg.get("type") != "PDF":
+                continue
+            if not item_cfg.get("enabled", True):
+                continue
+            if selected is None:
+                selected = (name, item_cfg)
+            else:
+                try:
+                    self.default_logger.warning(
+                        f"pdf_export_skip_extra_config[{name}]: using {selected[0]} from display_sequence"
+                    )
+                except Exception:
+                    pass
+        return selected
 
     def _schedule_excel_spool_build(self, excel_cfg_list):
         """
@@ -2316,6 +2365,76 @@ class SequenceWindow(QWidget):
             else:
                 break
 
+    def _maybe_export_pdf_results(self):
+        """
+        Export selected analysis items to PDF once for the current completed analysis run.
+        """
+        selected = self._select_pdf_export_config()
+        if not selected:
+            return
+
+        cfg_name, pdf_cfg = selected
+        current_run_id = getattr(self, "_analysis_export_run_id", None)
+        if current_run_id is not None and getattr(self, "_pdf_exported_run_id", None) == current_run_id:
+            return
+
+        record_id = None
+        if isinstance(self.recorded_signal_info, dict):
+            record_id = self.recorded_signal_info.get("file_path")
+        if not record_id:
+            record_id = self.recorded_path
+        if not record_id:
+            return
+
+        cache = self._excel_export_cache
+        if not isinstance(cache, dict) or cache.get("record_id") != record_id:
+            self.default_logger.warning("pdf_export_skip: no matching cached analysis results for current record")
+            return
+        if cache.get("run_id") != current_run_id:
+            self.default_logger.warning("pdf_export_skip: no matching cached analysis results for current run")
+            return
+
+        while True:
+            try:
+                ret = export_analysis_to_pdf(
+                    pdf_cfg,
+                    audio_path=cache.get("audio_path") or record_id,
+                    sn=cache.get("sn") or "",
+                    product_model=cache.get("product_model") or "",
+                    date_text=cache.get("date_text") or "",
+                    analysis_items_data=cache.get("analysis_items_data") or {},
+                    analysis_config=self.analysis_config,
+                    analysis_result_dict=cache.get("analysis_result_dict") or {},
+                    image_exporters=cache.get("image_exporters") or {},
+                )
+            except Exception as e:
+                ret = ExportResult(ok=False, message=f"导出异常: {e}")
+
+            if ret.ok:
+                self.default_logger.info(f"pdf_export_ok[{cfg_name}]: {ret.message}")
+                self._pdf_exported_run_id = current_run_id
+                break
+
+            self.default_logger.error(f"pdf_export_fail[{cfg_name}]: {ret.message}")
+            msg_box = MessageBox(self)
+            msg_box.setIcon(MessageBox.Warning)
+            msg_box.setWindowTitle("PDF保存失败")
+            msg_box.setText(
+                "无法保存PDF文件，可能是文件被占用、保存目录不可达或权限不足。\n请检查保存目录或关闭相关文件后重试。"
+            )
+            try:
+                msg_box.setInformativeText(str(ret.message))
+            except Exception:
+                pass
+            retry_btn = msg_box.addButton("重试", MessageBox.AcceptRole)
+            msg_box.addButton("忽略", MessageBox.RejectRole)
+            msg_box.setDefaultButton(retry_btn)
+            msg_box.exec_()
+
+            if msg_box.clickedButton() == retry_btn:
+                continue
+            break
+
     def _show_channel_mismatch_warning(self, analysis_name: str, err: Exception = None, mismatch_info: dict = None):
         configured_channel_text = "未知"
         active_channels_text = "未知"
@@ -2351,7 +2470,12 @@ class SequenceWindow(QWidget):
         and adds it to the analysis window list.
         """
         class_mapping = get_class_mapping()
-        requires_v2pa = type in self.analysis_types_requiring_v2pa
+        analysis_types_requiring_v2pa = getattr(
+            self,
+            "analysis_types_requiring_v2pa",
+            {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"},
+        )
+        requires_v2pa = type in analysis_types_requiring_v2pa
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:

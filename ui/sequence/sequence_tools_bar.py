@@ -3,7 +3,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QHBoxLayout, QFrame, QVBoxLayout, QWidget
 
 from consts import ui_style_const
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import CheckBox, ComboBox, LineEdit, Label, PushButton
 from ui.ui_src import ui_resources
 
