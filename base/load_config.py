@@ -633,14 +633,18 @@ class ConfigManager(object):
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         default_config = {}
         try:
-            with open(default_config_file, "r", encoding="utf-8") as f:
-                default_config = json.load(f)
-                if type in default_config:
-                    default_config[type].update(config_data)
-                else:
-                    default_config[type] = config_data
+            if os.path.exists(default_config_file):
+                with open(default_config_file, "r", encoding="utf-8") as f:
+                    loaded_config = json.load(f)
+                    if isinstance(loaded_config, dict):
+                        default_config = loaded_config
+            if type in default_config:
+                default_config[type].update(config_data)
+            else:
+                default_config[type] = config_data
+            os.makedirs(os.path.dirname(default_config_file), exist_ok=True)
             with open(default_config_file, "w", encoding="utf-8") as f:
-                json.dump(default_config, f, indent=4)
+                json.dump(default_config, f, indent=4, ensure_ascii=False)
                 self.default_logger.info(
                     f"The config info for {type} analysis has been saved to {default_config_file}."
                 )

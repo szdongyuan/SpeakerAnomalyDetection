@@ -14,6 +14,8 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.core_algorithm.mel_spectrogram import default_mel_config
+from base.core_algorithm.modulation_map import default_modulation_config
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.acquisition_recording_defaults import (
     load_acquisition_defaults,
@@ -47,6 +49,8 @@ from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpec
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
+from ui.ui_analysis_config.mel_config_dialog import MelConfigWindow
+from ui.ui_analysis_config.modulation_config_dialog import ModulationConfigWindow
 from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_src import ui_resources
@@ -209,6 +213,8 @@ class AnalysisModelSelect(QDialog):
             "声压级 (SPL) ",
             "声压级-频率 (SPLF) ",
             "频谱分析 (Spec) ",
+            "梅尔频谱 (Mel) ",
+            "调制 (Modulation) ",
             "参考频谱对比 (RSC) ",
             "频响 (FR) ",
             "频段能量 (FBA) ",
@@ -842,6 +848,8 @@ class OptionList(ListView):
             model = AIConfigWindow(config_manager, name, signal_len, available_channels=available_channels)
         elif type == "Spec":
             model = SpecConfigWindow(config_manager, name, available_channels=available_channels)
+        elif type == "Mel":
+            model = MelConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "RSC":
             model = ReferenceSpectrumConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "LP":
@@ -854,6 +862,8 @@ class OptionList(ListView):
             model = PatternMatchConfigWindow(config_manager, name)
         elif type == "FBA":
             model = FbaConfigWindow(config_manager, name, available_channels=available_channels)
+        elif type == "Modulation":
+            model = ModulationConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         return model
@@ -1271,10 +1281,19 @@ class OptionList(ListView):
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
-            self.default_logger.error(f"Failed to load the default config file. {data}")
-            return
+            if type == "Modulation":
+                data = {"Modulation": default_modulation_config()}
+            elif type == "Mel":
+                data = {"Mel": default_mel_config()}
+            else:
+                self.default_logger.error(f"Failed to load the default config file. {data}")
+                return
 
-        default_of_type = data.get(type, {})
+        default_of_type = copy.deepcopy(data.get(type, {}))
+        if type == "Modulation" and not default_of_type:
+            default_of_type = default_modulation_config()
+        elif type == "Mel" and not default_of_type:
+            default_of_type = default_mel_config()
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type
 

@@ -1878,6 +1878,16 @@ class SequenceWindow(QWidget):
                 elif hasattr(instance, "calculate_spec"):
                     instance.calculate_spec()
                     instance.show()
+                elif hasattr(instance, "calculate_mel"):
+                    result = instance.calculate_mel()
+                    if not result:
+                        continue
+                    instance.show()
+                elif hasattr(instance, "calculate_modulation"):
+                    result = instance.calculate_modulation()
+                    if not result:
+                        continue
+                    instance.show()
                 elif hasattr(instance, "calculate_reference_spectrum"):
                     result = instance.calculate_reference_spectrum()
                     if not result:

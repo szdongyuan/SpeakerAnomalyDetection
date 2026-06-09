@@ -10,7 +10,7 @@ from librosa.core import spectrum
 from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
-from PyQt5.QtCore import Qt, QModelIndex
+from PyQt5.QtCore import Qt, QModelIndex, QRectF
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
@@ -37,6 +37,8 @@ from base.core_algorithm.response.frequency_band_analyzer import (
     BandAnalysisResult,
     Threshold as BandThreshold,
 )
+from base.core_algorithm.mel_spectrogram import compute_mel_spectrogram, hz_to_mel
+from base.core_algorithm.modulation_map import compute_modulation_map
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
@@ -68,6 +70,8 @@ def get_class_mapping():
         "PRB": PerceptualRubAndBuzz,  # Perceptual Rub & Buzz (2nd-35th harmonics, psychoacoustic loudness in phons)
         "AI": AI,
         "Spec": Spectrogram,
+        "Mel": Mel,
+        "Modulation": Modulation,
         "LP": LooseParticle,
         "PD": PeakDetection,
         "PM": PatternMatch,
@@ -1819,6 +1823,531 @@ class Spectrogram(QWidget):
             self.stft_colorbar.setLevels((min_value, max_value))
 
         self.set_color_font_size()
+
+
+class Mel(QWidget):
+    HOTSPOT_MARKER_SIZE = 12
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.analysis_config = None
+        self.result = None
+        self.title_name = title_name
+        self.img_item = None
+        self.colorbar = None
+        self.core_region = None
+        self.plot_widget = None
+        self.table_widget = None
+        self.status_label = None
+        self.init_ui()
+        self.setWindowTitle(title_name)
+
+    def init_ui(self):
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
+        self.main_layout = QVBoxLayout(self)
+
+        self.status_label = Label("Mel: -")
+        self.main_layout.addWidget(self.status_label)
+
+        self.plot_widget = pg.PlotWidget(background="white")
+        self.plot_widget.setLabel("bottom", "Time (s)")
+        self.plot_widget.setLabel("left", "Mel frequency (Mel)")
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
+        self.main_layout.addWidget(self.plot_widget, 3)
+
+        self.table_widget = TableWidget()
+        self.table_widget.setColumnCount(5)
+        self.table_widget.setHorizontalHeaderLabels(["整体SPL dB(A)", "热点时间(s)", "热点频率(kHz)", "热点Mel", "热点dB(A)"])
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget.verticalHeader().setVisible(False)
+        self.table_widget.setEditTriggers(TableWidget.NoEditTriggers)
+        self.main_layout.addWidget(self.table_widget, 1)
+        self.setLayout(self.main_layout)
+
+    def calculate_mel(self):
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            return None
+        sample_rate = self.data_struct.sample_rate
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "Mel 分析缺少录音数据或采样率。")
+            return None
+
+        try:
+            analysis_result = compute_mel_spectrogram(
+                np.asarray(recorded_signal, dtype=np.float64),
+                int(sample_rate),
+                self.analysis_config or {},
+            )
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"Mel 分析失败: {str(e)[:200]}")
+            return None
+
+        self._render_result(analysis_result)
+        self.result = self._to_exportable_result(analysis_result)
+        return self.result
+
+    def _render_result(self, analysis_result):
+        mel_db_a = np.asarray(analysis_result.get("mel_db_a", []), dtype=np.float64)
+        times_s = np.asarray(analysis_result.get("times_s", []), dtype=np.float64)
+        mel_axis = np.asarray(analysis_result.get("mel_axis", []), dtype=np.float64)
+        if mel_db_a.size == 0 or times_s.size == 0 or mel_axis.size == 0:
+            return
+
+        self._clear_plot()
+        self.img_item = pg.ImageItem()
+        self.plot_widget.addItem(self.img_item)
+
+        display_matrix = mel_db_a.T
+        self.img_item.setImage(display_matrix, autoLevels=False)
+
+        x_min, x_max = float(times_s[0]), float(times_s[-1])
+        y_min, y_max = float(mel_axis[0]), float(mel_axis[-1])
+        self.img_item.setRect(QRectF(x_min, y_min, max(x_max - x_min, 1e-9), max(y_max - y_min, 1e-9)))
+
+        finite_values = mel_db_a[np.isfinite(mel_db_a)]
+        if finite_values.size:
+            vmax = float(np.nanpercentile(finite_values, 99.0))
+            vmin = float(np.nanpercentile(finite_values, 5.0))
+        else:
+            vmax, vmin = 1.0, 0.0
+        dynamic_range = float((self.analysis_config or {}).get("dynamic_range_db", 65.0) or 65.0)
+        vmin = max(vmin, vmax - dynamic_range)
+        if not np.isfinite(vmax) or not np.isfinite(vmin) or vmax <= vmin:
+            vmin, vmax = 0.0, 1.0
+
+        color_map_name = (self.analysis_config or {}).get("color_map", "magma")
+        color_map = self._build_color_map(color_map_name)
+        self.img_item.setLookupTable(color_map.getLookupTable(nPts=256))
+        self.img_item.setLevels([vmin, vmax])
+        self.colorbar = pg.ColorBarItem(values=(vmin, vmax), width=25, colorMap=color_map)
+        self.colorbar.setImageItem(self.img_item, insert_in=self.plot_widget.getPlotItem())
+
+        self.plot_widget.setXRange(x_min, x_max, padding=0)
+        self.plot_widget.setYRange(y_min, y_max, padding=0)
+        self.plot_widget.setTitle("A-weighted Mel spectrogram", size="20px", color="black")
+
+        self._plot_core_band(y_min, y_max)
+        self._plot_hotspot(analysis_result)
+        self._update_table(analysis_result)
+        self._update_fonts()
+
+    def _clear_plot(self):
+        self.plot_widget.clear()
+        if self.colorbar is not None:
+            try:
+                self.colorbar.close()
+            except Exception:
+                pass
+        self.img_item = None
+        self.colorbar = None
+        self.core_region = None
+
+    @staticmethod
+    def _build_color_map(color_map_name):
+        try:
+            colors = pg.colormap.get(str(color_map_name or "magma")).getLookupTable(nPts=256)
+        except Exception:
+            colors = pg.colormap.get("magma").getLookupTable(nPts=256)
+        positions = np.linspace(0.0, 1.0, 256)
+        return pg.ColorMap(positions, colors)
+
+    def _plot_core_band(self, y_min, y_max):
+        cfg = self.analysis_config if isinstance(self.analysis_config, dict) else {}
+        core_range = cfg.get("core_range_hz", [2000.0, 5000.0])
+        try:
+            core_low_hz, core_high_hz = list(core_range)[:2]
+            core_low_mel = float(hz_to_mel(float(core_low_hz)))
+            core_high_mel = float(hz_to_mel(float(core_high_hz)))
+        except Exception:
+            return
+        low = max(min(core_low_mel, core_high_mel), y_min)
+        high = min(max(core_low_mel, core_high_mel), y_max)
+        if high <= low:
+            return
+        try:
+            self.core_region = pg.LinearRegionItem(
+                values=(low, high),
+                orientation="horizontal",
+                brush=pg.mkBrush(0, 188, 212, 40),
+                movable=False,
+            )
+            self.core_region.setZValue(10)
+            self.plot_widget.addItem(self.core_region)
+        except Exception:
+            for value in (low, high):
+                line = pg.InfiniteLine(
+                    pos=value,
+                    angle=0,
+                    pen=pg.mkPen(color=(0, 188, 212, 200), width=1, style=Qt.DotLine),
+                    movable=False,
+                )
+                self.plot_widget.addItem(line)
+
+    def _plot_hotspot(self, analysis_result):
+        hotspot = analysis_result.get("hotspot")
+        if not isinstance(hotspot, dict):
+            return
+        spot = {
+            "pos": (float(hotspot.get("time_s", 0.0)), float(hotspot.get("mel", 0.0))),
+            "brush": pg.mkBrush(255, 255, 255, 230),
+            "pen": pg.mkPen("black", width=1.0),
+            "size": self.HOTSPOT_MARKER_SIZE,
+            "symbol": "star",
+        }
+        self.plot_widget.addItem(pg.ScatterPlotItem(spots=[spot]))
+        label = pg.TextItem(
+            text=f"{float(hotspot.get('freq_hz', 0.0)) / 1000.0:.2f} kHz / {float(hotspot.get('level_dba', 0.0)):.1f} dB(A)",
+            color=(20, 20, 20),
+            anchor=(0.0, 1.0),
+            fill=pg.mkBrush(255, 255, 255, 180),
+        )
+        label.setPos(float(hotspot.get("time_s", 0.0)), float(hotspot.get("mel", 0.0)))
+        label.setZValue(30)
+        self.plot_widget.addItem(label)
+
+    def _update_table(self, analysis_result):
+        hotspot = analysis_result.get("hotspot")
+        self.table_widget.setRowCount(1)
+        if isinstance(hotspot, dict):
+            values = [
+                f"{float(analysis_result.get('overall_spl_dba', 0.0)):.2f}",
+                f"{float(hotspot.get('time_s', 0.0)):.3f}",
+                f"{float(hotspot.get('freq_hz', 0.0)) / 1000.0:.3f}",
+                f"{float(hotspot.get('mel', 0.0)):.1f}",
+                f"{float(hotspot.get('level_dba', 0.0)):.2f}",
+            ]
+            status_text = (
+                f"Mel: Overall {float(analysis_result.get('overall_spl_dba', 0.0)):.1f} dB(A), "
+                f"Hotspot {float(hotspot.get('freq_hz', 0.0)) / 1000.0:.2f} kHz"
+            )
+        else:
+            values = [f"{float(analysis_result.get('overall_spl_dba', 0.0)):.2f}", "-", "-", "-", "-"]
+            status_text = f"Mel: Overall {float(analysis_result.get('overall_spl_dba', 0.0)):.1f} dB(A)"
+        for col, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            self.table_widget.setItem(0, col, item)
+        self.status_label.setText(status_text)
+
+    def _update_fonts(self):
+        font = QFont()
+        font.setPixelSize(20)
+        for axis_name in ("bottom", "left"):
+            axis = self.plot_widget.getAxis(axis_name)
+            axis.setTickFont(font)
+            axis.setTextPen("black")
+            axis.setLabel(axis.labelText, **{"font-size": "20px"})
+
+    @staticmethod
+    def _to_plain_value(value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (np.floating, float)):
+            return float(value)
+        if isinstance(value, (np.integer, int)):
+            return int(value)
+        if isinstance(value, (np.bool_, bool)):
+            return bool(value)
+        if isinstance(value, dict):
+            return {k: Mel._to_plain_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [Mel._to_plain_value(v) for v in value]
+        return value
+
+    @staticmethod
+    def _to_exportable_result(analysis_result):
+        keys = (
+            "mel_db_a",
+            "times_s",
+            "mel_axis",
+            "mel_freq_edges_hz",
+            "overall_spl_dba",
+            "hotspot",
+            "params",
+        )
+        return {key: Mel._to_plain_value(analysis_result.get(key)) for key in keys}
+
+
+class Modulation(QWidget):
+    MODULATION_COLOR_CAP_PERCENT = 20.0
+    HOTSPOT_MARKER_SIZE = 20
+    MAIN_TONE_LABEL_FONT_PX = 9
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.analysis_config = None
+        self.result = None
+        self.title_name = title_name
+        self.img_item = None
+        self.colorbar = None
+        self.threshold_contour = None
+        self.plot_widget = None
+        self.table_widget = None
+        self.status_label = None
+        self.init_ui()
+        self.setWindowTitle(title_name)
+
+    def init_ui(self):
+        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
+        self.main_layout = QVBoxLayout(self)
+
+        self.status_label = Label("Modulation: -")
+        self.main_layout.addWidget(self.status_label)
+
+        self.plot_widget = pg.PlotWidget(background="white")
+        self.plot_widget.setLabel("bottom", "Modulation frequency (Hz)")
+        self.plot_widget.setLabel("left", "Signal frequency (kHz)")
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.35)
+        self.main_layout.addWidget(self.plot_widget, 3)
+
+        self.table_widget = TableWidget()
+        self.table_widget.setColumnCount(6)
+        self.table_widget.setHorizontalHeaderLabels(
+            ["主音(Hz)", "分析频率(kHz)", "调制频率(Hz)", "深度(%)", "机械匹配", "原因"]
+        )
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget.verticalHeader().setVisible(False)
+        self.table_widget.setEditTriggers(TableWidget.NoEditTriggers)
+        self.main_layout.addWidget(self.table_widget, 1)
+        self.setLayout(self.main_layout)
+
+    def calculate_modulation(self):
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            return None
+        sample_rate = self.data_struct.sample_rate
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "Modulation 分析缺少录音数据或采样率。")
+            return None
+
+        try:
+            analysis_result = compute_modulation_map(
+                np.asarray(recorded_signal, dtype=np.float64),
+                int(sample_rate),
+                self.analysis_config or {},
+            )
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"Modulation 分析失败: {str(e)[:200]}")
+            return None
+
+        self._render_result(analysis_result)
+        self.result = self._to_exportable_result(analysis_result)
+        return self.result
+
+    def _render_result(self, analysis_result):
+        mod_depth = np.asarray(analysis_result.get("mod_depth_matrix", []), dtype=np.float64)
+        signal_freqs = np.asarray(analysis_result.get("signal_freq_axis_hz", []), dtype=np.float64)
+        mod_freqs = np.asarray(analysis_result.get("mod_freq_axis_hz", []), dtype=np.float64)
+        if mod_depth.size == 0 or signal_freqs.size == 0 or mod_freqs.size == 0:
+            return
+
+        self._clear_plot()
+        self.img_item = pg.ImageItem()
+        self.plot_widget.addItem(self.img_item)
+
+        display_matrix = mod_depth.T
+        self.img_item.setImage(display_matrix, autoLevels=False)
+
+        x_min, x_max = float(mod_freqs[0]), float(mod_freqs[-1])
+        y_axis_khz = signal_freqs / 1000.0
+        y_min, y_max = float(y_axis_khz[0]), float(y_axis_khz[-1])
+        self.img_item.setRect(QRectF(x_min, y_min, max(x_max - x_min, 1e-9), max(y_max - y_min, 1e-9)))
+
+        threshold = float(analysis_result.get("threshold_percent", 10.0))
+        vmax = self.MODULATION_COLOR_CAP_PERCENT
+        color_map = self._build_modulation_color_map()
+        self.img_item.setLookupTable(color_map.getLookupTable(nPts=256))
+        self.img_item.setLevels([0.0, vmax])
+        self.colorbar = pg.ColorBarItem(values=(0.0, vmax), width=25, colorMap=color_map)
+        self.colorbar.setImageItem(self.img_item, insert_in=self.plot_widget.getPlotItem())
+
+        self.plot_widget.setXRange(x_min, x_max, padding=0)
+        self.plot_widget.setYRange(y_min, y_max, padding=0)
+        self.plot_widget.setTitle("Modulation map", size="20px", color="black")
+
+        self._plot_core_lines(analysis_result, y_min, y_max)
+        self._plot_threshold_contour(display_matrix, threshold)
+        self._plot_main_tone_results(analysis_result, signal_freqs, mod_freqs)
+        self._plot_hotspots(analysis_result)
+        self._update_table(analysis_result)
+        self._update_fonts()
+
+    def _clear_plot(self):
+        self.plot_widget.clear()
+        if self.colorbar is not None:
+            try:
+                self.colorbar.close()
+            except Exception:
+                pass
+        self.colorbar = None
+        self.img_item = None
+        self.threshold_contour = None
+
+    @staticmethod
+    def _build_modulation_color_map():
+        positions = np.array([0.0, 0.35, 0.5, 1.0], dtype=np.float64)
+        colors = np.array(
+            [
+                [8, 24, 72, 255],
+                [30, 64, 175, 255],
+                [250, 204, 21, 255],
+                [220, 38, 38, 255],
+            ],
+            dtype=np.ubyte,
+        )
+        return pg.ColorMap(positions, colors)
+
+    def _plot_threshold_contour(self, display_matrix, threshold):
+        if self.img_item is None or display_matrix.size == 0 or not np.isfinite(threshold):
+            return
+        finite_values = display_matrix[np.isfinite(display_matrix)]
+        if finite_values.size == 0 or float(np.nanmax(finite_values)) < threshold:
+            return
+
+        low_fill = min(float(np.nanmin(finite_values)), threshold) - 1.0
+        contour_data = np.asarray(display_matrix, dtype=np.float64)
+        contour_data = np.nan_to_num(contour_data, nan=low_fill, posinf=float(np.nanmax(finite_values)), neginf=low_fill)
+        self.threshold_contour = pg.IsocurveItem(
+            data=contour_data,
+            level=threshold,
+            pen=pg.mkPen(color=(0, 0, 0, 220), width=1.2, style=Qt.DashLine),
+        )
+        self.threshold_contour.setParentItem(self.img_item)
+        self.threshold_contour.setZValue(20)
+
+    def _plot_core_lines(self, analysis_result, y_min, y_max):
+        for line_khz in analysis_result.get("core_freq_lines_khz", []) or []:
+            try:
+                value = float(line_khz)
+            except (TypeError, ValueError):
+                continue
+            if y_min <= value <= y_max:
+                line = pg.InfiniteLine(
+                    pos=value,
+                    angle=0,
+                    pen=pg.mkPen(color=(255, 255, 255, 210), width=1, style=Qt.DotLine),
+                    movable=False,
+                )
+                self.plot_widget.addItem(line)
+
+    def _plot_main_tone_results(self, analysis_result, signal_freqs, mod_freqs):
+        tone_results = analysis_result.get("main_tone_results", []) or []
+        if not tone_results:
+            return
+
+        label_font = QFont()
+        label_font.setPixelSize(self.MAIN_TONE_LABEL_FONT_PX)
+        for item in tone_results:
+            if not bool(item.get("is_valid", False)) or not bool(item.get("has_modulation_peak", True)):
+                continue
+            if item.get("mod_freq_hz") is None:
+                continue
+            target_hz = float(item.get("target_signal_freq_hz", item.get("analysis_signal_freq_hz", 0.0)))
+            mod_hz = float(item.get("mod_freq_hz", 0.0))
+            depth = float(item.get("mod_depth_percent", 0.0))
+            label = pg.TextItem(
+                text=f"{target_hz:.0f} Hz\n{mod_hz:.1f} Hz / {depth:.1f}%",
+                color=(20, 20, 20),
+                anchor=(0.0, 1.0),
+                fill=pg.mkBrush(255, 255, 255, 170),
+            )
+            label.setFont(label_font)
+            label.setPos(mod_hz, float(item.get("signal_freq_khz", 0.0)))
+            label.setZValue(30)
+            self.plot_widget.addItem(label)
+
+    def _plot_hotspots(self, analysis_result):
+        hotspots = analysis_result.get("hotspots", []) or analysis_result.get("global_hotspots", []) or []
+        if not hotspots:
+            return
+        spots = []
+        for item in hotspots:
+            spots.append(
+                {
+                    "pos": (float(item.get("mod_freq_hz", 0.0)), float(item.get("signal_freq_khz", 0.0))),
+                    "brush": pg.mkBrush(0, 229, 255, 235),
+                    "pen": pg.mkPen("black", width=1.0),
+                    "size": self.HOTSPOT_MARKER_SIZE,
+                    "symbol": "star",
+                }
+            )
+        self.plot_widget.addItem(pg.ScatterPlotItem(spots=spots))
+
+    def _update_table(self, analysis_result):
+        rows = analysis_result.get("main_tone_results", []) or []
+        self.table_widget.setRowCount(len(rows))
+        for row, item in enumerate(rows):
+            has_modulation_peak = bool(item.get("has_modulation_peak", True))
+            mod_freq_hz = item.get("mod_freq_hz")
+            mechanical_text = "-"
+            if has_modulation_peak:
+                mechanical_text = "Yes" if item.get("mechanical_match", False) else "No"
+            values = [
+                f"{float(item.get('target_signal_freq_hz', 0.0)):.1f}",
+                f"{float(item.get('signal_freq_khz', 0.0)):.3f}",
+                "-" if mod_freq_hz is None else f"{float(mod_freq_hz):.1f}",
+                f"{float(item.get('mod_depth_percent', 0.0)):.2f}",
+                "是" if item.get("mechanical_match", False) else "否",
+                str(item.get("reason", "")),
+            ]
+            values[4] = mechanical_text
+            for col, value in enumerate(values):
+                table_item = QTableWidgetItem(value)
+                table_item.setFlags(table_item.flags() & ~Qt.ItemIsEditable)
+                self.table_widget.setItem(row, col, table_item)
+
+        hotspot_count = len(analysis_result.get("global_hotspots", []) or [])
+        self.status_label.setText(f"Modulation: 主音 {len(rows)} 个, 全局热点 {hotspot_count} 个")
+
+    def _update_fonts(self):
+        font = QFont()
+        font.setPixelSize(20)
+        for axis_name in ("bottom", "left"):
+            axis = self.plot_widget.getAxis(axis_name)
+            axis.setTickFont(font)
+            axis.setTextPen("black")
+            axis.setLabel(axis.labelText, **{"font-size": "20px"})
+
+    @staticmethod
+    def _to_plain_value(value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (np.floating, float)):
+            return float(value)
+        if isinstance(value, (np.integer, int)):
+            return int(value)
+        if isinstance(value, (np.bool_, bool)):
+            return bool(value)
+        if isinstance(value, dict):
+            return {k: Modulation._to_plain_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [Modulation._to_plain_value(v) for v in value]
+        return value
+
+    @staticmethod
+    def _to_exportable_result(analysis_result):
+        keys = (
+            "mod_depth_matrix",
+            "signal_freq_axis_hz",
+            "mod_freq_axis_hz",
+            "main_tone_results",
+            "global_hotspots",
+            "mechanical_references",
+            "mechanical_mod_freqs_hz",
+            "stft_params",
+            "threshold_percent",
+            "min_modulation_depth_percent",
+        )
+        return {key: Modulation._to_plain_value(analysis_result.get(key)) for key in keys}
 
 
 class LooseParticle(AnalysisGraphWidget):
