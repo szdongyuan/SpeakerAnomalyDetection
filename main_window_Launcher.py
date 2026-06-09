@@ -1,9 +1,5 @@
 import sys
 
-from base.qt_environment import ensure_qt_platform_plugin_path
-
-ensure_qt_platform_plugin_path()
-
 from PyQt5.QtCore import QThread, QFile, QTextStream
 from PyQt5.QtWidgets import QApplication
 from ui.splash_screen_window import Splash, LoaderThread
