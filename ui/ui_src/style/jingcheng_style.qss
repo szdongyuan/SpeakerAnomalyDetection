@@ -304,6 +304,14 @@ QWidget#SequenceToolsBar QLabel {
   color: black;
 }
 
+QWidget#SequenceToolsBar QComboBox QAbstractItemView {
+  background: #ffffff;
+  color: #111827;
+  selection-background-color: rgba(37, 99, 235, 0.18);
+  selection-color: #111827;
+  outline: 0px;
+}
+
 /* sequence widget style */
 QWidget#LinearGraphWidget {
   background-color: white;

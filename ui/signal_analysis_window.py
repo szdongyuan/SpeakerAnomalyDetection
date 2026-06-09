@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 )
 from scipy.signal import find_peaks
 
+from base.pdf_result_exporter import export_plot_widget_image
 from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_filter
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
@@ -395,6 +396,10 @@ class AnalysisGraphWidget(QWidget):
         l_axis.setTextPen("black")
         b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
         l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
+
+    def export_pdf_images(self, output_dir):
+        image_path = export_plot_widget_image(self.analysis_plot, output_dir, "analysis_graph")
+        return [{"title": self.windowTitle(), "path": image_path}]
 
 
 class Distortion(AnalysisGraphWidget):
@@ -1660,6 +1665,8 @@ class AI(QWidget):
 
 
 class Spectrogram(QWidget):
+    PDF_EXPORT_LEFT_AXIS_MIN_WIDTH = 110
+
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -1823,6 +1830,38 @@ class Spectrogram(QWidget):
             self.stft_colorbar.setLevels((min_value, max_value))
 
         self.set_color_font_size()
+
+    def _prepare_plot_for_pdf_export(self, plot_widget):
+        if plot_widget is None:
+            return
+        try:
+            left_axis = plot_widget.getAxis("left")
+            if left_axis is not None:
+                left_axis.setWidth(max(left_axis.width(), self.PDF_EXPORT_LEFT_AXIS_MIN_WIDTH))
+                app = QApplication.instance()
+                if app is not None:
+                    app.processEvents()
+        except Exception:
+            pass
+
+    def export_pdf_images(self, output_dir):
+        plot_widget = self.current_plot_widget
+        if isinstance(plot_widget, pg.PlotWidget):
+            export_widget = plot_widget
+        else:
+            export_widget = None
+            if plot_widget is not None:
+                children = plot_widget.findChildren(pg.PlotWidget)
+                export_widget = children[0] if children else None
+            if export_widget is None:
+                export_widget = self.stft_plot_widget
+
+        if export_widget is None:
+            return []
+
+        self._prepare_plot_for_pdf_export(export_widget)
+        image_path = export_plot_widget_image(export_widget, output_dir, "spectrogram")
+        return [{"title": self.title_name, "path": image_path}]
 
 
 class Mel(QWidget):

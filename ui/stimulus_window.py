@@ -507,6 +507,9 @@ class StimulusWindow(QDialog):
         self.total_time_box.setRange(*self.LEGACY_TOTAL_TIME_RANGE)
         self.total_time_box.setSingleStep(self.LEGACY_TOTAL_TIME_STEP)
         self.total_time_box.setReadOnly(False)
+        self.total_time_box.style().unpolish(self.total_time_box)
+        self.total_time_box.style().polish(self.total_time_box)
+        self.total_time_box.update()
         self.total_time_box.setButtonSymbols(DoubleSpinBox.UpDownArrows)
 
     def _configure_step_sc_total_time_box(self):
@@ -514,6 +517,9 @@ class StimulusWindow(QDialog):
         self.total_time_box.setRange(*self.STEP_SC_TOTAL_TIME_RANGE)
         self.total_time_box.setSingleStep(self.STEP_SC_TOTAL_TIME_STEP)
         self.total_time_box.setReadOnly(True)
+        self.total_time_box.style().unpolish(self.total_time_box)
+        self.total_time_box.style().polish(self.total_time_box)
+        self.total_time_box.update()
         self.total_time_box.setButtonSymbols(DoubleSpinBox.NoButtons)
 
     def create_step_group_box(self):
@@ -1400,6 +1406,9 @@ class StimulusWindow(QDialog):
             self.step_box.setReadOnly(False)
             self.step_box.setEnabled(True)
             self.resolution_combo_box.setEnabled(True)
+        self.step_box.style().unpolish(self.step_box)
+        self.step_box.style().polish(self.step_box)
+        self.step_box.update()
         self.total_time_box.blockSignals(previous_signal_state)
         self._refresh_step_sc_frequency_preferences()
 
@@ -1458,6 +1467,9 @@ class StimulusWindow(QDialog):
         try:
             self.step_box.setRange(*self.LEGACY_STEP_COUNT_RANGE)
             self.step_box.setReadOnly(False)
+            self.step_box.style().unpolish(self.step_box)
+            self.step_box.style().polish(self.step_box)
+            self.step_box.update()
             self.step_box.setEnabled(True)
             self.step_box.setValue(step_count)
         finally:
@@ -1616,7 +1628,9 @@ class StimulusWindow(QDialog):
         stimulus_method = self.stimulus_method_combo_box.currentText()
         previous_method = normalize_stimulus_method(self.stimulus_info.get("stimulus_method"))
         target_method = self.STIMULUS_DICT[stimulus_method]["name"]
-        legacy_switch_from_step_sc = previous_method == FREQUENCY_STEPPED_METHOD and target_method != FREQUENCY_STEPPED_METHOD
+        legacy_switch_from_step_sc = (
+            previous_method == FREQUENCY_STEPPED_METHOD and target_method != FREQUENCY_STEPPED_METHOD
+        )
         total_time_signal_state = self.total_time_box.blockSignals(True) if legacy_switch_from_step_sc else None
         method_entry_snapshot = (
             self._stimulus_state_snapshot()
@@ -1757,9 +1771,7 @@ class StimulusWindow(QDialog):
         }
         create_function = create_function_dict.get(self.stimulus_info["stimulus_method"])
         if create_function is None:
-            self.stimulus_info = self._unsupported_stimulus_method_fallback(
-                self.stimulus_info["stimulus_method"]
-            )
+            self.stimulus_info = self._unsupported_stimulus_method_fallback(self.stimulus_info["stimulus_method"])
             self.stimulus_data, _ = StimulusSignal().generate_chirps(**self.stimulus_info)
             return False
         if self.stimulus_info["stimulus_method"] == "step":
@@ -2032,9 +2044,7 @@ class StimulusWindow(QDialog):
             return
         self._normalize_stimulus_info_method(loaded_stimulus)
         if not self._is_supported_stimulus_method(loaded_stimulus):
-            self.stimulus_info = self._unsupported_stimulus_method_fallback(
-                loaded_stimulus.get("stimulus_method")
-            )
+            self.stimulus_info = self._unsupported_stimulus_method_fallback(loaded_stimulus.get("stimulus_method"))
         elif loaded_stimulus.get("stimulus_method") == FREQUENCY_STEPPED_METHOD:
             try:
                 candidate, retained, retained_state = self._prepare_frequency_stepped_info(loaded_stimulus)
@@ -2189,9 +2199,7 @@ class StimulusWindow(QDialog):
         invalid_step_sc_fallback = False
         unsupported_method_fallback = not self._is_supported_stimulus_method(self.stimulus_info)
         if unsupported_method_fallback:
-            self.stimulus_info = self._unsupported_stimulus_method_fallback(
-                self.stimulus_info.get("stimulus_method")
-            )
+            self.stimulus_info = self._unsupported_stimulus_method_fallback(self.stimulus_info.get("stimulus_method"))
             self.stimulus_data, _ = StimulusSignal().generate_chirps(**self.stimulus_info)
         elif self.stimulus_info.get("stimulus_method") == FREQUENCY_STEPPED_METHOD:
             try:

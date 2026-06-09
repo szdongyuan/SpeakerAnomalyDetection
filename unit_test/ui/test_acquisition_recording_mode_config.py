@@ -327,3 +327,48 @@ def test_new_items_missing_acquisition_default_use_false(qapp, monkeypatch):
     )
     play_option_list.set_sound_item("播放与录制")
     assert play_option_list.config[0].detail["use_streaming_recording"] is False
+
+
+def test_delete_item_removes_excel_and_pdf_save_items(qapp, monkeypatch):
+    from ui.operation_sequence import OptionList
+
+    option_list = OptionList.__new__(OptionList)
+    option_list.config = [
+        types.SimpleNamespace(
+            analysis_list={
+                "SPL1": {"type": "SPL"},
+                "Excel1": {"type": "Excel", "save_items": ["SPL1", "FR1"]},
+                "PDF1": {"type": "PDF", "save_items": ["SPL1", "FR1"]},
+            }
+        )
+    ]
+
+    option_list.delete_item_config("SPL1")
+
+    assert "SPL1" not in option_list.config[0].analysis_list
+    assert option_list.config[0].analysis_list["Excel1"]["save_items"] == ["FR1"]
+    assert option_list.config[0].analysis_list["PDF1"]["save_items"] == ["FR1"]
+
+
+def test_rename_item_updates_excel_and_pdf_save_items(qapp, monkeypatch):
+    from ui.operation_sequence import OptionList
+
+    option_list = OptionList.__new__(OptionList)
+    display_sequence = ["SPL1", "Excel1", "PDF1"]
+    option_list.config = [
+        types.SimpleNamespace(
+            analysis_list={
+                "SPL1": {"type": "SPL"},
+                "Excel1": {"type": "Excel", "save_items": ["SPL1", "FR1"]},
+                "PDF1": {"type": "PDF", "save_items": ["SPL1", "FR1"]},
+            }
+        )
+    ]
+
+    option_list.update_config_data("SPL1", "SPL_A", display_sequence)
+
+    assert "SPL1" not in option_list.config[0].analysis_list
+    assert option_list.config[0].analysis_list["SPL_A"] == {"type": "SPL"}
+    assert display_sequence == ["SPL_A", "Excel1", "PDF1"]
+    assert option_list.config[0].analysis_list["Excel1"]["save_items"] == ["SPL_A", "FR1"]
+    assert option_list.config[0].analysis_list["PDF1"]["save_items"] == ["SPL_A", "FR1"]
