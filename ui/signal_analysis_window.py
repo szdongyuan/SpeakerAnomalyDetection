@@ -1,3 +1,4 @@
+import copy
 import csv
 import json
 import os
@@ -40,6 +41,11 @@ from base.core_algorithm.response.frequency_band_analyzer import (
 )
 from base.core_algorithm.mel_spectrogram import compute_mel_spectrogram, hz_to_mel
 from base.core_algorithm.modulation_map import compute_modulation_map
+from base.core_algorithm.response.prominence_ratio_analyzer import (
+    ProminenceRatioAnalyzer,
+    ProminenceRatioParams,
+)
+from base.core_algorithm.sound_quality import run_sound_quality
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
@@ -78,6 +84,10 @@ def get_class_mapping():
         "PM": PatternMatch,
         "ED": PipelinePdPm,
         "FBA": FrequencyBandAnalysis,
+        "PR": ProminenceRatioAnalysis,
+        "LOUD": LoudnessAnalysis,
+        "SHRP": SharpnessAnalysis,
+        "ROUGH": RoughnessAnalysis,
     }
     return class_mapping
 
@@ -121,6 +131,31 @@ def _load_golden_baseline_result(analysis_config: dict, title_name: str):
         return None
     result = item.get("result")
     return result if isinstance(result, dict) else None
+
+
+def _load_default_analysis_item_config(item_type: str) -> dict:
+    default_config_path = os.path.join(DEFAULT_DIR, "ui/ui_config/analysis_default_config.json")
+    try:
+        with open(default_config_path, "r", encoding="utf-8") as file:
+            defaults = json.load(file)
+    except Exception:
+        return {}
+    item_cfg = defaults.get(item_type, {})
+    return copy.deepcopy(item_cfg) if isinstance(item_cfg, dict) else {}
+
+
+def _merge_loudness_config_with_defaults(loud_cfg: dict) -> dict:
+    merged = _load_default_analysis_item_config("LOUD")
+    source = copy.deepcopy(loud_cfg) if isinstance(loud_cfg, dict) else {}
+    for section in ("display", "save", "advanced"):
+        section_defaults = dict(merged.get(section, {}) or {})
+        section_source = source.pop(section, {}) or {}
+        if isinstance(section_source, dict):
+            section_defaults.update(section_source)
+        merged[section] = section_defaults
+    merged.update(source)
+    merged.pop("type", None)
+    return merged
 
 
 def resolve_analysis_channel_signal(
@@ -400,6 +435,17 @@ class AnalysisGraphWidget(QWidget):
     def export_pdf_images(self, output_dir):
         image_path = export_plot_widget_image(self.analysis_plot, output_dir, "analysis_graph")
         return [{"title": self.windowTitle(), "path": image_path}]
+
+    @staticmethod
+    def apply_plot_font_style(plot_widget, font_size: int = 20):
+        font_size = ui_style_const.scale_size_px(font_size)
+        font = QFont()
+        font.setPixelSize(font_size)
+        for axis_name in ("bottom", "left"):
+            axis = plot_widget.getAxis(axis_name)
+            axis.setTickFont(font)
+            axis.setTextPen("black")
+            axis.setLabel(axis.labelText, **{"font-size": f"{font_size}px"})
 
 
 class Distortion(AnalysisGraphWidget):
@@ -3048,6 +3094,814 @@ class PipelinePdPm(QWidget):
         return self._summarize_and_notify(results, cfg.get("pass_condition", {}))
 
 
+class LoudnessAnalysis(AnalysisGraphWidget):
+    """LOUD analysis window backed by the sound-quality loudness service."""
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.recorded_path = None
+        self.result = {}
+        self.export_detail = {}
+        self.specific_loudness_widget = None
+        self.specific_loudness_colorbar = None
+        self.specific_loudness_profile_widget = None
+        self.sharpness_plot = None
+        self.roughness_plot = None
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_loudness(self):
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        config = self.analysis_config or {}
+
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "响度分析失败：没有可用录音数据。")
+            return False
+
+        sq_config = self._build_sq_config(config)
+        run_result = run_sound_quality(
+            np.asarray(recorded_signal, dtype=np.float64),
+            int(sample_rate),
+            project_v2pa_factor=float(self.v2pa_factor or 1.0),
+            sq_config=sq_config,
+        )
+        loud_result = run_result.loudness
+        if loud_result is None or not loud_result.enabled or loud_result.raw_result is None:
+            reason = getattr(loud_result, "skipped_reason", None) or run_result.skipped_reason or "unknown"
+            MessageBox.warning(self, "提示", f"响度分析跳过：{reason}")
+            return False
+
+        summary = loud_result.summary or {}
+        self._plot_loudness_curve(loud_result, config)
+        self._apply_loudness_limits(loud_result, config)
+
+        raw = loud_result.raw_result
+        self.result = {
+            "summary": summary,
+            "time_s": np.asarray(raw.time_s, dtype=np.float64).tolist(),
+            "loudness_sone": np.asarray(raw.loudness_sone, dtype=np.float64).tolist(),
+            "loudness_level_phon": np.asarray(raw.loudness_level_phon, dtype=np.float64).tolist(),
+            "metadata": dict(raw.metadata or {}),
+        }
+        self.export_detail = {
+            "specific_loudness_sum_sone": summary.get("specific_loudness_sum_sone"),
+            "specific_loudness_summed_exceedance": summary.get("specific_loudness_summed_exceedance"),
+            "steady_state_average_sone": summary.get("steady_state_average_sone"),
+            "steady_state_average_phon": summary.get("steady_state_average_phon"),
+            "max_transient_sone": summary.get("max_transient_sone"),
+            "max_transient_phon": summary.get("max_transient_phon"),
+            "nmax_sone": summary.get("nmax_sone"),
+            "n5_sone": summary.get("n5_sone"),
+            "lnmax_phon": summary.get("lnmax_phon"),
+            "ln5_phon": summary.get("ln5_phon"),
+            "mean_sone": summary.get("mean_sone"),
+            "mean_phon": summary.get("mean_phon"),
+        }
+        return self.result
+
+    @staticmethod
+    def _build_sq_config(config: dict) -> dict:
+        display_cfg = config.get("display", {}) or {}
+        save_cfg = config.get("save", {}) or {}
+        advanced_cfg = config.get("advanced", {}) or {}
+        return {
+            "enabled": True,
+            "shared": {"field_type": config.get("field_type", "free")},
+            "items": {
+                "LOUD": {
+                    "enabled": bool(config.get("enabled", True)),
+                    "method": config.get("method", "per_segment"),
+                    "display": display_cfg,
+                    "save": save_cfg,
+                    "advanced": advanced_cfg,
+                },
+                "SHRP": {"enabled": False},
+                "ROUGH": {"enabled": False},
+                "FLUC": {"enabled": False},
+                "TON": {"enabled": False},
+                "PR": {"enabled": False},
+                "TNR": {"enabled": False},
+            },
+        }
+
+    def _plot_loudness_curve(self, loud_result, config=None):
+        raw = loud_result.raw_result
+        time_s = np.asarray(raw.time_s, dtype=np.float64)
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        curve_y_unit = str(advanced_cfg.get("curve_y_unit", "sone") or "sone").lower()
+        if curve_y_unit == "phon":
+            loudness = np.asarray(raw.loudness_level_phon, dtype=np.float64)
+            y_label = "响度级 (phon)"
+        else:
+            loudness = np.asarray(raw.loudness_sone, dtype=np.float64)
+            y_label = "响度 (sone)"
+
+        plot_time_s = time_s
+        plot_loudness = loudness
+        method = str((config or {}).get("method", "") or "").lower()
+        metadata = dict(getattr(raw, "metadata", None) or {})
+        if (
+            method == "per_segment"
+            and time_s.size
+            and loudness.size
+            and np.isfinite(time_s[0])
+            and np.isfinite(loudness[0])
+            and time_s[0] > 0.0
+        ):
+            if time_s.size > 1 and loudness.size > 1 and np.isfinite(loudness[1]):
+                plot_time_s = np.insert(time_s[1:], 0, 0.0)
+                plot_loudness = np.insert(loudness[1:], 0, loudness[1])
+            else:
+                plot_time_s = np.insert(time_s, 0, 0.0)
+                plot_loudness = np.insert(loudness, 0, loudness[0])
+            end_time_s = None
+            sample_rate = getattr(self.data_struct, "sample_rate", None)
+            recorded_signal = getattr(self.data_struct, "store_wave_data", None)
+            try:
+                if sample_rate and recorded_signal is not None:
+                    end_time_s = len(recorded_signal) / float(sample_rate)
+            except (TypeError, ValueError, ZeroDivisionError):
+                end_time_s = None
+            if end_time_s is None:
+                try:
+                    frame_duration_s = float(metadata.get("frame_duration_s"))
+                    end_time_s = float(time_s[-1]) + frame_duration_s / 2.0
+                except (TypeError, ValueError):
+                    end_time_s = None
+            if (
+                end_time_s is not None
+                and np.isfinite(end_time_s)
+                and plot_time_s.size
+                and end_time_s > float(plot_time_s[-1])
+            ):
+                plot_time_s = np.append(plot_time_s, float(end_time_s))
+                plot_loudness = np.append(plot_loudness, float(plot_loudness[-1]))
+
+        self.analysis_plot.clear()
+        if plot_time_s.size and plot_loudness.size:
+            self.analysis_plot.plot(
+                plot_time_s,
+                plot_loudness,
+                pen=mkPen(color=(51, 196, 77), width=2),
+                name="Loudness",
+            )
+            self._apply_loudness_y_axis(loudness, advanced_cfg, curve_y_unit)
+        self.analysis_plot.setLabel("left", y_label)
+        self.analysis_plot.setLabel("bottom", "时间 (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+
+        payload = loud_result.display_payload or {}
+        title_parts = []
+        for card in payload.get("summary_cards", []) or []:
+            # The summed exceedance is shown on the N'(z) profile plot (in cSones),
+            # so keep it off the loudness-time curve title to avoid duplication.
+            if card.get("key") == "specific_loudness_summed_exceedance":
+                continue
+            value = card.get("value")
+            try:
+                finite_value = value is not None and np.isfinite(float(value))
+            except (TypeError, ValueError):
+                finite_value = False
+            if finite_value:
+                title_parts.append(f"{card.get('label', card.get('key'))}: {float(value):.3g} {card.get('unit', '')}")
+        if title_parts:
+            self.analysis_plot.setTitle(" | ".join(title_parts), size="14px", color="k")
+
+        if config:
+            self._draw_loudness_limit_lines(self.analysis_plot, config)
+
+        self._plot_specific_loudness_profile(loud_result, config or {})
+        self._plot_specific_loudness_heatmap(loud_result, config or {})
+
+    def _apply_loudness_y_axis(self, loudness: np.ndarray, advanced_cfg: dict, curve_y_unit: str):
+        finite = np.asarray(loudness, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return
+        y_max = float(np.max(finite))
+        if y_max <= 0.0:
+            return
+        unit = str(curve_y_unit or "sone").lower()
+        min_y_range = max(5.0, y_max * 0.08) if unit == "phon" else max(2.0, y_max * 0.12)
+        self.analysis_plot.getViewBox().setLimits(minYRange=min_y_range)
+        if not bool(advanced_cfg.get("curve_y_axis_zero_based", True)):
+            return
+        upper = y_max * 1.03
+        if upper <= y_max:
+            upper = y_max + 1.0
+        self.analysis_plot.getViewBox().setYRange(0.0, upper, padding=0.0)
+
+    def _apply_sharpness_y_axis(self, plot_widget, sharpness: np.ndarray):
+        finite = np.asarray(sharpness, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return
+        y_max = float(np.max(finite))
+        upper = max(2.0, y_max * 1.3)
+        view_box = plot_widget.getViewBox()
+        view_box.setYRange(0.0, upper, padding=0.0)
+
+    def _apply_roughness_y_axis(self, plot_widget, roughness: np.ndarray):
+        finite = np.asarray(roughness, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return
+        y_max = float(np.max(finite))
+        upper = max(0.5, y_max * 1.3)
+        view_box = plot_widget.getViewBox()
+        view_box.setYRange(0.0, upper, padding=0.0)
+
+    def _plot_specific_loudness_profile(self, loud_result, config=None):
+        self._remove_specific_loudness_profile()
+
+        curves = (loud_result.display_payload or {}).get("curves", []) or []
+        curve = next((item for item in curves if item.get("key") == "specific_loudness_profile"), None)
+        if not curve:
+            return
+
+        bark_axis = np.asarray(curve.get("x"), dtype=np.float64)
+        profile = np.asarray(curve.get("y"), dtype=np.float64)
+        if bark_axis.size == 0 or profile.size == 0:
+            return
+
+        plot_widget = pg.PlotWidget(background="white")
+        legend = plot_widget.addLegend(offset=(-10, 10))
+        legend.setParentItem(plot_widget.getPlotItem().getViewBox())
+        legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, 10))
+        plot_widget.plot(
+            bark_axis,
+            profile,
+            pen=mkPen(color=(238, 126, 33), width=2),
+            name="N'(z) measured",
+        )
+        ref_curve = self._draw_specific_loudness_ref_line(plot_widget, bark_axis, profile, config or {})
+        mode = str(curve.get("profile_mode", "steady_average") or "steady_average")
+        title = "特征响度曲线 N'(z)"
+        if mode == "max_loudness":
+            title += " - 最大响度时刻"
+        else:
+            title += " - 稳态平均"
+        exceedance_csones = self._specific_loudness_exceedance_csones(loud_result)
+        if exceedance_csones is not None:
+            title += f"  |  超限总量: {exceedance_csones:.2f} cSones"
+        plot_widget.setTitle(title, size="14px", color="k")
+        plot_widget.setLabel("left", "N' (sone/Bark)")
+        plot_widget.setLabel("bottom", "Bark")
+        self.apply_plot_font_style(plot_widget, 20)
+        plot_widget.showGrid(x=True, y=True)
+        finite = profile[np.isfinite(profile)]
+        candidates = [float(np.max(finite))] if finite.size else []
+        if ref_curve is not None and ref_curve.size:
+            ref_finite = ref_curve[np.isfinite(ref_curve)]
+            if ref_finite.size:
+                candidates.append(float(np.max(ref_finite)))
+        if candidates:
+            y_max = max(candidates)
+            plot_widget.getViewBox().setYRange(0.0, max(0.1, y_max * 1.15), padding=0.0)
+        self.specific_loudness_profile_widget = plot_widget
+        self.layout().addWidget(plot_widget)
+
+    @staticmethod
+    def _specific_loudness_exceedance_csones(loud_result):
+        """Return the summed specific-loudness exceedance in cSones (0.01 sone), or None.
+
+        The value is computed by the service layer in sone; centi-sones makes the
+        small exceedance numbers easier to read on the plot title.
+        """
+        payload = loud_result.display_payload or {}
+        for card in payload.get("summary_cards", []) or []:
+            if card.get("key") != "specific_loudness_summed_exceedance":
+                continue
+            value = card.get("value")
+            try:
+                value_sone = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(value_sone):
+                return None
+            return value_sone * 100.0
+        return None
+
+    @staticmethod
+    def _draw_specific_loudness_ref_line(plot_widget, bark_axis, profile, config):
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        ref_key = str(advanced_cfg.get("specific_loudness_exceedance_ref_line", "") or "").lower()
+        try:
+            from base.core_algorithm.sound_quality.psychoacoustic_constants import (
+                SSTS_SPECIFIC_LOUDNESS_REF_LINES,
+            )
+            from base.core_algorithm.sound_quality.service import _interpolate_ref_line
+        except ImportError:
+            return None
+        if ref_key not in SSTS_SPECIFIC_LOUDNESS_REF_LINES:
+            return None
+        ref_curve = _interpolate_ref_line(bark_axis, SSTS_SPECIFIC_LOUDNESS_REF_LINES[ref_key])
+        ref_label = f"Ref {ref_key[-1]} limit"
+        plot_widget.plot(
+            bark_axis,
+            ref_curve,
+            pen=mkPen(color=(214, 39, 40), width=2, style=Qt.DashLine),
+            name=ref_label,
+        )
+        excess = np.maximum(profile - ref_curve, 0.0)
+        if np.any(excess > 0.0):
+            fill_top = pg.PlotDataItem(bark_axis, np.maximum(profile, ref_curve))
+            fill_bottom = pg.PlotDataItem(bark_axis, ref_curve)
+            fill = pg.FillBetweenItem(fill_top, fill_bottom, brush=(214, 39, 40, 70))
+            plot_widget.addItem(fill)
+        return ref_curve
+
+    def _remove_specific_loudness_profile(self):
+        if self.specific_loudness_profile_widget is None:
+            return
+        try:
+            self.layout().removeWidget(self.specific_loudness_profile_widget)
+            self.specific_loudness_profile_widget.deleteLater()
+        finally:
+            self.specific_loudness_profile_widget = None
+
+    def _plot_specific_loudness_heatmap(self, loud_result, config: dict):
+        self._remove_specific_loudness_heatmap()
+
+        heatmaps = (loud_result.display_payload or {}).get("heatmaps", []) or []
+        heatmap = next((item for item in heatmaps if item.get("key") == "specific_loudness"), None)
+        if not heatmap:
+            return
+
+        time_s = np.asarray(heatmap.get("x"), dtype=np.float64)
+        bark_axis = np.asarray(heatmap.get("y"), dtype=np.float64)
+        specific = np.asarray(heatmap.get("z"), dtype=np.float64)
+        if time_s.size < 2 or bark_axis.size < 2 or specific.size == 0:
+            return
+
+        advanced_cfg = config.get("advanced", {}) or {}
+        colormap = str(advanced_cfg.get("specific_loudness_colormap", "viridis") or "viridis")
+        z = specific.T if specific.shape[0] == bark_axis.size else specific
+        self.specific_loudness_widget, self.specific_loudness_colorbar = plot_2d_image(
+            x=time_s,
+            y=bark_axis,
+            z=z,
+            title="特征响度 N'(z, t) [sone/Bark]",
+            xlabel="时间 (s)",
+            ylabel="Bark",
+            colormap=colormap,
+            x_range=(float(time_s.min()), float(time_s.max())),
+            y_range=(float(bark_axis.min()), float(bark_axis.max())),
+            background_color="white",
+        )
+        heatmap_plot = self.specific_loudness_widget.findChild(pg.PlotWidget)
+        if heatmap_plot is not None:
+            heatmap_plot.setTitle("特征响度 N'(z, t) [sone/Bark]", size="14px", color="k")
+            self.apply_plot_font_style(heatmap_plot, 20)
+        self.layout().addWidget(self.specific_loudness_widget)
+
+    def _remove_specific_loudness_heatmap(self):
+        if self.specific_loudness_widget is None:
+            return
+        try:
+            self.layout().removeWidget(self.specific_loudness_widget)
+            self.specific_loudness_widget.deleteLater()
+        finally:
+            self.specific_loudness_widget = None
+            self.specific_loudness_colorbar = None
+
+    def _apply_loudness_limits(self, loud_result, config: dict):
+        if not bool(config.get("limit_checked", False)):
+            return
+
+        raw = getattr(loud_result, "raw_result", None)
+        if raw is None:
+            self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
+            return
+
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        limit_metric = str(config.get("limit_metric", "curve_y") or "curve_y").lower()
+
+        if limit_metric == "steady_state_average":
+            self._apply_loudness_scalar_limit(loud_result, config, metric="steady_state_average")
+        elif limit_metric == "max_transient":
+            self._apply_loudness_scalar_limit(loud_result, config, metric="max_transient")
+        elif limit_metric == "specific_loudness_summed_exceedance":
+            self._apply_loudness_scalar_limit(loud_result, config, metric="specific_loudness_summed_exceedance")
+        else:
+            self._apply_loudness_curve_limit(raw, config, advanced_cfg)
+
+    def _apply_loudness_scalar_limit(self, loud_result, config: dict, metric: str):
+        """Apply limit check on a single scalar metric value."""
+        summary = getattr(loud_result, "summary", None) or {}
+        if metric == "steady_state_average":
+            value = summary.get("steady_state_average_sone",
+                    summary.get("steady_state_average_phon",
+                    summary.get("mean_sone", summary.get("mean_phon"))))
+        elif metric == "max_transient":
+            value = summary.get("max_transient_sone",
+                    summary.get("max_transient_phon",
+                    summary.get("nmax_sone")))
+        elif metric == "specific_loudness_summed_exceedance":
+            value = summary.get("specific_loudness_summed_exceedance")
+        else:
+            value = None
+
+        if value is None or not np.isfinite(float(value)):
+            self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
+            return
+
+        value = float(value)
+        upper_enabled = bool(config.get("curve_upper_enabled", False))
+        upper_limit = float(config.get("curve_upper_value", 0.0) or 0.0)
+        lower_enabled = bool(config.get("curve_lower_enabled", False))
+        lower_limit = float(config.get("curve_lower_value", 0.0) or 0.0)
+
+        deviations = []
+        if upper_enabled and value > upper_limit:
+            deviations.append(value - upper_limit)
+        if lower_enabled and value < lower_limit:
+            deviations.append(lower_limit - value)
+
+        deviation = float(max(deviations)) if deviations else 0.0
+        self._merge_analysis_limit_result(deviation == 0.0, deviation)
+
+    def _apply_loudness_curve_limit(self, raw, config: dict, advanced_cfg: dict):
+        """Apply per-point limit check on the loudness time curve."""
+        curve_y_unit = str(advanced_cfg.get("curve_y_unit", config.get("curve_limit_unit", "sone")) or "sone").lower()
+        if curve_y_unit == "phon":
+            values = np.asarray(raw.loudness_level_phon, dtype=np.float64)
+        else:
+            values = np.asarray(raw.loudness_sone, dtype=np.float64)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
+            return
+
+        upper_enabled = bool(
+            config.get(
+                "curve_upper_enabled",
+                config.get("mean_upper_enabled", config.get("nmax_upper_enabled", False)),
+            )
+        )
+        upper_limit = float(
+            config.get(
+                "curve_upper_value",
+                config.get("mean_upper_sone", config.get("nmax_upper_sone", 0.0)),
+            )
+            or 0.0
+        )
+        lower_enabled = bool(
+            config.get(
+                "curve_lower_enabled",
+                config.get("mean_lower_enabled", config.get("nmax_lower_enabled", False)),
+            )
+        )
+        lower_limit = float(
+            config.get(
+                "curve_lower_value",
+                config.get("mean_lower_sone", config.get("nmax_lower_sone", 0.0)),
+            )
+            or 0.0
+        )
+
+        deviations = []
+        if upper_enabled:
+            upper_deviation = float(np.max(values - upper_limit))
+            if upper_deviation > 0.0:
+                deviations.append(upper_deviation)
+        if lower_enabled:
+            lower_deviation = float(np.max(lower_limit - values))
+            if lower_deviation > 0.0:
+                deviations.append(lower_deviation)
+
+        deviation = float(max(deviations)) if deviations else 0.0
+        self._merge_analysis_limit_result(deviation == 0.0, deviation)
+
+    def _apply_curve_limits(self, values: np.ndarray, config: dict):
+        if not bool(config.get("limit_checked", False)):
+            return
+
+        finite = np.asarray(values, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            self._merge_analysis_limit_result(False, float("nan"))
+            return
+
+        upper_enabled = bool(config.get("curve_upper_enabled", False))
+        upper_limit = float(config.get("curve_upper_value", 0.0) or 0.0)
+        lower_enabled = bool(config.get("curve_lower_enabled", False))
+        lower_limit = float(config.get("curve_lower_value", 0.0) or 0.0)
+
+        deviations = []
+        if upper_enabled:
+            upper_deviation = float(np.max(finite - upper_limit))
+            if upper_deviation > 0.0:
+                deviations.append(upper_deviation)
+        if lower_enabled:
+            lower_deviation = float(np.max(lower_limit - finite))
+            if lower_deviation > 0.0:
+                deviations.append(lower_deviation)
+
+        deviation = float(max(deviations)) if deviations else 0.0
+        self._merge_analysis_limit_result(deviation == 0.0, deviation)
+
+    @staticmethod
+    def _draw_limit_lines(plot_widget, config: dict, x_range=None):
+        """Draw horizontal limit lines on a plot if configured."""
+        if not bool(config.get("limit_checked", False)):
+            return
+        upper_enabled = bool(config.get("curve_upper_enabled", False))
+        lower_enabled = bool(config.get("curve_lower_enabled", False))
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
+        if upper_enabled:
+            val = float(config.get("curve_upper_value", 0.0) or 0.0)
+            plot_widget.addLine(y=val, pen=dashed_pen)
+        if lower_enabled:
+            val = float(config.get("curve_lower_value", 0.0) or 0.0)
+            plot_widget.addLine(y=val, pen=dashed_pen)
+
+    @staticmethod
+    def _draw_loudness_limit_lines(plot_widget, config: dict):
+        """Draw horizontal limit lines for loudness plot."""
+        if not bool(config.get("limit_checked", False)):
+            return
+        upper_enabled = bool(
+            config.get("curve_upper_enabled",
+                        config.get("mean_upper_enabled", config.get("nmax_upper_enabled", False)))
+        )
+        lower_enabled = bool(
+            config.get("curve_lower_enabled",
+                        config.get("mean_lower_enabled", config.get("nmax_lower_enabled", False)))
+        )
+        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
+        if upper_enabled:
+            val = float(
+                config.get("curve_upper_value",
+                            config.get("mean_upper_sone", config.get("nmax_upper_sone", 0.0))) or 0.0
+            )
+            plot_widget.addLine(y=val, pen=dashed_pen)
+        if lower_enabled:
+            val = float(
+                config.get("curve_lower_value",
+                            config.get("mean_lower_sone", config.get("nmax_lower_sone", 0.0))) or 0.0
+            )
+            plot_widget.addLine(y=val, pen=dashed_pen)
+
+    def _merge_analysis_limit_result(self, is_ok: bool, deviation: float):
+        existing = self.data_struct.analysis_result_dict.get(self.title_name)
+        if not isinstance(existing, (tuple, list)) or len(existing) < 2:
+            self.data_struct.analysis_result_dict[self.title_name] = (bool(is_ok), float(deviation))
+            return
+
+        existing_ok = bool(existing[0])
+        try:
+            existing_deviation = float(existing[1])
+        except (TypeError, ValueError):
+            existing_deviation = float("nan")
+
+        if np.isfinite(existing_deviation) and np.isfinite(float(deviation)):
+            merged_deviation = max(existing_deviation, float(deviation))
+        elif np.isfinite(existing_deviation):
+            merged_deviation = existing_deviation
+        else:
+            merged_deviation = float(deviation)
+        self.data_struct.analysis_result_dict[self.title_name] = (existing_ok and bool(is_ok), merged_deviation)
+
+
+class RoughnessAnalysis(LoudnessAnalysis):
+    """Standalone ROUGH analysis backed by Daniel-Weber / Aures roughness."""
+
+    def calculate_roughness(self):
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        config = self.analysis_config or {}
+
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "粗糙度分析失败：没有可用录音数据。")
+            return False
+
+        sq_config = self._build_sq_config(config)
+        run_result = run_sound_quality(
+            np.asarray(recorded_signal, dtype=np.float64),
+            int(sample_rate),
+            project_v2pa_factor=float(self.v2pa_factor or 1.0),
+            sq_config=sq_config,
+        )
+
+        roughness_result = run_result.roughness
+        if roughness_result is None or not roughness_result.enabled or roughness_result.raw_result is None:
+            reason = getattr(roughness_result, "skipped_reason", None) or run_result.skipped_reason or "unknown"
+            MessageBox.warning(self, "提示", f"粗糙度分析跳过：{reason}")
+            return False
+
+        self._plot_roughness_curve(roughness_result, config)
+        self._apply_curve_limits(roughness_result.raw_result.roughness_asper, config)
+
+        raw = roughness_result.raw_result
+        summary = roughness_result.summary or {}
+        self.result = {
+            "summary": summary,
+            "time_s": np.asarray(raw.time_s, dtype=np.float64).tolist(),
+            "roughness_asper": np.asarray(raw.roughness_asper, dtype=np.float64).tolist(),
+            "bark_axis": np.asarray(raw.bark_axis, dtype=np.float64).tolist(),
+            "metadata": dict(raw.metadata or {}),
+        }
+        self.export_detail = {
+            "rmean_asper": summary.get("r_mean_asper"),
+        }
+        return self.result
+
+    @staticmethod
+    def _build_sq_config(config: dict) -> dict:
+        display_cfg = config.get("display", {}) or {}
+        save_cfg = config.get("save", {}) or {}
+        advanced_cfg = config.get("advanced", {}) or {}
+        return {
+            "enabled": True,
+            "shared": {"field_type": "free"},
+            "items": {
+                "LOUD": {"enabled": False},
+                "SHRP": {"enabled": False},
+                "ROUGH": {
+                    "enabled": bool(config.get("enabled", True)),
+                    "display": display_cfg,
+                    "save": save_cfg,
+                    "advanced": advanced_cfg,
+                },
+                "FLUC": {"enabled": False},
+                "TON": {"enabled": False},
+                "PR": {"enabled": False},
+                "TNR": {"enabled": False},
+            },
+        }
+
+    def _plot_roughness_curve(self, roughness_result, config=None):
+        payload = roughness_result.display_payload or {}
+        curves = payload.get("curves", []) or []
+        curve = next((item for item in curves if item.get("key") == "roughness_time"), None)
+
+        self.analysis_plot.clear()
+        if curve:
+            time_s = np.asarray(curve.get("x"), dtype=np.float64)
+            roughness = np.asarray(curve.get("y"), dtype=np.float64)
+            if time_s.size and roughness.size:
+                self.analysis_plot.plot(
+                    time_s,
+                    roughness,
+                    pen=mkPen(color=(105, 85, 190), width=2),
+                    name="Roughness",
+                    connect="finite",
+                )
+                self._apply_roughness_y_axis(self.analysis_plot, roughness)
+
+        self.analysis_plot.setLabel("left", "Roughness R (asper)")
+        self.analysis_plot.setLabel("bottom", "Time (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+
+        if config:
+            self._draw_limit_lines(self.analysis_plot, config)
+
+        title_parts = []
+        for card in payload.get("summary_cards", []) or []:
+            value = card.get("value")
+            try:
+                finite_value = value is not None and np.isfinite(float(value))
+            except (TypeError, ValueError):
+                finite_value = False
+            if finite_value:
+                title_parts.append(f"{card.get('label', card.get('key'))}: {float(value):.3g} {card.get('unit', '')}")
+        if title_parts:
+            self.analysis_plot.setTitle(" | ".join(title_parts), size="14px", color="k")
+
+
+class SharpnessAnalysis(LoudnessAnalysis):
+    """Standalone SHRP analysis backed by DIN 45692 sharpness."""
+
+    def calculate_sharpness(self):
+        recorded_signal = self.data_struct.store_wave_data
+        sample_rate = self.data_struct.sample_rate
+        config = self.analysis_config or {}
+
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "尖锐度分析失败：没有可用录音数据。")
+            return False
+
+        sq_config = self._build_sq_config(config)
+        run_result = run_sound_quality(
+            np.asarray(recorded_signal, dtype=np.float64),
+            int(sample_rate),
+            project_v2pa_factor=float(self.v2pa_factor or 1.0),
+            sq_config=sq_config,
+        )
+
+        sharpness_result = run_result.sharpness
+        if sharpness_result is None or not sharpness_result.enabled or sharpness_result.raw_result is None:
+            reason = getattr(sharpness_result, "skipped_reason", None) or run_result.skipped_reason or "unknown"
+            MessageBox.warning(self, "提示", f"尖锐度分析跳过：{reason}")
+            return False
+
+        self._plot_sharpness_curve(sharpness_result, config)
+        self._apply_curve_limits(sharpness_result.raw_result.sharpness_acum, config)
+
+        raw = sharpness_result.raw_result
+        summary = sharpness_result.summary or {}
+        self.result = {
+            "summary": summary,
+            "time_s": np.asarray(raw.time_s, dtype=np.float64).tolist(),
+            "sharpness_acum": np.asarray(raw.sharpness_acum, dtype=np.float64).tolist(),
+            "metadata": dict(raw.metadata or {}),
+        }
+        self.export_detail = {
+            "smean_acum": summary.get("s_mean_acum"),
+            "sstationary_acum": summary.get("s_stationary_acum"),
+        }
+        return self.result
+
+    @staticmethod
+    def _build_sq_config(config: dict) -> dict:
+        display_cfg = config.get("display", {}) or {}
+        save_cfg = config.get("save", {}) or {}
+        advanced_cfg = config.get("advanced", {}) or {}
+
+        loud_cfg = _merge_loudness_config_with_defaults(
+            config.get("upstream_loudness", {}) or config.get("loudness", {}) or {}
+        )
+        loud_display = dict(loud_cfg.get("display", {}) or {})
+        loud_display.setdefault("summary_metrics", [])
+        loud_display.setdefault("curves", [])
+        loud_display.setdefault("heatmaps", [])
+
+        loud_save = dict(loud_cfg.get("save", {}) or {})
+        loud_save.setdefault("summary", False)
+        loud_save.setdefault("curve", False)
+        loud_save.setdefault("specific_loudness", False)
+
+        loud_advanced = dict(loud_cfg.get("advanced", {}) or {})
+
+        return {
+            "enabled": True,
+            "shared": {"field_type": "free"},
+            "items": {
+                "LOUD": {
+                    "enabled": True,
+                    "method": loud_cfg.get("method", config.get("loudness_method", "per_segment")),
+                    "display": loud_display,
+                    "save": loud_save,
+                    "advanced": loud_advanced,
+                },
+                "SHRP": {
+                    "enabled": bool(config.get("enabled", True)),
+                    "display": display_cfg,
+                    "save": save_cfg,
+                    "advanced": advanced_cfg,
+                },
+                "ROUGH": {"enabled": False},
+                "FLUC": {"enabled": False},
+                "TON": {"enabled": False},
+                "PR": {"enabled": False},
+                "TNR": {"enabled": False},
+            },
+        }
+
+    def _plot_sharpness_curve(self, sharpness_result, config=None):
+        payload = sharpness_result.display_payload or {}
+        curves = payload.get("curves", []) or []
+        curve = next((item for item in curves if item.get("key") == "sharpness_time"), None)
+
+        self.analysis_plot.clear()
+        if curve:
+            time_s = np.asarray(curve.get("x"), dtype=np.float64)
+            sharpness = np.asarray(curve.get("y"), dtype=np.float64)
+            if time_s.size and sharpness.size:
+                self.analysis_plot.plot(
+                    time_s,
+                    sharpness,
+                    pen=mkPen(color=(225, 122, 39), width=2),
+                    name="Sharpness",
+                    connect="finite",
+                )
+                self._apply_sharpness_y_axis(self.analysis_plot, sharpness)
+
+        self.analysis_plot.setLabel("left", "Sharpness S (acum)")
+        self.analysis_plot.setLabel("bottom", "Time (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+
+        if config:
+            self._draw_limit_lines(self.analysis_plot, config)
+
+        title_parts = []
+        for card in payload.get("summary_cards", []) or []:
+            value = card.get("value")
+            try:
+                finite_value = value is not None and np.isfinite(float(value))
+            except (TypeError, ValueError):
+                finite_value = False
+            if finite_value:
+                title_parts.append(f"{card.get('label', card.get('key'))}: {float(value):.3g} {card.get('unit', '')}")
+        if title_parts:
+            self.analysis_plot.setTitle(" | ".join(title_parts), size="14px", color="k")
+
+
 class FrequencyBandAnalysis(AnalysisGraphWidget):
     """
     频段能量分析 (Frequency Band Analysis) 窗口。
@@ -3333,6 +4187,451 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         self.analysis_plot.setTitle(f"Overall: {overall:.1f} {weight_label} [SPL]", size="14px", color="k")
 
         self.analysis_plot.showGrid(x=False, y=True)
+
+
+def _decimate_peak_envelope(x: np.ndarray, y: np.ndarray, max_points: int):
+    """峰值包络降采样：把密集曲线压到约 max_points 点，保留每段的最小/最大值。
+
+    频谱有数万点时 pyqtgraph 宽线渲染很慢；普通抽稀会丢掉窄带峰，这里按桶取
+    min/max 两点并按 x 顺序排列，视觉上峰谷与原曲线一致。
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = x.size
+    if max_points <= 0 or n <= max_points:
+        return x, y
+    buckets = max(1, max_points // 2)
+    step = n // buckets
+    if step < 2:
+        return x, y
+    usable = step * buckets
+    xr = x[:usable].reshape(buckets, step)
+    yr = y[:usable].reshape(buckets, step)
+    cols = np.arange(buckets)
+    imin = yr.argmin(axis=1)
+    imax = yr.argmax(axis=1)
+    first_is_min = imin <= imax
+    out_x = np.empty(buckets * 2, dtype=float)
+    out_y = np.empty(buckets * 2, dtype=float)
+    out_x[0::2] = np.where(first_is_min, xr[cols, imin], xr[cols, imax])
+    out_y[0::2] = np.where(first_is_min, yr[cols, imin], yr[cols, imax])
+    out_x[1::2] = np.where(first_is_min, xr[cols, imax], xr[cols, imin])
+    out_y[1::2] = np.where(first_is_min, yr[cols, imax], yr[cols, imin])
+    if usable < n:
+        out_x = np.concatenate([out_x, x[usable:]])
+        out_y = np.concatenate([out_y, y[usable:]])
+    return out_x, out_y
+
+
+class ProminenceRatioAnalysis(AnalysisGraphWidget):
+    """突出比 (PR / Prominence Ratio) 分析窗口（双轨图）。
+
+    需求书《笔记本电脑风扇噪音核心测试要求书》PR 频谱模块：
+    - 标题沿用“线性功率谱 + PR 值分布曲线”；上轨按需求纵轴定义绘制临界频带功率 dB。
+    - 下轨：PR 值分布曲线 dB；横轴 Frequency (kHz)。
+    - 默认计算口径：ECMA-74 Annex D / ECMA-418-1 标准临界带 + 线性(Z)/不计权功率。
+      15% 固定比例仅按需求书作为图面划分线显示，不参与默认 PR 功率积分。
+    - 图面按需求书展示名称标注，不显示 mode/df/FFT/weighting 等内部调试参数。
+    """
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.result = {}
+        self.export_detail = {}
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+        # 下轨 PR 曲线（上轨复用基类 self.analysis_plot 作为临界带功率谱）
+        self.pr_plot = pg.PlotWidget()
+        self.pr_plot.setBackground("white")
+        self.apply_plot_font_style(self.pr_plot, 20)
+        self.layout().addWidget(self.pr_plot)
+        # 双轨共用同一频率横轴：与下轨联动，并隐藏上轨重复的 X 刻度，仅下轨保留一条频率轴
+        self.analysis_plot.setXLink(self.pr_plot)
+        self.analysis_plot.getAxis("bottom").setStyle(showValues=False)
+
+    def calculate_pr(self):
+        """执行 PR 分析并绘制双轨图。"""
+        config = self.analysis_config or {}
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            return False
+        sample_rate = self.data_struct.sample_rate
+        if sample_rate is None:
+            return False
+
+        params, cfg_warnings = ProminenceRatioParams.from_config(config)
+        fan_pr_limits = config.get("fan_pr_limits") or [[100, 2000, 4], [2000, 5000, 2], [5000, 20000, 4]]
+
+        try:
+            analyzer = ProminenceRatioAnalyzer(int(sample_rate))
+            res = analyzer.compute(
+                recorded_signal,
+                self.v2pa_factor or 1.0,
+                params,
+                fan_pr_limits,
+                initial_warnings=cfg_warnings,
+            )
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"PR 分析失败: {str(e)[:200]}")
+            return False
+
+        if res.decision_status == "invalid" and (res.frequency_hz is None or len(res.frequency_hz) == 0):
+            MessageBox.warning(self, "提示", "PR 分析无有效数据:\n" + "\n".join(res.warnings[:6]))
+            return False
+
+        self._plot_dual_track(res, params, fan_pr_limits)
+
+        # OK/NG 仅在启用限值且判定为 pass/fail（overall_ok 为 bool）时写入汇总
+        limit_checked = bool(config.get("limit_checked", True))
+        if limit_checked and res.decision_status in ("pass", "fail") and res.overall_ok is not None:
+            self.data_struct.analysis_result_dict[self.title_name] = (bool(res.overall_ok), float(res.max_exceed_db))
+
+        if res.warnings:
+            MessageBox.warning(self, "提示", "PR 分析提示:\n" + "\n".join(res.warnings[:6]))
+
+        self.result = {
+            "frequency_hz": np.asarray(res.frequency_hz, dtype=float).tolist(),
+            "band_power_db": np.asarray(res.band_power_db, dtype=float).tolist(),
+            "pr_db": np.asarray(res.pr_db, dtype=float).tolist(),
+            "fft_freq_hz": np.asarray(res.fft_freq_hz, dtype=float).tolist(),
+            "fft_magnitude_db": np.asarray(res.fft_magnitude_db, dtype=float).tolist(),
+            "max_pr_db": res.max_pr_db,
+            "max_pr_frequency_hz": res.max_pr_frequency_hz,
+            "decision_status": res.decision_status,
+            "overall_ok": res.overall_ok,
+            "max_exceed_db": res.max_exceed_db,
+            "no_valid_main_tone": res.no_valid_main_tone,
+            "main_tones": [self._tone_to_dict(t) for t in res.main_tones],
+            "warnings": list(res.warnings),
+            "metadata": dict(res.metadata),
+        }
+        self.export_detail = {
+            "max_pr_db": res.max_pr_db,
+            "max_pr_frequency_hz": res.max_pr_frequency_hz,
+            "max_exceed_db": res.max_exceed_db,
+            "decision_status": res.decision_status,
+            "tone_count": int(sum(1 for t in res.main_tones if t.valid_main_tone)),
+            "critical_band_mode": res.metadata.get("critical_band_mode"),
+            "effective_weighting": res.metadata.get("effective_weighting"),
+            "warnings": list(res.warnings),
+        }
+        return self.result
+
+    @staticmethod
+    def _tone_to_dict(t):
+        return {
+            "frequency_hz": t.frequency_hz,
+            "peak_db": t.peak_db,
+            "target_band_hz": list(t.target_band_hz),
+            "lower_adjacent_band_hz": list(t.lower_adjacent_band_hz),
+            "upper_adjacent_band_hz": list(t.upper_adjacent_band_hz),
+            "pr_db": t.pr_db,
+            "limit_db": t.limit_db,
+            "margin_db": t.margin_db,
+            "ecma_prominent": t.ecma_prominent,
+            "customer_ok": t.customer_ok,
+            "is_ok": t.is_ok,
+            "valid_main_tone": t.valid_main_tone,
+            "same_band_group_id": t.same_band_group_id,
+            "same_band_representative": t.same_band_representative,
+            "harmonic_order": t.harmonic_order,
+            "bpf_verified": t.bpf_verified,
+            "invalid_reasons": list(t.invalid_reasons),
+        }
+
+    @staticmethod
+    def _finite_float(value, default=float("nan")):
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            return default
+        return out if np.isfinite(out) else default
+
+    @staticmethod
+    def _tone_sort_key(t):
+        pr_db = ProminenceRatioAnalysis._finite_float(getattr(t, "pr_db", float("nan")), -1e9)
+        limit_db = ProminenceRatioAnalysis._finite_float(getattr(t, "limit_db", float("nan")), 0.0)
+        exceed_db = pr_db - limit_db
+        is_ng = getattr(t, "customer_ok", None) is False
+        is_rep = bool(getattr(t, "same_band_representative", True))
+        return (1 if is_ng else 0, 1 if is_rep else 0, exceed_db, pr_db)
+
+    def _select_pr_plot_tones(self, tones):
+        cfg = self.analysis_config or {}
+        max_labels = int(cfg.get("max_pr_annotation_tones", 8) or 8)
+        max_labels = max(1, min(max_labels, 20))
+        valid = [
+            t for t in tones
+            if getattr(t, "valid_main_tone", False)
+            and np.isfinite(self._finite_float(getattr(t, "pr_db", float("nan"))))
+        ]
+        if not valid:
+            return []
+        primary = [
+            t for t in valid
+            if getattr(t, "customer_ok", None) is False
+            or bool(getattr(t, "same_band_representative", True))
+        ]
+        pool = primary or valid
+        return sorted(pool, key=self._tone_sort_key, reverse=True)[:max_labels]
+
+    @staticmethod
+    def _reset_pr_legend(plot, offset=(-10, 10)):
+        plot_item = plot.getPlotItem()
+        legend = getattr(plot_item, "legend", None)
+        if legend is None:
+            legend = plot.addLegend(offset=offset)
+            legend.setParentItem(plot_item.getViewBox())
+        else:
+            legend.clear()
+        legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=offset)
+        try:
+            legend.setBrush(QColor(255, 255, 255, 220))
+            legend.setPen(mkPen(color=(180, 180, 180), width=1))
+        except Exception:
+            pass
+        return legend
+
+    @staticmethod
+    def _add_legend_sample(plot, name, *, color, width=2, style=Qt.SolidLine, symbol=None, line=True, fill=None):
+        """向图例添加一个不参与绘图的样本条目。
+
+        fill 给定 RGBA 时，图例样本渲染为“半透明填充块 + 同色细边”，与频带色块
+        （LinearRegionItem 填充 + InfiniteLine 边线）一致，避免图例颜色比实际更鲜艳。
+        """
+        if fill is not None:
+            # RGBA 预合成到白底，与画面上半透明色块视觉一致
+            r, g, b = fill[:3]
+            a = fill[3] / 255.0
+            premul = (int(255 * (1 - a) + r * a),
+                      int(255 * (1 - a) + g * a),
+                      int(255 * (1 - a) + b * a))
+            plot.plot([], [], pen=mkPen(color=premul, width=8), name=name)
+            return
+
+        kwargs = {
+            "pen": mkPen(color=color, width=width, style=style) if (line and color is not None) else mkPen(None),
+            "name": name,
+        }
+        if symbol:
+            kwargs.update({
+                "symbol": symbol,
+                "symbolSize": 9,
+                "symbolBrush": color,
+                "symbolPen": mkPen(color=color, width=1) if color is not None else None,
+            })
+        plot.plot([], [], **kwargs)
+
+    @staticmethod
+    def _add_pr_band_region(plot, band_hz, color):
+        f1, f2 = [ProminenceRatioAnalysis._finite_float(v) for v in band_hz]
+        if not (np.isfinite(f1) and np.isfinite(f2)) or f2 <= f1:
+            return
+        x1, x2 = f1 / 1000.0, f2 / 1000.0
+        region = pg.LinearRegionItem(
+            values=(x1, x2),
+            orientation=pg.LinearRegionItem.Vertical,
+            movable=False,
+            brush=QColor(color[0], color[1], color[2], color[3]),
+            pen=mkPen(color=color[:3], width=1),
+        )
+        region.setZValue(-10)
+        plot.addItem(region)
+
+    @staticmethod
+    def _vline_label_font():
+        """竖线标签（如 15%）用较大字体。"""
+        font = QFont()
+        font.setPixelSize(ui_style_const.scale_size_px(13))
+        return font
+
+    @staticmethod
+    def _add_pr_vertical_line(plot, x_hz, pen, label=None, label_y=None):
+        x = ProminenceRatioAnalysis._finite_float(x_hz)
+        if not np.isfinite(x):
+            return
+        plot.addItem(pg.InfiniteLine(pos=x / 1000.0, angle=90, pen=pen))
+        if label and label_y is not None and np.isfinite(label_y):
+            text = pg.TextItem(label, color=(90, 90, 90), anchor=(0.5, 1.0))
+            text.setFont(ProminenceRatioAnalysis._vline_label_font())
+            text.setPos(x / 1000.0, label_y)
+            plot.addItem(text)
+
+    @staticmethod
+    def _format_band_line(name, band_hz, power_db):
+        """格式化单行频带信息：名称 频率范围 功率。"""
+        f1 = ProminenceRatioAnalysis._finite_float(band_hz[0])
+        f2 = ProminenceRatioAnalysis._finite_float(band_hz[1])
+        power = ProminenceRatioAnalysis._finite_float(power_db)
+        if not (np.isfinite(f1) and np.isfinite(f2)):
+            return ""
+        pwr = f"{power:.1f}dB" if np.isfinite(power) else "--dB"
+        return f"{name} {f1:.0f}-{f2:.0f}Hz {pwr}"
+
+    def _plot_pr_band_annotations(self, tones, params, y_top, y_span):
+        """上轨频带色块 + 信息卡片（白底框，放在色块右侧）。"""
+        ratio = self._finite_float(getattr(params, "customer_band_ratio", 0.15), 0.15)
+        dashed_15pct = mkPen(color=(120, 120, 120), width=1, style=Qt.DashLine)
+        for idx, t in enumerate(tones):
+            xm = self._finite_float(getattr(t, "target_power_db", float("nan")))
+            xl = self._finite_float(getattr(t, "lower_adjacent_power_db", float("nan")))
+            xu = self._finite_float(getattr(t, "upper_adjacent_power_db", float("nan")))
+            lower_band = getattr(t, "lower_adjacent_band_hz", (np.nan, np.nan))
+            target_band = getattr(t, "target_band_hz", (np.nan, np.nan))
+            upper_band = getattr(t, "upper_adjacent_band_hz", (np.nan, np.nan))
+
+            self._add_pr_band_region(self.analysis_plot, lower_band, (33, 102, 172, 34))
+            self._add_pr_band_region(self.analysis_plot, upper_band, (33, 102, 172, 34))
+            self._add_pr_band_region(self.analysis_plot, target_band, (214, 39, 40, 42))
+
+            # 信息卡片：三行汇总，白底半透明框，放在上邻带右侧
+            lines = [
+                self._format_band_line("下邻带", lower_band, xl),
+                self._format_band_line("目标带", target_band, xm),
+                self._format_band_line("上邻带", upper_band, xu),
+            ]
+            card_text = "\n".join(ln for ln in lines if ln)
+            if card_text:
+                upper_f2 = self._finite_float(upper_band[1])
+                card_x = (upper_f2 / 1000.0 + 0.05) if np.isfinite(upper_f2) else 0
+                card_y = y_top - (0.03 + 0.30 * idx) * y_span
+                card = pg.TextItem(
+                    card_text, color=(50, 50, 50), anchor=(0.0, 0.0),
+                    border=mkPen(color=(160, 160, 160), width=1),
+                    fill=QColor(255, 255, 255, 200),
+                )
+                card.setPos(card_x, card_y)
+                self.analysis_plot.addItem(card)
+
+            ft = self._finite_float(getattr(t, "frequency_hz", float("nan")))
+            if np.isfinite(ft):
+                half_15 = 0.5 * ratio * ft
+                line_label = "15%" if idx == 0 else None
+                self._add_pr_vertical_line(self.analysis_plot, ft - half_15, dashed_15pct,
+                                           line_label, y_top + 0.14 * y_span)
+                self._add_pr_vertical_line(self.analysis_plot, ft + half_15, dashed_15pct)
+                self._add_pr_vertical_line(
+                    self.analysis_plot,
+                    ft,
+                    mkPen(color=(45, 45, 45), width=1, style=Qt.DotLine),
+                )
+
+    def _plot_dual_track(self, res, params, fan_pr_limits):
+        # 批量绘图期间冻结视图更新，避免每次 addItem 都触发重绘
+        for pw in (self.analysis_plot, self.pr_plot):
+            pw.getPlotItem().getViewBox().blockSignals(True)
+            pw.getPlotItem().getViewBox().disableAutoRange()
+        try:
+            self._plot_dual_track_inner(res, params, fan_pr_limits)
+        finally:
+            for pw in (self.analysis_plot, self.pr_plot):
+                pw.getPlotItem().getViewBox().blockSignals(False)
+            # 上轨已手动 setYRange；下轨需要解冻后自动适配
+            self.pr_plot.getPlotItem().getViewBox().enableAutoRange()
+            self.pr_plot.getPlotItem().getViewBox().autoRange()
+
+    def _plot_dual_track_inner(self, res, params, fan_pr_limits):
+        self.analysis_plot.clear()
+        self.pr_plot.clear()
+        self._reset_pr_legend(self.analysis_plot)
+        self._reset_pr_legend(self.pr_plot)
+
+        freq = np.asarray(res.frequency_hz, dtype=float)
+        if freq.size == 0:
+            return
+        f_khz = freq / 1000.0
+        band_power = np.asarray(res.band_power_db, dtype=float)
+        pr = np.asarray(res.pr_db, dtype=float)
+
+        # ---- 上轨：临界频带功率 + 频带功率标注 ----
+        # 谱可达数万点，pyqtgraph 宽线渲染极慢；先做峰值包络降采样（保留峰，渲染快约 10×）
+        max_pts = int((self.analysis_config or {}).get("max_plot_points", 2000))
+        f_lo_hz = self._finite_float(getattr(params, "f_min", 0.0), 0.0)
+        configured_f_hi_hz = self._finite_float(getattr(params, "f_max", freq[-1]), float(freq[-1]))
+        f_hi_hz = configured_f_hi_hz
+        band_valid = np.isfinite(band_power) & (freq >= f_lo_hz) & (freq <= f_hi_hz)
+        bx, by = _decimate_peak_envelope(f_khz[band_valid], band_power[band_valid], max_pts)
+        self.analysis_plot.plot(bx, by, pen=mkPen(color=(51, 196, 77), width=2), name="临界频带功率")
+        finite_upper = band_power[band_valid]
+        self.analysis_plot.setLabel("left", "临界频带功率 [dB]")
+        self.analysis_plot.showGrid(x=True, y=True)
+        self.analysis_plot.setTitle("线性功率谱 + PR值分布曲线", size="12px", color="k")
+
+        if finite_upper.size:
+            y_top = float(np.nanmax(finite_upper))
+            y_bottom = float(np.nanmin(finite_upper))
+            y_span = max(y_top - y_bottom, 1.0)
+            # 顶部留白，给抬高的 15% 标签和信息卡片腾出空间
+            self.analysis_plot.setYRange(y_bottom - 0.02 * y_span, y_top + 0.18 * y_span, padding=0)
+        else:
+            y_top, y_span = 1.0, 1.0
+        plot_tones = self._select_pr_plot_tones(res.main_tones)
+        self._plot_pr_band_annotations(plot_tones, params, y_top, y_span)
+        if plot_tones:
+            # 图例色块直接用画色块时的颜色（取 RGB 实色，便于辨认）
+            self._add_legend_sample(self.analysis_plot, "目标频带", color=(214, 39, 40), fill=(214, 39, 40, 42))
+            self._add_legend_sample(self.analysis_plot, "相邻频带", color=(33, 102, 172), fill=(33, 102, 172, 34))
+            self._add_legend_sample(
+                self.analysis_plot,
+                "15%划分线",
+                color=(120, 120, 120),
+                width=1,
+                style=Qt.DashLine,
+            )
+        # ---- 下轨：PR 曲线 + 限值线 + 主音标注 ----
+        valid = np.isfinite(pr)
+        px, py = _decimate_peak_envelope(f_khz[valid], pr[valid], max_pts)
+        self.pr_plot.plot(px, py, pen=mkPen(color=(33, 102, 172), width=2), name="PR")
+        self.pr_plot.setLabel("left", "PR值 [dB]")
+        self.pr_plot.setLabel("bottom", "频率 [kHz]")
+        self.pr_plot.showGrid(x=True, y=True)
+
+        x_min = max(0.0, f_lo_hz / 1000.0)
+        x_max = f_hi_hz / 1000.0
+        if np.isfinite(x_max) and x_max > x_min:
+            x_pad = (x_max - x_min) * 0.02
+            self.analysis_plot.setXRange(x_min, x_max + x_pad, padding=0)
+            self.pr_plot.setXRange(x_min, x_max + x_pad, padding=0)
+            self.analysis_plot.getViewBox().setLimits(xMin=x_min, xMax=x_max + x_pad)
+            self.pr_plot.getViewBox().setLimits(xMin=x_min, xMax=x_max + x_pad)
+
+        # 分段限值线（仅在启用限值时绘制）
+        if bool((self.analysis_config or {}).get("limit_checked", True)):
+            self._add_legend_sample(
+                self.pr_plot,
+                "PR限值",
+                color=(214, 39, 40),
+                width=2,
+                style=Qt.DashLine,
+            )
+            for band in fan_pr_limits:
+                f_lo, f_hi, lim = float(band[0]), float(band[1]), float(band[2])
+                self.pr_plot.plot(
+                    [f_lo / 1000.0, f_hi / 1000.0], [lim, lim],
+                    pen=mkPen(color=(214, 39, 40), width=2, style=Qt.DashLine),
+                )
+
+        # 主音标注：只标代表峰/NG 峰，避免候选峰文本铺满图面
+        if plot_tones:
+            self._add_legend_sample(self.pr_plot, "有效主音", color=(76, 175, 80), symbol="o", line=False)
+        for idx, t in enumerate(plot_tones):
+            is_ng = (t.customer_ok is False)
+            color = (214, 39, 40) if is_ng else (76, 175, 80)
+            self.pr_plot.plot(
+                [t.frequency_hz / 1000.0], [t.pr_db],
+                pen=mkPen(None), symbol="o", symbolSize=9, symbolBrush=color,
+            )
+            prefix = "NG " if is_ng else ""
+            label = f"{prefix}{t.frequency_hz:.0f}Hz  PR={t.pr_db:.1f} dB, Limit={t.limit_db:.0f} dB"
+            text = pg.TextItem(label, color=color, anchor=(0.5, 1.15 + 0.25 * (idx % 3)))
+            text.setPos(t.frequency_hz / 1000.0, t.pr_db + 0.15 * (idx % 3))
+            self.pr_plot.addItem(text)
 
 
 if __name__ == "__main__":
