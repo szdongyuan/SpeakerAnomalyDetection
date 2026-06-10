@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
     QTableWidgetItem,
     QHeaderView,
+    QToolTip,
 )
 from scipy.signal import find_peaks
 
@@ -32,7 +33,13 @@ from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
-from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
+from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer, FftAnalyzer
+from base.core_algorithm.response.dominant_tone_analyzer import (
+    FrequencyInterval,
+    find_dominant_fba_bands,
+    find_dominant_fft_peaks,
+    parse_frequency_intervals,
+)
 from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
     FrequencyBandAnalyzer,
@@ -70,6 +77,7 @@ def get_class_mapping():
     class_mapping = {
         "SPL": Spl,
         "SPLF": SplFrequency,
+        "FFT": FftAnalysis,
         "FR": Frequency,
         "RSC": ReferenceSpectrumCompareWindow,
         "HD": Distortion,
@@ -1583,6 +1591,352 @@ class Frequency(AnalysisGraphWidget):
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
+
+
+class FftAnalysis(AnalysisGraphWidget):
+    """Welch FFT spectrum analysis window."""
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.result = {}
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_fft(self):
+        config = self.analysis_config or {}
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, config, self.title_name)
+        except Exception as e:
+            MessageBox.warning(self, "提示", str(e))
+            self.plot_fft(np.array([]), np.array([]), x_axis_scale=config.get("x_axis_scale", "log"))
+            self.result = {}
+            return False
+
+        sample_rate = self.data_struct.sample_rate
+        if sample_rate is None:
+            return False
+
+        try:
+            n_fft = int(config.get("n_fft", 4096))
+            window = str(config.get("window", "hann") or "hann")
+            overlap_ratio = float(config.get("overlap_ratio", 0.5))
+            weighting = str(config.get("weighting", "Z") or "Z")
+            analyzer = FftAnalyzer()
+            main_result = analyzer.analyze(
+                recorded_signal,
+                fs=int(sample_rate),
+                n_fft=n_fft,
+                window=window,
+                overlap_ratio=overlap_ratio,
+                weighting=weighting,
+                v2pa_factor=self.v2pa_factor or 1.0,
+            )
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"FFT 分析失败: {str(e)[:200]}")
+            self.plot_fft(np.array([]), np.array([]), x_axis_scale=config.get("x_axis_scale", "log"))
+            self.result = {}
+            return False
+
+        frequency = np.asarray(main_result.frequencies_hz, dtype=float)
+        fft_db = np.asarray(main_result.spectrum_db, dtype=float)
+        baseline_db = None
+
+        baseline_file_path = str(config.get("baseline_file_path", "") or "").strip()
+        if baseline_file_path:
+            try:
+                baseline_signal, _baseline_sr = librosa.load(baseline_file_path, sr=int(sample_rate), mono=True)
+                baseline_result = analyzer.analyze(
+                    baseline_signal,
+                    fs=int(sample_rate),
+                    n_fft=n_fft,
+                    window=window,
+                    overlap_ratio=overlap_ratio,
+                    weighting=weighting,
+                    v2pa_factor=self.v2pa_factor or 1.0,
+                )
+                baseline_db = np.interp(
+                    frequency,
+                    np.asarray(baseline_result.frequencies_hz, dtype=float),
+                    np.asarray(baseline_result.spectrum_db, dtype=float),
+                    left=np.nan,
+                    right=np.nan,
+                )
+                if bool(config.get("baseline_smooth_third_octave", False)):
+                    baseline_db = self._smooth_baseline_third_octave(frequency, baseline_db)
+            except Exception as e:
+                MessageBox.warning(self, "提示", f"背景噪声基线加载失败: {str(e)[:200]}")
+                baseline_db = None
+
+        display_mode = str(config.get("baseline_display_mode", "overlay") or "overlay")
+        curves = self._build_display_curves(frequency, fft_db, baseline_db, display_mode)
+        plot_y = np.asarray(curves["plot_y"], dtype=float)
+        delta_db = curves["delta_db"]
+
+        x_axis_scale = str(config.get("x_axis_scale", "log") or "log")
+        focus_enabled = bool(config.get("focus_range_enabled", True))
+        focus_min_hz = float(config.get("focus_min_hz", 100) or 100)
+        focus_max_hz = float(config.get("focus_max_hz", 20000) or 20000)
+        mask = self._build_frequency_mask(frequency, focus_enabled, focus_min_hz, focus_max_hz, x_axis_scale)
+
+        plot_x = frequency[mask]
+        display_y = plot_y[mask]
+        display_baseline = baseline_db[mask] if baseline_db is not None else None
+        display_fft = fft_db[mask]
+        display_delta = delta_db[mask] if isinstance(delta_db, np.ndarray) else None
+        dominant_y = display_y if bool(config.get("dominant_tone_use_display_curve", True)) else display_fft
+        dominant_tones = self._detect_dominant_tones(
+            plot_x,
+            dominant_y,
+            config,
+            fallback_low_hz=float(np.nanmin(plot_x)) if plot_x.size else 0.0,
+            fallback_high_hz=float(np.nanmax(plot_x)) if plot_x.size else 0.0,
+        )
+
+        limit_checked = bool(config.get("limit_checked", False))
+        y_label = f"FFT Spectrum [dB({weighting}) SPL]" if weighting != "Z" else "FFT Spectrum [dB SPL]"
+        if display_mode == "delta" and display_delta is not None:
+            y_label = "FFT - Baseline [dB]"
+
+        if limit_checked:
+            limit_data = config.get("limit_data")
+            if not limit_data:
+                MessageBox.warning(self, "提示", "已启用阈值，但未加载 CSV 配置文件。")
+                return False
+            csv_x, csv_upper, csv_lower = limit_data
+            self.plot_fft_with_limits(
+                plot_x,
+                display_y,
+                csv_x,
+                csv_upper,
+                csv_lower,
+                x_axis_scale=x_axis_scale,
+                y_label=y_label,
+                baseline_y=display_baseline if display_mode == "overlay" else None,
+                dominant_tones=dominant_tones,
+            )
+        else:
+            self.plot_fft(
+                plot_x,
+                display_y,
+                x_axis_scale=x_axis_scale,
+                y_label=y_label,
+                baseline_y=display_baseline if display_mode == "overlay" else None,
+                dominant_tones=dominant_tones,
+            )
+
+        self.result = {
+            "frequency_bins": plot_x.tolist(),
+            "fft_db": display_fft.tolist(),
+            "baseline_db": display_baseline.tolist() if isinstance(display_baseline, np.ndarray) else [],
+            "delta_db": display_delta.tolist() if isinstance(display_delta, np.ndarray) else [],
+            "plot_db": display_y.tolist(),
+            "weighting": weighting,
+            "display_mode": display_mode,
+            "baseline_smooth_third_octave": bool(config.get("baseline_smooth_third_octave", False)),
+            "n_fft": n_fft,
+            "window": window,
+            "overlap_ratio": overlap_ratio,
+            "x_axis_scale": x_axis_scale,
+            "dominant_tones": dominant_tones,
+        }
+        return self.result
+
+    @staticmethod
+    def _build_display_curves(frequency, spectrum_db, baseline_db, display_mode):
+        spectrum = np.asarray(spectrum_db, dtype=float)
+        baseline = None if baseline_db is None else np.asarray(baseline_db, dtype=float)
+        delta = None
+        plot_y = spectrum
+        if str(display_mode or "overlay") == "delta" and baseline is not None:
+            delta = spectrum - baseline
+            plot_y = delta
+        elif baseline is not None:
+            delta = spectrum - baseline
+        return {
+            "frequency": frequency,
+            "plot_y": plot_y,
+            "fft_db": spectrum,
+            "baseline_db": baseline,
+            "delta_db": delta,
+        }
+
+    @staticmethod
+    def _smooth_baseline_third_octave(frequency, baseline_db):
+        freq = np.asarray(frequency, dtype=float)
+        baseline = np.asarray(baseline_db, dtype=float)
+        smoothed = np.full_like(baseline, np.nan, dtype=float)
+        factor = 2.0 ** (1.0 / 6.0)
+
+        valid_points = np.isfinite(freq) & np.isfinite(baseline)
+        if not np.any(valid_points):
+            return smoothed
+
+        sorted_idx = np.argsort(freq[valid_points])
+        sorted_freq = freq[valid_points][sorted_idx]
+        sorted_power = np.power(10.0, baseline[valid_points][sorted_idx] / 10.0)
+        prefix_power = np.concatenate(([0.0], np.cumsum(sorted_power)))
+        prefix_count = np.arange(sorted_power.size + 1, dtype=float)
+
+        valid_centers = np.isfinite(freq) & (freq > 0)
+        if not np.any(valid_centers):
+            return smoothed
+
+        f_low = freq[valid_centers] / factor
+        f_high = freq[valid_centers] * factor
+        left = np.searchsorted(sorted_freq, f_low, side="left")
+        right = np.searchsorted(sorted_freq, f_high, side="right")
+        counts = prefix_count[right] - prefix_count[left]
+        power_sum = prefix_power[right] - prefix_power[left]
+
+        center_values = np.full(counts.shape, np.nan, dtype=float)
+        non_empty = counts > 0
+        center_values[non_empty] = 10.0 * np.log10(np.maximum(power_sum[non_empty] / counts[non_empty], 1e-30))
+        smoothed[valid_centers] = center_values
+        return smoothed
+
+    @staticmethod
+    def _build_frequency_mask(frequency, focus_enabled, focus_min_hz, focus_max_hz, x_axis_scale):
+        freq = np.asarray(frequency, dtype=float)
+        mask = np.isfinite(freq)
+        if str(x_axis_scale or "linear").lower() == "log":
+            mask &= freq > 0
+        if focus_enabled:
+            mask &= (freq >= float(focus_min_hz)) & (freq <= float(focus_max_hz))
+        return mask
+
+    @staticmethod
+    def _apply_frequency_focus(frequency, values, focus_enabled, focus_min_hz, focus_max_hz, x_axis_scale):
+        freq = np.asarray(frequency, dtype=float)
+        val = np.asarray(values, dtype=float)
+        mask = np.isfinite(freq)
+        if str(x_axis_scale or "linear").lower() == "log":
+            mask &= freq > 0
+        if focus_enabled:
+            mask &= (freq >= float(focus_min_hz)) & (freq <= float(focus_max_hz))
+        return freq[mask], val[mask]
+
+    @staticmethod
+    def _detect_dominant_tones(frequency, values, config, *, fallback_low_hz, fallback_high_hz):
+        if not bool(config.get("dominant_tone_enabled", False)):
+            return []
+        intervals = parse_frequency_intervals(config.get("dominant_tone_intervals_text", ""))
+        if not intervals and fallback_high_hz > fallback_low_hz:
+            intervals = [FrequencyInterval(float(fallback_low_hz), float(fallback_high_hz), "Overall")]
+        return find_dominant_fft_peaks(
+            frequency,
+            values,
+            intervals,
+            min_prominence_db=float(config.get("dominant_tone_min_prominence_db", 3.0) or 0.0),
+        )
+
+    @staticmethod
+    def _dominant_annotation_x(freq, x_axis_scale):
+        freq = float(freq)
+        if str(x_axis_scale or "linear").lower() == "log":
+            if not (np.isfinite(freq) and freq > 0):
+                return np.nan
+            return float(np.log10(freq))
+        return freq
+
+    def _draw_fft_dominant_tones(self, dominant_tones, *, x_axis_scale="linear"):
+        for tone in dominant_tones or []:
+            freq = float(tone.get("frequency_hz", np.nan))
+            level = float(tone.get("level_db", np.nan))
+            plot_x = self._dominant_annotation_x(freq, x_axis_scale)
+            if not (np.isfinite(plot_x) and np.isfinite(level)):
+                continue
+            line = pg.InfiniteLine(pos=plot_x, angle=90, pen=mkPen(color=(255, 152, 0), width=1))
+            self.analysis_plot.addItem(line)
+            text = pg.TextItem(
+                f"{tone.get('interval_label', '')}\n{freq:.1f} Hz",
+                color=(255, 152, 0),
+                anchor=(0.0, 1.0),
+            )
+            text.setPos(plot_x, level)
+            self.analysis_plot.addItem(text)
+
+    def plot_fft(
+        self,
+        frequency,
+        spectrum_db,
+        *,
+        x_axis_scale="log",
+        y_label="FFT Spectrum [dB SPL]",
+        baseline_y=None,
+        dominant_tones=None,
+    ):
+        self.analysis_plot.clear()
+        self.analysis_plot.plot(frequency, spectrum_db, pen=mkPen(color=(51, 196, 77), width=2), name="FFT")
+        if baseline_y is not None:
+            self.analysis_plot.plot(frequency, baseline_y, pen=mkPen(color=(128, 128, 128), width=2), name="Baseline")
+        self.analysis_plot.setLabel("left", y_label)
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.setLogMode(x=str(x_axis_scale).lower() == "log", y=False)
+        self._draw_fft_dominant_tones(dominant_tones, x_axis_scale=x_axis_scale)
+        self.analysis_plot.showGrid(x=True, y=True)
+
+    def plot_fft_with_limits(
+        self,
+        frequency,
+        spectrum_db,
+        csv_freq_list,
+        csv_upper_list,
+        csv_lower_list,
+        *,
+        x_axis_scale="log",
+        y_label="FFT Spectrum [dB SPL]",
+        baseline_y=None,
+        dominant_tones=None,
+    ):
+        freq_arr = np.asarray(frequency, dtype=float)
+        y_arr = np.asarray(spectrum_db, dtype=float)
+        mask = np.isfinite(freq_arr) & np.isfinite(y_arr)
+        if str(x_axis_scale).lower() == "log":
+            mask &= freq_arr > 0
+        freq_valid = freq_arr[mask]
+        y_valid = y_arr[mask]
+        sort_idx = None
+        if freq_valid.size > 1:
+            sort_idx = np.argsort(freq_valid)
+            freq_valid = freq_valid[sort_idx]
+            y_valid = y_valid[sort_idx]
+
+        LimitPlotUtils.setup_limit_plot(
+            self.analysis_plot,
+            freq_valid,
+            y_valid,
+            np.asarray(csv_freq_list, dtype=float),
+            np.asarray(csv_upper_list, dtype=float),
+            np.asarray(csv_lower_list, dtype=float),
+            x_label="Frequency (Hz)",
+            y_label=y_label,
+            log_x=str(x_axis_scale).lower() == "log",
+            curve_name="FFT",
+        )
+        if baseline_y is not None:
+            base = np.asarray(baseline_y, dtype=float)[mask]
+            if sort_idx is not None:
+                base = base[sort_idx]
+            self.analysis_plot.plot(freq_valid, base, pen=mkPen(color=(128, 128, 128), width=2), name="Baseline")
+        self._draw_fft_dominant_tones(dominant_tones, x_axis_scale=x_axis_scale)
+
+        try:
+            out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
+                freq_valid,
+                y_valid,
+                np.asarray(csv_freq_list, dtype=float),
+                np.asarray(csv_upper_list, dtype=float),
+                np.asarray(csv_lower_list, dtype=float),
+            )
+        except Exception:
+            is_ok, deviation = False, 0.0
+            out_mask = np.zeros(len(freq_valid), dtype=bool)
+            plot_x, plot_y = freq_valid, y_valid
+        self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
 
 class AI(QWidget):
@@ -3927,6 +4281,10 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         self.analysis_config = None
         self.result = {}
         self.title_name = title_name
+        self._fba_hover_rows = []
+        self._fba_hover_bar_width = 0.7
+        self._fba_hover_connected = False
+        self._fba_last_hover_index = None
         self.setWindowTitle(title_name)
 
     def calculate_fba(self):
@@ -3984,13 +4342,48 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             MessageBox.warning(self, "提示", f"频段能量分析失败: {str(e)[:200]}")
             return False
 
+        baseline_result = None
+        baseline_file_path = str(config.get("baseline_file_path", "") or "").strip()
+        if baseline_file_path:
+            try:
+                baseline_signal, _baseline_sr = librosa.load(baseline_file_path, sr=int(sample_rate), mono=True)
+                baseline_result = analyzer.analyze(
+                    baseline_signal,
+                    fs=int(sample_rate),
+                    v2pa_factor=self.v2pa_factor or 1.0,
+                )
+            except Exception as e:
+                MessageBox.warning(self, "提示", f"背景噪声基线加载失败: {str(e)[:200]}")
+                baseline_result = None
+
+        baseline_levels = (
+            np.asarray(baseline_result.band_levels_weighted_db, dtype=np.float64)
+            if baseline_result is not None
+            else None
+        )
+        display_mode = str(config.get("baseline_display_mode", "overlay") or "overlay")
+        display_curves = self._build_fba_display_levels(
+            np.asarray(analysis_result.band_levels_weighted_db, dtype=np.float64),
+            baseline_levels,
+            display_mode,
+        )
+        plot_levels = np.asarray(display_curves["plot_levels"], dtype=np.float64)
+        delta_levels = display_curves["delta_levels"]
+        dominant_tones = self._detect_dominant_tones(
+            analysis_result.bands,
+            plot_levels,
+            config,
+            fallback_low_hz=float(f_min),
+            fallback_high_hz=float(f_max),
+        )
+
         limit_checked = config.get("limit_checked", False)
         limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
         upper_limits = None
         lower_limits = None
 
         if limit_checked:
-            levels = np.asarray(analysis_result.band_levels_weighted_db, dtype=np.float64)
+            levels = np.asarray(plot_levels, dtype=np.float64)
             n = int(levels.size)
             centers = np.array([b.f_center for b in analysis_result.bands], dtype=np.float64)
 
@@ -4043,16 +4436,30 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             analysis_result.exceeded_bands = np.where(out_mask)[0].astype(int).tolist()
             self.data_struct.analysis_result_dict[self.title_name] = (bool(is_ok), float(deviation))
 
-        self._plot_bar_chart(analysis_result, weighting, upper_limits=upper_limits, lower_limits=lower_limits)
+        self._plot_bar_chart(
+            analysis_result,
+            weighting,
+            upper_limits=upper_limits,
+            lower_limits=lower_limits,
+            plot_levels=plot_levels,
+            baseline_levels=baseline_levels if display_mode == "overlay" else None,
+            display_mode=display_mode,
+            dominant_tones=dominant_tones,
+        )
 
         self.result = {
             "bands": [b.label for b in analysis_result.bands],
             "band_centers": [b.f_center for b in analysis_result.bands],
             "band_levels_db": analysis_result.band_levels_db.tolist(),
             "band_levels_weighted_db": analysis_result.band_levels_weighted_db.tolist(),
+            "baseline_band_levels_weighted_db": baseline_levels.tolist() if isinstance(baseline_levels, np.ndarray) else [],
+            "delta_band_levels_weighted_db": delta_levels.tolist() if isinstance(delta_levels, np.ndarray) else [],
+            "plot_band_levels_weighted_db": plot_levels.tolist(),
             "overall_db": analysis_result.overall_db,
             "overall_weighted_db": analysis_result.overall_weighted_db,
             "weighting": analysis_result.weighting,
+            "baseline_display_mode": display_mode,
+            "dominant_tones": dominant_tones,
             "exceeded_bands": analysis_result.exceeded_bands,
         }
         return self.result
@@ -4095,6 +4502,123 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 raise ValueError("自定义频段不允许重叠，请检查相邻频段边界。")
         return edges
 
+    @staticmethod
+    def _build_sparse_x_ticks(labels, max_ticks=10):
+        n = len(labels)
+        if n == 0:
+            return []
+        if n <= max_ticks:
+            return [(i, lbl) for i, lbl in enumerate(labels)]
+
+        max_ticks = max(2, int(max_ticks))
+        step = int(np.ceil((n - 1) / float(max_ticks - 1)))
+        indices = list(range(0, n, step))
+        if indices[-1] != n - 1:
+            indices.append(n - 1)
+        while len(indices) > max_ticks:
+            indices.pop(-2)
+        return [(i, labels[i]) for i in indices if 0 <= i < n]
+
+    @staticmethod
+    def _build_fba_hover_rows(bands, levels, exceeded_indices):
+        rows = []
+        exceeded = {int(idx) for idx in exceeded_indices}
+        for i, band in enumerate(bands):
+            level = float(levels[i]) if i < len(levels) and np.isfinite(levels[i]) else None
+            rows.append(
+                {
+                    "index": i,
+                    "label": str(getattr(band, "label", "")),
+                    "f_low": float(getattr(band, "f_low", 0.0)),
+                    "f_high": float(getattr(band, "f_high", 0.0)),
+                    "f_center": float(getattr(band, "f_center", 0.0)),
+                    "level": level,
+                    "level_text": f"{level:.2f} dB" if level is not None else "N/A",
+                    "status": "NG" if i in exceeded else "OK",
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _format_fba_freq(freq):
+        if freq >= 1000:
+            return f"{freq / 1000:.4g} kHz"
+        return f"{freq:.4g} Hz"
+
+    @staticmethod
+    def _build_fba_display_levels(levels, baseline_levels, display_mode):
+        plot_levels = np.asarray(levels, dtype=np.float64)
+        baseline = None if baseline_levels is None else np.asarray(baseline_levels, dtype=np.float64)
+        delta = None
+        if baseline is not None:
+            if baseline.shape != plot_levels.shape:
+                baseline = None
+            else:
+                delta = plot_levels - baseline
+                if str(display_mode or "overlay") == "delta":
+                    plot_levels = delta
+        return {
+            "plot_levels": plot_levels,
+            "baseline_levels": baseline,
+            "delta_levels": delta,
+        }
+
+    @staticmethod
+    def _detect_dominant_tones(bands, levels, config, *, fallback_low_hz, fallback_high_hz):
+        if not bool(config.get("dominant_tone_enabled", False)):
+            return []
+        intervals = parse_frequency_intervals(config.get("dominant_tone_intervals_text", ""))
+        if not intervals and fallback_high_hz > fallback_low_hz:
+            intervals = [FrequencyInterval(float(fallback_low_hz), float(fallback_high_hz), "Overall")]
+        return find_dominant_fba_bands(bands, levels, intervals)
+
+    def _connect_fba_hover_tooltip(self):
+        if self._fba_hover_connected:
+            return
+        try:
+            self.analysis_plot.scene().sigMouseMoved.connect(self._on_fba_mouse_moved)
+            self._fba_hover_connected = True
+        except Exception:
+            self._fba_hover_connected = False
+
+    def _on_fba_mouse_moved(self, scene_pos):
+        if not self._fba_hover_rows:
+            QToolTip.hideText()
+            self._fba_last_hover_index = None
+            return
+        if not self.analysis_plot.sceneBoundingRect().contains(scene_pos):
+            QToolTip.hideText()
+            self._fba_last_hover_index = None
+            return
+
+        view_pos = self.analysis_plot.getViewBox().mapSceneToView(scene_pos)
+        x_value = float(view_pos.x())
+        index = int(round(x_value))
+        if index < 0 or index >= len(self._fba_hover_rows):
+            QToolTip.hideText()
+            self._fba_last_hover_index = None
+            return
+        if abs(x_value - index) > (self._fba_hover_bar_width / 2.0):
+            QToolTip.hideText()
+            self._fba_last_hover_index = None
+            return
+
+        row = self._fba_hover_rows[index]
+        if self._fba_last_hover_index == index and QToolTip.isVisible():
+            return
+        self._fba_last_hover_index = index
+
+        text = (
+            f"Frequency: {row['label']}\n"
+            f"Band: {self._format_fba_freq(row['f_low'])} - {self._format_fba_freq(row['f_high'])}\n"
+            f"Center: {self._format_fba_freq(row['f_center'])}\n"
+            f"Level: {row['level_text']}\n"
+            f"Status: {row['status']}"
+        )
+        views = self.analysis_plot.scene().views()
+        global_pos = views[0].mapToGlobal(views[0].mapFromScene(scene_pos)) if views else self.mapToGlobal(self.rect().center())
+        QToolTip.showText(global_pos, text, self.analysis_plot)
+
     def _plot_bar_chart(
         self,
         result: BandAnalysisResult,
@@ -4102,11 +4626,22 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         *,
         upper_limits: np.ndarray | None = None,
         lower_limits: np.ndarray | None = None,
+        plot_levels: np.ndarray | None = None,
+        baseline_levels: np.ndarray | None = None,
+        display_mode: str = "overlay",
+        dominant_tones: list | None = None,
     ):
         """使用 pyqtgraph 绘制频段能量柱状图"""
         self.analysis_plot.clear()
+        self._fba_hover_rows = []
+        self._fba_last_hover_index = None
 
-        levels = np.asarray(result.band_levels_weighted_db, dtype=np.float64)
+        levels = (
+            np.asarray(plot_levels, dtype=np.float64)
+            if plot_levels is not None
+            else np.asarray(result.band_levels_weighted_db, dtype=np.float64)
+        )
+        original_levels = levels.copy()
         labels = [b.label for b in result.bands]
         n = len(labels)
         if n == 0:
@@ -4118,6 +4653,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         normal_color = (76, 175, 80)
         exceed_color = (244, 67, 54)
         missing_color = (189, 189, 189)
+        tone_color = (255, 152, 0)
 
         finite_mask = np.isfinite(levels)
         if not np.all(finite_mask):
@@ -4129,6 +4665,10 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         for i in range(n):
             if not finite_mask[i]:
                 brushes[i] = pg.mkBrush(missing_color)
+        dominant_indices = self._dominant_tone_band_indices(result.bands, dominant_tones)
+        for idx in dominant_indices:
+            if 0 <= int(idx) < n and finite_mask[int(idx)]:
+                brushes[int(idx)] = pg.mkBrush(tone_color)
         for idx in result.exceeded_bands:
             if 0 <= int(idx) < n and finite_mask[int(idx)]:
                 brushes[int(idx)] = pg.mkBrush(exceed_color)
@@ -4141,6 +4681,19 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             pen=pg.mkPen("w", width=0.5),
         )
         self.analysis_plot.addItem(bar_item)
+
+        if baseline_levels is not None:
+            baseline = np.asarray(baseline_levels, dtype=np.float64)
+            if baseline.size == n and np.any(np.isfinite(baseline)):
+                self.analysis_plot.plot(
+                    x,
+                    baseline,
+                    pen=mkPen(color=(128, 128, 128), width=2),
+                    symbol="x",
+                    symbolSize=5,
+                    symbolBrush=(128, 128, 128),
+                    name="Baseline",
+                )
 
         if upper_limits is not None:
             u = np.asarray(upper_limits, dtype=np.float64)
@@ -4175,18 +4728,44 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                     text.setPos(int(idx), levels[int(idx)])
                     self.analysis_plot.addItem(text)
 
+        for idx in dominant_indices:
+            if 0 <= int(idx) < n and np.isfinite(levels[int(idx)]):
+                text = pg.TextItem("Tone", color=tone_color, anchor=(0.5, 1.0))
+                text.setPos(int(idx), levels[int(idx)])
+                self.analysis_plot.addItem(text)
+
         x_axis = self.analysis_plot.getAxis("bottom")
-        x_ticks = [(i, lbl) for i, lbl in enumerate(labels)]
-        x_axis.setTicks([x_ticks])
+        x_axis.setTicks([self._build_sparse_x_ticks(labels, max_ticks=10)])
+        self._fba_hover_bar_width = bar_width
+        self._fba_hover_rows = self._build_fba_hover_rows(result.bands, original_levels, result.exceeded_bands)
+        self._connect_fba_hover_tooltip()
 
         weight_label = f"dB({weighting})" if weighting != "Z" else "dB"
-        self.analysis_plot.setLabel("left", f"Sound Pressure Level [{weight_label}]")
+        y_label = f"Sound Pressure Level [{weight_label}]"
+        if str(display_mode or "overlay") == "delta":
+            y_label = "FBA - Baseline [dB]"
+        self.analysis_plot.setLabel("left", y_label)
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
 
         overall = result.overall_weighted_db if weighting != "Z" else result.overall_db
         self.analysis_plot.setTitle(f"Overall: {overall:.1f} {weight_label} [SPL]", size="14px", color="k")
 
         self.analysis_plot.showGrid(x=False, y=True)
+
+    @staticmethod
+    def _dominant_tone_band_indices(bands, dominant_tones):
+        indices = []
+        for tone in dominant_tones or []:
+            tone_label = str(tone.get("band_label", ""))
+            tone_center = float(tone.get("frequency_hz", np.nan))
+            for index, band in enumerate(bands):
+                if tone_label and str(getattr(band, "label", "")) == tone_label:
+                    indices.append(index)
+                    break
+                if np.isfinite(tone_center) and np.isclose(float(getattr(band, "f_center", np.nan)), tone_center):
+                    indices.append(index)
+                    break
+        return sorted(set(indices))
 
 
 def _decimate_peak_envelope(x: np.ndarray, y: np.ndarray, max_points: int):

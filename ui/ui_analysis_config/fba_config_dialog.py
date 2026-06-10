@@ -2,14 +2,14 @@ import re
 from typing import List, Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QSizePolicy, QWidget
+from PyQt5.QtWidgets import QFileDialog, QDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QSizePolicy, QWidget
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
 # 确保这里导入的是你项目中正确的 ThresholdConfigWidget 路径
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.custom_ui_widget.widgets import PushButton, ComboBox, Label, GroupBox, DoubleSpinBox, PlainTextEdit, MessageBox
+from ui.custom_ui_widget.widgets import PushButton, ComboBox, Label, GroupBox, DoubleSpinBox, PlainTextEdit, MessageBox, LineEdit, CheckBox
 from ui.ui_src import ui_resources
 
 
@@ -27,6 +27,10 @@ class FbaConfigWindow(QDialog):
         "等宽",
         "自定义",
     ]
+    BASELINE_DISPLAY_MODES = {
+        "overlay": "叠加显示",
+        "delta": "差值显示",
+    }
 
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__()
@@ -83,8 +87,13 @@ class FbaConfigWindow(QDialog):
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
 
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(15)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
         if self.show_channel_selector:
-            main_layout.addLayout(self._create_channel_layout())
+            content_layout.addLayout(self._create_channel_layout())
 
         # =========================================================
         # 1. 频段划分策略 (GroupBox)
@@ -131,7 +140,7 @@ class FbaConfigWindow(QDialog):
         strategy_layout.addWidget(self.custom_widget)
 
         strategy_group.setLayout(strategy_layout)
-        main_layout.addWidget(strategy_group)
+        content_layout.addWidget(strategy_group)
 
         # =========================================================
         # 2. 频率范围 (GroupBox)
@@ -158,7 +167,7 @@ class FbaConfigWindow(QDialog):
         range_layout.addWidget(self.f_max_spin)
 
         range_group.setLayout(range_layout)
-        main_layout.addWidget(range_group)
+        content_layout.addWidget(range_group)
 
         # =========================================================
         # 3. 计权方式 (水平布局) - 关键修复点
@@ -179,7 +188,15 @@ class FbaConfigWindow(QDialog):
         weight_layout.addStretch()
 
         # 将这一行加入主布局
-        main_layout.addLayout(weight_layout)
+        content_layout.addLayout(weight_layout)
+
+        baseline_group = GroupBox("背景噪声基线")
+        baseline_group.setLayout(self._create_baseline_layout())
+        content_layout.addWidget(baseline_group)
+
+        dominant_group = GroupBox("主音识别")
+        dominant_group.setLayout(self._create_dominant_tone_layout())
+        content_layout.addWidget(dominant_group)
 
         # =========================================================
         # 4. 阈值配置组件 (ThresholdConfigWidget)
@@ -191,12 +208,19 @@ class FbaConfigWindow(QDialog):
         # 不让阈值组件吃掉所有剩余高度（否则内部 addStretch 会形成很大空白）
         self.threshold_widget.setMaximumHeight(360)
         self.threshold_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        main_layout.addWidget(self.threshold_widget)
+        content_layout.addWidget(self.threshold_widget)
 
         # =========================================================
         # 5. 底部按钮
         # =========================================================
-        main_layout.addStretch(1)
+        content_layout.addStretch(1)
+
+        scroll_area = QScrollArea()
+        scroll_area.setObjectName("fba_config_scroll_area")
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area, 1)
         main_layout.addLayout(self.create_btn())
 
         self.setLayout(main_layout)
@@ -208,6 +232,74 @@ class FbaConfigWindow(QDialog):
 
         # --- 初始化界面状态 ---
         self._on_strategy_changed(self.strategy_combo.currentText())
+
+    def _create_baseline_layout(self):
+        layout = QVBoxLayout()
+
+        file_layout = QHBoxLayout()
+        file_layout.addWidget(Label("背景音频:"))
+        self.baseline_path_edit = LineEdit()
+        self.baseline_path_edit.setReadOnly(True)
+        self.baseline_path_edit.setText(str(self.load_config.get("baseline_file_path", "") or ""))
+        icon = QIcon(":/ui/icon/folder-s.png")
+        action = self.baseline_path_edit.addAction(icon, LineEdit.TrailingPosition)
+        action.setToolTip("选择背景噪声音频")
+        action.triggered.connect(self._on_baseline_file_clicked)
+        file_layout.addWidget(self.baseline_path_edit, 1)
+        layout.addLayout(file_layout)
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(Label("显示方式:"))
+        self.baseline_mode_combo = ComboBox()
+        for value, label in self.BASELINE_DISPLAY_MODES.items():
+            self.baseline_mode_combo.addItem(label, value)
+        saved_mode = str(self.load_config.get("baseline_display_mode", "overlay"))
+        idx = self.baseline_mode_combo.findData(saved_mode)
+        self.baseline_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        mode_layout.addWidget(self.baseline_mode_combo, 1)
+        layout.addLayout(mode_layout)
+        return layout
+
+    def _on_baseline_file_clicked(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择背景噪声音频",
+            DEFAULT_DIR,
+            filter="音频文件 (*.wav *.flac *.mp3);;所有文件 (*.*)",
+        )
+        if file_path:
+            self.baseline_path_edit.setText(file_path)
+
+    def _create_dominant_tone_layout(self):
+        layout = QVBoxLayout()
+
+        self.dominant_tone_checkbox = CheckBox("启用主音识别")
+        self.dominant_tone_checkbox.setChecked(bool(self.load_config.get("dominant_tone_enabled", False)))
+        layout.addWidget(self.dominant_tone_checkbox)
+
+        prominence_layout = QHBoxLayout()
+        prominence_layout.addWidget(Label("最小 prominence:"))
+        self.dominant_prominence_spin = DoubleSpinBox()
+        self.dominant_prominence_spin.setRange(0, 100)
+        self.dominant_prominence_spin.setDecimals(1)
+        self.dominant_prominence_spin.setSuffix(" dB")
+        self.dominant_prominence_spin.setValue(float(self.load_config.get("dominant_tone_min_prominence_db", 3.0)))
+        prominence_layout.addWidget(self.dominant_prominence_spin, 1)
+        layout.addLayout(prominence_layout)
+
+        self.dominant_use_display_curve_checkbox = CheckBox("使用当前显示曲线识别")
+        self.dominant_use_display_curve_checkbox.setChecked(
+            bool(self.load_config.get("dominant_tone_use_display_curve", True))
+        )
+        layout.addWidget(self.dominant_use_display_curve_checkbox)
+
+        layout.addWidget(Label("频率区间:"))
+        self.dominant_intervals_edit = PlainTextEdit()
+        self.dominant_intervals_edit.setPlaceholderText("示例:\n100, 500, Low\n500, 2000, Mid")
+        self.dominant_intervals_edit.setPlainText(str(self.load_config.get("dominant_tone_intervals_text", "") or ""))
+        self.dominant_intervals_edit.setMaximumHeight(80)
+        layout.addWidget(self.dominant_intervals_edit)
+        return layout
 
     def _init_strategy_combo(self):
         val = self.load_config.get("band_strategy", "1/3 倍频程")
@@ -308,6 +400,12 @@ class FbaConfigWindow(QDialog):
             "analysis_channel": int(self.channel_combo_box.currentData())
             if self.show_channel_selector and hasattr(self, "channel_combo_box")
             else int(self.load_config.get("analysis_channel", 0) or 0),
+            "baseline_file_path": self.baseline_path_edit.text().strip(),
+            "baseline_display_mode": self.baseline_mode_combo.currentData(),
+            "dominant_tone_enabled": self.dominant_tone_checkbox.isChecked(),
+            "dominant_tone_intervals_text": self.dominant_intervals_edit.toPlainText(),
+            "dominant_tone_min_prominence_db": float(self.dominant_prominence_spin.value()),
+            "dominant_tone_use_display_curve": self.dominant_use_display_curve_checkbox.isChecked(),
         }
         if self.strategy_combo.currentText() == "自定义":
             config["custom_bands_text"] = self.custom_bands_edit.toPlainText()

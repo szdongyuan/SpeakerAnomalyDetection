@@ -156,6 +156,9 @@ class ThresholdConfigWidget(QWidget):
         elif "FR" in model_type:
             self.limit_graph.setLabel("left", "Amplitude (dB)")
             self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+        elif "FFT" in model_type:
+            self.limit_graph.setLabel("left", "FFT Spectrum (dB)")
+            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
         elif "PRB" in model_type:
             self.limit_graph.setLabel("left", "phon")
             self.limit_graph.setLabel("bottom", "Frequency (Hz)")

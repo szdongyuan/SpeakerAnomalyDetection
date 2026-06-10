@@ -1,8 +1,12 @@
 from datetime import datetime
 import os
+import sys
 import tempfile
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import pdf_result_exporter
 from base.pdf_result_exporter import (
@@ -234,9 +238,14 @@ def test_summarize_result_payload_labels_frequency_band_fields():
             "band_centers": [20.0, 1000.0, 20000.0],
             "band_levels_db": [60.0, 70.0, 80.0],
             "band_levels_weighted_db": [50.0, 65.0, 78.0],
+            "baseline_band_levels_weighted_db": [45.0, 60.0, 70.0],
+            "delta_band_levels_weighted_db": [5.0, 5.0, 8.0],
+            "plot_band_levels_weighted_db": [5.0, 5.0, 8.0],
             "overall_db": 95.4212,
             "overall_weighted_db": 86.5292,
             "weighting": "A",
+            "baseline_display_mode": "delta",
+            "dominant_tones": [{"interval_label": "Low", "frequency_hz": 315.0}],
             "exceeded_bands": [],
         }
     )
@@ -244,10 +253,47 @@ def test_summarize_result_payload_labels_frequency_band_fields():
     assert "频段中心频率" in keys
     assert "各频段声压级" in keys
     assert "加权各频段声压级" in keys
+    assert "背景基线加权频段声压级" in keys
+    assert "频段声压级与背景差值" in keys
+    assert "当前显示频段声压级" in keys
     assert "总声压级" in keys
     assert "计权总声压级" in keys
     assert "计权方式" in keys
+    assert "背景显示方式" in keys
+    assert "主音识别结果" in keys
     assert "超限频段" in keys
+
+
+def test_summarize_result_payload_labels_fft_fields():
+    rows = summarize_result_payload(
+        {
+            "frequency_bins": [100.0, 1000.0],
+            "fft_db": [30.0, 50.0],
+            "baseline_db": [20.0, 45.0],
+            "delta_db": [10.0, 5.0],
+            "plot_db": [10.0, 5.0],
+            "display_mode": "delta",
+            "baseline_smooth_third_octave": True,
+            "n_fft": 4096,
+            "window": "hann",
+            "overlap_ratio": 0.5,
+            "x_axis_scale": "log",
+            "dominant_tones": [{"interval_label": "Overall", "frequency_hz": 1000.0}],
+        }
+    )
+    keys = [key for key, _value in rows]
+    assert "FFT 频率点" in keys
+    assert "FFT 频谱" in keys
+    assert "背景噪声基线" in keys
+    assert "FFT 与背景差值" in keys
+    assert "当前显示曲线" in keys
+    assert "背景显示方式" in keys
+    assert "背景基线 1/3 倍频程平滑" in keys
+    assert "FFT 点数" in keys
+    assert "窗函数" in keys
+    assert "重叠率" in keys
+    assert "横轴类型" in keys
+    assert "主音识别结果" in keys
 
 
 def test_calculate_overall_status_uses_selected_judged_items_only():

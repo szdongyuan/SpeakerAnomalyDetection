@@ -52,6 +52,7 @@ from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpec
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
+from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.mel_config_dialog import MelConfigWindow
 from ui.ui_analysis_config.modulation_config_dialog import ModulationConfigWindow
 from ui.ui_analysis_config.pr_config_dialog import PRConfigWindow, default_pr_config
@@ -217,6 +218,7 @@ class AnalysisModelSelect(QDialog):
         analysis_items = [
             "声压级 (SPL) ",
             "声压级-频率 (SPLF) ",
+            "快速傅里叶频谱 (FFT) ",
             "频谱分析 (Spec) ",
             "梅尔频谱 (Mel) ",
             "调制 (Modulation) ",
@@ -863,6 +865,8 @@ class OptionList(ListView):
             model = SplConfigWindow(config_manager, name)
         elif type == "FR":
             model = FrConfigWindow(config_manager, name)
+        elif type == "FFT":
+            model = FftConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "HD":
             model = HdConfigWindow(config_manager, name)
         elif type == "RB":

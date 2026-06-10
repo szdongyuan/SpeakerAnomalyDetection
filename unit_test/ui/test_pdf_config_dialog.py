@@ -42,6 +42,7 @@ def test_pdf_config_available_items_exclude_exporters_and_unimplemented(qapp):
         "PRB1": {"type": "PRB"},
         "LP1": {"type": "LP"},
         "FBA1": {"type": "FBA"},
+        "FFT1": {"type": "FFT"},
         "Spec1": {"type": "Spec"},
         "AI1": {"type": "AI"},
         "Excel1": {"type": "Excel"},
@@ -54,6 +55,7 @@ def test_pdf_config_available_items_exclude_exporters_and_unimplemented(qapp):
 
     assert window._get_available_analysis_items() == [
         "FBA1",
+        "FFT1",
         "FR1",
         "HD1",
         "LP1",
