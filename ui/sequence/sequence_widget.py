@@ -83,7 +83,7 @@ class SequenceWindow(QWidget):
 
         self.v2pa_factor = None
         self.analysis_types_requiring_v2pa = {
-            "SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA",
+            "SPL", "SPLF", "FFT", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA",
             "LOUD", "SHRP", "ROUGH", "PR",
         }
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
@@ -403,7 +403,7 @@ class SequenceWindow(QWidget):
             if t == "AI":
                 candidates.append(key)
                 continue
-            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB", "LOUD", "SHRP", "ROUGH", "PR"):
+            if t in ("SPL", "SPLF", "FFT", "FR", "HD", "RB", "PRB", "LOUD", "SHRP", "ROUGH", "PR"):
                 if item_cfg.get("limit_checked"):
                     candidates.append(key)
 
@@ -1876,6 +1876,11 @@ class SequenceWindow(QWidget):
                     if not result:
                         continue
                     instance.show()
+                elif hasattr(instance, "calculate_fft"):
+                    result = instance.calculate_fft()
+                    if not result:
+                        continue
+                    instance.show()
                 elif hasattr(instance, "calculate_thd"):
                     instance.calculate_thd()
                     instance.show()
@@ -2531,7 +2536,7 @@ class SequenceWindow(QWidget):
         analysis_types_requiring_v2pa = getattr(
             self,
             "analysis_types_requiring_v2pa",
-            {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"},
+            {"SPL", "SPLF", "FFT", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"},
         )
         requires_v2pa = type in analysis_types_requiring_v2pa
         if type in class_mapping.keys():
