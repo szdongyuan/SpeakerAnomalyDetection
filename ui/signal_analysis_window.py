@@ -4415,6 +4415,22 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             plot.plot([], [], pen=mkPen(color=premul, width=8), name=name)
             return
 
+        if symbol and not line:
+            # pyqtgraph 对空 PlotDataItem 的 legend symbol 可能回退默认颜色；
+            # 直接给 legend 一个 ScatterPlotItem 样本，确保颜色与图上主音点一致。
+            scatter = pg.ScatterPlotItem(
+                [],
+                [],
+                symbol=symbol,
+                size=9,
+                brush=pg.mkBrush(color) if color is not None else None,
+                pen=mkPen(color=color, width=1) if color is not None else None,
+            )
+            legend = getattr(plot.getPlotItem(), "legend", None)
+            if legend is not None:
+                legend.addItem(scatter, name)
+                return
+
         kwargs = {
             "pen": mkPen(color=color, width=width, style=style) if (line and color is not None) else mkPen(None),
             "name": name,
@@ -4423,7 +4439,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             kwargs.update({
                 "symbol": symbol,
                 "symbolSize": 9,
-                "symbolBrush": color,
+                "symbolBrush": pg.mkBrush(color) if color is not None else None,
                 "symbolPen": mkPen(color=color, width=1) if color is not None else None,
             })
         plot.plot([], [], **kwargs)
@@ -4465,14 +4481,14 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
 
     @staticmethod
     def _format_band_line(name, band_hz, power_db):
-        """格式化单行频带信息：名称 频率范围 功率。"""
+        """格式化单行频带信息：名称 频率范围 临界频带功率。"""
         f1 = ProminenceRatioAnalysis._finite_float(band_hz[0])
         f2 = ProminenceRatioAnalysis._finite_float(band_hz[1])
         power = ProminenceRatioAnalysis._finite_float(power_db)
         if not (np.isfinite(f1) and np.isfinite(f2)):
             return ""
-        pwr = f"{power:.1f}dB" if np.isfinite(power) else "--dB"
-        return f"{name} {f1:.0f}-{f2:.0f}Hz {pwr}"
+        pwr = f"{power:.1f} dB" if np.isfinite(power) else "-- dB"
+        return f"{name} {f1:.0f}-{f2:.0f}Hz  临界频带功率 {pwr}"
 
     def _plot_pr_band_annotations(self, tones, params, y_top, y_span):
         """上轨频带色块 + 信息卡片（白底框，放在色块右侧）。"""
@@ -4647,7 +4663,11 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             color = (214, 39, 40) if is_ng else (76, 175, 80)
             self.pr_plot.plot(
                 [t.frequency_hz / 1000.0], [t.pr_db],
-                pen=mkPen(None), symbol="o", symbolSize=9, symbolBrush=color,
+                pen=mkPen(None),
+                symbol="o",
+                symbolSize=9,
+                symbolBrush=pg.mkBrush(color),
+                symbolPen=mkPen(color=color, width=1),
             )
             prefix = "NG " if is_ng else ""
             label = f"{prefix}{t.frequency_hz:.0f}Hz  PR={t.pr_db:.1f} dB, Limit={t.limit_db:.0f} dB"
