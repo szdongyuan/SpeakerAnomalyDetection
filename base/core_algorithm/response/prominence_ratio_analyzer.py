@@ -47,6 +47,7 @@ class ProminenceRatioParams:
     rpm: int = 0
     bpf_tolerance_percent: float = 5.0
     include_harmonics_in_customer_judgement: bool = False
+    user_tone_frequencies: tuple[float, ...] = ()
 
     @classmethod
     def from_config(cls, cfg: Optional[dict]) -> tuple["ProminenceRatioParams", list[str]]:
@@ -89,8 +90,27 @@ class ProminenceRatioParams:
             include_harmonics_in_customer_judgement=bool(
                 pick("include_harmonics_in_customer_judgement", defaults.include_harmonics_in_customer_judgement)
             ),
+            user_tone_frequencies=cls._parse_user_tone_frequencies(pick("user_tone_frequencies", "")),
         )
         return params, warnings
+
+    @staticmethod
+    def _parse_user_tone_frequencies(raw) -> tuple[float, ...]:
+        if not raw:
+            return ()
+        if isinstance(raw, (list, tuple)):
+            vals = raw
+        else:
+            vals = str(raw).replace(";", ",").replace(" ", ",").split(",")
+        result = []
+        for v in vals:
+            try:
+                f = float(v)
+                if np.isfinite(f) and f > 0:
+                    result.append(f)
+            except (ValueError, TypeError):
+                continue
+        return tuple(sorted(set(result)))
 
 
 @dataclass
@@ -116,6 +136,7 @@ class ProminenceToneResult:
     harmonic_order: Optional[int]
     valid_main_tone: bool
     bpf_verified: Optional[bool]
+    user_specified: bool = False
     invalid_reasons: list[str] = field(default_factory=list)
 
 
@@ -319,6 +340,16 @@ class ProminenceRatioAnalyzer:
             return []
 
         peaks, _props = sp_signal.find_peaks(mag_in, prominence=CANDIDATE_PEAK_PROMINENCE_DB)
+
+        user_specified_bins: set[int] = set()
+        if params.user_tone_frequencies:
+            for uf in params.user_tone_frequencies:
+                if freq_in[0] <= uf <= freq_in[-1]:
+                    idx = int(np.argmin(np.abs(freq_in - uf)))
+                    user_specified_bins.add(idx)
+            all_peaks = sorted(set(peaks.tolist()) | user_specified_bins)
+            peaks = np.array(all_peaks, dtype=int)
+
         bpf_hz = (params.blade_count * params.rpm / 60.0) if (params.bpf_enabled and params.rpm > 0) else None
 
         tones: list[ProminenceToneResult] = []
@@ -369,7 +400,8 @@ class ProminenceRatioAnalyzer:
                 customer_ok = pr_db <= limit_db
                 margin_db = limit_db - pr_db
 
-            valid_main_tone = (len(invalid_reasons) == 0)
+            is_user_specified = (pk in user_specified_bins)
+            valid_main_tone = is_user_specified or (len(invalid_reasons) == 0)
 
             bpf_verified: Optional[bool] = None
             harmonic_order: Optional[int] = None
@@ -382,7 +414,7 @@ class ProminenceRatioAnalyzer:
                     harmonic_order = int(nearest) if nearest > 1 else None
                 else:
                     bpf_verified = False
-                if bpf_verified is False:
+                if bpf_verified is False and not is_user_specified:
                     valid_main_tone = False
                     reason = "BPF/mechanical match not verified"
                     if reason not in invalid_reasons:
@@ -410,6 +442,7 @@ class ProminenceRatioAnalyzer:
                 harmonic_order=harmonic_order,
                 valid_main_tone=valid_main_tone,
                 bpf_verified=bpf_verified,
+                user_specified=(pk in user_specified_bins),
                 invalid_reasons=invalid_reasons,
             ))
 
@@ -449,23 +482,33 @@ class ProminenceRatioAnalyzer:
             ranked = sorted(in_band, key=lambda t: t.peak_db, reverse=True)
             top = ranked[0]
             if len(ranked) > 1:
+                non_user = [t for t in ranked if not t.user_specified]
                 second = ranked[1]
                 diff = top.peak_db - second.peak_db
                 if diff < MAIN_TONE_MIN_GAP_DB:
                     reason = f"interval top-second gap {diff:.1f}dB < {MAIN_TONE_MIN_GAP_DB:.1f}dB"
                     for t in ranked:
+                        if t.user_specified:
+                            selected_ids.add(id(t))
+                            continue
                         t.valid_main_tone = False
                         if reason not in t.invalid_reasons:
                             t.invalid_reasons.append(reason)
                     continue
             selected_ids.add(id(top))
             for t in ranked[1:]:
+                if t.user_specified:
+                    selected_ids.add(id(t))
+                    continue
                 t.valid_main_tone = False
                 reason = "not highest tone in frequency interval"
                 if reason not in t.invalid_reasons:
                     t.invalid_reasons.append(reason)
 
         for t in valid_candidates:
+            if t.user_specified:
+                selected_ids.add(id(t))
+                continue
             if id(t) not in selected_ids and t.valid_main_tone:
                 t.valid_main_tone = False
                 reason = "outside configured PR frequency intervals"

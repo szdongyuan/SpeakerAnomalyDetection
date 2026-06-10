@@ -14,7 +14,7 @@ from ui.ui_src import ui_resources
 class PdfConfigWindow(QDialog):
     """PDF result export configuration dialog."""
 
-    __PDF_EXPORTABLE_TYPES = {"SPL", "SPLF", "FFT", "FR", "RSC", "HD", "RB", "PRB", "LP", "FBA", "Spec"}
+    __PDF_EXPORTABLE_TYPES = {"SPL", "SPLF", "FFT", "FR", "RSC", "HD", "RB", "PRB", "LP", "FBA", "Spec", "PR"}
 
     def __init__(self, config_manager, model_type):
         super().__init__()

@@ -4896,11 +4896,39 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             "max_exceed_db": res.max_exceed_db,
             "decision_status": res.decision_status,
             "tone_count": int(sum(1 for t in res.main_tones if t.valid_main_tone)),
-            "critical_band_mode": res.metadata.get("critical_band_mode"),
-            "effective_weighting": res.metadata.get("effective_weighting"),
-            "warnings": list(res.warnings),
         }
+        self.pdf_export_result = None
         return self.result
+
+    def export_pdf_images(self, output_dir):
+        """导出双轨图（上轨 + 下轨拼合为一张 PNG）。"""
+        import os
+        from PyQt5.QtGui import QPixmap, QPainter
+
+        os.makedirs(str(output_dir), exist_ok=True)
+        top_path = export_plot_widget_image(self.analysis_plot, output_dir, "_pr_upper")
+        bot_path = export_plot_widget_image(self.pr_plot, output_dir, "_pr_lower")
+
+        top_pix = QPixmap(top_path)
+        bot_pix = QPixmap(bot_path)
+        w = max(top_pix.width(), bot_pix.width())
+        combined = QPixmap(w, top_pix.height() + bot_pix.height())
+        combined.fill(Qt.white)
+        painter = QPainter(combined)
+        painter.drawPixmap(0, 0, top_pix)
+        painter.drawPixmap(0, top_pix.height(), bot_pix)
+        painter.end()
+
+        combined_path = os.path.join(str(output_dir), "pr_dual_track.png")
+        combined.save(combined_path)
+
+        try:
+            os.remove(top_path)
+            os.remove(bot_path)
+        except OSError:
+            pass
+
+        return [{"title": self.windowTitle(), "path": combined_path}]
 
     @staticmethod
     def _tone_to_dict(t):

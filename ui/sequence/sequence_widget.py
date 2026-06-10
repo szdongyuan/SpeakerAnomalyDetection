@@ -31,6 +31,8 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.pdf_result_exporter import export_analysis_to_pdf
+
+_SENTINEL = object()
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.mes_result_exporter import _validate_mes_runtime_config, select_mes_export_config, write_mes_result
@@ -2154,7 +2156,9 @@ class SequenceWindow(QWidget):
                 t = cfg.get("type")
                 if not t or t in ("Excel", "PDF"):
                     continue
-                item = {"type": t, "result": getattr(inst, "result", None)}
+                pdf_result = getattr(inst, "pdf_export_result", _SENTINEL)
+                raw_result = pdf_result if pdf_result is not _SENTINEL else getattr(inst, "result", None)
+                item = {"type": t, "result": raw_result}
                 detail = getattr(inst, "export_detail", None)
                 if isinstance(detail, dict):
                     item.update(detail)

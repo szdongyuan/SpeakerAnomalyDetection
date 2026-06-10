@@ -28,6 +28,7 @@ from ui.custom_ui_widget.widgets import (
     DoubleSpinBox,
     CheckBox,
     MessageBox,
+    LineEdit,
 )
 
 
@@ -69,6 +70,7 @@ def default_pr_config() -> dict:
         "bpf_tolerance_percent": 5.0,
         # 需求书 1.4 第7条 / 4.3：谐波分量一律不纳入判定，固定 False，不开放 UI 配置。
         "include_harmonics_in_customer_judgement": False,
+        "user_tone_frequencies": "",
         "limit_checked": True,
         "fan_pr_limits": [list(b) for b in DEFAULT_FAN_PR_LIMITS],
     }
@@ -119,6 +121,7 @@ class PRConfigWindow(QDialog):
 
         main_layout.addWidget(self._create_mode_group())
         main_layout.addWidget(self._create_fft_group())
+        main_layout.addWidget(self._create_tone_freq_group())
         main_layout.addWidget(self._create_limit_group())
 
         main_layout.addStretch(1)
@@ -239,6 +242,20 @@ class PRConfigWindow(QDialog):
         group.setLayout(layout)
         return group
 
+    def _create_tone_freq_group(self):
+        group = GroupBox("指定主音频率（可选，由 FFT 定位）")
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 16, 10, 10)
+        self.tone_freq_edit = LineEdit()
+        self.tone_freq_edit.setPlaceholderText("留空=自动检测；多个频率用逗号分隔")
+        saved = self.load_config.get("user_tone_frequencies", "")
+        if isinstance(saved, (list, tuple)):
+            saved = ", ".join(str(f) for f in saved if f)
+        self.tone_freq_edit.setText(str(saved or ""))
+        layout.addWidget(self.tone_freq_edit)
+        group.setLayout(layout)
+        return group
+
     def _create_limit_group(self):
         group = GroupBox("PR 限值对比")
         layout = QVBoxLayout()
@@ -288,9 +305,8 @@ class PRConfigWindow(QDialog):
         default_btn.clicked.connect(self.on_default_btn_clicked)
         ok_btn = PushButton(" 确  认 ")
         ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addStretch()
         btn_layout.addWidget(default_btn)
-        btn_layout.addSpacing(10)
+        btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         return btn_layout
 
@@ -322,6 +338,7 @@ class PRConfigWindow(QDialog):
             "overlap_ratio": float(self.overlap_spin.value()),
             "target_resolution_hz": float(self.load_config.get("target_resolution_hz", 1.0)),
             "highpass_hz": float(self.highpass_spin.value()) if self.highpass_check.isChecked() else 0.0,
+            "user_tone_frequencies": self.tone_freq_edit.text().strip(),
             "limit_checked": bool(self.limit_check.isChecked()),
             "fan_pr_limits": self._collect_fan_pr_limits(),
         })
