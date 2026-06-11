@@ -2819,6 +2819,10 @@ class Modulation(QWidget):
             "stft_params",
             "threshold_percent",
             "min_modulation_depth_percent",
+            "analysis_scope",
+            "main_tones_hz",
+            "tone_band_hz",
+            "computed_signal_freq_count",
         )
         return {key: Modulation._to_plain_value(analysis_result.get(key)) for key in keys}
 

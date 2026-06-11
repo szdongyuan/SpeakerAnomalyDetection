@@ -228,6 +228,13 @@ class ModulationConfigWindow(QDialog):
             self.load_config.get("main_tone_search_width_hz", 160.0),
             " Hz",
         )
+        self.tone_band_spin = self._double_spin(
+            1,
+            5000,
+            1,
+            self.load_config.get("tone_band_hz", 80.0),
+            " Hz",
+        )
         self.mechanical_tolerance_spin = self._double_spin(
             0,
             1000,
@@ -252,13 +259,15 @@ class ModulationConfigWindow(QDialog):
         layout.addWidget(self.smoothing_spin, 1, 1)
         layout.addWidget(Label("主音搜索宽度:"), 1, 2)
         layout.addWidget(self.main_tone_width_spin, 1, 3)
-        layout.addWidget(Label("机械匹配容差:"), 2, 0)
-        layout.addWidget(self.mechanical_tolerance_spin, 2, 1)
-        layout.addWidget(Label("转频谐波数:"), 2, 2)
-        layout.addWidget(self.rotation_harmonics_spin, 2, 3)
-        layout.addWidget(Label("BPF谐波数:"), 3, 0)
-        layout.addWidget(self.bpf_harmonics_spin, 3, 1)
-        layout.addWidget(self.show_hotspots_checkbox, 3, 2, 1, 2)
+        layout.addWidget(Label("主音计算半宽:"), 2, 0)
+        layout.addWidget(self.tone_band_spin, 2, 1)
+        layout.addWidget(Label("机械匹配容差:"), 2, 2)
+        layout.addWidget(self.mechanical_tolerance_spin, 2, 3)
+        layout.addWidget(Label("转频谐波数:"), 3, 0)
+        layout.addWidget(self.rotation_harmonics_spin, 3, 1)
+        layout.addWidget(Label("BPF谐波数:"), 3, 2)
+        layout.addWidget(self.bpf_harmonics_spin, 3, 3)
+        layout.addWidget(self.show_hotspots_checkbox, 4, 0, 1, 4)
 
         group.setLayout(layout)
         return group
@@ -354,6 +363,7 @@ class ModulationConfigWindow(QDialog):
             "main_tone_search_width_hz": float(self.main_tone_width_spin.value()),
             "mechanical_match_tolerance_hz": float(self.mechanical_tolerance_spin.value()),
             "min_modulation_depth_percent": float(self.load_config.get("min_modulation_depth_percent", 1.0)),
+            "tone_band_hz": float(self.tone_band_spin.value()),
             "show_global_hotspots": bool(self.show_hotspots_checkbox.isChecked()),
             "analysis_channel": int(self.channel_combo_box.currentData())
             if self.show_channel_selector and hasattr(self, "channel_combo_box")

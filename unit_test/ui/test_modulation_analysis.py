@@ -1,4 +1,5 @@
 import os
+import time
 import types
 from pathlib import Path
 
@@ -41,6 +42,50 @@ def test_modulation_algorithm_detects_synthetic_am_tone():
     assert tone_1200["mod_freq_hz"] == pytest.approx(75.0, abs=4.0)
 
 
+def test_modulation_main_tone_search_width_selects_peak_within_window():
+    from base.core_algorithm.modulation_map import _evaluate_main_tones
+
+    mod_depth = np.array(
+        [
+            [0.0, 2.0],
+            [0.0, 5.0],
+            [0.0, 20.0],
+        ],
+        dtype=np.float64,
+    )
+    signal_freqs = np.array([1160.0, 1200.0, 1240.0], dtype=np.float64)
+    mod_freqs = np.array([0.0, 50.0], dtype=np.float64)
+    main_tones = [{"id": 1, "label": "tone", "freq_hz": 1200.0}]
+
+    narrow = _evaluate_main_tones(
+        mod_depth,
+        signal_freqs,
+        mod_freqs,
+        main_tones,
+        threshold_percent=10.0,
+        mechanical_refs=[],
+        mechanical_match_tolerance_hz=20.0,
+        main_tone_search_width_hz=40.0,
+        min_modulation_depth_percent=1.0,
+    )[0]
+    wide = _evaluate_main_tones(
+        mod_depth,
+        signal_freqs,
+        mod_freqs,
+        main_tones,
+        threshold_percent=10.0,
+        mechanical_refs=[],
+        mechanical_match_tolerance_hz=20.0,
+        main_tone_search_width_hz=100.0,
+        min_modulation_depth_percent=1.0,
+    )[0]
+
+    assert narrow["analysis_signal_freq_hz"] == 1200.0
+    assert narrow["mod_depth_percent"] == 5.0
+    assert wide["analysis_signal_freq_hz"] == 1240.0
+    assert wide["mod_depth_percent"] == 20.0
+
+
 def test_modulation_algorithm_does_not_assign_frequency_to_unmodulated_main_tone():
     from base.core_algorithm.modulation_map import compute_modulation_map, default_modulation_config
 
@@ -76,6 +121,68 @@ def test_modulation_algorithm_does_not_assign_frequency_to_unmodulated_main_tone
         hotspot
         for hotspot in result["global_hotspots"]
         if abs(float(hotspot["signal_freq_hz"]) - 3500.0) <= cfg["main_tone_search_width_hz"] / 2.0
+    ]
+
+
+def test_modulation_algorithm_limits_work_to_main_tone_rois():
+    from base.core_algorithm.modulation_map import compute_modulation_map, default_modulation_config
+
+    sample_rate = 48000
+    duration_s = 2.0
+    t = np.arange(int(sample_rate * duration_s), dtype=np.float64) / sample_rate
+    audio = (
+        (1.0 + 0.08 * np.sin(2.0 * np.pi * 50.0 * t)) * np.sin(2.0 * np.pi * 1200.0 * t)
+        + 0.6 * np.sin(2.0 * np.pi * 3500.0 * t)
+    )
+
+    base_cfg = default_modulation_config()
+    base_cfg.update(
+        {
+            "signal_freq_range_hz": [500.0, 4000.0],
+            "mod_freq_range_hz": [0.0, 200.0],
+            "show_global_hotspots": True,
+            "signal_freq_display_step_hz": 1.0,
+            "mod_freq_bin_hz": 1.0,
+            "smoothing_points": 3,
+            "main_tone_search_width_hz": 100.0,
+            "min_modulation_depth_percent": 1.0,
+        }
+    )
+
+    full_cfg = dict(base_cfg)
+    full_cfg["main_tones_hz"] = None
+    full_start = time.perf_counter()
+    full_result = compute_modulation_map(audio, sample_rate, full_cfg)
+    full_elapsed = time.perf_counter() - full_start
+
+    roi_cfg = dict(base_cfg)
+    roi_cfg.update({"main_tones_hz": [1200.0, 3500.0], "tone_band_hz": 50.0})
+    roi_start = time.perf_counter()
+    roi_result = compute_modulation_map(audio, sample_rate, roi_cfg)
+    roi_elapsed = time.perf_counter() - roi_start
+
+    assert full_result["stft_params"]["analysis_scope"] == "full"
+    assert roi_result["stft_params"]["analysis_scope"] == "main_tone_roi"
+    assert roi_result["stft_params"]["computed_signal_freq_count"] < (
+        full_result["stft_params"]["computed_signal_freq_count"] / 4
+    )
+    assert roi_elapsed < full_elapsed
+
+    signal_axis = np.asarray(roi_result["signal_freq_axis_hz"], dtype=float)
+    in_1200_roi = (signal_axis >= 1200.0 - 50.0) & (signal_axis <= 1200.0 + 50.0)
+    in_3500_roi = (signal_axis >= 3500.0 - 50.0) & (signal_axis <= 3500.0 + 50.0)
+    assert np.all(in_1200_roi | in_3500_roi)
+    assert np.any(in_1200_roi)
+    assert np.any(in_3500_roi)
+
+    tone_3500 = next(item for item in roi_result["main_tone_results"] if item["target_signal_freq_hz"] == 3500.0)
+    assert tone_3500["has_modulation_peak"] is False
+    assert tone_3500["mod_freq_hz"] is None
+    assert not [
+        hotspot
+        for hotspot in roi_result["global_hotspots"]
+        if abs(float(hotspot["signal_freq_hz"]) - 3500.0) <= 50.0
+        and float(hotspot["mod_depth_percent"]) >= roi_cfg["threshold_percent"]
     ]
 
 
@@ -185,7 +292,9 @@ def test_modulation_ui_smoke_renders_pyqtgraph_without_matplotlib(qapp, monkeypa
         save_default_config=lambda *_args, **_kwargs: True,
     )
     dialog = ModulationConfigWindow(fake_manager, "调制 (Modulation) 1", available_channels=[0, 1])
-    assert dialog.get_default_config()["main_tones_hz"] == [1200.0, 3500.0]
+    dialog_config = dialog.get_default_config()
+    assert dialog_config["main_tones_hz"] == [1200.0, 3500.0]
+    assert dialog_config["tone_band_hz"] == 80.0
 
     fake_result = {
         "mod_depth_matrix": np.array([[0.0, 12.0, 8.0], [1.0, 20.0, 5.0]], dtype=float),

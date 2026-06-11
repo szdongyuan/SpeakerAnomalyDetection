@@ -1,13 +1,19 @@
-from machine_learning.cnn import CNN1d
-from machine_learning.rnn import RNN
-from machine_learning.svc import EnsembleSVC, SimpleSVC
-from machine_learning.transformer import Transformer
+from importlib import import_module
 
 
 MODEL_MAPPING = {
-    "EnsembleSVC": EnsembleSVC,
-    "SimpleSVC": SimpleSVC,
-    "CNN1d": CNN1d,
-    "RNN": RNN,
-    "Transformer": Transformer,
+    "EnsembleSVC": ("machine_learning.svc", "EnsembleSVC"),
+    "SimpleSVC": ("machine_learning.svc", "SimpleSVC"),
+    "CNN1d": ("machine_learning.cnn", "CNN1d"),
+    "RNN": ("machine_learning.rnn", "RNN"),
+    "Transformer": ("machine_learning.transformer", "Transformer"),
 }
+
+
+def get_model_class(model_name):
+    model_path = MODEL_MAPPING.get(model_name)
+    if model_path is None:
+        return None
+    module_name, class_name = model_path
+    module = import_module(module_name)
+    return getattr(module, class_name)

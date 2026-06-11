@@ -25,6 +25,7 @@ DEFAULT_ROTATION_HARMONICS = 2
 DEFAULT_BPF_HARMONICS = 1
 DEFAULT_MAIN_TONES_HZ = (1200.0, 3500.0)
 DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ = 160.0
+DEFAULT_TONE_BAND_HZ = DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ / 2.0
 DEFAULT_MECHANICAL_MATCH_TOLERANCE_HZ = 20.0
 DEFAULT_SHOW_GLOBAL_HOTSPOTS = True
 DEFAULT_MIN_MODULATION_DEPTH_PERCENT = 1.0
@@ -53,6 +54,7 @@ DEFAULT_MODULATION_CONFIG = {
     "mechanical_match_tolerance_hz": DEFAULT_MECHANICAL_MATCH_TOLERANCE_HZ,
     "show_global_hotspots": DEFAULT_SHOW_GLOBAL_HOTSPOTS,
     "min_modulation_depth_percent": DEFAULT_MIN_MODULATION_DEPTH_PERCENT,
+    "tone_band_hz": DEFAULT_TONE_BAND_HZ,
     "core_freq_lines_khz": [0.5, 1.0, 2.0, 4.0, 8.0],
     "analysis_channel": 0,
 }
@@ -184,6 +186,8 @@ def _compute_modulation_depth(
     envelope_window_ms,
     envelope_shift_ms,
     mod_freq_step_hz,
+    main_tones_hz=None,
+    tone_band_hz=DEFAULT_TONE_BAND_HZ,
 ):
     nperseg, nfft, noverlap, envelope_hop_length = _choose_envelope_stft_params(
         sample_rate,
@@ -206,7 +210,22 @@ def _compute_modulation_depth(
     )
     envelope = np.abs(stft)
 
-    freq_mask = (freqs >= signal_freq_range_hz[0]) & (freqs <= signal_freq_range_hz[1])
+    roi_main_tones_hz = _float_list(main_tones_hz, ())
+    tone_band_hz = max(float(tone_band_hz), 0.0)
+    full_range_mask = (freqs >= signal_freq_range_hz[0]) & (freqs <= signal_freq_range_hz[1])
+    if main_tones_hz is None or len(roi_main_tones_hz) == 0:
+        freq_mask = full_range_mask
+        analysis_scope = "full"
+    else:
+        freq_mask = np.zeros_like(freqs, dtype=bool)
+        for tone_freq in roi_main_tones_hz:
+            roi_mask = (
+                (freqs >= tone_freq - tone_band_hz)
+                & (freqs <= tone_freq + tone_band_hz)
+            )
+            freq_mask |= roi_mask
+        freq_mask &= full_range_mask
+        analysis_scope = "main_tone_roi"
     signal_freqs = freqs[freq_mask]
     envelope = envelope[freq_mask]
 
@@ -306,6 +325,10 @@ def _compute_modulation_depth(
         "envelope_nyquist_hz": envelope_nyquist_hz,
         "requested_mod_freq_range_hz": mod_freq_range_hz,
         "effective_mod_freq_range_hz": effective_mod_freq_range_hz,
+        "analysis_scope": analysis_scope,
+        "main_tones_hz": roi_main_tones_hz if roi_main_tones_hz else None,
+        "tone_band_hz": tone_band_hz,
+        "computed_signal_freq_count": int(signal_freqs.size),
     }
     return mod_depth, signal_freqs, mod_freqs, stft_params
 
@@ -344,16 +367,39 @@ def _interpolate_signal_axis(mod_depth, signal_freqs, signal_freq_display_step_h
         return mod_depth, signal_freqs
 
     step_hz = float(signal_freq_display_step_hz)
-    start_hz = np.ceil(signal_freqs[0] / step_hz) * step_hz
-    stop_hz = np.floor(signal_freqs[-1] / step_hz) * step_hz
-    display_freqs = np.arange(start_hz, stop_hz + step_hz * 0.5, step_hz)
-    if display_freqs.size < 2:
+    raw_step_hz = _axis_step(signal_freqs)
+    if raw_step_hz is None or raw_step_hz <= 0:
         return mod_depth, signal_freqs
 
-    display_depth = np.empty((display_freqs.size, mod_depth.shape[1]), dtype=mod_depth.dtype)
-    for col in range(mod_depth.shape[1]):
-        display_depth[:, col] = np.interp(display_freqs, signal_freqs, mod_depth[:, col])
-    return display_depth, display_freqs
+    gap_threshold_hz = max(step_hz * 2.0, raw_step_hz * 2.5)
+    split_points = np.where(np.diff(signal_freqs) > gap_threshold_hz)[0] + 1
+    index_segments = np.split(np.arange(signal_freqs.size), split_points)
+    display_depth_parts = []
+    display_freq_parts = []
+
+    for indices in index_segments:
+        segment_freqs = signal_freqs[indices]
+        segment_depth = mod_depth[indices]
+        if segment_freqs.size < 2:
+            display_depth_parts.append(segment_depth)
+            display_freq_parts.append(segment_freqs)
+            continue
+
+        start_hz = np.ceil(segment_freqs[0] / step_hz) * step_hz
+        stop_hz = np.floor(segment_freqs[-1] / step_hz) * step_hz
+        display_freqs = np.arange(start_hz, stop_hz + step_hz * 0.5, step_hz)
+        if display_freqs.size < 2:
+            display_depth_parts.append(segment_depth)
+            display_freq_parts.append(segment_freqs)
+            continue
+
+        display_depth = np.empty((display_freqs.size, mod_depth.shape[1]), dtype=mod_depth.dtype)
+        for col in range(mod_depth.shape[1]):
+            display_depth[:, col] = np.interp(display_freqs, segment_freqs, segment_depth[:, col])
+        display_depth_parts.append(display_depth)
+        display_freq_parts.append(display_freqs)
+
+    return np.vstack(display_depth_parts), np.concatenate(display_freq_parts)
 
 
 def _axis_step(axis):
@@ -529,10 +575,25 @@ def _evaluate_main_tones(
     mechanical_mod_freqs = _mechanical_ref_freqs(mechanical_refs)
     for tone in main_tones:
         tone_hz = tone["freq_hz"]
-        row = int(np.argmin(np.abs(signal_freqs - tone_hz)))
+        half_width_hz = max(float(main_tone_search_width_hz), 0.0) / 2.0
+        if half_width_hz > 0:
+            row_indices = np.where(
+                (signal_freqs >= tone_hz - half_width_hz)
+                & (signal_freqs <= tone_hz + half_width_hz)
+            )[0]
+        else:
+            row_indices = np.array([], dtype=int)
+        if row_indices.size == 0:
+            row_indices = np.asarray([int(np.argmin(np.abs(signal_freqs - tone_hz)))], dtype=int)
+
         col_indices = np.where(mod_mask)[0]
-        tone_depth = mod_depth[row, col_indices]
-        any_col = col_indices[int(np.argmax(tone_depth))]
+        tone_depth = mod_depth[np.ix_(row_indices, col_indices)]
+        any_row_offset, any_col_offset = np.unravel_index(
+            int(np.argmax(tone_depth)),
+            tone_depth.shape,
+        )
+        row = int(row_indices[any_row_offset])
+        any_col = int(col_indices[any_col_offset])
         max_any_depth_percent = float(mod_depth[row, any_col])
         max_any_mod_freq_hz = float(mod_freqs[any_col])
         has_modulation_peak = max_any_depth_percent >= float(min_modulation_depth_percent)
@@ -547,12 +608,19 @@ def _evaluate_main_tones(
         else:
             mechanical_cols = col_indices
 
+        mechanical_row = row
         if mechanical_cols.size:
-            local_col = mechanical_cols[int(np.argmax(mod_depth[row, mechanical_cols]))]
+            mechanical_depth_window = mod_depth[np.ix_(row_indices, mechanical_cols)]
+            mechanical_row_offset, mechanical_col_offset = np.unravel_index(
+                int(np.argmax(mechanical_depth_window)),
+                mechanical_depth_window.shape,
+            )
+            mechanical_row = int(row_indices[mechanical_row_offset])
+            local_col = int(mechanical_cols[mechanical_col_offset])
         else:
             local_col = any_col
 
-        mechanical_depth_percent = float(mod_depth[row, local_col])
+        mechanical_depth_percent = float(mod_depth[mechanical_row, local_col])
         mechanical_mod_freq_hz = float(mod_freqs[local_col])
         mod_freq_hz = max_any_mod_freq_hz if has_modulation_peak else None
 
@@ -614,7 +682,9 @@ def _evaluate_main_tones(
 def compute_modulation_map(audio_signal, sample_rate, config=None):
     cfg = default_modulation_config()
     if isinstance(config, dict):
-        cfg.update({k: v for k, v in config.items() if v is not None})
+        for key, value in config.items():
+            if value is not None or key == "main_tones_hz":
+                cfg[key] = value
 
     audio = _clean_audio(audio_signal)
     sample_rate = int(sample_rate)
@@ -623,6 +693,7 @@ def compute_modulation_map(audio_signal, sample_rate, config=None):
     mod_freq_range_hz = _range_pair(cfg.get("mod_freq_range_hz"), DEFAULT_MODULATION_CONFIG["mod_freq_range_hz"])
     main_tones_hz = _float_list(cfg.get("main_tones_hz"), DEFAULT_MAIN_TONES_HZ)
     mechanical_freqs_hz = _float_list(cfg.get("mechanical_freqs_hz"), ())
+    tone_band_hz = float(cfg.get("tone_band_hz", DEFAULT_TONE_BAND_HZ))
 
     mod_freq_bin_hz = float(cfg.get("mod_freq_bin_hz", DEFAULT_MOD_FREQ_BIN_HZ))
     internal_mod_freq_step_hz = DEFAULT_INTERNAL_MOD_FREQ_STEP_HZ
@@ -642,6 +713,8 @@ def compute_modulation_map(audio_signal, sample_rate, config=None):
         float(cfg.get("envelope_window_ms", DEFAULT_ENVELOPE_WINDOW_MS)),
         float(cfg.get("envelope_shift_ms", DEFAULT_ENVELOPE_SHIFT_MS)),
         internal_mod_freq_step_hz,
+        main_tones_hz if cfg.get("main_tones_hz") is not None else None,
+        tone_band_hz,
     )
     effective_mod_freq_range_hz = stft_params["effective_mod_freq_range_hz"]
     mod_depth, mod_freqs = _bin_modulation_axis(
@@ -721,6 +794,10 @@ def compute_modulation_map(audio_signal, sample_rate, config=None):
         "stft_params": stft_params,
         "threshold_percent": threshold_percent,
         "min_modulation_depth_percent": min_modulation_depth_percent,
+        "analysis_scope": stft_params.get("analysis_scope"),
+        "main_tones_hz": stft_params.get("main_tones_hz"),
+        "tone_band_hz": stft_params.get("tone_band_hz"),
+        "computed_signal_freq_count": stft_params.get("computed_signal_freq_count"),
         "core_freq_lines_khz": _float_list(cfg.get("core_freq_lines_khz"), DEFAULT_MODULATION_CONFIG["core_freq_lines_khz"]),
         "main_tone_search_width_hz": float(
             cfg.get("main_tone_search_width_hz", DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ)

@@ -4,7 +4,7 @@ from base.load_config import load_config
 from base.pre_processing.preprocessing_manager import PreprocessingManager
 from base.split_data_dir import copy_from_restored_audio_database
 from consts import error_code, model_consts
-from machine_learning import MODEL_MAPPING
+from machine_learning import get_model_class
 
 def load_data_from_database():
     try:
@@ -24,7 +24,10 @@ def init_model_from_config(**kwargs):
     """
     config_path = kwargs.get("config_path", model_consts.DEFAULT_DIR + model_consts.CONFIG_PATH)
     model_config = load_config(config_path=config_path, module_name="model")
-    model_obj = MODEL_MAPPING.get(model_config.get("model_name"))
+    model_name = model_config.get("model_name")
+    model_obj = get_model_class(model_name)
+    if model_obj is None:
+        raise ValueError(f"Unknown model_name: {model_name}")
     model = model_obj(model_config)
     return model
 

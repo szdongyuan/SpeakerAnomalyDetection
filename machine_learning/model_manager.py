@@ -1,12 +1,6 @@
 import numpy as np
 from copy import deepcopy
 from sklearn.model_selection import train_test_split
-from tensorflow.keras import models
-
-try:
-    from keras.callbacks import EarlyStopping
-except Exception as e:
-    from keras.src.callbacks import EarlyStopping
 
 from base.sample_balance import balance_sample_number
 from base.training_model_management import TrainingModelManagement
@@ -85,6 +79,8 @@ class NeuralNetManager(ModelManager):
                                                     ret_str, model_description)
 
     def load_model(self, load_model_path):
+        from tensorflow.keras import models
+
         self.model = models.load_model(load_model_path)
 
     def parse_fit_config(self):
@@ -95,6 +91,11 @@ class NeuralNetManager(ModelManager):
         if self.fit_config.get("class_weight"):
             fit_kwargs["class_weight"] = self.fit_config.get("class_weight")
         if self.fit_config.get("early_stop"):
+            try:
+                from keras.callbacks import EarlyStopping
+            except Exception:
+                from keras.src.callbacks import EarlyStopping
+
             early_stop = EarlyStopping(monitor='val_loss', patience=3)
             fit_kwargs["callbacks"] = [early_stop]
         return fit_kwargs
