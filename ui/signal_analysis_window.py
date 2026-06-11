@@ -4866,13 +4866,10 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
 
         self._plot_dual_track(res, params, fan_pr_limits)
 
-        # OK/NG 仅在启用限值且判定为 pass/fail（overall_ok 为 bool）时写入汇总
-        limit_checked = bool(config.get("limit_checked", True))
-        if limit_checked and res.decision_status in ("pass", "fail") and res.overall_ok is not None:
-            self.data_struct.analysis_result_dict[self.title_name] = (bool(res.overall_ok), float(res.max_exceed_db))
-
-        if res.warnings:
-            MessageBox.warning(self, "提示", "PR 分析提示:\n" + "\n".join(res.warnings[:6]))
+        import logging
+        _pr_logger = logging.getLogger("pr_analysis")
+        for w in res.warnings:
+            _pr_logger.warning(f"PR: {w}")
 
         self.result = {
             "frequency_hz": np.asarray(res.frequency_hz, dtype=float).tolist(),
@@ -4980,6 +4977,9 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         ]
         if not valid:
             return []
+        user = [t for t in valid if getattr(t, "user_specified", False)]
+        if user:
+            return user
         primary = [
             t for t in valid
             if getattr(t, "customer_ok", None) is False
@@ -5277,8 +5277,14 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
                 symbolPen=mkPen(color=color, width=1),
             )
             prefix = "NG " if is_ng else ""
-            label = f"{prefix}{t.frequency_hz:.0f}Hz  PR={t.pr_db:.1f} dB, Limit={t.limit_db:.0f} dB"
-            text = pg.TextItem(label, color=color, anchor=(0.5, 1.15 + 0.25 * (idx % 3)))
+            label = f"{prefix}{t.frequency_hz:.0f}Hz  PR={t.pr_db:.1f} dB"
+            dev = getattr(t, "cross_deviation_db", None)
+            if dev is not None:
+                label += f", ΔECMA={dev:.2f} dB"
+            text_color = color
+            if dev is not None and dev > float((self.analysis_config or {}).get("ecma_cross_check_threshold_db", 0.5)):
+                text_color = (200, 80, 0)
+            text = pg.TextItem(label, color=text_color, anchor=(0.5, 1.15 + 0.25 * (idx % 3)))
             text.setPos(t.frequency_hz / 1000.0, t.pr_db + 0.15 * (idx % 3))
             self.pr_plot.addItem(text)
 

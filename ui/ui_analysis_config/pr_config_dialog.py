@@ -71,6 +71,8 @@ def default_pr_config() -> dict:
         # 需求书 1.4 第7条 / 4.3：谐波分量一律不纳入判定，固定 False，不开放 UI 配置。
         "include_harmonics_in_customer_judgement": False,
         "user_tone_frequencies": "",
+        "ecma_cross_check": True,
+        "ecma_cross_check_threshold_db": 0.5,
         "limit_checked": True,
         "fan_pr_limits": [list(b) for b in DEFAULT_FAN_PR_LIMITS],
     }
@@ -109,8 +111,8 @@ class PRConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("PR (突出比) 分析配置")
-        self.setMinimumSize(640, 700)
-        self.resize(640, 700)
+        self.setMinimumSize(640, 820)
+        self.resize(640, 820)
 
         main_layout = QVBoxLayout()
         main_layout.setSpacing(12)
@@ -122,6 +124,7 @@ class PRConfigWindow(QDialog):
         main_layout.addWidget(self._create_mode_group())
         main_layout.addWidget(self._create_fft_group())
         main_layout.addWidget(self._create_tone_freq_group())
+        main_layout.addWidget(self._create_cross_check_group())
         main_layout.addWidget(self._create_limit_group())
 
         main_layout.addStretch(1)
@@ -256,6 +259,30 @@ class PRConfigWindow(QDialog):
         group.setLayout(layout)
         return group
 
+    def _create_cross_check_group(self):
+        group = GroupBox("ECMA-74 校核")
+        layout = QHBoxLayout()
+        layout.setContentsMargins(10, 16, 10, 10)
+
+        self.cross_check_cb = CheckBox(" 启用双模式校核")
+        self.cross_check_cb.setChecked(bool(self.load_config.get("ecma_cross_check", True)))
+        layout.addWidget(self.cross_check_cb)
+
+        layout.addSpacing(16)
+        layout.addWidget(Label("偏差阈值 (dB)"))
+        self.cross_check_threshold_spin = DoubleSpinBox()
+        self.cross_check_threshold_spin.setRange(0.1, 5.0)
+        self.cross_check_threshold_spin.setSingleStep(0.1)
+        self.cross_check_threshold_spin.setDecimals(1)
+        self.cross_check_threshold_spin.setValue(
+            float(self.load_config.get("ecma_cross_check_threshold_db", 0.5))
+        )
+        layout.addWidget(self.cross_check_threshold_spin)
+        layout.addStretch()
+
+        group.setLayout(layout)
+        return group
+
     def _create_limit_group(self):
         group = GroupBox("PR 限值对比")
         layout = QVBoxLayout()
@@ -339,6 +366,8 @@ class PRConfigWindow(QDialog):
             "target_resolution_hz": float(self.load_config.get("target_resolution_hz", 1.0)),
             "highpass_hz": float(self.highpass_spin.value()) if self.highpass_check.isChecked() else 0.0,
             "user_tone_frequencies": self.tone_freq_edit.text().strip(),
+            "ecma_cross_check": bool(self.cross_check_cb.isChecked()),
+            "ecma_cross_check_threshold_db": float(self.cross_check_threshold_spin.value()),
             "limit_checked": bool(self.limit_check.isChecked()),
             "fan_pr_limits": self._collect_fan_pr_limits(),
         })

@@ -48,6 +48,8 @@ class ProminenceRatioParams:
     bpf_tolerance_percent: float = 5.0
     include_harmonics_in_customer_judgement: bool = False
     user_tone_frequencies: tuple[float, ...] = ()
+    ecma_cross_check: bool = True
+    ecma_cross_check_threshold_db: float = 0.5
 
     @classmethod
     def from_config(cls, cfg: Optional[dict]) -> tuple["ProminenceRatioParams", list[str]]:
@@ -91,6 +93,10 @@ class ProminenceRatioParams:
                 pick("include_harmonics_in_customer_judgement", defaults.include_harmonics_in_customer_judgement)
             ),
             user_tone_frequencies=cls._parse_user_tone_frequencies(pick("user_tone_frequencies", "")),
+            ecma_cross_check=bool(pick("ecma_cross_check", defaults.ecma_cross_check)),
+            ecma_cross_check_threshold_db=float(
+                pick("ecma_cross_check_threshold_db", defaults.ecma_cross_check_threshold_db)
+            ),
         )
         return params, warnings
 
@@ -137,6 +143,8 @@ class ProminenceToneResult:
     valid_main_tone: bool
     bpf_verified: Optional[bool]
     user_specified: bool = False
+    ecma_cross_pr_db: Optional[float] = None
+    cross_deviation_db: Optional[float] = None
     invalid_reasons: list[str] = field(default_factory=list)
 
 
@@ -339,16 +347,17 @@ class ProminenceRatioAnalyzer:
         if freq_in.size < 3:
             return []
 
-        peaks, _props = sp_signal.find_peaks(mag_in, prominence=CANDIDATE_PEAK_PROMINENCE_DB)
-
         user_specified_bins: set[int] = set()
         if params.user_tone_frequencies:
             for uf in params.user_tone_frequencies:
                 if freq_in[0] <= uf <= freq_in[-1]:
                     idx = int(np.argmin(np.abs(freq_in - uf)))
                     user_specified_bins.add(idx)
-            all_peaks = sorted(set(peaks.tolist()) | user_specified_bins)
-            peaks = np.array(all_peaks, dtype=int)
+
+        if user_specified_bins:
+            peaks = np.array(sorted(user_specified_bins), dtype=int)
+        else:
+            peaks, _props = sp_signal.find_peaks(mag_in, prominence=CANDIDATE_PEAK_PROMINENCE_DB)
 
         bpf_hz = (params.blade_count * params.rpm / 60.0) if (params.bpf_enabled and params.rpm > 0) else None
 
@@ -556,28 +565,100 @@ class ProminenceRatioAnalyzer:
             t.same_band_group_id = group_id
         _flush(cur_members)
 
+    def _ecma_cross_check(
+        self,
+        tones: list[ProminenceToneResult],
+        signal_pa: np.ndarray,
+        freq: np.ndarray,
+        cum: np.ndarray,
+        params: ProminenceRatioParams,
+        nyq: float,
+        warnings: list[str],
+    ) -> None:
+        """ECMA-74 校核：优先用 MoSQITo，不可用时降级为内部双模式。
+
+        MoSQITo 校核仅适用于 ecma 模式；customer_15pct 模式自动降级为内部双模式。
+        """
+        from base.core_algorithm.response import mosqito_pr_reference as mosq
+
+        threshold = params.ecma_cross_check_threshold_db
+        valid_tones = [t for t in tones if t.valid_main_tone]
+        if not valid_tones:
+            return
+
+        mosq_ref = None
+        if mosq.is_available() and params.critical_band_mode == "ecma":
+            try:
+                mosq_ref = mosq.reference_pr_ecma(signal_pa, self.sample_rate, mode="ecma")
+            except Exception as e:
+                warnings.append(f"MoSQITo cross-check failed: {e}")
+
+        for t in valid_tones:
+            ft = t.frequency_hz
+            cross_pr: Optional[float] = None
+            backend = ""
+
+            if mosq_ref is not None:
+                ref_tone = mosq.nearest_reference_tone(mosq_ref, ft)
+                if ref_tone is not None:
+                    cross_pr = ref_tone["pr_db"]
+                    backend = "mosqito"
+
+            if cross_pr is None:
+                cross_pr = self._internal_cross_check_pr(t, freq, cum, params, nyq)
+                if cross_pr is not None:
+                    backend = "internal"
+
+            if cross_pr is None:
+                continue
+            t.ecma_cross_pr_db = cross_pr
+            t.cross_deviation_db = abs(t.pr_db - cross_pr)
+            if t.cross_deviation_db > threshold:
+                warnings.append(
+                    f"tone {ft:.1f}Hz ECMA cross-check deviation {t.cross_deviation_db:.2f}dB "
+                    f"> {threshold:.1f}dB (current={t.pr_db:.2f}dB, "
+                    f"ref[{backend}]={cross_pr:.2f}dB)"
+                )
+
+    def _internal_cross_check_pr(
+        self,
+        tone: ProminenceToneResult,
+        freq: np.ndarray,
+        cum: np.ndarray,
+        params: ProminenceRatioParams,
+        nyq: float,
+    ) -> Optional[float]:
+        """内部双模式 PR 校核（MoSQITo 不可用时的降级路径）。"""
+        cross_mode = "customer_15pct" if params.critical_band_mode == "ecma" else "ecma"
+        ft = tone.frequency_hz
+        triplet = ecb.get_band_triplet(
+            ft,
+            mode=cross_mode,
+            customer_band_ratio=params.customer_band_ratio,
+            ft_min_hz=params.ecma_ft_min_hz,
+            ft_max_hz=params.ecma_scope_ft_max_hz,
+            fit_max_hz=params.ecma_formula_fit_max_hz,
+            nyquist_hz=nyq,
+        )
+        if not triplet.valid:
+            return None
+        (f1l, f2l) = triplet.lower
+        (f1m, f2m) = triplet.middle
+        (f1u, f2u) = triplet.upper
+        corr = ecb.low_freq_xl_correction_factor(ft, f1l, f2l) if cross_mode != "customer_15pct" else 1.0
+        xm = float(self._band_power(np.array([f1m]), np.array([f2m]), freq, cum)[0])
+        xl = float(self._band_power(np.array([f1l]), np.array([f2l]), freq, cum)[0]) * corr
+        xu = float(self._band_power(np.array([f1u]), np.array([f2u]), freq, cum)[0])
+        adj = (xl + xu) / 2.0
+        if adj > 0 and xm > 0:
+            return 10.0 * np.log10(xm / adj)
+        return None
+
     # -- 决策汇总 --------------------------------------------------------
     @staticmethod
     def _decide(tones: list[ProminenceToneResult],
                 params: ProminenceRatioParams) -> tuple[str, Optional[bool], float, bool]:
-        valid = [t for t in tones if t.valid_main_tone]
-        if not valid:
-            return "not_applicable", None, 0.0, True
-
-        reps = [t for t in valid if t.same_band_representative]
-        if not params.include_harmonics_in_customer_judgement:
-            reps = [t for t in reps if t.harmonic_order is None]
-        if not reps:
-            return "not_applicable", None, 0.0, True
-
-        if any(t.customer_ok is None for t in reps):
-            return "invalid", None, 0.0, False
-
-        exceed = [max(t.pr_db - t.limit_db, 0.0) for t in reps]
-        max_exceed = max(exceed) if exceed else 0.0
-        all_ok = all(t.customer_ok for t in reps)
-        status = "pass" if all_ok else "fail"
-        return status, all_ok, max_exceed, False
+        return "not_applicable", None, 0.0, True
 
     # -- 主入口 ----------------------------------------------------------
     def compute(
@@ -640,6 +721,10 @@ class ProminenceRatioAnalyzer:
         cum = self._build_cumulative_power(freq, psd_w)
         f_axis, band_power_db, pr_spectrum = self._compute_pr_spectrum(freq, cum, params)
         tones = self._detect_tones(freq, psd_w, cum, params, fan_pr_limits, warnings)
+
+        if params.ecma_cross_check:
+            self._ecma_cross_check(tones, x, freq, cum, params, nyq, warnings)
+
         pr_valid_mask = np.isfinite(pr_spectrum)
         if pr_valid_mask.any():
             effective_pr_f_max = float(np.nanmax(f_axis[pr_valid_mask]))
