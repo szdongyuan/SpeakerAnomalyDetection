@@ -2511,6 +2511,12 @@ class Mel(QWidget):
         )
         return {key: Mel._to_plain_value(analysis_result.get(key)) for key in keys}
 
+    def export_pdf_images(self, output_dir):
+        if self.plot_widget is None:
+            return []
+        image_path = export_plot_widget_image(self.plot_widget, output_dir, "mel_spectrogram")
+        return [{"title": self.title_name, "path": image_path}]
+
 
 class Modulation(QWidget):
     MODULATION_COLOR_CAP_PERCENT = 20.0
@@ -2787,6 +2793,12 @@ class Modulation(QWidget):
             "min_modulation_depth_percent",
         )
         return {key: Modulation._to_plain_value(analysis_result.get(key)) for key in keys}
+
+    def export_pdf_images(self, output_dir):
+        if self.plot_widget is None:
+            return []
+        image_path = export_plot_widget_image(self.plot_widget, output_dir, "modulation_map")
+        return [{"title": self.title_name, "path": image_path}]
 
 
 class LooseParticle(AnalysisGraphWidget):
