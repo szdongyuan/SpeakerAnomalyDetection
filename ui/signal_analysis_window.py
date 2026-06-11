@@ -52,7 +52,6 @@ from base.core_algorithm.response.prominence_ratio_analyzer import (
     ProminenceRatioAnalyzer,
     ProminenceRatioParams,
 )
-from base.core_algorithm.sound_quality import run_sound_quality
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
@@ -5147,7 +5146,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             ft = self._finite_float(getattr(t, "frequency_hz", float("nan")))
             if np.isfinite(ft):
                 half_15 = 0.5 * ratio * ft
-                line_label = "15%" if idx == 0 else None
+                line_label = f"{ratio * 100:.0f}%" if idx == 0 else None
                 self._add_pr_vertical_line(self.analysis_plot, ft - half_15, dashed_15pct,
                                            line_label, y_top + 0.14 * y_span)
                 self._add_pr_vertical_line(self.analysis_plot, ft + half_15, dashed_15pct)
@@ -5236,7 +5235,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             self._add_legend_sample(self.analysis_plot, "相邻频带", color=(33, 102, 172), fill=(33, 102, 172, 34))
             self._add_legend_sample(
                 self.analysis_plot,
-                "15%划分线",
+                f"{self._finite_float(getattr(params, 'customer_band_ratio', 0.15), 0.15) * 100:.0f}%划分线",
                 color=(120, 120, 120),
                 width=1,
                 style=Qt.DashLine,

@@ -40,9 +40,6 @@ from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
 from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
-from ui.ui_analysis_config import LoudnessConfigWindow
-from ui.ui_analysis_config import RoughnessConfigWindow, default_roughness_config
-from ui.ui_analysis_config import SharpnessConfigWindow, default_sharpness_config
 from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
 from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
 from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
@@ -226,9 +223,6 @@ class AnalysisModelSelect(QDialog):
             "频响 (FR) ",
             "频段能量 (FBA) ",
             "突出比 (PR) ",
-            "响度 (LOUD) ",
-            "尖锐度 (SHRP) ",
-            "粗糙度 (ROUGH) ",
             "谐波失真 (HD) ",
             "高阶谐波失真 (RB) ",
             "感知失真 (PRB) ",
@@ -895,12 +889,6 @@ class OptionList(ListView):
             model = ModulationConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "PR":
             model = PRConfigWindow(config_manager, name, available_channels=available_channels)
-        elif type == "LOUD":
-            model = LoudnessConfigWindow(config_manager, name)
-        elif type == "SHRP":
-            model = SharpnessConfigWindow(config_manager, name)
-        elif type == "ROUGH":
-            model = RoughnessConfigWindow(config_manager, name)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         elif type == "PDF":
@@ -1355,28 +1343,8 @@ class OptionList(ListView):
             default_of_type = default_modulation_config()
         elif type == "Mel" and not default_of_type:
             default_of_type = default_mel_config()
-        if type == "SHRP" and not default_of_type:
-            default_of_type = default_sharpness_config()
-        if type == "ROUGH" and not default_of_type:
-            default_of_type = default_roughness_config()
         if type == "PR" and not default_of_type:
             default_of_type = default_pr_config()
-        if type == "SHRP":
-            default_of_type.setdefault("limit_checked", False)
-            default_of_type.setdefault("limit_metric", "curve_y")
-            default_of_type.setdefault("curve_limit_unit", "acum")
-            default_of_type.setdefault("curve_upper_enabled", False)
-            default_of_type.setdefault("curve_upper_value", 0.0)
-            default_of_type.setdefault("curve_lower_enabled", False)
-            default_of_type.setdefault("curve_lower_value", 0.0)
-        if type == "ROUGH":
-            default_of_type.setdefault("limit_checked", False)
-            default_of_type.setdefault("limit_metric", "curve_y")
-            default_of_type.setdefault("curve_limit_unit", "asper")
-            default_of_type.setdefault("curve_upper_enabled", False)
-            default_of_type.setdefault("curve_upper_value", 0.0)
-            default_of_type.setdefault("curve_lower_enabled", False)
-            default_of_type.setdefault("curve_lower_value", 0.0)
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type
 
