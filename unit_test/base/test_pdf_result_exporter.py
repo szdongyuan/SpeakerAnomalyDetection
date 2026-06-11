@@ -71,6 +71,39 @@ def test_build_pdf_report_items_places_judged_items_first_preserving_order():
     assert [x["name"] for x in items] == ["SPL1", "FR1", "Spec1"]
 
 
+def test_build_pdf_report_items_preserves_tables_and_excludes_duplicate_summary_fields():
+    table = {
+        "title": "Mel 分析表格",
+        "headers": ["整体SPL dB(A)", "热点时间(s)"],
+        "rows": [["-8.13", "1.365"]],
+    }
+    items = build_pdf_report_items(
+        ["Mel1"],
+        {
+            "Mel1": {
+                "type": "Mel",
+                "result": {
+                    "overall_spl_dba": -8.13,
+                    "hotspot": {"time_s": 1.365, "freq_hz": 2423.0},
+                    "mel_db_a": [[1.0, 2.0]],
+                    "times_s": [0.0, 1.0],
+                },
+                "tables": [table],
+                "pdf_summary_exclude_fields": ["overall_spl_dba", "hotspot"],
+            }
+        },
+        {},
+        {},
+    )
+
+    keys = [key for key, _value in items[0]["result_rows"]]
+    assert items[0]["tables"] == [table]
+    assert "整体声压级 dB(A)" not in keys
+    assert "热点" not in keys
+    assert "A计权Mel频谱" in keys
+    assert "时间轴" in keys
+
+
 def test_summarize_result_payload_summarizes_long_arrays():
     rows = summarize_result_payload({"curve": list(range(100)), "score": 0.95})
     text = "\n".join(value for _key, value in rows)
@@ -296,6 +329,70 @@ def test_summarize_result_payload_labels_fft_fields():
     assert "主音识别结果" in keys
 
 
+def test_summarize_result_payload_labels_mel_and_modulation_fields():
+    rows = summarize_result_payload(
+        {
+            "mel_db_a": [[1.0, 2.0]],
+            "times_s": [0.0, 1.0],
+            "mel_axis": [100.0, 200.0],
+            "mel_freq_edges_hz": [80.0, 160.0, 320.0],
+            "overall_spl_dba": -8.13,
+            "hotspot": {"time_s": 1.365, "freq_hz": 2423.0},
+            "params": {"n_mels": 128},
+            "mod_depth_matrix": [[0.0, 12.0]],
+            "signal_freq_axis_hz": [1200.0],
+            "mod_freq_axis_hz": [75.0],
+            "main_tone_results": [{"target_signal_freq_hz": 1200.0}],
+            "global_hotspots": [],
+            "mechanical_references": [{"freq_hz": 75.0}],
+            "mechanical_mod_freqs_hz": [75.0],
+            "stft_params": {"n_fft": 2048},
+            "threshold_percent": 10.0,
+            "min_modulation_depth_percent": 1.0,
+        }
+    )
+    keys = [key for key, _value in rows]
+    assert "A计权Mel频谱" in keys
+    assert "时间轴" in keys
+    assert "Mel频率轴" in keys
+    assert "Mel频带边界" in keys
+    assert "整体声压级 dB(A)" in keys
+    assert "热点" in keys
+    assert "参数" in keys
+    assert "调制深度矩阵" in keys
+    assert "信号频率轴" in keys
+    assert "调制频率轴" in keys
+    assert "主音分析结果" in keys
+    assert "全局热点" in keys
+    assert "机械参考频率" in keys
+    assert "机械调制频率" in keys
+    assert "STFT参数" in keys
+    assert "阈值(%)" in keys
+    assert "最小调制深度(%)" in keys
+
+
+def test_summarize_result_payload_labels_pr_fields_and_status_values():
+    rows = summarize_result_payload(
+        {
+            "max_pr_db": 4.63635,
+            "max_pr_frequency": 1096.44,
+            "max_pr_frequency_hz": 1096.44,
+            "max_exceed_db": 0,
+            "decision_status": "not_applicable",
+            "tone_count": 0,
+        }
+    )
+    row_dict = dict(rows)
+
+    assert "最大突出比(dB)" in row_dict
+    assert "最大突出比频率(Hz)" in row_dict
+    assert "最大超限(dB)" in row_dict
+    assert "判定状态" in row_dict
+    assert "主音数量" in row_dict
+    assert row_dict["判定状态"] == "不适用"
+    assert "not_applicable" not in "\n".join(row_dict.values())
+
+
 def test_calculate_overall_status_uses_selected_judged_items_only():
     assert calculate_overall_status(
         ["SPL1", "FR1"], {"SPL1": (True, 0.1), "FR1": (True, 0.2)}
@@ -409,6 +506,9 @@ def test_render_pdf_starts_details_on_new_page_after_summary(monkeypatch):
         def _status_color(self, value):
             return value
 
+        def table(self, headers, rows, title=None):
+            calls.append(("table", headers, rows, title))
+
         def image(self, image_path, title=None):
             calls.append(("image", image_path, title))
 
@@ -427,6 +527,14 @@ def test_render_pdf_starts_details_on_new_page_after_summary(monkeypatch):
             "status": "OK",
             "deviation": "0",
             "result_rows": [("score", "1.23")],
+            "tables": [
+                {
+                    "title": "Mel 分析表格",
+                    "headers": ["整体SPL dB(A)", "热点时间(s)"],
+                    "rows": [["-8.13", "1.365"]],
+                }
+            ],
+            "images": [{"title": "plot", "path": "plot.png"}],
         }
     ]
     pdf_result_exporter._render_pdf("out.pdf", header_rows=[("音频文件", "demo.wav")], report_items=report_items)
@@ -446,6 +554,9 @@ def test_render_pdf_starts_details_on_new_page_after_summary(monkeypatch):
     assert summary_index < new_page_index < first_section_index
     assert ("text", "判定: OK") in calls
     assert not any(call[0] == "text" and "偏差" in call[1] for call in calls)
+    table_index = calls.index(("table", ["整体SPL dB(A)", "热点时间(s)"], [["-8.13", "1.365"]], "Mel 分析表格"))
+    image_index = calls.index(("image", "plot.png", "plot"))
+    assert first_section_index < table_index < image_index
 
 
 def test_render_pdf_does_not_add_blank_page_without_report_items(monkeypatch):
@@ -515,6 +626,38 @@ def test_export_analysis_to_pdf_creates_non_empty_pdf(tmp_path):
         now_dt=datetime(2026, 6, 5, 14, 23, 8),
     )
     assert ret.ok
+    assert os.path.exists(ret.file_path)
+    assert os.path.getsize(ret.file_path) > 100
+
+
+def test_export_analysis_to_pdf_renders_wide_table_without_float_drawline_error(tmp_path):
+    cfg = {"enabled": True, "save_dir": str(tmp_path), "save_items": ["Mel1"]}
+    ret = export_analysis_to_pdf(
+        cfg,
+        audio_path="D:/records/demo.wav",
+        sn="SN001",
+        product_model="MODEL-A",
+        date_text="2026/6/5 14:23:08",
+        analysis_items_data={
+            "Mel1": {
+                "type": "Mel",
+                "result": {"mel_db_a": [[1.0, 2.0]]},
+                "tables": [
+                    {
+                        "title": "分析表格",
+                        "headers": ["整体SPL dB(A)", "热点时间(s)", "热点频率(kHz)", "热点Mel", "热点dB(A)"],
+                        "rows": [["-8.13", "1.365", "2.423", "1685.3", "-9.02"]],
+                    }
+                ],
+            }
+        },
+        analysis_config={"Mel1": {"type": "Mel"}},
+        analysis_result_dict={},
+        image_exporters={},
+        now_dt=datetime(2026, 6, 5, 14, 23, 8),
+    )
+
+    assert ret.ok, ret.message
     assert os.path.exists(ret.file_path)
     assert os.path.getsize(ret.file_path) > 100
 

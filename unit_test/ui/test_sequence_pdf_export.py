@@ -55,9 +55,13 @@ class FakeAnalysis:
     _sequence_analysis_key = "SPL1"
     result = {"score": 1}
     export_detail = {"summary": "done"}
+    pdf_summary_exclude_fields = ("score",)
 
     def export_pdf_images(self, output_dir):
         return []
+
+    def export_pdf_tables(self):
+        return [{"title": "分析表格", "headers": ["项目"], "rows": [["值"]]}]
 
 
 def _new_window():
@@ -109,6 +113,10 @@ def test_capture_analysis_export_cache_includes_pdf_image_callbacks():
     assert cache["run_id"] == 7
     assert cache["analysis_items_data"]["SPL1"]["result"] == {"score": 1}
     assert cache["analysis_items_data"]["SPL1"]["summary"] == "done"
+    assert cache["analysis_items_data"]["SPL1"]["tables"] == [
+        {"title": "分析表格", "headers": ["项目"], "rows": [["值"]]}
+    ]
+    assert cache["analysis_items_data"]["SPL1"]["pdf_summary_exclude_fields"] == ["score"]
     assert "SPL1" in cache["image_exporters"]
     assert cache["image_exporters"]["SPL1"]("D:/tmp") == []
 
