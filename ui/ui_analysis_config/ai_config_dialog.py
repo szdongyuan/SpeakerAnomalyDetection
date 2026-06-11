@@ -1,71 +1,40 @@
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QSizePolicy
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QSizePolicy
 
 from base.training_model_management import TrainingModelManagement
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import PushButton, ComboBox, Label, GroupBox, MessageBox
+from ui.custom_ui_widget.widgets import ComboBox, Label, GroupBox, MessageBox
+from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, ChannelSelectorWidget
 from ui.ui_src import ui_resources
 
 
-class AIConfigWindow(QDialog):
+class AIConfigWindow(AnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, signal_len=None, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.signal_len = signal_len
         self.config_manager = config_manager
         self.model_list = self.load_model_name_from_db()
         self.load_config = self.config_manager.load_config().get(model_type, {})
         self.show_channel_selector = available_channels is not None
-        self.available_channels = self._normalize_available_channels(available_channels)
+        self.available_channels = available_channels
         self.init_ui()
 
-    @staticmethod
-    def _normalize_available_channels(available_channels):
-        channels = []
-        try:
-            channels = sorted({int(ch) for ch in (available_channels or [])})
-        except Exception:
-            channels = []
-        if not channels:
-            channels = [0]
-        return channels
-
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(200, 300)
         layout = QVBoxLayout()
         if self.show_channel_selector:
-            layout.addLayout(self.create_channel_layout())
+            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
+            layout.addWidget(self.channel_selector)
         model_box = self.create_model_layout()
         btn_layout = self.create_btn()
         layout.addWidget(model_box)
         layout.addStretch()
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-
-    def create_channel_layout(self):
-        channel_label = Label("通道:")
-        self.channel_combo_box = ComboBox(self)
-        for ch in self.available_channels:
-            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
-
-        saved_channel = self.load_config.get("analysis_channel", None)
-        if saved_channel is None or int(saved_channel) not in self.available_channels:
-            saved_channel = int(self.available_channels[0])
-        idx = self.channel_combo_box.findData(int(saved_channel))
-        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
-
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(channel_label)
-        channel_layout.addWidget(self.channel_combo_box)
-        channel_layout.setSpacing(10)
-        return channel_layout
 
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:
@@ -105,21 +74,13 @@ class AIConfigWindow(QDialog):
         return model_list
 
     def create_btn(self):
-        btn_layout = QHBoxLayout()
-        default_btn = PushButton(" 设为默认 ")
-        default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = PushButton(" 确  认 ")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-        return btn_layout
+        return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
 
     def get_default_config(self):
         default_config = {
             "analyse_model_name": self.analyse_model_combo_box.currentText(),
-            "analysis_channel": int(self.channel_combo_box.currentData())
-            if self.show_channel_selector and hasattr(self, "channel_combo_box")
+            "analysis_channel": self.channel_selector.current_channel()
+            if self.show_channel_selector and hasattr(self, "channel_selector")
             else int(self.load_config.get("analysis_channel", 0) or 0),
         }
         return default_config
