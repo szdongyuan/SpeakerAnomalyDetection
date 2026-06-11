@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, Label, PushButton, ComboBox, RadioButton
+from ui.ui_analysis_config.config_normalization import normalize_octave_smoothing, weighting_to_display_label
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.ui_src import ui_resources
 
@@ -103,10 +104,7 @@ class SplConfigWindow(QDialog):
             # SPLF: octave smoothing dropdown (frequency-domain)
             self.smooth_combo_box = ComboBox()
             self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
-            selected_oct = self.load_config.get("octave_smoothing", None)
-            if selected_oct is None:
-                selected_oct = 6 if self.load_config.get("smooth_checked", False) else 0
-            selected_oct = int(selected_oct)
+            selected_oct = normalize_octave_smoothing(self.load_config, default=0)
             selected_label = next(
                 (k for k, v in self.OCTAVE_SMOOTHING_LABELS.items() if v == selected_oct),
                 "不平滑",
@@ -128,9 +126,7 @@ class SplConfigWindow(QDialog):
         weighting_label = Label("计权方式:")
         self.weighting_combo = ComboBox()
         self.weighting_combo.addItems(["Z（None）", "A", "B", "C", "D"])
-        weighting_value = self.load_config.get("weighting", "Z（None）")
-        if weighting_value in ["None", "Z"]:
-            weighting_value = "Z（None）"
+        weighting_value = weighting_to_display_label(self.load_config.get("weighting", "Z"))
         index = self.weighting_combo.findText(weighting_value)
         if index >= 0:
             self.weighting_combo.setCurrentIndex(index)
