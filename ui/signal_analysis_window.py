@@ -99,6 +99,30 @@ def get_class_mapping():
     return class_mapping
 
 
+def _export_table_widget_for_pdf(table_widget, title="分析表格"):
+    if table_widget is None:
+        return []
+    row_count = table_widget.rowCount()
+    column_count = table_widget.columnCount()
+    if row_count <= 0 or column_count <= 0:
+        return []
+
+    headers = []
+    for col in range(column_count):
+        header_item = table_widget.horizontalHeaderItem(col)
+        headers.append(header_item.text() if header_item is not None else "")
+
+    rows = []
+    for row in range(row_count):
+        row_values = []
+        for col in range(column_count):
+            item = table_widget.item(row, col)
+            row_values.append(item.text() if item is not None else "")
+        rows.append(row_values)
+
+    return [{"title": title, "headers": headers, "rows": rows}]
+
+
 def _resolve_golden_baseline_path(path: str):
     if not path or not isinstance(path, str):
         return None
@@ -2265,6 +2289,7 @@ class Spectrogram(QWidget):
 
 class Mel(QWidget):
     HOTSPOT_MARKER_SIZE = 12
+    pdf_summary_exclude_fields = ("overall_spl_dba", "hotspot")
 
     def __init__(self, title_name):
         super().__init__()
@@ -2516,11 +2541,15 @@ class Mel(QWidget):
         image_path = export_plot_widget_image(self.plot_widget, output_dir, "mel_spectrogram")
         return [{"title": self.title_name, "path": image_path}]
 
+    def export_pdf_tables(self):
+        return _export_table_widget_for_pdf(self.table_widget)
+
 
 class Modulation(QWidget):
     MODULATION_COLOR_CAP_PERCENT = 20.0
     HOTSPOT_MARKER_SIZE = 20
     MAIN_TONE_LABEL_FONT_PX = 9
+    pdf_summary_exclude_fields = ("main_tone_results",)
 
     def __init__(self, title_name):
         super().__init__()
@@ -2798,6 +2827,9 @@ class Modulation(QWidget):
             return []
         image_path = export_plot_widget_image(self.plot_widget, output_dir, "modulation_map")
         return [{"title": self.title_name, "path": image_path}]
+
+    def export_pdf_tables(self):
+        return _export_table_widget_for_pdf(self.table_widget)
 
 
 class LooseParticle(AnalysisGraphWidget):

@@ -12,6 +12,7 @@ from consts.pdf_result_exporter_consts import (
     INVALID_FILENAME_CHARS_RE,
     MAX_RENDERED_VALUE_LENGTH,
     RESULT_FIELD_LABELS,
+    RESULT_VALUE_LABELS,
 )
 
 _QT_APP = None
@@ -96,6 +97,8 @@ def _sequence_values(value: Any) -> list[Any]:
 def _format_scalar(value: Any) -> str:
     if value is None:
         return "-"
+    if isinstance(value, str):
+        return RESULT_VALUE_LABELS.get(value, value)
     if isinstance(value, float):
         return f"{value:.6g}"
     return str(value)
@@ -200,13 +203,16 @@ def _result_values_equivalent(base_value: Any, raw_value: Any) -> bool:
         return False
 
 
-def summarize_result_payload(result: Any) -> list[tuple[str, str]]:
+def summarize_result_payload(result: Any, *, exclude_keys: set[str] | None = None) -> list[tuple[str, str]]:
     if result is None:
         return []
+    excluded = {str(key) for key in (exclude_keys or set())}
     if isinstance(result, dict):
         rows: list[tuple[str, str]] = []
         for key, value in result.items():
             key_text = str(key)
+            if key_text in excluded:
+                continue
             if key_text.endswith("_raw"):
                 base_key = key_text[: -len("_raw")]
                 if base_key in result and _result_values_equivalent(result[base_key], value):
@@ -259,11 +265,12 @@ def build_pdf_report_items(
         if item_type is None and isinstance(cfg, dict):
             item_type = cfg.get("type")
         status, deviation = format_ok_ng((analysis_result_dict or {}).get(item_name))
-        result_rows = summarize_result_payload(item_data.get("result"))
+        summary_exclude_fields = set(item_data.get("pdf_summary_exclude_fields") or [])
+        result_rows = summarize_result_payload(item_data.get("result"), exclude_keys=summary_exclude_fields)
         detail_rows = [
             row
             for key, value in item_data.items()
-            if key not in {"type", "result"}
+            if key not in {"type", "result", "tables", "pdf_summary_exclude_fields"}
             for row in summarize_result_payload({key: value})
         ]
         report_items.append(
@@ -273,6 +280,7 @@ def build_pdf_report_items(
                 "status": status,
                 "deviation": deviation,
                 "result_rows": result_rows + detail_rows,
+                "tables": item_data.get("tables") or [],
                 "has_judgment": item_name in (analysis_result_dict or {}),
             }
         )
@@ -462,6 +470,56 @@ class _PdfPainter:
             return self.QColor(190, 40, 40)
         return self.QColor(45, 45, 45)
 
+    def table(self, headers: list[Any], rows: list[list[Any]], title: str | None = None) -> None:
+        painter = self.painter
+        if painter is None:
+            return
+        headers = [str(item) for item in (headers or [])]
+        if not headers:
+            return
+        normalized_rows = []
+        for row in rows or []:
+            row_values = [str(value) for value in (row or [])]
+            if len(row_values) < len(headers):
+                row_values.extend([""] * (len(headers) - len(row_values)))
+            normalized_rows.append(row_values[: len(headers)])
+
+        if title:
+            self.text(str(title), size=9, bold=True, height=20)
+
+        col_count = max(1, len(headers))
+        col_width = self.content_width / col_count
+        row_height = 24
+
+        def draw_row(values: list[str], *, header: bool = False) -> None:
+            self._ensure_space(row_height)
+            y = self.y
+            x = self.margin
+            if header:
+                painter.fillRect(self.QRectF(self.margin, y, self.content_width, row_height), self.QColor(245, 245, 245))
+            painter.setPen(self.QPen(self.QColor(190, 190, 190)))
+            painter.drawRect(self.QRectF(self.margin, y, self.content_width, row_height))
+            font = self.QFont("Microsoft YaHei", 8)
+            font.setBold(header)
+            painter.setFont(font)
+            painter.setPen(self.QPen(self.QColor(45, 45, 45)))
+            for col_index, value in enumerate(values):
+                if col_index:
+                    line_x = int(round(x))
+                    painter.drawLine(line_x, y, line_x, y + row_height)
+                painter.drawText(
+                    self.QRectF(x + 4, y, col_width - 8, row_height),
+                    int(self.Qt.AlignLeft | self.Qt.AlignVCenter),
+                    str(value),
+                )
+                x += col_width
+            self.y += row_height
+
+        draw_row(headers, header=True)
+        for row in normalized_rows:
+            draw_row(row)
+        self.spacer(6)
+
     def image(self, image_path: str, title: str | None = None) -> None:
         from PyQt5.QtGui import QImage
 
@@ -540,6 +598,13 @@ def _render_pdf(
                 layout.rows([(str(k), str(v)) for k, v in rows])
             else:
                 layout.text("无文本结果", size=9, height=20)
+            for table_info in item.get("tables") or []:
+                if isinstance(table_info, dict):
+                    layout.table(
+                        list(table_info.get("headers") or []),
+                        list(table_info.get("rows") or []),
+                        table_info.get("title"),
+                    )
             for image_info in item.get("images") or []:
                 if isinstance(image_info, dict):
                     layout.image(str(image_info.get("path") or ""), image_info.get("title"))

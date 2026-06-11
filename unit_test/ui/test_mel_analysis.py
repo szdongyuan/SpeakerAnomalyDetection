@@ -102,6 +102,14 @@ def test_mel_ui_smoke_renders_pyqtgraph_without_matplotlib(qapp, monkeypatch):
         assert result["mel_db_a"] == fake_result["mel_db_a"].tolist()
         assert widget.table_widget.rowCount() == 1
         assert widget.img_item is not None
+        assert widget.pdf_summary_exclude_fields == ("overall_spl_dba", "hotspot")
+        assert widget.export_pdf_tables() == [
+            {
+                "title": "分析表格",
+                "headers": ["整体SPL dB(A)", "热点时间(s)", "热点频率(kHz)", "热点Mel", "热点dB(A)"],
+                "rows": [["42.50", "0.020", "1.000", "900.0", "35.00"]],
+            }
+        ]
     finally:
         data_struct.store_wave_data = old_wave
         data_struct.store_wave_data_multi = old_multi

@@ -155,6 +155,7 @@ def test_sequence_run_dispatches_modulation_without_ok_ng_summary():
         _get_analysis_window_geometry=lambda _key: None,
         _set_analysis_window_geometry=lambda *_args, **_kwargs: None,
         _analysis_window_key_by_obj={},
+        _begin_analysis_export_run=lambda: None,
         _handle_post_analysis_exports=lambda: None,
         count_board=types.SimpleNamespace(mode="analysis"),
         _maybe_show_analysis_result_summary=lambda *_args, **_kwargs: None,
@@ -230,6 +231,14 @@ def test_modulation_ui_smoke_renders_pyqtgraph_without_matplotlib(qapp, monkeypa
         assert result["mod_depth_matrix"] == fake_result["mod_depth_matrix"].tolist()
         assert widget.table_widget.rowCount() == 1
         assert widget.img_item is not None
+        assert widget.pdf_summary_exclude_fields == ("main_tone_results",)
+        assert widget.export_pdf_tables() == [
+            {
+                "title": "分析表格",
+                "headers": ["主音(Hz)", "分析频率(kHz)", "调制频率(Hz)", "深度(%)", "机械匹配", "原因"],
+                "rows": [["1200.0", "1.200", "75.0", "20.00", "Yes", "AM depth above threshold"]],
+            }
+        ]
     finally:
         data_struct.store_wave_data = old_wave
         data_struct.store_wave_data_multi = old_multi
