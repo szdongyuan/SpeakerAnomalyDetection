@@ -11,9 +11,7 @@ from typing import List, Optional
 
 import numpy as np
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
-    QDialog,
     QFileDialog,
     QHBoxLayout,
     QVBoxLayout,
@@ -43,20 +41,16 @@ from ui.custom_ui_widget.widgets import (
     LineEdit,
     SpinBox,
 )
+from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, OctaveSmoothingSelectorWidget
 
 
-class ReferenceSpectrumConfigWindow(QDialog):
+class ReferenceSpectrumConfigWindow(AnalysisConfigDialogBase):
     WINDOW_OPTIONS = ["hann", "hamming", "blackman"]
     NPERSEG_OPTIONS = ["1024", "2048", "4096", "8192"]
     OVERLAP_OPTIONS = [("25%", 0.25), ("50%", 0.5), ("75%", 0.75)]
-    SMOOTHING_OPTIONS = [
-        ("不平滑", 0),
-        ("1/3 Oct", 3),
-        ("1/6 Oct", 6),
-    ]
 
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
         self.available_channels = list(available_channels or [])
@@ -71,9 +65,6 @@ class ReferenceSpectrumConfigWindow(QDialog):
         self._bind_initial_values()
 
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setMinimumSize(520, 680)
         self.resize(560, 720)
 
@@ -233,18 +224,18 @@ class ReferenceSpectrumConfigWindow(QDialog):
         self.overlap_combo_box.currentIndexChanged.connect(self._on_generation_relevant_value_changed)
         overlap_row.addWidget(self.overlap_combo_box)
 
-        smoothing_row = QHBoxLayout()
-        smoothing_row.addWidget(Label("平滑"))
-        self.smoothing_combo_box = ComboBox()
-        for text, value in self.SMOOTHING_OPTIONS:
-            self.smoothing_combo_box.addItem(text, int(value))
-        self.smoothing_combo_box.currentIndexChanged.connect(self._on_generation_relevant_value_changed)
-        smoothing_row.addWidget(self.smoothing_combo_box)
+        self.smoothing_selector = OctaveSmoothingSelectorWidget(
+            {"octave_smoothing": self.load_config.get("smoothing", 0)},
+            allowed_options=(0, 3, 6),
+            default=0,
+            parent=self,
+        )
+        self.smoothing_selector.combo_box.currentIndexChanged.connect(self._on_generation_relevant_value_changed)
 
         advanced_layout.addLayout(window_row)
         advanced_layout.addLayout(nperseg_row)
         advanced_layout.addLayout(overlap_row)
-        advanced_layout.addLayout(smoothing_row)
+        advanced_layout.addWidget(self.smoothing_selector)
         self.advanced_container.setLayout(advanced_layout)
         self.advanced_container.setVisible(False)
 
@@ -253,14 +244,9 @@ class ReferenceSpectrumConfigWindow(QDialog):
         return group
 
     def create_btn(self):
-        btn_layout = QHBoxLayout()
-        self.default_btn = PushButton(" 设为默认 ")
-        self.default_btn.clicked.connect(self.on_default_btn_clicked)
-        self.ok_btn = PushButton(" 确  认 ")
-        self.ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(self.default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.ok_btn)
+        btn_layout = self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
+        self.default_btn = btn_layout.itemAt(0).widget()
+        self.ok_btn = btn_layout.itemAt(2).widget()
         return btn_layout
 
     def _bind_initial_values(self):
@@ -284,9 +270,6 @@ class ReferenceSpectrumConfigWindow(QDialog):
         overlap_value = float(cfg.get("overlap_ratio", 0.5))
         overlap_index = self.overlap_combo_box.findData(overlap_value)
         self.overlap_combo_box.setCurrentIndex(overlap_index if overlap_index >= 0 else 1)
-        smoothing_value = int(cfg.get("smoothing", 0))
-        smoothing_index = self.smoothing_combo_box.findData(smoothing_value)
-        self.smoothing_combo_box.setCurrentIndex(smoothing_index if smoothing_index >= 0 else 0)
         self.show_advanced_checkbox.setChecked(self._has_non_default_advanced_params(cfg))
 
         if source_path:
@@ -338,7 +321,7 @@ class ReferenceSpectrumConfigWindow(QDialog):
             window=self.window_combo_box.currentText(),
             nperseg=int(self.nperseg_combo_box.currentText()),
             overlap_ratio=float(self.overlap_combo_box.currentData()),
-            smoothing=int(self.smoothing_combo_box.currentData()),
+            smoothing=self.smoothing_selector.current_octave_smoothing(),
         )
 
     def _probe_audio_file(self, file_path: str):
@@ -561,7 +544,7 @@ class ReferenceSpectrumConfigWindow(QDialog):
             "window": self.window_combo_box.currentText(),
             "nperseg": int(self.nperseg_combo_box.currentText()),
             "overlap_ratio": float(self.overlap_combo_box.currentData()),
-            "smoothing": int(self.smoothing_combo_box.currentData()),
+            "smoothing": self.smoothing_selector.current_octave_smoothing(),
         }
         return config
 

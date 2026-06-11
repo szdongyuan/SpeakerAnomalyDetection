@@ -2,7 +2,7 @@ import os
 import numpy as np
 
 from PyQt5.QtCore import Qt, QEvent
-from PyQt5.QtGui import QIcon, QStandardItem, QIntValidator, QDoubleValidator
+from PyQt5.QtGui import QStandardItem, QIntValidator, QDoubleValidator
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -32,12 +32,13 @@ from ui.custom_ui_widget.widgets import (
     CheckBox,
     MessageBox,
 )
+from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
-class PatternMatchConfigWindow(QDialog):
+class PatternMatchConfigWindow(AnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type):
-        super().__init__()
+        super().__init__(disable_close_button=False)
         self.config_manager = config_manager
         _, self.feature_registry = self.load_features_param_config()
         self.load_config = self.config_manager.load_config().get(model_type, {})
@@ -64,8 +65,6 @@ class PatternMatchConfigWindow(QDialog):
     def init_ui(self):
         self.setObjectName("PatternMatchConfigWindow")
         self.setWindowTitle("模式匹配参数配置")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(800, 750)
         self.resize(800, 750)
         self.main_layout = QVBoxLayout(self)
@@ -208,15 +207,7 @@ class PatternMatchConfigWindow(QDialog):
         return group
 
     def create_btn_layout(self):
-        layout = QHBoxLayout()
-        ok_btn = PushButton(" 确  认 ")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        default_btn = PushButton("设为默认")
-        default_btn.clicked.connect(self.on_click_default_btn)
-        layout.addWidget(default_btn)
-        layout.addStretch()
-        layout.addWidget(ok_btn)
-        return layout
+        return self.create_standard_button_layout(self.on_click_default_btn, self.on_click_ok_btn)
 
     def on_click_extract_btn(self):
         dlg = AudioClipExtractionDialog(save_clip=True, dialog_title="选择模板片段")
