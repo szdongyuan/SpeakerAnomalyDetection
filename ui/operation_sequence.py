@@ -1274,7 +1274,7 @@ class OptionList(ListView):
             self.default_logger.error(f"Failed to load the default config file. {data}")
             return
 
-        default_of_type = data.get(type, {})
+        default_of_type = copy.deepcopy(data.get(type, {}))
         self.config[0].analysis_list[list_item_text] = default_of_type
         self.config[0].analysis_list[list_item_text]["type"] = type
 
