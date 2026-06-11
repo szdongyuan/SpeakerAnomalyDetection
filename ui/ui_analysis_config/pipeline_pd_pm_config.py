@@ -1,5 +1,4 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
 from consts.running_consts import DEFAULT_DIR
@@ -14,10 +13,11 @@ from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.custom_ui_widget.widgets import GroupBox, Label, PushButton, CheckBox, SpinBox, MessageBox
+from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
-class PipelineConfigWindow(QDialog):
+class PipelineConfigWindow(AnalysisConfigDialogBase):
     """
     pipeline configuration window (for inheritance)
 
@@ -27,7 +27,7 @@ class PipelineConfigWindow(QDialog):
     """
 
     def __init__(self, config_manager, model_type):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
         # full configuration dictionary (analysis_list)
@@ -39,9 +39,6 @@ class PipelineConfigWindow(QDialog):
         self._hydrate_from_saved()
 
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(720, 360)
         self.resize(760, 380)
 
@@ -213,6 +210,7 @@ class PipelineConfigWindow(QDialog):
             self.config_manager.config = {}
         local_cfg = self.head_local_config if slot == "head" else self.tail_local_config
         if isinstance(local_cfg, dict) and local_cfg:
+            # Temporary child configs stay scoped to this pipeline and are not top-level analysis items.
             # 使用副本，避免子窗体原地修改带来意外引用问题
             try:
                 self.config_manager.config[temp_name] = dict(local_cfg)

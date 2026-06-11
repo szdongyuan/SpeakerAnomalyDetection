@@ -1,20 +1,22 @@
 import re
 from typing import List, Optional
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QSizePolicy, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QSizePolicy, QWidget
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
 # 确保这里导入的是你项目中正确的 ThresholdConfigWidget 路径
-from ui.ui_analysis_config.config_normalization import weighting_to_display_label
+from ui.ui_analysis_config.common_widgets import (
+    AnalysisConfigDialogBase,
+    ChannelSelectorWidget,
+    WeightingSelectorWidget,
+)
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.custom_ui_widget.widgets import PushButton, ComboBox, Label, GroupBox, DoubleSpinBox, PlainTextEdit, MessageBox
+from ui.custom_ui_widget.widgets import ComboBox, Label, GroupBox, DoubleSpinBox, PlainTextEdit, MessageBox
 from ui.ui_src import ui_resources
 
 
-class FbaConfigWindow(QDialog):
+class FbaConfigWindow(AnalysisConfigDialogBase):
     """
     FBA 频段能量分析配置窗口 (修复布局版)
     """
@@ -30,12 +32,12 @@ class FbaConfigWindow(QDialog):
     ]
 
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         # 提取模型类型中的字母部分，例如 "FBA"
         self.model_type_str = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "FBA"
         self.show_channel_selector = available_channels is not None
-        self.available_channels = self._normalize_available_channels(available_channels)
+        self.available_channels = available_channels
 
         # 加载配置
         full_config = self.config_manager.load_config()
@@ -43,36 +45,8 @@ class FbaConfigWindow(QDialog):
 
         self.init_ui()
 
-    @staticmethod
-    def _normalize_available_channels(available_channels):
-        channels = []
-        try:
-            channels = sorted({int(ch) for ch in (available_channels or [])})
-        except Exception:
-            channels = []
-        if not channels:
-            channels = [0]
-        return channels
-
-    def _create_channel_layout(self):
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(Label("通道:"))
-        self.channel_combo_box = ComboBox()
-        for ch in self.available_channels:
-            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
-        saved_channel = self.load_config.get("analysis_channel", None)
-        if saved_channel is None or int(saved_channel) not in self.available_channels:
-            saved_channel = int(self.available_channels[0])
-        idx = self.channel_combo_box.findData(int(saved_channel))
-        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
-        channel_layout.addWidget(self.channel_combo_box, 1)
-        return channel_layout
-
     def init_ui(self):
         # --- 窗口基本设置 ---
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("FBA 分析配置")
         # 该对话框主要是纵向排布；过大的默认宽度会让界面“显得很宽”
         # 同时避免默认高度过大把“阈值展示区域”撑得太高
@@ -85,7 +59,8 @@ class FbaConfigWindow(QDialog):
         main_layout.setContentsMargins(20, 20, 20, 20)
 
         if self.show_channel_selector:
-            main_layout.addLayout(self._create_channel_layout())
+            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
+            main_layout.addWidget(self.channel_selector)
 
         # =========================================================
         # 1. 频段划分策略 (GroupBox)
@@ -161,26 +136,13 @@ class FbaConfigWindow(QDialog):
         range_group.setLayout(range_layout)
         main_layout.addWidget(range_group)
 
-        # =========================================================
-        # 3. 计权方式 (水平布局) - 关键修复点
-        # =========================================================
-        weight_layout = QHBoxLayout()
-
-        weight_label = Label("计权方式:")
-        weight_layout.addWidget(weight_label)
-
-        self.weighting_combo = ComboBox()
-        self.weighting_combo.addItems(["Z（None）", "A", "C"])
-        self._init_weighting_combo()
-        # 避免下拉框“参与抢占”横向空间导致对话框默认宽度变大
-        self.weighting_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        weight_layout.addWidget(self.weighting_combo)
-
-        # 加一个弹簧，让它靠左显示，不要拉得太长
-        weight_layout.addStretch()
-
-        # 将这一行加入主布局
-        main_layout.addLayout(weight_layout)
+        self.weighting_selector = WeightingSelectorWidget(
+            self.load_config,
+            allowed_options=("Z", "A", "C"),
+            default="A",
+            parent=self,
+        )
+        main_layout.addWidget(self.weighting_selector)
 
         # =========================================================
         # 4. 阈值配置组件 (ThresholdConfigWidget)
@@ -215,12 +177,6 @@ class FbaConfigWindow(QDialog):
         idx = self.strategy_combo.findText(val)
         self.strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
-    def _init_weighting_combo(self):
-        val = weighting_to_display_label(self.load_config.get("weighting", "A"), default="A")
-        idx = self.weighting_combo.findText(val)
-        # 默认选 A (索引通常是 1，取决于 addItems 的顺序)
-        self.weighting_combo.setCurrentIndex(idx if idx >= 0 else 1)
-
     def _on_strategy_changed(self, text):
         """根据选择的策略，显隐对应的参数控件"""
         is_equal = text == "等宽"
@@ -230,17 +186,7 @@ class FbaConfigWindow(QDialog):
         self.custom_widget.setVisible(is_custom)
 
     def create_btn(self):
-        btn_layout = QHBoxLayout()
-        default_btn = PushButton(" 设为默认 ")
-        default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = PushButton(" 确  认 ")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-
-        btn_layout.addStretch()
-        btn_layout.addWidget(default_btn)
-        btn_layout.addSpacing(10)
-        btn_layout.addWidget(ok_btn)
-        return btn_layout
+        return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
 
     # -----------------------------------------------------------
     # 以下逻辑方法保持原有不变
@@ -303,15 +249,14 @@ class FbaConfigWindow(QDialog):
             "f_min": int(self.f_min_spin.value()),
             "f_max": int(self.f_max_spin.value()),
             "bandwidth": int(self.bandwidth_spin.value()),
-            "analysis_channel": int(self.channel_combo_box.currentData())
-            if self.show_channel_selector and hasattr(self, "channel_combo_box")
+            "analysis_channel": self.channel_selector.current_channel()
+            if self.show_channel_selector and hasattr(self, "channel_selector")
             else int(self.load_config.get("analysis_channel", 0) or 0),
         }
         if self.strategy_combo.currentText() == "自定义":
             config["custom_bands_text"] = self.custom_bands_edit.toPlainText()
 
-        weighting_value = self.weighting_combo.currentText()
-        config["weighting"] = "Z" if weighting_value == "Z（None）" else weighting_value
+        config.update(self.weighting_selector.get_config())
 
         # 获取阈值组件的配置
         config.update(self.threshold_widget.get_config())

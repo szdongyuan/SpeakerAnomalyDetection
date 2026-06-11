@@ -199,10 +199,12 @@ class TimeSmoothingWidget(QWidget):
         cfg: dict[str, Any] | None = None,
         defaults: dict[str, Any] | None = None,
         show_algorithm: bool = True,
+        min_points: int = 1,
         parent=None,
     ):
         super().__init__(parent)
         self.show_algorithm = show_algorithm
+        self.min_points = int(min_points)
         smoothing = normalize_time_smoothing(cfg, defaults)
 
         self.enabled_checkbox = CheckBox("平滑")
@@ -222,8 +224,8 @@ class TimeSmoothingWidget(QWidget):
         self.time_spin.setValue(float(smoothing["time_sec"]))
 
         self.points_spin = SpinBox(self)
-        self.points_spin.setRange(1, 99999)
-        self.points_spin.setValue(max(1, int(smoothing["points"])))
+        self.points_spin.setRange(self.min_points, 99999)
+        self.points_spin.setValue(max(self.min_points, int(smoothing["points"])))
 
         main_row = QHBoxLayout()
         main_row.addWidget(self.enabled_checkbox)
