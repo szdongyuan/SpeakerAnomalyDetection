@@ -40,9 +40,9 @@ from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
 from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
-from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
-from ui.ui_analysis_config.roughness_config_dialog import RoughnessConfigWindow, default_roughness_config
-from ui.ui_analysis_config.sharpness_config_dialog import SharpnessConfigWindow, default_sharpness_config
+from ui.ui_analysis_config import LoudnessConfigWindow
+from ui.ui_analysis_config import RoughnessConfigWindow, default_roughness_config
+from ui.ui_analysis_config import SharpnessConfigWindow, default_sharpness_config
 from ui.ui_analysis_config.pattern_match_config_dialog import PatternMatchConfigWindow
 from ui.ui_analysis_config.pd_config_dialog import PDConfigWindow
 from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
