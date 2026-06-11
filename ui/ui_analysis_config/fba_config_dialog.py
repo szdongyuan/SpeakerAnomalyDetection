@@ -8,6 +8,7 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
 # 确保这里导入的是你项目中正确的 ThresholdConfigWidget 路径
+from ui.ui_analysis_config.config_normalization import weighting_to_display_label
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.custom_ui_widget.widgets import PushButton, ComboBox, Label, GroupBox, DoubleSpinBox, PlainTextEdit, MessageBox
 from ui.ui_src import ui_resources
@@ -215,10 +216,7 @@ class FbaConfigWindow(QDialog):
         self.strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _init_weighting_combo(self):
-        val = self.load_config.get("weighting", "A")
-        # 兼容旧配置中的 None
-        if val in ("None", "Z"):
-            val = "Z（None）"
+        val = weighting_to_display_label(self.load_config.get("weighting", "A"), default="A")
         idx = self.weighting_combo.findText(val)
         # 默认选 A (索引通常是 1，取决于 addItems 的顺序)
         self.weighting_combo.setCurrentIndex(idx if idx >= 0 else 1)

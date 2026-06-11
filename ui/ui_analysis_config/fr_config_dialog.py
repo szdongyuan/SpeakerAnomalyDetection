@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.ui_analysis_config.config_normalization import normalize_octave_smoothing
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.custom_ui_widget.widgets import CheckBox, ComboBox, Label, PushButton
 from ui.ui_src import ui_resources
@@ -47,11 +48,7 @@ class FrConfigWindow(QDialog):
         self.smooth_combo_box = ComboBox()
         self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
 
-        selected_oct = self.load_config.get("octave_smoothing", None)
-        if selected_oct is None:
-            # Backward-compatible: legacy boolean smooth_checked -> default to 1/6 Oct
-            selected_oct = 6 if self.load_config.get("smooth_checked", False) else 0
-        selected_oct = int(selected_oct)
+        selected_oct = normalize_octave_smoothing(self.load_config, default=0)
         selected_label = next(
             (k for k, v in self.OCTAVE_SMOOTHING_LABELS.items() if v == selected_oct),
             "不平滑",
