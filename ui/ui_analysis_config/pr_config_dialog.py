@@ -16,8 +16,9 @@ from typing import List, Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QWidget
+from PyQt5.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QWidget
 
+from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
     PushButton,
@@ -41,6 +42,12 @@ MODE_LABELS = [
 # 需求书默认三段 PR 限值 [f_lo, f_hi, limit_db]
 DEFAULT_FAN_PR_LIMITS = [[100, 2000, 4], [2000, 5000, 2], [5000, 20000, 4]]
 
+# 背景噪声基线显示方式：配置值 ↔ UI 文本
+BASELINE_DISPLAY_MODES = {
+    "overlay": "叠加显示",
+    "delta": "差值显示",
+}
+
 
 def default_pr_config() -> dict:
     """PR 顶层默认配置（代码内可靠默认源，不依赖被 gitignore 的 JSON）。
@@ -56,11 +63,15 @@ def default_pr_config() -> dict:
         "mode_profile": "ecma2022",
         "f_min": 100,
         "f_max": 20000,
+        # 横轴显示标度：linear=线性(kHz)；log=对数(kHz)。仅影响图面显示，不参与 PR 计算。
+        "x_axis_scale": "linear",
         "window": "hann",
         "window_samples": 65536,
         "overlap_ratio": 0.75,
         "target_resolution_hz": 1.0,
         "weighting": "auto",
+        # 仅控制上轨功率谱显示；PR 计算计权仍由 weighting 控制。
+        "spectrum_display_weighting": "calculation",
         "customer_band_ratio": 0.15,
         "highpass_hz": 20.0,
         "dc_removal": "mean",
@@ -75,6 +86,10 @@ def default_pr_config() -> dict:
         "ecma_cross_check_threshold_db": 0.5,
         "limit_checked": True,
         "fan_pr_limits": [list(b) for b in DEFAULT_FAN_PR_LIMITS],
+        # 背景噪声基线：与 FFT 同源功能，仅影响上轨频谱显示，不参与 PR 计算。
+        "baseline_file_path": "",
+        "baseline_display_mode": "overlay",
+        "baseline_smooth_third_octave": False,
     }
 
 
@@ -111,8 +126,8 @@ class PRConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("PR (突出比) 分析配置")
-        self.setMinimumSize(640, 820)
-        self.resize(640, 820)
+        self.setMinimumSize(640, 1040)
+        self.resize(640, 1040)
 
         main_layout = QVBoxLayout()
         main_layout.setSpacing(12)
@@ -123,6 +138,7 @@ class PRConfigWindow(QDialog):
 
         main_layout.addWidget(self._create_mode_group())
         main_layout.addWidget(self._create_fft_group())
+        main_layout.addWidget(self._create_baseline_group())
         main_layout.addWidget(self._create_tone_freq_group())
         main_layout.addWidget(self._create_cross_check_group())
         main_layout.addWidget(self._create_limit_group())
@@ -197,6 +213,15 @@ class PRConfigWindow(QDialog):
         row_range.addWidget(self.f_max_spin)
         layout.addLayout(row_range)
 
+        row_axis = QHBoxLayout()
+        row_axis.addWidget(Label("横轴:"))
+        self.x_axis_combo = ComboBox()
+        self.x_axis_combo.addItems(["linear", "log"])
+        self.x_axis_combo.setCurrentText(str(self.load_config.get("x_axis_scale", "linear")))
+        row_axis.addWidget(self.x_axis_combo, 1)
+        row_axis.addStretch()
+        layout.addLayout(row_axis)
+
         group.setLayout(layout)
         return group
 
@@ -227,10 +252,21 @@ class PRConfigWindow(QDialog):
         self.overlap_spin.setValue(float(self.load_config.get("overlap_ratio", 0.75)))
         layout.addWidget(self.overlap_spin, 2, 1)
 
+        layout.addWidget(Label("线性功率谱计权:"), 3, 0)
+        self.spectrum_weighting_combo = ComboBox()
+        self.spectrum_weighting_combo.addItem("跟随PR计算", "calculation")
+        self.spectrum_weighting_combo.addItem("Z/不计权", "Z")
+        self.spectrum_weighting_combo.addItem("A计权", "A")
+        self.spectrum_weighting_combo.addItem("C计权", "C")
+        saved_spectrum_weighting = str(self.load_config.get("spectrum_display_weighting", "calculation"))
+        swidx = self.spectrum_weighting_combo.findData(saved_spectrum_weighting)
+        self.spectrum_weighting_combo.setCurrentIndex(swidx if swidx >= 0 else 0)
+        layout.addWidget(self.spectrum_weighting_combo, 3, 1)
+
         saved_hp = float(self.load_config.get("highpass_hz", 20.0))
         self.highpass_check = CheckBox(" 高通去直流")
         self.highpass_check.setChecked(saved_hp > 0)
-        layout.addWidget(self.highpass_check, 3, 0)
+        layout.addWidget(self.highpass_check, 4, 0)
         self.highpass_spin = DoubleSpinBox()
         self.highpass_spin.setRange(1.0, 200.0)
         self.highpass_spin.setDecimals(0)
@@ -240,17 +276,63 @@ class PRConfigWindow(QDialog):
         self.highpass_check.stateChanged.connect(
             lambda *_: self.highpass_spin.setEnabled(self.highpass_check.isChecked())
         )
-        layout.addWidget(self.highpass_spin, 3, 1)
+        layout.addWidget(self.highpass_spin, 4, 1)
 
         group.setLayout(layout)
         return group
 
+    def _create_baseline_group(self):
+        """背景噪声基线（与 FFT 同源）：上轨频谱可叠加/扣减一条背景噪声谱。"""
+        group = GroupBox("背景噪声基线")
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 16, 10, 10)
+
+        file_layout = QHBoxLayout()
+        file_layout.addWidget(Label("背景音频:"))
+        self.baseline_path_edit = LineEdit()
+        self.baseline_path_edit.setReadOnly(True)
+        self.baseline_path_edit.setText(str(self.load_config.get("baseline_file_path", "") or ""))
+        icon = QIcon(":/ui/icon/folder-s.png")
+        action = self.baseline_path_edit.addAction(icon, LineEdit.TrailingPosition)
+        action.setToolTip("选择背景噪声音频")
+        action.triggered.connect(self._on_baseline_file_clicked)
+        file_layout.addWidget(self.baseline_path_edit, 1)
+        layout.addLayout(file_layout)
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(Label("显示方式:"))
+        self.baseline_mode_combo = ComboBox()
+        for value, label in BASELINE_DISPLAY_MODES.items():
+            self.baseline_mode_combo.addItem(label, value)
+        saved_mode = str(self.load_config.get("baseline_display_mode", "overlay"))
+        idx = self.baseline_mode_combo.findData(saved_mode)
+        self.baseline_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        mode_layout.addWidget(self.baseline_mode_combo, 1)
+        layout.addLayout(mode_layout)
+
+        self.baseline_smooth_checkbox = CheckBox("使用 1/3 倍频程做平滑")
+        self.baseline_smooth_checkbox.setChecked(bool(self.load_config.get("baseline_smooth_third_octave", False)))
+        layout.addWidget(self.baseline_smooth_checkbox)
+
+        group.setLayout(layout)
+        return group
+
+    def _on_baseline_file_clicked(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择背景噪声音频",
+            DEFAULT_DIR,
+            filter="音频文件 (*.wav *.flac *.mp3);;所有文件 (*.*)",
+        )
+        if file_path:
+            self.baseline_path_edit.setText(file_path)
+
     def _create_tone_freq_group(self):
-        group = GroupBox("指定主音频率（可选，由 FFT 定位）")
+        group = GroupBox("指定主音频率（可选，按填写频率计算）")
         layout = QVBoxLayout()
         layout.setContentsMargins(10, 16, 10, 10)
         self.tone_freq_edit = LineEdit()
-        self.tone_freq_edit.setPlaceholderText("留空=自动检测；多个频率用逗号分隔")
+        self.tone_freq_edit.setPlaceholderText("留空=自动检测；填写后按该频率计算，多个频率用逗号分隔")
         saved = self.load_config.get("user_tone_frequencies", "")
         if isinstance(saved, (list, tuple)):
             saved = ", ".join(str(f) for f in saved if f)
@@ -360,16 +442,21 @@ class PRConfigWindow(QDialog):
             "customer_band_ratio": float(self.band_ratio_spin.value()) / 100.0,
             "f_min": int(self.f_min_spin.value()),
             "f_max": int(self.f_max_spin.value()),
+            "x_axis_scale": self.x_axis_combo.currentText(),
             "window": self.window_combo.currentText(),
             "window_samples": int(self.window_samples_combo.currentData() or 65536),
             "overlap_ratio": float(self.overlap_spin.value()),
             "target_resolution_hz": float(self.load_config.get("target_resolution_hz", 1.0)),
+            "spectrum_display_weighting": str(self.spectrum_weighting_combo.currentData() or "calculation"),
             "highpass_hz": float(self.highpass_spin.value()) if self.highpass_check.isChecked() else 0.0,
             "user_tone_frequencies": self.tone_freq_edit.text().strip(),
             "ecma_cross_check": bool(self.cross_check_cb.isChecked()),
             "ecma_cross_check_threshold_db": float(self.cross_check_threshold_spin.value()),
             "limit_checked": bool(self.limit_check.isChecked()),
             "fan_pr_limits": self._collect_fan_pr_limits(),
+            "baseline_file_path": self.baseline_path_edit.text().strip(),
+            "baseline_display_mode": self.baseline_mode_combo.currentData(),
+            "baseline_smooth_third_octave": bool(self.baseline_smooth_checkbox.isChecked()),
         })
         # 计权为隐藏高级项：界面不暴露，默认 auto→线性(Z)；如配置里显式写了 A/C 则保留。
         config["weighting"] = str(self.load_config.get("weighting", "auto"))

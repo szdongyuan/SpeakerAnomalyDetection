@@ -4849,6 +4849,21 @@ def _decimate_peak_envelope(x: np.ndarray, y: np.ndarray, max_points: int):
     return out_x, out_y
 
 
+def _merge_curve_anchor_points(x: np.ndarray, y: np.ndarray, anchor_x: np.ndarray, anchor_y: np.ndarray):
+    """把关键标注点并回降采样曲线，避免绘图抽稀后曲线跳过业务关注点。"""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    anchor_x = np.asarray(anchor_x, dtype=float)
+    anchor_y = np.asarray(anchor_y, dtype=float)
+    anchor_valid = np.isfinite(anchor_x) & np.isfinite(anchor_y)
+    if not np.any(anchor_valid):
+        return x, y
+    out_x = np.concatenate([x, anchor_x[anchor_valid]])
+    out_y = np.concatenate([y, anchor_y[anchor_valid]])
+    order = np.argsort(out_x, kind="mergesort")
+    return out_x[order], out_y[order]
+
+
 class ProminenceRatioAnalysis(AnalysisGraphWidget):
     """突出比 (PR / Prominence Ratio) 分析窗口（双轨图）。
 
@@ -4868,6 +4883,8 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         self.result = {}
         self.export_detail = {}
         self.title_name = title_name
+        # 背景噪声基线谱（已插值对齐到主谱 fft_freq_hz；无基线时为 None）
+        self._pr_baseline_db = None
         self.setWindowTitle(title_name)
 
         # 下轨 PR 曲线（上轨复用基类 self.analysis_plot 作为线性功率谱）
@@ -4911,6 +4928,35 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             MessageBox.warning(self, "提示", "PR 分析无有效数据:\n" + "\n".join(res.warnings[:6]))
             return False
 
+        # 背景噪声基线：用与主信号完全相同的 PR 频谱管线计算背景谱，再插值对齐到主谱频点。
+        # 仅用于上轨频谱显示（叠加/差值），不改变 PR 计算与判定。
+        self._pr_baseline_db = None
+        baseline_path = str(config.get("baseline_file_path", "") or "").strip()
+        if baseline_path:
+            try:
+                baseline_signal, _baseline_sr = librosa.load(baseline_path, sr=int(sample_rate), mono=True)
+                baseline_res = analyzer.compute(
+                    baseline_signal,
+                    self.v2pa_factor or 1.0,
+                    params,
+                    fan_pr_limits,
+                )
+                baseline_db = np.interp(
+                    np.asarray(res.fft_freq_hz, dtype=float),
+                    np.asarray(baseline_res.fft_freq_hz, dtype=float),
+                    np.asarray(baseline_res.fft_magnitude_db, dtype=float),
+                    left=np.nan,
+                    right=np.nan,
+                )
+                if bool(config.get("baseline_smooth_third_octave", False)):
+                    baseline_db = FftAnalysis._smooth_baseline_third_octave(
+                        np.asarray(res.fft_freq_hz, dtype=float), baseline_db
+                    )
+                self._pr_baseline_db = baseline_db
+            except Exception as e:
+                MessageBox.warning(self, "提示", f"背景噪声基线加载失败: {str(e)[:200]}")
+                self._pr_baseline_db = None
+
         self._plot_dual_track(res, params, fan_pr_limits)
 
         import logging
@@ -4924,6 +4970,12 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             "pr_db": np.asarray(res.pr_db, dtype=float).tolist(),
             "fft_freq_hz": np.asarray(res.fft_freq_hz, dtype=float).tolist(),
             "fft_magnitude_db": np.asarray(res.fft_magnitude_db, dtype=float).tolist(),
+            "baseline_db": (
+                np.asarray(self._pr_baseline_db, dtype=float).tolist()
+                if isinstance(self._pr_baseline_db, np.ndarray)
+                else []
+            ),
+            "baseline_display_mode": str(config.get("baseline_display_mode", "overlay") or "overlay"),
             "max_pr_db": res.max_pr_db,
             "max_pr_frequency_hz": res.max_pr_frequency_hz,
             "decision_status": res.decision_status,
@@ -4989,6 +5041,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             "customer_ok": t.customer_ok,
             "is_ok": t.is_ok,
             "valid_main_tone": t.valid_main_tone,
+            "user_specified": t.user_specified,
             "same_band_group_id": t.same_band_group_id,
             "same_band_representative": t.same_band_representative,
             "harmonic_order": t.harmonic_order,
@@ -5099,11 +5152,27 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         plot.plot([], [], **kwargs)
 
     @staticmethod
-    def _add_pr_band_region(plot, band_hz, color):
+    def _pr_axis_x(x_khz, is_log_x):
+        """横轴坐标变换。
+
+        log 模式下，pyqtgraph 仅自动变换 plot() 曲线数据；手动添加的图元
+        (InfiniteLine / TextItem / LinearRegionItem) 需自行换算到 log10(kHz) 坐标。
+        线性模式下原样返回 kHz。
+        """
+        x = ProminenceRatioAnalysis._finite_float(x_khz)
+        if is_log_x:
+            return float(np.log10(x)) if (np.isfinite(x) and x > 0) else float("nan")
+        return x
+
+    @staticmethod
+    def _add_pr_band_region(plot, band_hz, color, is_log_x=False):
         f1, f2 = [ProminenceRatioAnalysis._finite_float(v) for v in band_hz]
         if not (np.isfinite(f1) and np.isfinite(f2)) or f2 <= f1:
             return
-        x1, x2 = f1 / 1000.0, f2 / 1000.0
+        x1 = ProminenceRatioAnalysis._pr_axis_x(f1 / 1000.0, is_log_x)
+        x2 = ProminenceRatioAnalysis._pr_axis_x(f2 / 1000.0, is_log_x)
+        if not (np.isfinite(x1) and np.isfinite(x2)) or x2 <= x1:
+            return
         region = pg.LinearRegionItem(
             values=(x1, x2),
             orientation=pg.LinearRegionItem.Vertical,
@@ -5122,15 +5191,18 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         return font
 
     @staticmethod
-    def _add_pr_vertical_line(plot, x_hz, pen, label=None, label_y=None):
+    def _add_pr_vertical_line(plot, x_hz, pen, label=None, label_y=None, is_log_x=False):
         x = ProminenceRatioAnalysis._finite_float(x_hz)
         if not np.isfinite(x):
             return
-        plot.addItem(pg.InfiniteLine(pos=x / 1000.0, angle=90, pen=pen))
+        xpos = ProminenceRatioAnalysis._pr_axis_x(x / 1000.0, is_log_x)
+        if not np.isfinite(xpos):
+            return
+        plot.addItem(pg.InfiniteLine(pos=xpos, angle=90, pen=pen))
         if label and label_y is not None and np.isfinite(label_y):
             text = pg.TextItem(label, color=(90, 90, 90), anchor=(0.5, 1.0))
             text.setFont(ProminenceRatioAnalysis._vline_label_font())
-            text.setPos(x / 1000.0, label_y)
+            text.setPos(xpos, label_y)
             plot.addItem(text)
 
     @staticmethod
@@ -5144,7 +5216,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         pwr = f"{power:.1f} dB" if np.isfinite(power) else "-- dB"
         return f"{name} {f1:.0f}-{f2:.0f}Hz  临界频带功率 {pwr}"
 
-    def _plot_pr_band_annotations(self, tones, params, y_top, y_span):
+    def _plot_pr_band_annotations(self, tones, params, y_top, y_span, is_log_x=False):
         """上轨频带色块 + 信息卡片（白底框，放在色块右侧）。"""
         ratio = self._finite_float(getattr(params, "customer_band_ratio", 0.15), 0.15)
         dashed_15pct = mkPen(color=(120, 120, 120), width=1, style=Qt.DashLine)
@@ -5156,9 +5228,9 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             target_band = getattr(t, "target_band_hz", (np.nan, np.nan))
             upper_band = getattr(t, "upper_adjacent_band_hz", (np.nan, np.nan))
 
-            self._add_pr_band_region(self.analysis_plot, lower_band, (33, 102, 172, 34))
-            self._add_pr_band_region(self.analysis_plot, upper_band, (33, 102, 172, 34))
-            self._add_pr_band_region(self.analysis_plot, target_band, (214, 39, 40, 42))
+            self._add_pr_band_region(self.analysis_plot, lower_band, (33, 102, 172, 34), is_log_x)
+            self._add_pr_band_region(self.analysis_plot, upper_band, (33, 102, 172, 34), is_log_x)
+            self._add_pr_band_region(self.analysis_plot, target_band, (214, 39, 40, 42), is_log_x)
 
             # 信息卡片：三行汇总，白底半透明框，放在上邻带右侧
             lines = [
@@ -5169,27 +5241,31 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             card_text = "\n".join(ln for ln in lines if ln)
             if card_text:
                 upper_f2 = self._finite_float(upper_band[1])
-                card_x = (upper_f2 / 1000.0 + 0.05) if np.isfinite(upper_f2) else 0
+                card_x_khz = (upper_f2 / 1000.0 + 0.05) if np.isfinite(upper_f2) else 0.0
+                card_x = self._pr_axis_x(card_x_khz, is_log_x)
                 card_y = y_top - (0.03 + 0.30 * idx) * y_span
-                card = pg.TextItem(
-                    card_text, color=(50, 50, 50), anchor=(0.0, 0.0),
-                    border=mkPen(color=(160, 160, 160), width=1),
-                    fill=QColor(255, 255, 255, 200),
-                )
-                card.setPos(card_x, card_y)
-                self.analysis_plot.addItem(card)
+                if np.isfinite(card_x):
+                    card = pg.TextItem(
+                        card_text, color=(50, 50, 50), anchor=(0.0, 0.0),
+                        border=mkPen(color=(160, 160, 160), width=1),
+                        fill=QColor(255, 255, 255, 200),
+                    )
+                    card.setPos(card_x, card_y)
+                    self.analysis_plot.addItem(card)
 
             ft = self._finite_float(getattr(t, "frequency_hz", float("nan")))
             if np.isfinite(ft):
                 half_15 = 0.5 * ratio * ft
                 line_label = f"{ratio * 100:.0f}%" if idx == 0 else None
                 self._add_pr_vertical_line(self.analysis_plot, ft - half_15, dashed_15pct,
-                                           line_label, y_top + 0.14 * y_span)
-                self._add_pr_vertical_line(self.analysis_plot, ft + half_15, dashed_15pct)
+                                           line_label, y_top + 0.14 * y_span, is_log_x)
+                self._add_pr_vertical_line(self.analysis_plot, ft + half_15, dashed_15pct,
+                                           is_log_x=is_log_x)
                 self._add_pr_vertical_line(
                     self.analysis_plot,
                     ft,
                     mkPen(color=(45, 45, 45), width=1, style=Qt.DotLine),
+                    is_log_x=is_log_x,
                 )
 
     def _plot_dual_track(self, res, params, fan_pr_limits):
@@ -5216,9 +5292,18 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         if freq.size == 0:
             return
         f_khz = freq / 1000.0
+        # 横轴标度：linear=线性(kHz)，log=对数(kHz)。双轨 X 轴联动，必须同步设置。
+        x_axis_scale = str((self.analysis_config or {}).get("x_axis_scale", "linear") or "linear").lower()
+        is_log_x = x_axis_scale == "log"
+        self.analysis_plot.setLogMode(x=is_log_x, y=False)
+        self.pr_plot.setLogMode(x=is_log_x, y=False)
         pr = np.asarray(res.pr_db, dtype=float)
         spectrum_freq = np.asarray(getattr(res, "fft_freq_hz", []), dtype=float)
         spectrum_power = np.asarray(getattr(res, "fft_magnitude_db", []), dtype=float)
+        spectrum_weighting = str(
+            (getattr(res, "metadata", {}) or {}).get("spectrum_display_weighting", "Z")
+        ).upper()
+        spectrum_unit = f"dB({spectrum_weighting})" if spectrum_weighting in ("A", "C") else "dB"
 
         # ---- 上轨：线性功率谱 + 频带功率标注 ----
         # 谱可达数万点，pyqtgraph 宽线渲染极慢；先做峰值包络降采样（保留峰，渲染快约 10×）
@@ -5235,15 +5320,34 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             )
         else:
             spectrum_valid = np.zeros(0, dtype=bool)
-        upper_label = "线性功率谱 [dB]"
+        upper_curve_name = "线性功率谱" if spectrum_weighting == "Z" else f"{spectrum_weighting}计权功率谱"
+        upper_label = f"{upper_curve_name} [{spectrum_unit}]"
+        # 背景噪声基线（已对齐到 spectrum_freq）：叠加=灰色第二条曲线；差值=主谱减背景
+        baseline_db = getattr(self, "_pr_baseline_db", None)
+        has_baseline = (
+            isinstance(baseline_db, np.ndarray)
+            and baseline_db.size == spectrum_freq.size
+            and spectrum_freq.size > 0
+        )
+        baseline_mode = str((self.analysis_config or {}).get("baseline_display_mode", "overlay") or "overlay")
         if spectrum_freq.size and np.any(spectrum_valid):
-            sx, sy = _decimate_peak_envelope(
-                spectrum_freq[spectrum_valid] / 1000.0,
-                spectrum_power[spectrum_valid],
-                max_pts,
-            )
-            self.analysis_plot.plot(sx, sy, pen=mkPen(color=(51, 196, 77), width=2), name="线性功率谱")
-            finite_upper = spectrum_power[spectrum_valid]
+            sf_khz = spectrum_freq[spectrum_valid] / 1000.0
+            main_power = spectrum_power[spectrum_valid]
+            base_power = baseline_db[spectrum_valid] if has_baseline else None
+            if has_baseline and baseline_mode == "delta":
+                delta = main_power - base_power
+                dx, dy = _decimate_peak_envelope(sf_khz, delta, max_pts)
+                self.analysis_plot.plot(dx, dy, pen=mkPen(color=(51, 196, 77), width=2), name=upper_curve_name)
+                finite_upper = delta
+                upper_label = f"{upper_curve_name}-背景 [{spectrum_unit}]"
+            else:
+                sx, sy = _decimate_peak_envelope(sf_khz, main_power, max_pts)
+                self.analysis_plot.plot(sx, sy, pen=mkPen(color=(51, 196, 77), width=2), name=upper_curve_name)
+                finite_upper = main_power
+                if has_baseline:
+                    bx, by = _decimate_peak_envelope(sf_khz, base_power, max_pts)
+                    self.analysis_plot.plot(bx, by, pen=mkPen(color=(128, 128, 128), width=2), name="背景噪声")
+                    finite_upper = np.concatenate([main_power, base_power])
         else:
             band_power = np.asarray(res.band_power_db, dtype=float)
             band_valid = np.isfinite(band_power) & (freq >= f_lo_hz) & (freq <= f_hi_hz)
@@ -5264,7 +5368,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         else:
             y_top, y_span = 1.0, 1.0
         plot_tones = self._select_pr_plot_tones(res.main_tones)
-        self._plot_pr_band_annotations(plot_tones, params, y_top, y_span)
+        self._plot_pr_band_annotations(plot_tones, params, y_top, y_span, is_log_x)
         if plot_tones:
             # 图例色块直接用画色块时的颜色（取 RGB 实色，便于辨认）
             self._add_legend_sample(self.analysis_plot, "目标频带", color=(214, 39, 40), fill=(214, 39, 40, 42))
@@ -5279,6 +5383,15 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         # ---- 下轨：PR 曲线 + 限值线 + 主音标注 ----
         valid = np.isfinite(pr)
         px, py = _decimate_peak_envelope(f_khz[valid], pr[valid], max_pts)
+        tone_anchor_x = np.array(
+            [self._finite_float(getattr(t, "frequency_hz", float("nan"))) / 1000.0 for t in plot_tones],
+            dtype=float,
+        )
+        tone_anchor_y = np.array(
+            [self._finite_float(getattr(t, "pr_db", float("nan"))) for t in plot_tones],
+            dtype=float,
+        )
+        px, py = _merge_curve_anchor_points(px, py, tone_anchor_x, tone_anchor_y)
         self.pr_plot.plot(px, py, pen=mkPen(color=(33, 102, 172), width=2), name="PR")
         self.pr_plot.setLabel("left", "PR值 [dB]")
         self.pr_plot.setLabel("bottom", "频率 [kHz]")
@@ -5287,11 +5400,19 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
         x_min = max(0.0, f_lo_hz / 1000.0)
         x_max = f_hi_hz / 1000.0
         if np.isfinite(x_max) and x_max > x_min:
-            x_pad = (x_max - x_min) * 0.02
-            self.analysis_plot.setXRange(x_min, x_max + x_pad, padding=0)
-            self.pr_plot.setXRange(x_min, x_max + x_pad, padding=0)
-            self.analysis_plot.getViewBox().setLimits(xMin=x_min, xMax=x_max + x_pad)
-            self.pr_plot.getViewBox().setLimits(xMin=x_min, xMax=x_max + x_pad)
+            if is_log_x:
+                # log 模式下视图坐标为 log10(kHz)；下限需为正，缺省以 1Hz(=1e-3 kHz) 兜底
+                lo_khz = x_min if x_min > 0 else 1e-3
+                v_lo = float(np.log10(lo_khz))
+                v_hi = float(np.log10(x_max))
+            else:
+                v_lo = x_min
+                v_hi = x_max
+            v_pad = (v_hi - v_lo) * 0.02
+            self.analysis_plot.setXRange(v_lo, v_hi + v_pad, padding=0)
+            self.pr_plot.setXRange(v_lo, v_hi + v_pad, padding=0)
+            self.analysis_plot.getViewBox().setLimits(xMin=v_lo, xMax=v_hi + v_pad)
+            self.pr_plot.getViewBox().setLimits(xMin=v_lo, xMax=v_hi + v_pad)
 
         # 分段限值线（仅在启用限值时绘制）
         if bool((self.analysis_config or {}).get("limit_checked", True)):
@@ -5311,7 +5432,8 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
 
         # 主音标注：只标代表峰/NG 峰，避免候选峰文本铺满图面
         if plot_tones:
-            self._add_legend_sample(self.pr_plot, "有效主音", color=(76, 175, 80), symbol="o", line=False)
+            tone_legend = "指定主音PR点" if any(getattr(t, "user_specified", False) for t in plot_tones) else "有效主音"
+            self._add_legend_sample(self.pr_plot, tone_legend, color=(76, 175, 80), symbol="o", line=False)
         for idx, t in enumerate(plot_tones):
             is_ng = (t.customer_ok is False)
             color = (214, 39, 40) if is_ng else (76, 175, 80)
@@ -5324,6 +5446,8 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
                 symbolPen=mkPen(color=color, width=1),
             )
             prefix = "NG " if is_ng else ""
+            if getattr(t, "user_specified", False):
+                prefix += "指定 "
             label = f"{prefix}{t.frequency_hz:.0f}Hz  PR={t.pr_db:.1f} dB"
             dev = getattr(t, "cross_deviation_db", None)
             if dev is not None:
@@ -5332,7 +5456,7 @@ class ProminenceRatioAnalysis(AnalysisGraphWidget):
             if dev is not None and dev > float((self.analysis_config or {}).get("ecma_cross_check_threshold_db", 0.5)):
                 text_color = (200, 80, 0)
             text = pg.TextItem(label, color=text_color, anchor=(0.5, 1.15 + 0.25 * (idx % 3)))
-            text.setPos(t.frequency_hz / 1000.0, t.pr_db + 0.15 * (idx % 3))
+            text.setPos(self._pr_axis_x(t.frequency_hz / 1000.0, is_log_x), t.pr_db + 0.15 * (idx % 3))
             self.pr_plot.addItem(text)
 
 

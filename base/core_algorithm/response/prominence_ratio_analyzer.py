@@ -39,6 +39,7 @@ class ProminenceRatioParams:
     overlap_ratio: float = 0.75
     window: str = "hann"
     weighting: str = "auto"
+    spectrum_display_weighting: str = "calculation"
     customer_band_ratio: float = 0.15
     dc_removal: str = "mean"
     highpass_hz: float = 20.0
@@ -82,6 +83,9 @@ class ProminenceRatioParams:
             overlap_ratio=float(pick("overlap_ratio", defaults.overlap_ratio)),
             window=str(pick("window", defaults.window)),
             weighting=effective_weighting,
+            spectrum_display_weighting=str(
+                pick("spectrum_display_weighting", defaults.spectrum_display_weighting)
+            ),
             customer_band_ratio=float(pick("customer_band_ratio", defaults.customer_band_ratio)),
             dc_removal=str(pick("dc_removal", defaults.dc_removal)),
             highpass_hz=float(pick("highpass_hz", defaults.highpass_hz)),
@@ -181,6 +185,18 @@ def _customer_limit_db(ft: float, fan_pr_limits: list) -> float:
     return 4.0
 
 
+def _resolve_spectrum_display_weighting(raw: str, calculation_weighting: str, warnings: list[str]) -> str:
+    w = (raw or "calculation").strip().upper()
+    if w in ("CALCULATION", "CALC", "FOLLOW", "AUTO"):
+        return (calculation_weighting or "Z").strip().upper()
+    if w in ("Z", "NONE"):
+        return "Z"
+    if w in ("A", "C"):
+        return w
+    warnings.append(f"未知上轨显示计权 {raw}，回退跟随 PR 计算计权")
+    return (calculation_weighting or "Z").strip().upper()
+
+
 def _power_to_level_db(power: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     arr = np.asarray(power, dtype=float)
     level = 10.0 * np.log10(np.maximum(arr, 1e-30) / (P_REF_PA ** 2))
@@ -248,6 +264,15 @@ class ProminenceRatioAnalyzer:
             scaling="density",
         )
         return np.asarray(freq, dtype=float), np.asarray(psd, dtype=float)
+
+    def _display_power_bandwidth_hz(self, params: ProminenceRatioParams) -> float:
+        """Welch PSD 转功率谱显示时使用的等效噪声带宽（ENBW）。"""
+        nperseg = int(params.window_samples)
+        window = sp_signal.get_window(params.window, nperseg)
+        denom = float(np.sum(window) ** 2)
+        if denom <= 0.0:
+            return float(self.sample_rate) / max(nperseg, 1)
+        return float(self.sample_rate) * float(np.sum(window * window)) / denom
 
     @staticmethod
     def _build_cumulative_power(freq: np.ndarray, psd: np.ndarray) -> np.ndarray:
@@ -347,24 +372,20 @@ class ProminenceRatioAnalyzer:
         if freq_in.size < 3:
             return []
 
-        user_specified_bins: set[int] = set()
+        candidates: list[tuple[float, float, bool]] = []
         if params.user_tone_frequencies:
             for uf in params.user_tone_frequencies:
                 if freq_in[0] <= uf <= freq_in[-1]:
-                    idx = int(np.argmin(np.abs(freq_in - uf)))
-                    user_specified_bins.add(idx)
-
-        if user_specified_bins:
-            peaks = np.array(sorted(user_specified_bins), dtype=int)
+                    peak_db = float(np.interp(float(uf), freq_in, mag_in))
+                    candidates.append((float(uf), peak_db, True))
         else:
             peaks, _props = sp_signal.find_peaks(mag_in, prominence=CANDIDATE_PEAK_PROMINENCE_DB)
+            candidates = [(float(freq_in[pk]), float(mag_in[pk]), False) for pk in peaks]
 
         bpf_hz = (params.blade_count * params.rpm / 60.0) if (params.bpf_enabled and params.rpm > 0) else None
 
         tones: list[ProminenceToneResult] = []
-        for pk in peaks:
-            ft = float(freq_in[pk])
-            peak_db = float(mag_in[pk])
+        for ft, peak_db, is_user_specified in candidates:
             invalid_reasons: list[str] = []
 
             triplet = ecb.get_band_triplet(
@@ -409,7 +430,6 @@ class ProminenceRatioAnalyzer:
                 customer_ok = pr_db <= limit_db
                 margin_db = limit_db - pr_db
 
-            is_user_specified = (pk in user_specified_bins)
             valid_main_tone = is_user_specified or (len(invalid_reasons) == 0)
 
             bpf_verified: Optional[bool] = None
@@ -451,7 +471,7 @@ class ProminenceRatioAnalyzer:
                 harmonic_order=harmonic_order,
                 valid_main_tone=valid_main_tone,
                 bpf_verified=bpf_verified,
-                user_specified=(pk in user_specified_bins),
+                user_specified=is_user_specified,
                 invalid_reasons=invalid_reasons,
             ))
 
@@ -683,6 +703,7 @@ class ProminenceRatioAnalyzer:
             "critical_band_mode": params.critical_band_mode,
             "mode_profile": params.mode_profile,
             "effective_weighting": effective_weighting,
+            "spectrum_display_weighting": "",
             "sample_rate_hz": self.sample_rate,
             "window": params.window,
             "window_samples": params.window_samples,
@@ -716,7 +737,16 @@ class ProminenceRatioAnalyzer:
 
         # 默认线性(Z)功率；显式 A/C 仅作为高级覆盖。
         psd_w = ecb.apply_weighting_to_psd(psd, freq, effective_weighting)
+        spectrum_display_weighting = _resolve_spectrum_display_weighting(
+            params.spectrum_display_weighting,
+            effective_weighting,
+            warnings,
+        )
+        psd_display = ecb.apply_weighting_to_psd(psd, freq, spectrum_display_weighting)
+        metadata["spectrum_display_weighting"] = spectrum_display_weighting
         metadata["effective_nfft"] = int((len(freq) - 1) * 2)
+        display_bandwidth_hz = self._display_power_bandwidth_hz(params)
+        metadata["spectrum_display_bandwidth_hz"] = display_bandwidth_hz
 
         cum = self._build_cumulative_power(freq, psd_w)
         f_axis, band_power_db, pr_spectrum = self._compute_pr_spectrum(freq, cum, params)
@@ -747,11 +777,7 @@ class ProminenceRatioAnalyzer:
                 f"当前采样率 {self.sample_rate}Hz 不足，超出部分无 PR 值"
             )
         metadata["pr_frequency_coverage_complete"] = pr_frequency_coverage_complete
-        if freq.size > 1:
-            df = float(np.median(np.diff(freq)))
-        else:
-            df = 1.0
-        spectrum_power_db = _power_to_level_db(psd_w * max(df, 1e-30))
+        spectrum_power_db = _power_to_level_db(psd_display * max(display_bandwidth_hz, 1e-30))
 
         if pr_spectrum.size and np.any(~np.isnan(pr_spectrum)):
             i_max = int(np.nanargmax(pr_spectrum))
