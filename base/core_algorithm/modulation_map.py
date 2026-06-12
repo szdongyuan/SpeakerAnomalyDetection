@@ -28,7 +28,6 @@ DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ = 160.0
 DEFAULT_TONE_BAND_HZ = DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ / 2.0
 DEFAULT_MECHANICAL_MATCH_TOLERANCE_HZ = 20.0
 DEFAULT_SHOW_GLOBAL_HOTSPOTS = True
-DEFAULT_MIN_MODULATION_DEPTH_PERCENT = 1.0
 
 
 DEFAULT_MODULATION_CONFIG = {
@@ -53,7 +52,6 @@ DEFAULT_MODULATION_CONFIG = {
     "main_tone_search_width_hz": DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ,
     "mechanical_match_tolerance_hz": DEFAULT_MECHANICAL_MATCH_TOLERANCE_HZ,
     "show_global_hotspots": DEFAULT_SHOW_GLOBAL_HOTSPOTS,
-    "min_modulation_depth_percent": DEFAULT_MIN_MODULATION_DEPTH_PERCENT,
     "tone_band_hz": DEFAULT_TONE_BAND_HZ,
     "core_freq_lines_khz": [0.5, 1.0, 2.0, 4.0, 8.0],
     "analysis_channel": 0,
@@ -562,7 +560,6 @@ def _evaluate_main_tones(
     mechanical_refs,
     mechanical_match_tolerance_hz,
     main_tone_search_width_hz,
-    min_modulation_depth_percent,
 ):
     if not main_tones:
         return []
@@ -596,7 +593,7 @@ def _evaluate_main_tones(
         any_col = int(col_indices[any_col_offset])
         max_any_depth_percent = float(mod_depth[row, any_col])
         max_any_mod_freq_hz = float(mod_freqs[any_col])
-        has_modulation_peak = max_any_depth_percent >= float(min_modulation_depth_percent)
+        has_modulation_peak = True
 
         if mechanical_mod_freqs.size:
             mechanical_cols = []
@@ -622,9 +619,9 @@ def _evaluate_main_tones(
 
         mechanical_depth_percent = float(mod_depth[mechanical_row, local_col])
         mechanical_mod_freq_hz = float(mod_freqs[local_col])
-        mod_freq_hz = max_any_mod_freq_hz if has_modulation_peak else None
+        mod_freq_hz = max_any_mod_freq_hz
 
-        if has_modulation_peak and mechanical_mod_freqs.size:
+        if mechanical_mod_freqs.size:
             nearest_index = int(np.argmin(np.abs(mechanical_mod_freqs - mod_freq_hz)))
             nearest_mech_hz = float(mechanical_mod_freqs[nearest_index])
             nearest_mech_label = mechanical_refs[nearest_index]["label"]
@@ -641,7 +638,7 @@ def _evaluate_main_tones(
         fail_reasons = []
         if not depth_pass:
             fail_reasons.append("AM depth above threshold")
-        if has_modulation_peak and not mechanical_match:
+        if not mechanical_match:
             fail_reasons.append("modulation frequency not mechanically matched")
 
         results.append(
@@ -664,15 +661,10 @@ def _evaluate_main_tones(
                 "mechanical_delta_hz": mechanical_delta_hz,
                 "mechanical_match": bool(mechanical_match),
                 "has_modulation_peak": bool(has_modulation_peak),
-                "min_modulation_depth_percent": float(min_modulation_depth_percent),
                 "depth_pass": bool(depth_pass),
                 "is_valid": bool(is_valid),
                 "status": "valid" if is_valid else "invalid",
-                "reason": (
-                    "; ".join(fail_reasons)
-                    if fail_reasons
-                    else ("pass" if has_modulation_peak else "no AM peak")
-                ),
+                "reason": "; ".join(fail_reasons) if fail_reasons else "pass",
             }
         )
 
@@ -753,9 +745,6 @@ def compute_modulation_map(audio_signal, sample_rate, config=None):
     )
     mechanical_mod_freqs = _mechanical_ref_freqs(mechanical_refs)
     threshold_percent = float(cfg.get("threshold_percent", 10.0))
-    min_modulation_depth_percent = float(
-        cfg.get("min_modulation_depth_percent", DEFAULT_MIN_MODULATION_DEPTH_PERCENT)
-    )
 
     main_tone_results = _evaluate_main_tones(
         mod_depth,
@@ -766,7 +755,6 @@ def compute_modulation_map(audio_signal, sample_rate, config=None):
         mechanical_refs,
         float(cfg.get("mechanical_match_tolerance_hz", DEFAULT_MECHANICAL_MATCH_TOLERANCE_HZ)),
         float(cfg.get("main_tone_search_width_hz", DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ)),
-        min_modulation_depth_percent,
     )
     global_hotspots = _find_hotspots(
         mod_depth,
@@ -793,7 +781,6 @@ def compute_modulation_map(audio_signal, sample_rate, config=None):
         "mechanical_mod_freqs_hz": mechanical_mod_freqs,
         "stft_params": stft_params,
         "threshold_percent": threshold_percent,
-        "min_modulation_depth_percent": min_modulation_depth_percent,
         "analysis_scope": stft_params.get("analysis_scope"),
         "main_tones_hz": stft_params.get("main_tones_hz"),
         "tone_band_hz": stft_params.get("tone_band_hz"),

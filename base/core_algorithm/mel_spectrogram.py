@@ -12,14 +12,16 @@ DEFAULT_FRAME_SHIFT_MS = 10.0
 DEFAULT_WINDOW = "hamming"
 DEFAULT_STFT_NFFT = 4096
 DEFAULT_N_MELS = 128
-DEFAULT_SAMPLE_TO_PA = 0.05
-DEFAULT_MIC_SENSITIVITY_V_PER_PA = 0.01
 DEFAULT_CORE_RANGE_HZ = (2000.0, 5000.0)
+DEFAULT_MEL_SCALE_RANGE = (0.0, 8000.0)
+DEFAULT_MAIN_TONES_HZ = (1200.0, 3500.0)
+DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ = 160.0
+POWER_FLOOR_PA2 = 1e-30
 
 
 DEFAULT_MEL_CONFIG = {
-    "sample_to_pa": DEFAULT_SAMPLE_TO_PA,
-    "mic_sensitivity_v_per_pa": DEFAULT_MIC_SENSITIVITY_V_PER_PA,
+    "main_tones_hz": list(DEFAULT_MAIN_TONES_HZ),
+    "main_tone_search_width_hz": DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ,
     "fmin_hz": DEFAULT_FMIN_HZ,
     "fmax_hz": DEFAULT_FMAX_HZ,
     "frame_length_ms": DEFAULT_FRAME_LENGTH_MS,
@@ -30,6 +32,7 @@ DEFAULT_MEL_CONFIG = {
     "color_map": "magma",
     "dynamic_range_db": 65.0,
     "core_range_hz": list(DEFAULT_CORE_RANGE_HZ),
+    "mel_scale_range": list(DEFAULT_MEL_SCALE_RANGE),
     "analysis_channel": 0,
 }
 
@@ -133,30 +136,217 @@ def _frequency_bin_widths(freqs_hz):
     return widths
 
 
-def _find_hotspot(mel_db_a, times_s, mel_axis):
-    if mel_db_a.size == 0:
-        return None
+def _mel_display_range(mel_scale_range):
+    mel_min, mel_max = _range_pair(mel_scale_range, DEFAULT_MEL_SCALE_RANGE)
+    if mel_min < 0 or mel_max <= mel_min:
+        raise ValueError("mel_scale_range must define a non-negative ascending Mel range.")
+    return mel_min, mel_max
 
-    row, col = np.unravel_index(np.nanargmax(mel_db_a), mel_db_a.shape)
+
+def _power_to_db(power_pa2):
+    return 10.0 * np.log10(np.maximum(power_pa2, POWER_FLOOR_PA2) / REFERENCE_PRESSURE_PA**2)
+
+
+def _mel_channel_edges(mel_axis, mel_edges):
+    channel_edges = np.empty(mel_axis.size + 1, dtype=np.float64)
+    channel_edges[0] = float(mel_edges[0])
+    channel_edges[-1] = float(mel_edges[-1])
+    if mel_axis.size > 1:
+        channel_edges[1:-1] = 0.5 * (mel_axis[:-1] + mel_axis[1:])
+    return channel_edges
+
+
+def _first_number(mapping, keys):
+    for key in keys:
+        if key not in mapping:
+            continue
+        try:
+            value = float(mapping.get(key))
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            return value
+    return None
+
+
+def _normalize_main_tones(raw_tones, search_width_hz=0.0):
+    if raw_tones is None:
+        return []
+    if isinstance(raw_tones, dict):
+        if isinstance(raw_tones.get("dominant_tones"), (list, tuple, np.ndarray)):
+            raw_tones = raw_tones.get("dominant_tones")
+        elif isinstance(raw_tones.get("main_tones"), (list, tuple, np.ndarray)):
+            raw_tones = raw_tones.get("main_tones")
+        else:
+            raw_tones = [raw_tones]
+    elif not isinstance(raw_tones, (list, tuple, np.ndarray)):
+        raw_tones = [raw_tones]
+
+    normalized = []
+    for order, raw in enumerate(raw_tones):
+        source = "configured_main_tone"
+        label = ""
+        level_db = None
+        prominence_db = None
+        if isinstance(raw, dict):
+            frequency_hz = _first_number(
+                raw,
+                (
+                    "frequency_hz",
+                    "freq_hz",
+                    "main_tone_hz",
+                    "target_signal_freq_hz",
+                    "tone_hz",
+                ),
+            )
+            f_low = _first_number(raw, ("f_low", "freq_low_hz", "band_low_hz", "interval_low_hz"))
+            f_high = _first_number(raw, ("f_high", "freq_high_hz", "band_high_hz", "interval_high_hz"))
+            label = str(raw.get("interval_label", raw.get("label", "")) or "")
+            source = str(raw.get("source", source) or source)
+            level_db = _first_number(raw, ("level_db", "peak_db", "level_dba"))
+            prominence_db = _first_number(raw, ("prominence_db",))
+        else:
+            try:
+                frequency_hz = float(raw)
+            except (TypeError, ValueError):
+                continue
+            f_low = None
+            f_high = None
+            label = f"Tone {order + 1}"
+
+        if frequency_hz is None and f_low is not None and f_high is not None:
+            frequency_hz = 0.5 * (f_low + f_high)
+        if frequency_hz is None or not np.isfinite(frequency_hz) or frequency_hz <= 0:
+            continue
+
+        half_width_hz = max(float(search_width_hz or 0.0), 0.0) / 2.0
+        if f_low is None or not np.isfinite(f_low):
+            f_low = frequency_hz - half_width_hz
+        if f_high is None or not np.isfinite(f_high):
+            f_high = frequency_hz + half_width_hz
+        if f_high < f_low:
+            f_low, f_high = f_high, f_low
+
+        normalized.append(
+            {
+                "order": int(order),
+                "frequency_hz": float(frequency_hz),
+                "f_low": float(max(f_low, 0.0)),
+                "f_high": float(max(f_high, 0.0)),
+                "interval_label": label,
+                "source": source,
+                "level_db": level_db,
+                "prominence_db": prominence_db,
+            }
+        )
+    return normalized
+
+
+def _hotspot_from_row(
+    row,
+    mel_power_pa2,
+    mel_db_a,
+    mel_axis,
+    mel_axis_edges,
+    mel_center_freqs_hz=None,
+    *,
+    kind="mel_band",
+):
     mel_value = float(mel_axis[row])
+    mel_low = float(mel_axis_edges[row])
+    mel_high = float(mel_axis_edges[row + 1])
+    if mel_center_freqs_hz is not None and len(mel_center_freqs_hz) > row:
+        freq_hz = float(mel_center_freqs_hz[row])
+    else:
+        freq_hz = float(mel_to_hz(mel_value))
+    band_power_pa2 = np.nanmean(mel_power_pa2, axis=1)
     return {
-        "time_s": float(times_s[col]),
+        "kind": kind,
         "mel": mel_value,
-        "freq_hz": float(mel_to_hz(mel_value)),
-        "level_dba": float(mel_db_a[row, col]),
+        "mel_low": mel_low,
+        "mel_high": mel_high,
+        "freq_hz": freq_hz,
+        "freq_low_hz": float(mel_to_hz(mel_low)),
+        "freq_high_hz": float(mel_to_hz(mel_high)),
+        "level_dba": float(_power_to_db(band_power_pa2[row])),
+        "peak_level_dba": float(np.nanmax(mel_db_a[row])),
+        "aggregation": "mean_over_time",
+        "mel_band_index": int(row),
     }
 
 
-def compute_mel_spectrogram(audio_signal, sample_rate, config=None):
+def _find_hotspot(mel_power_pa2, mel_db_a, mel_axis, mel_axis_edges, mel_center_freqs_hz=None):
+    if mel_db_a.size == 0:
+        return None
+
+    band_power_pa2 = np.nanmean(mel_power_pa2, axis=1)
+    row = int(np.nanargmax(band_power_pa2))
+    return _hotspot_from_row(row, mel_power_pa2, mel_db_a, mel_axis, mel_axis_edges, mel_center_freqs_hz)
+
+
+def _find_main_tone_hotspots(mel_power_pa2, mel_db_a, mel_axis, mel_axis_edges, mel_center_freqs_hz, main_tones):
+    if mel_db_a.size == 0 or not main_tones:
+        return []
+
+    band_power_pa2 = np.nanmean(mel_power_pa2, axis=1)
+    analysis_low_hz = float(mel_to_hz(mel_axis_edges[0]))
+    analysis_high_hz = float(mel_to_hz(mel_axis_edges[-1]))
+    hotspots = []
+    for tone in main_tones:
+        tone_freq = float(tone["frequency_hz"])
+        search_low_hz = max(float(tone.get("f_low", tone_freq)), analysis_low_hz)
+        search_high_hz = min(float(tone.get("f_high", tone_freq)), analysis_high_hz)
+        if search_high_hz < search_low_hz:
+            search_low_hz = search_high_hz = min(max(tone_freq, analysis_low_hz), analysis_high_hz)
+
+        search_low_mel = float(hz_to_mel(search_low_hz))
+        search_high_mel = float(hz_to_mel(search_high_hz))
+        row_mask = (mel_axis_edges[:-1] <= search_high_mel) & (mel_axis_edges[1:] >= search_low_mel)
+        rows = np.flatnonzero(row_mask)
+        if rows.size:
+            local_power = band_power_pa2[rows]
+            row = int(rows[int(np.nanargmax(local_power))])
+        else:
+            row = int(np.nanargmin(np.abs(np.asarray(mel_center_freqs_hz, dtype=float) - tone_freq)))
+
+        hotspot = _hotspot_from_row(
+            row,
+            mel_power_pa2,
+            mel_db_a,
+            mel_axis,
+            mel_axis_edges,
+            mel_center_freqs_hz,
+            kind="main_tone_mel_band",
+        )
+        hotspot.update(
+            {
+                "source": str(tone.get("source", "configured_main_tone") or "configured_main_tone"),
+                "main_tone_order": int(tone.get("order", len(hotspots))),
+                "main_tone_frequency_hz": tone_freq,
+                "main_tone_label": str(tone.get("interval_label", "") or ""),
+                "main_tone_band_low_hz": float(tone.get("f_low", tone_freq)),
+                "main_tone_band_high_hz": float(tone.get("f_high", tone_freq)),
+                "fft_interval_label": str(tone.get("interval_label", "") or ""),
+                "fft_band_low_hz": float(tone.get("f_low", tone_freq)),
+                "fft_band_high_hz": float(tone.get("f_high", tone_freq)),
+                "fft_level_db": tone.get("level_db"),
+                "fft_prominence_db": tone.get("prominence_db"),
+                "search_freq_low_hz": float(search_low_hz),
+                "search_freq_high_hz": float(search_high_hz),
+                "search_mel_low": float(search_low_mel),
+                "search_mel_high": float(search_high_mel),
+            }
+        )
+        hotspots.append(hotspot)
+    return hotspots
+
+
+def compute_mel_spectrogram(audio_signal, sample_rate, config=None, v2pa_factor=None):
     cfg = default_mel_config()
     if isinstance(config, dict):
         cfg.update({key: value for key, value in config.items() if value is not None})
 
-    sample_to_pa = _validate_positive("sample_to_pa", cfg.get("sample_to_pa"))
-    mic_sensitivity_v_per_pa = _validate_positive(
-        "mic_sensitivity_v_per_pa",
-        cfg.get("mic_sensitivity_v_per_pa"),
-    )
+    pressure_scale_pa_per_sample = _validate_positive("v2pa_factor", v2pa_factor)
     audio = _clean_audio(audio_signal)
     sample_rate = int(sample_rate)
     if sample_rate <= 0:
@@ -169,9 +359,12 @@ def compute_mel_spectrogram(audio_signal, sample_rate, config=None):
     window = str(cfg.get("window", DEFAULT_WINDOW) or DEFAULT_WINDOW)
     stft_nfft = int(cfg.get("stft_nfft", DEFAULT_STFT_NFFT))
     n_mels = int(cfg.get("n_mels", DEFAULT_N_MELS))
+    main_tone_search_width_hz = float(
+        cfg.get("main_tone_search_width_hz", DEFAULT_MAIN_TONE_SEARCH_WIDTH_HZ) or 0.0
+    )
 
-    if fmin_hz <= 0 or fmax_hz <= fmin_hz:
-        raise ValueError("fmin_hz and fmax_hz must define a positive frequency range.")
+    if fmin_hz < 0 or fmax_hz <= fmin_hz:
+        raise ValueError("fmin_hz and fmax_hz must define a non-negative ascending frequency range.")
     if fmax_hz > sample_rate / 2.0:
         raise ValueError(f"fmax_hz={fmax_hz:g} exceeds Nyquist frequency {sample_rate / 2.0:g}.")
     if frame_length_ms <= 0 or frame_shift_ms <= 0:
@@ -190,7 +383,7 @@ def compute_mel_spectrogram(audio_signal, sample_rate, config=None):
     if stft_nfft < nperseg:
         raise ValueError("stft_nfft must be no smaller than the frame length in samples.")
 
-    pressure_pa = audio * sample_to_pa
+    pressure_pa = audio * pressure_scale_pa_per_sample
     freqs_hz, times_s, psd_pa2_per_hz = signal.spectrogram(
         pressure_pa,
         fs=sample_rate,
@@ -219,19 +412,40 @@ def compute_mel_spectrogram(audio_signal, sample_rate, config=None):
 
     mel_filters, mel_edges, hz_edges = _mel_filter_bank(freqs_hz, n_mels, fmin_hz, fmax_hz)
     mel_power_pa2 = mel_filters @ power_a_pa2
-    mel_db_a = 10.0 * np.log10(np.maximum(mel_power_pa2, 1e-30) / REFERENCE_PRESSURE_PA**2)
+    mel_db_a = _power_to_db(mel_power_pa2)
 
     total_power_pa2_by_frame = np.sum(power_a_pa2, axis=0)
     mean_square_a_pa2 = float(np.mean(total_power_pa2_by_frame))
-    overall_spl_dba = 10.0 * np.log10(max(mean_square_a_pa2, 1e-30) / REFERENCE_PRESSURE_PA**2)
+    overall_spl_dba = float(_power_to_db(mean_square_a_pa2))
 
-    mel_axis = mel_edges[1:-1]
-    hotspot = _find_hotspot(mel_db_a, times_s, mel_axis)
+    true_mel_axis = mel_edges[1:-1]
+    mel_center_freqs_hz = hz_edges[1:-1]
+    mel_display_min, mel_display_max = _mel_display_range(cfg.get("mel_scale_range", DEFAULT_MEL_SCALE_RANGE))
+    core_low_hz, core_high_hz = _range_pair(cfg.get("core_range_hz", DEFAULT_CORE_RANGE_HZ), DEFAULT_CORE_RANGE_HZ)
+    core_low_mel = float(hz_to_mel(core_low_hz))
+    core_high_mel = float(hz_to_mel(core_high_hz))
+    mel_axis_edges = _mel_channel_edges(true_mel_axis, mel_edges)
+    mel_axis = true_mel_axis
+    global_hotspot = _find_hotspot(mel_power_pa2, mel_db_a, mel_axis, mel_axis_edges, mel_center_freqs_hz)
+    configured_main_tones = cfg.get("main_tones_hz")
+    if configured_main_tones is None:
+        configured_main_tones = cfg.get("main_tones", cfg.get("dominant_tones"))
+    main_tones = _normalize_main_tones(configured_main_tones, main_tone_search_width_hz)
+    main_tone_hotspots = _find_main_tone_hotspots(
+        mel_power_pa2,
+        mel_db_a,
+        mel_axis,
+        mel_axis_edges,
+        mel_center_freqs_hz,
+        main_tones,
+    )
+    hotspot = main_tone_hotspots[0] if main_tone_hotspots else global_hotspot
 
     params = {
         "sample_rate_hz": sample_rate,
-        "sample_to_pa": sample_to_pa,
-        "mic_sensitivity_v_per_pa": mic_sensitivity_v_per_pa,
+        "pressure_scale_pa_per_sample": pressure_scale_pa_per_sample,
+        "calibration_source": "v2pa_factor",
+        "v2pa_factor": pressure_scale_pa_per_sample,
         "fmin_hz": fmin_hz,
         "fmax_hz": fmax_hz,
         "frame_length_ms": frame_length_ms,
@@ -243,15 +457,35 @@ def compute_mel_spectrogram(audio_signal, sample_rate, config=None):
         "nperseg": nperseg,
         "noverlap": noverlap,
         "n_mels": n_mels,
+        "main_tones_hz": [float(item["frequency_hz"]) for item in main_tones],
+        "main_tone_search_width_hz": float(main_tone_search_width_hz),
         "reference_pressure_pa": REFERENCE_PRESSURE_PA,
+        "log_compression": "10*log10(power_pa2/reference_pressure_pa^2)",
+        "level_unit": "dB(A)",
+        "mel_scale_range": [float(mel_display_min), float(mel_display_max)],
+        "mel_display_range": [float(mel_display_min), float(mel_display_max)],
+        "analysis_mel_range": [float(mel_edges[0]), float(mel_edges[-1])],
+        "analysis_freq_range_hz": [float(fmin_hz), float(fmax_hz)],
+        "core_range_hz": [float(core_low_hz), float(core_high_hz)],
+        "core_mel_range": [float(core_low_mel), float(core_high_mel)],
+        "filter_mel_range": [float(mel_edges[0]), float(mel_edges[-1])],
+        "main_tone_source": str(cfg.get("main_tone_source", "configured_main_tones") or "configured_main_tones")
+        if main_tones
+        else "",
     }
 
     return {
         "mel_db_a": mel_db_a,
         "times_s": times_s,
         "mel_axis": mel_axis,
+        "mel_axis_edges": mel_axis_edges,
+        "mel_true_axis": true_mel_axis,
+        "mel_center_freqs_hz": mel_center_freqs_hz,
         "mel_freq_edges_hz": hz_edges,
         "overall_spl_dba": float(overall_spl_dba),
         "hotspot": hotspot,
+        "global_hotspot": global_hotspot,
+        "main_tone_hotspots": main_tone_hotspots,
+        "main_tone_hotspot_count": int(len(main_tone_hotspots)),
         "params": params,
     }

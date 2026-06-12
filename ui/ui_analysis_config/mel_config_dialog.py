@@ -6,7 +6,16 @@ from PyQt5.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QVBoxLayout
 
 from base.core_algorithm.mel_spectrogram import default_mel_config
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import ComboBox, DoubleSpinBox, GroupBox, Label, MessageBox, PushButton, SpinBox
+from ui.custom_ui_widget.widgets import (
+    ComboBox,
+    DoubleSpinBox,
+    GroupBox,
+    Label,
+    MessageBox,
+    PlainTextEdit,
+    PushButton,
+    SpinBox,
+)
 from ui.ui_src import ui_resources
 
 
@@ -40,13 +49,14 @@ class MelConfigWindow(QDialog):
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
-        self.setMinimumSize(480, 520)
-        self.resize(540, 600)
+        self.setMinimumSize(520, 620)
+        self.resize(580, 700)
 
         layout = QVBoxLayout()
         layout.setSpacing(12)
         if self.show_channel_selector:
             layout.addLayout(self._create_channel_layout())
+        layout.addWidget(self._create_tone_group())
         layout.addWidget(self._create_frequency_group())
         layout.addWidget(self._create_algorithm_group())
         layout.addWidget(self._create_display_group())
@@ -72,35 +82,42 @@ class MelConfigWindow(QDialog):
         channel_layout.addWidget(self.channel_combo_box, 1)
         return channel_layout
 
-    def _create_frequency_group(self):
-        group = GroupBox("频率与校准")
+    def _create_tone_group(self):
+        group = GroupBox("主音")
         layout = QGridLayout()
 
-        self.fmin_spin = self._double_spin(1, 96000, 1, self.load_config.get("fmin_hz", 100.0), " Hz")
+        self.main_tones_edit = PlainTextEdit()
+        self.main_tones_edit.setMaximumHeight(70)
+        self.main_tones_edit.setPlaceholderText("每行一个主音频率，例如:\n1200\n3500")
+        self.main_tones_edit.setPlainText(self._format_float_lines(self.load_config.get("main_tones_hz", [])))
+
+        self.main_tone_width_spin = self._double_spin(
+            0,
+            20000,
+            1,
+            self.load_config.get("main_tone_search_width_hz", 160.0),
+            " Hz",
+        )
+
+        layout.addWidget(Label("主音频率(Hz):"), 0, 0)
+        layout.addWidget(self.main_tones_edit, 0, 1, 1, 3)
+        layout.addWidget(Label("主音搜索宽度:"), 1, 0)
+        layout.addWidget(self.main_tone_width_spin, 1, 1)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_frequency_group(self):
+        group = GroupBox("频率")
+        layout = QGridLayout()
+
+        self.fmin_spin = self._double_spin(0, 96000, 1, self.load_config.get("fmin_hz", 100.0), " Hz")
         self.fmax_spin = self._double_spin(1, 96000, 1, self.load_config.get("fmax_hz", 20000.0), " Hz")
-        self.sample_to_pa_spin = self._double_spin(
-            0.000001,
-            1000,
-            6,
-            self.load_config.get("sample_to_pa", 0.05),
-            " Pa/sample",
-        )
-        self.mic_sensitivity_spin = self._double_spin(
-            0.000001,
-            1000,
-            6,
-            self.load_config.get("mic_sensitivity_v_per_pa", 0.01),
-            " V/Pa",
-        )
 
         layout.addWidget(Label("频率下限:"), 0, 0)
         layout.addWidget(self.fmin_spin, 0, 1)
         layout.addWidget(Label("频率上限:"), 0, 2)
         layout.addWidget(self.fmax_spin, 0, 3)
-        layout.addWidget(Label("采样换算:"), 1, 0)
-        layout.addWidget(self.sample_to_pa_spin, 1, 1)
-        layout.addWidget(Label("麦克风灵敏度:"), 1, 2)
-        layout.addWidget(self.mic_sensitivity_spin, 1, 3)
 
         group.setLayout(layout)
         return group
@@ -195,6 +212,24 @@ class MelConfigWindow(QDialog):
         spin.setSuffix(suffix)
         return spin
 
+    @staticmethod
+    def _format_float_lines(values):
+        if isinstance(values, str):
+            return values
+        if not isinstance(values, (list, tuple)):
+            return ""
+        return "\n".join(f"{float(v):g}" for v in values)
+
+    @staticmethod
+    def _parse_float_lines(text):
+        values = []
+        for raw in (text or "").replace(";", "\n").replace(",", "\n").splitlines():
+            item = raw.strip()
+            if not item:
+                continue
+            values.append(float(item))
+        return values
+
     def _range_values(self, key, default_pair):
         value = self.load_config.get(key, default_pair)
         if isinstance(value, str):
@@ -206,6 +241,14 @@ class MelConfigWindow(QDialog):
         return [float(parts[0]), float(parts[1])]
 
     def get_default_config(self):
+        try:
+            main_tones = self._parse_float_lines(self.main_tones_edit.toPlainText())
+        except ValueError:
+            MessageBox.warning(self, "设置警告", "主音频率列表只能包含数字。")
+            return None
+        if not main_tones:
+            MessageBox.warning(self, "设置警告", "请至少输入一个主音频率。")
+            return None
         if self.fmax_spin.value() <= self.fmin_spin.value():
             MessageBox.warning(self, "设置警告", "频率上限必须大于下限。")
             return None
@@ -217,8 +260,8 @@ class MelConfigWindow(QDialog):
             return None
 
         return {
-            "sample_to_pa": float(self.sample_to_pa_spin.value()),
-            "mic_sensitivity_v_per_pa": float(self.mic_sensitivity_spin.value()),
+            "main_tones_hz": main_tones,
+            "main_tone_search_width_hz": float(self.main_tone_width_spin.value()),
             "fmin_hz": float(self.fmin_spin.value()),
             "fmax_hz": float(self.fmax_spin.value()),
             "frame_length_ms": float(self.frame_length_spin.value()),
@@ -229,6 +272,7 @@ class MelConfigWindow(QDialog):
             "color_map": self.colormap_box.currentText(),
             "dynamic_range_db": float(self.dynamic_range_spin.value()),
             "core_range_hz": [float(self.core_low_spin.value()), float(self.core_high_spin.value())],
+            "mel_scale_range": self._range_values("mel_scale_range", [0.0, 8000.0]),
             "analysis_channel": int(self.channel_combo_box.currentData())
             if self.show_channel_selector and hasattr(self, "channel_combo_box")
             else int(self.load_config.get("analysis_channel", 0) or 0),

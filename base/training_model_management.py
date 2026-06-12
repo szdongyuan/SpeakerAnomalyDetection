@@ -3,8 +3,6 @@ import os
 import uuid
 from datetime import datetime
 
-from keras.models import load_model
-
 from base.db_manager import DataSave, ensure_audio_database_ready
 from base.file_ops import FileOps
 from consts import model_consts, error_code
@@ -103,6 +101,8 @@ class TrainingModelManagement(object):
     @staticmethod
     def get_training_model_info_to_db(database, signal_length, model_path, config_path, ret_str=None,
                                       model_description="No description"):
+        from keras.models import load_model
+
         if not os.path.exists(model_path):
             return error_code.INVALID_PATH, "The model path does not exist."
         if not os.path.exists(config_path):

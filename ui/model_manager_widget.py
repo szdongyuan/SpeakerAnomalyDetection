@@ -12,7 +12,6 @@ from base.training_model_management import TrainingModelManagement
 from base.log_manager import LogManager
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
-from machine_learning.model_builder import build_and_save_model_from_config
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 from ui.custom_ui_widget.widgets import PushButton, ComboBox, LineEdit, Label, GroupBox, MessageBox
 from ui.ui_src import ui_resources
@@ -221,6 +220,8 @@ class ModelInfoList(DataManageDialog):
             MessageBox.warning(self, "警告", "请先选择YML配置文件！")
             return
         try:
+            from machine_learning.model_builder import build_and_save_model_from_config
+
             new_model = build_and_save_model_from_config(config_path=yml_config_path, compile_model=True)
         except Exception as e:
             MessageBox.critical(self, "错误", f"模型构建失败：{str(e)}")

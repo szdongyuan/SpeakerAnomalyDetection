@@ -11,7 +11,7 @@ from librosa.core import spectrum
 from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
-from PyQt5.QtCore import Qt, QModelIndex, QRectF
+from PyQt5.QtCore import Qt, QModelIndex, QRectF, QTimer
 from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
@@ -2289,6 +2289,7 @@ class Spectrogram(QWidget):
 
 class Mel(QWidget):
     HOTSPOT_MARKER_SIZE = 12
+    LEFT_AXIS_MIN_WIDTH = 120
     pdf_summary_exclude_fields = ("overall_spl_dba", "hotspot")
 
     def __init__(self, title_name):
@@ -2299,10 +2300,18 @@ class Mel(QWidget):
         self.title_name = title_name
         self.img_item = None
         self.colorbar = None
+        self.analysis_region = None
+        self.analysis_label = None
         self.core_region = None
+        self.core_label = None
+        self.hotspot_region = None
+        self.hotspot_regions = []
+        self.hotspot_label = None
+        self.overall_spl_label = None
         self.plot_widget = None
         self.table_widget = None
         self.status_label = None
+        self.v2pa_factor = None
         self.init_ui()
         self.setWindowTitle(title_name)
 
@@ -2310,24 +2319,57 @@ class Mel(QWidget):
         self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
 
-        self.status_label = Label("Mel: -")
+        self.status_label = Label("Mel")
+        self.status_label.setVisible(False)
         self.main_layout.addWidget(self.status_label)
 
         self.plot_widget = pg.PlotWidget(background="white")
         self.plot_widget.setLabel("bottom", "Time (s)")
         self.plot_widget.setLabel("left", "Mel frequency (Mel)")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
+        self._reserve_left_axis_space()
         self.main_layout.addWidget(self.plot_widget, 3)
 
         self.table_widget = TableWidget()
-        self.table_widget.setColumnCount(5)
-        self.table_widget.setHorizontalHeaderLabels(["整体SPL dB(A)", "热点时间(s)", "热点频率(kHz)", "热点Mel", "热点dB(A)"])
+        self.table_widget.setColumnCount(3)
+        self.table_widget.setHorizontalHeaderLabels(
+            [
+                "Main tone (Hz)",
+                "Hotspot band (kHz)",
+                "Hotspot Mel band",
+            ]
+        )
         header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
         self.table_widget.verticalHeader().setVisible(False)
         self.table_widget.setEditTriggers(TableWidget.NoEditTriggers)
         self.main_layout.addWidget(self.table_widget, 1)
         self.setLayout(self.main_layout)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_plot_layout_refresh()
+
+    def _reserve_left_axis_space(self):
+        if self.plot_widget is None:
+            return
+        left_axis = self.plot_widget.getAxis("left")
+        if left_axis is not None:
+            left_axis.setWidth(self.LEFT_AXIS_MIN_WIDTH)
+
+    def _schedule_plot_layout_refresh(self):
+        self._reserve_left_axis_space()
+        QTimer.singleShot(0, self._refresh_plot_layout)
+
+    def _refresh_plot_layout(self):
+        self._reserve_left_axis_space()
+        if self.plot_widget is None:
+            return
+        plot_item = self.plot_widget.getPlotItem()
+        if plot_item is not None:
+            plot_item.updateGeometry()
+        self.plot_widget.updateGeometry()
+        self.plot_widget.update()
 
     def calculate_mel(self):
         try:
@@ -2345,6 +2387,7 @@ class Mel(QWidget):
                 np.asarray(recorded_signal, dtype=np.float64),
                 int(sample_rate),
                 self.analysis_config or {},
+                v2pa_factor=self.v2pa_factor,
             )
         except Exception as e:
             MessageBox.warning(self, "提示", f"Mel 分析失败: {str(e)[:200]}")
@@ -2358,6 +2401,7 @@ class Mel(QWidget):
         mel_db_a = np.asarray(analysis_result.get("mel_db_a", []), dtype=np.float64)
         times_s = np.asarray(analysis_result.get("times_s", []), dtype=np.float64)
         mel_axis = np.asarray(analysis_result.get("mel_axis", []), dtype=np.float64)
+        mel_axis_edges = np.asarray(analysis_result.get("mel_axis_edges", []), dtype=np.float64)
         if mel_db_a.size == 0 or times_s.size == 0 or mel_axis.size == 0:
             return
 
@@ -2369,7 +2413,10 @@ class Mel(QWidget):
         self.img_item.setImage(display_matrix, autoLevels=False)
 
         x_min, x_max = float(times_s[0]), float(times_s[-1])
-        y_min, y_max = float(mel_axis[0]), float(mel_axis[-1])
+        if mel_axis_edges.size == mel_axis.size + 1:
+            y_min, y_max = float(mel_axis_edges[0]), float(mel_axis_edges[-1])
+        else:
+            y_min, y_max = float(mel_axis[0]), float(mel_axis[-1])
         self.img_item.setRect(QRectF(x_min, y_min, max(x_max - x_min, 1e-9), max(y_max - y_min, 1e-9)))
 
         finite_values = mel_db_a[np.isfinite(mel_db_a)]
@@ -2391,13 +2438,17 @@ class Mel(QWidget):
         self.colorbar.setImageItem(self.img_item, insert_in=self.plot_widget.getPlotItem())
 
         self.plot_widget.setXRange(x_min, x_max, padding=0)
-        self.plot_widget.setYRange(y_min, y_max, padding=0)
+        display_y_min, display_y_max = self._display_y_range(analysis_result, y_min, y_max)
+        self.plot_widget.setYRange(display_y_min, display_y_max, padding=0)
         self.plot_widget.setTitle("A-weighted Mel spectrogram", size="20px", color="black")
 
-        self._plot_core_band(y_min, y_max)
+        self._plot_analysis_mel_band(display_y_min, display_y_max, analysis_result, x_min)
+        self._plot_core_band(display_y_min, display_y_max, analysis_result, x_min)
+        self._plot_overall_spl_label(analysis_result, x_min, x_max, display_y_min, display_y_max)
         self._plot_hotspot(analysis_result)
         self._update_table(analysis_result)
         self._update_fonts()
+        self._schedule_plot_layout_refresh()
 
     def _clear_plot(self):
         self.plot_widget.clear()
@@ -2408,7 +2459,14 @@ class Mel(QWidget):
                 pass
         self.img_item = None
         self.colorbar = None
+        self.analysis_region = None
+        self.analysis_label = None
         self.core_region = None
+        self.core_label = None
+        self.hotspot_region = None
+        self.hotspot_regions = []
+        self.hotspot_label = None
+        self.overall_spl_label = None
 
     @staticmethod
     def _build_color_map(color_map_name):
@@ -2419,82 +2477,252 @@ class Mel(QWidget):
         positions = np.linspace(0.0, 1.0, 256)
         return pg.ColorMap(positions, colors)
 
-    def _plot_core_band(self, y_min, y_max):
-        cfg = self.analysis_config if isinstance(self.analysis_config, dict) else {}
-        core_range = cfg.get("core_range_hz", [2000.0, 5000.0])
+    @staticmethod
+    def _display_y_range(analysis_result, fallback_min, fallback_max):
+        params = analysis_result.get("params", {}) if isinstance(analysis_result, dict) else {}
+        display_range = params.get("mel_display_range", params.get("mel_scale_range", None))
         try:
-            core_low_hz, core_high_hz = list(core_range)[:2]
-            core_low_mel = float(hz_to_mel(float(core_low_hz)))
-            core_high_mel = float(hz_to_mel(float(core_high_hz)))
+            display_min, display_max = list(display_range)[:2]
+            display_min = float(display_min)
+            display_max = float(display_max)
         except Exception:
-            return
-        low = max(min(core_low_mel, core_high_mel), y_min)
-        high = min(max(core_low_mel, core_high_mel), y_max)
-        if high <= low:
-            return
+            display_min, display_max = float(fallback_min), float(fallback_max)
+        if not np.isfinite(display_min) or not np.isfinite(display_max) or display_max <= display_min:
+            return float(fallback_min), float(fallback_max)
+        return display_min, display_max
+
+    @staticmethod
+    def _clipped_band_range(raw_range, y_min, y_max):
         try:
-            self.core_region = pg.LinearRegionItem(
+            first, second = list(raw_range)[:2]
+            raw_low = min(float(first), float(second))
+            raw_high = max(float(first), float(second))
+            low = max(raw_low, float(y_min))
+            high = min(raw_high, float(y_max))
+        except Exception:
+            return None
+        if high <= low:
+            return None
+        return low, high
+
+    def _plot_band_region(self, low, high, x_min, label, brush, pen, text_color, z_value):
+        region = None
+        try:
+            region = pg.LinearRegionItem(
                 values=(low, high),
                 orientation="horizontal",
-                brush=pg.mkBrush(0, 188, 212, 40),
+                brush=brush,
                 movable=False,
             )
-            self.core_region.setZValue(10)
-            self.plot_widget.addItem(self.core_region)
+            region.setZValue(z_value)
+            self.plot_widget.addItem(region)
         except Exception:
-            for value in (low, high):
-                line = pg.InfiniteLine(
-                    pos=value,
-                    angle=0,
-                    pen=pg.mkPen(color=(0, 188, 212, 200), width=1, style=Qt.DotLine),
-                    movable=False,
+            pass
+
+        for value in (low, high):
+            line = pg.InfiniteLine(pos=value, angle=0, pen=pen, movable=False)
+            line.setZValue(z_value + 8)
+            self.plot_widget.addItem(line)
+
+        text_item = None
+        if label:
+            try:
+                text_item = pg.TextItem(
+                    text=label,
+                    color=text_color,
+                    anchor=(0.0, 1.0),
+                    fill=pg.mkBrush(255, 255, 255, 185),
                 )
-                self.plot_widget.addItem(line)
+                text_item.setPos(float(x_min), high)
+                text_item.setZValue(z_value + 12)
+                self.plot_widget.addItem(text_item)
+            except Exception:
+                pass
+
+        return region, text_item
+
+    def _plot_analysis_mel_band(self, y_min, y_max, analysis_result, x_min):
+        params = analysis_result.get("params", {}) if isinstance(analysis_result, dict) else {}
+        mel_range = params.get("analysis_mel_range", params.get("filter_mel_range", None))
+        clipped = self._clipped_band_range(mel_range, y_min, y_max)
+        if clipped is None:
+            return
+        low, high = clipped
+        self.analysis_region, self.analysis_label = self._plot_band_region(
+            low,
+            high,
+            x_min,
+            None,
+            pg.mkBrush(255, 193, 7, 24),
+            pg.mkPen(color=(245, 158, 11, 230), width=1.5, style=Qt.DashLine),
+            (120, 75, 0),
+            5,
+        )
+
+    def _plot_core_band(self, y_min, y_max, analysis_result=None, x_min=None):
+        params = analysis_result.get("params", {}) if isinstance(analysis_result, dict) else {}
+        cfg = self.analysis_config if isinstance(self.analysis_config, dict) else {}
+        core_range_hz = params.get("core_range_hz", cfg.get("core_range_hz", [2000.0, 5000.0]))
+        core_mel_range = params.get("core_mel_range")
+        try:
+            core_low_hz, core_high_hz = list(core_range_hz)[:2]
+            if core_mel_range is None:
+                core_low_mel = float(hz_to_mel(float(core_low_hz)))
+                core_high_mel = float(hz_to_mel(float(core_high_hz)))
+            else:
+                core_low_mel, core_high_mel = list(core_mel_range)[:2]
+        except Exception:
+            return
+        clipped = self._clipped_band_range([core_low_mel, core_high_mel], y_min, y_max)
+        if clipped is None:
+            return
+        low, high = clipped
+        if x_min is None:
+            try:
+                x_min = self.plot_widget.viewRange()[0][0]
+            except Exception:
+                x_min = 0.0
+        self.core_region, self.core_label = self._plot_band_region(
+            low,
+            high,
+            x_min,
+            None,
+            pg.mkBrush(0, 188, 212, 46),
+            pg.mkPen(color=(0, 131, 143, 235), width=1.6, style=Qt.DotLine),
+            (0, 90, 105),
+            16,
+        )
 
     def _plot_hotspot(self, analysis_result):
-        hotspot = analysis_result.get("hotspot")
-        if not isinstance(hotspot, dict):
+        hotspots = analysis_result.get("main_tone_hotspots") or []
+        if not hotspots:
+            fallback_hotspot = analysis_result.get("hotspot")
+            hotspots = [fallback_hotspot] if isinstance(fallback_hotspot, dict) else []
+        if not hotspots:
             return
-        spot = {
-            "pos": (float(hotspot.get("time_s", 0.0)), float(hotspot.get("mel", 0.0))),
-            "brush": pg.mkBrush(255, 255, 255, 230),
-            "pen": pg.mkPen("black", width=1.0),
-            "size": self.HOTSPOT_MARKER_SIZE,
-            "symbol": "star",
-        }
-        self.plot_widget.addItem(pg.ScatterPlotItem(spots=[spot]))
+        y_range = self.plot_widget.viewRange()[1]
+        x_min = self.plot_widget.viewRange()[0][0]
+        for index, hotspot in enumerate(hotspots):
+            if not isinstance(hotspot, dict):
+                continue
+            clipped = self._clipped_band_range(
+                [hotspot.get("mel_low", hotspot.get("mel")), hotspot.get("mel_high", hotspot.get("mel"))],
+                y_range[0],
+                y_range[1],
+            )
+            if clipped is None:
+                continue
+            low, high = clipped
+            is_main_tone_hotspot = bool(hotspot.get("main_tone_frequency_hz") is not None) or (
+                str(hotspot.get("kind", "")) == "main_tone_mel_band"
+            )
+            if is_main_tone_hotspot:
+                hotspot_brush = pg.mkBrush(34, 197, 94, 88)
+                hotspot_pen = pg.mkPen(color=(22, 101, 52, 235), width=2.4, style=Qt.SolidLine)
+                hotspot_text_color = (22, 101, 52)
+            else:
+                hotspot_brush = pg.mkBrush(236, 72, 153, 88)
+                hotspot_pen = pg.mkPen(color=(157, 23, 77, 235), width=2.4, style=Qt.SolidLine)
+                hotspot_text_color = (157, 23, 77)
+            region, label = self._plot_band_region(
+                low,
+                high,
+                x_min,
+                None,
+                hotspot_brush,
+                hotspot_pen,
+                hotspot_text_color,
+                32 + index,
+            )
+            self.hotspot_regions.append(region)
+            if index == 0:
+                self.hotspot_region = region
+                self.hotspot_label = label
+
+    def _plot_overall_spl_label(self, analysis_result, x_min, x_max, y_min, y_max):
+        try:
+            overall_spl = float(analysis_result.get("overall_spl_dba", 0.0))
+        except (TypeError, ValueError):
+            return
+        if not np.isfinite(overall_spl):
+            return
+
+        x_margin = max((float(x_max) - float(x_min)) * 0.012, 1e-6)
+        y_margin = max((float(y_max) - float(y_min)) * 0.025, 1e-6)
         label = pg.TextItem(
-            text=f"{float(hotspot.get('freq_hz', 0.0)) / 1000.0:.2f} kHz / {float(hotspot.get('level_dba', 0.0)):.1f} dB(A)",
-            color=(20, 20, 20),
-            anchor=(0.0, 1.0),
-            fill=pg.mkBrush(255, 255, 255, 180),
+            text=f"Overall SPL: {overall_spl:.1f} dB(A)",
+            color=(255, 255, 255),
+            anchor=(0.0, 0.0),
+            fill=pg.mkBrush(0, 0, 0, 150),
         )
-        label.setPos(float(hotspot.get("time_s", 0.0)), float(hotspot.get("mel", 0.0)))
-        label.setZValue(30)
+        label.setPos(float(x_min) + x_margin, float(y_max) - y_margin)
+        label.setZValue(80)
         self.plot_widget.addItem(label)
+        self.overall_spl_label = label
+
+    @staticmethod
+    def _format_khz_range(low_hz, high_hz):
+        try:
+            low = float(low_hz) / 1000.0
+            high = float(high_hz) / 1000.0
+        except (TypeError, ValueError):
+            return "-"
+        if not np.isfinite(low) or not np.isfinite(high):
+            return "-"
+        if abs(high - low) < 1e-9:
+            return f"{low:.3f}"
+        return f"{low:.3f}-{high:.3f}"
+
+    @staticmethod
+    def _format_mel_range(low_mel, high_mel):
+        try:
+            low = float(low_mel)
+            high = float(high_mel)
+        except (TypeError, ValueError):
+            return "-"
+        if not np.isfinite(low) or not np.isfinite(high):
+            return "-"
+        if abs(high - low) < 1e-9:
+            return f"{low:.1f}"
+        return f"{low:.1f}-{high:.1f}"
+
+    def _table_row_for_hotspot(self, hotspot):
+        tone_freq = hotspot.get("main_tone_frequency_hz")
+        try:
+            tone_text = f"{float(tone_freq):.1f}" if tone_freq is not None else "-"
+        except (TypeError, ValueError):
+            tone_text = "-"
+        hotspot_band = self._format_khz_range(hotspot.get("freq_low_hz"), hotspot.get("freq_high_hz"))
+        mel_band = self._format_mel_range(
+            hotspot.get("mel_low", hotspot.get("mel")),
+            hotspot.get("mel_high", hotspot.get("mel")),
+        )
+        return [tone_text, hotspot_band, mel_band]
 
     def _update_table(self, analysis_result):
-        hotspot = analysis_result.get("hotspot")
-        self.table_widget.setRowCount(1)
-        if isinstance(hotspot, dict):
-            values = [
-                f"{float(analysis_result.get('overall_spl_dba', 0.0)):.2f}",
-                f"{float(hotspot.get('time_s', 0.0)):.3f}",
-                f"{float(hotspot.get('freq_hz', 0.0)) / 1000.0:.3f}",
-                f"{float(hotspot.get('mel', 0.0)):.1f}",
-                f"{float(hotspot.get('level_dba', 0.0)):.2f}",
-            ]
-            status_text = (
-                f"Mel: Overall {float(analysis_result.get('overall_spl_dba', 0.0)):.1f} dB(A), "
-                f"Hotspot {float(hotspot.get('freq_hz', 0.0)) / 1000.0:.2f} kHz"
-            )
+        hotspots = analysis_result.get("main_tone_hotspots") or []
+        if hotspots:
+            self.table_widget.setRowCount(len(hotspots))
+            for row, hotspot in enumerate(hotspots):
+                values = self._table_row_for_hotspot(hotspot)
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    self.table_widget.setItem(row, col, item)
+            status_text = "Mel"
         else:
-            values = [f"{float(analysis_result.get('overall_spl_dba', 0.0)):.2f}", "-", "-", "-", "-"]
-            status_text = f"Mel: Overall {float(analysis_result.get('overall_spl_dba', 0.0)):.1f} dB(A)"
-        for col, value in enumerate(values):
-            item = QTableWidgetItem(value)
-            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            self.table_widget.setItem(0, col, item)
+            hotspot = analysis_result.get("global_hotspot") or analysis_result.get("hotspot")
+            self.table_widget.setRowCount(1)
+            if isinstance(hotspot, dict):
+                values = self._table_row_for_hotspot(hotspot)
+                status_text = "Mel"
+            else:
+                values = ["-", "-", "-"]
+                status_text = "Mel"
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.table_widget.setItem(0, col, item)
         self.status_label.setText(status_text)
 
     def _update_fonts(self):
@@ -2505,6 +2733,7 @@ class Mel(QWidget):
             axis.setTickFont(font)
             axis.setTextPen("black")
             axis.setLabel(axis.labelText, **{"font-size": "20px"})
+        self._reserve_left_axis_space()
 
     @staticmethod
     def _to_plain_value(value):
@@ -2528,9 +2757,15 @@ class Mel(QWidget):
             "mel_db_a",
             "times_s",
             "mel_axis",
+            "mel_axis_edges",
+            "mel_true_axis",
+            "mel_center_freqs_hz",
             "mel_freq_edges_hz",
             "overall_spl_dba",
             "hotspot",
+            "global_hotspot",
+            "main_tone_hotspots",
+            "main_tone_hotspot_count",
             "params",
         )
         return {key: Mel._to_plain_value(analysis_result.get(key)) for key in keys}
@@ -2580,9 +2815,9 @@ class Modulation(QWidget):
         self.main_layout.addWidget(self.plot_widget, 3)
 
         self.table_widget = TableWidget()
-        self.table_widget.setColumnCount(6)
+        self.table_widget.setColumnCount(5)
         self.table_widget.setHorizontalHeaderLabels(
-            ["主音(Hz)", "分析频率(kHz)", "调制频率(Hz)", "深度(%)", "机械匹配", "原因"]
+            ["主音(Hz)", "调制频率(Hz)", "深度(%)", "机械匹配", "原因"]
         )
         header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
@@ -2766,13 +3001,12 @@ class Modulation(QWidget):
                 mechanical_text = "Yes" if item.get("mechanical_match", False) else "No"
             values = [
                 f"{float(item.get('target_signal_freq_hz', 0.0)):.1f}",
-                f"{float(item.get('signal_freq_khz', 0.0)):.3f}",
                 "-" if mod_freq_hz is None else f"{float(mod_freq_hz):.1f}",
                 f"{float(item.get('mod_depth_percent', 0.0)):.2f}",
                 "是" if item.get("mechanical_match", False) else "否",
                 str(item.get("reason", "")),
             ]
-            values[4] = mechanical_text
+            values[3] = mechanical_text
             for col, value in enumerate(values):
                 table_item = QTableWidgetItem(value)
                 table_item.setFlags(table_item.flags() & ~Qt.ItemIsEditable)
@@ -2818,7 +3052,6 @@ class Modulation(QWidget):
             "mechanical_mod_freqs_hz",
             "stft_params",
             "threshold_percent",
-            "min_modulation_depth_percent",
             "analysis_scope",
             "main_tones_hz",
             "tone_band_hz",

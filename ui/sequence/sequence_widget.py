@@ -84,7 +84,7 @@ class SequenceWindow(QWidget):
 
         self.v2pa_factor = None
         self.analysis_types_requiring_v2pa = {
-            "SPL", "SPLF", "FFT", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA",
+            "SPL", "SPLF", "FFT", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA", "Mel",
             "LOUD", "SHRP", "ROUGH", "PR",
         }
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
@@ -2548,7 +2548,7 @@ class SequenceWindow(QWidget):
         analysis_types_requiring_v2pa = getattr(
             self,
             "analysis_types_requiring_v2pa",
-            {"SPL", "SPLF", "FFT", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"},
+            {"SPL", "SPLF", "FFT", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA", "Mel"},
         )
         requires_v2pa = type in analysis_types_requiring_v2pa
         if type in class_mapping.keys():

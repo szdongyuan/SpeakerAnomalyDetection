@@ -22,6 +22,7 @@ def test_sequence_marks_fft_as_v2pa_required():
     assert assigned_sets
     values = {elt.value for elt in assigned_sets[0].elts if isinstance(elt, ast.Constant)}
     assert "FFT" in values
+    assert "Mel" in values
 
 
 def test_operation_sequence_fft_label_extracts_single_fft_type():

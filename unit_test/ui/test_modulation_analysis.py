@@ -66,7 +66,6 @@ def test_modulation_main_tone_search_width_selects_peak_within_window():
         mechanical_refs=[],
         mechanical_match_tolerance_hz=20.0,
         main_tone_search_width_hz=40.0,
-        min_modulation_depth_percent=1.0,
     )[0]
     wide = _evaluate_main_tones(
         mod_depth,
@@ -77,7 +76,6 @@ def test_modulation_main_tone_search_width_selects_peak_within_window():
         mechanical_refs=[],
         mechanical_match_tolerance_hz=20.0,
         main_tone_search_width_hz=100.0,
-        min_modulation_depth_percent=1.0,
     )[0]
 
     assert narrow["analysis_signal_freq_hz"] == 1200.0
@@ -86,7 +84,7 @@ def test_modulation_main_tone_search_width_selects_peak_within_window():
     assert wide["mod_depth_percent"] == 20.0
 
 
-def test_modulation_algorithm_does_not_assign_frequency_to_unmodulated_main_tone():
+def test_modulation_algorithm_assigns_frequency_even_for_low_depth_main_tone():
     from base.core_algorithm.modulation_map import compute_modulation_map, default_modulation_config
 
     sample_rate = 48000
@@ -113,10 +111,8 @@ def test_modulation_algorithm_does_not_assign_frequency_to_unmodulated_main_tone
     result = compute_modulation_map(audio, sample_rate, cfg)
 
     tone_3500 = next(item for item in result["main_tone_results"] if item["target_signal_freq_hz"] == 3500.0)
-    assert tone_3500["has_modulation_peak"] is False
-    assert tone_3500["mod_freq_hz"] is None
-    assert tone_3500["is_valid"] is True
-    assert tone_3500["reason"] == "no AM peak"
+    assert tone_3500["has_modulation_peak"] is True
+    assert tone_3500["mod_freq_hz"] is not None
     assert not [
         hotspot
         for hotspot in result["global_hotspots"]
@@ -145,7 +141,6 @@ def test_modulation_algorithm_limits_work_to_main_tone_rois():
             "mod_freq_bin_hz": 1.0,
             "smoothing_points": 3,
             "main_tone_search_width_hz": 100.0,
-            "min_modulation_depth_percent": 1.0,
         }
     )
 
@@ -176,8 +171,8 @@ def test_modulation_algorithm_limits_work_to_main_tone_rois():
     assert np.any(in_3500_roi)
 
     tone_3500 = next(item for item in roi_result["main_tone_results"] if item["target_signal_freq_hz"] == 3500.0)
-    assert tone_3500["has_modulation_peak"] is False
-    assert tone_3500["mod_freq_hz"] is None
+    assert tone_3500["has_modulation_peak"] is True
+    assert tone_3500["mod_freq_hz"] is not None
     assert not [
         hotspot
         for hotspot in roi_result["global_hotspots"]
@@ -344,8 +339,8 @@ def test_modulation_ui_smoke_renders_pyqtgraph_without_matplotlib(qapp, monkeypa
         assert widget.export_pdf_tables() == [
             {
                 "title": "分析表格",
-                "headers": ["主音(Hz)", "分析频率(kHz)", "调制频率(Hz)", "深度(%)", "机械匹配", "原因"],
-                "rows": [["1200.0", "1.200", "75.0", "20.00", "Yes", "AM depth above threshold"]],
+                "headers": ["主音(Hz)", "调制频率(Hz)", "深度(%)", "机械匹配", "原因"],
+                "rows": [["1200.0", "75.0", "20.00", "Yes", "AM depth above threshold"]],
             }
         ]
     finally:

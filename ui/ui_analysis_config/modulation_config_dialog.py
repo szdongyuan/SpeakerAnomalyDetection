@@ -362,7 +362,6 @@ class ModulationConfigWindow(QDialog):
             "mechanical_freqs_hz": mechanical_freqs,
             "main_tone_search_width_hz": float(self.main_tone_width_spin.value()),
             "mechanical_match_tolerance_hz": float(self.mechanical_tolerance_spin.value()),
-            "min_modulation_depth_percent": float(self.load_config.get("min_modulation_depth_percent", 1.0)),
             "tone_band_hz": float(self.tone_band_spin.value()),
             "show_global_hotspots": bool(self.show_hotspots_checkbox.isChecked()),
             "analysis_channel": int(self.channel_combo_box.currentData())
