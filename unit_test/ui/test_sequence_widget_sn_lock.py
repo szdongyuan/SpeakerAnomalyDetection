@@ -2,6 +2,7 @@ import ast
 import re
 import textwrap
 import types
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,8 @@ TARGET_METHODS = {
     "_tcp_run_test",
     "_commit_barcode",
     "_set_sn_input_recording_read_only",
+    "_load_import_audio",
+    "import_audio_and_analyze",
     "on_sequence_config_updated",
     "validate_count",
     "set_audio_devices_available",
@@ -111,6 +114,8 @@ def _build_method_namespace():
         "pyqtSlot": lambda *args, **kwargs: (lambda func: func),
         "MessageBox": DummyMessageBox,
         "LoadUiConfig": DummyLoadUiConfig,
+        "QFileDialog": types.SimpleNamespace(getOpenFileName=lambda *args, **kwargs: ("", "")),
+        "DEFAULT_DIR": "",
         "QEvent": DummyEventType,
         "Qt": DummyQt,
         "QLineEdit": DummyLineEdit,
@@ -129,6 +134,8 @@ def _build_method_namespace():
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
         "TempTcpClient": lambda *args, **kwargs: None,
         "np": np,
+        "librosa": types.SimpleNamespace(load=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unset"))),
+        "warnings": warnings,
         "SoundcardAudioProcessor": None,
         "re": re,
         "time": types.SimpleNamespace(monotonic=lambda: 1000.0),
@@ -550,6 +557,8 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window.on_sequence_config_updated = _bind_method(window, namespace, "on_sequence_config_updated")
     window.validate_count = _bind_method(window, namespace, "validate_count")
     window._real_start_this_play = _bind_method(window, namespace, "start_this_play")
+    window._load_import_audio = _bind_method(window, namespace, "_load_import_audio")
+    window.import_audio_and_analyze = _bind_method(window, namespace, "import_audio_and_analyze")
     window.judge_play_and_record = _bind_method(window, namespace, "judge_play_and_record")
     window._should_use_streaming_recording = _bind_method(window, namespace, "_should_use_streaming_recording")
     window._start_streaming_recording = _bind_method(window, namespace, "_start_streaming_recording")
@@ -560,6 +569,149 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._on_streaming_complete = _bind_method(window, namespace, "_on_streaming_complete")
     window.eventFilter = _bind_method(window, namespace, "eventFilter")
     return window
+
+
+def test_import_audio_uses_librosa_primary_and_updates_analysis_data():
+    namespace = _build_method_namespace()
+    namespace["MessageBox"].warnings.clear()
+    namespace["QFileDialog"] = types.SimpleNamespace(getOpenFileName=lambda *args, **kwargs: ("primary.wav", ""))
+    librosa_calls = []
+
+    def fake_load(file_path, sr=None, mono=True):
+        librosa_calls.append((file_path, sr, mono))
+        return np.array([[0.1, 0.2, 0.3], [1.1, 1.2, 1.3]], dtype=np.float32), sr
+
+    namespace["librosa"] = types.SimpleNamespace(load=fake_load)
+    window = _build_fake_window(namespace, use_streaming=True, mode="IMPORT_AUDIO")
+    window.sequence_config[0]["seq1"]["acq"]["detail"]["sample_rate"] = 44100
+
+    window.import_audio_and_analyze()
+
+    assert librosa_calls == [("primary.wav", 44100, False)]
+    np.testing.assert_allclose(
+        window.data_struct.store_wave_data_multi,
+        np.array([[0.1, 1.1], [0.2, 1.2], [0.3, 1.3]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(window.data_struct.store_wave_data, np.array([0.6, 0.7, 0.8], dtype=np.float32))
+    assert window.data_struct.sample_rate == 44100
+    assert window.data_struct.audio_lenth == 3
+    assert window.data_btn.enabled is True
+    assert window.plot_calls
+    assert namespace["MessageBox"].warnings == []
+
+
+def test_import_audio_falls_back_to_soundfile_when_librosa_fails(monkeypatch):
+    import soundfile
+
+    namespace = _build_method_namespace()
+    namespace["MessageBox"].warnings.clear()
+    namespace["QFileDialog"] = types.SimpleNamespace(getOpenFileName=lambda *args, **kwargs: ("fallback.wav", ""))
+    namespace["librosa"] = types.SimpleNamespace(
+        load=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("librosa backend missing"))
+    )
+    monkeypatch.setattr(
+        soundfile,
+        "read",
+        lambda *args, **kwargs: (
+            np.array([[0.1, 1.1], [0.2, 1.2], [0.3, 1.3]], dtype=np.float32),
+            48000,
+        ),
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="IMPORT_AUDIO")
+    window.sequence_config[0]["seq1"]["acq"]["detail"]["sample_rate"] = 44100
+
+    window.import_audio_and_analyze()
+
+    np.testing.assert_allclose(
+        window.data_struct.store_wave_data_multi,
+        np.array([[0.1, 1.1], [0.2, 1.2], [0.3, 1.3]], dtype=np.float32),
+    )
+    assert window.data_struct.sample_rate == 48000
+    assert window.data_struct.audio_lenth == 3
+    assert any("soundfile兜底" in message for level, message in window.default_logger.messages if level == "warning")
+    assert namespace["MessageBox"].warnings == []
+
+
+def test_import_audio_falls_back_to_scipy_when_soundfile_rejects_wav_chunk(monkeypatch):
+    import soundfile
+    from scipy.io import wavfile
+
+    namespace = _build_method_namespace()
+    namespace["MessageBox"].warnings.clear()
+    namespace["QFileDialog"] = types.SimpleNamespace(getOpenFileName=lambda *args, **kwargs: ("peak_chunk.wav", ""))
+    namespace["librosa"] = types.SimpleNamespace(
+        load=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("librosa backend missing"))
+    )
+    monkeypatch.setattr(
+        soundfile,
+        "read",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Bad 'PEAK' chunk.")),
+    )
+    monkeypatch.setattr(
+        wavfile,
+        "read",
+        lambda *args, **kwargs: (
+            48000,
+            np.array(
+                [
+                    [0, 32767],
+                    [-32768, 16384],
+                    [8192, -8192],
+                ],
+                dtype=np.int16,
+            ),
+        ),
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="IMPORT_AUDIO")
+
+    window.import_audio_and_analyze()
+
+    assert window.data_struct.store_wave_data_multi.dtype == np.float32
+    np.testing.assert_allclose(
+        window.data_struct.store_wave_data_multi,
+        np.array(
+            [
+                [0.0, 32767.0 / 32768.0],
+                [-1.0, 0.5],
+                [0.25, -0.25],
+            ],
+            dtype=np.float32,
+        ),
+    )
+    assert window.data_struct.sample_rate == 48000
+    assert window.data_struct.audio_lenth == 3
+    assert any("scipy兜底" in message for level, message in window.default_logger.messages if level == "warning")
+    assert namespace["MessageBox"].warnings == []
+
+
+def test_import_audio_warns_when_librosa_and_soundfile_both_fail(monkeypatch):
+    import soundfile
+    from scipy.io import wavfile
+
+    namespace = _build_method_namespace()
+    namespace["MessageBox"].warnings.clear()
+    namespace["QFileDialog"] = types.SimpleNamespace(getOpenFileName=lambda *args, **kwargs: ("bad.wav", ""))
+    namespace["librosa"] = types.SimpleNamespace(
+        load=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("librosa failed"))
+    )
+    monkeypatch.setattr(
+        soundfile,
+        "read",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("soundfile failed")),
+    )
+    monkeypatch.setattr(
+        wavfile,
+        "read",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("scipy failed")),
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="IMPORT_AUDIO")
+
+    window.import_audio_and_analyze()
+
+    assert namespace["MessageBox"].warnings
+    assert "导入音频失败" in namespace["MessageBox"].warnings[-1][0][2]
+    assert window.data_btn.enabled is None
+    assert window.plot_calls == []
 
 
 def test_streaming_mode_keeps_sn_locked_until_completion():

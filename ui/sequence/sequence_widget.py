@@ -6,6 +6,7 @@ import threading
 import weakref
 from datetime import datetime
 import time
+import warnings
 
 import librosa
 import numpy as np
@@ -1389,6 +1390,58 @@ class SequenceWindow(QWidget):
         self.clicked_player_flag = True
         self.start_this_play(label)
 
+    def _load_import_audio(self, file_path, sample_rate):
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="PySoundFile failed. Trying audioread instead.")
+                warnings.filterwarnings("ignore", category=FutureWarning, module=r"librosa\.core\.audio")
+                audio_multi, loaded_sample_rate = librosa.load(file_path, sr=sample_rate, mono=False)
+            audio_multi = np.asarray(audio_multi, dtype=np.float32)
+            if audio_multi.ndim == 1:
+                audio_multi = audio_multi.reshape(1, -1)
+            if audio_multi.ndim != 2:
+                raise ValueError(f"不支持的音频形状: {audio_multi.shape}")
+            return audio_multi.T, int(loaded_sample_rate)
+        except Exception as librosa_error:
+            try:
+                import soundfile as sf
+
+                audio_multi, loaded_sample_rate = sf.read(file_path, dtype="float32", always_2d=True)
+                audio_multi = np.asarray(audio_multi, dtype=np.float32)
+                if audio_multi.ndim != 2:
+                    raise ValueError(f"不支持的音频形状: {audio_multi.shape}")
+                if hasattr(self, "default_logger"):
+                    self.default_logger.warning(f"librosa导入音频失败，已使用soundfile兜底: {librosa_error}")
+                return audio_multi, int(loaded_sample_rate)
+            except Exception as soundfile_error:
+                try:
+                    from scipy.io import wavfile
+
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=wavfile.WavFileWarning)
+                        loaded_sample_rate, audio_multi = wavfile.read(file_path)
+                    audio_multi = np.asarray(audio_multi)
+                    if audio_multi.ndim == 1:
+                        audio_multi = audio_multi.reshape(-1, 1)
+                    if audio_multi.ndim != 2:
+                        raise ValueError(f"不支持的音频形状: {audio_multi.shape}")
+                    if np.issubdtype(audio_multi.dtype, np.integer):
+                        max_abs = float(max(abs(np.iinfo(audio_multi.dtype).min), np.iinfo(audio_multi.dtype).max))
+                        audio_multi = audio_multi.astype(np.float32) / max_abs
+                    else:
+                        audio_multi = audio_multi.astype(np.float32, copy=False)
+                    if hasattr(self, "default_logger"):
+                        self.default_logger.warning(
+                            f"soundfile导入音频失败，已使用scipy兜底: {soundfile_error}"
+                        )
+                    return audio_multi, int(loaded_sample_rate)
+                except Exception as scipy_error:
+                    raise RuntimeError(
+                        f"librosa错误: {librosa_error}; "
+                        f"soundfile错误: {soundfile_error}; "
+                        f"scipy错误: {scipy_error}"
+                    ) from scipy_error
+
     def import_audio_and_analyze(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1407,19 +1460,20 @@ class SequenceWindow(QWidget):
             pass
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         sample_rate = acq_detail.get("sample_rate", 44100)
-        audio_multi, _ = librosa.load(file_path, sr=sample_rate, mono=False)
-        audio_multi = np.asarray(audio_multi, dtype=np.float32)
-        if audio_multi.ndim == 1:
-            audio_multi = audio_multi.reshape(1, -1)
-        audio_multi = audio_multi.T
+        try:
+            audio_multi, loaded_sample_rate = self._load_import_audio(file_path, sample_rate)
+        except Exception as e:
+            if hasattr(self, "default_logger"):
+                self.default_logger.error(f"import_audio_failed: {e}")
+            MessageBox.warning(self, "提示", f"导入音频失败：{e}")
+            return
         self.data_struct.store_wave_data_multi = audio_multi
 
         # not recommended for metadata analysis, as it may cause inaccurate data
         self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(np.float32, copy=False)
 
-        self.data_struct.sample_rate = sample_rate
-        audio_y, _ = librosa.load(file_path, sr=None)
-        self.data_struct.audio_lenth = len(audio_y)
+        self.data_struct.sample_rate = loaded_sample_rate
+        self.data_struct.audio_lenth = len(audio_multi)
         self._clear_plot_area()
         self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
         self.data_btn.setEnabled(True)
