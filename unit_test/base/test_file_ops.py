@@ -34,6 +34,18 @@ def test_get_zip_arcname_categorizes_audio_paths():
     assert result == os.path.join("OK", "a.wav")
 
 
+def test_ensure_directory_exists_creates_missing_parent(tmp_path):
+    target = tmp_path / "missing" / "nested" / "out.txt"
+
+    FileOps.ensure_directory_exists(target)
+
+    assert target.parent.is_dir()
+
+
+def test_ensure_directory_exists_accepts_current_directory_path():
+    FileOps.ensure_directory_exists("out.txt")
+
+
 def test_get_zip_arcname_keeps_database_at_root():
     base_dir = os.path.abspath("project")
     path = os.path.join(base_dir, "database", "audio_data.db")
@@ -154,3 +166,16 @@ def test_create_zip_with_files_records_missing_file_failure():
         assert len(failures) == 1
         assert failures[0][0] == missing_path
         assert isinstance(failures[0][1], FileNotFoundError)
+
+
+def test_create_zip_with_files_creates_missing_output_parent(tmp_path):
+    source_path = tmp_path / "OK" / "exists.wav"
+    zip_path = tmp_path / "missing" / "package" / "out.zip"
+    source_path.parent.mkdir()
+    source_path.write_bytes(b"audio")
+
+    FileOps.create_zip_with_files([str(source_path)], str(zip_path), base_dir=str(tmp_path))
+
+    assert zip_path.is_file()
+    with ZipFile(zip_path, "r") as zip_file:
+        assert "OK/exists.wav" in zip_file.namelist()

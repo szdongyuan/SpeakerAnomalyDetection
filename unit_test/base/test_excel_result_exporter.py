@@ -3,7 +3,7 @@ import tempfile
 
 import numpy as np
 
-from base.excel_result_exporter import _extract_curve_xy, resolve_excel_output_path
+from base.excel_result_exporter import _extract_curve_xy, export_analysis_to_excel, resolve_excel_output_path
 
 
 def test_extract_curve_xy_prefers_raw_keys_when_present():
@@ -61,4 +61,34 @@ def test_resolve_excel_output_path_uses_empty_model_placeholder_dir_when_enabled
         path = resolve_excel_output_path(cfg, product_model="")
         assert path == os.path.join(tmpdir, "空型号", "analysis_results.xlsx")
         assert os.path.isdir(os.path.join(tmpdir, "空型号"))
+
+
+def test_export_analysis_to_excel_creates_missing_explicit_parent(tmp_path):
+    file_path = tmp_path / "missing" / "excel" / "analysis.xlsx"
+    cfg = {
+        "enabled": True,
+        "save_items": ["AI结果"],
+        "lock_files": False,
+    }
+
+    result = export_analysis_to_excel(
+        cfg,
+        sn="SN001",
+        date_text="2026-06-10 10:00:00",
+        analysis_items_data={
+            "AI结果": {
+                "type": "AI",
+                "label": "OK",
+                "ok_score": 0.91,
+                "ng_score": 0.09,
+                "model_name": "demo",
+            }
+        },
+        analysis_config={},
+        analysis_result_dict={},
+        file_path=str(file_path),
+    )
+
+    assert result.ok is True
+    assert file_path.is_file()
 

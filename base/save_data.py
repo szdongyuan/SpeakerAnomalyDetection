@@ -4,12 +4,14 @@ import os
 from datetime import datetime
 from scipy.io import wavfile
 
+from base.file_ops import FileOps
 from consts.running_consts import DEFAULT_DIR
 
 
 def save_audio_simple(save_path, audio, sr=44100):
     # we assume audio is mono channel
     audio = audio.astype("float32")
+    FileOps.ensure_directory_exists(save_path)
     wavfile.write(save_path, sr, audio)
 
 

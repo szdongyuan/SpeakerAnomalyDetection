@@ -9,6 +9,7 @@ from re import _parser as re_parser
 
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR, SEQUENCE_CONFIG_REGISTRY_PATH, SN_REGEX_RULES_JSON_PATH
+from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.stimulus_signal.methods import normalize_stimulus_method
 
@@ -589,6 +590,7 @@ class LoadUiConfig(object):
         file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
 
         try:
+            FileOps.ensure_directory_exists(file_path)
             with open(file_path, "w") as f:
                 f.write(f"ip = {ip}\n")
                 f.write(f"port = {port}\n")
@@ -621,6 +623,7 @@ class ConfigManager(object):
         else:
             self.config[type] = config_data
         try:
+            FileOps.ensure_directory_exists(self.config_file)
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=4)
                 self.default_logger.info(f"The config info for {type} analysis has been saved to {self.config_file}.")
@@ -633,6 +636,10 @@ class ConfigManager(object):
         default_config_file = DEFAULT_DIR + "ui/ui_config/analysis_default_config.json"
         default_config = {}
         try:
+            FileOps.ensure_directory_exists(default_config_file)
+            if not os.path.exists(default_config_file):
+                with open(default_config_file, "w", encoding="utf-8") as f:
+                    json.dump(default_config, f, indent=4)
             with open(default_config_file, "r", encoding="utf-8") as f:
                 default_config = json.load(f)
                 if type in default_config:
