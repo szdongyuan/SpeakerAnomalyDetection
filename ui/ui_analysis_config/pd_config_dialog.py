@@ -1,6 +1,5 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QButtonGroup
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
@@ -12,24 +11,21 @@ from ui.custom_ui_widget.widgets import (
     LineEdit,
     SpinBox,
     DoubleSpinBox,
-    RadioButton,
     CheckBox,
 )
+from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, TimeSmoothingWidget
 from ui.ui_src import ui_resources
 
 
-class PDConfigWindow(QDialog):
+class PDConfigWindow(AnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
 
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(940, 520)
         self.resize(1000, 560)
 
@@ -102,55 +98,17 @@ class PDConfigWindow(QDialog):
         self.spin_filter_order.valueChanged.connect(lambda _: self.get_default_config())
         row_filter_order.addWidget(self.spin_filter_order)
 
-        # smooth (two rows: main parameters + algorithm)
-        row_smooth_main = QHBoxLayout()
-        self.chk_smooth = CheckBox("平滑")
-        self.chk_smooth.setChecked(self.load_config.get("smooth_enabled", False))
-        self.chk_smooth.stateChanged.connect(self.get_default_config)
-        row_smooth_main.addWidget(self.chk_smooth)
-        row_smooth_main.addStretch()
-        row_smooth_main.addWidget(Label("单位:"))
-        self.combo_smooth_unit = ComboBox()
-        self.combo_smooth_unit.addItems(["时间(秒)", "格点数"])
-        self.combo_smooth_unit.setCurrentIndex(0 if self.load_config.get("smooth_unit", "time") == "time" else 1)
-        self.combo_smooth_unit.currentIndexChanged.connect(
-            lambda _: (self._update_smooth_unit_enabled(), self.get_default_config())
+        self.smoothing_widget = TimeSmoothingWidget(
+            self.load_config,
+            defaults={"enabled": False, "unit": "time", "time_sec": 0.02, "points": 0, "algo": 1},
+            min_points=0,
+            parent=self,
         )
-        row_smooth_main.addWidget(self.combo_smooth_unit)
-        self.spin_smooth_time = DoubleSpinBox()
-        self.spin_smooth_time.setRange(0.00, 999.00)
-        self.spin_smooth_time.setDecimals(4)
-        self.spin_smooth_time.setSingleStep(0.01)
-        self.spin_smooth_time.setValue(float(self.load_config.get("smooth_time_sec", 0.02)))
-        self.spin_smooth_time.valueChanged.connect(lambda _: self.get_default_config())
-        row_smooth_main.addWidget(self.spin_smooth_time)
-        self.spin_smooth_points = SpinBox()
-        self.spin_smooth_points.setRange(1, 99999)
-        self.spin_smooth_points.setValue(int(self.load_config.get("smooth_points", 0)))
-        self.spin_smooth_points.valueChanged.connect(lambda _: self.get_default_config())
-        row_smooth_main.addWidget(self.spin_smooth_points)
-
-        row_smooth_algo = QHBoxLayout()
-        row_smooth_algo.addStretch()
-        row_smooth_algo.addWidget(Label("平滑算法:"))
-        self.group_smooth_algo = QButtonGroup(self)
-        self.rb_algo1 = RadioButton("平均")
-        self.rb_algo2 = RadioButton("Golay")
-        self.rb_algo3 = RadioButton("Gaussian")
-        row_smooth_algo.addWidget(self.rb_algo1)
-        row_smooth_algo.addWidget(self.rb_algo2)
-        row_smooth_algo.addWidget(self.rb_algo3)
-        self.group_smooth_algo.addButton(self.rb_algo1, 1)
-        self.group_smooth_algo.addButton(self.rb_algo2, 2)
-        self.group_smooth_algo.addButton(self.rb_algo3, 3)
-        algo_saved = int(self.load_config.get("smooth_algo", 1))
-        if algo_saved == 2:
-            self.rb_algo2.setChecked(True)
-        elif algo_saved == 3:
-            self.rb_algo3.setChecked(True)
-        else:
-            self.rb_algo1.setChecked(True)
-        self.group_smooth_algo.buttonClicked.connect(lambda _: self.get_default_config())
+        self.smoothing_widget.enabled_checkbox.stateChanged.connect(self.get_default_config)
+        self.smoothing_widget.unit_combo.currentIndexChanged.connect(lambda _: self.get_default_config())
+        self.smoothing_widget.time_spin.valueChanged.connect(lambda _: self.get_default_config())
+        self.smoothing_widget.points_spin.valueChanged.connect(lambda _: self.get_default_config())
+        self.smoothing_widget.algo_group.buttonClicked.connect(lambda _: self.get_default_config())
 
         # SPL calculation window length (no check box, default enabled; support time/grid point number)
         row_splwin = QHBoxLayout()
@@ -183,13 +141,11 @@ class PDConfigWindow(QDialog):
         vbox.addLayout(row_filter_order)
         # place the SPL calculation window length between the filter and smooth
         vbox.addLayout(row_splwin)
-        vbox.addLayout(row_smooth_main)
-        vbox.addLayout(row_smooth_algo)
+        vbox.addWidget(self.smoothing_widget)
         vbox.setSpacing(8)
         vbox.setContentsMargins(10, 12, 10, 12)
         group_box.setLayout(vbox)
         # initialize the display state
-        self._update_smooth_unit_enabled()
         self._update_spl_window_unit_enabled()
         return group_box
 
@@ -441,15 +397,7 @@ class PDConfigWindow(QDialog):
         self.adjustSize()
 
     def create_btn_layout(self):
-        btn_layout = QHBoxLayout()
-        default_btn = PushButton(" 设为默认 ")
-        ok_btn = PushButton(" 确  认 ")
-        default_btn.clicked.connect(self.on_click_default_btn)
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-        return btn_layout
+        return self.create_standard_button_layout(self.on_click_default_btn, self.on_click_ok_btn)
 
     def get_default_config(self):
         default_config = {
@@ -457,10 +405,6 @@ class PDConfigWindow(QDialog):
             "filter_enabled": self.chk_filter.isChecked(),
             "filter_ranges": self.edit_filter_ranges.text().strip(),
             "filter_type": "bandpass" if self.combo_filter_type.currentIndex() == 0 else "bandstop",
-            "smooth_enabled": self.chk_smooth.isChecked(),
-            "smooth_unit": "time" if self.combo_smooth_unit.currentIndex() == 0 else "points",
-            "smooth_time_sec": float(self.spin_smooth_time.value()),
-            "smooth_points": int(self.spin_smooth_points.value()),
             # based parameter
             "peak_count_enabled": self.chk_peak_count.isChecked(),
             "peak_count": int(self.spin_peak_count.value()),
@@ -483,7 +427,6 @@ class PDConfigWindow(QDialog):
             # advanced mode
             "advanced_mode": bool(getattr(self, "advanced_visible", False)),
             "filter_order": int(self.spin_filter_order.value()),
-            "smooth_algo": int(self.group_smooth_algo.checkedId() or 1),
             "convex_unit": (
                 "audio"
                 if self.combo_convex_unit.currentIndex() == 0
@@ -498,6 +441,7 @@ class PDConfigWindow(QDialog):
             "test_peak_op": self.combo_test_peak_op.currentText(),
             "test_peak_value": int(self.spin_test_peak_value.value()),
         }
+        default_config.update(self.smoothing_widget.get_config())
         return default_config
 
     def _update_duration_ref_unit(self):

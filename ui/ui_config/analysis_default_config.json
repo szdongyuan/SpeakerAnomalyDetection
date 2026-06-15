@@ -1,0 +1,235 @@
+{
+    "SPL": {
+        "smooth_checked": true,
+        "limit_checked": false,
+        "limit_data": null,
+        "weighting": "Z",
+        "analysis_channel": 0
+    },
+    "SPLF": {
+        "splf_calc_mode": "fundamental",
+        "octave_smoothing": 0,
+        "golden_sample_checked": false,
+        "limit_checked": false,
+        "limit_data": null,
+        "weighting": "Z",
+        "analysis_channel": 0
+    },
+    "Spec": {
+        "n_fft": 2048,
+        "hop_length": 256,
+        "window_func": "hann",
+        "color_map": "viridis",
+        "freq_scale_type": "linear",
+        "top_limit": 70,
+        "bottom_limit": 50,
+        "custom_limit": false,
+        "analysis_channel": 0
+    },
+    "RSC": {
+        "reference_source_path": "",
+        "reference_data_path": "",
+        "reference_data_state": "not_generated",
+        "reference_data_last_generated_at": null,
+        "use_custom_band": false,
+        "start_freq_hz": 500,
+        "end_freq_hz": 8000,
+        "highlight_analysis_band": true,
+        "enable_threshold_judgment": true,
+        "lower_offset_db": -3.0,
+        "upper_offset_db": 3.0,
+        "channel_labels": {},
+        "window": "hann",
+        "nperseg": 4096,
+        "overlap_ratio": 0.5,
+        "smoothing": 0
+    },
+    "FR": {
+        "octave_smoothing": 0,
+        "golden_sample_checked": false,
+        "limit_checked": false,
+        "limit_data": null
+    },
+    "FBA": {
+        "band_strategy": "1/3 倍频程",
+        "f_min": 20,
+        "f_max": 20000,
+        "bandwidth": 100,
+        "weighting": "A",
+        "analysis_channel": 0,
+        "limit_checked": false,
+        "limit_data": null
+    },
+    "HD": {
+        "selected_labels": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+        ],
+        "all_checked": false,
+        "golden_sample_checked": false,
+        "limit_checked": false,
+        "limit_data": null
+    },
+    "RB": {
+        "selected_labels": [
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25
+        ],
+        "all_checked": false,
+        "golden_sample_checked": false,
+        "limit_checked": false,
+        "limit_data": null
+    },
+    "PRB": {
+        "prb_method": "sc",
+        "masking_config": {
+            "sc_metric": "totalnl_x_ehs"
+        },
+        "golden_sample_checked": false,
+        "limit_checked": false,
+        "limit_data": null
+    },
+    "LP": {
+        "trigger_threshold": 22,
+        "hysterests_threshold": 3,
+        "min_check_duration": 2,
+        "max_check_duration": 20,
+        "loose_particle_num": 3,
+        "cutoff_freq": 2007,
+        "analysis_channel": 0
+    },
+    "PD": {
+        "filter_enabled": false,
+        "filter_ranges": "",
+        "filter_type": "bandpass",
+        "filter_order": 4,
+        "smooth_enabled": false,
+        "smooth_unit": "time",
+        "smooth_time_sec": 0.02,
+        "smooth_points": 0,
+        "smooth_algo": 1,
+        "spl_window_unit": "time",
+        "spl_window_time_sec": 0.05,
+        "spl_window_points": 0,
+        "peak_count_enabled": true,
+        "peak_count": 3,
+        "peak_size_enabled": true,
+        "peak_size_unit": "db",
+        "peak_min_value": 100.0,
+        "peak_slope_enabled": false,
+        "peak_slope_unit": "db",
+        "peak_min_slope": 100.0,
+        "nms_enabled": false,
+        "nms_unit": "time",
+        "nms_time_sec": 0.5,
+        "nms_points": 0,
+        "duration_enabled": false,
+        "duration_min": 0.0,
+        "duration_max": 0.0,
+        "advanced_mode": false,
+        "convex_unit": "audio",
+        "convex_audio_ratio": 1.0,
+        "convex_points": 1024,
+        "convex_time_sec": 0.0,
+        "duration_ref_unit": "peak",
+        "duration_ref_value": 0.5,
+        "test_peak_op": "≥",
+        "test_peak_value": 3
+    },
+    "PM": {
+        "pattern_list": [],
+        "sample_rate": 44100,
+        "feature_type": "mfcc",
+        "feature_params": {
+            "n_fft": 256,
+            "hop_length": 64,
+            "n_mels": 128,
+            "n_mfcc": 20
+        },
+        "apply_filter": false,
+        "filter_range_hz": [
+            0,
+            4000
+        ],
+        "algorithm": "dtw",
+        "similarity_metric": "cosine",
+        "threshold_strategy": "fixed_threshold",
+        "threshold_value": 0.85
+    },
+    "ED": {
+        "type": "ED",
+        "head": {
+            "type": "PD",
+            "config": {}
+        },
+        "tail": {
+            "type": "PM",
+            "config": {}
+        },
+        "auto_equal_length": false,
+        "left_grid": 0,
+        "right_grid": 0,
+        "pass_condition": {
+            "n1": 1,
+            "n2": 1
+        }
+    },
+    "AI": {
+        "analyse_model_name": "",
+        "analysis_channel": 0
+    },
+    "Excel": {
+        "enabled": true,
+        "save_dir": null,
+        "file_base": "analysis_results",
+        "add_date": true,
+        "add_model_dir": false,
+        "lock_files": true,
+        "date_format": "%Y%m%d",
+        "max_points": 2000,
+        "save_items": [],
+        "save_mes_enabled": false,
+        "mes_file_base": "D:/dataMES",
+        "mes_file_name": "Results"
+    },
+    "FFT": {
+        "n_fft": 4096,
+        "window": "hann",
+        "overlap_ratio": 0.5,
+        "weighting": "Z",
+        "x_axis_scale": "log",
+        "focus_range_enabled": true,
+        "focus_min_hz": 100,
+        "focus_max_hz": 20000,
+        "baseline_file_path": "",
+        "baseline_display_mode": "overlay",
+        "baseline_smooth_third_octave": false,
+        "dominant_tone_enabled": false,
+        "dominant_tone_intervals_text": "",
+        "dominant_tone_min_prominence_db": 3.0,
+        "dominant_tone_use_display_curve": true,
+        "limit_checked": false,
+        "limit_data": null
+    }
+}

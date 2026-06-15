@@ -5,69 +5,35 @@ SPL (Sound Pressure Level) 分析配置对话框
 import re
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, Label, PushButton, ComboBox, RadioButton
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, RadioButton
+from ui.ui_analysis_config.common_widgets import (
+    AnalysisConfigDialogBase,
+    ChannelSelectorWidget,
+    GoldenSampleWidget,
+    OctaveSmoothingSelectorWidget,
+    WeightingSelectorWidget,
+)
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.ui_src import ui_resources
 
 
-class SplConfigWindow(QDialog):
+class SplConfigWindow(AnalysisConfigDialogBase):
     """SPL 分析配置对话框"""
 
-    OCTAVE_SMOOTHING_LABELS = {
-        "不平滑": 0,
-        "1/1 Oct": 1,
-        "1/3 Oct": 3,
-        "1/6 Oct": 6,
-        "1/12 Oct": 12,
-        "1/24 Oct": 24,
-        "1/48 Oct": 48,
-    }
-
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.load_config = self.config_manager.load_config().get(model_type, {})
         self.model_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
         self.show_channel_selector = available_channels is not None
-        self.available_channels = self._normalize_available_channels(available_channels)
+        self.available_channels = available_channels
         self.init_ui()
 
-    @staticmethod
-    def _normalize_available_channels(available_channels):
-        channels = []
-        try:
-            channels = sorted({int(ch) for ch in (available_channels or [])})
-        except Exception:
-            channels = []
-        if not channels:
-            channels = [0]
-        return channels
-
-    def _create_channel_layout(self):
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(Label("通道:"))
-        self.channel_combo_box = ComboBox()
-        for ch in self.available_channels:
-            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
-        saved_channel = self.load_config.get("analysis_channel", None)
-        if saved_channel is None or int(saved_channel) not in self.available_channels:
-            saved_channel = int(self.available_channels[0])
-        idx = self.channel_combo_box.findData(int(saved_channel))
-        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
-        channel_layout.addWidget(self.channel_combo_box)
-        channel_layout.addStretch()
-        return channel_layout
-
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         # 默认高度偏小会把阈值绘图区域压缩得很矮，导致“显示不完整”的观感
         height = 570 if self.model_type == "SPLF" else 430
         self.setMinimumSize(380, height)
@@ -100,24 +66,12 @@ class SplConfigWindow(QDialog):
             mode_layout.addWidget(self.radio_total)
             self.splf_mode_group_box.setLayout(mode_layout)
 
-            # SPLF: octave smoothing dropdown (frequency-domain)
-            self.smooth_combo_box = ComboBox()
-            self.smooth_combo_box.addItems(list(self.OCTAVE_SMOOTHING_LABELS.keys()))
-            selected_oct = self.load_config.get("octave_smoothing", None)
-            if selected_oct is None:
-                selected_oct = 6 if self.load_config.get("smooth_checked", False) else 0
-            selected_oct = int(selected_oct)
-            selected_label = next(
-                (k for k, v in self.OCTAVE_SMOOTHING_LABELS.items() if v == selected_oct),
-                "不平滑",
-            )
-            self.smooth_combo_box.setCurrentText(selected_label)
+            self.smoothing_selector = OctaveSmoothingSelectorWidget(self.load_config, parent=self)
 
         # SPLF only: golden sample checkbox (placed above threshold widget)
         self.golden_chk_box = None
         if self.model_type == "SPLF":
-            self.golden_chk_box = CheckBox("使用黄金样本")
-            self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+            self.golden_chk_box = GoldenSampleWidget(self.load_config, self)
 
         self.threshold_widget = ThresholdConfigWidget(
             parent=self,
@@ -125,35 +79,17 @@ class SplConfigWindow(QDialog):
             model_type=self.model_type,
         )
 
-        weighting_label = Label("计权方式:")
-        self.weighting_combo = ComboBox()
-        self.weighting_combo.addItems(["Z（None）", "A", "B", "C", "D"])
-        weighting_value = self.load_config.get("weighting", "Z（None）")
-        if weighting_value in ["None", "Z"]:
-            weighting_value = "Z（None）"
-        index = self.weighting_combo.findText(weighting_value)
-        if index >= 0:
-            self.weighting_combo.setCurrentIndex(index)
-        else:
-            self.weighting_combo.setCurrentIndex(0)
-
-        threshold_weighting_layout = QHBoxLayout()
-        threshold_weighting_layout.addWidget(weighting_label)
-        threshold_weighting_layout.addWidget(self.weighting_combo)
-        threshold_weighting_layout.addStretch()
+        self.weighting_selector = WeightingSelectorWidget(self.load_config, parent=self)
 
         btn_layout = self.create_btn()
 
         if self.show_channel_selector:
-            layout.addLayout(self._create_channel_layout())
-        layout.addLayout(threshold_weighting_layout)
+            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
+            layout.addWidget(self.channel_selector)
+        layout.addWidget(self.weighting_selector)
         if self.splf_mode_group_box is not None:
             layout.addWidget(self.splf_mode_group_box)
-
-            smooth_layout = QHBoxLayout()
-            smooth_layout.addWidget(Label("平滑"))
-            smooth_layout.addWidget(self.smooth_combo_box)
-            layout.addLayout(smooth_layout)
+            layout.addWidget(self.smoothing_selector)
         elif self.smooth_chk_box is not None:
             layout.addWidget(self.smooth_chk_box)
         if self.golden_chk_box is not None:
@@ -165,15 +101,7 @@ class SplConfigWindow(QDialog):
         self.setLayout(layout)
 
     def create_btn(self):
-        btn_layout = QHBoxLayout()
-        default_btn = PushButton(" 设为默认 ")
-        default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = PushButton(" 确  认 ")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-        return btn_layout
+        return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
 
     def get_default_config(self):
         """获取配置数据"""
@@ -185,18 +113,13 @@ class SplConfigWindow(QDialog):
             if hasattr(self, "radio_total") and self.radio_total.isChecked():
                 calc_mode = "total"
             config["splf_calc_mode"] = calc_mode
-            smooth_label = self.smooth_combo_box.currentText()
-            config["octave_smoothing"] = int(self.OCTAVE_SMOOTHING_LABELS.get(smooth_label, 0))
+            config.update(self.smoothing_selector.get_config())
             if self.golden_chk_box is not None:
-                config["golden_sample_checked"] = self.golden_chk_box.isChecked()
+                config.update(self.golden_chk_box.get_config())
         config.update(self.threshold_widget.get_config())
-        weighting_value = self.weighting_combo.currentText()
-        if weighting_value == "Z（None）":
-            config["weighting"] = "Z"
-        else:
-            config["weighting"] = weighting_value
-        if self.show_channel_selector and hasattr(self, "channel_combo_box"):
-            config["analysis_channel"] = int(self.channel_combo_box.currentData())
+        config.update(self.weighting_selector.get_config())
+        if self.show_channel_selector and hasattr(self, "channel_selector"):
+            config.update(self.channel_selector.get_config())
         else:
             config["analysis_channel"] = int(self.load_config.get("analysis_channel", 0) or 0)
         return config

@@ -6,16 +6,17 @@ PRB 使用固定谐波范围 (2阶-35阶) 结合 SoundCheck/Listen (SC) 心理�
 """
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, GoldenSampleWidget
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.custom_ui_widget.widgets import GroupBox, Label, PushButton, ComboBox, CheckBox
+from ui.custom_ui_widget.widgets import GroupBox, Label, ComboBox
 from ui.ui_src import ui_resources
 
-class PerceptualRbConfigWindow(QDialog):
+
+class PerceptualRbConfigWindow(AnalysisConfigDialogBase):
     """
     Perceptual Rub & Buzz (PRB) 分析配置对话框
 
@@ -24,16 +25,13 @@ class PerceptualRbConfigWindow(QDialog):
     """
 
     def __init__(self, config_manager, model_type):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {}) if self.config_manager else {}
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         # 默认高度偏小会把阈值绘图区域压缩得很矮
         self.setMinimumSize(380, 420)
         self.resize(400, 480)
@@ -69,9 +67,7 @@ class PerceptualRbConfigWindow(QDialog):
         group_layout.addWidget(self.sc_metric_combo)
         group.setLayout(group_layout)
 
-        # Golden sample checkbox (placed above threshold widget)
-        self.golden_chk_box = CheckBox("使用黄金样本")
-        self.golden_chk_box.setChecked(self.load_config.get("golden_sample_checked", False))
+        self.golden_chk_box = GoldenSampleWidget(self.load_config, self)
 
         # 阈值配置组件
         self.threshold_widget = ThresholdConfigWidget(
@@ -80,21 +76,11 @@ class PerceptualRbConfigWindow(QDialog):
             model_type=self.model_type,
         )
 
-        # 按钮布局
-        btn_layout = QHBoxLayout()
-        default_btn = PushButton(" 设为默认 ")
-        default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = PushButton(" 确  认 ")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-
         root_layout.addWidget(group)
         root_layout.addWidget(self.golden_chk_box)
         root_layout.addWidget(self.threshold_widget)
         root_layout.addStretch()
-        root_layout.addLayout(btn_layout)
+        root_layout.addLayout(self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn))
         self.setLayout(root_layout)
 
 
@@ -113,7 +99,7 @@ class PerceptualRbConfigWindow(QDialog):
         masking_config["sc_metric"] = metric
 
         config = {"prb_method": "sc", "masking_config": masking_config}
-        config["golden_sample_checked"] = self.golden_chk_box.isChecked()
+        config.update(self.golden_chk_box.get_config())
         config.update(self.threshold_widget.get_config())
         return config
 
