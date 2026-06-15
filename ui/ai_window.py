@@ -462,6 +462,7 @@ class AiWindow(QDialog):
         - mode (str): Mode identifier, can be 'train' for training data path or 'test' for test data path. Default is 'train'.
         """
         file_path = DEFAULT_DIR + "ui/ui_config/%s_data_path.txt" % mode
+        FileOps.ensure_directory_exists(file_path)
         with open(file_path, "w") as f:
             f.write(path)
 
@@ -707,9 +708,8 @@ class BaseModel(QWidget):
         a text file within that directory.
         """
         dir_path = DEFAULT_DIR + "ui/ui_config"
-        if not os.path.exists(dir_path):
-            os.mkdir(dir_path)
         file_path = dir_path + "/" + "model_path.txt"
+        FileOps.ensure_directory_exists(file_path)
         with open(file_path, "w") as f:
             model_path = FileOps.get_relative_path(self.model_path, DEFAULT_DIR)
             f.write(model_path)

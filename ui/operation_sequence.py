@@ -12,6 +12,7 @@ from time import time
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
+from base.file_ops import FileOps
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
@@ -484,6 +485,7 @@ class AnalysisModelSelect(QDialog):
         }
 
         try:
+            FileOps.ensure_directory_exists(json_path)
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception as e:

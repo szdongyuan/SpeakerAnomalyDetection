@@ -55,9 +55,11 @@ class FileOps(object):
                 The save path of audio signals.
         Returns:
         """
-        directory = os.path.dirname(save_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
+        if not save_path:
+            return
+        directory = os.path.dirname(os.fspath(save_path))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
 
     @staticmethod
     def copy_with_selected_wav(audio_data_path_list: list, output_dir: str = None):
@@ -129,6 +131,7 @@ class FileOps(object):
             output_name = temp_name + f"({str(count)})"
             count += 1
         output_zip = output_name + ".zip"
+        FileOps.ensure_directory_exists(output_zip)
 
         files = []
         for root, dirs, fs in os.walk(target_dir_path):

@@ -689,6 +689,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
     def _write_failure_report_to_file(self, output_zip_path, report_content):
         report_path = os.path.splitext(output_zip_path)[0] + "_failures.txt"
         try:
+            FileOps.ensure_directory_exists(report_path)
             with open(report_path, "w", encoding="utf-8") as report_file:
                 report_file.write(report_content)
             return report_path, None
@@ -903,6 +904,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         database_package_error = None
         archive_finalize_error = None
         progress_value = 0
+        FileOps.ensure_directory_exists(file_path)
 
         def update_package_delete_progress(value, text=None):
             nonlocal progress_value

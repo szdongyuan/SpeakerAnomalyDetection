@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
         icon_label.setFixedSize(25, 25)
         icon_label.setScaledContents(True)
         current_version = self.get_current_version()
-        title_label = Label(f"谛听异音检测 -{current_version} beta")
+        title_label = Label(f"希听异音检测 -{current_version} beta")
         h_spacer = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
