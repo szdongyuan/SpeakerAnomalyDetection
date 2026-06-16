@@ -86,6 +86,12 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+def assert_vertical_golden_size(window):
+    assert window.minimumWidth() == 630
+    assert window.minimumHeight() == 840
+    assert round(window.minimumWidth() / window.minimumHeight(), 2) == 0.75
+
+
 def test_ai_dialog_uses_shared_channel_selector_without_changing_config(qapp, monkeypatch):
     class FakeTrainingModelManagement:
         def get_all_model_name_from_db(self):
@@ -103,6 +109,8 @@ def test_ai_dialog_uses_shared_channel_selector_without_changing_config(qapp, mo
 
     window = ai_config_dialog.AIConfigWindow(config_manager, "AI", available_channels=[0, 2])
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "compute"]
     assert window.get_default_config() == {
         "analyse_model_name": "model_a",
         "analysis_channel": 2,
@@ -128,6 +136,8 @@ def test_lp_dialog_preserves_saved_keys_after_channel_migration(qapp):
 
     window = LPConfigWindow(config_manager, "LP", available_channels=[0, 1])
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "detection"]
     assert window.get_default_config() == {
         "trigger_threshold": 12,
         "hysterests_threshold": 3,
@@ -160,6 +170,8 @@ def test_spec_dialog_preserves_saved_keys_after_channel_migration(qapp):
 
     window = SpecConfigWindow(config_manager, "Spec", available_channels=[1, 3])
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "compute", "display"]
     assert window.get_default_config() == {
         "n_fft": 1024,
         "hop_length": 128,
@@ -190,6 +202,8 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
 
     window = SplConfigWindow(config_manager, "SPL", available_channels=[0, 2])
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "compute", "judgment"]
     assert window.get_default_config() == {
         "smooth_checked": True,
         "limit_checked": False,
@@ -218,6 +232,8 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
 
     window = SplConfigWindow(config_manager, "SPLF", available_channels=[0, 1])
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "compute", "reference", "judgment"]
     assert window.get_default_config() == {
         "splf_calc_mode": "total",
         "octave_smoothing": 3,
@@ -245,11 +261,50 @@ def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
 
     window = FrConfigWindow(config_manager, "FR")
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["compute", "reference", "judgment"]
     assert window.get_default_config() == {
         "octave_smoothing": 6,
         "golden_sample_checked": True,
         "limit_checked": False,
         "limit_data": None,
+    }
+
+
+def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
+    from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "SPL": {
+                "smooth_checked": True,
+                "limit_checked": False,
+                "limit_data": None,
+                "weighting": "A",
+                "analysis_channel": 0,
+            }
+        }
+    )
+    window = SplConfigWindow(config_manager, "SPL", available_channels=[0, 1])
+
+    config_manager.config = {
+        "SPL": {
+            "smooth_checked": False,
+            "limit_checked": False,
+            "limit_data": None,
+            "weighting": "C",
+            "analysis_channel": 1,
+        }
+    }
+    window.on_restore_default_btn_clicked()
+
+    assert window.semantic_group_keys() == ["input", "compute", "judgment"]
+    assert window.get_default_config() == {
+        "smooth_checked": False,
+        "limit_checked": False,
+        "limit_data": None,
+        "weighting": "C",
+        "analysis_channel": 1,
     }
 
 
@@ -273,6 +328,8 @@ def test_fba_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
 
     window = FbaConfigWindow(config_manager, "FBA", available_channels=[1, 3])
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "compute", "judgment"]
     assert window.get_default_config() == {
         "band_strategy": "1/3 倍频程",
         "f_min": 50,
@@ -302,6 +359,8 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
 
     window = HdConfigWindow(config_manager, "HD")
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["detection", "reference", "judgment"]
     assert window.get_default_config() == {
         "selected_labels": [2, 3],
         "all_checked": False,
@@ -328,6 +387,8 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
 
     window = RbConfigWindow(config_manager, "RB")
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["detection", "reference", "judgment"]
     assert window.get_default_config() == {
         "selected_labels": [10, 12],
         "all_checked": False,
@@ -354,6 +415,8 @@ def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
     window = PerceptualRbConfigWindow(config_manager, "PRB")
     config = window.get_default_config()
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["compute", "reference", "judgment"]
     assert config["prb_method"] == "sc"
     assert config["masking_config"] == {"sc_metric": "totalnl_x_ehs", "keep": "value"}
     assert config["golden_sample_checked"] is True
@@ -389,11 +452,56 @@ def test_rsc_dialog_keeps_smoothing_key_after_shared_selector_migration(qapp, mo
     window = rsc_dialog.ReferenceSpectrumConfigWindow(config_manager, "RSC")
     config = window.get_default_config()
 
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["reference", "compute", "judgment", "display"]
     assert config["smoothing"] == 3
     assert "octave_smoothing" not in config
     assert config["enable_threshold_judgment"] is True
     assert config["lower_offset_db"] == -2.0
     assert config["upper_offset_db"] == 2.0
+
+
+def test_excel_dialog_preserves_output_config_after_semantic_migration(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "Excel": {
+                "save_dir": "",
+                "file_base": "result",
+                "add_date": False,
+                "add_model_dir": True,
+                "lock_files": False,
+                "max_points": 500,
+                "save_items": ["SPL", "FBA"],
+                "save_mes_enabled": True,
+                "mes_file_base": "D:/dataMES",
+                "mes_file_name": "MES_Result",
+            },
+            "SPL": {"type": "SPL"},
+            "FBA": {"type": "FBA"},
+            "Spec": {"type": "Spec"},
+        }
+    )
+
+    window = ExcelConfigWindow(config_manager, "Excel")
+
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["output"]
+    assert window.get_default_config() == {
+        "enabled": True,
+        "save_dir": None,
+        "file_base": "result",
+        "add_date": False,
+        "add_model_dir": True,
+        "lock_files": False,
+        "date_format": "%Y%m%d",
+        "max_points": 500,
+        "save_items": ["FBA", "SPL"],
+        "save_mes_enabled": True,
+        "mes_file_base": "D:/dataMES",
+        "mes_file_name": "MES_Result",
+    }
 
 
 def test_pd_dialog_preserves_time_smoothing_keys_after_widget_migration(qapp):

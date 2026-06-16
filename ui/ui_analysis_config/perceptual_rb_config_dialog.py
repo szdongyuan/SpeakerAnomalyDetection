@@ -10,13 +10,13 @@ from PyQt5.QtWidgets import QVBoxLayout
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, GoldenSampleWidget
+from ui.ui_analysis_config.common_widgets import GoldenSampleWidget, SemanticAnalysisConfigDialogBase
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.custom_ui_widget.widgets import GroupBox, Label, ComboBox
 from ui.ui_src import ui_resources
 
 
-class PerceptualRbConfigWindow(AnalysisConfigDialogBase):
+class PerceptualRbConfigWindow(SemanticAnalysisConfigDialogBase):
     """
     Perceptual Rub & Buzz (PRB) 分析配置对话框
 
@@ -32,18 +32,19 @@ class PerceptualRbConfigWindow(AnalysisConfigDialogBase):
         self.init_ui()
 
     def init_ui(self):
-        # 默认高度偏小会把阈值绘图区域压缩得很矮
-        self.setMinimumSize(380, 420)
-        self.resize(400, 480)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
 
-        root_layout = QVBoxLayout()
-
-        # PRB 输出选项组
+    def _build_semantic_sections(self):
         group = GroupBox("PRB")
         group.setObjectName("prb_group_box")
         group_layout = QVBoxLayout()
 
-        # 输出结果选择
         self.sc_metric_desc = Label("选择输出结果：")
         self.sc_metric_desc.setAlignment(Qt.AlignLeft)
         self.sc_metric_combo = ComboBox()
@@ -76,13 +77,9 @@ class PerceptualRbConfigWindow(AnalysisConfigDialogBase):
             model_type=self.model_type,
         )
 
-        root_layout.addWidget(group)
-        root_layout.addWidget(self.golden_chk_box)
-        root_layout.addWidget(self.threshold_widget)
-        root_layout.addStretch()
-        root_layout.addLayout(self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn))
-        self.setLayout(root_layout)
-
+        self.add_semantic_section("compute", widget=group)
+        self.add_semantic_section("reference", widget=self.golden_chk_box)
+        self.add_semantic_section("judgment", widget=self.threshold_widget)
 
     def get_default_config(self):
         """获取配置数据"""
@@ -109,6 +106,11 @@ class PerceptualRbConfigWindow(AnalysisConfigDialogBase):
             return
         save_flag = self.config_manager.save_default_config("PRB", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.model_type, {}) if self.config_manager else {}
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

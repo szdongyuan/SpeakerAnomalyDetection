@@ -7,8 +7,8 @@ from ui.custom_ui_widget.popuputils import PopupUtils
 
 # 确保这里导入的是你项目中正确的 ThresholdConfigWidget 路径
 from ui.ui_analysis_config.common_widgets import (
-    AnalysisConfigDialogBase,
     ChannelSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
     WeightingSelectorWidget,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
@@ -16,7 +16,7 @@ from ui.custom_ui_widget.widgets import ComboBox, Label, GroupBox, DoubleSpinBox
 from ui.ui_src import ui_resources
 
 
-class FbaConfigWindow(AnalysisConfigDialogBase):
+class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
     """
     FBA 频段能量分析配置窗口 (修复布局版)
     """
@@ -34,6 +34,7 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
+        self.config_key = model_type
         # 提取模型类型中的字母部分，例如 "FBA"
         self.model_type_str = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "FBA"
         self.show_channel_selector = available_channels is not None
@@ -41,26 +42,30 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
 
         # 加载配置
         full_config = self.config_manager.load_config()
-        self.load_config = full_config.get(model_type, {})
+        self.load_config = full_config.get(self.config_key, {})
 
         self.init_ui()
 
     def init_ui(self):
         # --- 窗口基本设置 ---
         self.setWindowTitle("FBA 分析配置")
-        # 该对话框主要是纵向排布；过大的默认宽度会让界面“显得很宽”
-        # 同时避免默认高度过大把“阈值展示区域”撑得太高
-        self.setMinimumSize(420, 620)
-        self.resize(420, 620)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
 
-        # --- 主布局：垂直流式布局 ---
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-
+    def _build_semantic_sections(self):
         if self.show_channel_selector:
             self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
-            main_layout.addWidget(self.channel_selector)
+            self.add_semantic_section("input", widget=self.channel_selector)
+
+        compute_widget = QWidget(self)
+        compute_layout = QVBoxLayout(compute_widget)
+        compute_layout.setContentsMargins(0, 0, 0, 0)
+        compute_layout.setSpacing(12)
 
         # =========================================================
         # 1. 频段划分策略 (GroupBox)
@@ -107,7 +112,7 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
         strategy_layout.addWidget(self.custom_widget)
 
         strategy_group.setLayout(strategy_layout)
-        main_layout.addWidget(strategy_group)
+        compute_layout.addWidget(strategy_group)
 
         # =========================================================
         # 2. 频率范围 (GroupBox)
@@ -134,7 +139,7 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
         range_layout.addWidget(self.f_max_spin)
 
         range_group.setLayout(range_layout)
-        main_layout.addWidget(range_group)
+        compute_layout.addWidget(range_group)
 
         self.weighting_selector = WeightingSelectorWidget(
             self.load_config,
@@ -142,7 +147,7 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
             default="A",
             parent=self,
         )
-        main_layout.addWidget(self.weighting_selector)
+        compute_layout.addWidget(self.weighting_selector)
 
         # =========================================================
         # 4. 阈值配置组件 (ThresholdConfigWidget)
@@ -154,17 +159,8 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
         # 不让阈值组件吃掉所有剩余高度（否则内部 addStretch 会形成很大空白）
         self.threshold_widget.setMaximumHeight(360)
         self.threshold_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        main_layout.addWidget(self.threshold_widget)
-
-        # =========================================================
-        # 5. 底部按钮
-        # =========================================================
-        main_layout.addStretch(1)
-        main_layout.addLayout(self.create_btn())
-
-        self.setLayout(main_layout)
-
-        # --- 样式设置 ---
+        self.add_semantic_section("compute", widget=compute_widget)
+        self.add_semantic_section("judgment", widget=self.threshold_widget)
 
         # --- 信号连接 ---
         self.strategy_combo.currentTextChanged.connect(self._on_strategy_changed)
@@ -271,6 +267,11 @@ class FbaConfigWindow(AnalysisConfigDialogBase):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config(self.model_type_str, config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         if not self._validate_custom_bands_if_needed():
