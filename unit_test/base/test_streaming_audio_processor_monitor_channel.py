@@ -98,6 +98,38 @@ def test_monitor_duplex_callback_uses_trimmed_payload_for_final_chunk(monkeypatc
     assert started_threads
 
 
+def test_monitor_duplex_outputs_silence_during_discarded_warmup():
+    processor = _prepare_processor([0], 0)
+    processor.discard_initial_samples = 5
+    processor.samples_discarded = 0
+    indata = np.arange(4, dtype=np.float32).reshape(-1, 1)
+    outdata = np.full((4, 1), -9.0, dtype=np.float32)
+
+    processor.monitor_duplex_callback(indata, outdata, 4, None, None)
+
+    np.testing.assert_allclose(outdata[:, 0], np.zeros(4, dtype=np.float32))
+    assert processor.audio_queue.empty()
+    assert processor.samples_captured == 0
+    assert processor.samples_discarded == 4
+
+
+def test_monitor_duplex_pads_silence_for_partial_discarded_warmup():
+    processor = _prepare_processor([0], 0)
+    processor.discard_initial_samples = 2
+    processor.samples_discarded = 0
+    indata = (np.arange(5, dtype=np.float32) / 10.0).reshape(-1, 1)
+    outdata = np.full((5, 1), -9.0, dtype=np.float32)
+
+    processor.monitor_duplex_callback(indata, outdata, 5, None, None)
+
+    np.testing.assert_allclose(outdata[:, 0], [0.0, 0.0, 0.2, 0.3, 0.4])
+    payload = processor.audio_queue.get_nowait()
+    np.testing.assert_allclose(payload["mono"], [0.2, 0.3, 0.4])
+    np.testing.assert_allclose(payload["multi"], [[0.2], [0.3], [0.4]])
+    assert processor.samples_captured == 3
+    assert processor.samples_discarded == 2
+
+
 def test_start_streaming_rec_initializes_monitor_input_column(monkeypatch):
     created = []
 
@@ -191,6 +223,30 @@ def test_start_streaming_rec_uses_device_max_input_channels(monkeypatch):
     assert created[0]["device"] == 1
 
 
+@pytest.mark.parametrize("value", [None, -1, True, False, "bad"])
+def test_start_streaming_rec_invalid_discard_initial_samples_defaults_to_zero(monkeypatch, value):
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.sd, "InputStream", FakeInputStream)
+
+    processor = streaming_audio_processor.StreamingAudioProcessor()
+    code, _ = processor.start_streaming_rec(
+        sample_rate=44100,
+        target_samples=8,
+        device={"name": "Mic", "index": 1, "max_input_channels": 2},
+        discard_initial_samples=value,
+    )
+
+    assert code == error_code.OK
+    assert processor.discard_initial_samples == 0
+    assert processor.samples_discarded == 0
+
+
 def test_start_streaming_playrec_uses_device_max_input_channels(monkeypatch):
     created = []
 
@@ -222,6 +278,34 @@ def test_start_streaming_playrec_uses_device_max_input_channels(monkeypatch):
     assert processor.input_channels == 8
     assert created[0]["channels"] == (8, 1)
     assert created[0]["device"] == (1, 2)
+
+
+@pytest.mark.parametrize("value", [None, -1, True, False, "bad"])
+def test_start_streaming_playrec_invalid_discard_initial_samples_defaults_to_zero(monkeypatch, value):
+    class FakeStream:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.sd, "Stream", FakeStream)
+
+    processor = streaming_audio_processor.StreamingAudioProcessor()
+    code, _ = processor.start_streaming_playrec(
+        stimulus_dict={"data": np.array([0.1, 0.2], dtype=np.float32), "amplitude": 1.0},
+        sample_rate=44100,
+        target_samples=2,
+        input_device={"name": "Mic", "index": 1, "max_input_channels": 2},
+        output_device={"name": "Speaker", "index": 2, "max_output_channels": 1},
+        prepare_frames=0,
+        prolong_frames=0,
+        discard_initial_samples=value,
+    )
+
+    assert code == error_code.OK
+    assert processor.discard_initial_samples == 0
+    assert processor.samples_discarded == 0
 
 
 def test_playrec_duplex_callback_queues_selected_channels(monkeypatch):
@@ -258,6 +342,45 @@ def test_playrec_duplex_callback_queues_selected_channels(monkeypatch):
     payload = processor.audio_queue.get_nowait()
     np.testing.assert_allclose(payload["multi"], [[0.1, 0.3], [0.11, 0.31]])
     np.testing.assert_allclose(payload["mono"], [0.2, 0.21])
+
+
+def test_playrec_duplex_prepends_delay_silence_and_discards_warmup(monkeypatch):
+    created = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.sd, "Stream", FakeStream)
+
+    processor = streaming_audio_processor.StreamingAudioProcessor()
+    code, _ = processor.start_streaming_playrec(
+        stimulus_dict={"data": np.array([10.0, 11.0], dtype=np.float32), "amplitude": 1.0},
+        sample_rate=44100,
+        target_samples=4,
+        input_device={"name": "Mic", "index": 1, "max_input_channels": 1},
+        output_device={"name": "Speaker", "index": 2, "max_output_channels": 1},
+        prepare_frames=1,
+        prolong_frames=1,
+        discard_initial_samples=2,
+    )
+
+    assert code == error_code.OK
+    callback = created[0]["callback"]
+    indata = np.arange(4, dtype=np.float32).reshape(-1, 1)
+    outdata = np.full((4, 1), -9.0, dtype=np.float32)
+
+    callback(indata, outdata, 4, None, None)
+
+    np.testing.assert_allclose(outdata[:, 0], [0.0, 0.0, 0.0, 10.0])
+    payload = processor.audio_queue.get_nowait()
+    np.testing.assert_allclose(payload["mono"], [2.0, 3.0])
+    np.testing.assert_allclose(payload["multi"], [[2.0], [3.0]])
+    assert processor.samples_captured == 2
+    assert processor.samples_discarded == 2
 
 
 def test_playrec_duplex_callback_trims_final_multichannel_chunk(monkeypatch):
@@ -502,6 +625,127 @@ def test_record_only_audio_callback_preserves_selected_channels_and_counts_frame
     )
     assert payload["multi"].shape == (3, 2)
     np.testing.assert_allclose(payload["mono"], [0.20, 0.21, 0.22])
+    assert started_threads
+
+
+def test_record_only_audio_callback_discards_initial_samples_before_queue(monkeypatch):
+    started_threads = []
+
+    class FakeThread:
+        def __init__(self, target, daemon=False):
+            self.target = target
+            self.daemon = daemon
+            started_threads.append(self)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.threading, "Thread", FakeThread)
+
+    processor = StreamingAudioProcessor()
+    processor._rec_in_sel = [0]
+    processor.target_samples = 3
+    processor.samples_captured = 0
+    processor.discard_initial_samples = 2
+    processor.samples_discarded = 0
+
+    processor._audio_callback(np.arange(5, dtype=np.float32).reshape(-1, 1), 5, None, None)
+
+    payload = processor.audio_queue.get_nowait()
+    np.testing.assert_array_equal(payload["mono"], np.array([2, 3, 4], dtype=np.float32))
+    np.testing.assert_array_equal(payload["multi"], np.array([[2], [3], [4]], dtype=np.float32))
+    assert processor.samples_captured == 3
+    assert processor.samples_discarded == 2
+    assert started_threads
+
+
+def test_record_only_warmup_spanning_full_callback_does_not_queue_or_count_retained_samples(monkeypatch):
+    started_threads = []
+
+    class FakeThread:
+        def __init__(self, target, daemon=False):
+            self.target = target
+            self.daemon = daemon
+            started_threads.append(self)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.threading, "Thread", FakeThread)
+
+    processor = StreamingAudioProcessor()
+    processor._rec_in_sel = [0]
+    processor.target_samples = 3
+    processor.samples_captured = 0
+    processor.discard_initial_samples = 5
+    processor.samples_discarded = 0
+
+    processor._audio_callback(np.arange(4, dtype=np.float32).reshape(-1, 1), 4, None, None)
+
+    assert processor.audio_queue.empty()
+    assert processor.samples_captured == 0
+    assert processor.samples_discarded == 4
+    assert started_threads == []
+
+    processor._audio_callback(np.arange(4, 8, dtype=np.float32).reshape(-1, 1), 4, None, None)
+
+    payload = processor.audio_queue.get_nowait()
+    np.testing.assert_array_equal(payload["mono"], np.array([5, 6, 7], dtype=np.float32))
+    assert processor.samples_captured == 3
+    assert processor.samples_discarded == 5
+    assert started_threads
+
+
+def test_playrec_warmup_spanning_full_callback_does_not_queue_or_count_retained_samples(monkeypatch):
+    created = []
+    started_threads = []
+
+    class FakeThread:
+        def __init__(self, target, daemon=False):
+            self.target = target
+            self.daemon = daemon
+            started_threads.append(self)
+
+        def start(self):
+            return None
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.threading, "Thread", FakeThread)
+    monkeypatch.setattr(streaming_audio_processor.sd, "Stream", FakeStream)
+
+    processor = streaming_audio_processor.StreamingAudioProcessor()
+    code, _ = processor.start_streaming_playrec(
+        stimulus_dict={"data": np.array([0.5, 0.6], dtype=np.float32), "amplitude": 1.0},
+        sample_rate=44100,
+        target_samples=3,
+        input_device={"name": "Mic", "index": 1, "max_input_channels": 1},
+        output_device={"name": "Speaker", "index": 2, "max_output_channels": 1},
+        prepare_frames=0,
+        prolong_frames=0,
+        discard_initial_samples=5,
+    )
+
+    assert code == error_code.OK
+    callback = created[0]["callback"]
+    callback(np.arange(4, dtype=np.float32).reshape(-1, 1), np.zeros((4, 1), dtype=np.float32), 4, None, None)
+
+    assert processor.audio_queue.empty()
+    assert processor.samples_captured == 0
+    assert processor.samples_discarded == 4
+    assert started_threads == []
+
+    callback(np.arange(4, 8, dtype=np.float32).reshape(-1, 1), np.zeros((4, 1), dtype=np.float32), 4, None, None)
+
+    payload = processor.audio_queue.get_nowait()
+    np.testing.assert_array_equal(payload["mono"], np.array([5, 6, 7], dtype=np.float32))
+    assert processor.samples_captured == 3
+    assert processor.samples_discarded == 5
     assert started_threads
 
 

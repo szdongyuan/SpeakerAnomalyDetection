@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from base.acquisition_recording_defaults import normalize_play_record_detail
 from base import soundcard_calibration_manager as calibration_manager
 from base.soundcard_calibration_manager import MicChannelCalibrationResult
 
@@ -71,6 +72,15 @@ class FakeAnalysis:
         return {"value": 1.0}
 
 
+def _fake_get_rec_and_play_dict_base_sequence_dict(data_struct, recording_start_delay_ms=None):
+    recorded_dict = {"recorded": True}
+    if recording_start_delay_ms is not None:
+        recorded_dict["recording_start_delay_frames"] = int(
+            round(recording_start_delay_ms * data_struct.sample_rate / 1000.0)
+        )
+    return {"stimulus": True}, recorded_dict
+
+
 def _build_sequence_window(resolve_impl, *, mode, analysis_type="SPL", active_input_channels=None, analysis_config=None):
     DummyMessageBox.reset()
     FakeAnalysis.reset()
@@ -88,6 +98,7 @@ def _build_sequence_window(resolve_impl, *, mode, analysis_type="SPL", active_in
         analysis_window=[],
         analysis_config=analysis_config or {},
         _active_input_channels=list(active_input_channels or [0]),
+        analysis_types_requiring_v2pa=namespace["ANALYSIS_TYPES_REQUIRING_V2PA"],
     )
     window.instance_analysis_class = method.__get__(window, type(window))
     return window
@@ -319,13 +330,15 @@ def test_golden_sample_rb_uses_per_channel_calibration_resolution(tmp_path):
         "os": os,
         "DEFAULT_DIR": str(tmp_path).replace("\\", "/") + "/",
         "LoadUiConfig": types.SimpleNamespace(
-            get_rec_and_play_dict_base_sequence_dict=lambda data_struct: ({"stimulus": True}, {"recorded": True})
+            get_rec_and_play_dict_base_sequence_dict=_fake_get_rec_and_play_dict_base_sequence_dict
         ),
+        "normalize_play_record_detail": normalize_play_record_detail,
         "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
             sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path: (0, [0.1, 0.2, 0.3])
         ),
         "get_class_mapping": lambda: {"RB": FakeAnalysis},
         "MessageBox": DummyMessageBox,
+        "FileOps": types.SimpleNamespace(ensure_directory_exists=lambda path: None),
         "QFileDialog": DummyFileDialog,
         "resolve_analysis_v2pa_factor_for_channel": resolve_impl,
         "GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA": {"SPLF", "HD", "RB", "PRB"},
@@ -389,13 +402,15 @@ def test_golden_sample_fr_skips_calibration_requirement(tmp_path):
         "os": os,
         "DEFAULT_DIR": str(tmp_path).replace("\\", "/") + "/",
         "LoadUiConfig": types.SimpleNamespace(
-            get_rec_and_play_dict_base_sequence_dict=lambda data_struct: ({"stimulus": True}, {"recorded": True})
+            get_rec_and_play_dict_base_sequence_dict=_fake_get_rec_and_play_dict_base_sequence_dict
         ),
+        "normalize_play_record_detail": normalize_play_record_detail,
         "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
             sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path: (0, [0.1, 0.2, 0.3])
         ),
         "get_class_mapping": lambda: {"FR": FakeAnalysis},
         "MessageBox": DummyMessageBox,
+        "FileOps": types.SimpleNamespace(ensure_directory_exists=lambda path: None),
         "QFileDialog": DummyFileDialog,
         "resolve_analysis_v2pa_factor_for_channel": resolve_impl,
         "GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA": {"SPLF", "HD", "RB", "PRB"},
@@ -457,13 +472,15 @@ def test_golden_sample_rb_warns_and_skips_item_without_calibration(tmp_path):
         "os": os,
         "DEFAULT_DIR": str(tmp_path).replace("\\", "/") + "/",
         "LoadUiConfig": types.SimpleNamespace(
-            get_rec_and_play_dict_base_sequence_dict=lambda data_struct: ({"stimulus": True}, {"recorded": True})
+            get_rec_and_play_dict_base_sequence_dict=_fake_get_rec_and_play_dict_base_sequence_dict
         ),
+        "normalize_play_record_detail": normalize_play_record_detail,
         "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
             sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path: (0, [0.1, 0.2, 0.3])
         ),
         "get_class_mapping": lambda: {"RB": FakeAnalysis},
         "MessageBox": DummyMessageBox,
+        "FileOps": types.SimpleNamespace(ensure_directory_exists=lambda path: None),
         "QFileDialog": DummyFileDialog,
         "resolve_analysis_v2pa_factor_for_channel": resolve_impl,
         "GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA": {"SPLF", "HD", "RB", "PRB"},

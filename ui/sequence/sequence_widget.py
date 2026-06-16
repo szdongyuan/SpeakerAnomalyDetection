@@ -53,6 +53,7 @@ from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
 from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
+from base.acquisition_recording_defaults import normalize_play_record_detail, normalize_record_only_detail
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
@@ -1547,6 +1548,13 @@ class SequenceWindow(QWidget):
         )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+        normalized_detail = None
+        if acq_mode == "RECORD_ONLY":
+            normalized_detail = normalize_record_only_detail(acq_detail)
+            acq_detail = normalized_detail
+        elif acq_mode == "PLAY_AND_RECORD":
+            normalized_detail = normalize_play_record_detail(acq_detail)
+            acq_detail = normalized_detail
         if acq_mode in ["RECORD_ONLY", "IMPORT_AUDIO"]:
             self.data_struct.sample_rate = int(acq_detail.get("sample_rate", self.data_struct.sample_rate or 44100))
         total_time = float(acq_detail.get("total_time", 5.0))
@@ -1554,8 +1562,11 @@ class SequenceWindow(QWidget):
         monitor_gain_db = float(acq_detail.get("monitor_gain_db", 0.0))
         acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
         sample_rate = self.data_struct.sample_rate
+        delay_ms = None
+        if normalized_detail is not None:
+            delay_ms = normalized_detail["recording_start_delay_ms"]
         stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
-            self.data_struct, total_time
+            self.data_struct, total_time, recording_start_delay_ms=delay_ms
         )
 
         # Add device information for streaming mode

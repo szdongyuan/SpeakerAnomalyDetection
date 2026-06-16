@@ -540,7 +540,9 @@ class LoadUiConfig(object):
         return None, None
 
     @staticmethod
-    def get_rec_and_play_dict_base_sequence_dict(data_struct, total_time=None):
+    def get_rec_and_play_dict_base_sequence_dict(
+        data_struct, total_time=None, recording_start_delay_ms=None
+    ):
         """
         Generate dictionaries containing stimulus signal data and recording parameters.
 
@@ -583,6 +585,15 @@ class LoadUiConfig(object):
             "num_frames": num_frames,
             "prolong_frames": prolong_frames,
         }
+        if recording_start_delay_ms is not None:
+            try:
+                delay_ms = float(recording_start_delay_ms)
+            except (TypeError, ValueError):
+                delay_ms = 0.0
+            recorded_dict["recording_start_delay_frames"] = max(
+                0,
+                int(round(delay_ms * float(data_struct.sample_rate) / 1000.0)),
+            )
         return stimulus_dict, recorded_dict
 
     @staticmethod

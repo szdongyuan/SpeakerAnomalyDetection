@@ -46,6 +46,16 @@ class SoundcardAudioProcessor(object):
         self.logger = LogManager.set_log_handler("soundcard_core")
 
     @staticmethod
+    def _coerce_nonnegative_frames(value, default=0):
+        if isinstance(value, bool):
+            return default
+        try:
+            frames = int(value)
+        except (TypeError, ValueError):
+            return default
+        return frames if frames >= 0 else default
+
+    @staticmethod
     def _device_index(device):
         if isinstance(device, dict):
             return int(device["index"])
@@ -76,15 +86,26 @@ class SoundcardAudioProcessor(object):
                 "alignment_sample_count": stimulus_dict.get("alignment_sample_count"),
             }
         )
-        prepare_frames = record_dict.get("prepare_frames", 1000)
-        prolong_frames = record_dict.get("prolong_frames", 10000)
-        prolong_data = [0] * prepare_frames + list(data) + [0] * prolong_frames
+        prepare_frames = self._coerce_nonnegative_frames(record_dict.get("prepare_frames", 1000), 1000)
+        prolong_frames = self._coerce_nonnegative_frames(record_dict.get("prolong_frames", 10000), 10000)
+        delay_frames = self._coerce_nonnegative_frames(
+            record_dict.get("recording_start_delay_frames", 0), 0
+        )
+        prolong_data = np.concatenate(
+            [
+                np.zeros(delay_frames + prepare_frames, dtype=data.dtype),
+                data,
+                np.zeros(prolong_frames, dtype=data.dtype),
+            ]
+        )
         sr = stimulus_dict.get("sr")
         device = self._playrec_device_selector(record_dict)
         if device is None:
             rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
         else:
             rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True, device=device).T[0]
+        if delay_frames > 0:
+            rec_data = rec_data[delay_frames:]
         align_frames = self.calculate_alignment(alignment_reference, rec_data)
         aligned_data = bounded_aligned_recording_slice(
             rec_data, align_frames, len(alignment_reference)
@@ -116,11 +137,18 @@ class SoundcardAudioProcessor(object):
 
     @staticmethod
     def sd_rec(recorded_dict):
-        num_frames = recorded_dict.get("num_frames", 441000)
+        num_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(
+            recorded_dict.get("num_frames", 441000), 441000
+        )
         sample_rate = recorded_dict.get("sample_rate", recorded_dict.get("sr", 44100))
         channels = recorded_dict.get("channels", 1)
         blocking = recorded_dict.get("blocking", True)
-        prolong_frames = recorded_dict.get("prolong_frames", 0)
+        prolong_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(
+            recorded_dict.get("prolong_frames", 0), 0
+        )
+        delay_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(
+            recorded_dict.get("recording_start_delay_frames", 0), 0
+        )
         device = recorded_dict.get("device") or recorded_dict.get("input_device")
         device = SoundcardAudioProcessor._device_index(device)
         input_channels = recorded_dict.get("input_channels")
@@ -133,15 +161,16 @@ class SoundcardAudioProcessor(object):
 
         record_channels = max(selected_channels) + 1 if selected_channels else channels
         recorded_data = sd.rec(
-            frames=num_frames,
+            frames=num_frames + delay_frames,
             samplerate=sample_rate,
             channels=record_channels,
             device=device,
             blocking=blocking,
         )
         recorded_data = np.asarray(recorded_data)
-        if prolong_frames > 0:
-            recorded_data = recorded_data[prolong_frames:, ...]
+        trim_frames = delay_frames + prolong_frames
+        if trim_frames > 0:
+            recorded_data = recorded_data[trim_frames:, ...]
 
         if recorded_data.ndim == 1:
             return error_code.OK, recorded_data

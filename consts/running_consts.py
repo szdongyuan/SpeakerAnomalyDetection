@@ -23,7 +23,10 @@ VALID_ACQUISITION_MODES = {
     "RECORD_ONLY",
 }
 
-DEFAULT_PLAY_AND_RECORD_DETAIL = {"use_streaming_recording": False}
+DEFAULT_PLAY_AND_RECORD_DETAIL = {
+    "use_streaming_recording": False,
+    "recording_start_delay_ms": 100.0,
+}
 DEFAULT_RECORD_ONLY_DETAIL = {
     "total_time": 4.0,
     "sample_rate": 44100,
@@ -31,6 +34,7 @@ DEFAULT_RECORD_ONLY_DETAIL = {
     "monitor_input_channel": 0,
     "monitor_gain_db": 0.0,
     "use_streaming_recording": False,
+    "recording_start_delay_ms": 100.0,
 }
 
 DEFAULT_LOG = {

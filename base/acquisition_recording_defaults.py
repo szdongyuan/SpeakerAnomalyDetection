@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import tempfile
 from copy import deepcopy
@@ -37,8 +38,31 @@ def _as_bool(value, default):
     return value if isinstance(value, bool) else default
 
 
+def _without_recording_start_delay_runtime_fields(value):
+    if isinstance(value, dict):
+        return {
+            key: _without_recording_start_delay_runtime_fields(child)
+            for key, child in value.items()
+            if str(key) != "recording_start_delay_frames"
+        }
+    if isinstance(value, list):
+        return [_without_recording_start_delay_runtime_fields(child) for child in value]
+    return deepcopy(value)
+
+
+def _normalize_recording_start_delay_ms(value, default):
+    delay_ms = _as_float(value, default)
+    if not math.isfinite(delay_ms):
+        return default
+    if delay_ms < 0:
+        return default
+    if delay_ms > 1000.0:
+        return 1000.0
+    return delay_ms
+
+
 def normalize_play_record_detail(detail):
-    normalized = deepcopy(detail) if isinstance(detail, dict) else {}
+    normalized = _without_recording_start_delay_runtime_fields(detail) if isinstance(detail, dict) else {}
     normalized["use_streaming_recording"] = _as_bool(
         normalized.get(
             "use_streaming_recording",
@@ -46,11 +70,15 @@ def normalize_play_record_detail(detail):
         ),
         DEFAULT_PLAY_AND_RECORD_DETAIL["use_streaming_recording"],
     )
+    normalized["recording_start_delay_ms"] = _normalize_recording_start_delay_ms(
+        normalized.get("recording_start_delay_ms"),
+        DEFAULT_PLAY_AND_RECORD_DETAIL["recording_start_delay_ms"],
+    )
     return normalized
 
 
 def normalize_record_only_detail(detail):
-    normalized = deepcopy(detail) if isinstance(detail, dict) else {}
+    normalized = _without_recording_start_delay_runtime_fields(detail) if isinstance(detail, dict) else {}
     normalized["total_time"] = _as_float(
         normalized.get("total_time"),
         DEFAULT_RECORD_ONLY_DETAIL["total_time"],
@@ -79,6 +107,10 @@ def normalize_record_only_detail(detail):
         ),
         DEFAULT_RECORD_ONLY_DETAIL["use_streaming_recording"],
     )
+    normalized["recording_start_delay_ms"] = _normalize_recording_start_delay_ms(
+        normalized.get("recording_start_delay_ms"),
+        DEFAULT_RECORD_ONLY_DETAIL["recording_start_delay_ms"],
+    )
     return normalized
 
 
@@ -91,17 +123,19 @@ def _built_in_defaults():
 
 def _read_json(path, logger=None, missing_ok=True):
     if not os.path.exists(path):
-        if not missing_ok:
+        if not missing_ok and logger is not None:
             logger.warning(f"Acquisition default config does not exist: {path}")
         return None
     try:
         with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
     except Exception as exc:
-        logger.warning(f"Failed to load acquisition default config: {exc}")
+        if logger is not None:
+            logger.warning(f"Failed to load acquisition default config: {exc}")
         return None
     if not isinstance(data, dict):
-        logger.warning("Acquisition default config must be a JSON object.")
+        if logger is not None:
+            logger.warning("Acquisition default config must be a JSON object.")
         return None
     return data
 
@@ -131,6 +165,10 @@ def save_acquisition_default(mode, detail, path=None, logger=None):
         parent = os.path.dirname(target_path) or "."
         os.makedirs(parent, exist_ok=True)
         data = _read_json(target_path, logger=logger) or {}
+        for acquisition_mode in VALID_ACQUISITION_MODES:
+            mode_detail = data.get(acquisition_mode)
+            if isinstance(mode_detail, dict):
+                data[acquisition_mode] = _without_recording_start_delay_runtime_fields(mode_detail)
         existing_detail = data.get(mode)
         if not isinstance(existing_detail, dict):
             existing_detail = {}

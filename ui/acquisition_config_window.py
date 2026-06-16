@@ -130,6 +130,15 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.streaming_recording_checkbox.setChecked(
             bool(self.stimulus_config_data.get("use_streaming_recording", False))
         )
+        label_delay = Label("启动延迟:")
+        self.recording_start_delay_ms_input = DoubleSpinBox()
+        self.recording_start_delay_ms_input.setRange(0.0, 1000.0)
+        self.recording_start_delay_ms_input.setDecimals(1)
+        self.recording_start_delay_ms_input.setSingleStep(10.0)
+        self.recording_start_delay_ms_input.setSuffix(" ms")
+        self.recording_start_delay_ms_input.setValue(
+            float(self.stimulus_config_data.get("recording_start_delay_ms", 100.0))
+        )
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -138,6 +147,8 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.input_device_display, 1, 1)
         grid_layout.addWidget(label_streaming_recording, 2, 0)
         grid_layout.addWidget(self.streaming_recording_checkbox, 2, 1)
+        grid_layout.addWidget(label_delay, 3, 0)
+        grid_layout.addWidget(self.recording_start_delay_ms_input, 3, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -166,13 +177,17 @@ class PlayRecordConfigWindow(BaseConfigWindow):
 
     def on_click_ok_btn(self):
         self.stimulus_config_data["use_streaming_recording"] = bool(self.streaming_recording_checkbox.isChecked())
+        self.stimulus_config_data["recording_start_delay_ms"] = float(self.recording_start_delay_ms_input.value())
         self.final_data = self.stimulus_config_data
         self.accept()
 
     def on_default_btn_clicked(self):
         ok = save_acquisition_default(
             "PLAY_AND_RECORD",
-            {"use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked())},
+            {
+                "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
+                "recording_start_delay_ms": float(self.recording_start_delay_ms_input.value()),
+            },
             logger=self.logger,
         )
         self._show_default_save_result(ok)
@@ -180,13 +195,16 @@ class PlayRecordConfigWindow(BaseConfigWindow):
     def open_stimulus_window(self):
         self.clicked_stimulus_btn_flag = True
         streaming_recording = bool(self.streaming_recording_checkbox.isChecked())
+        recording_start_delay_ms = float(self.recording_start_delay_ms_input.value())
         stimulus_config_data = deepcopy(self.stimulus_config_data)
         stimulus_config_data.pop("use_streaming_recording", None)
+        stimulus_config_data.pop("recording_start_delay_ms", None)
         self.stimulus_window = StimulusWindow(stimulus_config_data=stimulus_config_data, speaker=self.speaker)
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
             self.stimulus_config_data = normalize_play_record_detail(self.stimulus_window.final_save_data)
             self.stimulus_config_data["use_streaming_recording"] = streaming_recording
+            self.stimulus_config_data["recording_start_delay_ms"] = recording_start_delay_ms
             self.stimulus_signal = self.stimulus_window.stimulus_data
             total_time = self.update_ui_total_time(self.stimulus_config_data["stimulus_info"])
             self.time_input.setText(f"{total_time:.1f} 秒")
@@ -256,6 +274,13 @@ class RecordConfigWindow(BaseConfigWindow):
         label_streaming_recording = Label("流式录制:")
         self.streaming_recording_checkbox = CheckBox("启用")
         self.streaming_recording_checkbox.setChecked(bool(self.input_data.get("use_streaming_recording", False)))
+        label_delay = Label("启动延迟:")
+        self.recording_start_delay_ms_input = DoubleSpinBox()
+        self.recording_start_delay_ms_input.setRange(0.0, 1000.0)
+        self.recording_start_delay_ms_input.setDecimals(1)
+        self.recording_start_delay_ms_input.setSingleStep(10.0)
+        self.recording_start_delay_ms_input.setSuffix(" ms")
+        self.recording_start_delay_ms_input.setValue(float(self.input_data.get("recording_start_delay_ms", 100.0)))
         label_monitor_gain = Label("监听增益:")
         self.monitor_gain_db_input = DoubleSpinBox()
         self.monitor_gain_db_input.setRange(-60.0, 50.0)
@@ -307,6 +332,8 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.monitor_channel_combo, 5, 1)
         grid_layout.addWidget(label_streaming_recording, 6, 0)
         grid_layout.addWidget(self.streaming_recording_checkbox, 6, 1)
+        grid_layout.addWidget(label_delay, 7, 0)
+        grid_layout.addWidget(self.recording_start_delay_ms_input, 7, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -319,6 +346,7 @@ class RecordConfigWindow(BaseConfigWindow):
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
             "monitor_input_channel": int(self.monitor_channel_combo.currentData()),
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
+            "recording_start_delay_ms": float(self.recording_start_delay_ms_input.value()),
         }
 
     def on_click_ok_btn(self):

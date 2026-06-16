@@ -341,7 +341,7 @@ class AnalysisModelSelect(QDialog):
 
         seq = self.select_list.config[0]
 
-        detail = getattr(seq, "detail", None) or {}
+        detail = normalize_play_record_detail(getattr(seq, "detail", None) or {})
         data_struct = self.select_list.data_struct
 
         # 录音前预检查：未勾选“使用黄金样本”的分析项则直接提示，避免白录一遍
@@ -379,7 +379,10 @@ class AnalysisModelSelect(QDialog):
             return
 
         try:
-            stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(data_struct)
+            stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
+                data_struct,
+                recording_start_delay_ms=detail["recording_start_delay_ms"],
+            )
         except Exception as e:
             MessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")
             return
@@ -1212,12 +1215,15 @@ class OptionList(ListView):
                 else:
                     acquisition_defaults = load_acquisition_defaults(logger=default_logger)
                 play_record_defaults = acquisition_defaults.get("PLAY_AND_RECORD", {})
-                use_streaming_recording = False
-                if isinstance(play_record_defaults, dict):
-                    use_streaming_recording = bool(play_record_defaults.get("use_streaming_recording", False))
+                normalized_play_record_defaults = normalize_play_record_detail(play_record_defaults)
                 seq_item.mode = "PLAY_AND_RECORD"
                 seq_item.detail = normalize_play_record_detail(config)
-                seq_item.detail["use_streaming_recording"] = use_streaming_recording
+                seq_item.detail["recording_start_delay_ms"] = normalized_play_record_defaults.get(
+                    "recording_start_delay_ms", 100.0
+                )
+                seq_item.detail["use_streaming_recording"] = bool(
+                    normalized_play_record_defaults.get("use_streaming_recording", False)
+                )
                 seq_item.detail["monitor_playback"] = False
                 self.signal_len = seq_item.detail.get("total_time", 4.0) * seq_item.detail.get("sample_rate", 44100)
             else:

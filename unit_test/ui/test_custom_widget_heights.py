@@ -1,0 +1,128 @@
+import os
+import sys
+from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest
+from PyQt5.QtCore import QSize
+from PyQt5.QtGui import QFontMetrics
+from PyQt5.QtWidgets import QApplication
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from consts.ui_style_const import scale_size_px
+from ui.custom_ui_widget.widgets import (
+    CheckBox,
+    ComboBox,
+    DoubleSpinBox,
+    LineEdit,
+    PushButton,
+    SpinBox,
+)
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    return QApplication.instance() or QApplication([])
+
+
+def _current_font(widget):
+    font = widget.font
+    return font() if callable(font) else font
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected_font_px"),
+    [
+        (LineEdit, scale_size_px(20)),
+        (SpinBox, scale_size_px(20)),
+        (DoubleSpinBox, scale_size_px(20)),
+        (ComboBox, scale_size_px(18)),
+        (PushButton, scale_size_px(20)),
+        (CheckBox, scale_size_px(20)),
+    ],
+)
+def test_common_controls_have_font_safe_natural_height(qapp, factory, expected_font_px):
+    widget = factory("启用") if factory in (PushButton, CheckBox) else factory()
+    widget.ensurePolished()
+
+    font = _current_font(widget)
+    font_metrics = QFontMetrics(font)
+    expected_minimum = font_metrics.height() + scale_size_px(8)
+
+    assert font.pixelSize() == expected_font_px
+    assert widget.minimumHeight() >= expected_minimum
+    assert widget.sizeHint().height() >= expected_minimum
+    assert widget.minimumSizeHint().height() >= expected_minimum
+
+
+def test_common_control_fixed_height_remains_authoritative(qapp):
+    widget = DoubleSpinBox()
+    widget.setFixedHeight(23)
+    widget.show()
+    qapp.processEvents()
+
+    assert widget.minimumHeight() == 23
+    assert widget.maximumHeight() == 23
+    assert widget.height() == 23
+
+
+def test_common_control_fixed_size_remains_authoritative(qapp):
+    widget = LineEdit()
+    widget.setFixedSize(QSize(130, 27))
+    widget.show()
+    qapp.processEvents()
+
+    assert widget.minimumWidth() == 130
+    assert widget.maximumWidth() == 130
+    assert widget.minimumHeight() == 27
+    assert widget.maximumHeight() == 27
+    assert widget.size() == QSize(130, 27)
+
+
+def test_acquisition_delay_spinbox_natural_height_fits_font(qapp):
+    from ui.acquisition_config_window import PlayRecordConfigWindow
+
+    window = PlayRecordConfigWindow(
+        {
+            "stimulus_info": {"total_time": 1.0, "sample_rate": 48000},
+            "recording_start_delay_ms": 50.0,
+        },
+        mic={"name": "mic"},
+        speaker={"name": "speaker"},
+    )
+    spinbox = window.recording_start_delay_ms_input
+    spinbox.ensurePolished()
+
+    expected_minimum = QFontMetrics(_current_font(spinbox)).height() + scale_size_px(8)
+
+    assert spinbox.sizeHint().height() >= expected_minimum
+    assert spinbox.minimumSizeHint().height() >= expected_minimum
+
+
+def test_play_record_dialog_controls_keep_readable_height_when_window_is_compact(qapp):
+    from ui.acquisition_config_window import PlayRecordConfigWindow
+
+    window = PlayRecordConfigWindow(
+        {
+            "stimulus_info": {"total_time": 4.0, "sample_rate": 48000},
+            "recording_start_delay_ms": 50.0,
+        },
+        mic={"name": "麦克风 (Dongyuan...)"},
+        speaker={"name": "扬声器 (Dongyuan...)"},
+    )
+    window.resize(350, 350)
+    window.show()
+    qapp.processEvents()
+
+    for widget in (
+        window.time_input,
+        window.input_device_display,
+        window.streaming_recording_checkbox,
+        window.recording_start_delay_ms_input,
+        window.output_device_display,
+        window.config_button,
+    ):
+        expected_minimum = QFontMetrics(_current_font(widget)).height() + scale_size_px(8)
+        assert widget.height() >= expected_minimum

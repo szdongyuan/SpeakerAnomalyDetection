@@ -1,15 +1,27 @@
 import ast
 import json
 import re
+import sys
 import textwrap
 import types
 from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from base.load_config import LoadUiConfig
+from base.acquisition_recording_defaults import (
+    normalize_play_record_detail,
+    normalize_record_only_detail,
+)
 
 
-SOURCE_PATH = Path(__file__).resolve().parents[2] / "ui" / "sequence" / "sequence_widget.py"
+SOURCE_PATH = REPO_ROOT / "ui" / "sequence" / "sequence_widget.py"
 TARGET_METHODS = {
     "_get_mode_display_name",
     "_clear_sn_for_external_trigger_rejection",
@@ -32,6 +44,7 @@ TARGET_METHODS = {
     "start_this_play",
     "checked_work_status_message",
     "judge_play_and_record",
+    "reset_work_pram",
     "update_player_btn_is_paused",
     "_should_use_streaming_recording",
     "_start_streaming_recording",
@@ -42,6 +55,41 @@ TARGET_METHODS = {
     "_on_streaming_complete",
     "eventFilter",
 }
+
+
+def _recording_delay_keys(value):
+    keys = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).startswith("recording_start_delay"):
+                keys.append(str(key))
+            keys.extend(_recording_delay_keys(child))
+    elif isinstance(value, list):
+        for child in value:
+            keys.extend(_recording_delay_keys(child))
+    return keys
+
+
+def _recording_delay_frame_keys(value):
+    return [key for key in _recording_delay_keys(value) if key == "recording_start_delay_frames"]
+
+
+def _assert_no_recording_delay_frame_keys(value):
+    assert _recording_delay_frame_keys(value) == []
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    import os
+    from PyQt5.QtWidgets import QApplication
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+def _option_list_logger():
+    return types.SimpleNamespace(warning=lambda *a, **k: None, error=lambda *a, **k: None)
 
 
 def _build_method_namespace():
@@ -137,6 +185,8 @@ def _build_method_namespace():
         "save_audio_simple": lambda *args, **kwargs: None,
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
         "TempTcpClient": lambda *args, **kwargs: None,
+        "normalize_play_record_detail": normalize_play_record_detail,
+        "normalize_record_only_detail": normalize_record_only_detail,
         "np": np,
         "SoundcardAudioProcessor": None,
         "re": re,
@@ -560,6 +610,7 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window.validate_count = _bind_method(window, namespace, "validate_count")
     window._real_start_this_play = _bind_method(window, namespace, "start_this_play")
     window.judge_play_and_record = _bind_method(window, namespace, "judge_play_and_record")
+    window._real_reset_work_pram = _bind_method(window, namespace, "reset_work_pram")
     window._should_use_streaming_recording = _bind_method(window, namespace, "_should_use_streaming_recording")
     window._start_streaming_recording = _bind_method(window, namespace, "_start_streaming_recording")
     window._normalize_blocking_recorded_data = _bind_method(window, namespace, "_normalize_blocking_recorded_data")
@@ -569,6 +620,396 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._on_streaming_complete = _bind_method(window, namespace, "_on_streaming_complete")
     window.eventFilter = _bind_method(window, namespace, "eventFilter")
     return window
+
+
+def test_reset_work_pram_converts_configured_recording_start_delay_ms_only_for_recording_modes():
+    namespace = _build_method_namespace()
+    namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
+    calls = []
+
+    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None):
+        calls.append(recording_start_delay_ms)
+        recorded = {
+            "sr": data_struct.sample_rate,
+            "num_frames": int((total_time or 1.0) * data_struct.sample_rate),
+        }
+        if recording_start_delay_ms is not None:
+            recorded["recording_start_delay_frames"] = int(
+                round(recording_start_delay_ms * data_struct.sample_rate / 1000.0)
+            )
+        return {
+            "data": np.array([0.1], dtype=np.float32),
+            "amplitude": 1.0,
+            "sr": data_struct.sample_rate,
+        }, recorded
+
+    namespace["LoadUiConfig"] = types.SimpleNamespace(
+        get_rec_and_play_dict_base_sequence_dict=fake_get_dict
+    )
+
+    class FakeDataStruct:
+        def __init__(self):
+            self.sample_rate = 48000
+            self.clear_calls = 0
+
+        def clear_data(self):
+            self.clear_calls += 1
+
+    delay_by_mode = {}
+    for mode in ["RECORD_ONLY", "PLAY_AND_RECORD", "IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"]:
+        window = _build_fake_window(namespace, use_streaming=False, mode=mode)
+        window.data_struct = FakeDataStruct()
+        window.mic = {"name": "Mic", "hostapi": 1}
+        window.speaker = {"name": "Speaker", "hostapi": 1}
+        window.mic_channels = [0]
+        window.sequence_config[0]["seq1"]["acq"]["detail"].update(
+            {
+                "sample_rate": 48000,
+                "total_time": 1.0,
+                "recording_start_delay_ms": 250.0,
+            }
+        )
+
+        _, recorded_dict, _ = window._real_reset_work_pram("not_labeled")
+        delay_by_mode[mode] = recorded_dict.get("recording_start_delay_frames")
+
+    assert delay_by_mode == {
+        "RECORD_ONLY": 12000,
+        "PLAY_AND_RECORD": 12000,
+        "IMPORT_AUDIO": None,
+        "IMPORT_STIMULUS_AUDIO": None,
+    }
+    assert calls == [250.0, 250.0, None, None]
+
+
+def test_reset_work_pram_zero_recording_start_delay_disables_runtime_warmup():
+    namespace = _build_method_namespace()
+    namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
+    namespace["LoadUiConfig"] = types.SimpleNamespace(
+        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None: (
+            {},
+            {
+                "sr": data_struct.sample_rate,
+                "num_frames": int(total_time * data_struct.sample_rate),
+                "recording_start_delay_frames": int(
+                    round((recording_start_delay_ms or 0.0) * data_struct.sample_rate / 1000.0)
+                ),
+            },
+        )
+    )
+    window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
+    window.data_struct.sample_rate = 48000
+    window.data_struct.clear_data = lambda: None
+    window.mic = {"name": "Mic", "hostapi": 1}
+    window.speaker = {"name": "Speaker", "hostapi": 1}
+    window.mic_channels = [0]
+    window.sequence_config[0]["seq1"]["acq"]["detail"].update(
+        {"sample_rate": 48000, "total_time": 1.0, "recording_start_delay_ms": 0.0}
+    )
+
+    _, recorded_dict, _ = window._real_reset_work_pram("not_labeled")
+
+    assert recorded_dict["recording_start_delay_frames"] == 0
+
+
+def test_reset_work_pram_missing_recording_start_delay_uses_normalized_default():
+    namespace = _build_method_namespace()
+    namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
+    namespace["LoadUiConfig"] = types.SimpleNamespace(
+        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None: (
+            {},
+            {
+                "sr": data_struct.sample_rate,
+                "num_frames": int(total_time * data_struct.sample_rate),
+                "recording_start_delay_frames": int(
+                    round(recording_start_delay_ms * data_struct.sample_rate / 1000.0)
+                ),
+            },
+        )
+    )
+    window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
+    window.data_struct.sample_rate = 48000
+    window.data_struct.clear_data = lambda: None
+    window.mic = {"name": "Mic", "hostapi": 1}
+    window.speaker = {"name": "Speaker", "hostapi": 1}
+    window.mic_channels = [0]
+    window.sequence_config[0]["seq1"]["acq"]["detail"] = {"sample_rate": 48000, "total_time": 1.0}
+
+    _, recorded_dict, _ = window._real_reset_work_pram("not_labeled")
+
+    assert recorded_dict["recording_start_delay_frames"] == 4800
+
+
+def test_option_list_new_record_only_item_uses_default_recording_start_delay(
+    qapp, tmp_path, monkeypatch
+):
+    from ui import operation_sequence
+
+    empty_config = tmp_path / "empty.json"
+    empty_config.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        operation_sequence,
+        "load_acquisition_defaults",
+        lambda logger=None: {
+            "RECORD_ONLY": {
+                "total_time": 2.0,
+                "sample_rate": 48000,
+                "monitor_playback": False,
+                "monitor_input_channel": 0,
+                "monitor_gain_db": 0.0,
+                "use_streaming_recording": False,
+                "recording_start_delay_ms": 220.0,
+            },
+            "PLAY_AND_RECORD": {
+                "use_streaming_recording": False,
+                "recording_start_delay_ms": 100.0,
+            },
+        },
+    )
+    option_list = operation_sequence.OptionList(
+        logger=_option_list_logger(),
+        using_config_path=str(empty_config),
+        mic={"name": "mic"},
+        speaker={"name": "speaker", "max_output_channels": 2},
+        mic_channels=[0],
+    )
+
+    option_list.set_sound_item("录制音频")
+
+    assert option_list.config[0].mode == "RECORD_ONLY"
+    assert option_list.config[0].detail["recording_start_delay_ms"] == 220.0
+    assert "recording_start_delay_frames" not in option_list.config[0].detail
+
+
+def test_option_list_new_play_record_item_uses_default_recording_start_delay(
+    qapp, tmp_path, monkeypatch
+):
+    from ui import operation_sequence
+
+    empty_config = tmp_path / "empty.json"
+    empty_config.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        operation_sequence,
+        "load_acquisition_defaults",
+        lambda logger=None: {
+            "PLAY_AND_RECORD": {
+                "use_streaming_recording": True,
+                "recording_start_delay_ms": 320.0,
+            },
+            "RECORD_ONLY": {"recording_start_delay_ms": 100.0},
+        },
+    )
+
+    option_list = operation_sequence.OptionList(
+        logger=_option_list_logger(),
+        using_config_path=str(empty_config),
+        mic={"name": "mic"},
+        speaker={"name": "speaker", "max_output_channels": 2},
+        mic_channels=[0],
+    )
+    option_list.load_stimulus_config = lambda: (
+        True,
+        {
+            "stimulus_info": {"total_time": 1.0, "sample_rate": 48000},
+            "total_time": 1.0,
+            "sample_rate": 48000,
+        },
+    )
+
+    option_list.set_sound_item("播放与录制")
+
+    assert option_list.config[0].mode == "PLAY_AND_RECORD"
+    assert option_list.config[0].detail["recording_start_delay_ms"] == 320.0
+    assert option_list.config[0].detail["use_streaming_recording"] is True
+    assert "recording_start_delay_frames" not in option_list.config[0].detail
+
+
+def test_option_list_loads_old_sequence_config_with_default_recording_start_delay(
+    qapp, tmp_path
+):
+    from ui import operation_sequence
+
+    config_path = tmp_path / "old_sequence.json"
+    config_path.write_text(
+        json.dumps(
+            [
+                {
+                    "seq1": {
+                        "acq": {
+                            "name": "录制音频",
+                            "mode": "RECORD_ONLY",
+                            "detail": {"total_time": 1.0, "sample_rate": 48000},
+                        },
+                        "analysis_list": {
+                            "display_sequence": [],
+                            "auto_analysis": False,
+                        },
+                    }
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    option_list = operation_sequence.OptionList(
+        logger=_option_list_logger(),
+        using_config_path=str(config_path),
+        mic={"name": "mic"},
+        speaker={"name": "speaker", "max_output_channels": 2},
+        mic_channels=[0],
+    )
+
+    assert option_list.config[0].detail["recording_start_delay_ms"] == 100.0
+    assert "recording_start_delay_frames" not in option_list.config[0].detail
+
+    saved_config = [option_list.config[0].config_info]
+    assert saved_config[0]["seq1"]["acq"]["detail"]["recording_start_delay_ms"] == 100.0
+    _assert_no_recording_delay_frame_keys(saved_config)
+
+
+@pytest.mark.parametrize("mode", ["RECORD_ONLY", "PLAY_AND_RECORD"])
+def test_existing_sequence_config_without_recording_delay_runs_to_blocking_start_and_saves_without_delay(
+    tmp_path, mode
+):
+    namespace = _build_method_namespace()
+    captured = {}
+    namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
+
+    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None):
+        recorded = {
+            "sr": data_struct.sample_rate,
+            "num_frames": int((total_time or 1.0) * data_struct.sample_rate),
+        }
+        if recording_start_delay_ms is not None:
+            recorded["recording_start_delay_frames"] = int(
+                round(recording_start_delay_ms * data_struct.sample_rate / 1000.0)
+            )
+        return {
+            "data": np.array([0.1, 0.2], dtype=np.float32),
+            "amplitude": 1.0,
+            "sr": data_struct.sample_rate,
+        }, recorded
+
+    namespace["LoadUiConfig"] = types.SimpleNamespace(
+        get_rec_and_play_dict_base_sequence_dict=fake_get_dict
+    )
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            captured["recorded_dict"] = dict(recorded_dict)
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+            captured["recorded_dict"] = dict(recorded_dict)
+            captured["stimulus_dict"] = dict(stimulus_dict)
+            return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
+
+    namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
+    )
+    namespace["save_audio_simple"] = lambda *args, **kwargs: None
+
+    window = _build_fake_window(namespace, use_streaming=False, mode=mode)
+    window.reset_work_pram = window._real_reset_work_pram
+    window.data_struct.clear_data = lambda: None
+    window.mic = {"name": "Mic", "hostapi": 1}
+    window.speaker = {"name": "Speaker", "hostapi": 1}
+    window.mic_channels = [0]
+    window.sequence_config = [
+        {
+            "seq1": {
+                "acq": {
+                    "mode": mode,
+                    "detail": {
+                        "sample_rate": 48000,
+                        "total_time": 1.0,
+                        "use_streaming_recording": False,
+                    },
+                },
+                "analysis_list": {"display_sequence": [], "auto_analysis": False},
+            }
+        }
+    ]
+
+    window.judge_play_and_record()
+
+    assert captured["recorded_dict"]["recording_start_delay_frames"] == 4800
+    assert "recording_start_delay_ms" not in captured["recorded_dict"]
+    _assert_no_recording_delay_frame_keys(window.sequence_config)
+
+    saved_path = tmp_path / f"{mode.lower()}_sequence.json"
+    assert LoadUiConfig.save_sequence_config_to_json(window.sequence_config, saved_path)
+    saved_config = json.loads(saved_path.read_text(encoding="utf-8"))
+    _assert_no_recording_delay_frame_keys(saved_config)
+
+
+@pytest.mark.parametrize("mode", ["RECORD_ONLY", "PLAY_AND_RECORD"])
+def test_existing_sequence_config_without_recording_delay_runs_to_streaming_start(mode):
+    namespace = _build_method_namespace()
+    captured = {}
+    namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
+
+    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None):
+        recorded = {
+            "sr": data_struct.sample_rate,
+            "num_frames": int((total_time or 1.0) * data_struct.sample_rate),
+        }
+        if recording_start_delay_ms is not None:
+            recorded["recording_start_delay_frames"] = int(
+                round(recording_start_delay_ms * data_struct.sample_rate / 1000.0)
+            )
+        return {
+            "data": np.array([0.1, 0.2], dtype=np.float32),
+            "amplitude": 1.0,
+            "sr": data_struct.sample_rate,
+        }, recorded
+
+    namespace["LoadUiConfig"] = types.SimpleNamespace(
+        get_rec_and_play_dict_base_sequence_dict=fake_get_dict
+    )
+    namespace["StreamingWavWriter"] = FakeWavWriter
+
+    def _capture_stream_record(recorded_dict, recorded_path, recorded_signal_info):
+        captured["recorded_dict"] = dict(recorded_dict)
+        return FakeStreamingProcessor(), recorded_dict["sr"]
+
+    def _capture_stream_playrec(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info):
+        captured["recorded_dict"] = dict(recorded_dict)
+        captured["stimulus_dict"] = dict(stimulus_dict)
+        return FakeStreamingProcessor(), stimulus_dict["data"], stimulus_dict["sr"]
+
+    namespace["stream_record_without_play"] = _capture_stream_record
+    namespace["stream_play_and_record"] = _capture_stream_playrec
+
+    window = _build_fake_window(namespace, use_streaming=True, mode=mode)
+    window.reset_work_pram = window._real_reset_work_pram
+    window.data_struct.clear_data = lambda: None
+    window.mic = {"name": "Mic", "hostapi": 1}
+    window.speaker = {"name": "Speaker", "hostapi": 1}
+    window.mic_channels = [0]
+    window.sequence_config = [
+        {
+            "seq1": {
+                "acq": {
+                    "mode": mode,
+                    "detail": {
+                        "sample_rate": 48000,
+                        "total_time": 1.0,
+                        "use_streaming_recording": True,
+                    },
+                },
+                "analysis_list": {"display_sequence": [], "auto_analysis": False},
+            }
+        }
+    ]
+
+    window.judge_play_and_record()
+
+    assert captured["recorded_dict"]["recording_start_delay_frames"] == 4800
+    assert "recording_start_delay_ms" not in captured["recorded_dict"]
+    _assert_no_recording_delay_frame_keys(window.sequence_config)
 
 
 def test_streaming_mode_keeps_sn_locked_until_completion():
