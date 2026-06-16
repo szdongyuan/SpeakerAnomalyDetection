@@ -41,10 +41,10 @@ from ui.custom_ui_widget.widgets import (
     LineEdit,
     SpinBox,
 )
-from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, OctaveSmoothingSelectorWidget
+from ui.ui_analysis_config.common_widgets import OctaveSmoothingSelectorWidget, SemanticAnalysisConfigDialogBase
 
 
-class ReferenceSpectrumConfigWindow(AnalysisConfigDialogBase):
+class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
     WINDOW_OPTIONS = ["hann", "hamming", "blackman"]
     NPERSEG_OPTIONS = ["1024", "2048", "4096", "8192"]
     OVERLAP_OPTIONS = [("25%", 0.25), ("50%", 0.5), ("75%", 0.75)]
@@ -65,18 +65,28 @@ class ReferenceSpectrumConfigWindow(AnalysisConfigDialogBase):
         self._bind_initial_values()
 
     def init_ui(self):
-        self.setMinimumSize(520, 680)
-        self.resize(560, 720)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self.default_btn = self.semantic_default_btn
+        self.ok_btn = self.semantic_ok_btn
+        self._build_semantic_sections()
 
-        layout = QVBoxLayout()
-        layout.addWidget(self._create_reference_group())
-        layout.addWidget(self._create_band_group())
-        layout.addWidget(self._create_threshold_group())
-        layout.addWidget(self._create_channel_name_group())
-        layout.addWidget(self._create_advanced_group())
-        layout.addStretch()
-        layout.addLayout(self.create_btn())
-        self.setLayout(layout)
+    def _build_semantic_sections(self):
+        compute_widget = QWidget(self)
+        compute_layout = QVBoxLayout(compute_widget)
+        compute_layout.setContentsMargins(0, 0, 0, 0)
+        compute_layout.setSpacing(12)
+        compute_layout.addWidget(self._create_band_group())
+        compute_layout.addWidget(self._create_advanced_group())
+
+        self.add_semantic_section("reference", widget=self._create_reference_group())
+        self.add_semantic_section("compute", widget=compute_widget)
+        self.add_semantic_section("judgment", widget=self._create_threshold_group())
+        self.add_semantic_section("display", widget=self._create_channel_name_group())
 
     def _create_reference_group(self):
         group = GroupBox("参考样本")
@@ -191,10 +201,10 @@ class ReferenceSpectrumConfigWindow(AnalysisConfigDialogBase):
         return self.channel_name_group
 
     def _create_advanced_group(self):
-        group = GroupBox("高级设置（可选）")
+        group = GroupBox("频谱估计参数（可选）")
         layout = QVBoxLayout()
 
-        self.show_advanced_checkbox = CheckBox("调整高级参数")
+        self.show_advanced_checkbox = CheckBox("调整频谱估计参数")
         self.show_advanced_checkbox.setChecked(False)
         self.show_advanced_checkbox.stateChanged.connect(self._on_advanced_visibility_changed)
         layout.addWidget(self.show_advanced_checkbox)
@@ -248,6 +258,16 @@ class ReferenceSpectrumConfigWindow(AnalysisConfigDialogBase):
         self.default_btn = btn_layout.itemAt(0).widget()
         self.ok_btn = btn_layout.itemAt(2).widget()
         return btn_layout
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.model_type, {})
+        self._reference_audio_meta = None
+        self._reference_data_path = ""
+        self._reference_data_last_generated_at = self.load_config.get("reference_data_last_generated_at")
+        self._channel_name_inputs = {}
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
+        self._bind_initial_values()
 
     def _bind_initial_values(self):
         cfg = self.load_config or {}

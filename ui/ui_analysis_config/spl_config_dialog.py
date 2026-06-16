@@ -5,42 +5,45 @@ SPL (Sound Pressure Level) 分析配置对话框
 import re
 from typing import List, Optional
 
-from PyQt5.QtWidgets import QVBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, RadioButton
 from ui.ui_analysis_config.common_widgets import (
-    AnalysisConfigDialogBase,
     ChannelSelectorWidget,
     GoldenSampleWidget,
     OctaveSmoothingSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
     WeightingSelectorWidget,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.ui_src import ui_resources
 
 
-class SplConfigWindow(AnalysisConfigDialogBase):
+class SplConfigWindow(SemanticAnalysisConfigDialogBase):
     """SPL 分析配置对话框"""
 
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.config_key = model_type
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
         self.model_type = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "SPL"
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
         self.init_ui()
 
     def init_ui(self):
-        # 默认高度偏小会把阈值绘图区域压缩得很矮，导致“显示不完整”的观感
-        height = 570 if self.model_type == "SPLF" else 430
-        self.setMinimumSize(380, height)
-        self.resize(380, height)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
 
-        layout = QVBoxLayout()
-
+    def _build_semantic_sections(self):
         # SPL: time-domain smoothing checkbox
         self.smooth_chk_box = None
         if self.model_type != "SPLF":
@@ -81,24 +84,25 @@ class SplConfigWindow(AnalysisConfigDialogBase):
 
         self.weighting_selector = WeightingSelectorWidget(self.load_config, parent=self)
 
-        btn_layout = self.create_btn()
-
         if self.show_channel_selector:
             self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
-            layout.addWidget(self.channel_selector)
-        layout.addWidget(self.weighting_selector)
+            self.add_semantic_section("input", widget=self.channel_selector)
+
+        compute_widget = QWidget(self)
+        compute_layout = QVBoxLayout(compute_widget)
+        compute_layout.setContentsMargins(0, 0, 0, 0)
+        compute_layout.setSpacing(8)
+        compute_layout.addWidget(self.weighting_selector)
         if self.splf_mode_group_box is not None:
-            layout.addWidget(self.splf_mode_group_box)
-            layout.addWidget(self.smoothing_selector)
+            compute_layout.addWidget(self.splf_mode_group_box)
+            compute_layout.addWidget(self.smoothing_selector)
         elif self.smooth_chk_box is not None:
-            layout.addWidget(self.smooth_chk_box)
+            compute_layout.addWidget(self.smooth_chk_box)
+        self.add_semantic_section("compute", widget=compute_widget)
+
         if self.golden_chk_box is not None:
-            layout.addWidget(self.golden_chk_box)
-        layout.addWidget(self.threshold_widget)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        layout.setSpacing(10)
-        self.setLayout(layout)
+            self.add_semantic_section("reference", widget=self.golden_chk_box)
+        self.add_semantic_section("judgment", widget=self.threshold_widget)
 
     def create_btn(self):
         return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
@@ -130,6 +134,11 @@ class SplConfigWindow(AnalysisConfigDialogBase):
             return
         save_flag = self.config_manager.save_default_config(self.model_type, config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

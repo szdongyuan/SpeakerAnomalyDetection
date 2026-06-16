@@ -1,16 +1,15 @@
 import os
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import PushButton, Label, GroupBox, CheckBox, LineEdit, SpinBox, MessageBox
+from ui.ui_analysis_config.common_widgets import SemanticAnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
-class ExcelConfigWindow(QDialog):
+class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
     """
     Excel 结果导出配置（全局分析项）
 
@@ -20,7 +19,7 @@ class ExcelConfigWindow(QDialog):
     """
 
     def __init__(self, config_manager, model_type):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
@@ -30,13 +29,25 @@ class ExcelConfigWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
-        self.setMinimumSize(420, 420)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
 
-        layout = QVBoxLayout()
+    def _build_semantic_sections(self):
+        output_widget = QWidget(self)
+        output_layout = QVBoxLayout(output_widget)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(12)
 
+        output_layout.addWidget(self._create_excel_save_group())
+        output_layout.addWidget(self._create_mes_save_group())
+        self.add_semantic_section("output", widget=output_widget)
+
+    def _create_excel_save_group(self):
         basic_box = GroupBox("Excel 保存设置")
         basic_layout = QVBoxLayout()
 
@@ -121,8 +132,9 @@ class ExcelConfigWindow(QDialog):
         basic_layout.addWidget(select_box)
 
         basic_box.setLayout(basic_layout)
-        layout.addWidget(basic_box)
+        return basic_box
 
+    def _create_mes_save_group(self):
         mes_box = GroupBox("MES 保存设置")
         mes_layout = QVBoxLayout()
 
@@ -154,12 +166,7 @@ class ExcelConfigWindow(QDialog):
         mes_layout.addLayout(mes_name_layout)
 
         mes_box.setLayout(mes_layout)
-        layout.addWidget(mes_box)
-
-        layout.addStretch()
-        layout.addLayout(self.create_btn())
-
-        self.setLayout(layout)
+        return mes_box
 
     def _get_available_analysis_items(self) -> list[str]:
         """
@@ -324,6 +331,12 @@ class ExcelConfigWindow(QDialog):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("Excel", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.model_type, {})
+        self._item_checkbox_by_name = {}
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         ok, msg = self._validate_save_dir_text(self.save_dir_edit.text(), create=True)

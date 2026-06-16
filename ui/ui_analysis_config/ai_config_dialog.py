@@ -1,40 +1,44 @@
 from typing import List, Optional
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QSizePolicy
+from PyQt5.QtWidgets import QHBoxLayout, QSizePolicy
 
 from base.training_model_management import TrainingModelManagement
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import ComboBox, Label, GroupBox, MessageBox
-from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, ChannelSelectorWidget
+from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
-class AIConfigWindow(AnalysisConfigDialogBase):
+class AIConfigWindow(SemanticAnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, signal_len=None, available_channels: Optional[List[int]] = None):
         super().__init__(disable_close_button=True)
         self.signal_len = signal_len
         self.config_manager = config_manager
+        self.config_key = model_type
         self.model_list = self.load_model_name_from_db()
-        self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
         self.init_ui()
 
     def init_ui(self):
-        self.setMinimumSize(200, 300)
-        layout = QVBoxLayout()
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
+
+    def _build_semantic_sections(self):
         if self.show_channel_selector:
             self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
-            layout.addWidget(self.channel_selector)
+            self.add_semantic_section("input", widget=self.channel_selector)
         model_box = self.create_model_layout()
-        btn_layout = self.create_btn()
-        layout.addWidget(model_box)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
+        self.add_semantic_section("compute", widget=model_box)
 
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:
@@ -89,6 +93,11 @@ class AIConfigWindow(AnalysisConfigDialogBase):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("AI", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

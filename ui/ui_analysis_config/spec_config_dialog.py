@@ -6,37 +6,41 @@ from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, Label, ComboBox, SpinBox, MessageBox
-from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, ChannelSelectorWidget
+from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
-class SpecConfigWindow(AnalysisConfigDialogBase):
+class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.config_key = model_type
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
         self.init_ui()
 
     def init_ui(self):
-        self.setMinimumSize(350, 350)
-        self.resize(350, 420)
-        layout = QVBoxLayout()
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
+
+    def _build_semantic_sections(self):
         if self.show_channel_selector:
             self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
-            layout.addWidget(self.channel_selector)
-        spec_param_group_box = GroupBox("频谱图参数配置")
-        param_layout = self.create_spec_param()
-        spec_param_group_box.setLayout(param_layout)
-        btn_layout = self.create_btn()
+            self.add_semantic_section("input", widget=self.channel_selector)
+        compute_group_box = GroupBox("频谱计算参数")
+        compute_group_box.setLayout(self.create_compute_param())
+        display_group_box = GroupBox("频谱显示参数")
+        display_group_box.setLayout(self.create_display_param())
+        self.add_semantic_section("compute", widget=compute_group_box)
+        self.add_semantic_section("display", widget=display_group_box)
 
-        layout.addWidget(spec_param_group_box)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
-
-    def create_spec_param(self):
+    def create_compute_param(self):
         freq_scale_label = Label("频率轴类型")
         self.freq_scale_box = ComboBox()
         self.freq_scale_box.addItems(["linear", "log"])
@@ -75,6 +79,18 @@ class SpecConfigWindow(AnalysisConfigDialogBase):
         window_layout.addWidget(window_func_label)
         window_layout.addWidget(self.window_func_box)
 
+        param_layout = QVBoxLayout()
+        param_layout.addLayout(freq_scale_layout)
+        param_layout.addStretch()
+        param_layout.addLayout(fft_layout)
+        param_layout.addStretch()
+        param_layout.addLayout(hop_layout)
+        param_layout.addStretch()
+        param_layout.addLayout(window_layout)
+        param_layout.setSpacing(10)
+        return param_layout
+
+    def create_display_param(self):
         colormap_label = Label("配色")
         self.colormap_box = ComboBox()
         self.colormap_box.addItems(["viridis", "plasma", "magma", "inferno"])
@@ -117,15 +133,6 @@ class SpecConfigWindow(AnalysisConfigDialogBase):
         self.custom_limit_checkbox.setChecked(self.load_config.get("custom_limit", False))
 
         param_layout = QVBoxLayout()
-        param_layout.addStretch()
-        param_layout.addLayout(freq_scale_layout)
-        param_layout.addStretch()
-        param_layout.addLayout(fft_layout)
-        param_layout.addStretch()
-        param_layout.addLayout(hop_layout)
-        param_layout.addStretch()
-        param_layout.addLayout(window_layout)
-        param_layout.addStretch()
         param_layout.addLayout(colormap_layout)
         param_layout.addStretch()
         param_layout.addWidget(self.custom_limit_checkbox)
@@ -169,6 +176,11 @@ class SpecConfigWindow(AnalysisConfigDialogBase):
             return
         save_flag = self.config_manager.save_default_config("Spec", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

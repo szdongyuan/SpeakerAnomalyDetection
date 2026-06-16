@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Any
+from typing import Any, Callable
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -41,9 +41,26 @@ OCTAVE_SMOOTHING_LABELS = {
     48: "1/48 Oct",
 }
 
+SEMANTIC_GROUP_TITLES = {
+    "input": "输入参数",
+    "compute": "计算参数",
+    "preprocess": "预处理参数",
+    "detection": "检测参数",
+    "judgment": "判定参数",
+    "reference": "基准参数",
+    "display": "显示参数",
+    "output": "输出参数",
+}
+
+VERTICAL_GOLDEN_DIALOG_WIDTH = 630
+VERTICAL_GOLDEN_DIALOG_HEIGHT = 840
+
 
 class AnalysisConfigDialogBase(QDialog):
     """Base dialog helpers for analysis configuration windows."""
+
+    DEFAULT_DIALOG_WIDTH = VERTICAL_GOLDEN_DIALOG_WIDTH
+    DEFAULT_DIALOG_HEIGHT = VERTICAL_GOLDEN_DIALOG_HEIGHT
 
     def __init__(self, *args, disable_close_button: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
@@ -68,6 +85,417 @@ class AnalysisConfigDialogBase(QDialog):
 
     def show_default_save_popup(self, success_flag: bool) -> None:
         PopupUtils().save_popup(self, success_flag=success_flag)
+
+    def apply_vertical_golden_dialog_size(
+        self,
+        width: int = DEFAULT_DIALOG_WIDTH,
+        height: int = DEFAULT_DIALOG_HEIGHT,
+    ) -> None:
+        self.setMinimumSize(width, height)
+        self.resize(width, height)
+
+
+class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
+    """Base dialog with semantic navigation and a single scrollable form page."""
+
+    DEFAULT_DIALOG_WIDTH = VERTICAL_GOLDEN_DIALOG_WIDTH
+    DEFAULT_DIALOG_HEIGHT = VERTICAL_GOLDEN_DIALOG_HEIGHT
+
+    def __init__(
+        self,
+        *args,
+        nav_width: int = 150,
+        disable_close_button: bool = True,
+        **kwargs,
+    ):
+        super().__init__(*args, disable_close_button=disable_close_button, **kwargs)
+        self._semantic_nav_buttons: dict[str, PushButton] = {}
+        self._semantic_sections: dict[str, QWidget] = {}
+        self._semantic_section_contents: dict[str, QWidget] = {}
+        self._semantic_section_indicators: dict[str, Label] = {}
+        self._semantic_section_collapsed: dict[str, bool] = {}
+        self._active_semantic_group_key: str | None = None
+        self._default_callback: Callable[[], Any] | None = None
+        self._restore_callback: Callable[[], Any] | None = None
+        self._ok_callback: Callable[[], Any] | None = None
+        self._cancel_callback: Callable[[], Any] | None = None
+        self._syncing_scroll = False
+        self.setObjectName("semanticAnalysisConfigDialog")
+        self.setStyleSheet(self._semantic_dialog_stylesheet())
+
+        self._root_layout = QVBoxLayout(self)
+        self._root_layout.setContentsMargins(12, 12, 12, 12)
+        self._root_layout.setSpacing(10)
+
+        self._content_layout = QHBoxLayout()
+        self._content_layout.setSpacing(12)
+
+        self.nav_widget = QWidget(self)
+        self.nav_widget.setObjectName("semanticNav")
+        self.nav_widget.setFixedWidth(nav_width)
+        self.nav_layout = QVBoxLayout(self.nav_widget)
+        self.nav_layout.setContentsMargins(10, 12, 10, 12)
+        self.nav_layout.setSpacing(6)
+        self.nav_title_label = Label("参数分组")
+        self.nav_title_label.setObjectName("semanticNavTitle")
+        self.nav_layout.addWidget(self.nav_title_label)
+        self.nav_layout.addStretch(1)
+
+        self.section_scroll_area = QScrollArea(self)
+        self.section_scroll_area.setObjectName("semanticSectionScrollArea")
+        self.section_scroll_area.setWidgetResizable(True)
+        self.section_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.section_container = QWidget(self.section_scroll_area)
+        self.section_container.setObjectName("semanticSectionContainer")
+        self.section_layout = QVBoxLayout(self.section_container)
+        self.section_layout.setContentsMargins(0, 0, 0, 0)
+        self.section_layout.setSpacing(22)
+        self.section_layout.addStretch(1)
+        self.section_scroll_area.setWidget(self.section_container)
+        self.section_scroll_area.verticalScrollBar().valueChanged.connect(self._sync_active_section_from_scroll)
+
+        self._content_layout.addWidget(self.nav_widget)
+        self._content_layout.addWidget(self.section_scroll_area, 1)
+        self._root_layout.addLayout(self._content_layout, 1)
+        self._root_layout.addLayout(self._create_semantic_footer_layout())
+
+    def apply_semantic_dialog_size(
+        self,
+        width: int = DEFAULT_DIALOG_WIDTH,
+        height: int = DEFAULT_DIALOG_HEIGHT,
+    ) -> None:
+        self.apply_vertical_golden_dialog_size(width, height)
+
+    def _semantic_dialog_stylesheet(self) -> str:
+        return """
+        QDialog#semanticAnalysisConfigDialog {
+            background: #f5f7fa;
+        }
+        QWidget#semanticNav {
+            background: #f2f5f9;
+            border: 1px solid #d9e0ea;
+            border-radius: 8px;
+        }
+        Label#semanticNavTitle {
+            color: #667085;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 0 4px 6px 4px;
+        }
+        PushButton#semanticNavButton {
+            min-height: 32px;
+            text-align: left;
+            padding: 5px 10px;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            background: transparent;
+            color: #344054;
+        }
+        PushButton#semanticNavButton:hover {
+            background: #edf2f7;
+            border-color: #d9e0ea;
+        }
+        PushButton#semanticNavButton[active="true"] {
+            background: #e8f0ff;
+            border-color: #bad0ff;
+            color: #123d93;
+            font-weight: 600;
+        }
+        QScrollArea#semanticSectionScrollArea {
+            background: #f8fafc;
+            border: 1px solid #d9e0ea;
+            border-radius: 8px;
+        }
+        QWidget#semanticSectionContainer {
+            background: #f8fafc;
+        }
+        QWidget#semanticSectionCard {
+            background: #ffffff;
+            border: 1px solid #d9e0ea;
+            border-radius: 8px;
+        }
+        QWidget#semanticSectionHeader {
+            background: #fbfcfe;
+            border-bottom: 1px solid #d9e0ea;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+        }
+        Label#semanticSectionTitle {
+            color: #1f2937;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        Label#semanticSectionDescription {
+            color: #667085;
+            font-size: 12px;
+        }
+        Label#semanticSectionIndicator {
+            color: #667085;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        QWidget#semanticSectionContent {
+            background: #ffffff;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
+        }
+        PushButton {
+            min-height: 30px;
+            border: 1px solid #b9c4d2;
+            border-radius: 6px;
+            background: #ffffff;
+            padding: 0 12px;
+            color: #344054;
+        }
+        PushButton:hover {
+            border-color: #8fa4c0;
+            background: #f8fafc;
+        }
+        PushButton#semanticPrimaryButton {
+            background: #2563eb;
+            border-color: #1d4ed8;
+            color: #ffffff;
+        }
+        PushButton#semanticPrimaryButton:hover {
+            background: #1d4ed8;
+            border-color: #1e40af;
+        }
+        QGroupBox {
+            background: #f8fafc;
+            border: 1px solid #d9e0ea;
+            border-radius: 6px;
+            margin-top: 12px;
+            padding: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 4px;
+            color: #344054;
+        }
+        QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
+            min-height: 28px;
+            border: 1px solid #b9c4d2;
+            border-radius: 6px;
+            background: #ffffff;
+            padding: 2px 8px;
+            color: #1f2937;
+        }
+        QComboBox:hover, QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {
+            border-color: #8fa4c0;
+        }
+        """
+
+    def _create_semantic_footer_layout(self) -> QHBoxLayout:
+        footer_layout = QHBoxLayout()
+        self.semantic_default_btn = PushButton(" 设为默认 ")
+        self.semantic_restore_btn = PushButton(" 恢复默认 ")
+        self.semantic_cancel_btn = PushButton(" 取  消 ")
+        self.semantic_ok_btn = PushButton(" 确  认 ")
+        self.semantic_ok_btn.setObjectName("semanticPrimaryButton")
+
+        self.semantic_default_btn.clicked.connect(self._on_default_clicked)
+        self.semantic_restore_btn.clicked.connect(self._on_restore_clicked)
+        self.semantic_cancel_btn.clicked.connect(self._on_cancel_clicked)
+        self.semantic_ok_btn.clicked.connect(self._on_ok_clicked)
+
+        footer_layout.addWidget(self.semantic_default_btn)
+        footer_layout.addWidget(self.semantic_restore_btn)
+        footer_layout.addStretch()
+        footer_layout.addWidget(self.semantic_cancel_btn)
+        footer_layout.addWidget(self.semantic_ok_btn)
+        return footer_layout
+
+    def set_semantic_button_callbacks(
+        self,
+        *,
+        default_callback: Callable[[], Any] | None = None,
+        restore_callback: Callable[[], Any] | None = None,
+        ok_callback: Callable[[], Any] | None = None,
+        cancel_callback: Callable[[], Any] | None = None,
+    ) -> None:
+        self._default_callback = default_callback
+        self._restore_callback = restore_callback
+        self._ok_callback = ok_callback
+        self._cancel_callback = cancel_callback
+
+    def add_semantic_section(
+        self,
+        group_key: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        widget: QWidget | None = None,
+        layout: QVBoxLayout | QHBoxLayout | None = None,
+    ) -> QVBoxLayout:
+        if group_key in self._semantic_sections:
+            raise ValueError(f"Semantic section already exists: {group_key}")
+
+        section_title = title or SEMANTIC_GROUP_TITLES.get(group_key, str(group_key))
+        nav_button = PushButton(section_title)
+        nav_button.setObjectName("semanticNavButton")
+        nav_button.setCheckable(True)
+        nav_button.setFlat(True)
+        nav_button.setCursor(Qt.PointingHandCursor)
+        nav_button.clicked.connect(partial(self.scroll_to_semantic_section, group_key))
+        self._semantic_nav_buttons[group_key] = nav_button
+        self.nav_layout.insertWidget(max(self.nav_layout.count() - 1, 0), nav_button)
+
+        section_widget = QWidget(self.section_container)
+        section_widget.setObjectName("semanticSectionCard")
+        section_widget.setProperty("semanticGroupKey", group_key)
+        section_widget.setAttribute(Qt.WA_StyledBackground, True)
+        section_layout = QVBoxLayout(section_widget)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(0)
+
+        header_widget = QWidget(section_widget)
+        header_widget.setObjectName("semanticSectionHeader")
+        header_widget.setAttribute(Qt.WA_StyledBackground, True)
+        header_widget.setCursor(Qt.PointingHandCursor)
+        header_widget.mousePressEvent = partial(self._on_section_header_clicked, group_key)
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(14, 10, 14, 10)
+        header_layout.setSpacing(4)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+        title_label = Label(section_title)
+        title_label.setObjectName("semanticSectionTitle")
+        title_label.setAlignment(Qt.AlignLeft)
+        indicator_label = Label("v")
+        indicator_label.setObjectName("semanticSectionIndicator")
+        indicator_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+        title_row.addWidget(indicator_label)
+        header_layout.addLayout(title_row)
+
+        if description:
+            description_label = Label(description)
+            description_label.setObjectName("semanticSectionDescription")
+            description_label.setAlignment(Qt.AlignLeft)
+            header_layout.addWidget(description_label)
+        section_layout.addWidget(header_widget)
+
+        content_widget = QWidget(section_widget)
+        content_widget.setObjectName("semanticSectionContent")
+        content_widget.setAttribute(Qt.WA_StyledBackground, True)
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(14, 12, 14, 14)
+        content_layout.setSpacing(10)
+        if widget is not None:
+            content_layout.addWidget(widget)
+        if layout is not None:
+            content_layout.addLayout(layout)
+        section_layout.addWidget(content_widget)
+
+        self._semantic_sections[group_key] = section_widget
+        self._semantic_section_contents[group_key] = content_widget
+        self._semantic_section_indicators[group_key] = indicator_label
+        self._semantic_section_collapsed[group_key] = False
+        self.section_layout.insertWidget(max(self.section_layout.count() - 1, 0), section_widget)
+
+        if self._active_semantic_group_key is None:
+            self._set_active_semantic_group(group_key)
+        return content_layout
+
+    def semantic_group_keys(self) -> list[str]:
+        return list(self._semantic_sections.keys())
+
+    def current_semantic_group_key(self) -> str | None:
+        return self._active_semantic_group_key
+
+    def clear_semantic_sections(self) -> None:
+        for button in self._semantic_nav_buttons.values():
+            self.nav_layout.removeWidget(button)
+            button.deleteLater()
+        for section in self._semantic_sections.values():
+            self.section_layout.removeWidget(section)
+            section.deleteLater()
+        self._semantic_nav_buttons.clear()
+        self._semantic_sections.clear()
+        self._semantic_section_contents.clear()
+        self._semantic_section_indicators.clear()
+        self._semantic_section_collapsed.clear()
+        self._active_semantic_group_key = None
+
+    def is_semantic_section_collapsed(self, group_key: str) -> bool:
+        return bool(self._semantic_section_collapsed.get(group_key, False))
+
+    def set_semantic_section_collapsed(self, group_key: str, collapsed: bool) -> None:
+        content = self._semantic_section_contents.get(group_key)
+        indicator = self._semantic_section_indicators.get(group_key)
+        if content is None:
+            return
+        collapsed = bool(collapsed)
+        content.setVisible(not collapsed)
+        self._semantic_section_collapsed[group_key] = collapsed
+        if indicator is not None:
+            indicator.setText(">" if collapsed else "v")
+
+    def toggle_semantic_section(self, group_key: str) -> None:
+        self.set_semantic_section_collapsed(group_key, not self.is_semantic_section_collapsed(group_key))
+
+    def _on_section_header_clicked(self, group_key: str, event) -> None:
+        self.toggle_semantic_section(group_key)
+        if event is not None:
+            event.accept()
+
+    def scroll_to_semantic_section(self, group_key: str) -> None:
+        section = self._semantic_sections.get(group_key)
+        if section is None:
+            return
+        self._set_active_semantic_group(group_key)
+        self.section_scroll_area.ensureWidgetVisible(section, 0, 0)
+
+    def _sync_active_section_from_scroll(self) -> None:
+        if self._syncing_scroll or not self._semantic_sections:
+            return
+        scroll_value = self.section_scroll_area.verticalScrollBar().value()
+        current_key = self._active_semantic_group_key
+        for group_key, section in self._semantic_sections.items():
+            if section.y() <= scroll_value + 12:
+                current_key = group_key
+            else:
+                break
+        if current_key is not None:
+            self._set_active_semantic_group(current_key)
+
+    def _set_active_semantic_group(self, group_key: str) -> None:
+        if group_key not in self._semantic_sections:
+            return
+        self._syncing_scroll = True
+        try:
+            self._active_semantic_group_key = group_key
+            for key, button in self._semantic_nav_buttons.items():
+                button.setChecked(key == group_key)
+                button.setProperty("active", key == group_key)
+                button.style().unpolish(button)
+                button.style().polish(button)
+        finally:
+            self._syncing_scroll = False
+
+    def _on_default_clicked(self) -> None:
+        if self._default_callback is not None:
+            self._default_callback()
+
+    def _on_restore_clicked(self) -> None:
+        if self._restore_callback is not None:
+            self._restore_callback()
+
+    def _on_cancel_clicked(self) -> None:
+        if self._cancel_callback is not None:
+            self._cancel_callback()
+        else:
+            self.reject()
+
+    def _on_ok_clicked(self) -> None:
+        if self._ok_callback is not None:
+            self._ok_callback()
+        else:
+            self.accept()
 
 
 class ChannelSelectorWidget(QWidget):

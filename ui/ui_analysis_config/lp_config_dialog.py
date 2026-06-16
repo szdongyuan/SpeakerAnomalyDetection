@@ -6,37 +6,39 @@ from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import GroupBox, Label, SpinBox
-from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, ChannelSelectorWidget
+from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
-class LPConfigWindow(AnalysisConfigDialogBase):
+class LPConfigWindow(SemanticAnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__()
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.config_key = model_type
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
 
         self.init_ui()
 
     def init_ui(self):
-        self.setMinimumSize(350, 350)
-        layout = QVBoxLayout()
-        lp_config_box = self.create_lp_config_box()
-        btn_layout = self.create_btn_layout()
-        layout.addWidget(lp_config_box)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_click_default_btn,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
+
+    def _build_semantic_sections(self):
+        if self.show_channel_selector:
+            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
+            self.add_semantic_section("input", widget=self.channel_selector)
+        self.add_semantic_section("detection", widget=self.create_lp_config_box())
 
     def create_lp_config_box(self):
         lp_config_box = GroupBox("松散颗粒参数配置")
         lp_config_box_layout = QVBoxLayout()
-        if self.show_channel_selector:
-            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
-            lp_config_box_layout.addWidget(self.channel_selector)
-            lp_config_box_layout.addStretch()
         trigger_threshold_layout = self.create_trigger_threshold_layout()
         comfirm_threshold_layout = self.create_confirm_threshold_layout()
         max_check_duration_layout = self.create_max_check_duration_layout()
@@ -156,6 +158,11 @@ class LPConfigWindow(AnalysisConfigDialogBase):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("LP", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

@@ -9,12 +9,16 @@ from PyQt5.QtWidgets import QVBoxLayout
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import GroupBox, MessageBox
-from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase, GoldenSampleWidget, HarmonicSelectorWidget
+from ui.ui_analysis_config.common_widgets import (
+    GoldenSampleWidget,
+    HarmonicSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
+)
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.ui_src import ui_resources
 
 
-class RbConfigWindow(AnalysisConfigDialogBase):
+class RbConfigWindow(SemanticAnalysisConfigDialogBase):
     """
     Rub & Buzz 分析配置对话框
 
@@ -29,13 +33,15 @@ class RbConfigWindow(AnalysisConfigDialogBase):
         self.init_ui()
 
     def init_ui(self):
-        self.setObjectName("RbConfigWindow")
-        self.setMinimumSize(320, 480)
-        self.resize(380, 620)
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
 
-        layout = QVBoxLayout()
-
-        # 谐波选择组
+    def _build_semantic_sections(self):
         harmonic_group_box = GroupBox("Rub & Buzz")
         harmonic_group_box.setObjectName("harmonic_group_box")
         harmonic_slider_layout = QVBoxLayout()
@@ -53,14 +59,9 @@ class RbConfigWindow(AnalysisConfigDialogBase):
             model_type=self.model_type,
         )
 
-        btn_layout = self.create_btn()
-
-        layout.addWidget(harmonic_group_box)
-        layout.addWidget(self.golden_chk_box)
-        layout.addWidget(self.threshold_widget)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
+        self.add_semantic_section("detection", widget=harmonic_group_box)
+        self.add_semantic_section("reference", widget=self.golden_chk_box)
+        self.add_semantic_section("judgment", widget=self.threshold_widget)
 
     def create_btn(self):
         return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
@@ -79,6 +80,11 @@ class RbConfigWindow(AnalysisConfigDialogBase):
             return
         save_flag = self.config_manager.save_default_config("RB", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(self.model_type, {})
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         if not self.harmonic_selector.selected_labels():

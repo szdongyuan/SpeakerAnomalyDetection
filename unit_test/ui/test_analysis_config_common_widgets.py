@@ -4,13 +4,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
 
 from ui.ui_analysis_config.common_widgets import (
     ChannelSelectorWidget,
     GoldenSampleWidget,
     HarmonicSelectorWidget,
     OctaveSmoothingSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
     TimeSmoothingWidget,
     WeightingSelectorWidget,
 )
@@ -134,3 +135,98 @@ def test_harmonic_selector_toggle_label_updates_selection(qapp):
 
     assert widget.selected_labels() == []
     assert first_label.text().startswith("  ")
+
+
+def _filler_widget(min_height=120):
+    widget = QWidget()
+    widget.setMinimumHeight(min_height)
+    layout = QVBoxLayout(widget)
+    layout.addWidget(ChannelSelectorWidget({"analysis_channel": 0}, [0]))
+    return widget
+
+
+def test_semantic_dialog_registers_only_added_groups(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("input", widget=_filler_widget())
+    dialog.add_semantic_section("compute", widget=_filler_widget())
+    dialog.add_semantic_section("judgment", title="判定参数", widget=_filler_widget())
+
+    assert dialog.semantic_group_keys() == ["input", "compute", "judgment"]
+    assert set(dialog._semantic_nav_buttons) == {"input", "compute", "judgment"}
+    assert dialog.current_semantic_group_key() == "input"
+    assert dialog._semantic_nav_buttons["input"].isChecked() is True
+
+
+def test_semantic_dialog_rejects_duplicate_group_keys(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("input", widget=_filler_widget())
+
+    with pytest.raises(ValueError):
+        dialog.add_semantic_section("input", widget=_filler_widget())
+
+
+def test_semantic_dialog_nav_click_updates_active_group(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("input", widget=_filler_widget())
+    dialog.add_semantic_section("compute", widget=_filler_widget())
+
+    dialog.scroll_to_semantic_section("compute")
+
+    assert dialog.current_semantic_group_key() == "compute"
+    assert dialog._semantic_nav_buttons["compute"].isChecked() is True
+    assert dialog._semantic_nav_buttons["input"].isChecked() is False
+
+
+def test_semantic_dialog_sections_are_collapsible_and_expanded_by_default(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("compute", widget=_filler_widget())
+
+    assert dialog.is_semantic_section_collapsed("compute") is False
+    assert dialog._semantic_section_contents["compute"].isHidden() is False
+
+    dialog.toggle_semantic_section("compute")
+
+    assert dialog.is_semantic_section_collapsed("compute") is True
+    assert dialog._semantic_section_contents["compute"].isHidden() is True
+    assert dialog._semantic_section_indicators["compute"].text() == ">"
+
+    dialog.set_semantic_section_collapsed("compute", False)
+
+    assert dialog.is_semantic_section_collapsed("compute") is False
+    assert dialog._semantic_section_contents["compute"].isHidden() is False
+    assert dialog._semantic_section_indicators["compute"].text() == "v"
+
+
+def test_semantic_dialog_scroll_sync_updates_active_group(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("input", widget=_filler_widget(200))
+    dialog.add_semantic_section("compute", widget=_filler_widget(200))
+    dialog.add_semantic_section("judgment", widget=_filler_widget(200))
+    dialog.resize(500, 260)
+    dialog.show()
+    qapp.processEvents()
+
+    judgment_y = dialog._semantic_sections["judgment"].y()
+    dialog.section_scroll_area.verticalScrollBar().setValue(judgment_y)
+    qapp.processEvents()
+
+    assert dialog.current_semantic_group_key() == "judgment"
+    assert dialog._semantic_nav_buttons["judgment"].isChecked() is True
+
+
+def test_semantic_dialog_footer_buttons_call_callbacks(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    calls = []
+    dialog.set_semantic_button_callbacks(
+        default_callback=lambda: calls.append("default"),
+        restore_callback=lambda: calls.append("restore"),
+        ok_callback=lambda: calls.append("ok"),
+        cancel_callback=lambda: calls.append("cancel"),
+    )
+
+    dialog.semantic_default_btn.click()
+    dialog.semantic_restore_btn.click()
+    dialog.semantic_cancel_btn.click()
+    dialog.semantic_ok_btn.click()
+
+    assert calls == ["default", "restore", "cancel", "ok"]
