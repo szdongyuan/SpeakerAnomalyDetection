@@ -122,6 +122,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     monitor_playback = recorded_dict.get("monitor_playback", False)
     monitor_input_channel = recorded_dict.get("monitor_input_channel")
     monitor_gain_db = float(recorded_dict.get("monitor_gain_db", 0.0))
+    recording_start_delay_frames = recorded_dict.get("recording_start_delay_frames", 0)
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -136,6 +137,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         monitor_playback=monitor_playback,
         monitor_input_channel=monitor_input_channel,
         monitor_gain_db=monitor_gain_db,
+        discard_initial_samples=recording_start_delay_frames,
     )
 
     if record_code == error_code.OK:
@@ -178,6 +180,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
 
     input_device = recorded_dict.get("input_device")
     output_device = recorded_dict.get("output_device")
+    recording_start_delay_frames = recorded_dict.get("recording_start_delay_frames", 0)
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -190,7 +193,8 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         input_device=input_device,
         output_device=output_device,
         prepare_frames=prepare_frames,
-        prolong_frames=prolong_frames
+        prolong_frames=prolong_frames,
+        discard_initial_samples=recording_start_delay_frames,
     )
 
     if record_code == error_code.OK:

@@ -1,4 +1,5 @@
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QSize
+from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QLabel,
     QCheckBox,
@@ -23,7 +24,51 @@ from PyQt5.QtWidgets import (
     QTableWidget,
 )
 
-from consts.ui_style_const import scale_size_px
+from consts.ui_style_const import (
+    CUSTOM_WIDGET_BUTTON_VERTICAL_PADDING_PX,
+    CUSTOM_WIDGET_CONTROL_VERTICAL_PADDING_PX,
+    scale_size_px,
+)
+
+
+def _build_font(pixel_size):
+    font = QFont()
+    font.setFamily("SimSun")
+    font.setPixelSize(scale_size_px(pixel_size))
+    return font
+
+
+def _font_safe_height(widget, vertical_padding_px=CUSTOM_WIDGET_CONTROL_VERTICAL_PADDING_PX):
+    try:
+        metrics = QFontMetrics(widget.font())
+        metric_height = int(metrics.height())
+    except Exception:
+        metric_height = 0
+    fallback_height = scale_size_px(28)
+    return max(fallback_height, metric_height + scale_size_px(vertical_padding_px))
+
+
+def _apply_font(widget, pixel_size):
+    widget.font_size = scale_size_px(pixel_size)
+    widget._font = _build_font(pixel_size)
+    widget.setFont(widget._font)
+    if hasattr(widget, "_safe_height"):
+        widget.setMinimumHeight(widget._safe_height())
+
+
+class _FontSafeHeightMixin:
+    _vertical_padding_px = CUSTOM_WIDGET_CONTROL_VERTICAL_PADDING_PX
+
+    def _safe_height(self):
+        return _font_safe_height(self, self._vertical_padding_px)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return QSize(hint.width(), max(hint.height(), self._safe_height()))
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(hint.width(), max(hint.height(), self._safe_height()))
 
 
 class Label(QLabel):
@@ -41,44 +86,28 @@ class Label(QLabel):
         self.setFont(self.font)
 
 
-class CheckBox(QCheckBox):
+class CheckBox(_FontSafeHeightMixin, QCheckBox):
     def __init__(self, *args):
         super(CheckBox, self).__init__(*args)
-        self.font_size = scale_size_px(20)
-        self.font = QFont()
-        self.font.setFamily("SimSun")
-        self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        _apply_font(self, 20)
 
 
-class ComboBox(QComboBox):
+class ComboBox(_FontSafeHeightMixin, QComboBox):
     def __init__(self, parent=None):
         super(ComboBox, self).__init__(parent)
-        self.font_size = scale_size_px(18)
-        self.font = QFont()
-        self.font.setFamily("SimSun")
-        self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        _apply_font(self, 18)
 
 
-class SpinBox(QSpinBox):
+class SpinBox(_FontSafeHeightMixin, QSpinBox):
     def __init__(self, parent=None):
         super(SpinBox, self).__init__(parent)
-        self.font_size = scale_size_px(20)
-        self.font = QFont()
-        self.font.setFamily("SimSun")
-        self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        _apply_font(self, 20)
 
 
-class DoubleSpinBox(QDoubleSpinBox):
+class DoubleSpinBox(_FontSafeHeightMixin, QDoubleSpinBox):
     def __init__(self, parent=None):
         super(DoubleSpinBox, self).__init__(parent)
-        self.font_size = scale_size_px(20)
-        self.font = QFont()
-        self.font.setFamily("SimSun")
-        self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        _apply_font(self, 20)
 
 
 class GroupBox(QGroupBox):
@@ -91,26 +120,19 @@ class GroupBox(QGroupBox):
         self.setFont(self.font)
 
 
-class PushButton(QPushButton):
+class PushButton(_FontSafeHeightMixin, QPushButton):
+    _vertical_padding_px = CUSTOM_WIDGET_BUTTON_VERTICAL_PADDING_PX
 
     def __init__(self, *args):
         super(PushButton, self).__init__(*args)
 
-        self.font_size = scale_size_px(20)
-        self.font = QFont()
-        self.font.setFamily("SimSun")
-        self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        _apply_font(self, 20)
 
 
-class LineEdit(QLineEdit):
+class LineEdit(_FontSafeHeightMixin, QLineEdit):
     def __init__(self, *args):
         super(LineEdit, self).__init__(*args)
-        self.font_size = scale_size_px(20)
-        self.font = QFont()
-        self.font.setFamily("SimSun")
-        self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        _apply_font(self, 20)
 
 
 class MarkPushButton(QPushButton):

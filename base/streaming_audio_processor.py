@@ -42,6 +42,8 @@ class StreamingAudioProcessor:
         self._rec_in_sel = [0]
         self._monitor_input_column = 0
         self._streaming_mode = None
+        self.discard_initial_samples = 0
+        self.samples_discarded = 0
 
     @staticmethod
     def _normalize_channel_selection(channels: Any) -> List[int]:
@@ -197,6 +199,30 @@ class StreamingAudioProcessor:
 
         return payload, reached_target
 
+    @staticmethod
+    def _coerce_nonnegative_samples(value, default=0):
+        if isinstance(value, bool):
+            return default
+        try:
+            samples = int(value)
+        except (TypeError, ValueError):
+            return default
+        return samples if samples >= 0 else default
+
+    def _discard_initial_multi(self, multi_chunk: np.ndarray) -> Tuple[np.ndarray, int]:
+        """
+        Drop configured startup warmup frames from a selected multichannel chunk.
+
+        Returns:
+            (retained_chunk, discarded_count_for_this_chunk)
+        """
+        remaining = max(0, self.discard_initial_samples - self.samples_discarded)
+        if remaining <= 0:
+            return multi_chunk, 0
+        discard = min(remaining, int(multi_chunk.shape[0]))
+        self.samples_discarded += discard
+        return multi_chunk[discard:, :], discard
+
     def _audio_callback(self, indata, frames, time_info, status):
         """
         Audio callback function called by sounddevice from audio thread.
@@ -217,6 +243,10 @@ class StreamingAudioProcessor:
             pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
             multi = np.concatenate([multi, pad], axis=0)
 
+        multi, _ = self._discard_initial_multi(multi)
+        if multi.shape[0] == 0:
+            return
+
         self._queue_chunk_and_maybe_stop(multi)
 
     def monitor_duplex_callback(self, indata, outdata, frames, time_info, status):
@@ -230,19 +260,22 @@ class StreamingAudioProcessor:
             pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
             multi = np.concatenate([multi, pad], axis=0)
 
-        payload, reached = self._queue_chunk_and_maybe_stop(multi)
-
         outdata.fill(0)
+        multi, discarded = self._discard_initial_multi(multi)
+        if multi.shape[0] == 0:
+            return
+
+        payload, _ = self._queue_chunk_and_maybe_stop(multi)
+
         monitor_multi = payload["multi"]
         if monitor_multi.shape[1] > self._monitor_input_column:
             monitor_in = monitor_multi[:, self._monitor_input_column]
         else:
             monitor_in = monitor_multi[:, 0]
-        if reached and len(monitor_in) < frames:
-            play = np.zeros(frames, dtype=np.float32)
-            play[: len(monitor_in)] = monitor_in
-        else:
-            play = monitor_in
+        play = np.zeros(frames, dtype=np.float32)
+        copy_count = min(len(monitor_in), max(0, frames - discarded))
+        if copy_count:
+            play[discarded : discarded + copy_count] = monitor_in[:copy_count]
         play = np.clip(play * self.monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
 
         if outdata.shape[1] >= 2:
@@ -318,6 +351,7 @@ class StreamingAudioProcessor:
         monitor_gain_db: float = 0.0,
         monitor_input_channel=None,
         input_channels: Any = None,
+        discard_initial_samples: Any = 0,
     ):
         """
         Start streaming audio recording (record-only mode).
@@ -340,6 +374,8 @@ class StreamingAudioProcessor:
         self.sample_rate = sample_rate
         self.target_samples = target_samples
         self.samples_captured = 0
+        self.discard_initial_samples = self._coerce_nonnegative_samples(discard_initial_samples, 0)
+        self.samples_discarded = 0
         self.accumulated_chunks = []
         self.accumulated_multi_chunks = []
         self.is_recording = True
@@ -424,6 +460,7 @@ class StreamingAudioProcessor:
         prepare_frames=1000,
         prolong_frames=10000,
         input_channels=None,
+        discard_initial_samples=0,
     ):
         """
         Start streaming play and record (simultaneous playback and recording).
@@ -452,6 +489,8 @@ class StreamingAudioProcessor:
         self.sample_rate = sample_rate
         self.target_samples = target_samples
         self.samples_captured = 0
+        self.discard_initial_samples = self._coerce_nonnegative_samples(discard_initial_samples, 0)
+        self.samples_discarded = 0
         self.accumulated_chunks = []
         self.accumulated_multi_chunks = []
         self.is_recording = True
@@ -465,7 +504,12 @@ class StreamingAudioProcessor:
             self.input_channels = max_input_channels
 
             self.playback_data = np.concatenate(
-                [np.zeros(prepare_frames), stimulus_data, np.zeros(prolong_frames)]
+                [
+                    np.zeros(self.discard_initial_samples, dtype=np.float32),
+                    np.zeros(prepare_frames),
+                    stimulus_data,
+                    np.zeros(prolong_frames),
+                ]
             ).astype(np.float32)
             self.playback_index = 0
 
@@ -506,6 +550,9 @@ class StreamingAudioProcessor:
                 elif multi.shape[0] < frames:
                     pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
                     multi = np.concatenate([multi, pad], axis=0)
+                multi, _ = self._discard_initial_multi(multi)
+                if multi.shape[0] == 0:
+                    return
                 self._queue_chunk_and_maybe_stop(multi)
 
             # ONE duplex stream instead of OutputStream + InputStream
