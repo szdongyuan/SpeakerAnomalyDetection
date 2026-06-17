@@ -80,7 +80,6 @@ class TcpServer:
                 self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.server_socket.bind((self.host, self.port))
                 self.server_socket.listen(5)
-                print("Tcp_service is waiting for a connection...")
                 client_socket, client_address = self.server_socket.accept()
                 self._set_current_client(client_socket, client_address)
                 self.default_logger.info(f"client_address from {client_address} build")
@@ -104,7 +103,6 @@ class TcpServer:
                             self.default_logger.error(f"server_socket accept error: {e}")
                             break
                 finally:
-                    print("client close")
                     self.default_logger.info(f"client close")
                     self._clear_current_client(expected_socket=client_socket)
             except Exception as e:
