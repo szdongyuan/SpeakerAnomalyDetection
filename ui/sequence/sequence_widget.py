@@ -49,7 +49,6 @@ from base.save_data import ensure_test_result_file, save_recorded_data_to_json, 
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.tcp_service import TcpServer, check_tcp_msg_format
-from base.temp_tcp_client import TempTcpClient
 from base.streaming_file_writer import StreamingWavWriter
 from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
@@ -406,14 +405,15 @@ class SequenceWindow(QWidget):
             return
         try:
             tcp_server = getattr(SequenceWindow, "tcp_server", None)
-            client_address = getattr(tcp_server, "client_address", None)
-            if not client_address:
-                self.default_logger.warning("tcp_callback_skip: no client address")
+            if tcp_server is None:
+                self.default_logger.warning("tcp_callback_skip: no tcp server")
                 return
             payload = self._build_tcp_analysis_result_payload()
             message = json.dumps(payload, ensure_ascii=False)
-            TempTcpClient(client_address[0], client_address[1], message)
-            self.default_logger.info(f"tcp_callback_sent: {message}")
+            if tcp_server.send_to_current_client(message):
+                self.default_logger.info(f"tcp_callback_sent: {message}")
+            else:
+                self.default_logger.warning("tcp_callback_skip: no active tcp client")
         except Exception as e:
             self.default_logger.error(f"tcp_callback_send_error: {e}")
 

@@ -184,7 +184,6 @@ def _build_method_namespace():
         "error_code": types.SimpleNamespace(OK="OK"),
         "save_audio_simple": lambda *args, **kwargs: None,
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
-        "TempTcpClient": lambda *args, **kwargs: None,
         "normalize_play_record_detail": normalize_play_record_detail,
         "normalize_record_only_detail": normalize_record_only_detail,
         "np": np,
@@ -1674,9 +1673,11 @@ def test_start_this_play_no_longer_sends_finish_callback():
     namespace = _build_method_namespace()
     tcp_sends = []
     namespace["SequenceWindow"] = types.SimpleNamespace(
-        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+        tcp_server=types.SimpleNamespace(
+            client_address=("127.0.0.1", 5000),
+            send_to_current_client=lambda message: tcp_sends.append(message) or True,
+        )
     )
-    namespace["TempTcpClient"] = lambda *args: tcp_sends.append(args)
     window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
     window.start_this_play = window._real_start_this_play
     window.tcp_flag = True
@@ -1722,13 +1723,15 @@ def test_tcp_analysis_result_payload_defaults_to_not_labeled_without_summary():
     assert payload["FileName"] == "OH2P-002.wav"
 
 
-def test_tcp_analysis_result_callback_sends_json_to_client_address():
+def test_tcp_analysis_result_callback_sends_json_to_current_tcp_client():
     namespace = _build_method_namespace()
     sends = []
-    namespace["SequenceWindow"] = types.SimpleNamespace(
-        tcp_server=types.SimpleNamespace(client_address=("127.0.0.1", 5000))
+    fake_tcp_server = types.SimpleNamespace(
+        send_to_current_client=lambda message: sends.append(message) or True
     )
-    namespace["TempTcpClient"] = lambda *args: sends.append(args)
+    namespace["SequenceWindow"] = types.SimpleNamespace(
+        tcp_server=fake_tcp_server
+    )
     window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
     window.tcp_flag = True
     window.recorded_path = "OH2P-003.wav"
@@ -1742,10 +1745,22 @@ def test_tcp_analysis_result_callback_sends_json_to_client_address():
     window._send_tcp_analysis_result_callback()
 
     assert len(sends) == 1
-    assert sends[0][0:2] == ("127.0.0.1", 5000)
-    sent_payload = json.loads(sends[0][2])
+    sent_payload = json.loads(sends[0])
     assert sent_payload["Label"] == "NG"
     assert sent_payload["FileName"] == "OH2P-003.wav"
+
+
+def test_tcp_analysis_result_callback_skips_without_tcp_server():
+    namespace = _build_method_namespace()
+    namespace["SequenceWindow"] = types.SimpleNamespace(tcp_server=None)
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.tcp_flag = True
+    window._build_tcp_analysis_result_payload = lambda: {"TimeStamp": "t", "Label": "OK", "FileName": "a.wav"}
+    window._send_tcp_analysis_result_callback = _bind_method(window, namespace, "_send_tcp_analysis_result_callback")
+
+    window._send_tcp_analysis_result_callback()
+
+    assert any("tcp_callback_skip" in message for level, message in window.default_logger.messages)
 
 
 def test_tcp_run_test_allows_play_and_record_mode():
