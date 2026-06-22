@@ -203,13 +203,29 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
     window = SplConfigWindow(config_manager, "SPL", available_channels=[0, 2])
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["input", "compute", "judgment"]
+    assert window.semantic_group_keys() == ["input", "preprocess", "compute", "judgment"]
     assert window.get_default_config() == {
+        "spl_window_unit": "points",
+        "spl_window_time_sec": 0.0272,
+        "spl_window_points": 1201,
+        "smooth_enabled": True,
+        "smooth_unit": "points",
+        "smooth_time_sec": 0.025,
+        "smooth_points": 1102,
+        "smooth_algo": 2,
         "smooth_checked": True,
         "limit_checked": False,
         "limit_data": None,
+        "limit_mode": "csv",
+        "manual_upper_enabled": True,
+        "manual_upper": 0.0,
+        "manual_lower_enabled": False,
+        "manual_lower": 0.0,
         "weighting": "C",
         "analysis_channel": 2,
+        "analysis_time_range_enabled": False,
+        "analysis_start_time_sec": 0.0,
+        "analysis_end_time_sec": 0.0,
     }
 
 
@@ -243,6 +259,39 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "weighting": "Z",
         "analysis_channel": 1,
     }
+
+
+def test_spl_dialog_preserves_manual_threshold_config(qapp):
+    from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "SPL": {
+                "smooth_checked": False,
+                "smooth_enabled": False,
+                "limit_checked": True,
+                "limit_mode": "manual",
+                "limit_data": None,
+                "manual_upper_enabled": True,
+                "manual_upper": 88.5,
+                "manual_lower_enabled": True,
+                "manual_lower": 20.0,
+                "weighting": "A",
+                "analysis_channel": 0,
+            }
+        }
+    )
+
+    window = SplConfigWindow(config_manager, "SPL", available_channels=[0])
+    config = window.get_default_config()
+
+    assert config["limit_checked"] is True
+    assert config["limit_mode"] == "manual"
+    assert config["manual_upper_enabled"] is True
+    assert config["manual_upper"] == 88.5
+    assert config["manual_lower_enabled"] is True
+    assert config["manual_lower"] == 20.0
+    assert window.threshold_widget.validate() is True
 
 
 def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
@@ -298,14 +347,70 @@ def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
     }
     window.on_restore_default_btn_clicked()
 
-    assert window.semantic_group_keys() == ["input", "compute", "judgment"]
+    assert window.semantic_group_keys() == ["input", "preprocess", "compute", "judgment"]
     assert window.get_default_config() == {
+        "spl_window_unit": "points",
+        "spl_window_time_sec": 0.0272,
+        "spl_window_points": 1201,
+        "smooth_enabled": False,
+        "smooth_unit": "points",
+        "smooth_time_sec": 0.025,
+        "smooth_points": 1102,
+        "smooth_algo": 2,
         "smooth_checked": False,
         "limit_checked": False,
         "limit_data": None,
+        "limit_mode": "csv",
+        "manual_upper_enabled": True,
+        "manual_upper": 0.0,
+        "manual_lower_enabled": False,
+        "manual_lower": 0.0,
         "weighting": "C",
         "analysis_channel": 1,
+        "analysis_time_range_enabled": False,
+        "analysis_start_time_sec": 0.0,
+        "analysis_end_time_sec": 0.0,
     }
+
+
+def test_spl_preprocess_subsections_disable_inactive_controls(qapp):
+    from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "SPL": {
+                "smooth_checked": False,
+                "smooth_enabled": False,
+                "analysis_time_range_enabled": False,
+                "limit_checked": False,
+                "limit_data": None,
+                "weighting": "Z",
+                "analysis_channel": 0,
+            }
+        }
+    )
+
+    window = SplConfigWindow(config_manager, "SPL", available_channels=[0])
+
+    assert window.smoothing_section.isChecked() is False
+    assert window.time_smoothing_widget.unit_combo.isEnabled() is False
+    assert window.time_smoothing_widget.points_spin.isEnabled() is False
+    assert window.time_smoothing_widget.algo_group.button(1).isEnabled() is False
+
+    assert window.analysis_time_range_section.isChecked() is False
+    assert window.analysis_time_range_widget.start_spin.isEnabled() is False
+    assert window.analysis_time_range_widget.end_spin.isEnabled() is False
+
+    window.smoothing_section.setChecked(True)
+    window.analysis_time_range_section.setChecked(True)
+
+    assert window.time_smoothing_widget.unit_combo.isEnabled() is True
+    assert window.time_smoothing_widget.points_spin.isEnabled() is True
+    assert window.time_smoothing_widget.algo_group.button(1).isEnabled() is True
+    assert window.analysis_time_range_widget.start_spin.isEnabled() is True
+    assert window.analysis_time_range_widget.end_spin.isEnabled() is True
+    assert window.get_default_config()["smooth_enabled"] is True
+    assert window.get_default_config()["analysis_time_range_enabled"] is True
 
 
 def test_fba_dialog_preserves_saved_keys_after_shared_control_migration(qapp):

@@ -68,6 +68,28 @@ def test_channel_defaults_are_present_for_channel_aware_dialogs():
 def test_special_dialog_defaults_include_required_legacy_keys():
     defaults = load_defaults()
 
+    spl_defaults = defaults["SPL"]
+    for key in (
+        "smooth_checked",
+        "smooth_enabled",
+        "smooth_unit",
+        "smooth_time_sec",
+        "smooth_points",
+        "smooth_algo",
+        "spl_window_unit",
+        "spl_window_time_sec",
+        "spl_window_points",
+        "analysis_time_range_enabled",
+        "analysis_start_time_sec",
+        "analysis_end_time_sec",
+        "limit_mode",
+        "manual_upper_enabled",
+        "manual_upper",
+        "manual_lower_enabled",
+        "manual_lower",
+    ):
+        assert key in spl_defaults
+
     assert defaults["RSC"]["smoothing"] == 0
     assert "octave_smoothing" not in defaults["RSC"]
     assert defaults["RSC"]["enable_threshold_judgment"] is True

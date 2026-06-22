@@ -30,6 +30,11 @@ from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.pre_processing.spl_runtime_config import (
+    apply_spl_analysis_time_range,
+    resolve_spl_smoothing,
+    resolve_spl_window_size,
+)
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
@@ -921,6 +926,15 @@ class Spl(AnalysisGraphWidget):
         else:  # Z or None
             return "SPL (dB)"
 
+    def _resolve_spl_window_size(self, sample_rate):
+        return resolve_spl_window_size(self.analysis_config, sample_rate)
+
+    def _resolve_spl_smoothing(self, sample_rate, series_len):
+        return resolve_spl_smoothing(self.analysis_config, sample_rate, series_len)
+
+    def _apply_spl_analysis_time_range(self, recorded_signal, sample_rate):
+        return apply_spl_analysis_time_range(recorded_signal, sample_rate, self.analysis_config)
+
     def calculate_spl(self):
         # calculate Sound Pressure Level according to recorded_signal
         try:
@@ -930,25 +944,29 @@ class Spl(AnalysisGraphWidget):
             return False
         sample_rate = self.data_struct.sample_rate
         reference_pressure = 20e-6
-        window_size = 1201
+        window_size = self._resolve_spl_window_size(sample_rate)
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
         if weighting and weighting.upper() not in ["NONE", "Z"]:
             recorded_signal = apply_weighting_filter(
                 recorded_signal, sample_rate, weighting=weighting, zero_phase=False
             )
+        analysis_signal, analysis_start_sample = self._apply_spl_analysis_time_range(recorded_signal, sample_rate)
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal,
+            analysis_signal,
             reference_pressure,
             window_size=window_size,
             v2pa_factor=self.v2pa_factor,
             trim_edges=True,
         )
-        start_index = 0 if len(signal_spl) == len(recorded_signal) else window_size // 2
+        start_index = 0 if len(signal_spl) == len(analysis_signal) else window_size // 2
         signal_duration = (np.arange(len(signal_spl), dtype=float) + float(start_index)) / float(sample_rate)
+        signal_duration = signal_duration + (float(analysis_start_sample) / float(sample_rate))
 
-        if self.analysis_config and self.analysis_config.get("smooth_checked"):
+        smoothing = self._resolve_spl_smoothing(sample_rate, len(signal_spl))
+        if smoothing:
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
-            signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
+            smooth_window_size, smooth_method = smoothing
+            signal_spl = smooth(signal_spl, window_size=smooth_window_size, method=smooth_method)
         limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
             limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
@@ -971,7 +989,7 @@ class Spl(AnalysisGraphWidget):
             self.plot_spl(signal_duration, signal_spl)
         self.result = {
             "signal_duration": signal_duration.tolist(),
-            "recorded_signal": recorded_signal.tolist(),
+            "recorded_signal": np.asarray(analysis_signal).tolist(),
             "signal_spl": signal_spl.tolist(),
         }
         return self.result

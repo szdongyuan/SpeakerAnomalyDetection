@@ -5,20 +5,145 @@ SPL (Sound Pressure Level) 分析配置对话框
 import re
 from typing import List, Optional
 
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, RadioButton
+from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label, RadioButton, SpinBox
 from ui.ui_analysis_config.common_widgets import (
     ChannelSelectorWidget,
     GoldenSampleWidget,
     OctaveSmoothingSelectorWidget,
     SemanticAnalysisConfigDialogBase,
+    TimeSmoothingWidget,
     WeightingSelectorWidget,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.ui_src import ui_resources
+
+
+class ConfigSubsectionWidget(GroupBox):
+    """Small bordered subsection for related analysis configuration controls."""
+
+    def __init__(self, title: str, content_widget: QWidget, checkable: bool = False, checked: bool = True, parent=None):
+        super().__init__(title, parent)
+        self.content_widget = content_widget
+        self.setCheckable(checkable)
+        if checkable:
+            self.setChecked(bool(checked))
+            self.toggled.connect(self._sync_content_enabled)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        layout.addWidget(content_widget)
+        self._sync_content_enabled()
+
+    def _sync_content_enabled(self, *args) -> None:
+        self.content_widget.setEnabled(self.isChecked() if self.isCheckable() else True)
+
+
+class SplWindowLengthWidget(QWidget):
+    """SPL calculation window length control preserving the legacy fixed window."""
+
+    def __init__(self, cfg: dict | None = None, parent=None):
+        super().__init__(parent)
+        config = cfg or {}
+        self.unit_combo = ComboBox(self)
+        self.unit_combo.addItem("时间(秒)", "time")
+        self.unit_combo.addItem("格点数", "points")
+        self.unit_combo.setMaximumWidth(120)
+        unit = str(config.get("spl_window_unit", "points") or "points").lower()
+        unit_idx = self.unit_combo.findData(unit if unit in ("time", "points") else "points")
+        self.unit_combo.setCurrentIndex(unit_idx if unit_idx >= 0 else 1)
+        self.unit_combo.currentIndexChanged.connect(self._update_unit_visibility)
+
+        self.time_spin = DoubleSpinBox(self)
+        self.time_spin.setRange(0.0001, 999.0000)
+        self.time_spin.setDecimals(4)
+        self.time_spin.setSingleStep(0.001)
+        self.time_spin.setValue(float(config.get("spl_window_time_sec", 0.0272) or 0.0272))
+        self.time_spin.setMaximumWidth(120)
+
+        self.points_spin = SpinBox(self)
+        self.points_spin.setRange(1, 999999)
+        self.points_spin.setValue(int(config.get("spl_window_points", 1201) or 1201))
+        self.points_spin.setMaximumWidth(120)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        value_row = QHBoxLayout()
+        value_row.addWidget(Label("单位:"))
+        value_row.addWidget(self.unit_combo)
+        value_row.addWidget(self.time_spin)
+        value_row.addWidget(self.points_spin)
+        value_row.addStretch()
+        layout.addLayout(value_row)
+        self._update_unit_visibility()
+
+    def _update_unit_visibility(self) -> None:
+        is_time = self.unit_combo.currentData() == "time"
+        self.time_spin.setVisible(is_time)
+        self.points_spin.setVisible(not is_time)
+
+    def get_config(self) -> dict:
+        return {
+            "spl_window_unit": str(self.unit_combo.currentData()),
+            "spl_window_time_sec": float(self.time_spin.value()),
+            "spl_window_points": int(self.points_spin.value()),
+        }
+
+
+class AnalysisTimeRangeWidget(QWidget):
+    """Optional SPL analysis time range."""
+
+    def __init__(self, cfg: dict | None = None, parent=None):
+        super().__init__(parent)
+        config = cfg or {}
+        self.enabled_checkbox = CheckBox("限制分析时间范围")
+        self.enabled_checkbox.setChecked(bool(config.get("analysis_time_range_enabled", False)))
+        self.enabled_checkbox.stateChanged.connect(self._update_enabled)
+
+        self.start_spin = DoubleSpinBox(self)
+        self.start_spin.setRange(0.0, 999999.0)
+        self.start_spin.setDecimals(4)
+        self.start_spin.setSingleStep(0.1)
+        self.start_spin.setValue(float(config.get("analysis_start_time_sec", 0.0) or 0.0))
+        self.start_spin.setMaximumWidth(120)
+
+        self.end_spin = DoubleSpinBox(self)
+        self.end_spin.setRange(0.0, 999999.0)
+        self.end_spin.setDecimals(4)
+        self.end_spin.setSingleStep(0.1)
+        self.end_spin.setValue(float(config.get("analysis_end_time_sec", 0.0) or 0.0))
+        self.end_spin.setMaximumWidth(120)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.enabled_checkbox.setVisible(False)
+        value_row = QHBoxLayout()
+        value_row.addWidget(Label("起始(s):"))
+        value_row.addWidget(self.start_spin)
+        value_row.addWidget(Label("结束(s):"))
+        value_row.addWidget(self.end_spin)
+        value_row.addStretch()
+        layout.addLayout(value_row)
+        self._update_enabled()
+
+    def _update_enabled(self, *args) -> None:
+        enabled = self.enabled_checkbox.isChecked()
+        self.start_spin.setEnabled(enabled)
+        self.end_spin.setEnabled(enabled)
+
+    def set_range_enabled(self, enabled: bool) -> None:
+        self.enabled_checkbox.setChecked(bool(enabled))
+        self._update_enabled()
+
+    def get_config(self) -> dict:
+        return {
+            "analysis_time_range_enabled": self.enabled_checkbox.isChecked(),
+            "analysis_start_time_sec": float(self.start_spin.value()),
+            "analysis_end_time_sec": float(self.end_spin.value()),
+        }
 
 
 class SplConfigWindow(SemanticAnalysisConfigDialogBase):
@@ -44,12 +169,24 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         self._build_semantic_sections()
 
     def _build_semantic_sections(self):
-        # SPL: time-domain smoothing checkbox
-        self.smooth_chk_box = None
+        self.spl_window_widget = None
+        self.time_smoothing_widget = None
+        self.analysis_time_range_widget = None
         if self.model_type != "SPLF":
-            self.smooth_chk_box = CheckBox("平滑")
-            self.smooth_chk_box.setChecked(self.load_config.get("smooth_checked", False))
-            self.smooth_chk_box.stateChanged.connect(self.get_default_config)
+            self.spl_window_widget = SplWindowLengthWidget(self.load_config, self)
+            self.time_smoothing_widget = TimeSmoothingWidget(
+                self.load_config,
+                defaults={
+                    "enabled": bool(self.load_config.get("smooth_checked", True)),
+                    "unit": "points",
+                    "time_sec": 0.0250,
+                    "points": 1102,
+                    "algo": 2,
+                },
+                parent=self,
+            )
+            self.time_smoothing_widget.enabled_checkbox.setVisible(False)
+            self.analysis_time_range_widget = AnalysisTimeRangeWidget(self.load_config, self)
 
         # SPLF: calculation mode (fundamental-only vs total RMS SPL)
         self.splf_mode_group_box = None
@@ -80,6 +217,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
+            allow_manual_limits=self.model_type != "SPLF",
         )
 
         self.weighting_selector = WeightingSelectorWidget(self.load_config, parent=self)
@@ -87,6 +225,35 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         if self.show_channel_selector:
             self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
             self.add_semantic_section("input", widget=self.channel_selector)
+
+        if self.model_type != "SPLF":
+            preprocess_widget = QWidget(self)
+            preprocess_layout = QVBoxLayout(preprocess_widget)
+            preprocess_layout.setContentsMargins(0, 0, 0, 0)
+            preprocess_layout.setSpacing(10)
+
+            preprocess_layout.addWidget(ConfigSubsectionWidget("SPL计算窗长", self.spl_window_widget, parent=self))
+
+            self.smoothing_section = ConfigSubsectionWidget(
+                "平滑",
+                self.time_smoothing_widget,
+                checkable=True,
+                checked=self.time_smoothing_widget.enabled_checkbox.isChecked(),
+                parent=self,
+            )
+            self.smoothing_section.toggled.connect(self.time_smoothing_widget.set_smoothing_enabled)
+            preprocess_layout.addWidget(self.smoothing_section)
+
+            self.analysis_time_range_section = ConfigSubsectionWidget(
+                "限制分析时间范围",
+                self.analysis_time_range_widget,
+                checkable=True,
+                checked=self.analysis_time_range_widget.enabled_checkbox.isChecked(),
+                parent=self,
+            )
+            self.analysis_time_range_section.toggled.connect(self.analysis_time_range_widget.set_range_enabled)
+            preprocess_layout.addWidget(self.analysis_time_range_section)
+            self.add_semantic_section("preprocess", widget=preprocess_widget)
 
         compute_widget = QWidget(self)
         compute_layout = QVBoxLayout(compute_widget)
@@ -96,8 +263,6 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         if self.splf_mode_group_box is not None:
             compute_layout.addWidget(self.splf_mode_group_box)
             compute_layout.addWidget(self.smoothing_selector)
-        elif self.smooth_chk_box is not None:
-            compute_layout.addWidget(self.smooth_chk_box)
         self.add_semantic_section("compute", widget=compute_widget)
 
         if self.golden_chk_box is not None:
@@ -110,8 +275,15 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
     def get_default_config(self):
         """获取配置数据"""
         config = {}
-        if self.model_type != "SPLF" and self.smooth_chk_box is not None:
-            config["smooth_checked"] = self.smooth_chk_box.isChecked()
+        if self.model_type != "SPLF":
+            if self.spl_window_widget is not None:
+                config.update(self.spl_window_widget.get_config())
+            if self.time_smoothing_widget is not None:
+                smoothing_config = self.time_smoothing_widget.get_config()
+                config.update(smoothing_config)
+                config["smooth_checked"] = bool(smoothing_config["smooth_enabled"])
+            if self.analysis_time_range_widget is not None:
+                config.update(self.analysis_time_range_widget.get_config())
         if self.model_type == "SPLF":
             calc_mode = "fundamental"
             if hasattr(self, "radio_total") and self.radio_total.isChecked():

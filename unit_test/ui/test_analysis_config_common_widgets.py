@@ -157,6 +157,13 @@ def test_semantic_dialog_registers_only_added_groups(qapp):
     assert dialog._semantic_nav_buttons["input"].isChecked() is True
 
 
+def test_semantic_dialog_scrollbars_are_available_when_content_overflows(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+
+    assert dialog.section_scroll_area.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    assert dialog.section_scroll_area.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+
+
 def test_semantic_dialog_rejects_duplicate_group_keys(qapp):
     dialog = SemanticAnalysisConfigDialogBase()
     dialog.add_semantic_section("input", widget=_filler_widget())
