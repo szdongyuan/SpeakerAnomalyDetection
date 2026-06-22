@@ -13,11 +13,11 @@ import numpy as np
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QWidget, QFileDialog, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QFileDialog, QHBoxLayout, QVBoxLayout
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox
+from ui.custom_ui_widget.widgets import CheckBox, DoubleSpinBox, GroupBox, Label, LineEdit, MessageBox, RadioButton
 from ui.ui_src import ui_resources
 
 
@@ -37,6 +37,7 @@ class ThresholdConfigWidget(QWidget):
         load_config: dict = None,
         csv_validator=None,
         model_type: str = None,
+        allow_manual_limits: bool = False,
     ):
         """
         初始化阈值配置组件
@@ -52,6 +53,7 @@ class ThresholdConfigWidget(QWidget):
         self.csv_validator = csv_validator
         self.limit_data = self.load_config.get("limit_data", None)
         self.model_type = model_type
+        self.allow_manual_limits = bool(allow_manual_limits)
 
         self._init_ui()
 
@@ -79,9 +81,21 @@ class ThresholdConfigWidget(QWidget):
         # 文件选择
         self._create_config_dir()
 
+        self.manual_widget = None
+        if self.allow_manual_limits:
+            self._create_manual_limit_controls()
+
         # 组合布局
         group_layout = QVBoxLayout()
+        if self.allow_manual_limits:
+            mode_layout = QHBoxLayout()
+            mode_layout.addWidget(self.csv_mode_radio)
+            mode_layout.addWidget(self.manual_mode_radio)
+            mode_layout.addStretch()
+            group_layout.addLayout(mode_layout)
         group_layout.addWidget(self.config_dir_box)
+        if self.manual_widget is not None:
+            group_layout.addWidget(self.manual_widget)
         group_layout.addWidget(self.limit_graph)
         self.limit_group_box.setLayout(group_layout)
 
@@ -92,6 +106,7 @@ class ThresholdConfigWidget(QWidget):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(main_layout)
+        self._sync_limit_mode_controls()
 
     def _create_config_dir(self) -> None:
         """创建配置文件选择布局"""
@@ -110,15 +125,111 @@ class ThresholdConfigWidget(QWidget):
         if self.load_config.get("limit_data", None):
             self.config_dir_box.setText("已加载")
 
+    def _create_manual_limit_controls(self) -> None:
+        limit_mode = str(self.load_config.get("limit_mode", "csv") or "csv").lower()
+        self.csv_mode_radio = RadioButton("CSV阈值曲线")
+        self.manual_mode_radio = RadioButton("手动上下限")
+        if limit_mode == "manual":
+            self.manual_mode_radio.setChecked(True)
+        else:
+            self.csv_mode_radio.setChecked(True)
+        self.csv_mode_radio.toggled.connect(self._on_limit_mode_changed)
+        self.manual_mode_radio.toggled.connect(self._on_limit_mode_changed)
+
+        self.manual_widget = QWidget(self)
+        manual_layout = QVBoxLayout(self.manual_widget)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+
+        upper_row = QHBoxLayout()
+        self.manual_upper_check = CheckBox("上限")
+        self.manual_upper_check.setChecked(bool(self.load_config.get("manual_upper_enabled", True)))
+        self.manual_upper_spin = DoubleSpinBox()
+        self.manual_upper_spin.setRange(-300.0, 300.0)
+        self.manual_upper_spin.setDecimals(2)
+        self.manual_upper_spin.setSingleStep(1.0)
+        self.manual_upper_spin.setValue(float(self.load_config.get("manual_upper", 0.0) or 0.0))
+        upper_row.addWidget(self.manual_upper_check)
+        upper_row.addWidget(self.manual_upper_spin)
+        upper_row.addWidget(Label("dB"))
+        upper_row.addStretch()
+
+        lower_row = QHBoxLayout()
+        self.manual_lower_check = CheckBox("下限")
+        self.manual_lower_check.setChecked(bool(self.load_config.get("manual_lower_enabled", False)))
+        self.manual_lower_spin = DoubleSpinBox()
+        self.manual_lower_spin.setRange(-300.0, 300.0)
+        self.manual_lower_spin.setDecimals(2)
+        self.manual_lower_spin.setSingleStep(1.0)
+        self.manual_lower_spin.setValue(float(self.load_config.get("manual_lower", 0.0) or 0.0))
+        lower_row.addWidget(self.manual_lower_check)
+        lower_row.addWidget(self.manual_lower_spin)
+        lower_row.addWidget(Label("dB"))
+        lower_row.addStretch()
+
+        manual_layout.addLayout(upper_row)
+        manual_layout.addLayout(lower_row)
+
+        for widget in (
+            self.manual_upper_check,
+            self.manual_upper_spin,
+            self.manual_lower_check,
+            self.manual_lower_spin,
+        ):
+            if hasattr(widget, "stateChanged"):
+                widget.stateChanged.connect(self._on_manual_limit_changed)
+            if hasattr(widget, "valueChanged"):
+                widget.valueChanged.connect(self._on_manual_limit_changed)
+
     def _on_limit_checkbox_changed(self, state):
         """阈值复选框状态变更处理"""
         self.config_changed.emit()
         if state == Qt.Checked:
             self.limit_group_box.setDisabled(False)
-            self.config_dir_box.setDisabled(False)
         else:
             self.limit_group_box.setDisabled(True)
-            self.config_dir_box.setDisabled(True)
+        self._sync_limit_mode_controls()
+
+    def _on_limit_mode_changed(self, *args):
+        self.config_changed.emit()
+        self._sync_limit_mode_controls()
+
+    def _on_manual_limit_changed(self, *args):
+        self.config_changed.emit()
+        if self.allow_manual_limits and self.current_limit_mode() == "manual":
+            self.draw_limit_curve(self._manual_limit_preview_data())
+
+    def current_limit_mode(self) -> str:
+        if self.allow_manual_limits and hasattr(self, "manual_mode_radio") and self.manual_mode_radio.isChecked():
+            return "manual"
+        return "csv"
+
+    def _sync_limit_mode_controls(self) -> None:
+        enabled = self.limit_checkbox.isChecked()
+        if not self.allow_manual_limits:
+            self.config_dir_box.setDisabled(not enabled)
+            return
+
+        manual = enabled and self.current_limit_mode() == "manual"
+        csv = enabled and not manual
+        self.config_dir_box.setDisabled(not csv)
+        if self.manual_widget is not None:
+            self.manual_widget.setDisabled(not manual)
+        if manual:
+            self.draw_limit_curve(self._manual_limit_preview_data())
+        else:
+            self.draw_limit_curve(self.limit_data)
+
+    def _manual_limit_preview_data(self):
+        upper_enabled = bool(self.manual_upper_check.isChecked())
+        lower_enabled = bool(self.manual_lower_check.isChecked())
+        upper = float(self.manual_upper_spin.value())
+        lower = float(self.manual_lower_spin.value())
+        x_values = [0.0, 1.0]
+        return (
+            x_values,
+            [upper, upper] if upper_enabled else [np.nan, np.nan],
+            [lower, lower] if lower_enabled else [np.nan, np.nan],
+        )
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -186,9 +297,22 @@ class ThresholdConfigWidget(QWidget):
         Returns:
             dict: 包含阈值配置的字典
         """
-        return {
+        config = {
             "limit_checked": self.limit_checkbox.isChecked(),
             "limit_data": self.limit_data,
+        }
+        config.update(self._manual_limit_config())
+        return config
+
+    def _manual_limit_config(self) -> dict:
+        if not self.allow_manual_limits:
+            return {}
+        return {
+            "limit_mode": self.current_limit_mode(),
+            "manual_upper_enabled": self.manual_upper_check.isChecked(),
+            "manual_upper": float(self.manual_upper_spin.value()),
+            "manual_lower_enabled": self.manual_lower_check.isChecked(),
+            "manual_lower": float(self.manual_lower_spin.value()),
         }
 
     def validate(self) -> bool:
@@ -199,7 +323,16 @@ class ThresholdConfigWidget(QWidget):
             bool: 配置是否有效
         """
         if self.limit_checkbox.isChecked():
-            if not self.limit_data:
+            if self.allow_manual_limits and self.current_limit_mode() == "manual":
+                upper_enabled = self.manual_upper_check.isChecked()
+                lower_enabled = self.manual_lower_check.isChecked()
+                if not upper_enabled and not lower_enabled:
+                    MessageBox.warning(self, "提示", "请至少启用一个手动阈值！")
+                    return False
+                if upper_enabled and lower_enabled and self.manual_lower_spin.value() > self.manual_upper_spin.value():
+                    MessageBox.warning(self, "提示", "手动阈值下限不能大于上限！")
+                    return False
+            elif not self.limit_data:
                 MessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
                 return False
         return True

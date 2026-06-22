@@ -145,8 +145,10 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self.section_scroll_area.setObjectName("semanticSectionScrollArea")
         self.section_scroll_area.setWidgetResizable(True)
         self.section_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.section_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.section_container = QWidget(self.section_scroll_area)
         self.section_container.setObjectName("semanticSectionContainer")
+        self.section_container.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
         self.section_layout = QVBoxLayout(self.section_container)
         self.section_layout.setContentsMargins(0, 0, 0, 0)
         self.section_layout.setSpacing(22)
@@ -345,6 +347,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         section_widget.setObjectName("semanticSectionCard")
         section_widget.setProperty("semanticGroupKey", group_key)
         section_widget.setAttribute(Qt.WA_StyledBackground, True)
+        section_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
         section_layout = QVBoxLayout(section_widget)
         section_layout.setContentsMargins(0, 0, 0, 0)
         section_layout.setSpacing(0)
@@ -382,10 +385,12 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         content_widget = QWidget(section_widget)
         content_widget.setObjectName("semanticSectionContent")
         content_widget.setAttribute(Qt.WA_StyledBackground, True)
+        content_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(14, 12, 14, 14)
         content_layout.setSpacing(10)
         if widget is not None:
+            widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
             content_layout.addWidget(widget)
         if layout is not None:
             content_layout.addLayout(layout)
@@ -396,10 +401,16 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._semantic_section_indicators[group_key] = indicator_label
         self._semantic_section_collapsed[group_key] = False
         self.section_layout.insertWidget(max(self.section_layout.count() - 1, 0), section_widget)
+        self._refresh_section_container_minimum_height()
 
         if self._active_semantic_group_key is None:
             self._set_active_semantic_group(group_key)
         return content_layout
+
+    def _refresh_section_container_minimum_height(self) -> None:
+        self.section_layout.activate()
+        self.section_container.setMinimumWidth(0)
+        self.section_container.setMinimumHeight(max(0, self.section_container.sizeHint().height()))
 
     def semantic_group_keys(self) -> list[str]:
         return list(self._semantic_sections.keys())
@@ -420,6 +431,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._semantic_section_indicators.clear()
         self._semantic_section_collapsed.clear()
         self._active_semantic_group_key = None
+        self._refresh_section_container_minimum_height()
 
     def is_semantic_section_collapsed(self, group_key: str) -> bool:
         return bool(self._semantic_section_collapsed.get(group_key, False))
@@ -434,6 +446,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._semantic_section_collapsed[group_key] = collapsed
         if indicator is not None:
             indicator.setText(">" if collapsed else "v")
+        self._refresh_section_container_minimum_height()
 
     def toggle_semantic_section(self, group_key: str) -> None:
         self.set_semantic_section_collapsed(group_key, not self.is_semantic_section_collapsed(group_key))
@@ -633,10 +646,12 @@ class TimeSmoothingWidget(QWidget):
         super().__init__(parent)
         self.show_algorithm = show_algorithm
         self.min_points = int(min_points)
+        self.control_widgets: list[QWidget] = []
         smoothing = normalize_time_smoothing(cfg, defaults)
 
         self.enabled_checkbox = CheckBox("平滑")
         self.enabled_checkbox.setChecked(smoothing["enabled"])
+        self.enabled_checkbox.stateChanged.connect(self._sync_control_enabled)
 
         self.unit_combo = ComboBox(self)
         self.unit_combo.addItem("时间(秒)", "time")
@@ -644,34 +659,42 @@ class TimeSmoothingWidget(QWidget):
         unit_idx = self.unit_combo.findData(smoothing["unit"])
         self.unit_combo.setCurrentIndex(unit_idx if unit_idx >= 0 else 0)
         self.unit_combo.currentIndexChanged.connect(self._update_unit_visibility)
+        self.control_widgets.append(self.unit_combo)
 
         self.time_spin = DoubleSpinBox(self)
         self.time_spin.setRange(0.00, 999.00)
         self.time_spin.setDecimals(4)
         self.time_spin.setSingleStep(0.01)
         self.time_spin.setValue(float(smoothing["time_sec"]))
+        self.time_spin.setMaximumWidth(120)
+        self.control_widgets.append(self.time_spin)
 
         self.points_spin = SpinBox(self)
         self.points_spin.setRange(self.min_points, 99999)
         self.points_spin.setValue(max(self.min_points, int(smoothing["points"])))
+        self.points_spin.setMaximumWidth(120)
+        self.unit_combo.setMaximumWidth(120)
+        self.control_widgets.append(self.points_spin)
 
         main_row = QHBoxLayout()
         main_row.addWidget(self.enabled_checkbox)
-        main_row.addStretch()
-        main_row.addWidget(Label("单位:"))
-        main_row.addWidget(self.unit_combo)
-        main_row.addWidget(self.time_spin)
-        main_row.addWidget(self.points_spin)
+
+        unit_row = QHBoxLayout()
+        unit_row.addWidget(Label("单位:"))
+        unit_row.addWidget(self.unit_combo)
+        unit_row.addWidget(self.time_spin)
+        unit_row.addWidget(self.points_spin)
+        unit_row.addStretch()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(main_row)
+        layout.addLayout(unit_row)
 
         self.algo_group = None
         if show_algorithm:
             self.algo_group = QButtonGroup(self)
             algo_row = QHBoxLayout()
-            algo_row.addStretch()
             algo_row.addWidget(Label("平滑算法:"))
             algo_buttons = (
                 (RadioButton("平均"), 1),
@@ -681,6 +704,7 @@ class TimeSmoothingWidget(QWidget):
             for button, value in algo_buttons:
                 self.algo_group.addButton(button, value)
                 algo_row.addWidget(button)
+                self.control_widgets.append(button)
                 if int(smoothing["algo"]) == value:
                     button.setChecked(True)
             if self.algo_group.checkedId() < 0:
@@ -688,11 +712,21 @@ class TimeSmoothingWidget(QWidget):
             layout.addLayout(algo_row)
 
         self._update_unit_visibility()
+        self._sync_control_enabled()
 
     def _update_unit_visibility(self) -> None:
         is_time = self.unit_combo.currentData() == "time"
         self.time_spin.setVisible(is_time)
         self.points_spin.setVisible(not is_time)
+
+    def set_smoothing_enabled(self, enabled: bool) -> None:
+        self.enabled_checkbox.setChecked(bool(enabled))
+        self._sync_control_enabled()
+
+    def _sync_control_enabled(self, *args) -> None:
+        enabled = self.enabled_checkbox.isChecked()
+        for widget in self.control_widgets:
+            widget.setEnabled(enabled)
 
     def get_config(self) -> dict[str, Any]:
         config = {
