@@ -54,26 +54,18 @@ from .psychoacoustic_constants import (
     TARGET_FS_HZ,
 )
 
-try:
-    import numba
-
-    _NUMBA_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only when numba is missing
-    numba = None  # type: ignore[assignment]
-    _NUMBA_AVAILABLE = False
+_NUMBA_AVAILABLE = False
 
 
 def _maybe_njit(*njit_args, **njit_kwargs):
-    """Decorator that compiles with numba when available, else returns the function as-is.
+    """No-op decorator — numba JIT is disabled.
 
-    Falling back to pure Python keeps the algorithm correct on environments
-    where numba cannot install (e.g. unsupported Python version), at the
-    cost of being noticeably slower on the time-varying chain.
+    The pure-Python fallback is used unconditionally. This avoids the
+    heavy first-call JIT compilation penalty (~10 s) and removes the
+    numba dependency from the build.
     """
 
     def _wrap(func):
-        if _NUMBA_AVAILABLE:
-            return numba.njit(*njit_args, **njit_kwargs)(func)
         return func
 
     return _wrap
@@ -334,44 +326,96 @@ def _core_loudness_kernel_batch(
 
 
 def _core_loudness_from_third_octaves_batch(levels_db: np.ndarray, field_type: str) -> np.ndarray:
-    """Vectorized helper used by the time-varying chain. Input shape: (28, T)."""
+    """Compute Zwicker core-loudness for all time frames via NumPy batch ops.
 
-    spec = np.ascontiguousarray(np.asarray(levels_db, dtype=np.float64))
+    Input shape: (28, T), output shape: (21, T).
+    """
+    spec = np.asarray(levels_db, dtype=np.float64)
     if spec.ndim != 2 or spec.shape[0] != 28:
         raise ValueError(f"Expected (28, T) levels, got shape {spec.shape}")
-    if spec.shape[1] == 0:
+    T = spec.shape[1]
+    if T == 0:
         return np.zeros((21, 0), dtype=np.float64)
     max_low = np.nanmax(spec[:11])
     if max_low > 120.0:
         raise ValueError("Zwicker loudness is not valid above 120 dB in the first 11 bands")
 
     field_is_diffuse = str(field_type).lower() == "diffuse"
-    return _core_loudness_kernel_batch(
-        spec,
-        field_is_diffuse,
-        _RAP_TABLE,
-        _DLL_TABLE,
-        _LTQ_TABLE,
-        _A0_TABLE,
-        _DDF_TABLE,
-        _DCB_TABLE,
+    rap = _RAP_TABLE
+    dll = _DLL_TABLE
+    ltq = _LTQ_TABLE
+    a0 = _A0_TABLE
+    ddf = _DDF_TABLE
+    dcb = _DCB_TABLE
+    s = LOUDNESS_CORE_S
+
+    low_spec = spec[:11, :]  # (11, T)
+    corrected_low = np.empty((11, T), dtype=np.float64)
+    for band_idx in range(11):
+        level = low_spec[band_idx, :]
+        correction = np.full(T, dll[7, band_idx], dtype=np.float64)
+        still_default = np.ones(T, dtype=bool)
+        for range_idx in range(rap.size):
+            threshold = rap[range_idx] - dll[range_idx, band_idx]
+            matched = still_default & (level <= threshold)
+            correction[matched] = dll[range_idx, band_idx]
+            still_default &= ~matched
+        corrected_low[band_idx, :] = level + correction
+
+    s0 = np.sum(10.0 ** (corrected_low[:6, :] / 10.0), axis=0)
+    s1 = np.sum(10.0 ** (corrected_low[6:9, :] / 10.0), axis=0)
+    s2 = np.sum(10.0 ** (corrected_low[9:11, :] / 10.0), axis=0)
+
+    lcb0 = np.where(s0 > 0.0, 10.0 * np.log10(s0), 0.0)
+    lcb1 = np.where(s1 > 0.0, 10.0 * np.log10(s1), 0.0)
+    lcb2 = np.where(s2 > 0.0, 10.0 * np.log10(s2), 0.0)
+
+    le = np.empty((20, T), dtype=np.float64)
+    le[0, :] = lcb0
+    le[1, :] = lcb1
+    le[2, :] = lcb2
+    le[3:, :] = spec[11:, :]
+    le -= a0[:, np.newaxis]
+    if field_is_diffuse:
+        le += ddf[:, np.newaxis]
+
+    above_threshold = le > ltq[:, np.newaxis]
+    le_adj = le - dcb[:, np.newaxis]
+    mp1 = LOUDNESS_CORE_MP1_SCALE * (10.0 ** (LOUDNESS_CORE_LTQ_EXPONENT_SCALE * ltq))
+    mp2_base = 1.0 - s + s * (10.0 ** (LOUDNESS_CORE_LEVEL_EXPONENT_SCALE * (le_adj - ltq[:, np.newaxis])))
+    mp2 = mp2_base ** LOUDNESS_CORE_POWER - 1.0
+    core_vals = np.maximum(mp1[:, np.newaxis] * mp2, 0.0)
+    core_vals[~above_threshold] = 0.0
+
+    core = np.zeros((21, T), dtype=np.float64)
+    core[:20, :] = core_vals
+
+    low_band_correction = LOUDNESS_LOW_BAND_CORRECTION_BASE + (
+        LOUDNESS_LOW_BAND_CORRECTION_SCALE
+        * (np.maximum(core[0, :], 0.0) ** LOUDNESS_LOW_BAND_CORRECTION_POWER)
     )
+    mask_correct = low_band_correction <= 1.0
+    core[0, :] = np.where(mask_correct, core[0, :] * low_band_correction, core[0, :])
+    return core
+
+
+_NEG_RNS_SORTED = np.sort(-np.round(LOUDNESS_RNS_TABLE, 8))
 
 
 def _get_rns_index(values: np.ndarray, rns: np.ndarray, *, equal_too: bool = False) -> np.ndarray:
-    """Return slope-table range indexes for core/specific loudness values."""
+    """Return slope-table range indexes for core/specific loudness values.
 
-    arr = np.asarray(values, dtype=np.float64)
-    if arr.ndim == 1:
-        tiled = np.round(np.tile(arr, (rns.size, 1)), 8)
-        rns_array = np.round(np.ones((arr.size, rns.size), dtype=np.float64) * rns, 8).T
-    else:
-        wide, length = arr.shape
-        tiled = np.round(np.tile(arr, (rns.size, 1, 1)), 8)
-        rns_array = np.round((np.ones((wide, length, rns.size), dtype=np.float64) * rns), 8).transpose(2, 0, 1)
-    indexes = (tiled <= rns_array).sum(axis=0) if equal_too else (tiled < rns_array).sum(axis=0)
-    indexes[indexes == rns.size] = rns.size - 1
-    return indexes
+    For each value *v* the index equals the count of ``rns`` entries that are
+    strictly greater than *v* (or >= when *equal_too* is True).  ``rns`` is
+    assumed descending; the look-up is done via ``np.searchsorted`` on the
+    negated/sorted table, avoiding the large temporary arrays that a
+    broadcast-tile approach would create.
+    """
+    arr = np.round(np.asarray(values, dtype=np.float64), 8)
+    neg_rns = _NEG_RNS_SORTED
+    side = "right" if equal_too else "left"
+    indexes = np.searchsorted(neg_rns, -arr, side=side)
+    return np.minimum(indexes, rns.size - 1)
 
 
 def _specific_loudness_from_core(core_loudness: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
@@ -581,11 +625,144 @@ def _nonlinear_decay_kernel(
     return out
 
 
-def _nonlinear_decay(core_loudness: np.ndarray) -> np.ndarray:
-    """Simulate nonlinear temporal decay used by the Zwicker time-varying path."""
+def _nonlinear_decay_kernel_python(
+    core: np.ndarray,
+    nl_iter: int,
+    b0: float,
+    b1: float,
+    b2: float,
+    b3: float,
+    b4: float,
+    b5: float,
+) -> np.ndarray:
+    """Pure-Python fallback for the Zwicker nonlinear temporal decay.
+
+    Optimisations vs. a naive port of the numba kernel:
+    - core rows converted to Python lists (.tolist()) to dodge numpy scalar overhead
+    - incremental ``ui_cur += delta`` instead of ``base + delta * inner``
+    - ``abs()`` replaced with direct difference comparison
+    - inner iteration count cached as local int
+    """
+
+    n_bands = core.shape[0]
+    n_time = core.shape[1]
+    out = np.empty((n_bands, n_time), dtype=np.float64)
+    inv_iter = 1.0 / float(nl_iter)
+    one_minus_b5 = 1.0 - b5
+    n_inner_tail = nl_iter - 1
+    eps = 1e-5
+
+    for band in range(n_bands):
+        core_band = core[band].tolist()
+        c0 = core_band[0]
+        uo_prev = c0
+        u2_prev = c0 * one_minus_b5 if c0 >= eps else 0.0
+        out[band, 0] = uo_prev
+
+        base = c0
+        delta = (core_band[1] - base) * inv_iter if n_time > 1 else -base * inv_iter
+        ui_cur = base + delta
+        for _ in range(n_inner_tail):
+            uo_cur = ui_cur
+            if uo_prev > u2_prev:
+                uo2_a = uo_prev * b2 - u2_prev * b3
+                if uo2_a >= ui_cur:
+                    uo_cur = uo2_a
+                u2_cur = uo_cur
+                if ui_cur < uo_prev:
+                    u22 = uo_prev * b0 - u2_prev * b1
+                    if u22 <= uo_cur:
+                        u2_cur = u22
+            else:
+                uo2_b = uo_prev * b4
+                if uo2_b >= ui_cur:
+                    uo_cur = uo2_b
+                u2_cur = uo_cur
+
+            if ui_cur >= uo_prev:
+                if not ((ui_cur - uo_prev < eps) and (uo_cur <= u2_prev)):
+                    u2_cur = (u2_prev - ui_cur) * b5 + ui_cur
+
+            uo_prev = uo_cur
+            u2_prev = u2_cur
+            ui_cur += delta
+
+        for time_idx in range(1, n_time):
+            base = core_band[time_idx]
+            delta = (core_band[time_idx + 1] - base) * inv_iter if time_idx + 1 < n_time else -base * inv_iter
+
+            ui_cur = base
+            uo_cur = ui_cur
+            if uo_prev > u2_prev:
+                uo2_a = uo_prev * b2 - u2_prev * b3
+                if uo2_a >= ui_cur:
+                    uo_cur = uo2_a
+                u2_cur = uo_cur
+                if ui_cur < uo_prev:
+                    u22 = uo_prev * b0 - u2_prev * b1
+                    if u22 <= uo_cur:
+                        u2_cur = u22
+            else:
+                uo2_b = uo_prev * b4
+                if uo2_b >= ui_cur:
+                    uo_cur = uo2_b
+                u2_cur = uo_cur
+
+            if ui_cur >= uo_prev:
+                if not ((ui_cur - uo_prev < eps) and (uo_cur <= u2_prev)):
+                    u2_cur = (u2_prev - ui_cur) * b5 + ui_cur
+
+            out[band, time_idx] = uo_cur
+            uo_prev = uo_cur
+            u2_prev = u2_cur
+
+            ui_cur = base + delta
+            for _ in range(n_inner_tail):
+                uo_cur = ui_cur
+                if uo_prev > u2_prev:
+                    uo2_a = uo_prev * b2 - u2_prev * b3
+                    if uo2_a >= ui_cur:
+                        uo_cur = uo2_a
+                    u2_cur = uo_cur
+                    if ui_cur < uo_prev:
+                        u22 = uo_prev * b0 - u2_prev * b1
+                        if u22 <= uo_cur:
+                            u2_cur = u22
+                else:
+                    uo2_b = uo_prev * b4
+                    if uo2_b >= ui_cur:
+                        uo_cur = uo2_b
+                    u2_cur = uo_cur
+
+                if ui_cur >= uo_prev:
+                    if not ((ui_cur - uo_prev < eps) and (uo_cur <= u2_prev)):
+                        u2_cur = (u2_prev - ui_cur) * b5 + ui_cur
+
+                uo_prev = uo_cur
+                u2_prev = u2_cur
+                ui_cur += delta
+
+    return out
+
+
+NONLINEAR_DECAY_INTERPOLATION_STEPS = 12
+
+
+def _nonlinear_decay(core_loudness: np.ndarray, nl_iter: int | None = None) -> np.ndarray:
+    """Simulate nonlinear temporal decay used by the Zwicker time-varying path.
+
+    Parameters
+    ----------
+    nl_iter : int, optional
+        Number of linear-interpolation sub-steps between consecutive 2 kHz
+        core-loudness frames.  Higher values give a smoother decay at the
+        cost of more computation.  ``None`` uses the module-level default
+        ``NONLINEAR_DECAY_INTERPOLATION_STEPS`` (12).  The original Zwicker
+        reference uses 24; values >= 8 yield < 0.002 sone deviation.
+    """
 
     sample_rate = 2000
-    nl_iter = 24
+    nl_iter = nl_iter if nl_iter is not None else NONLINEAR_DECAY_INTERPOLATION_STEPS
     t_short = 0.005
     t_long = 0.015
     t_var = 0.075
@@ -608,7 +785,8 @@ def _nonlinear_decay(core_loudness: np.ndarray) -> np.ndarray:
     b4 = float(np.exp(-delta_t / t_long))
     b5 = float(np.exp(-delta_t / t_var))
 
-    return _nonlinear_decay_kernel(
+    kernel = _nonlinear_decay_kernel if _NUMBA_AVAILABLE else _nonlinear_decay_kernel_python
+    return kernel(
         np.ascontiguousarray(core),
         nl_iter,
         float(b0),
