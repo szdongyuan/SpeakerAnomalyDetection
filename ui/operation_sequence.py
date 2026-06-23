@@ -48,6 +48,7 @@ from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpec
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
+from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
 from ui.signal_analysis_window import get_class_mapping
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_src import ui_resources
@@ -213,6 +214,7 @@ class AnalysisModelSelect(QDialog):
             "参考频谱对比 (RSC) ",
             "频响 (FR) ",
             "频段能量 (FBA) ",
+            "响度 (LOUD) ",
             "谐波失真 (HD) ",
             "高阶谐波失真 (RB) ",
             "感知失真 (PRB) ",
@@ -859,6 +861,8 @@ class OptionList(ListView):
             model = PatternMatchConfigWindow(config_manager, name)
         elif type == "FBA":
             model = FbaConfigWindow(config_manager, name, available_channels=available_channels)
+        elif type == "LOUD":
+            model = LoudnessConfigWindow(config_manager, name)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         return model
