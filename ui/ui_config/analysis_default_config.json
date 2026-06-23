@@ -67,7 +67,7 @@
         "limit_data": null
     },
     "FBA": {
-        "band_strategy": "1/3 倍频程",
+        "band_strategy": "1/3 \u500d\u9891\u7a0b",
         "f_min": 20,
         "f_max": 20000,
         "bandwidth": 100,
@@ -170,7 +170,7 @@
         "convex_time_sec": 0.0,
         "duration_ref_unit": "peak",
         "duration_ref_value": 0.5,
-        "test_peak_op": "≥",
+        "test_peak_op": "\u2265",
         "test_peak_value": 3
     },
     "PM": {
@@ -247,5 +247,49 @@
         "dominant_tone_use_display_curve": true,
         "limit_checked": false,
         "limit_data": null
+    },
+    "LOUD": {
+        "enabled": true,
+        "field_type": "free",
+        "method": "time_varying_iso532_1",
+        "display": {
+            "summary_metrics": [],
+            "curves": [],
+            "heatmaps": []
+        },
+        "save": {
+            "summary": false,
+            "curve": false,
+            "specific_loudness": false
+        },
+        "advanced": {
+            "show_specific_loudness_heatmap": false,
+            "save_specific_loudness_npz": false,
+            "specific_loudness_colormap": "viridis",
+            "curve_y_unit": "sone",
+            "specific_loudness_profile_mode": "steady_average",
+            "specific_loudness_exceedance_threshold_sone_per_bark": 0.0,
+            "specific_loudness_exceedance_ref_line": "",
+            "output_time_resolution_ms": 2.0,
+            "stationary_frame_duration_s": 0.1,
+            "stationary_overlap_percent": 50.0,
+            "stationary_hop_duration_s": 0.05,
+            "curve_y_axis_zero_based": true
+        },
+        "limit_checked": false,
+        "limit_metric": "curve_y",
+        "curve_limit_unit": "sone",
+        "curve_upper_enabled": true,
+        "curve_upper_value": 20.0,
+        "curve_lower_enabled": false,
+        "curve_lower_value": 0.0,
+        "nmax_upper_enabled": false,
+        "nmax_upper_sone": 0.0,
+        "nmax_lower_enabled": false,
+        "nmax_lower_sone": 0.0,
+        "mean_upper_enabled": false,
+        "mean_upper_sone": 0.0,
+        "mean_lower_enabled": false,
+        "mean_lower_sone": 0.0
     }
 }

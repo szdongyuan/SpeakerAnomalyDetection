@@ -80,7 +80,7 @@ class SequenceWindow(QWidget):
         self.toolsbar = SequenceToolsBar()
 
         self.v2pa_factor = None
-        self.analysis_types_requiring_v2pa = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"}
+        self.analysis_types_requiring_v2pa = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA", "LOUD"}
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
@@ -1945,6 +1945,11 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, "calculate_fba"):
                     result = instance.calculate_fba()
+                    if not result:
+                        continue
+                    instance.show()
+                elif hasattr(instance, "calculate_loudness"):
+                    result = instance.calculate_loudness()
                     if not result:
                         continue
                     instance.show()
