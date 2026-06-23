@@ -253,8 +253,15 @@
         "field_type": "free",
         "method": "time_varying_iso532_1",
         "display": {
-            "summary_metrics": [],
-            "curves": [],
+            "summary_metrics": [
+                "steady_state_average_loudness",
+                "max_transient_loudness",
+                "specific_loudness_summed_exceedance"
+            ],
+            "curves": [
+                "loudness_time",
+                "specific_loudness_profile"
+            ],
             "heatmaps": []
         },
         "save": {
@@ -269,7 +276,7 @@
             "curve_y_unit": "sone",
             "specific_loudness_profile_mode": "steady_average",
             "specific_loudness_exceedance_threshold_sone_per_bark": 0.0,
-            "specific_loudness_exceedance_ref_line": "",
+            "specific_loudness_exceedance_ref_line": "ref1",
             "output_time_resolution_ms": 2.0,
             "stationary_frame_duration_s": 0.1,
             "stationary_overlap_percent": 50.0,
