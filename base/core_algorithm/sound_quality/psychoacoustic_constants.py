@@ -287,6 +287,7 @@ LOUDNESS_TEMPORAL_SLOW_WEIGHT = 0.53  # Weight for the slow temporal integrator
 LOUDNESS_TEMPORAL_FAST_TAU_S = 3.5e-3  # Fast time constant τ_fast = 3.5 ms (cochlear attack)
 LOUDNESS_TEMPORAL_SLOW_TAU_S = 70e-3  # Slow time constant τ_slow = 70 ms (auditory integration)
 LOUDNESS_INTERNAL_TIME_RESOLUTION_S = 0.0005  # Internal time-varying loudness step (s)
+LOUDNESS_NONLINEAR_DECAY_INTERPOLATION_STEPS = 12  # Interpolation steps for nonlinear temporal decay
 LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_S = 0.002  # Default exported loudness curve step (s)
 LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS = LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_S * 1000.0
 LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S = 0.1  # Default stationary-loudness frame length (s)

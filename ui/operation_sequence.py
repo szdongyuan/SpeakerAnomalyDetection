@@ -862,7 +862,7 @@ class OptionList(ListView):
         elif type == "FBA":
             model = FbaConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "LOUD":
-            model = LoudnessConfigWindow(config_manager, name)
+            model = LoudnessConfigWindow(config_manager, name, available_channels=available_channels)
         elif type == "Excel":
             model = ExcelConfigWindow(config_manager, name)
         return model

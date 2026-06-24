@@ -26,6 +26,7 @@ from .psychoacoustic_constants import (
     LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S,
     LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_S,
     LOUDNESS_INTERNAL_TIME_RESOLUTION_S,
+    LOUDNESS_NONLINEAR_DECAY_INTERPOLATION_STEPS,
     LOUDNESS_TV_SUMMARY_SKIP_S,
     LOUDNESS_A0_TABLE as _A0_TABLE,
     LOUDNESS_COMPARISON_DECIMALS,
@@ -53,24 +54,6 @@ from .psychoacoustic_constants import (
     P_REF,
     TARGET_FS_HZ,
 )
-
-_NUMBA_AVAILABLE = False
-
-
-def _maybe_njit(*njit_args, **njit_kwargs):
-    """No-op decorator — numba JIT is disabled.
-
-    The pure-Python fallback is used unconditionally. This avoids the
-    heavy first-call JIT compilation penalty (~10 s) and removes the
-    numba dependency from the build.
-    """
-
-    def _wrap(func):
-        return func
-
-    return _wrap
-
-
 
 
 class LoudnessMethod(str, Enum):
@@ -225,106 +208,6 @@ def _third_octave_levels_time_varying(signal_pa: np.ndarray, fs: int) -> tuple[n
     return levels, time_axis
 
 
-@_maybe_njit(cache=True)
-def _core_loudness_kernel_single(
-    spec: np.ndarray,
-    field_is_diffuse: bool,
-    rap: np.ndarray,
-    dll: np.ndarray,
-    ltq: np.ndarray,
-    a0: np.ndarray,
-    ddf: np.ndarray,
-    dcb: np.ndarray,
-) -> np.ndarray:
-    """Compute one Zwicker core-loudness column from 28 third-octave levels."""
-
-    s = LOUDNESS_CORE_S
-
-    corrected_low = np.empty(11, dtype=np.float64)
-    for band_idx in range(11):
-        level = spec[band_idx]
-        correction = dll[7, band_idx]
-        for range_idx in range(rap.size):
-            if level <= rap[range_idx] - dll[range_idx, band_idx]:
-                correction = dll[range_idx, band_idx]
-                break
-        corrected_low[band_idx] = level + correction
-
-    s0 = 0.0
-    for i in range(0, 6):
-        s0 += 10.0 ** (corrected_low[i] / 10.0)
-    s1 = 0.0
-    for i in range(6, 9):
-        s1 += 10.0 ** (corrected_low[i] / 10.0)
-    s2 = 0.0
-    for i in range(9, 11):
-        s2 += 10.0 ** (corrected_low[i] / 10.0)
-    lcb0 = 10.0 * np.log10(s0) if s0 > 0.0 else 0.0
-    lcb1 = 10.0 * np.log10(s1) if s1 > 0.0 else 0.0
-    lcb2 = 10.0 * np.log10(s2) if s2 > 0.0 else 0.0
-
-    le = np.empty(20, dtype=np.float64)
-    le[0] = lcb0
-    le[1] = lcb1
-    le[2] = lcb2
-    for i in range(3, 20):
-        le[i] = spec[8 + i]
-    for i in range(20):
-        le[i] -= a0[i]
-        if field_is_diffuse:
-            le[i] += ddf[i]
-
-    core = np.zeros(21, dtype=np.float64)
-    for i in range(20):
-        if le[i] > ltq[i]:
-            le_adj = le[i] - dcb[i]
-            mp1 = LOUDNESS_CORE_MP1_SCALE * (
-                10.0 ** (LOUDNESS_CORE_LTQ_EXPONENT_SCALE * ltq[i])
-            )
-            mp2 = (
-                1.0
-                - s
-                + s * (10.0 ** (LOUDNESS_CORE_LEVEL_EXPONENT_SCALE * (le_adj - ltq[i])))
-            ) ** LOUDNESS_CORE_POWER - 1.0
-            val = mp1 * mp2
-            if val < 0.0:
-                val = 0.0
-            core[i] = val
-
-    low_band_correction = LOUDNESS_LOW_BAND_CORRECTION_BASE + (
-        LOUDNESS_LOW_BAND_CORRECTION_SCALE
-        * (max(core[0], 0.0) ** LOUDNESS_LOW_BAND_CORRECTION_POWER)
-    )
-    if low_band_correction <= 1.0:
-        core[0] *= low_band_correction
-    return core
-
-
-@_maybe_njit(cache=True)
-def _core_loudness_kernel_batch(
-    spec: np.ndarray,
-    field_is_diffuse: bool,
-    rap: np.ndarray,
-    dll: np.ndarray,
-    ltq: np.ndarray,
-    a0: np.ndarray,
-    ddf: np.ndarray,
-    dcb: np.ndarray,
-) -> np.ndarray:
-    """Vectorized Zwicker core-loudness over time. ``spec`` is shape (28, T)."""
-
-    n_time = spec.shape[1]
-    out = np.zeros((21, n_time), dtype=np.float64)
-    spec_col = np.empty(28, dtype=np.float64)
-    for t in range(n_time):
-        for band in range(28):
-            spec_col[band] = spec[band, t]
-        out[:, t] = _core_loudness_kernel_single(
-            spec_col, field_is_diffuse, rap, dll, ltq, a0, ddf, dcb
-        )
-    return out
-
-
 def _core_loudness_from_third_octaves_batch(levels_db: np.ndarray, field_type: str) -> np.ndarray:
     """Compute Zwicker core-loudness for all time frames via NumPy batch ops.
 
@@ -399,9 +282,6 @@ def _core_loudness_from_third_octaves_batch(levels_db: np.ndarray, field_type: s
     return core
 
 
-_NEG_RNS_SORTED = np.sort(-np.round(LOUDNESS_RNS_TABLE, 8))
-
-
 def _get_rns_index(values: np.ndarray, rns: np.ndarray, *, equal_too: bool = False) -> np.ndarray:
     """Return slope-table range indexes for core/specific loudness values.
 
@@ -412,7 +292,7 @@ def _get_rns_index(values: np.ndarray, rns: np.ndarray, *, equal_too: bool = Fal
     broadcast-tile approach would create.
     """
     arr = np.round(np.asarray(values, dtype=np.float64), 8)
-    neg_rns = _NEG_RNS_SORTED
+    neg_rns = np.sort(-np.round(rns, 8))
     side = "right" if equal_too else "left"
     indexes = np.searchsorted(neg_rns, -arr, side=side)
     return np.minimum(indexes, rns.size - 1)
@@ -549,82 +429,6 @@ def _specific_loudness_from_core(core_loudness: np.ndarray) -> tuple[float, np.n
     return loudness, n_specific, bark_axis
 
 
-@_maybe_njit(cache=True)
-def _nonlinear_decay_kernel(
-    core: np.ndarray,
-    nl_iter: int,
-    b0: float,
-    b1: float,
-    b2: float,
-    b3: float,
-    b4: float,
-    b5: float,
-) -> np.ndarray:
-    """Numba-friendly inner loop of the Zwicker nonlinear temporal decay.
-
-    Computes ``uo`` (same shape as the interpolated grid) and returns the
-    first interpolation step of every input column, matching the original
-    ``uo.reshape(..., nl_iter)[:, :, 0]`` slice in pure-Python form.
-    """
-
-    n_bands = core.shape[0]
-    n_time = core.shape[1]
-    n_cols = n_time * nl_iter
-
-    delta = np.empty((n_bands, n_time), dtype=np.float64)
-    for band in range(n_bands):
-        for t in range(n_time - 1):
-            delta[band, t] = (core[band, t + 1] - core[band, t]) / nl_iter
-        delta[band, n_time - 1] = -core[band, n_time - 1] / nl_iter
-
-    ui = np.empty((n_bands, n_cols), dtype=np.float64)
-    for band in range(n_bands):
-        for t in range(n_time):
-            base = core[band, t]
-            d = delta[band, t]
-            offset = t * nl_iter
-            for inner in range(nl_iter):
-                ui[band, offset + inner] = base + d * inner
-
-    out = np.empty((n_bands, n_time), dtype=np.float64)
-    for band in range(n_bands):
-        uo_prev = ui[band, 0]
-        if core[band, 0] >= 1e-5:
-            u2_prev = core[band, 0] * (1.0 - b5)
-        else:
-            u2_prev = 0.0
-        out[band, 0] = uo_prev
-
-        for col in range(1, n_cols):
-            ui_cur = ui[band, col]
-
-            uo_cur = ui_cur
-            uo2_a = uo_prev * b2 - u2_prev * b3
-            if (uo_prev > u2_prev) and (uo2_a >= ui_cur):
-                uo_cur = uo2_a
-            uo2_b = uo_prev * b4
-            if (uo_prev <= u2_prev) and (uo2_b >= ui_cur):
-                uo_cur = uo2_b
-
-            u2_cur = uo_cur
-            u22 = uo_prev * b0 - u2_prev * b1
-            if (ui_cur < uo_prev) and (uo_prev > u2_prev) and (u22 <= uo_cur):
-                u2_cur = u22
-
-            u2_2 = (u2_prev - ui_cur) * b5 + ui_cur
-            near_previous = (abs(ui_cur - uo_prev) < 1e-5) and (uo_cur <= u2_prev)
-            if (ui_cur >= uo_prev) and (not near_previous):
-                u2_cur = u2_2
-
-            if col % nl_iter == 0:
-                out[band, col // nl_iter] = uo_cur
-
-            uo_prev = uo_cur
-            u2_prev = u2_cur
-
-    return out
-
-
 def _nonlinear_decay_kernel_python(
     core: np.ndarray,
     nl_iter: int,
@@ -745,9 +549,6 @@ def _nonlinear_decay_kernel_python(
     return out
 
 
-NONLINEAR_DECAY_INTERPOLATION_STEPS = 12
-
-
 def _nonlinear_decay(core_loudness: np.ndarray, nl_iter: int | None = None) -> np.ndarray:
     """Simulate nonlinear temporal decay used by the Zwicker time-varying path.
 
@@ -757,12 +558,12 @@ def _nonlinear_decay(core_loudness: np.ndarray, nl_iter: int | None = None) -> n
         Number of linear-interpolation sub-steps between consecutive 2 kHz
         core-loudness frames.  Higher values give a smoother decay at the
         cost of more computation.  ``None`` uses the module-level default
-        ``NONLINEAR_DECAY_INTERPOLATION_STEPS`` (12).  The original Zwicker
+        ``LOUDNESS_NONLINEAR_DECAY_INTERPOLATION_STEPS`` (12).  The original Zwicker
         reference uses 24; values >= 8 yield < 0.002 sone deviation.
     """
 
     sample_rate = 2000
-    nl_iter = nl_iter if nl_iter is not None else NONLINEAR_DECAY_INTERPOLATION_STEPS
+    nl_iter = nl_iter if nl_iter is not None else LOUDNESS_NONLINEAR_DECAY_INTERPOLATION_STEPS
     t_short = 0.005
     t_long = 0.015
     t_var = 0.075
@@ -785,8 +586,7 @@ def _nonlinear_decay(core_loudness: np.ndarray, nl_iter: int | None = None) -> n
     b4 = float(np.exp(-delta_t / t_long))
     b5 = float(np.exp(-delta_t / t_var))
 
-    kernel = _nonlinear_decay_kernel if _NUMBA_AVAILABLE else _nonlinear_decay_kernel_python
-    return kernel(
+    return _nonlinear_decay_kernel_python(
         np.ascontiguousarray(core),
         nl_iter,
         float(b0),

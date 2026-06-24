@@ -2856,9 +2856,13 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         self.setWindowTitle(title_name)
 
     def calculate_loudness(self):
-        recorded_signal = self.data_struct.store_wave_data
-        sample_rate = self.data_struct.sample_rate
         config = self.analysis_config or {}
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, config, self.title_name)
+        except ValueError as exc:
+            MessageBox.warning(self, "提示", f"响度分析失败：{exc}")
+            return False
+        sample_rate = self.data_struct.sample_rate
 
         if recorded_signal is None or sample_rate is None:
             MessageBox.warning(self, "提示", "响度分析失败：没有可用录音数据。")

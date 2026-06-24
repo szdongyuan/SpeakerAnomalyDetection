@@ -250,6 +250,7 @@
     },
     "LOUD": {
         "enabled": true,
+        "analysis_channel": 0,
         "field_type": "free",
         "method": "time_varying_iso532_1",
         "display": {

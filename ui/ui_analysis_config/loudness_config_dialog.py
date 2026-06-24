@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from base.core_algorithm.sound_quality.psychoacoustic_constants import (
@@ -13,7 +15,7 @@ _DEFAULT_OVERLAP = LOUDNESS_DEFAULT_STATIONARY_OVERLAP_PERCENT
 _DEFAULT_OUTPUT_TIME_RESOLUTION_MS = LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label
-from ui.ui_analysis_config.common_widgets import SemanticAnalysisConfigDialogBase
+from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
 from ui.ui_src import ui_resources
 
 
@@ -319,13 +321,6 @@ class LoudnessConfigPanel(QWidget):
         group.setLayout(layout)
         return group
 
-    LIMIT_METRIC_OPTIONS = {
-        "curve_y": "响度曲线逐点判定",
-        "steady_state_average": "稳态平均响度",
-        "max_transient": "最大瞬态响度",
-    }
-    LIMIT_METRIC_LABEL_TO_VALUE = {label: value for value, label in LIMIT_METRIC_OPTIONS.items()}
-
     def _create_limit_group(self):
         group = QWidget()
         group.setMinimumHeight(220)
@@ -346,11 +341,17 @@ class LoudnessConfigPanel(QWidget):
         metric_layout = QHBoxLayout()
         metric_layout.addWidget(Label("判定指标:"))
         self.limit_metric_combo = ComboBox()
-        self.limit_metric_combo.addItems(list(self.LIMIT_METRIC_OPTIONS.values()))
+        for value, label in (
+            ("curve_y", "响度曲线逐点判定"),
+            ("steady_state_average", "稳态平均响度"),
+            ("max_transient", "最大瞬态响度"),
+        ):
+            self.limit_metric_combo.addItem(label, value)
         limit_metric_value = str(self.load_config.get("limit_metric", "curve_y") or "curve_y")
-        self.limit_metric_combo.setCurrentText(
-            self.LIMIT_METRIC_OPTIONS.get(limit_metric_value, "响度曲线逐点判定")
-        )
+        limit_metric_index = self.limit_metric_combo.findData(limit_metric_value)
+        if limit_metric_index < 0:
+            limit_metric_index = self.limit_metric_combo.findData("curve_y")
+        self.limit_metric_combo.setCurrentIndex(limit_metric_index if limit_metric_index >= 0 else 0)
         self.limit_metric_combo.setToolTip(
             "响度曲线逐点判定：响度曲线每个时间点都不能超限。\n"
             "稳态平均响度：时间平均响度不能超限。\n"
@@ -515,7 +516,7 @@ class LoudnessConfigPanel(QWidget):
         return {
             "enabled": True,
             "field_type": "free",
-            "method": self.METHOD_LABEL_TO_VALUE.get(self.method_combo.currentText(), "per_segment"),
+            "method": self.METHOD_LABEL_TO_VALUE.get(self.method_combo.currentText(), "time_varying_iso532_1"),
             "display": {
                 "summary_metrics": summary_metrics,
                 "curves": curves,
@@ -554,9 +555,7 @@ class LoudnessConfigPanel(QWidget):
                 "curve_y_axis_zero_based": bool(advanced_cfg.get("curve_y_axis_zero_based", True)),
             },
             "limit_checked": self.limit_checked_box.isChecked(),
-            "limit_metric": self.LIMIT_METRIC_LABEL_TO_VALUE.get(
-                self.limit_metric_combo.currentText(), "curve_y"
-            ),
+            "limit_metric": str(self.limit_metric_combo.currentData() or "curve_y"),
             "curve_limit_unit": self._curve_limit_unit(),
             "curve_upper_enabled": self.upper_enabled_box.isChecked(),
             "curve_upper_value": self.upper_spin.value(),
@@ -576,11 +575,13 @@ class LoudnessConfigPanel(QWidget):
 class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
     """Configuration dialog for ISO 532-1 Zwicker loudness analysis."""
 
-    def __init__(self, config_manager, model_type):
+    def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
+        self.show_channel_selector = available_channels is not None
+        self.available_channels = available_channels
         self.panel = None
         self.init_ui()
 
@@ -595,13 +596,22 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
         self._build_semantic_sections()
 
     def _build_semantic_sections(self):
+        if self.show_channel_selector:
+            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
+            self.add_semantic_section("input", title="输入参数", widget=self.channel_selector)
+
         self.panel = LoudnessConfigPanel(self.load_config, comparison_only=False, parent=self)
         self.add_semantic_section("compute", title="算法参数", widget=self.panel.algorithm_group)
         self.add_semantic_section("display", title="显示设置", widget=self.panel.output_group)
         self.add_semantic_section("judgment", title="判定阈值", widget=self.panel.limit_group)
 
     def get_default_config(self):
-        return self.panel.get_default_config()
+        config = self.panel.get_default_config()
+        if self.show_channel_selector and hasattr(self, "channel_selector"):
+            config.update(self.channel_selector.get_config())
+        else:
+            config["analysis_channel"] = int(self.load_config.get("analysis_channel", 0) or 0)
+        return config
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
