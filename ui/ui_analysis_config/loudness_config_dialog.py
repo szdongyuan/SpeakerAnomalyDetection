@@ -1,21 +1,36 @@
 from typing import List, Optional
 
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
+from base.core_algorithm.sound_quality.noise_reduction import (
+    DEFAULT_SPECTRAL_SUBTRACTION_ALPHA,
+    DEFAULT_SPECTRAL_SUBTRACTION_FLOOR,
+    DEFAULT_SPECTRAL_SUBTRACTION_FREQ_SMOOTHING_BINS,
+    DEFAULT_SPECTRAL_SUBTRACTION_GAIN_SMOOTHING,
+    DEFAULT_SPECTRAL_SUBTRACTION_HOP_SIZE,
+    DEFAULT_SPECTRAL_SUBTRACTION_MIN_GAIN_DB,
+    DEFAULT_SPECTRAL_SUBTRACTION_N_FFT,
+)
 from base.core_algorithm.sound_quality.psychoacoustic_constants import (
     LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS,
     LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S,
     LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S,
     LOUDNESS_DEFAULT_STATIONARY_OVERLAP_PERCENT,
 )
+from consts.running_consts import DEFAULT_DIR
 
 _DEFAULT_FRAME_S = LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S
 _DEFAULT_HOP_S = LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S
 _DEFAULT_OVERLAP = LOUDNESS_DEFAULT_STATIONARY_OVERLAP_PERCENT
 _DEFAULT_OUTPUT_TIME_RESOLUTION_MS = LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label
-from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
+from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label, LineEdit
+from ui.ui_analysis_config.common_widgets import (
+    AnalysisTimeRangeWidget,
+    ChannelSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
+)
 from ui.ui_src import ui_resources
 
 
@@ -100,8 +115,60 @@ class LoudnessConfigPanel(QWidget):
         self.stationary_controls_widget = QWidget(self)
         self.stationary_controls_widget.setVisible(False)
 
+        self.analysis_time_range_widget = AnalysisTimeRangeWidget(
+            self.load_config.get("advanced", {}), self, show_checkbox=True
+        )
+        layout.addWidget(self.analysis_time_range_widget)
+
+        noise_layout = QVBoxLayout()
+        noise_layout.setSpacing(8)
+        self.background_noise_enabled_box = CheckBox("启用背景噪音处理")
+        self.background_noise_enabled_box.setToolTip(
+            "启用后先用背景噪声音频做保守谱减，再计算响度。"
+        )
+        self.background_noise_enabled_box.setChecked(
+            bool(advanced_cfg.get("background_noise_processing_enabled", False))
+        )
+        noise_layout.addWidget(self.background_noise_enabled_box)
+
+        self.background_noise_file_widget = QWidget(self)
+        file_layout = QHBoxLayout(self.background_noise_file_widget)
+        file_layout.setContentsMargins(18, 0, 0, 0)
+        file_layout.addWidget(Label("背景音频:"))
+        self.background_noise_path_edit = LineEdit()
+        self.background_noise_path_edit.setReadOnly(True)
+        self.background_noise_path_edit.setText(
+            str(advanced_cfg.get("background_noise_file_path", "") or "")
+        )
+        icon = QIcon(":/ui/icon/folder-s.png")
+        action = self.background_noise_path_edit.addAction(icon, LineEdit.TrailingPosition)
+        action.setToolTip("选择背景噪声音频")
+        action.triggered.connect(self._on_background_noise_file_clicked)
+        file_layout.addWidget(self.background_noise_path_edit, 1)
+        noise_layout.addWidget(self.background_noise_file_widget)
+        self.background_noise_enabled_box.toggled.connect(
+            self.background_noise_file_widget.setVisible
+        )
+        self.background_noise_file_widget.setVisible(
+            self.background_noise_enabled_box.isChecked()
+        )
+        layout.addLayout(noise_layout)
+
         group.setLayout(layout)
         return group
+
+    def _on_background_noise_file_clicked(self):
+        from PyQt5.QtWidgets import QFileDialog
+
+        start_dir = DEFAULT_DIR
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择背景噪声音频文件",
+            start_dir,
+            "Audio Files (*.wav *.WAV);;All Files (*)",
+        )
+        if path:
+            self.background_noise_path_edit.setText(path)
 
     def _create_output_group(self):
         group = QWidget()
@@ -553,6 +620,47 @@ class LoudnessConfigPanel(QWidget):
                 "stationary_overlap_percent": _DEFAULT_OVERLAP,
                 "stationary_hop_duration_s": self._stationary_hop_duration_s(),
                 "curve_y_axis_zero_based": bool(advanced_cfg.get("curve_y_axis_zero_based", True)),
+                **self.analysis_time_range_widget.get_config(),
+                "background_noise_processing_enabled": self.background_noise_enabled_box.isChecked(),
+                "background_noise_file_path": self.background_noise_path_edit.text().strip(),
+                "background_noise_algorithm": "spectral_subtraction_audio",
+                "background_noise_n_fft": int(
+                    advanced_cfg.get("background_noise_n_fft", DEFAULT_SPECTRAL_SUBTRACTION_N_FFT)
+                    or DEFAULT_SPECTRAL_SUBTRACTION_N_FFT
+                ),
+                "background_noise_hop_size": int(
+                    advanced_cfg.get("background_noise_hop_size", DEFAULT_SPECTRAL_SUBTRACTION_HOP_SIZE)
+                    or DEFAULT_SPECTRAL_SUBTRACTION_HOP_SIZE
+                ),
+                "background_noise_oversubtraction_factor": float(
+                    advanced_cfg.get(
+                        "background_noise_oversubtraction_factor",
+                        DEFAULT_SPECTRAL_SUBTRACTION_ALPHA,
+                    )
+                    or DEFAULT_SPECTRAL_SUBTRACTION_ALPHA
+                ),
+                "background_noise_spectral_floor": float(
+                    advanced_cfg.get("background_noise_spectral_floor", DEFAULT_SPECTRAL_SUBTRACTION_FLOOR)
+                    or DEFAULT_SPECTRAL_SUBTRACTION_FLOOR
+                ),
+                "background_noise_min_gain_db": float(
+                    advanced_cfg.get("background_noise_min_gain_db", DEFAULT_SPECTRAL_SUBTRACTION_MIN_GAIN_DB)
+                    or DEFAULT_SPECTRAL_SUBTRACTION_MIN_GAIN_DB
+                ),
+                "background_noise_frequency_smoothing_bins": int(
+                    advanced_cfg.get(
+                        "background_noise_frequency_smoothing_bins",
+                        DEFAULT_SPECTRAL_SUBTRACTION_FREQ_SMOOTHING_BINS,
+                    )
+                    or DEFAULT_SPECTRAL_SUBTRACTION_FREQ_SMOOTHING_BINS
+                ),
+                "background_noise_gain_time_smoothing": float(
+                    advanced_cfg.get(
+                        "background_noise_gain_time_smoothing",
+                        DEFAULT_SPECTRAL_SUBTRACTION_GAIN_SMOOTHING,
+                    )
+                    or DEFAULT_SPECTRAL_SUBTRACTION_GAIN_SMOOTHING
+                ),
             },
             "limit_checked": self.limit_checked_box.isChecked(),
             "limit_metric": str(self.limit_metric_combo.currentData() or "curve_y"),

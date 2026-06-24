@@ -12,7 +12,7 @@ service stays compatible with both the shipped defaults and any user-edited
 config.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -171,9 +171,17 @@ def _run_loudness(
         fallback_key="frame_duration_s",
     )
     stationary_hop_duration_s = _stationary_hop_duration_option(advanced_cfg, stationary_frame_duration_s)
+    analysis_signal = signal_v.astype(np.float64, copy=False)
+    analysis_signal, source_start_time_s, source_end_time_s = _apply_loudness_time_range(
+        analysis_signal,
+        sample_rate_int,
+        advanced_cfg,
+    )
+    analysis_signal = _apply_loudness_noise_reduction(analysis_signal, sample_rate_int, advanced_cfg)
+
     try:
         raw = LoudnessAnalyzer(sample_rate_int).compute(
-            signal_v.astype(np.float64, copy=False),
+            analysis_signal,
             method=method,
             field_type=field_type,
             v2pa_factor=v2pa,
@@ -189,13 +197,27 @@ def _run_loudness(
     requested_metrics = _requested_loudness_summary_metrics(display_cfg, save_cfg, advanced_cfg)
     summary = _build_loudness_summary(raw, advanced_cfg, requested_metrics=requested_metrics)
 
-    display_payload = _build_loudness_display_payload(raw, summary, display_cfg, advanced_cfg)
-    save_payload = _build_loudness_save_payload(raw, summary, save_cfg, advanced_cfg)
+    analysis_raw = _with_analysis_time_range_metadata(raw, source_start_time_s, source_end_time_s)
+    display_time_s = _source_time_axis(analysis_raw)
+    display_payload = _build_loudness_display_payload(
+        analysis_raw,
+        summary,
+        display_cfg,
+        advanced_cfg,
+        time_s=display_time_s,
+    )
+    save_payload = _build_loudness_save_payload(
+        analysis_raw,
+        summary,
+        save_cfg,
+        advanced_cfg,
+        time_s=display_time_s,
+    )
 
     return LoudnessRunResult(
         enabled=True,
         skipped_reason=None,
-        raw_result=raw,
+        raw_result=analysis_raw,
         summary=summary,
         display_payload=display_payload,
         save_payload=save_payload,
@@ -245,6 +267,119 @@ def _stationary_hop_duration_option(config: dict, frame_duration_s: Optional[flo
         overlap_ratio = min(max(overlap_percent, 0.0), 90.0) / 100.0
         return max(frame_duration_s * (1.0 - overlap_ratio), 0.001)
     return _positive_float_option(config, "stationary_hop_duration_s", fallback_key="hop_duration_s")
+
+
+def _apply_loudness_time_range(
+    signal: np.ndarray,
+    sample_rate: int,
+    advanced_cfg: dict,
+) -> tuple[np.ndarray, float, Optional[float]]:
+    """Slice the signal to the user-configured analysis window."""
+    if not advanced_cfg.get("analysis_time_range_enabled", False):
+        return signal, 0.0, None
+    start_sec = max(0.0, float(advanced_cfg.get("analysis_start_time_sec", 0.0) or 0.0))
+    end_sec = max(0.0, float(advanced_cfg.get("analysis_end_time_sec", 0.0) or 0.0))
+    start_sample = min(int(np.floor(start_sec * sample_rate)), signal.size)
+    end_sample = min(int(np.ceil(end_sec * sample_rate)), signal.size) if end_sec > 0.0 else signal.size
+    if end_sample <= start_sample:
+        return signal, 0.0, None
+    return (
+        signal[start_sample:end_sample],
+        start_sample / float(sample_rate),
+        end_sample / float(sample_rate),
+    )
+
+
+def _with_analysis_time_range_metadata(
+    raw: LoudnessResult,
+    source_start_time_s: float,
+    source_end_time_s: Optional[float],
+) -> LoudnessResult:
+    """Attach source-window metadata without changing segment-relative time."""
+    if source_end_time_s is None:
+        return raw
+
+    metadata = dict(raw.metadata or {})
+    source_start = float(source_start_time_s)
+    source_end = float(source_end_time_s)
+    metadata.update(
+        {
+            "analysis_time_range_enabled": True,
+            "analysis_source_start_s": source_start,
+            "analysis_source_end_s": source_end,
+            "analysis_duration_s": max(0.0, source_end - source_start),
+        }
+    )
+    return replace(raw, metadata=metadata)
+
+
+def _source_time_axis(raw: LoudnessResult) -> np.ndarray:
+    """Return the time axis to expose in UI/export payloads."""
+    time_s = np.asarray(raw.time_s, dtype=np.float64)
+    metadata = dict(raw.metadata or {})
+    if not metadata.get("analysis_time_range_enabled", False):
+        return time_s
+    try:
+        source_start_s = float(metadata.get("analysis_source_start_s", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return time_s
+    if not np.isfinite(source_start_s) or source_start_s <= 0.0:
+        return time_s
+    return time_s + source_start_s
+
+
+def _apply_loudness_noise_reduction(
+    signal: np.ndarray,
+    sample_rate: int,
+    advanced_cfg: dict,
+) -> np.ndarray:
+    """Apply spectral subtraction if a noise reference file is configured."""
+    if not advanced_cfg.get("background_noise_processing_enabled", False):
+        return signal
+    noise_path = str(advanced_cfg.get("background_noise_file_path", "") or "").strip()
+    if not noise_path:
+        return signal
+
+    import os
+    if not os.path.isfile(noise_path):
+        return signal
+
+    try:
+        import soundfile as sf
+        noise_data, sr_noise = sf.read(noise_path, dtype="float64", always_2d=True)
+        if noise_data.ndim == 2:
+            noise_data = noise_data[:, 0]
+        else:
+            noise_data = np.asarray(noise_data, dtype=np.float64)
+        if sr_noise != sample_rate:
+            from scipy.signal import resample
+            target_len = int(round(noise_data.size * sample_rate / float(sr_noise)))
+            if target_len <= 0:
+                return signal
+            noise_data = resample(noise_data, target_len)
+    except Exception:
+        return signal
+
+    try:
+        from .noise_reduction import spectral_subtract_audio
+        result = spectral_subtract_audio(
+            signal,
+            noise_data,
+            n_fft=int(advanced_cfg.get("background_noise_n_fft", 4096) or 4096),
+            hop_size=int(advanced_cfg.get("background_noise_hop_size", 1024) or 1024),
+            alpha=float(advanced_cfg.get("background_noise_oversubtraction_factor", 1.0) or 1.0),
+            spectral_floor=float(advanced_cfg.get("background_noise_spectral_floor", 0.02) or 0.02),
+            min_gain_db=float(advanced_cfg.get("background_noise_min_gain_db", -20.0) or -20.0),
+            frequency_smoothing_bins=int(
+                advanced_cfg.get("background_noise_frequency_smoothing_bins", 3) or 3
+            ),
+            gain_time_smoothing=float(
+                advanced_cfg.get("background_noise_gain_time_smoothing", 0.6) or 0.6
+            ),
+        )
+        return result.signal
+    except Exception:
+        return signal
 
 
 def _requested_loudness_summary_metrics(display_cfg: dict, save_cfg: dict, advanced_cfg: dict) -> set[str]:
@@ -446,7 +581,9 @@ def _build_loudness_display_payload(
     summary: Dict[str, float],
     display_cfg: dict,
     advanced_cfg: dict,
+    time_s: Optional[np.ndarray] = None,
 ) -> Dict[str, object]:
+    display_time_s = np.asarray(raw.time_s if time_s is None else time_s, dtype=np.float64)
     metric_keys = [
         _resolve_loudness_summary_metric_key(key, advanced_cfg)
         for key in (display_cfg.get("summary_metrics", []) or [])
@@ -477,7 +614,7 @@ def _build_loudness_display_payload(
             curves.append(
                 {
                     "key": "loudness_time",
-                    "x": np.asarray(raw.time_s, dtype=np.float64),
+                    "x": display_time_s,
                     "y": np.asarray(raw.loudness_sone, dtype=np.float64),
                     "x_label": "time / s",
                     "y_label": "Loudness / sone",
@@ -503,7 +640,7 @@ def _build_loudness_display_payload(
         heatmaps.append(
             {
                 "key": "specific_loudness",
-                "x": np.asarray(raw.time_s, dtype=np.float64),
+                "x": display_time_s,
                 "y": np.asarray(raw.bark_axis, dtype=np.float64),
                 "z": np.asarray(raw.specific_loudness, dtype=np.float64),
                 "x_label": "time / s",
@@ -536,8 +673,10 @@ def _build_loudness_save_payload(
     summary: Dict[str, float],
     save_cfg: dict,
     advanced_cfg: dict,
+    time_s: Optional[np.ndarray] = None,
 ) -> Dict[str, object]:
     payload: Dict[str, object] = {"summary": None, "curve": None, "specific_loudness": None}
+    save_time_s = np.asarray(raw.time_s if time_s is None else time_s, dtype=np.float64)
 
     if save_cfg.get("summary", False):
         payload["summary"] = {
@@ -550,7 +689,7 @@ def _build_loudness_save_payload(
 
     if save_cfg.get("curve", False):
         payload["curve"] = {
-            "time_s": np.asarray(raw.time_s, dtype=np.float64),
+            "time_s": save_time_s,
             "loudness_sone": np.asarray(raw.loudness_sone, dtype=np.float64),
             "loudness_level_phon": np.asarray(raw.loudness_level_phon, dtype=np.float64),
         }
@@ -558,7 +697,7 @@ def _build_loudness_save_payload(
     save_specific = bool(save_cfg.get("specific_loudness", False)) or bool(advanced_cfg.get("save_specific_loudness_npz", False))
     if save_specific:
         payload["specific_loudness"] = {
-            "time_s": np.asarray(raw.time_s, dtype=np.float64),
+            "time_s": save_time_s,
             "bark_axis": np.asarray(raw.bark_axis, dtype=np.float64),
             "specific_loudness": np.asarray(raw.specific_loudness, dtype=np.float64),
         }
