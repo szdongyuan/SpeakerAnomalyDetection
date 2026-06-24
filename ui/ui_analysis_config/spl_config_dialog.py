@@ -11,6 +11,7 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label, RadioButton, SpinBox
 from ui.ui_analysis_config.common_widgets import (
+    AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
     GoldenSampleWidget,
     OctaveSmoothingSelectorWidget,
@@ -90,59 +91,6 @@ class SplWindowLengthWidget(QWidget):
             "spl_window_unit": str(self.unit_combo.currentData()),
             "spl_window_time_sec": float(self.time_spin.value()),
             "spl_window_points": int(self.points_spin.value()),
-        }
-
-
-class AnalysisTimeRangeWidget(QWidget):
-    """Optional SPL analysis time range."""
-
-    def __init__(self, cfg: dict | None = None, parent=None):
-        super().__init__(parent)
-        config = cfg or {}
-        self.enabled_checkbox = CheckBox("限制分析时间范围")
-        self.enabled_checkbox.setChecked(bool(config.get("analysis_time_range_enabled", False)))
-        self.enabled_checkbox.stateChanged.connect(self._update_enabled)
-
-        self.start_spin = DoubleSpinBox(self)
-        self.start_spin.setRange(0.0, 999999.0)
-        self.start_spin.setDecimals(4)
-        self.start_spin.setSingleStep(0.1)
-        self.start_spin.setValue(float(config.get("analysis_start_time_sec", 0.0) or 0.0))
-        self.start_spin.setMaximumWidth(120)
-
-        self.end_spin = DoubleSpinBox(self)
-        self.end_spin.setRange(0.0, 999999.0)
-        self.end_spin.setDecimals(4)
-        self.end_spin.setSingleStep(0.1)
-        self.end_spin.setValue(float(config.get("analysis_end_time_sec", 0.0) or 0.0))
-        self.end_spin.setMaximumWidth(120)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.enabled_checkbox.setVisible(False)
-        value_row = QHBoxLayout()
-        value_row.addWidget(Label("起始(s):"))
-        value_row.addWidget(self.start_spin)
-        value_row.addWidget(Label("结束(s):"))
-        value_row.addWidget(self.end_spin)
-        value_row.addStretch()
-        layout.addLayout(value_row)
-        self._update_enabled()
-
-    def _update_enabled(self, *args) -> None:
-        enabled = self.enabled_checkbox.isChecked()
-        self.start_spin.setEnabled(enabled)
-        self.end_spin.setEnabled(enabled)
-
-    def set_range_enabled(self, enabled: bool) -> None:
-        self.enabled_checkbox.setChecked(bool(enabled))
-        self._update_enabled()
-
-    def get_config(self) -> dict:
-        return {
-            "analysis_time_range_enabled": self.enabled_checkbox.isChecked(),
-            "analysis_start_time_sec": float(self.start_spin.value()),
-            "analysis_end_time_sec": float(self.end_spin.value()),
         }
 
 

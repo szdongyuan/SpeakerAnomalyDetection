@@ -2888,7 +2888,7 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         raw = loud_result.raw_result
         self.result = {
             "summary": summary,
-            "time_s": np.asarray(raw.time_s, dtype=np.float64).tolist(),
+            "time_s": self._loudness_display_time_axis(raw).tolist(),
             "loudness_sone": np.asarray(raw.loudness_sone, dtype=np.float64).tolist(),
             "loudness_level_phon": np.asarray(raw.loudness_level_phon, dtype=np.float64).tolist(),
             "metadata": dict(raw.metadata or {}),
@@ -2918,7 +2918,7 @@ class LoudnessAnalysis(AnalysisGraphWidget):
             "items": {
                 "LOUD": {
                     "enabled": bool(config.get("enabled", True)),
-                    "method": config.get("method", "per_segment"),
+                    "method": config.get("method", "time_varying_iso532_1"),
                     "display": display_cfg,
                     "save": save_cfg,
                     "advanced": advanced_cfg,
@@ -2932,10 +2932,31 @@ class LoudnessAnalysis(AnalysisGraphWidget):
             },
         }
 
+    @staticmethod
+    def _loudness_display_time_axis(raw) -> np.ndarray:
+        time_s = np.asarray(raw.time_s, dtype=np.float64)
+        metadata = dict(getattr(raw, "metadata", None) or {})
+        if not metadata.get("analysis_time_range_enabled", False):
+            return time_s
+        try:
+            source_start_s = float(metadata.get("analysis_source_start_s", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return time_s
+        if not np.isfinite(source_start_s) or source_start_s <= 0.0:
+            return time_s
+        return time_s + source_start_s
+
     def _plot_loudness_curve(self, loud_result, config=None):
         raw = loud_result.raw_result
-        time_s = np.asarray(raw.time_s, dtype=np.float64)
         advanced_cfg = (config or {}).get("advanced", {}) or {}
+        metadata = dict(getattr(raw, "metadata", None) or {})
+        plot_start_s = 0.0
+        if metadata.get("analysis_time_range_enabled", False):
+            try:
+                plot_start_s = max(0.0, float(metadata.get("analysis_source_start_s", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                plot_start_s = 0.0
+        time_s = self._loudness_display_time_axis(raw)
         curve_y_unit = str(advanced_cfg.get("curve_y_unit", "sone") or "sone").lower()
         if curve_y_unit == "phon":
             loudness = np.asarray(raw.loudness_level_phon, dtype=np.float64)
@@ -2947,7 +2968,6 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         plot_time_s = time_s
         plot_loudness = loudness
         method = str((config or {}).get("method", "") or "").lower()
-        metadata = dict(getattr(raw, "metadata", None) or {})
         if (
             method == "per_segment"
             and time_s.size
@@ -2957,16 +2977,21 @@ class LoudnessAnalysis(AnalysisGraphWidget):
             and time_s[0] > 0.0
         ):
             if time_s.size > 1 and loudness.size > 1 and np.isfinite(loudness[1]):
-                plot_time_s = np.insert(time_s[1:], 0, 0.0)
+                plot_time_s = np.insert(time_s[1:], 0, plot_start_s)
                 plot_loudness = np.insert(loudness[1:], 0, loudness[1])
             else:
-                plot_time_s = np.insert(time_s, 0, 0.0)
+                plot_time_s = np.insert(time_s, 0, plot_start_s)
                 plot_loudness = np.insert(loudness, 0, loudness[0])
             end_time_s = None
+            if metadata.get("analysis_time_range_enabled", False):
+                try:
+                    end_time_s = float(metadata.get("analysis_source_end_s"))
+                except (TypeError, ValueError):
+                    end_time_s = None
             sample_rate = getattr(self.data_struct, "sample_rate", None)
             recorded_signal = getattr(self.data_struct, "store_wave_data", None)
             try:
-                if sample_rate and recorded_signal is not None:
+                if end_time_s is None and sample_rate and recorded_signal is not None:
                     end_time_s = len(recorded_signal) / float(sample_rate)
             except (TypeError, ValueError, ZeroDivisionError):
                 end_time_s = None
