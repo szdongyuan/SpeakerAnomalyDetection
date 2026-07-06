@@ -52,6 +52,8 @@ class MotorAiResultPanel(QWidget):
         card.content_layout.setSpacing(0)
 
         content_widget = QWidget(card)
+        content_widget.setObjectName("motorSectionContent")
+        content_widget.setStyleSheet(ui_style_const.motor_section_content_style)
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(14, 14, 14, 14)
         content_layout.setSpacing(12)
@@ -75,11 +77,14 @@ class MotorAiResultPanel(QWidget):
         content_widget.setLayout(content_layout)
 
         scroll_area = QScrollArea(card)
+        scroll_area.setObjectName("motorSectionScrollArea")
+        scroll_area.setStyleSheet(ui_style_const.motor_section_scroll_area_style)
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setFrameShape(QFrame.NoFrame)
         scroll_area.setWidget(content_widget)
+        scroll_area.viewport().setStyleSheet(ui_style_const.motor_section_viewport_style)
 
         card.content_layout.addWidget(scroll_area, stretch=1)
         layout.addWidget(card, stretch=1)

@@ -6,6 +6,8 @@ import pyqtgraph as pg
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
+from consts import ui_style_const
+
 
 class DirectionWaveformCard(QFrame):
     def __init__(self, title: str, parent=None):
@@ -13,11 +15,11 @@ class DirectionWaveformCard(QFrame):
         self.plot_item = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setStyleSheet("QFrame{background: white; border: 1px solid #9aa7bd; border-radius: 2px;}")
+        self.setStyleSheet(ui_style_const.waveform_frame_style)
 
         self.title_label = QLabel(title)
         self.title_label.setFixedHeight(26)
-        self.title_label.setStyleSheet("background-color: #2f5aa8; color: white; font-weight: 600; padding-left: 8px;")
+        self.title_label.setStyleSheet(ui_style_const.waveform_title_label_style)
 
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -71,7 +73,7 @@ class DirectionWaveformPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setStyleSheet("background-color: #f6f8fc; border: 1px solid #c9d3e3;")
+        self.setStyleSheet(ui_style_const.waveform_canvas_style)
 
         self._cards: Dict[str, DirectionWaveformCard] = {
             "forward": DirectionWaveformCard("正转波形", self),

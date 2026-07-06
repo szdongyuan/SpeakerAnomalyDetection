@@ -124,10 +124,18 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         self.assertEqual(panel.session_table.item(0, 4).toolTip(), "等待测试完成")
 
     def test_recent_session_column_widths_match_updated_layout(self):
-        panel = RecentSessionPanel()
+        from PyQt5.QtWidgets import QHeaderView
 
-        self.assertEqual(panel.session_table.columnWidth(1), 136)
-        self.assertEqual(panel.session_table.columnWidth(4), 138)
+        panel = RecentSessionPanel()
+        header = panel.session_table.horizontalHeader()
+
+        self.assertEqual(header.sectionResizeMode(1), QHeaderView.Stretch)
+        self.assertEqual(panel.session_table.columnWidth(0), 168)
+        self.assertEqual(panel.session_table.columnWidth(2), 112)
+        self.assertEqual(panel.session_table.columnWidth(3), 72)
+        self.assertEqual(panel.session_table.columnWidth(4), 136)
+        self.assertEqual(panel.session_table.columnWidth(5), 78)
+        self.assertEqual(panel.session_table.columnWidth(6), 100)
 
     def test_clicking_result_cell_opens_dropdown(self):
         session_record = {

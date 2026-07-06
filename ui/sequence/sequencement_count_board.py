@@ -25,6 +25,8 @@ class SequenceCountBoard(QWidget):
 
     def __init__(self, analysis_config, parent=None):
         super(SequenceCountBoard, self).__init__(parent)
+        self.setObjectName("sequenceCountBoard")
+        self.setStyleSheet(ui_style_const.count_board_container_style)
 
         self.analysis_config = analysis_config
         self.mode = str()
@@ -64,7 +66,7 @@ class SequenceCountBoard(QWidget):
         self.separator_line = QFrame()
         self.separator_line.setFrameShape(QFrame.HLine)
         self.separator_line.setFrameShadow(QFrame.Sunken)
-        self.separator_line.setStyleSheet("color: gray;")
+        self.separator_line.setStyleSheet(ui_style_const.motor_result_divider_style)
         self.separator_line.setFixedHeight(2)
 
         test_widget = self.set_test_widget()
@@ -150,51 +152,13 @@ class SequenceCountBoard(QWidget):
     def set_btn(self):
         self.reset_btn.setStyleSheet(ui_style_const.qpushbutton_style)
         self.ok_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/green_circle.png"))
-        self.ok_btn.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #edf7ef;
-                color: #29613a;
-                font-family: 'SimSun';
-                font-size: 24px;
-                font-weight: bold;
-                border-radius: 8px;
-                border: 1px solid #87b48e;
-                padding: 5px 12px;
-            }
-            QPushButton:hover {
-                background-color: #e1f1e4;
-            }
-            QPushButton:pressed {
-                background-color: #d5ebd9;
-            }
-            """
-        )
+        self.ok_btn.setStyleSheet(ui_style_const.count_board_ok_button_style)
         self.ok_btn.setMinimumSize(148, 56)
         self.ok_btn.setMaximumSize(260, 56)
         self.ok_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.ok_btn.setIconSize(QSize(20, 20))
         self.ng_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/red_circle.png"))
-        self.ng_btn.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #fbefef;
-                color: #9b3434;
-                font-family: 'SimSun';
-                font-size: 24px;
-                font-weight: bold;
-                border-radius: 8px;
-                border: 1px solid #d49a9a;
-                padding: 5px 12px;
-            }
-            QPushButton:hover {
-                background-color: #f7e3e3;
-            }
-            QPushButton:pressed {
-                background-color: #f1d7d7;
-            }
-            """
-        )
+        self.ng_btn.setStyleSheet(ui_style_const.count_board_ng_button_style)
         self.ng_btn.setMinimumSize(148, 56)
         self.ng_btn.setMaximumSize(260, 56)
         self.ng_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -218,6 +182,7 @@ class SequenceCountBoard(QWidget):
 
     def create_mode_switch_widget(self):
         widget = QWidget()
+        widget.setObjectName("sequenceCountBoardModeSwitch")
         widget.setLayout(self.create_mode_btn_layout())
         return widget
 
@@ -237,6 +202,7 @@ class SequenceCountBoard(QWidget):
         test_layout.addLayout(datatime_layout)
 
         test_widget = QWidget()
+        test_widget.setObjectName("sequenceCountBoardPage")
         test_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         test_widget.setLayout(test_layout)
 
@@ -265,6 +231,7 @@ class SequenceCountBoard(QWidget):
         mark_layout.addLayout(action_btn_layout)
 
         mark_widget = QWidget()
+        mark_widget.setObjectName("sequenceCountBoardPage")
         mark_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         mark_widget.setLayout(mark_layout)
 
@@ -275,8 +242,8 @@ class SequenceCountBoard(QWidget):
             QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
             self.on_mark_btn_clicked()
             return
-        self.test_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
-        self.mark_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
+        self.test_btn.setStyleSheet(ui_style_const.count_board_mode_active_style)
+        self.mark_btn.setStyleSheet(ui_style_const.count_board_mode_inactive_style)
         self.test_btn.setEnabled(False)
         self.mark_btn.setEnabled(True)
         self.stacked_widget.setCurrentIndex(0)
@@ -286,8 +253,8 @@ class SequenceCountBoard(QWidget):
     def on_mark_btn_clicked(self):
         self.stacked_widget.setCurrentIndex(1)
         self.mode = "mark"
-        self.test_btn.setStyleSheet("background-color: #E0E0E0; color: #666666; border: none;")
-        self.mark_btn.setStyleSheet("background-color: #007BFF; color: white; border: none;")
+        self.test_btn.setStyleSheet(ui_style_const.count_board_mode_inactive_style)
+        self.mark_btn.setStyleSheet(ui_style_const.count_board_mode_active_style)
         self.mark_btn.setEnabled(False)
         self.test_btn.setEnabled(bool(self._test_available))
         self._notify_mode_state_changed()

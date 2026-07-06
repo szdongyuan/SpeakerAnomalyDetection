@@ -2,6 +2,7 @@ import unittest
 
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget
 
+from consts import ui_style_const
 from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_mode_switch_panel import MotorModeSwitchPanel
@@ -36,7 +37,10 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIn("汇总信息", labels)
 
         content_scroll_area = card.content_layout.itemAt(0).widget()
+        self.assertIn(ui_style_const.COLOR_PANEL_BG, content_scroll_area.styleSheet())
         content_widget = content_scroll_area.widget()
+        self.assertEqual(content_widget.objectName(), "motorSectionContent")
+        self.assertIn(ui_style_const.COLOR_PANEL_BG, content_widget.styleSheet())
         embedded_mode_switch = content_widget.layout().itemAt(1).widget()
         self.assertIsInstance(embedded_mode_switch, MotorModeSwitchPanel)
 

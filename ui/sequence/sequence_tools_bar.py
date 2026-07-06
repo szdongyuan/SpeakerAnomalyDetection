@@ -1,5 +1,5 @@
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon, QColor
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QVBoxLayout, QWidget
 
 from consts import ui_style_const
@@ -10,6 +10,7 @@ class SequenceToolsBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("sequenceToolsBar")
         self.setMouseTracking(True)
 
         self.player_btn = QPushButton()
@@ -36,19 +37,11 @@ class SequenceToolsBar(QWidget):
         tools_layout = self.create_tools_layout()
 
         self.setLayout(tools_layout)
-
-        palette = self.palette()
-        palette.setColor(self.backgroundRole(), QColor(208, 206, 202))
-        self.setPalette(palette)
-        self.setAutoFillBackground(True)
+        self.setStyleSheet(ui_style_const.toolbar_container_style)
 
     def create_tools_layout(self):
-        line_top = QFrame()
-        line_bottom = QFrame()
-        line_top.setFrameShape(QFrame.HLine)
-        line_bottom.setFrameShape(QFrame.HLine)
-        line_top.setFixedHeight(1)
-        line_bottom.setFixedHeight(1)
+        line_top = self._create_separator(QFrame.HLine)
+        line_bottom = self._create_separator(QFrame.HLine)
 
         layout = self.create_mainly_layout()
 
@@ -63,16 +56,11 @@ class SequenceToolsBar(QWidget):
         return tools_layout
 
     def create_mainly_layout(self):
-        vertical_line_1 = QFrame()
-        vertical_line_2 = QFrame()
-        vertical_line_3 = QFrame()
-        vertical_line_4 = QFrame()
-        vertical_line_5 = QFrame()
-        vertical_line_1.setFrameShape(QFrame.VLine)
-        vertical_line_2.setFrameShape(QFrame.VLine)
-        vertical_line_3.setFrameShape(QFrame.VLine)
-        vertical_line_4.setFrameShape(QFrame.VLine)
-        vertical_line_5.setFrameShape(QFrame.VLine)
+        vertical_line_1 = self._create_separator(QFrame.VLine)
+        vertical_line_2 = self._create_separator(QFrame.VLine)
+        vertical_line_3 = self._create_separator(QFrame.VLine)
+        vertical_line_4 = self._create_separator(QFrame.VLine)
+        vertical_line_5 = self._create_separator(QFrame.VLine)
 
         mode_type_layout = self.create_mode_type_layout()
         barcode_scanner_layout = self.create_barcode_scanner_layout()
@@ -101,49 +89,54 @@ class SequenceToolsBar(QWidget):
         return layout
 
     def set_play_btn(self):
-        self.player_btn.setFixedSize(100, 40)
-        self.player_btn.setToolTip("开始录制")
-        self.player_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
-        self.player_btn.setIconSize(QSize(35, 35))
+        self._configure_icon_button(
+            self.player_btn,
+            "开始录制",
+            "ui/ui_pic/sequence_pic/play.png",
+            QSize(35, 35),
+        )
 
     def set_replay_btn(self):
-        self.player_btn.setIconSize(QSize(35, 35))
-        self.replayer_btn.setFixedSize(100, 40)
-        self.replayer_btn.setToolTip("重新录制")
+        self._configure_icon_button(
+            self.replayer_btn,
+            "重新录制",
+            "ui/ui_pic/sequence_pic/replay.png",
+            QSize(30, 30),
+        )
         self.replayer_btn.setDisabled(True)
-        self.replayer_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.replayer_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/replay.png"))
-        self.replayer_btn.setIconSize(QSize(30, 30))
 
     def set_data_btn(self):
-        self.data_btn.setFixedSize(100, 40)
-        self.data_btn.setToolTip("分析")
+        self._configure_icon_button(
+            self.data_btn,
+            "分析",
+            "ui/ui_pic/sequence_pic/data.png",
+            QSize(35, 35),
+        )
         self.data_btn.setEnabled(False)
-        self.data_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.data_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
-        self.data_btn.setIconSize(QSize(35, 35))
 
     def set_tcp_btn(self):
-        self.tcp_btn.setFixedSize(100, 40)
-        self.tcp_btn.setToolTip("tcp配置")
-        self.tcp_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.tcp_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/network.png"))
-        self.tcp_btn.setIconSize(QSize(35, 35))
+        self._configure_icon_button(
+            self.tcp_btn,
+            "tcp配置",
+            "ui/ui_pic/sequence_pic/network.png",
+            QSize(35, 35),
+        )
 
     def set_serial_trigger_btn(self):
-        self.serial_trigger_btn.setFixedSize(100, 40)
-        self.serial_trigger_btn.setToolTip("串口离散输入触发配置")
-        self.serial_trigger_btn.setStyleSheet(ui_style_const.toolbar_button_style)
-        self.serial_trigger_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/new_com.png"))
-        self.serial_trigger_btn.setIconSize(QSize(35, 35))
+        self._configure_icon_button(
+            self.serial_trigger_btn,
+            "串口离散输入触发配置",
+            "ui/ui_pic/sequence_pic/new_com.png",
+            QSize(35, 35),
+        )
 
     def create_using_file_combobox(self):
         type_label = QLabel(" 使用配置：")
         type_label.setFixedHeight(40)
+        type_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
         self.using_file_combobox.setFixedHeight(35)
-        vertical_line = QFrame()
-        vertical_line.setFrameShape(QFrame.VLine)
+        self.using_file_combobox.setStyleSheet(ui_style_const.toolbar_combobox_style)
+        vertical_line = self._create_separator(QFrame.VLine)
 
         using_file_combobox_layout = self.create_part_layout()
         using_file_combobox_layout.addWidget(type_label)
@@ -154,7 +147,11 @@ class SequenceToolsBar(QWidget):
         return using_file_combobox_layout
 
     def create_serial_trigger_status_layout(self):
-        self.serial_trigger_status_label.setStyleSheet("font-size: 14px; color: black;")
+        self.serial_trigger_status_label.setAlignment(Qt.AlignCenter)
+        self.serial_trigger_status_label.setStyleSheet(
+            ui_style_const.serial_trigger_badge_base_style
+            + ui_style_const.serial_trigger_badge_disconnected_style
+        )
         self.serial_trigger_status_label.setMinimumWidth(70)
 
         layout = QHBoxLayout()
@@ -166,10 +163,11 @@ class SequenceToolsBar(QWidget):
     def create_mode_type_layout(self):
         type_label = QLabel(" 型 号：")
         type_label.setFixedHeight(40)
+        type_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
         self.lineedit_type.setFixedHeight(35)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
-        vertical_line = QFrame()
-        vertical_line.setFrameShape(QFrame.VLine)
+        self.lineedit_type.setStyleSheet(ui_style_const.toolbar_input_style)
+        vertical_line = self._create_separator(QFrame.VLine)
 
         mode_type_layout = self.create_part_layout()
         mode_type_layout.addWidget(type_label)
@@ -181,11 +179,12 @@ class SequenceToolsBar(QWidget):
 
     def create_barcode_scanner_layout(self):
         self.barcode_scanner_box.setChecked(False)
+        self.barcode_scanner_box.setStyleSheet(ui_style_const.toolbar_checkbox_style)
         self.lineedit_s_or_n.setDisabled(True)
         self.lineedit_s_or_n.setFixedHeight(35)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
-        vertical_line = QFrame()
-        vertical_line.setFrameShape(QFrame.VLine)
+        self.lineedit_s_or_n.setStyleSheet(ui_style_const.toolbar_input_style)
+        vertical_line = self._create_separator(QFrame.VLine)
 
         barcode_scanner_layout = self.create_part_layout()
         barcode_scanner_layout.addWidget(self.barcode_scanner_box)
@@ -198,10 +197,11 @@ class SequenceToolsBar(QWidget):
     def create_mode_count_layout(self):
         label_count = QLabel(" 计 数：")
         label_count.setFixedHeight(40)
+        label_count.setStyleSheet(ui_style_const.toolbar_field_label_style)
         self.lineedit_count.setFixedHeight(35)
         self.lineedit_count.setAlignment(Qt.AlignCenter)
-        vertical_line = QFrame()
-        vertical_line.setFrameShape(QFrame.VLine)
+        self.lineedit_count.setStyleSheet(ui_style_const.toolbar_input_style)
+        vertical_line = self._create_separator(QFrame.VLine)
 
         mode_count_layout = self.create_part_layout()
         mode_count_layout.addWidget(label_count)
@@ -217,6 +217,27 @@ class SequenceToolsBar(QWidget):
         layout.setContentsMargins(10, 0, 0, 0)
 
         return layout
+
+    @staticmethod
+    def _create_separator(shape):
+        line = QFrame()
+        line.setFrameShape(shape)
+        line.setStyleSheet(ui_style_const.toolbar_separator_style)
+        if shape == QFrame.HLine:
+            line.setFixedHeight(1)
+        else:
+            line.setFixedWidth(1)
+        return line
+
+    @staticmethod
+    def _configure_icon_button(button, tooltip, icon_path, icon_size):
+        button.setFixedSize(100, 40)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setAccessibleDescription(tooltip)
+        button.setStyleSheet(ui_style_const.toolbar_button_style)
+        button.setIcon(QIcon(DEFAULT_DIR + icon_path))
+        button.setIconSize(icon_size)
 
     def mouseMoveEvent(self, a0):
         self.setCursor(Qt.ArrowCursor)

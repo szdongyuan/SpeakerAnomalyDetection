@@ -94,7 +94,11 @@ class MainWindow(QMainWindow):
         # hide the window title bar and reset the window title bar
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        title_layout = QHBoxLayout()
+        title_bar = QWidget()
+        title_bar.setObjectName("mainWindowTitleRow")
+        title_bar.setFixedHeight(31)
+        title_bar.setStyleSheet(ui_style_const.main_window_title_row_style)
+        title_layout = QHBoxLayout(title_bar)
         title_btn_layout = self.set_title_btn()
         icon_label = QLabel()
         icon_label.setStyleSheet("background-color: transparent")
@@ -103,7 +107,8 @@ class MainWindow(QMainWindow):
         icon_label.setFixedSize(25, 25)
         icon_label.setScaledContents(True)
         current_version = self.get_current_version()
-        title_label = QLabel(f"谛听异音检测 -{current_version} beta")
+        title_label = QLabel(f"希听异音检测 -{current_version} beta")
+        title_label.setStyleSheet(ui_style_const.main_window_title_label_style)
         h_spacer = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
@@ -116,7 +121,7 @@ class MainWindow(QMainWindow):
         )
         self.get_current_version()
 
-        return title_layout
+        return title_bar
 
     @staticmethod
     def get_current_version():
@@ -128,16 +133,16 @@ class MainWindow(QMainWindow):
         # create three button, include minimize, switch size and close
         self.min_btn = QPushButton()
         self.min_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/minsize.svg"))
-        self.min_btn.setStyleSheet("border: None; background-color: transparent")
+        self.min_btn.setStyleSheet(ui_style_const.main_window_title_button_style)
         self.min_btn.clicked.connect(self.showMinimized)
         self.max_flag = True
         self.max_btn = QPushButton()
         self.max_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/normalsize.svg"))
         self.max_btn.clicked.connect(self.show_window_size)
-        self.max_btn.setStyleSheet("border: None; background-color: transparent")
+        self.max_btn.setStyleSheet(ui_style_const.main_window_title_button_style)
         self.close_btn = QPushButton()
         self.close_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/close.svg"))
-        self.close_btn.setStyleSheet("border: None; background-color: transparent")
+        self.close_btn.setStyleSheet(ui_style_const.main_window_close_button_style)
         self.close_btn.clicked.connect(self.close)
 
         self.max_btn.setMouseTracking(True)
@@ -175,11 +180,10 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         self.sequence_window = SequenceWindow()
         menu_bar = self.init_menu()
-        title_layout = self.set_title()
-        layout.addLayout(title_layout)
-        layout.addSpacing(5)
-        layout.addWidget(menu_bar)
-        layout.addSpacing(1)
+        title_bar = self.set_title()
+        menu_row = self._create_menu_row(menu_bar)
+        layout.addWidget(title_bar)
+        layout.addWidget(menu_row)
         layout.addWidget(self.sequence_window)
         layout.setAlignment(Qt.AlignTop)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -193,9 +197,30 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
 
+    @staticmethod
+    def _create_menu_row(menu_bar):
+        menu_row = QWidget()
+        menu_row.setObjectName("mainWindowMenuRow")
+        menu_row.setFixedHeight(29)
+        menu_row.setStyleSheet(ui_style_const.main_window_menu_row_style)
+
+        menu_bar.setObjectName("mainWindowMenuBar")
+        menu_bar.setNativeMenuBar(False)
+        menu_bar.setFixedHeight(27)
+        menu_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        menu_bar.setContentsMargins(0, 0, 0, 0)
+
+        menu_layout = QHBoxLayout(menu_row)
+        menu_layout.setContentsMargins(0, 0, 0, 0)
+        menu_layout.setSpacing(0)
+        menu_layout.addWidget(menu_bar)
+        return menu_row
+
     def init_menu(self):
         # create menu bar, and link the menu bar to action
         menu_bar = QMenuBar()
+        menu_bar.setObjectName("mainWindowMenuBar")
+        menu_bar.setNativeMenuBar(False)
         menu_bar.setStyleSheet(ui_style_const.main_window_menubar_style)
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
@@ -260,6 +285,7 @@ class MainWindow(QMainWindow):
 
         statusbar = QStatusBar()
         statusbar.setSizeGripEnabled(False)
+        statusbar.setStyleSheet(ui_style_const.main_window_statusbar_style)
         statusbar.addWidget(self.user_label)
         statusbar.addPermanentWidget(self.device_label)
         self.setStatusBar(statusbar)
@@ -549,10 +575,13 @@ class MainWindow(QMainWindow):
         width = self.width()
         height = self.height()
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(208, 206, 202))
+        painter.setBrush(QColor(ui_style_const.COLOR_PAGE_BG))
+        painter.drawRect(1, 1, width - 2, height - 2)
+        painter.setBrush(QColor(ui_style_const.COLOR_TITLE_BAR_BG))
         painter.drawRect(1, 1, width - 2, 31)
-        painter.setBrush(QColor(208, 206, 202, 124))
-        painter.drawRect(1, 31, width - 2, 41)
+        painter.setBrush(QColor(ui_style_const.COLOR_MENU_BAR_BG))
+        painter.drawRect(1, 31, width - 2, 29)
+        painter.setBrush(QColor(ui_style_const.COLOR_MENU_BAR_BG))
         painter.drawRect(1, height - 24, width - 2, 23)
         painter.end()
 

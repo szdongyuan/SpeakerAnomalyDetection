@@ -16,6 +16,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from consts import ui_style_const
+
 
 @dataclass(frozen=True)
 class _TileSpec:
@@ -39,14 +41,13 @@ class ChannelPlotTitleBar(QWidget):
         layout.setSpacing(8)
 
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: white; font-weight: 600;")
         layout.addWidget(self.title_label)
         layout.addStretch(1)
 
         self.setLayout(layout)
         self.setFixedHeight(26)
         self.setCursor(Qt.SizeAllCursor)
-        self.setStyleSheet("background-color: #2f5aa8;")
+        self.setStyleSheet(ui_style_const.waveform_title_bar_style)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -85,7 +86,7 @@ class ChannelPlotSubWindow(QFrame):
         self.plot_item = None
 
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame{background: white; border: 1px solid #9aa7bd; border-radius: 2px;}")
+        self.setStyleSheet(ui_style_const.waveform_frame_style)
 
         title = f"In{self.channel_index + 1}"
         self.title_bar = ChannelPlotTitleBar(self, title)
@@ -139,7 +140,7 @@ class ChannelPlotCanvas(QWidget):
         super().__init__(parent)
         self._windows: List[ChannelPlotSubWindow] = []
         # Make the workspace area visually distinct from the surrounding UI.
-        self.setStyleSheet("background-color: #f6f8fc; border: 1px solid #c9d3e3;")
+        self.setStyleSheet(ui_style_const.waveform_canvas_style)
 
     def set_windows(self, windows: List[ChannelPlotSubWindow]) -> None:
         self._windows = list(windows)
@@ -190,7 +191,7 @@ class ChannelPlotWorkspace(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setFrameShape(QFrame.NoFrame)
         try:
-            self.scroll.viewport().setStyleSheet("background-color: #e9eef6;")
+            self.scroll.viewport().setStyleSheet(ui_style_const.waveform_viewport_style)
         except Exception:
             pass
 

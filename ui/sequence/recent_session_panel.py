@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 )
 
 from base.playback_controller import PlaybackController
-from consts import error_code
+from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.motor_panel_common import MotorSectionCard
 
@@ -82,20 +82,7 @@ class RecentSessionPanel(QWidget):
 
     def init_ui(self):
         card = MotorSectionCard("近期测试历史")
-        card.layout().itemAt(0).widget().setStyleSheet(
-            """
-            QLabel {
-                background-color: #4472c4;
-                color: white;
-                font-family: 'SimSun';
-                font-size: 17px;
-                font-weight: bold;
-                padding: 4px 10px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-            }
-            """
-        )
+        card.layout().itemAt(0).widget().setStyleSheet(ui_style_const.recent_session_card_title_style)
         card.content_layout.setContentsMargins(8, 6, 8, 8)
         card.content_layout.setSpacing(0)
 
@@ -111,41 +98,7 @@ class RecentSessionPanel(QWidget):
         self.session_table.setTextElideMode(Qt.ElideMiddle)
         self.session_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.session_table.setMinimumHeight(320)
-        self.session_table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #ffffff;
-                alternate-background-color: #fbfcff;
-                border: 1px solid #eef3fa;
-                gridline-color: #edf2f9;
-                color: #495b78;
-                selection-background-color: #dbe8ff;
-                selection-color: #203245;
-            }
-            QTableWidget::item {
-                padding: 2px 4px;
-                border: none;
-            }
-            QTableWidget::item:selected {
-                background-color: #dbe8ff;
-                color: #203245;
-            }
-            QHeaderView::section {
-                background-color: #fbfcff;
-                color: #7a88a3;
-                border: none;
-                border-right: 1px solid #edf2f9;
-                border-bottom: 1px solid #edf2f9;
-                padding: 2px 4px;
-            }
-            QTableCornerButton::section {
-                background-color: #fbfcff;
-                border: none;
-                border-right: 1px solid #edf2f9;
-                border-bottom: 1px solid #edf2f9;
-            }
-            """
-        )
+        self.session_table.setStyleSheet(ui_style_const.recent_session_table_style)
 
         header = self.session_table.horizontalHeader()
         header_font = header.font()
@@ -287,7 +240,7 @@ class RecentSessionPanel(QWidget):
                 background: transparent;
                 border: none;
                 padding: 0px 16px 0px 2px;
-                font-family: 'SimSun';
+                font-family: {ui_style_const.UI_FONT_FAMILY};
                 font-size: 13px;
             }}
             QComboBox:hover {{
@@ -394,27 +347,7 @@ class RecentSessionPanel(QWidget):
         play_btn.setText("播放")
         play_btn.setFixedSize(46, 24)
         play_btn.setAutoRaise(False)
-        play_btn.setStyleSheet(
-            """
-            QToolButton {
-                border: 1px solid rgba(120, 120, 120, 0.25);
-                background-color: rgba(120, 120, 120, 0.04);
-                border-radius: 3px;
-                padding: 0px 6px;
-            }
-            QToolButton:hover:enabled {
-                background-color: rgba(120, 120, 120, 0.08);
-            }
-            QToolButton:pressed:enabled {
-                background-color: rgba(120, 120, 120, 0.12);
-            }
-            QToolButton:disabled {
-                color: rgb(160, 160, 160);
-                border-color: rgba(160, 160, 160, 0.2);
-                background-color: rgba(120, 120, 120, 0.02);
-            }
-            """
-        )
+        play_btn.setStyleSheet(ui_style_const.recent_session_action_button_style)
         play_btn.clicked.connect(lambda: self._on_play_button_clicked(session_id))
         return play_btn
 
@@ -423,6 +356,7 @@ class RecentSessionPanel(QWidget):
         view_btn.setText("查看")
         view_btn.setFixedSize(56, 24)
         view_btn.setAutoRaise(False)
+        view_btn.setStyleSheet(ui_style_const.recent_session_action_button_style)
         view_btn.clicked.connect(lambda: self._on_view_button_clicked(session_id))
         return view_btn
 
