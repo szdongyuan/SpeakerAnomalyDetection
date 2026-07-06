@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -27,6 +28,36 @@ JSON_DIR_PATH = DEFAULT_DIR + "ui/ui_config"
 SYSTEM_DATABASE_PATH = DEFAULT_DIR + "database/system_data.db"
 AUDIO_DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"
 DATABASE_PATH = AUDIO_DATABASE_PATH
+
+HARDWARE_ASSETS_TABLE = "hardware_assets"
+HARDWARE_CHANNEL_CALIBRATIONS_TABLE = "hardware_channel_calibrations"
+HARDWARE_ASSET_COLUMNS = (
+    "hardware_id",
+    "hardware_type",
+    "display_name",
+    "device_name",
+    "hostapi_name",
+    "samplerate",
+    "bit_depth",
+    "latency_ms",
+    "max_input_channels",
+    "max_output_channels",
+    "updated_at",
+)
+HARDWARE_CHANNEL_CALIBRATION_COLUMNS = (
+    "channel_id",
+    "hardware_id",
+    "direction",
+    "channel_index",
+    "channel_label",
+    "calibration_type",
+    "factor_value",
+    "standard_spl",
+    "max_voltage",
+    "coefficients_json",
+    "updated_at",
+)
+SQLITE_REPOSITORY_EXCEPTIONS = (sqlite3.Error,)
 
 SAMPLE_RATE = 44100
 POSITIVE_SAMPLE_LABEL = "OK"

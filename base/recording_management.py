@@ -33,8 +33,19 @@ def _frequency_stepped_insert_metadata(insert_values):
 
 class RecordingManager(object):
     def __init__(self):
-        self.db_path = model_consts.AUDIO_DATABASE_PATH
+        self._db_path_override = None
         ensure_audio_database_ready()
+
+    @property
+    def db_path(self):
+        if self._db_path_override:
+            return self._db_path_override
+        ensure_audio_database_ready()
+        return model_consts.AUDIO_DATABASE_PATH
+
+    @db_path.setter
+    def db_path(self, value):
+        self._db_path_override = value
 
     def save_recording_to_wav(self, audio_info: dict, stimulus_parameter: dict):
         try:

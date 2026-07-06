@@ -79,6 +79,193 @@ def test_stream_record_without_play_forwards_recording_start_delay(monkeypatch):
     assert calls[0]["discard_initial_samples"] == 128
 
 
+def test_stream_record_without_play_uses_sr_before_global_sample_rate(monkeypatch):
+    calls = []
+
+    class FakeProcessor:
+        def start_streaming_rec(self, **kwargs):
+            calls.append(kwargs)
+            return play_and_record.error_code.OK, "ok"
+
+    monkeypatch.setattr(play_and_record, "StreamingAudioProcessor", FakeProcessor)
+    play_and_record.data_struct.sample_rate = 32000
+
+    recorded_dict = {
+        "sr": 48000,
+        "num_frames": 1024,
+        "device": {"index": 1, "max_input_channels": 4},
+    }
+
+    processor, sample_rate = play_and_record.stream_record_without_play(recorded_dict, "unused.wav", {})
+
+    assert isinstance(processor, FakeProcessor)
+    assert sample_rate == 48000
+    assert calls[0]["sample_rate"] == 48000
+
+
+def test_record_without_play_persists_runtime_sample_rate_when_global_is_stale(monkeypatch):
+    calls = {}
+    recorded_signal = np.array([0.1, 0.2], dtype=np.float32)
+
+    monkeypatch.setattr(
+        play_and_record.SoundcardAudioProcessor,
+        "sd_rec",
+        staticmethod(lambda recorded_dict: (error_code.OK, recorded_signal)),
+    )
+    monkeypatch.setattr(
+        play_and_record,
+        "save_audio_simple",
+        lambda path, audio, sample_rate: calls.update(
+            saved_path=path,
+            saved_audio=np.asarray(audio),
+            saved_sample_rate=sample_rate,
+        ),
+    )
+
+    class FakeRecordingManager:
+        def save_signal_info_to_db(self, recorded_signal_info, stimulus_info):
+            calls["db_sample_rate"] = recorded_signal_info["sample_rate"]
+            calls["db_stimulus_info"] = stimulus_info
+
+    monkeypatch.setattr(play_and_record, "RecordingManager", FakeRecordingManager)
+    play_and_record.data_struct.sample_rate = 44100
+    recorded_signal_info = {}
+
+    play_and_record.record_without_play(
+        {"sample_rate": 48000, "num_frames": 2},
+        "runtime.wav",
+        recorded_signal_info,
+    )
+
+    assert calls["saved_sample_rate"] == 48000
+    assert recorded_signal_info["sample_rate"] == 48000
+    assert calls["db_sample_rate"] == 48000
+    np.testing.assert_array_equal(calls["saved_audio"], recorded_signal)
+
+
+@pytest.mark.parametrize(
+    "recorded_dict, message_fragment",
+    [
+        ({"num_frames": 2}, "missing"),
+        ({"sample_rate": "invalid", "num_frames": 2}, "invalid"),
+        ({"sample_rate": 44100, "sr": 48000, "num_frames": 2}, "match"),
+    ],
+)
+def test_record_without_play_propagates_sd_rec_samplerate_failures_without_persisting(
+    monkeypatch, recorded_dict, message_fragment
+):
+    calls = []
+    previous_store = np.array([9.0], dtype=np.float32)
+    play_and_record.data_struct.sample_rate = 32000
+    play_and_record.data_struct.store_wave_data = previous_store
+    recorded_signal_info = {"sample_rate": 12345, "name": "existing"}
+
+    monkeypatch.setattr(
+        play_and_record,
+        "save_audio_simple",
+        lambda *args, **kwargs: calls.append(("save_audio", args, kwargs)),
+    )
+
+    class FakeRecordingManager:
+        def save_signal_info_to_db(self, *args, **kwargs):
+            calls.append(("recording_manager", args, kwargs))
+
+    monkeypatch.setattr(play_and_record, "RecordingManager", FakeRecordingManager)
+
+    result = play_and_record.record_without_play(
+        recorded_dict,
+        "runtime.wav",
+        recorded_signal_info,
+    )
+
+    assert result[0] == error_code.INVALID_RECORD
+    assert message_fragment in result[1].lower()
+    assert calls == []
+    assert recorded_signal_info == {"sample_rate": 12345, "name": "existing"}
+    assert play_and_record.data_struct.store_wave_data is previous_store
+
+
+def test_record_without_play_returns_recorded_signal_on_success(monkeypatch):
+    recorded_signal = np.array([0.1, 0.2], dtype=np.float32)
+
+    monkeypatch.setattr(
+        play_and_record.SoundcardAudioProcessor,
+        "sd_rec",
+        staticmethod(lambda recorded_dict: (error_code.OK, recorded_signal)),
+    )
+    monkeypatch.setattr(play_and_record, "save_audio_simple", lambda *args, **kwargs: None)
+
+    class FakeRecordingManager:
+        def save_signal_info_to_db(self, recorded_signal_info, stimulus_info):
+            return None
+
+    monkeypatch.setattr(play_and_record, "RecordingManager", FakeRecordingManager)
+
+    result = play_and_record.record_without_play(
+        {"sample_rate": 48000, "num_frames": 2},
+        "runtime.wav",
+        {},
+    )
+
+    assert result[0] == error_code.OK
+    np.testing.assert_array_equal(result[1], recorded_signal)
+
+
+def test_stream_record_without_play_requires_resolved_sample_rate(monkeypatch):
+    calls = []
+    constructions = []
+
+    class FakeProcessor:
+        def __init__(self):
+            constructions.append(True)
+
+        def start_streaming_rec(self, **kwargs):
+            calls.append(kwargs)
+            return play_and_record.error_code.OK, "ok"
+
+    monkeypatch.setattr(play_and_record, "StreamingAudioProcessor", FakeProcessor)
+    play_and_record.data_struct.sample_rate = 32000
+
+    recorded_dict = {
+        "num_frames": 1024,
+        "device": {"index": 1, "max_input_channels": 4},
+    }
+
+    with pytest.raises(RuntimeError, match="采样率|sample rate"):
+        play_and_record.stream_record_without_play(recorded_dict, "unused.wav", {})
+
+    assert constructions == []
+    assert calls == []
+
+
+def test_stream_record_without_play_rejects_conflicting_resolved_sample_rates(monkeypatch):
+    calls = []
+    constructions = []
+
+    class FakeProcessor:
+        def __init__(self):
+            constructions.append(True)
+
+        def start_streaming_rec(self, **kwargs):
+            calls.append(kwargs)
+            return play_and_record.error_code.OK, "ok"
+
+    monkeypatch.setattr(play_and_record, "StreamingAudioProcessor", FakeProcessor)
+
+    recorded_dict = {
+        "sample_rate": 44100,
+        "sr": 48000,
+        "num_frames": 1024,
+        "device": {"index": 1, "max_input_channels": 4},
+    }
+
+    with pytest.raises(RuntimeError, match="采样率|sample rate"):
+        play_and_record.stream_record_without_play(recorded_dict, "unused.wav", {})
+
+    assert constructions == []
+    assert calls == []
+
+
 def test_alignment_reference_helper_is_public():
     np.testing.assert_array_equal(
         alignment_reference_from_stimulus(
@@ -241,7 +428,7 @@ def test_blocking_play_record_aligns_and_saves_tail_free_frequency_stepped_recor
         "sr": 48000,
         "alignment_sample_count": 5,
     }
-    record_dict = {"prepare_frames": 2, "prolong_frames": 4}
+    record_dict = {"prepare_frames": 2, "prolong_frames": 4, "sr": 48000}
 
     code, aligned = SoundcardAudioProcessor().sd_play_rec(record_dict, stimulus_dict, "unused.wav")
 
@@ -334,7 +521,7 @@ def test_runtime_dict_builder_includes_alignment_sample_count_from_stimulus_info
 def test_runtime_dict_builder_does_not_leak_stale_alignment_count_to_legacy_stimulus(monkeypatch):
     data_struct = SimpleNamespace()
 
-    def fake_generate(detail, logger=None):
+    def fake_generate(detail, *, runtime_sample_rate, logger=None):
         info = detail.get("stimulus_info") or {}
         if info.get("stimulus_method") == "frequency_stepped":
             info["stimulus_method"] = "frequency_stepped"
@@ -353,7 +540,11 @@ def test_runtime_dict_builder_does_not_leak_stale_alignment_count_to_legacy_stim
             "sample_rate": 48000,
         }
     }
-    stimulus_resolver.set_data_struct_stimulus_signal(data_struct, stepped_detail)
+    stimulus_resolver.set_data_struct_stimulus_signal(
+        data_struct,
+        stepped_detail,
+        runtime_sample_rate=48000,
+    )
     stepped_stimulus_dict, _ = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(data_struct)
     assert stepped_stimulus_dict["alignment_sample_count"] == 5
 
@@ -365,7 +556,11 @@ def test_runtime_dict_builder_does_not_leak_stale_alignment_count_to_legacy_stim
             "alignment_sample_count": 5,
         }
     }
-    stimulus_resolver.set_data_struct_stimulus_signal(data_struct, legacy_detail)
+    stimulus_resolver.set_data_struct_stimulus_signal(
+        data_struct,
+        legacy_detail,
+        runtime_sample_rate=48000,
+    )
     legacy_stimulus_dict, _ = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(data_struct)
 
     assert "alignment_sample_count" not in legacy_stimulus_dict
@@ -389,7 +584,7 @@ def test_blocking_play_record_without_alignment_sample_count_keeps_existing_full
     )
 
     stimulus_dict = {"data": np.arange(8, dtype=float), "amplitude": 2.0, "sr": 48000}
-    record_dict = {"prepare_frames": 2, "prolong_frames": 4}
+    record_dict = {"prepare_frames": 2, "prolong_frames": 4, "sr": 48000}
 
     code, aligned = SoundcardAudioProcessor().sd_play_rec(record_dict, stimulus_dict, "unused.wav")
 
@@ -419,7 +614,7 @@ def test_blocking_play_record_clamps_negative_alignment_offset(monkeypatch):
         "sr": 48000,
         "alignment_sample_count": 5,
     }
-    record_dict = {"prepare_frames": 0, "prolong_frames": 0}
+    record_dict = {"prepare_frames": 0, "prolong_frames": 0, "sr": 48000}
 
     code, aligned = SoundcardAudioProcessor().sd_play_rec(record_dict, stimulus_dict, "unused.wav")
 
@@ -450,7 +645,7 @@ def test_blocking_play_record_pads_alignment_offset_near_recording_end(monkeypat
         "sr": 48000,
         "alignment_sample_count": 5,
     }
-    record_dict = {"prepare_frames": 0, "prolong_frames": 0}
+    record_dict = {"prepare_frames": 0, "prolong_frames": 0, "sr": 48000}
 
     code, aligned = SoundcardAudioProcessor().sd_play_rec(record_dict, stimulus_dict, "unused.wav")
 
@@ -494,6 +689,117 @@ def test_stream_play_and_record_plays_full_tail_but_returns_tail_free_alignment_
     assert calls[0]["discard_initial_samples"] == 3
     assert calls[0]["stimulus_dict"] is stimulus_dict
     np.testing.assert_array_equal(alignment_reference, np.arange(5, dtype=float))
+
+
+def test_play_last_stimulus_wave_persists_runtime_sample_rate_when_global_is_stale(monkeypatch):
+    calls = {}
+
+    def fake_playrec(playback_data, samplerate, channels, blocking, device=None):
+        calls["playrec_sample_rate"] = samplerate
+        return np.asarray(playback_data, dtype=np.float32).reshape(-1, 1)
+
+    monkeypatch.setattr("base.soundcard_audio_processor.sd.playrec", fake_playrec)
+    monkeypatch.setattr(play_and_record.SoundcardAudioProcessor, "calculate_alignment", staticmethod(lambda ref, rec: 0))
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.save_audio_simple",
+        lambda path, audio, sample_rate: calls.update(
+            saved_path=path,
+            saved_audio=np.asarray(audio),
+            saved_sample_rate=sample_rate,
+        ),
+    )
+
+    class FakeRecordingManager:
+        def save_signal_info_to_db(self, recorded_signal_info, stimulus_info):
+            calls["db_sample_rate"] = recorded_signal_info["sample_rate"]
+            calls["db_stimulus_info"] = stimulus_info
+
+    monkeypatch.setattr(play_and_record, "RecordingManager", FakeRecordingManager)
+    play_and_record.data_struct.sample_rate = 44100
+    play_and_record.data_struct.stimulus_info = {"repeat_times": 1}
+    play_and_record.data_struct.store_wave_data = None
+    recorded_signal_info = {}
+
+    play_and_record.play_last_stimulus_wave(
+        {"data": np.array([0.1, 0.2], dtype=np.float32), "amplitude": 1.0, "sr": 48000},
+        {"prepare_frames": 0, "prolong_frames": 0, "sr": 48000},
+        "runtime.wav",
+        recorded_signal_info,
+    )
+
+    assert calls["playrec_sample_rate"] == 48000
+    assert calls["saved_sample_rate"] == 48000
+    assert recorded_signal_info["sample_rate"] == 48000
+    assert calls["db_sample_rate"] == 48000
+
+
+def test_play_last_stimulus_wave_returns_on_playrec_failure_without_persisting_or_splitting(monkeypatch):
+    calls = []
+
+    class FakeSoundcardAudioProcessor:
+        def sd_play_rec(self, recorded_dict, stimulus_dict, recorded_path):
+            calls.append(("playrec", recorded_dict, stimulus_dict, recorded_path))
+            return error_code.INVALID_PLAY, "sample rate mismatch"
+
+    class FakeRecordingManager:
+        def save_signal_info_to_db(self, recorded_signal_info, stimulus_info):
+            calls.append(("recording_manager", recorded_signal_info, stimulus_info))
+
+    class FakeSplitRepeatSignal:
+        def split_repeat_signal(self, *args, **kwargs):
+            calls.append(("split_repeat", args, kwargs))
+            return np.array([])
+
+    monkeypatch.setattr(play_and_record, "SoundcardAudioProcessor", FakeSoundcardAudioProcessor)
+    monkeypatch.setattr(play_and_record, "RecordingManager", FakeRecordingManager)
+    monkeypatch.setattr(play_and_record, "SplitRepeatSignal", FakeSplitRepeatSignal)
+    previous_store = np.array([9.0], dtype=np.float32)
+    previous_split = np.array([8.0], dtype=np.float32)
+    play_and_record.data_struct.sample_rate = 44100
+    play_and_record.data_struct.stimulus_info = {"repeat_times": 2}
+    play_and_record.data_struct.store_wave_data = previous_store
+    play_and_record.data_struct.split_repeat_data = previous_split
+    recorded_signal_info = {}
+
+    result = play_and_record.play_last_stimulus_wave(
+        {"data": np.array([0.1, 0.2], dtype=np.float32), "amplitude": 1.0, "sr": 48000},
+        {"prepare_frames": 0, "prolong_frames": 0, "sr": 44100},
+        "runtime.wav",
+        recorded_signal_info,
+    )
+
+    assert result == (error_code.INVALID_PLAY, "sample rate mismatch")
+    assert len(calls) == 1
+    call_type, recorded_dict, stimulus_dict, recorded_path = calls[0]
+    assert call_type == "playrec"
+    assert recorded_dict == {"prepare_frames": 0, "prolong_frames": 0, "sr": 44100}
+    assert stimulus_dict["amplitude"] == 1.0
+    assert stimulus_dict["sr"] == 48000
+    np.testing.assert_array_equal(stimulus_dict["data"], np.array([0.1, 0.2], dtype=np.float32))
+    assert recorded_path == "runtime.wav"
+    assert recorded_signal_info == {}
+    assert play_and_record.data_struct.store_wave_data is previous_store
+    assert play_and_record.data_struct.split_repeat_data is previous_split
+
+
+def test_stream_play_and_record_requires_resolved_stimulus_sample_rate(monkeypatch):
+    calls = []
+
+    class FakeProcessor:
+        def start_streaming_playrec(self, **kwargs):
+            calls.append(kwargs)
+            return play_and_record.error_code.OK, "ok"
+
+    monkeypatch.setattr(play_and_record, "StreamingAudioProcessor", FakeProcessor)
+    play_and_record.data_struct.sample_rate = 32000
+
+    stimulus_dict = {"data": np.arange(8, dtype=float), "amplitude": 1.0}
+    recorded_dict = {"prepare_frames": 2, "prolong_frames": 4}
+
+    with pytest.raises(RuntimeError, match="采样率|sample rate"):
+        play_and_record.stream_play_and_record(stimulus_dict, recorded_dict, "unused.wav", {})
+
+    assert calls == []
 
 
 def test_stream_play_and_record_zero_delay_does_not_prepend_warmup(monkeypatch):
@@ -688,7 +994,7 @@ def test_sd_play_rec_prepends_delay_silence_and_aligns_retained_capture(monkeypa
     monkeypatch.setattr("base.soundcard_audio_processor.save_audio_simple", lambda *args: None)
 
     code, aligned = SoundcardAudioProcessor().sd_play_rec(
-        {"prepare_frames": 2, "prolong_frames": 1, "recording_start_delay_frames": 3},
+        {"prepare_frames": 2, "prolong_frames": 1, "recording_start_delay_frames": 3, "sr": 1000},
         {"data": np.array([10, 11], dtype=np.float32), "amplitude": 1.0, "sr": 1000},
         "unused.wav",
     )
@@ -711,7 +1017,7 @@ def test_sd_play_rec_zero_delay_uses_original_playback_window(monkeypatch):
     monkeypatch.setattr("base.soundcard_audio_processor.save_audio_simple", lambda *args: None)
 
     code, _ = SoundcardAudioProcessor().sd_play_rec(
-        {"prepare_frames": 2, "prolong_frames": 3, "recording_start_delay_frames": 0},
+        {"prepare_frames": 2, "prolong_frames": 3, "recording_start_delay_frames": 0, "sr": 1000},
         {"data": np.array([0.1, 0.2], dtype=np.float32), "amplitude": 1.0, "sr": 1000},
         "unused.wav",
     )
@@ -733,7 +1039,7 @@ def test_sd_play_rec_invalid_recording_start_delay_defaults_to_zero(monkeypatch,
     monkeypatch.setattr("base.soundcard_audio_processor.save_audio_simple", lambda *args: None)
 
     code, aligned = SoundcardAudioProcessor().sd_play_rec(
-        {"prepare_frames": 2, "prolong_frames": 1, "recording_start_delay_frames": value},
+        {"prepare_frames": 2, "prolong_frames": 1, "recording_start_delay_frames": value, "sr": 1000},
         {"data": np.array([10, 11], dtype=np.float32), "amplitude": 1.0, "sr": 1000},
         "unused.wav",
     )
@@ -774,6 +1080,7 @@ def test_sd_play_rec_forwards_selected_input_output_devices(monkeypatch):
         {
             "prepare_frames": 0,
             "prolong_frames": 0,
+            "sr": 48000,
             "input_device": {"index": 5, "max_input_channels": 2},
             "output_device": {"index": 7, "max_output_channels": 2},
         },

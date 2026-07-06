@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -6,7 +7,14 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QHeaderView, QHBoxLayout, QVBoxLayout
 
+from base.hardware_management import (
+    HardwareManagementError,
+    HardwareManagementRepository,
+    MissingHardwareTablesError,
+)
+from base import sound_device_manager as sound_device_manager_module
 from base.sound_device_manager import SoundDeviceManager
+from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, PushButton, Label, ComboBox, GroupBox, TableView
 
@@ -191,17 +199,21 @@ class HardwareSelectionState:
 
 class HardwareSelectionModel:
     """
-    Model：负责设备枚举、驱动过滤、通道生成、选择状态保存。
+    Model：负责注册硬件读取、驱动过滤、注册通道读取、选择状态保存。
     """
 
-    def __init__(self, initial_state: Optional[HardwareSelectionState] = None):
-        self.sdm = SoundDeviceManager()
+    def __init__(self, initial_state: Optional[HardwareSelectionState] = None, repository=None):
+        self.repository = repository or HardwareManagementRepository()
         self.devices_by_api: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
         self.state = initial_state or HardwareSelectionState()
 
     def refresh(self) -> None:
-        self.sdm.refresh_available_device()
-        self.devices_by_api = self.sdm.get_device_info() or {}
+        if not self.repository.tables_exist():
+            self.devices_by_api = {}
+            self.state.api_name = None
+            raise MissingHardwareTablesError("硬件管理表不存在，请使用最新版数据库")
+
+        self.devices_by_api = self.repository.list_assets_for_selection() or {}
         if self.state.api_name not in self.devices_by_api:
             self.state.api_name = next(iter(self.devices_by_api.keys()), None)
 
@@ -225,16 +237,22 @@ class HardwareSelectionModel:
             return []
         return self.devices_by_api[self.state.api_name].get("input", []) or []
 
-    @staticmethod
-    def channels_for_device(device: Optional[Dict[str, Any]], kind: str) -> List[int]:
+    def channels_for_device(self, device: Optional[Dict[str, Any]], kind: str) -> List[int]:
+        return [int(channel.get("channel_index")) for channel in self.channel_rows_for_device(device, kind)]
+
+    def channel_rows_for_device(self, device: Optional[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]:
         if not device:
             return []
-        if kind == "speaker":
-            n = int(device.get("max_output_channels") or 0)
-        else:
-            n = int(device.get("max_input_channels") or 0)
-        # 通道索引采用 0-based（返回值从 0 开始）
-        return list(range(0, n))
+        direction = "output" if kind == "speaker" else "input"
+        rows = self.repository.list_channels(device.get("hardware_id"), direction=direction)
+        return sorted(rows, key=self._channel_sort_key)
+
+    @staticmethod
+    def _channel_sort_key(row: Dict[str, Any]) -> Tuple[int, int, str]:
+        try:
+            return (0, int(row.get("channel_index")), str(row.get("channel_label", "")))
+        except (TypeError, ValueError):
+            return (1, 0, str(row.get("channel_label", "")))
 
 
 class HardwareSelectionView(QDialog):
@@ -286,9 +304,7 @@ class HardwareSelectionView(QDialog):
 
         # 底部按钮
         bottom_layout = QHBoxLayout()
-        self.refresh_btn = PushButton(" 刷  新 ")
         self.ok_btn = PushButton(" 确  定 ")
-        bottom_layout.addWidget(self.refresh_btn)
         bottom_layout.addStretch()
         bottom_layout.addWidget(self.ok_btn)
         bottom_layout.setContentsMargins(0, 0, 11, 0)
@@ -332,13 +348,21 @@ class HardwareSelectionController:
         self.refresh_and_render(try_restore=True)
 
     @staticmethod
-    def _device_key(device: Optional[Dict[str, Any]]) -> Optional[Tuple[str, int]]:
-        if not device:
-            return None
-        return device.get("name"), int(device.get("hostapi") or -1)
+    def _matches_restore_device(candidate: Optional[Dict[str, Any]], previous: Optional[Dict[str, Any]]) -> bool:
+        if not candidate or not previous:
+            return False
+        if previous.get("hardware_id"):
+            return candidate.get("hardware_id") == previous.get("hardware_id")
+        previous_name = previous.get("device_name") or previous.get("name")
+        previous_api = previous.get("hostapi_name")
+        return (
+            bool(previous_name)
+            and bool(previous_api)
+            and candidate.get("device_name") == previous_name
+            and candidate.get("hostapi_name") == previous_api
+        )
 
     def _bind_signals(self) -> None:
-        self.view.refresh_btn.clicked.connect(lambda: self.refresh_and_render(try_restore=True))
         self.view.driver_combo.currentTextChanged.connect(self._on_api_changed)
 
         self.view.speaker_device_table.checked_payload_changed.connect(self._on_speaker_device_checked)
@@ -354,7 +378,16 @@ class HardwareSelectionController:
             api_name=self.model.state.api_name,
         )
 
-        self.model.refresh()
+        try:
+            self.model.refresh()
+        except MissingHardwareTablesError:
+            MessageBox.warning(self.view, "提示", "硬件管理表不存在，请使用最新版数据库")
+            self._render_empty()
+            return None
+        except (HardwareManagementError,) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as e:
+            MessageBox.warning(self.view, "提示", str(e))
+            self._render_empty()
+            return None
 
         # 1) render combo
         api_names = self.model.api_names()
@@ -374,12 +407,26 @@ class HardwareSelectionController:
             self._try_restore_selection(last_state)
 
     def _render_devices(self) -> None:
-        speaker_opts = [(d.get("name", ""), d) for d in self.model.speaker_devices()]
-        mic_opts = [(d.get("name", ""), d) for d in self.model.mic_devices()]
+        speaker_opts = [(self._asset_label(d), d) for d in self.model.speaker_devices()]
+        mic_opts = [(self._asset_label(d), d) for d in self.model.mic_devices()]
         self.view.speaker_device_table.set_options(speaker_opts)
         self.view.mic_device_table.set_options(mic_opts)
 
         # 清空麦克风通道（等设备勾选后再填充）
+        self.view.mic_channel_table.set_options([])
+
+    @staticmethod
+    def _asset_label(device: Dict[str, Any]) -> str:
+        return str(device.get("display_name") or device.get("device_name") or device.get("name") or "")
+
+    def _render_empty(self) -> None:
+        self.view.driver_combo.blockSignals(True)
+        try:
+            self.view.driver_combo.clear()
+        finally:
+            self.view.driver_combo.blockSignals(False)
+        self.view.speaker_device_table.set_options([])
+        self.view.mic_device_table.set_options([])
         self.view.mic_channel_table.set_options([])
 
     def _try_restore_selection(self, last_state: HardwareSelectionState) -> None:
@@ -388,14 +435,16 @@ class HardwareSelectionController:
             self.model.state.api_name = last_state.api_name
             self.view.driver_combo.setCurrentText(last_state.api_name)
 
-        # 恢复设备（用 name+hostapi 匹配）
-        last_s_key = self._device_key(last_state.speaker_device)
-        if last_s_key:
-            self.view.speaker_device_table.set_checked_by_predicate(lambda p: self._device_key(p) == last_s_key)
+        # 恢复设备：注册设备按 hardware_id；旧 runtime dict 按 hostapi_name + device_name 精确匹配。
+        if last_state.speaker_device:
+            self.view.speaker_device_table.set_checked_by_predicate(
+                lambda p: self._matches_restore_device(p, last_state.speaker_device)
+            )
 
-        last_m_key = self._device_key(last_state.mic_device)
-        if last_m_key:
-            self.view.mic_device_table.set_checked_by_predicate(lambda p: self._device_key(p) == last_m_key)
+        if last_state.mic_device:
+            self.view.mic_device_table.set_checked_by_predicate(
+                lambda p: self._matches_restore_device(p, last_state.mic_device)
+            )
 
         # 恢复麦克风通道（在设备恢复后，通道表已刷新，这里再勾选）
         if last_state.mic_channels:
@@ -423,10 +472,47 @@ class HardwareSelectionController:
 
     def _on_mic_device_checked(self, payload: object) -> None:
         self.model.state.mic_device = payload if isinstance(payload, dict) else None
-        channels = self.model.channels_for_device(self.model.state.mic_device, "mic")
         self.model.state.mic_channels = []
-        # 显示仍用 In1..InN，但 payload/返回值为 0..N-1
-        self.view.mic_channel_table.set_options([(f"In{i + 1}", i) for i in channels])
+        try:
+            channels = self.model.channel_rows_for_device(self.model.state.mic_device, "mic")
+        except MissingHardwareTablesError:
+            MessageBox.warning(self.view, "提示", "硬件管理表不存在，请使用最新版数据库")
+            channels = []
+        except (HardwareManagementError,) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as e:
+            MessageBox.warning(self.view, "提示", str(e))
+            channels = []
+        channel_options = self._mic_channel_options(channels)
+        if channel_options is None:
+            MessageBox.warning(self.view, "提示", "已注册麦克风通道数据无效，请检查硬件管理数据库。")
+            channel_options = []
+        self.view.mic_channel_table.set_options(channel_options)
+
+    @classmethod
+    def _mic_channel_options(cls, channels: List[Dict[str, Any]]) -> Optional[List[Tuple[Any, int]]]:
+        options: List[Tuple[Any, int]] = []
+        for channel in channels:
+            channel_index = cls._validated_channel_index(channel.get("channel_index"))
+            if channel_index is None:
+                return None
+            options.append((channel.get("channel_label", channel.get("channel_index")), channel_index))
+        return options
+
+    @staticmethod
+    def _validated_channel_index(value: Any) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            channel_index = value
+        elif isinstance(value, str):
+            stripped = value.strip()
+            if not stripped.isdecimal():
+                return None
+            channel_index = int(stripped)
+        else:
+            return None
+        if channel_index < 0:
+            return None
+        return channel_index
 
     def _on_ok_clicked(self) -> None:
         speaker = self.model.state.speaker_device
@@ -434,22 +520,164 @@ class HardwareSelectionController:
 
         mic_channels = sorted(int(x) for x in self.view.mic_channel_table.checked_payloads())
 
-        if speaker and mic and mic_channels:
-            self.model.state.mic_channels = mic_channels
-        else:
+        if not (speaker and mic and mic_channels):
             MessageBox.warning(self.view, "提示", "请选择扬声器和麦克风设备，以及麦克风通道！")
             return None
 
-        mic_idx = int(mic.get("index")) if mic else -1
-        speaker_idx = int(speaker.get("index")) if speaker else -1
         try:
-            SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
-            SoundDeviceManager.save_selected_devices(mic, speaker, mic_channels)
+            runtime_devices = SoundDeviceManager.get_device_info()
         except Exception as e:
+            MessageBox.warning(self.view, "提示", f"当前音频设备枚举失败，请检查设备连接或重试。\n{e}")
+            return None
+
+        runtime_index = self._runtime_devices_by_api(runtime_devices)
+        mic_match = self._match_registered_asset(mic, runtime_index)
+        speaker_match = self._match_registered_asset(speaker, runtime_index)
+        if mic_match[0] == "missing" or speaker_match[0] == "missing":
+            MessageBox.warning(self.view, "提示", "已注册硬件当前不可用，请检查设备连接后重试。")
+            return None
+        if mic_match[0] == "ambiguous" or speaker_match[0] == "ambiguous":
+            MessageBox.warning(self.view, "提示", "已注册硬件匹配到多个当前设备，无法安全应用。")
+            return None
+
+        runtime_mic = mic_match[1]
+        runtime_speaker = speaker_match[1]
+        mic_max_input_channels = runtime_mic.get("max_input_channels")
+        if not self._is_positive_int(mic_max_input_channels):
+            MessageBox.warning(self.view, "提示", "当前麦克风设备不支持输入通道，请检查设备连接或重新选择。")
+            return None
+        if any(channel < 0 or channel >= mic_max_input_channels for channel in mic_channels):
+            MessageBox.warning(self.view, "提示", "当前麦克风设备不支持所选输入通道，请检查设备连接或重新选择。")
+            return None
+        if not self._is_positive_int(runtime_speaker.get("max_output_channels")):
+            MessageBox.warning(self.view, "提示", "当前扬声器设备不支持输出通道，请检查设备连接或重新选择。")
+            return None
+
+        mic_idx = int(runtime_mic.get("index"))
+        speaker_idx = int(runtime_speaker.get("index"))
+        mic_payload = self._augment_runtime_device(runtime_mic, mic)
+        speaker_payload = self._augment_runtime_device(runtime_speaker, speaker)
+
+        try:
+            selected_devices_snapshot = self._snapshot_selected_devices_config()
+        except OSError as e:
             MessageBox.warning(self.view, "提示", f"硬件配置保存失败，请检查权限或重试。\n{e}")
             return None
 
+        try:
+            SoundDeviceManager.save_selected_devices(mic_payload, speaker_payload, mic_channels)
+        except Exception as e:
+            try:
+                self._restore_selected_devices_config(selected_devices_snapshot)
+            except OSError as rollback_error:
+                MessageBox.warning(
+                    self.view,
+                    "提示",
+                    f"硬件配置保存失败，且已保存配置回滚失败，请检查权限或重试。\n{e}\n{rollback_error}",
+                )
+                return None
+            MessageBox.warning(self.view, "提示", f"硬件配置保存失败，请检查权限或重试。\n{e}")
+            return None
+
+        try:
+            SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
+        except Exception as e:
+            try:
+                self._restore_selected_devices_config(selected_devices_snapshot)
+            except OSError as rollback_error:
+                MessageBox.warning(
+                    self.view,
+                    "提示",
+                    f"硬件配置应用失败，且已保存配置回滚失败，请检查权限或重试。\n{e}\n{rollback_error}",
+                )
+                return None
+            MessageBox.warning(self.view, "提示", f"硬件配置应用失败，请检查设备连接或重试。\n{e}")
+            return None
+
+        self.model.state.speaker_device = speaker_payload
+        self.model.state.mic_device = mic_payload
+        self.model.state.mic_channels = mic_channels
         self.view.accept()
+
+    @staticmethod
+    def _is_positive_int(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+    @staticmethod
+    def _runtime_devices_by_api(runtime_devices: Dict[str, Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[Dict[str, Any]]]:
+        devices_by_api: Dict[str, List[Dict[str, Any]]] = {}
+        seen = set()
+        for api_name, groups in (runtime_devices or {}).items():
+            api_devices = devices_by_api.setdefault(api_name, [])
+            for direction in ("input", "output"):
+                for device in (groups or {}).get(direction, []) or []:
+                    key = (
+                        api_name,
+                        device.get("index"),
+                        device.get("name"),
+                        id(device) if device.get("index") is None else None,
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    api_devices.append(device)
+        return devices_by_api
+
+    @staticmethod
+    def _match_registered_asset(asset: Dict[str, Any], runtime_index: Dict[str, List[Dict[str, Any]]]) -> Tuple[str, Optional[Dict[str, Any]]]:
+        matches = [
+            device
+            for device in runtime_index.get(asset.get("hostapi_name"), [])
+            if device.get("name") == asset.get("device_name")
+        ]
+        if not matches:
+            return "missing", None
+        if len(matches) > 1:
+            return "ambiguous", None
+        return "ok", matches[0]
+
+    @staticmethod
+    def _augment_runtime_device(runtime_device: Dict[str, Any], asset: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(runtime_device)
+        registered_metadata = {
+            "hardware_id": asset.get("hardware_id"),
+            "display_name": asset.get("display_name"),
+            "device_name": asset.get("device_name"),
+            "hardware_type": asset.get("hardware_type"),
+            "hostapi_name": asset.get("hostapi_name"),
+            "samplerate": asset.get("samplerate"),
+            "bit_depth": asset.get("bit_depth"),
+            "latency_ms": asset.get("latency_ms"),
+        }
+        for key, value in registered_metadata.items():
+            if key not in payload:
+                payload[key] = value
+        return payload
+
+    @staticmethod
+    def _snapshot_selected_devices_config() -> Tuple[str, bool, bytes]:
+        path = sound_device_manager_module.AUDIO_DEVICE_CONFIG_PATH
+        try:
+            with open(path, "rb") as file:
+                return path, True, file.read()
+        except FileNotFoundError:
+            return path, False, b""
+
+    @staticmethod
+    def _restore_selected_devices_config(snapshot: Tuple[str, bool, bytes]) -> None:
+        path, existed, data = snapshot
+        if existed:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(path, "wb") as file:
+                file.write(data)
+            return
+
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            return
 
     def get_selected_devices(self):
         if self.view.result() == QDialog.Accepted:
@@ -481,20 +709,22 @@ def _normalize_channel_indices(channels: Optional[Iterable[Any]]) -> List[int]:
             continue
         if isinstance(x, str):
             s = x.strip()
-            # 支持 Out1 / In1 / 1
-            if s.lower().startswith(("out", "in")):
-                s = s[3:] if s.lower().startswith("out") else s[2:]
-            try:
-                n = int(s)
-                # 约定字符串通道为 1-based（Out1 表示索引 0）
-                out.append(max(0, n - 1))
-            except Exception:
+            label = s.lower()
+            # 支持 Out1 / In1 / 1；字符串通道按 1-based 解析，0 和非法标签忽略。
+            if label.startswith("out"):
+                s = s[3:]
+            elif label.startswith("in"):
+                s = s[2:]
+            if not s.isdecimal():
                 continue
+            n = int(s)
+            if n > 0:
+                out.append(n - 1)
+        elif isinstance(x, int) and not isinstance(x, bool):
+            if x >= 0:
+                out.append(x)
         else:
-            try:
-                out.append(int(x))
-            except Exception:
-                continue
+            continue
     # 去重 + 排序
     return sorted(set(out))
 
@@ -504,6 +734,7 @@ def open_hardware_selection_window(
     speaker_device: Optional[Dict[str, Any]] = None,
     mic_device: Optional[Dict[str, Any]] = None,
     mic_channels: Optional[Iterable[Any]] = None,
+    repository=None,
 ):
     """
     打开硬件选择窗口，并支持根据传入参数进行初始化回填：
@@ -519,7 +750,7 @@ def open_hardware_selection_window(
         api_name=driver,
     )
 
-    model = HardwareSelectionModel(initial_state=initial_state)
+    model = HardwareSelectionModel(initial_state=initial_state, repository=repository)
     view = HardwareSelectionView()
     controller = HardwareSelectionController(model, view)
     view.exec()

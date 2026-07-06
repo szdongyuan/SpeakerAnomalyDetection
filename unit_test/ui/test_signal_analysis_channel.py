@@ -103,11 +103,11 @@ def test_spl_frequency_step_sc_smoothing_preserves_duplicate_output_points(qapp,
     widget = SplFrequency("SPLF")
     monkeypatch.setattr(widget, "plot_spl_frequency", lambda *args, **kwargs: None)
     monkeypatch.setattr(widget, "plot_spl_frequency_with_limits", lambda *args, **kwargs: None)
-    widget.v2pa_factor = 1.0
     widget.analysis_config = {"smooth_checked": True, "splf_calc_mode": "total"}
     widget.data_struct.sample_rate = sample_rate
     widget.data_struct.stimulus_info = metadata
     widget.data_struct.store_wave_data = recording.astype(np.float32)
+    monkeypatch.setattr("ui.signal_analysis_window.resolve_analysis_v2pa_factor_for_channel", lambda *args, **kwargs: 1.0)
     monkeypatch.setattr("ui.signal_analysis_window.MessageBox.warning", lambda *args, **kwargs: None)
 
     result = widget.calculate_spl()

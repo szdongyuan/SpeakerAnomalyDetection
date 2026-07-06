@@ -1,15 +1,14 @@
 import json
 import math
-import os
-import tempfile
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 import numpy as np
 
+from base.hardware_management import HardwareManagementRepository
 from base.log_manager import LogManager
-from consts import error_code, model_consts, running_consts
+from base.sound_device_manager import SoundDeviceManager
+from consts import error_code, model_consts
 
 
 @dataclass(frozen=True)
@@ -55,156 +54,106 @@ def _normalize_standard_spl(standard_spl):
     return numeric
 
 
-def _channel_calibration_path(file_path=None):
-    MIC_CHANNEL_CALIBRATION_FILE = running_consts.DEFAULT_DIR + "ui/ui_config/mic_channel_calibration.json"
-    return os.fspath(file_path or MIC_CHANNEL_CALIBRATION_FILE)
+def _selected_hardware_id(device_key):
+    saved_devices = SoundDeviceManager.load_selected_devices() or {}
+    device_payload = saved_devices.get(device_key)
+    if isinstance(device_payload, dict):
+        hardware_id = device_payload.get("hardware_id")
+        if hardware_id:
+            return hardware_id
+    return None
 
 
-def _load_mic_channel_calibration_payload(file_path=None):
-    path = _channel_calibration_path(file_path=file_path)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+def _resolve_mic_hardware_id(hardware_id=None):
+    resolved = hardware_id or _selected_hardware_id("mic")
+    if not resolved:
+        raise ValueError("registered microphone hardware_id is required for calibration")
+    return resolved
 
 
-def _atomic_write_json_payload(path, payload):
-    directory = os.path.dirname(path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
-
-    temp_directory = directory or "."
-    temp_prefix = f".{os.path.basename(path) or 'mic_channel_calibration.json'}."
-    fd, temp_path = tempfile.mkstemp(prefix=temp_prefix, suffix=".tmp", dir=temp_directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, path)
-        temp_path = None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
+def _resolve_speaker_hardware_id(hardware_id=None):
+    resolved = hardware_id or _selected_hardware_id("speaker")
+    if not resolved:
+        raise ValueError("registered speaker hardware_id is required for calibration")
+    return resolved
 
 
-def load_mic_channel_v2pa_factors(file_path=None):
-    payload = _load_mic_channel_calibration_payload(file_path=file_path)
-    channels = payload.get("channels")
-    if not isinstance(channels, dict):
-        return {}
+def _repository(db_path=None):
+    return HardwareManagementRepository(db_path)
 
+
+def _load_mic_channel_calibration_rows(hardware_id=None, db_path=None):
+    resolved_hardware_id = _resolve_mic_hardware_id(hardware_id)
+    return _repository(db_path).list_channel_calibrations(
+        resolved_hardware_id,
+        "input",
+        "mic_v2pa",
+    )
+
+
+def load_mic_channel_v2pa_factors(hardware_id=None, db_path=None):
     factors = {}
-    for channel_key, channel_payload in channels.items():
-        if not isinstance(channel_payload, dict):
-            continue
+    for row in _load_mic_channel_calibration_rows(hardware_id=hardware_id, db_path=db_path):
         try:
-            channel_index = _normalize_channel_index(channel_key)
-            factors[channel_index] = _normalize_positive_factor(channel_payload.get("v2pa_factor"))
-        except ValueError:
-            continue
+            factors[_normalize_channel_index(row["channel_index"])] = _normalize_positive_factor(row["factor_value"])
+        except ValueError as exc:
+            channel_label = format_input_channel_label(row.get("channel_index", 0))
+            raise ValueError(f"Invalid microphone calibration payload for {channel_label}: {exc}") from exc
     return factors
 
 
-def save_mic_channel_v2pa_factor(channel_index, v2pa_factor, standard_spl=None, file_path=None):
+def save_mic_channel_v2pa_factor(channel_index, v2pa_factor, standard_spl=None, hardware_id=None, db_path=None):
     normalized_channel = _normalize_channel_index(channel_index)
-    normalized_factor = _normalize_positive_factor(v2pa_factor)
-    path = _channel_calibration_path(file_path=file_path)
-
-    channels_payload = {}
-    existing_payload = _load_mic_channel_calibration_payload(file_path=path)
-    existing_channels = existing_payload.get("channels")
-    if isinstance(existing_channels, dict):
-        for saved_channel, channel_payload in existing_channels.items():
-            if not isinstance(channel_payload, dict):
-                continue
-            try:
-                normalized_saved_channel = _normalize_channel_index(saved_channel)
-                preserved_payload = {
-                    "v2pa_factor": _normalize_positive_factor(channel_payload.get("v2pa_factor")),
-                    "calibrated_at": channel_payload.get("calibrated_at") or datetime.now().strftime("%Y-%m-%d"),
-                }
-            except (TypeError, ValueError):
-                continue
-            try:
-                normalized_saved_spl = _normalize_standard_spl(channel_payload.get("standard_spl"))
-            except (TypeError, ValueError):
-                normalized_saved_spl = None
-            if normalized_saved_spl is not None:
-                preserved_payload["standard_spl"] = normalized_saved_spl
-            channels_payload[str(normalized_saved_channel)] = preserved_payload
-
-    channel_payload = {
-        "v2pa_factor": normalized_factor,
-        "calibrated_at": datetime.now().strftime("%Y-%m-%d"),
-    }
-    normalized_standard_spl = _normalize_standard_spl(standard_spl)
-    if normalized_standard_spl is not None:
-        channel_payload["standard_spl"] = normalized_standard_spl
-    channels_payload[str(normalized_channel)] = channel_payload
-
-    _atomic_write_json_payload(path, {"version": 1, "channels": channels_payload})
+    resolved_hardware_id = _resolve_mic_hardware_id(hardware_id)
+    _repository(db_path).update_mic_channel_calibrations(
+        resolved_hardware_id,
+        {normalized_channel: _normalize_positive_factor(v2pa_factor)},
+        channel_standard_spl={normalized_channel: _normalize_standard_spl(standard_spl)},
+    )
 
 
-def clear_mic_channel_v2pa_factors(file_path=None):
-    path = _channel_calibration_path(file_path=file_path)
-    _atomic_write_json_payload(path, {"version": 1, "channels": {}})
+def clear_mic_channel_v2pa_factors(hardware_id=None, channel_indices=None, db_path=None):
+    _repository(db_path).clear_mic_channel_calibrations(
+        _resolve_mic_hardware_id(hardware_id),
+        channel_indices=channel_indices,
+    )
 
 
-def replace_mic_channel_v2pa_factors(channel_factors, channel_standard_spl=None, file_path=None):
-    path = _channel_calibration_path(file_path=file_path)
+def replace_mic_channel_v2pa_factors(channel_factors, channel_standard_spl=None, hardware_id=None, db_path=None):
+    resolved_hardware_id = _resolve_mic_hardware_id(hardware_id)
     channel_standard_spl = channel_standard_spl or {}
-
     normalized_factors = {}
     for channel_index, v2pa_factor in channel_factors.items():
-        normalized_channel = _normalize_channel_index(channel_index)
-        normalized_factors[normalized_channel] = _normalize_positive_factor(v2pa_factor)
+        normalized_factors[_normalize_channel_index(channel_index)] = _normalize_positive_factor(v2pa_factor)
 
     normalized_standard_spl_by_channel = {}
     for channel_index, standard_spl in channel_standard_spl.items():
-        normalized_channel = _normalize_channel_index(channel_index)
-        normalized_standard_spl_by_channel[normalized_channel] = _normalize_standard_spl(standard_spl)
+        normalized_standard_spl_by_channel[_normalize_channel_index(channel_index)] = _normalize_standard_spl(standard_spl)
 
-    existing_payload = _load_mic_channel_calibration_payload(file_path=path)
-    existing_channels = existing_payload.get("channels")
-    if not isinstance(existing_channels, dict):
-        existing_channels = {}
+    existing_standard_spl_by_channel = {}
+    for row in _load_mic_channel_calibration_rows(hardware_id=resolved_hardware_id, db_path=db_path):
+        if row.get("standard_spl") is not None:
+            existing_standard_spl_by_channel[_normalize_channel_index(row["channel_index"])] = row["standard_spl"]
 
-    channels_payload = {}
-    today = datetime.now().strftime("%Y-%m-%d")
-    for normalized_channel, normalized_factor in normalized_factors.items():
-        existing_channel_payload = existing_channels.get(str(normalized_channel))
-        if not isinstance(existing_channel_payload, dict):
-            existing_channel_payload = {}
-
-        channel_payload = {
-            "v2pa_factor": normalized_factor,
-            "calibrated_at": existing_channel_payload.get("calibrated_at") or today,
-        }
-        if normalized_channel in normalized_standard_spl_by_channel:
-            normalized_standard_spl = normalized_standard_spl_by_channel[normalized_channel]
+    complete_standard_spl = {}
+    for channel_index in normalized_factors:
+        if channel_index in normalized_standard_spl_by_channel:
+            complete_standard_spl[channel_index] = normalized_standard_spl_by_channel[channel_index]
+        elif channel_index in existing_standard_spl_by_channel:
+            complete_standard_spl[channel_index] = existing_standard_spl_by_channel[channel_index]
         else:
-            try:
-                normalized_standard_spl = _normalize_standard_spl(existing_channel_payload.get("standard_spl"))
-            except (TypeError, ValueError):
-                normalized_standard_spl = None
-        if normalized_standard_spl is not None:
-            channel_payload["standard_spl"] = normalized_standard_spl
-        channels_payload[str(normalized_channel)] = channel_payload
+            raise ValueError("standard_spl is required for mic_v2pa calibration")
 
-    _atomic_write_json_payload(path, {"version": 1, "channels": channels_payload})
+    _repository(db_path).update_mic_channel_calibrations(
+        resolved_hardware_id,
+        normalized_factors,
+        channel_standard_spl=complete_standard_spl,
+    )
 
 
-def resolve_mic_channel_v2pa_factor(channel_index, file_path=None):
+def resolve_mic_channel_v2pa_factor(channel_index, hardware_id=None, db_path=None):
     requested_channel = _normalize_channel_index(channel_index)
-    factors = load_mic_channel_v2pa_factors(file_path=file_path)
+    factors = load_mic_channel_v2pa_factors(hardware_id=hardware_id, db_path=db_path)
     if requested_channel in factors:
         return MicChannelCalibrationResult(
             factor=factors[requested_channel],
@@ -213,21 +162,12 @@ def resolve_mic_channel_v2pa_factor(channel_index, file_path=None):
             used_fallback=False,
             has_any_calibration=True,
         )
-    if factors:
-        fallback_channel = min(factors)
-        return MicChannelCalibrationResult(
-            factor=factors[fallback_channel],
-            requested_channel=requested_channel,
-            source_channel=fallback_channel,
-            used_fallback=True,
-            has_any_calibration=True,
-        )
     return MicChannelCalibrationResult(
         factor=None,
         requested_channel=requested_channel,
         source_channel=None,
         used_fallback=False,
-        has_any_calibration=False,
+        has_any_calibration=bool(factors),
     )
 
 
@@ -235,46 +175,29 @@ def format_input_channel_label(channel_index):
     return f"In{int(channel_index) + 1}"
 
 
-def resolve_analysis_v2pa_factor_for_channel(raw_channel, warn_callback=None, file_path=None):
+def resolve_analysis_v2pa_factor_for_channel(raw_channel, warn_callback=None, hardware_id=None, db_path=None):
     channel = max(0, int(raw_channel or 0))
-    result = resolve_mic_channel_v2pa_factor(channel, file_path=file_path)
+    result = resolve_mic_channel_v2pa_factor(channel, hardware_id=hardware_id, db_path=db_path)
     if result.factor is None:
-        raise ValueError(f"{format_input_channel_label(channel)} 未找到输入通道校准数据，请先完成输入校准。")
-    if result.used_fallback and warn_callback:
-        warn_callback(
-            f"{format_input_channel_label(channel)} 未校准，本次使用 "
-            f"{format_input_channel_label(result.source_channel)} 的校准系数。"
-        )
+        if warn_callback:
+            warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
     return float(result.factor)
 
 
-def get_mic_v2pa_factor():
-    """
-        Reads the microphone calibration v2pa_factor value from a specified file.
-
-        This method is static because it does not depend on the instance state of the class and can operate independently.
-        The v2pa_factor value is read from a file as it may vary based on environmental conditions and needs to be
-    dynamically adjusted.
-
-        Return:
-            The microphone calibration v2pa_factor value. Returns 0.0 if reading the file fails.
-    """
-    file_path = running_consts.DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
-    try:
-        with open(file_path, "r") as f:
-            lines = f.readlines()
-            v2pa_factor = lines[1].strip()
-            return float(v2pa_factor)
-    except Exception as e:
-        return 0.0
 
 
 class SoundcardCalibrationManager(object):
 
-    def __init__(self):
+    def __init__(self, db_path=None, speaker_hardware_id=None):
         self.amplitudes = []
         self.voltages = []
+        self.db_path = db_path
+        self.speaker_hardware_id = speaker_hardware_id
         self.logger = LogManager.set_log_handler("soundcard_core")
+
+    def _resolved_speaker_hardware_id(self):
+        return _resolve_speaker_hardware_id(self.speaker_hardware_id)
 
     def add_data(self, amplitude, voltage, validation=True):
         """
@@ -297,7 +220,7 @@ class SoundcardCalibrationManager(object):
         self.voltages.append(voltage)
         return error_code.OK, "Successfully add data."
 
-    def fit(self, threshold=0.001, json_file_name="calibration_coefficients.json"):
+    def fit(self, threshold=0.001):
         """
         Fit amplitude and voltage data to obtain a linear relationship.
         Returns:
@@ -318,7 +241,7 @@ class SoundcardCalibrationManager(object):
             if mse > threshold or mse < 0 or not np.isfinite(mse):
                 self.logger.error("Calibration is not accurate, please readjust.")
                 return error_code.INVALID_CALIBRATION, "Calibration is not accurate, please readjust."
-        save_code, msg = self.save_coefficients_to_json(coefficients, max(self.voltages), json_file_name)
+        save_code, msg = self.save_output_amplitude_calibration(coefficients, max(self.voltages))
         if save_code == error_code.OK:
             return error_code.OK, coefficients
         return save_code, msg
@@ -340,17 +263,15 @@ class SoundcardCalibrationManager(object):
         predict_amplitude = fit_function(target_voltage)
         return np.round(predict_amplitude, 4)
 
-    def calibrate_amplitude(self, target_voltage, json_file_name="calibration_coefficients.json"):
+    def calibrate_amplitude(self, target_voltage):
         """
         Args:
             target_voltage: int or float or list
-            json_file_name: str
-                The json file name of calibration coefficient.
         Returns:
             predict_amplitude: int or float or list
                 The amplitude corresponding to the target voltage.
         """
-        load_code, load_data = self.load_data_from_json(json_file_name)
+        load_code, load_data = self.load_output_amplitude_calibration()
         if load_code == error_code.OK:
             coefficients_data = load_data.get("calibration_coefficients")
             max_voltage = load_data.get("max_voltage")
@@ -359,57 +280,57 @@ class SoundcardCalibrationManager(object):
         self.logger.error("Failed to load coefficients, please calibrate first.")
         return error_code.INVALID_DATA_LOADING, "Failed to load coefficients, please calibrate first."
 
-    def save_coefficients_to_json(self, coefficients, max_voltages, json_file_name):
-        """
-        Save calibration coefficients and voltages to a JSON file.
-        Args:
-            coefficients: list or np.ndarray
-                Calibration coefficients to save.
-            max_voltages: int or float
-                Calibration max voltages to save.
-            json_file_name: str
-                Name of the JSON file to save the data.
-        Returns:
-            A tuple containing an error code and a message indicating success or failure.
-        """
-        if not json_file_name.endswith(".json"):
-            json_file_name = os.path.splitext(json_file_name)[0]
-            json_file_name += ".json"
-        json_file_path = model_consts.JSON_DIR_PATH + "/" + json_file_name
-        directory = os.path.dirname(json_file_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
-        if not isinstance(coefficients, (list, np.ndarray)):
-            return error_code.INVALID_TYPE_DATA, "Coefficients must be a list or numpy array."
-        coefficients = coefficients.tolist() if isinstance(coefficients, np.ndarray) else coefficients
-        data = {"calibration_coefficients": coefficients, "max_voltage": max_voltages}
+    def save_output_amplitude_calibration(self, coefficients, max_voltage):
+        if isinstance(coefficients, np.ndarray):
+            coefficients = coefficients.tolist()
         try:
-            with open(json_file_path, "w") as json_file:
-                json.dump(data, json_file, indent=3)
-                self.logger.info(f"Coefficients saved to {json_file_path}.")
-                return error_code.OK, f"Successfully save the coefficients to {json_file_path}."
+            hardware_id = self._resolved_speaker_hardware_id()
+            HardwareManagementRepository(self.db_path).update_output_amplitude_calibration(
+                hardware_id,
+                coefficients,
+                max_voltage=max_voltage,
+            )
+            return error_code.OK, "Successfully saved output calibration to database."
         except Exception as e:
-            err_msg = "Failed saving coefficients to json. %s" % (str(e)[:50])
-            self.logger.error(err_msg)
-            return error_code.INVALID_SAVE, err_msg
-
-    def load_data_from_json(self, json_file_name):
-        """
-        Load calibration coefficients and voltages from a JSON file.
-        Args:
-            json_file_name: str
-                The name of the JSON file to load data from.
-        Returns:
-                A tuple containing an error code and the loaded data or an error message.
-        """
-        json_file_path = model_consts.JSON_DIR_PATH + "/" + json_file_name
-        if not os.path.exists(json_file_path):
-            return error_code.INVALID_DATA_LOADING, "This json file does not exist."
-        try:
-            with open(json_file_path, "r") as json_file:
-                data = json.load(json_file)
-                return error_code.OK, data
-        except Exception as e:
-            err_msg = "Failed to load coefficients data from json.%s" % (str(e)[:50])
+            err_msg = str(e)
             self.logger.error(err_msg)
             return error_code.INVALID_DATA_LOADING, err_msg
+
+    def load_output_amplitude_calibration(self, channel_index=0):
+        try:
+            hardware_id = self._resolved_speaker_hardware_id()
+            row = HardwareManagementRepository(self.db_path).get_output_amplitude_calibration(
+                hardware_id,
+                channel_index=channel_index,
+            )
+            if row is None:
+                return error_code.INVALID_DATA_LOADING, "Failed to load coefficients, please calibrate first."
+            payload = json.loads(row["coefficients_json"])
+            coefficients = payload.get("calibration_coefficients") if isinstance(payload, dict) else None
+            if set(payload.keys()) != {"calibration_coefficients"}:
+                return error_code.INVALID_DATA_LOADING, "Invalid output calibration payload."
+            if not isinstance(coefficients, list) or len(coefficients) != 2:
+                return error_code.INVALID_DATA_LOADING, "Invalid output calibration coefficients."
+            normalized_coefficients = []
+            for coefficient in coefficients:
+                numeric = float(coefficient)
+                if not math.isfinite(numeric):
+                    return error_code.INVALID_DATA_LOADING, "Invalid output calibration coefficients."
+                normalized_coefficients.append(numeric)
+            max_voltage = float(row["max_voltage"])
+            if not math.isfinite(max_voltage) or max_voltage <= 0:
+                return error_code.INVALID_DATA_LOADING, "Invalid output calibration max voltage."
+            return error_code.OK, {
+                "calibration_coefficients": normalized_coefficients,
+                "max_voltage": max_voltage,
+            }
+        except Exception as e:
+            err_msg = str(e)
+            self.logger.error(err_msg)
+            return error_code.INVALID_DATA_LOADING, err_msg
+
+    def get_max_output_voltage(self, channel_index=0):
+        code, data = self.load_output_amplitude_calibration(channel_index=channel_index)
+        if code == error_code.OK:
+            return data["max_voltage"]
+        return None

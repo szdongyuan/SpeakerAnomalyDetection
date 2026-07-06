@@ -54,7 +54,10 @@ def test_supported_aliases_normalize_and_retained_frequencies_regenerate_authori
 ):
     detail = {"stimulus_info": _runtime_info(stimulus_method="Frequency Stepped")}
 
-    data, sample_rate, save_path = stimulus_resolver.generate_and_save_stimulus(detail)
+    data, sample_rate, save_path = stimulus_resolver.generate_and_save_stimulus(
+        detail,
+        runtime_sample_rate=48000,
+    )
 
     metadata = detail["stimulus_info"]
     assert sample_rate == 48000
@@ -81,7 +84,11 @@ def test_frequency_stepped_saved_wav_path_is_not_authoritative(monkeypatch, stor
     }
     data_struct = SimpleNamespace()
 
-    modified = stimulus_resolver.set_data_struct_stimulus_signal(data_struct, detail)
+    modified = stimulus_resolver.set_data_struct_stimulus_signal(
+        data_struct,
+        detail,
+        runtime_sample_rate=48000,
+    )
 
     assert modified is True
     assert data_struct.stimulus_info["stimulus_method"] == "frequency_stepped"
@@ -104,7 +111,11 @@ def test_step_sc_method_is_rejected_without_loading_wav_or_generating_silence(mo
     data_struct = SimpleNamespace()
 
     with pytest.raises(ValueError, match=r"Unsupported stimulus_method: step\(sc\)"):
-        stimulus_resolver.set_data_struct_stimulus_signal(data_struct, detail)
+        stimulus_resolver.set_data_struct_stimulus_signal(
+            data_struct,
+            detail,
+            runtime_sample_rate=48000,
+        )
 
     assert not hasattr(data_struct, "stimulus_data")
 
@@ -121,7 +132,7 @@ def test_cached_same_rate_schedule_is_reused_only_with_matching_provenance(store
     )
     detail = {"stimulus_info": dict(generated.metadata)}
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
     assert detail["stimulus_info"]["segments"] == generated.metadata["segments"]
 
@@ -134,7 +145,7 @@ def test_cached_same_rate_schedule_is_reused_only_with_matching_provenance(store
     ]
     detail = {"stimulus_info": stale}
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
     assert detail["stimulus_info"]["segments"] == generated.metadata["segments"]
 
@@ -162,7 +173,7 @@ def test_cross_rate_cached_schedule_rebuilds_from_retained_frequencies(stored_st
     metadata["sample_rate"] = 44100
     detail = {"stimulus_info": metadata}
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=44100)
 
     assert detail["stimulus_info"]["sample_rate"] == 44100
     assert detail["stimulus_info"]["segments"] == expected.metadata["segments"]
@@ -178,16 +189,18 @@ def test_insufficient_frequency_stepped_metadata_raises_value_error(stored_stimu
     }
 
     with pytest.raises(ValueError, match="frequency_stepped"):
-        stimulus_resolver.generate_and_save_stimulus(detail)
+        stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
 
-def test_frequency_stepped_runtime_missing_sample_rate_raises_value_error(stored_stimulus_path):
+def test_frequency_stepped_runtime_sample_rate_is_injected_when_config_missing(stored_stimulus_path):
     info = _runtime_info()
     info.pop("sample_rate")
     detail = {"stimulus_info": info}
 
-    with pytest.raises(ValueError, match="sample_rate"):
-        stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
+
+    assert detail["stimulus_info"]["sample_rate"] == 48000
+    assert detail["stimulus_info"]["schedule_sample_rate"] == 48000
 
 
 def test_runtime_extra_fields_are_filtered_before_generator_call(monkeypatch, stored_stimulus_path):
@@ -215,7 +228,7 @@ def test_runtime_extra_fields_are_filtered_before_generator_call(monkeypatch, st
     )
     detail = {"stimulus_info": info}
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
     assert calls
     assert set(calls[-1]) <= set(stimulus_resolver.FREQUENCY_STEPPED_GENERATOR_KEYS)
@@ -228,7 +241,7 @@ def test_runtime_extra_fields_are_filtered_before_generator_call(monkeypatch, st
 def test_stale_mode_conflicts_are_repaired_before_generation(stored_stimulus_path):
     detail = {"stimulus_info": _runtime_info(frequency_mode="custom_linear", stimulus_type="custom_log")}
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
     assert detail["stimulus_info"]["frequency_mode"] == "custom_linear"
     assert detail["stimulus_info"]["stimulus_type"] == "custom_linear"
@@ -244,7 +257,7 @@ def test_retained_frequencies_take_precedence_over_scalar_reconstruction_fields(
         )
     }
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
     assert detail["stimulus_info"]["frequencies"] == [315.5, 630.5, 1250.5]
     assert detail["stimulus_info"]["num_steps"] == 3
@@ -273,7 +286,7 @@ def test_voltage_and_amplitude_fields_are_preserved_but_only_numeric_amplitude_r
         )
     }
 
-    stimulus_resolver.generate_and_save_stimulus(detail)
+    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
     assert calls[-1]["amplitude"] == 0.4
     assert "voltage" not in calls[-1]
@@ -301,3 +314,18 @@ def test_frequency_stepped_filename_uses_bounded_whitelist():
     assert "sample_count" not in name
     assert "transition" not in name
     assert "long" not in name
+
+
+def test_frequency_stepped_runtime_rate_rebuilds_metadata(stored_stimulus_path):
+    detail = {"stimulus_info": _runtime_info(sample_rate=44100)}
+    data_struct = SimpleNamespace()
+
+    stimulus_resolver.set_data_struct_stimulus_signal(
+        data_struct,
+        detail,
+        runtime_sample_rate=48000,
+    )
+
+    assert data_struct.sample_rate == 48000
+    assert data_struct.stimulus_info["sample_rate"] == 48000
+    assert data_struct.stimulus_info["schedule_sample_rate"] == 48000

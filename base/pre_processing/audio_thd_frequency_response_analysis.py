@@ -99,14 +99,25 @@ def _frequency_stepped_index_row(frequency_hz, sample_rate, n_fft, max_harmonic_
     return index_row, np.insert(fft_freqs, 0, 0.0)
 
 
-def _frequency_stepped_spectrum_column(segment_signal, analyzer, stft_window_type):
-    n_fft = int(np.asarray(segment_signal).size)
-    spectrum = analyzer._compute_stft(
-        np.asarray(segment_signal, dtype=float),
-        window_size=n_fft,
-        hop_size=n_fft,
-        window_type=stft_window_type,
+def _frequency_stepped_stft_magnitude(segment_signal, sample_rate, window_type):
+    segment = np.asarray(segment_signal, dtype=float)
+    n_fft = int(segment.size)
+    _, _, stft_matrix = signal.stft(
+        segment,
+        fs=int(sample_rate),
+        window=window_type,
+        nperseg=n_fft,
+        noverlap=0,
+        nfft=n_fft,
+        return_onesided=True,
+        boundary=None,
+        padded=False,
     )
+    return np.abs(stft_matrix)
+
+
+def _frequency_stepped_spectrum_column(segment_signal, sample_rate, stft_window_type):
+    spectrum = _frequency_stepped_stft_magnitude(segment_signal, sample_rate, stft_window_type)
     return np.insert(spectrum, 0, 0.0, axis=0)
 
 
@@ -368,7 +379,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                 max_harmonic_order,
             )
             index_matrix = index_row.reshape(1, -1)
-            spectrum = _frequency_stepped_spectrum_column(segment_signal, analyzer, stft_window_type)
+            spectrum = _frequency_stepped_spectrum_column(segment_signal, int(sample_rate), stft_window_type)
             mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
             fundamental_bins = index_matrix[:, 1]
             thd = analyzer.compute_thd_batch(spectrum, mask_matrix, fundamental_bins)
@@ -556,7 +567,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                 max_harmonic_order,
             )
             index_matrix = index_row.reshape(1, -1)
-            spectrum = _frequency_stepped_spectrum_column(segment_signal, analyzer, stft_window_type)
+            spectrum = _frequency_stepped_spectrum_column(segment_signal, int(sample_rate), stft_window_type)
             mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
             fundamental_bins = index_matrix[:, 1]
             loudness = analyzer.compute_perceptual_thd_batch(

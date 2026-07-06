@@ -11,6 +11,7 @@ from PyQt5.QtGui import QStandardItem, QBrush, QColor
 from PyQt5.QtWidgets import QProgressDialog, QFileDialog, QApplication, QWidget, QHBoxLayout
 from scipy.io import wavfile as scipy_wavfile
 
+from base.audio_sample_rate import resolve_output_sample_rate
 from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
@@ -23,8 +24,9 @@ from ui.custom_ui_widget.widgets import Label, PushButton, MessageBox, SpinBox
 class ArchiveAudioDataDialog(AudioDataManageDialog):
     PAGE_SIZE = 100
 
-    def __init__(self, logger: LogManager):
+    def __init__(self, logger: LogManager, speaker=None):
         self._current_page_index = 0
+        self.speaker = speaker
         self._selected_audio_data_by_id = dict()
         self.prev_page_btn = None
         self.next_page_btn = None
@@ -833,7 +835,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             if not self.playback_controller.is_audio_playing() and self._current_playing_row is not None:
                 self._clear_playing_state()
 
-            code, msg = self.playback_controller.start_audio_playback(row_path)
+            code, msg = self._start_resolved_audio_playback(row_path)
             if code != error_code.OK:
                 MessageBox.warning(self, "提示", msg)
                 self._clear_playing_state()
@@ -852,6 +854,17 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             self.logger.error(e)
         finally:
             self._is_switching_playback = False
+
+    def _start_resolved_audio_playback(self, path):
+        result = resolve_output_sample_rate(self.speaker)
+        if not result.ok:
+            return error_code.INVALID_PLAY, result.message
+        device = self.speaker.get("index") if isinstance(self.speaker, dict) else None
+        return self.playback_controller.start_audio_playback(
+            path,
+            device=device,
+            output_sample_rate=result.sample_rate,
+        )
 
     def _on_playback_poll_timeout(self):
         if not self.playback_controller.is_audio_playing():

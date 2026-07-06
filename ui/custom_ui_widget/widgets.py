@@ -279,10 +279,10 @@ class MessageBox(QMessageBox):
         for button in self.buttons():
             button.setFont(self.font)
             standard_button = self.standardButton(button)
-            if standard_button == QMessageBox.Ok:
+            if standard_button in (QMessageBox.Ok, QMessageBox.Yes):
                 button.setText("确认")
                 button.setObjectName("okbtn")
-            elif standard_button == QMessageBox.Cancel:
+            elif standard_button in (QMessageBox.Cancel, QMessageBox.No):
                 button.setText("取消")
                 button.setObjectName("cancelbtn")
 

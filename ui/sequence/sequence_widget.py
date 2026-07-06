@@ -4,6 +4,7 @@ import re
 import threading
 import weakref
 from datetime import datetime
+from types import SimpleNamespace
 import time
 
 import librosa
@@ -30,7 +31,7 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.file_ops import FileOps
-from base.load_audio import load_audio_simple
+from base.load_audio import load_audio_preserve_rate
 from base.mes_result_exporter import _validate_mes_runtime_config, select_mes_export_config, write_mes_result
 from base.shortcut_trigger_manager import ShortcutTriggerManager
 from base.unified_hid_device_manager import UnifiedHardwareManager
@@ -53,11 +54,13 @@ from base.streaming_file_writer import StreamingWavWriter
 from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.acquisition_recording_defaults import normalize_play_record_detail, normalize_record_only_detail
+from base.audio_sample_rate import resolve_duplex_sample_rate, resolve_input_sample_rate
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox
 from ui.operation_sequence import AnalysisModelSelect
+from base.stimulus_resolver import set_data_struct_analysis_reference_signal
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sn_regex_manage_dialog import SnRegexManageDialog
@@ -65,6 +68,65 @@ from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_map
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
 from ui.ui_src import ui_resources
+
+
+def _clear_data_struct_stimulus_runtime_state(data_struct, *, clear_sample_rate: bool) -> None:
+    if data_struct is None:
+        return
+    if clear_sample_rate:
+        data_struct.sample_rate = None
+    data_struct.stimulus_data = None
+    data_struct.stimulus_info = None
+    if hasattr(data_struct, "alignment_sample_count"):
+        delattr(data_struct, "alignment_sample_count")
+
+
+def _clear_sequence_stimulus_runtime_state(window, *, clear_sample_rate: bool = True) -> None:
+    _clear_data_struct_stimulus_runtime_state(getattr(window, "data_struct", None), clear_sample_rate=clear_sample_rate)
+    if hasattr(window, "streaming_stimulus_data"):
+        window.streaming_stimulus_data = None
+
+
+def _commit_analysis_reference_state(data_struct, staged_reference) -> None:
+    data_struct.stimulus_data = getattr(staged_reference, "stimulus_data", None)
+    data_struct.stimulus_info = getattr(staged_reference, "stimulus_info", None)
+    if hasattr(data_struct, "alignment_sample_count"):
+        delattr(data_struct, "alignment_sample_count")
+    if hasattr(staged_reference, "alignment_sample_count"):
+        data_struct.alignment_sample_count = staged_reference.alignment_sample_count
+
+
+def _clear_import_analysis_runtime_state(window) -> None:
+    data_struct = getattr(window, "data_struct", None)
+    if data_struct is not None:
+        data_struct.store_wave_data = None
+        data_struct.store_wave_data_multi = None
+        data_struct.sample_rate = None
+        data_struct.audio_lenth = None
+        data_struct.stimulus_data = None
+        data_struct.stimulus_info = None
+        if hasattr(data_struct, "alignment_sample_count"):
+            delattr(data_struct, "alignment_sample_count")
+    window.recorded_path = None
+    window.recorded_signal_info = None
+    data_btn = getattr(window, "data_btn", None)
+    if data_btn is not None:
+        data_btn.setEnabled(False)
+    try:
+        window._clear_plot_area()
+    except Exception:
+        pass
+
+
+def _resolve_runtime_sample_rate_for_mode(window, acq_mode, acq_detail):
+    if acq_mode == "RECORD_ONLY":
+        normalized_detail = normalize_record_only_detail(acq_detail)
+        if normalized_detail.get("monitor_playback", False):
+            return resolve_duplex_sample_rate(getattr(window, "mic", None), getattr(window, "speaker", None))
+        return resolve_input_sample_rate(getattr(window, "mic", None))
+    if acq_mode == "PLAY_AND_RECORD":
+        return resolve_duplex_sample_rate(getattr(window, "mic", None), getattr(window, "speaker", None))
+    return None
 
 
 class SequenceWindow(QWidget):
@@ -561,12 +623,27 @@ class SequenceWindow(QWidget):
         if not self.sequence_config:
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
-        if acq_config["mode"] in ["PLAY_AND_RECORD", "IMPORT_STIMULUS_AUDIO"]:
-            modified = AnalysisModelSelect.set_data_struct_stimulus_signal(
-                self.data_struct,
-                acq_config["detail"],
-                using_config_path=self.using_config_path,
-            )
+        if acq_config["mode"] in ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"]:
+            _clear_sequence_stimulus_runtime_state(self, clear_sample_rate=True)
+            return
+        if acq_config["mode"] == "PLAY_AND_RECORD":
+            result = _resolve_runtime_sample_rate_for_mode(self, acq_config["mode"], acq_config["detail"])
+            if not result.ok:
+                LogManager.set_log_handler("core").warning(result.message)
+                _clear_sequence_stimulus_runtime_state(self, clear_sample_rate=True)
+                return
+            self.data_struct.sample_rate = result.sample_rate
+            try:
+                modified = AnalysisModelSelect.set_data_struct_stimulus_signal(
+                    self.data_struct,
+                    acq_config["detail"],
+                    using_config_path=self.using_config_path,
+                    runtime_sample_rate=result.sample_rate,
+                )
+            except Exception as e:
+                _clear_sequence_stimulus_runtime_state(self, clear_sample_rate=True)
+                LogManager.set_log_handler("core").warning(f"Failed to set runtime stimulus: {e}")
+                return
             # If stimulus wav was missing and we regenerated it, write back config to avoid future failures.
             if modified:
                 try:
@@ -580,7 +657,13 @@ class SequenceWindow(QWidget):
                         f"Failed to write back regenerated stimulus path to config: {self.using_config_path}. {e}"
                     )
         else:
-            self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
+            result = _resolve_runtime_sample_rate_for_mode(self, acq_config["mode"], acq_config["detail"])
+            if result is not None:
+                if not result.ok:
+                    LogManager.set_log_handler("core").warning(result.message)
+                    _clear_sequence_stimulus_runtime_state(self, clear_sample_rate=True)
+                    return
+                self.data_struct.sample_rate = result.sample_rate
             self.data_struct.stimulus_data = None
             self.data_struct.stimulus_info = None
 
@@ -1433,6 +1516,43 @@ class SequenceWindow(QWidget):
         )
         if not file_path:
             return
+        acq_config = self.sequence_config[0]["seq1"]["acq"]
+        acq_detail = acq_config["detail"]
+        try:
+            audio_multi, sample_rate = load_audio_preserve_rate(file_path, mono=False)
+        except Exception:
+            _clear_import_analysis_runtime_state(self)
+            MessageBox.warning(self, "提示", "导入音频失败，请重新选择音频文件。")
+            return
+        if audio_multi is None or sample_rate is None:
+            _clear_import_analysis_runtime_state(self)
+            MessageBox.warning(self, "提示", "导入音频失败，请重新选择音频文件。")
+            return
+        audio_multi = np.asarray(audio_multi, dtype=np.float32)
+        if audio_multi.ndim == 1:
+            audio_multi = audio_multi.reshape(1, -1)
+        audio_multi = audio_multi.T
+        staged_store_wave_data = audio_multi.mean(axis=1).astype(np.float32, copy=False)
+        staged_audio_length = audio_multi.shape[0]
+        staged_reference = None
+        if acq_config["mode"] == "IMPORT_STIMULUS_AUDIO":
+            staged_reference = SimpleNamespace(sample_rate=sample_rate)
+            try:
+                reference_ready = set_data_struct_analysis_reference_signal(
+                    staged_reference,
+                    acq_detail,
+                    using_config_path=self.using_config_path,
+                    runtime_sample_rate=sample_rate,
+                    logger=LogManager.set_log_handler("core"),
+                )
+            except Exception as e:
+                _clear_import_analysis_runtime_state(self)
+                MessageBox.warning(self, "提示", f"加载分析参考激励失败: {str(e)[:200]}")
+                return
+            if not reference_ready:
+                _clear_import_analysis_runtime_state(self)
+                MessageBox.warning(self, "提示", "加载分析参考激励失败，请检查激励配置。")
+                return
         # Ensure subsequent exports (CSV/Excel) use this imported file as the current record id,
         # instead of accidentally reusing a stale `recorded_path` from previous recordings.
         try:
@@ -1440,21 +1560,16 @@ class SequenceWindow(QWidget):
             self.recorded_signal_info = {"file_path": file_path, "barcode": None, "labels": "not_labeled"}
         except Exception:
             pass
-        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
-        sample_rate = acq_detail.get("sample_rate", 44100)
-        audio_multi, _ = librosa.load(file_path, sr=sample_rate, mono=False)
-        audio_multi = np.asarray(audio_multi, dtype=np.float32)
-        if audio_multi.ndim == 1:
-            audio_multi = audio_multi.reshape(1, -1)
-        audio_multi = audio_multi.T
         self.data_struct.store_wave_data_multi = audio_multi
-
         # not recommended for metadata analysis, as it may cause inaccurate data
-        self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(np.float32, copy=False)
-
+        self.data_struct.store_wave_data = staged_store_wave_data
         self.data_struct.sample_rate = sample_rate
-        audio_y, _ = librosa.load(file_path, sr=None)
-        self.data_struct.audio_lenth = len(audio_y)
+        self.data_struct.audio_lenth = staged_audio_length
+        if staged_reference is not None:
+            _commit_analysis_reference_state(self.data_struct, staged_reference)
+            self.data_struct.sample_rate = sample_rate
+        else:
+            _clear_data_struct_stimulus_runtime_state(self.data_struct, clear_sample_rate=False)
         self._clear_plot_area()
         self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
         self.data_btn.setEnabled(True)
@@ -1526,6 +1641,22 @@ class SequenceWindow(QWidget):
             )
             return True
 
+        acq_mode = None
+        acq_detail = {}
+        try:
+            acq_config = self.sequence_config[0]["seq1"]["acq"]
+            acq_mode = acq_config.get("mode")
+            acq_detail = acq_config.get("detail", {}) or {}
+        except Exception:
+            pass
+
+        sample_rate_result = _resolve_runtime_sample_rate_for_mode(self, acq_mode, acq_detail)
+        if sample_rate_result is not None:
+            if not sample_rate_result.ok:
+                MessageBox.warning(self, "提示", sample_rate_result.message)
+                return True
+            return False
+
         if not self.mic:
             MessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return True
@@ -1555,8 +1686,13 @@ class SequenceWindow(QWidget):
         elif acq_mode == "PLAY_AND_RECORD":
             normalized_detail = normalize_play_record_detail(acq_detail)
             acq_detail = normalized_detail
-        if acq_mode in ["RECORD_ONLY", "IMPORT_AUDIO"]:
-            self.data_struct.sample_rate = int(acq_detail.get("sample_rate", self.data_struct.sample_rate or 44100))
+        result = _resolve_runtime_sample_rate_for_mode(self, acq_mode, acq_detail)
+        if result is not None:
+            if not result.ok:
+                _clear_sequence_stimulus_runtime_state(self, clear_sample_rate=True)
+                MessageBox.warning(self, "提示", result.message)
+                return None, None, None
+            self.data_struct.sample_rate = result.sample_rate
         total_time = float(acq_detail.get("total_time", 5.0))
         monitor_playback = acq_detail.get("monitor_playback", False)
         monitor_gain_db = float(acq_detail.get("monitor_gain_db", 0.0))
@@ -1568,6 +1704,11 @@ class SequenceWindow(QWidget):
         stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
             self.data_struct, total_time, recording_start_delay_ms=delay_ms
         )
+        if sample_rate is not None:
+            recorded_dict["sr"] = sample_rate
+            recorded_dict["sample_rate"] = sample_rate
+            if stimulus_dict:
+                stimulus_dict["sr"] = sample_rate
 
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
@@ -1892,12 +2033,25 @@ class SequenceWindow(QWidget):
         window_height = ui_style_const.scale_size_px(500)
         if self.analysis_config:
             item_sort_list = self.analysis_config.get("display_sequence", [])
-            for key in item_sort_list:
-                key_config = self.analysis_config.get(key)
-                if not isinstance(key_config, dict):
-                    continue
-                item_type = key_config.get("type")
-                self.instance_analysis_class(key, item_type, key_config)
+            previous_v2pa_warning_callback = getattr(self, "_analysis_v2pa_warning_callback", None)
+            shown_v2pa_warning_messages = set()
+
+            def show_v2pa_warning_once(message):
+                if message in shown_v2pa_warning_messages:
+                    return
+                shown_v2pa_warning_messages.add(message)
+                MessageBox.warning(self, "提示", message)
+
+            self._analysis_v2pa_warning_callback = show_v2pa_warning_once
+            try:
+                for key in item_sort_list:
+                    key_config = self.analysis_config.get(key)
+                    if not isinstance(key_config, dict):
+                        continue
+                    item_type = key_config.get("type")
+                    self.instance_analysis_class(key, item_type, key_config)
+            finally:
+                self._analysis_v2pa_warning_callback = previous_v2pa_warning_callback
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
@@ -2395,7 +2549,10 @@ class SequenceWindow(QWidget):
         and adds it to the analysis window list.
         """
         class_mapping = get_class_mapping()
-        requires_v2pa = type in self.analysis_types_requiring_v2pa
+        requires_v2pa = type in self.analysis_types_requiring_v2pa and type not in {"HD", "RB"}
+        v2pa_warning_callback = getattr(self, "_analysis_v2pa_warning_callback", None)
+        if v2pa_warning_callback is None:
+            v2pa_warning_callback = lambda msg: MessageBox.warning(self, "提示", msg)
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
@@ -2433,8 +2590,11 @@ class SequenceWindow(QWidget):
                         try:
                             class_instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
                                 raw_channel,
-                                warn_callback=lambda msg: MessageBox.warning(self, "提示", msg),
+                                warn_callback=v2pa_warning_callback,
                             )
+                            if hasattr(class_instance, "_resolve_v2pa_factor_for_analysis"):
+                                class_instance._v2pa_raw_analysis_channel = raw_channel
+                                class_instance._use_pre_resolved_v2pa_factor = True
                         except ValueError as err:
                             MessageBox.warning(self, "提示", str(err))
                             return
@@ -2463,8 +2623,11 @@ class SequenceWindow(QWidget):
                     try:
                         class_instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
                             raw_channel,
-                            warn_callback=lambda msg: MessageBox.warning(self, "提示", msg),
+                            warn_callback=v2pa_warning_callback,
                         )
+                        if type != "PD" and hasattr(class_instance, "_resolve_v2pa_factor_for_analysis"):
+                            class_instance._v2pa_raw_analysis_channel = raw_channel
+                            class_instance._use_pre_resolved_v2pa_factor = True
                     except ValueError as err:
                         MessageBox.warning(self, "提示", str(err))
                         return

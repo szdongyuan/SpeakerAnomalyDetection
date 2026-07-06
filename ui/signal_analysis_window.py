@@ -37,6 +37,7 @@ from base.pre_processing.spl_runtime_config import (
     resolve_spl_smoothing,
     resolve_spl_window_size,
 )
+from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
@@ -411,6 +412,29 @@ class AnalysisGraphWidget(QWidget):
             axis.setTextPen("black")
             axis.setLabel(axis.labelText, **{"font-size": f"{font_size}px"})
 
+    def _resolve_v2pa_factor_for_analysis(self):
+        if getattr(self, "_use_pre_resolved_v2pa_factor", False):
+            self._use_pre_resolved_v2pa_factor = False
+            if self.v2pa_factor is not None:
+                return True
+
+        analysis_config = getattr(self, "analysis_config", None) or {}
+        raw_channel = getattr(
+            self,
+            "_v2pa_raw_analysis_channel",
+            analysis_config.get("analysis_channel", 0),
+        )
+        try:
+            self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+                raw_channel,
+                warn_callback=lambda message: MessageBox.warning(self, "提示", message),
+            )
+            return True
+        except Exception as exc:
+            self.v2pa_factor = None
+            MessageBox.warning(self, "提示", str(exc))
+            return False
+
 
 class Distortion(AnalysisGraphWidget):
     def __init__(self, title_name):
@@ -740,6 +764,12 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         if recorded_signal is None or sample_rate is None or stimulus_info is None:
             raise ValueError("Missing required data: recorded_signal, sample_rate, or stimulus_info")
 
+        if not self._resolve_v2pa_factor_for_analysis():
+            self.analysis_plot.clear()
+            self.plot_graph([], [])
+            self.result = {"freq_value": [], "harmonic": [], "thd": [], "thd_raw": []}
+            return self.result
+
         # Convert stimulus_info to stimulus_metadata format.
         stimulus_metadata = _analysis_stimulus_metadata(stimulus_info, sample_rate)
         stimulus_method = stimulus_metadata["stimulus_method"]
@@ -957,6 +987,8 @@ class Spl(AnalysisGraphWidget):
             MessageBox.warning(self, "提示", str(e))
             return False
         sample_rate = self.data_struct.sample_rate
+        if not self._resolve_v2pa_factor_for_analysis():
+            return False
         reference_pressure = 20e-6
         window_size = self._resolve_spl_window_size(sample_rate)
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
@@ -1109,6 +1141,11 @@ class SplFrequency(AnalysisGraphWidget):
         analysis_config = self.analysis_config or {}
 
         if recorded_signal is None or sample_rate is None or not stimulus_info:
+            self.plot_spl_frequency([], [])
+            self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
+            return self.result
+
+        if not self._resolve_v2pa_factor_for_analysis():
             self.plot_spl_frequency([], [])
             self.result = {"frequency_list": [], "spl_db": [], "spl_db_raw": []}
             return self.result
@@ -1879,6 +1916,8 @@ class LooseParticle(AnalysisGraphWidget):
 
     def calculate_loose_particle(self):
         recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        if not self._resolve_v2pa_factor_for_analysis():
+            return None
         filtered_spl, deviation = AudioThdFrequencyResponseAnalysis.calculate_loose_particle_spl(
             recorded_signal, self.analysis_config.get("cutoff_freq"), self.data_struct.sample_rate, 67, self.v2pa_factor
         )
@@ -2020,6 +2059,10 @@ class PeakDetection(AnalysisGraphWidget):
         recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
         if recorded_signal is None or sample_rate is None:
+            return None
+        if getattr(self, "_use_pre_resolved_v2pa_factor", False) and self.v2pa_factor is not None:
+            self._use_pre_resolved_v2pa_factor = False
+        elif not self._resolve_v2pa_factor_for_analysis():
             return None
 
         try:
@@ -2316,6 +2359,7 @@ class PipelinePdPm(QWidget):
         pd_instance = pd_cls(f"{self.windowTitle()}-PD")
         pd_instance.data_struct = self.data_struct
         pd_instance.v2pa_factor = self.v2pa_factor
+        pd_instance._use_pre_resolved_v2pa_factor = True
         pd_instance.analysis_config = head_cfg.get("config", {})
         pd_result = pd_instance.calculate_peak_detection()
 
@@ -2483,6 +2527,15 @@ class PipelinePdPm(QWidget):
             return None
 
         recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls = context
+        head_config = head.get("config", {}) or {}
+        try:
+            self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+                head_config.get("analysis_channel", 0),
+                warn_callback=lambda message: MessageBox.warning(self, "提示", message),
+            )
+        except Exception as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return None
 
         pd_result, peak_indices = self._execute_pd(pd_cls, head)
 
@@ -2549,6 +2602,8 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             return False
         sample_rate = self.data_struct.sample_rate
         if sample_rate is None:
+            return False
+        if not self._resolve_v2pa_factor_for_analysis():
             return False
 
         strategy_label = config.get("band_strategy", "1/3 倍频程")

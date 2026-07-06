@@ -260,8 +260,8 @@ def test_record_config_window_returns_streaming_flag(qapp):
             "monitor_gain_db": 0.0,
             "use_streaming_recording": True,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker", "max_output_channels": 2},
+        mic={"name": "mic", "samplerate": 48000},
+        speaker={"name": "speaker", "samplerate": 48000, "max_output_channels": 2},
         available_channels=[0],
     )
     assert window.streaming_recording_checkbox.isChecked() is True
@@ -283,8 +283,8 @@ def test_record_config_window_returns_recording_start_delay_ms(qapp):
             "use_streaming_recording": True,
             "recording_start_delay_ms": 230.0,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker", "max_output_channels": 2},
+        mic={"name": "mic", "samplerate": 48000},
+        speaker={"name": "speaker", "samplerate": 48000, "max_output_channels": 2},
         available_channels=[0],
     )
     assert window.recording_start_delay_ms_input.value() == 230.0
@@ -317,8 +317,8 @@ def test_play_record_config_window_preserves_delay_through_stimulus_window(qapp,
             "use_streaming_recording": True,
             "recording_start_delay_ms": 340.0,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker"},
+        mic={"name": "mic", "samplerate": 48000},
+        speaker={"name": "speaker", "samplerate": 48000},
     )
 
     assert window.recording_start_delay_ms_input.value() == 340.0
@@ -339,13 +339,260 @@ def test_play_record_config_window_returns_streaming_flag(qapp):
     }
     window = PlayRecordConfigWindow(
         detail,
-        mic={"name": "mic"},
-        speaker={"name": "speaker"},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100},
     )
     assert window.streaming_recording_checkbox.isChecked() is True
     window.streaming_recording_checkbox.setChecked(False)
     window.on_click_ok_btn()
     assert window.final_data["use_streaming_recording"] is False
+
+
+def test_base_config_window_does_not_query_default_devices(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import BaseConfigWindow
+
+    class FailingSoundDeviceManager:
+        def get_default_device(self, *args, **kwargs):
+            raise AssertionError("must not query default devices")
+
+    monkeypatch.setattr(module, "SoundDeviceManager", FailingSoundDeviceManager, raising=False)
+
+    window = BaseConfigWindow()
+
+    assert window.mic is None
+    assert window.speaker is None
+
+
+def test_device_display_name_treats_malformed_payloads_as_missing(qapp):
+    from ui.acquisition_config_window import BaseConfigWindow
+
+    window = BaseConfigWindow()
+
+    assert window._device_display_name(None, "empty") == "empty"
+    assert window._device_display_name({}, "empty") == "empty"
+    assert window._device_display_name({"name": ""}, "empty") == "empty"
+    assert window._device_display_name({"name": "   "}, "empty") == "empty"
+    assert window._device_display_name(object(), "empty") == "empty"
+    assert window._device_display_name({"name": " Mic "}, "empty") == "Mic"
+
+
+def test_play_record_config_window_missing_devices_disables_confirm_without_warning(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import PlayRecordConfigWindow
+
+    warnings = []
+    saved = []
+    infos = []
+    monkeypatch.setattr(module.MessageBox, "warning", lambda *args, **kwargs: warnings.append((args, kwargs)))
+    monkeypatch.setattr(module.MessageBox, "information", lambda *args, **kwargs: infos.append((args, kwargs)))
+    monkeypatch.setattr(module, "save_acquisition_default", lambda *args, **kwargs: saved.append(args) or True)
+
+    detail = {
+        "stimulus_info": {"total_time": 1.0, "sample_rate": 44100},
+        "use_streaming_recording": True,
+    }
+    window = PlayRecordConfigWindow(detail, mic=None, speaker=None)
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    assert warnings == []
+    assert window.input_device_display.text() == "未选择输入设备"
+    assert window.output_device_display.text() == "未选择输出设备"
+    assert window.ok_btn.isEnabled() is False
+    assert window.cancel_btn.isEnabled() is True
+
+    window.on_click_ok_btn()
+    assert accepted == []
+    assert window.final_data is None
+
+    window.on_click_cancel_btn()
+    assert accepted == []
+    assert window.final_data is None
+
+    window.on_default_btn_clicked()
+    assert saved == []
+    assert warnings
+    assert infos == []
+    assert accepted == []
+    assert window.final_data is None
+
+
+def test_record_config_window_missing_mic_disables_confirm_and_skips_default_lookup(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    class FailingSoundDeviceManager:
+        def get_default_device(self, *args, **kwargs):
+            raise AssertionError("must not query default devices")
+
+    monkeypatch.setattr(module, "SoundDeviceManager", FailingSoundDeviceManager, raising=False)
+
+    record_input_data = {
+        "total_time": 2.0,
+        "sample_rate": 44100,
+        "monitor_playback": False,
+        "monitor_input_channel": 0,
+        "monitor_gain_db": 0.0,
+        "use_streaming_recording": False,
+        "recording_start_delay_ms": 100.0,
+    }
+    window = RecordConfigWindow(
+        record_input_data,
+        mic=None,
+        speaker={"name": "speaker", "samplerate": 44100, "max_output_channels": 2},
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    assert window.input_device_display.text() == "未选择输入设备"
+    assert window.ok_btn.isEnabled() is False
+    window.on_click_ok_btn()
+    assert accepted == []
+    assert window.final_data is None
+
+
+def test_import_audio_config_window_missing_mic_disables_confirm_and_skips_default_lookup(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import ImportAudioConfigWindow
+
+    class FailingSoundDeviceManager:
+        def get_default_device(self, *args, **kwargs):
+            raise AssertionError("must not query default devices")
+
+    monkeypatch.setattr(module, "SoundDeviceManager", FailingSoundDeviceManager, raising=False)
+
+    window = ImportAudioConfigWindow({"sample_rate": 44100}, mic=None)
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    assert window.input_device_display.text() == "未选择输入设备"
+    assert window.ok_btn.isEnabled() is False
+    window.on_click_ok_btn()
+    assert accepted == []
+    assert window.final_data is None
+
+
+def test_import_stimulus_audio_config_window_missing_speaker_can_confirm_offline_reference_config(
+    qapp, monkeypatch
+):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import ImportStimulusAudioConfigWindow
+
+    class FailingSoundDeviceManager:
+        def get_default_device(self, *args, **kwargs):
+            raise AssertionError("must not query default devices")
+
+    monkeypatch.setattr(module, "SoundDeviceManager", FailingSoundDeviceManager, raising=False)
+
+    stimulus_config_data = {"stimulus_info": {"total_time": 1.0, "sample_rate": 44100}}
+    window = ImportStimulusAudioConfigWindow(stimulus_config_data, speaker=None)
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    assert window.ok_btn.isEnabled() is True
+    window.on_click_ok_btn()
+    assert accepted == [True]
+    assert window.final_data == stimulus_config_data
+
+
+def test_record_config_window_missing_mic_default_save_blocks_stale_sample_rate(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    saved = []
+    infos = []
+    warnings = []
+    monkeypatch.setattr(module, "save_acquisition_default", lambda *args, **kwargs: saved.append(args) or True)
+    monkeypatch.setattr(module.MessageBox, "information", lambda *args, **kwargs: infos.append((args, kwargs)))
+    monkeypatch.setattr(module.MessageBox, "warning", lambda *args, **kwargs: warnings.append((args, kwargs)))
+
+    window = RecordConfigWindow(
+        {
+            "total_time": 2.0,
+            "sample_rate": 44100,
+            "monitor_playback": False,
+            "monitor_input_channel": 0,
+            "monitor_gain_db": 0.0,
+            "use_streaming_recording": False,
+            "recording_start_delay_ms": 100.0,
+        },
+        mic=None,
+        speaker={"name": "speaker", "samplerate": 44100, "max_output_channels": 2},
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    window.on_default_btn_clicked()
+
+    assert saved == []
+    assert infos == []
+    assert warnings
+    assert window.final_data is None
+    assert accepted == []
+
+
+def test_play_record_config_window_valid_devices_confirm_normally(qapp):
+    from ui.acquisition_config_window import PlayRecordConfigWindow
+
+    window = PlayRecordConfigWindow(
+        {
+            "stimulus_info": {"total_time": 1.0, "sample_rate": 44100},
+            "use_streaming_recording": True,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100},
+    )
+
+    assert window.ok_btn.isEnabled() is True
+    window.on_click_ok_btn()
+    assert window.final_data is not None
+
+
+def test_record_config_window_valid_mic_confirms_normally(qapp):
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    window = RecordConfigWindow(
+        {
+            "total_time": 2.0,
+            "sample_rate": 44100,
+            "monitor_playback": False,
+            "monitor_input_channel": 0,
+            "monitor_gain_db": 0.0,
+            "use_streaming_recording": False,
+            "recording_start_delay_ms": 100.0,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100, "max_output_channels": 2},
+        available_channels=[0],
+    )
+
+    assert window.ok_btn.isEnabled() is True
+    window.on_click_ok_btn()
+    assert window.final_data["sample_rate"] == 44100
+
+
+def test_import_audio_config_window_valid_mic_confirms_normally(qapp):
+    from ui.acquisition_config_window import ImportAudioConfigWindow
+
+    window = ImportAudioConfigWindow({"sample_rate": 44100}, mic={"name": "mic", "samplerate": 48000})
+
+    assert window.ok_btn.isEnabled() is True
+    window.on_click_ok_btn()
+    assert window.final_data == {}
+
+
+def test_import_stimulus_audio_config_window_valid_speaker_confirms_normally(qapp):
+    from ui.acquisition_config_window import ImportStimulusAudioConfigWindow
+
+    stimulus_config_data = {
+        "stimulus_info": {"total_time": 1.0, "sample_rate": 44100},
+    }
+    window = ImportStimulusAudioConfigWindow(stimulus_config_data, speaker={"name": "speaker", "samplerate": 48000})
+
+    assert window.ok_btn.isEnabled() is True
+    window.on_click_ok_btn()
+    assert window.final_data == stimulus_config_data
 
 
 def test_record_default_save_failure_warns_and_keeps_dialog_open(qapp, monkeypatch):
@@ -358,8 +605,8 @@ def test_record_default_save_failure_warns_and_keeps_dialog_open(qapp, monkeypat
 
     window = RecordConfigWindow(
         {"total_time": 2.0, "sample_rate": 44100},
-        mic={"name": "mic"},
-        speaker={"name": "speaker", "max_output_channels": 2},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100, "max_output_channels": 2},
         available_channels=[0],
     )
     accepted = []
@@ -388,14 +635,16 @@ def test_record_default_save_saves_visible_values_and_keeps_dialog_open(qapp, mo
             "use_streaming_recording": True,
             "recording_start_delay_ms": 150.0,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker", "max_output_channels": 2},
+        mic={"name": "mic", "samplerate": 48000},
+        speaker={"name": "speaker", "samplerate": 48000, "max_output_channels": 2},
         available_channels=[0],
     )
     accepted = []
     window.accept = lambda: accepted.append(True)
     window.time_input.setValue(3.5)
-    window.samplerate_combo.setCurrentText("48000")
+    assert window.samplerate_lineedit.text() == "48000"
+    assert window.samplerate_lineedit.isReadOnly() is True
+    assert not hasattr(window, "samplerate_combo")
     window.streaming_recording_checkbox.setChecked(False)
     window.recording_start_delay_ms_input.setValue(250.0)
 
@@ -436,8 +685,8 @@ def test_play_record_default_save_saves_visible_acquisition_values_and_keeps_dia
             "use_streaming_recording": True,
             "recording_start_delay_ms": 180.0,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker"},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100},
     )
     accepted = []
     window.accept = lambda: accepted.append(True)
@@ -477,8 +726,8 @@ def test_play_record_stimulus_window_does_not_receive_streaming_flag(qapp, monke
             "stimulus_info": {"total_time": 1.0, "sample_rate": 44100, "use_custom_stimulus": True},
             "use_streaming_recording": True,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker"},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100},
     )
 
     window.open_stimulus_window()
@@ -499,6 +748,8 @@ def _build_option_list_for_new_item(monkeypatch):
     option_list.config = []
     option_list.model = lambda: type("M", (), {"insertRow": lambda *args: None})()
     option_list.signal_len = 0
+    option_list.mic = {"name": "mic", "samplerate": 48000}
+    option_list.speaker = {"name": "speaker", "samplerate": 48000}
     return option_list
 
 

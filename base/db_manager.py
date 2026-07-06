@@ -18,6 +18,7 @@ class DataSave(object):
 
     def connect(self):
         try:
+            self._ensure_parent_directory()
             self.connection = sqlite3.connect(self.db_name)
             self.connection.execute("PRAGMA foreign_keys = ON;")
             self.cursor = self.connection.cursor()
@@ -28,7 +29,15 @@ class DataSave(object):
             self.logger.error(err_msg)
             return error_code.INVALID_CONNECT_DATABASE, err_msg
 
+    def _ensure_parent_directory(self):
+        if self.db_name == ":memory:":
+            return
+        db_dir = os.path.dirname(self.db_name)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+
     def _connect_for_schema_setup(self):
+        self._ensure_parent_directory()
         self.connection = sqlite3.connect(self.db_name)
         self.connection.execute("PRAGMA foreign_keys = ON;")
         self.cursor = self.connection.cursor()
@@ -101,6 +110,38 @@ class DataSave(object):
             value TEXT
         )
         """
+        create_hardware_assets_table_sql = """
+        CREATE TABLE IF NOT EXISTS hardware_assets(
+            hardware_id TEXT PRIMARY KEY,
+            hardware_type TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            device_name TEXT NOT NULL,
+            hostapi_name TEXT NOT NULL,
+            samplerate INTEGER NOT NULL,
+            bit_depth INTEGER NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            max_input_channels INTEGER NOT NULL CHECK (max_input_channels >= 0),
+            max_output_channels INTEGER NOT NULL CHECK (max_output_channels >= 0),
+            updated_at TEXT DEFAULT (DATETIME('now', '+8 hours'))
+        )
+        """
+        create_hardware_channel_calibrations_table_sql = """
+        CREATE TABLE IF NOT EXISTS hardware_channel_calibrations(
+            channel_id TEXT PRIMARY KEY,
+            hardware_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            channel_index INTEGER NOT NULL,
+            channel_label TEXT NOT NULL,
+            calibration_type TEXT,
+            factor_value REAL,
+            standard_spl REAL,
+            max_voltage REAL,
+            coefficients_json TEXT,
+            updated_at TEXT DEFAULT (DATETIME('now', '+8 hours')),
+            FOREIGN KEY (hardware_id) REFERENCES hardware_assets (hardware_id)
+                ON DELETE CASCADE ON UPDATE NO ACTION
+        )
+        """
         create_insert_trigger_sql = """
         CREATE TRIGGER IF NOT EXISTS ensure_one_admin_user
         BEFORE INSERT ON users_table
@@ -126,9 +167,11 @@ class DataSave(object):
                                 THEN RAISE(ABORT, 'There can only be one Admin user.')
                             END;
                     END;
-                    """
+        """
         self.cursor.execute(create_users_table_sql)
         self.cursor.execute(create_system_info_table_sql)
+        self.cursor.execute(create_hardware_assets_table_sql)
+        self.cursor.execute(create_hardware_channel_calibrations_table_sql)
         self.cursor.execute(create_insert_trigger_sql)
         self.cursor.execute(create_update_trigger_sql)
 

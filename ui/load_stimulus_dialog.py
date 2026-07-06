@@ -372,11 +372,11 @@ class LoadStimulusDialog(DataManageDialog):
         return
 
     def _get_max_input_voltage(self):
-        """Fetch max voltage from calibration file; return None if unavailable."""
+        """Fetch max voltage from the selected speaker calibration row; return None if unavailable."""
         try:
-            code, data = SoundcardCalibrationManager().load_data_from_json("calibration_coefficients.json")
-            if code == error_code.OK:
-                return float(data.get("max_voltage", 0.0))
+            max_voltage = SoundcardCalibrationManager().get_max_output_voltage()
+            if max_voltage is not None:
+                return float(max_voltage)
         except Exception:
             pass
         return None

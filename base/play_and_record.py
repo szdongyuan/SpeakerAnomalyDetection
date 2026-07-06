@@ -13,6 +13,54 @@ from consts import error_code, model_consts
 data_struct = DataDealStruct()
 
 
+def _coerce_runtime_sample_rate(sample_rate):
+    if isinstance(sample_rate, bool):
+        return None
+    try:
+        coerced = int(sample_rate)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    try:
+        if not isinstance(sample_rate, str) and float(sample_rate) != float(coerced):
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return coerced if coerced > 0 else None
+
+
+def _require_runtime_sample_rate(sample_rate, context):
+    coerced = _coerce_runtime_sample_rate(sample_rate)
+    if coerced is None:
+        raise RuntimeError(f"Missing resolved {context} sample rate.")
+    return coerced
+
+
+def _require_recording_runtime_sample_rate(recorded_dict):
+    values = {}
+    for key in ("sample_rate", "sr"):
+        if key not in recorded_dict or recorded_dict.get(key) in (None, ""):
+            continue
+        coerced = _coerce_runtime_sample_rate(recorded_dict.get(key))
+        if coerced is None:
+            raise RuntimeError(f"Invalid resolved recording sample rate: {key}.")
+        values[key] = coerced
+    if not values:
+        raise RuntimeError("Missing resolved recording sample rate.")
+    if len(set(values.values())) != 1:
+        raise RuntimeError("Conflicting resolved recording sample rate values.")
+    return next(iter(values.values()))
+
+
+def _require_play_record_runtime_sample_rate(stimulus_dict, recorded_dict):
+    sample_rate, validation_code, validation_msg = SoundcardAudioProcessor._resolve_playrec_sample_rate(
+        recorded_dict,
+        stimulus_dict,
+    )
+    if validation_code != error_code.OK:
+        raise RuntimeError(validation_msg or "Invalid resolved play-and-record sample rate.")
+    return sample_rate
+
+
 def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
     """
     Implements the complete workflow for the record-only mode.
@@ -22,16 +70,19 @@ def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
     button state updates, are the same as in the play-and-record mode.
     """
 
-    sample_rate = data_struct.sample_rate
     record_code, recorded_signal = SoundcardAudioProcessor.sd_rec(recorded_dict)
 
-    if record_code == error_code.OK:
-        save_audio_simple(recorded_path, recorded_signal, sample_rate)
+    if record_code != error_code.OK:
+        return record_code, recorded_signal
 
-        data_struct.store_wave_data = recorded_signal
+    sample_rate = _require_recording_runtime_sample_rate(recorded_dict)
+    save_audio_simple(recorded_path, recorded_signal, sample_rate)
 
-        recorded_signal_info["sample_rate"] = sample_rate
-        RecordingManager().save_signal_info_to_db(recorded_signal_info, None)
+    data_struct.store_wave_data = recorded_signal
+
+    recorded_signal_info["sample_rate"] = sample_rate
+    RecordingManager().save_signal_info_to_db(recorded_signal_info, None)
+    return record_code, recorded_signal
 
 
 def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorded_signal_info):
@@ -45,10 +96,14 @@ def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorde
     sample_rate = data_struct.sample_rate
 
     sap = SoundcardAudioProcessor()
-    record_code, data_struct.store_wave_data = sap.sd_play_rec(recorded_dict, stimulus_dict, recorded_path)
-    if record_code == error_code.OK:
-        recorded_signal_info["sample_rate"] = sample_rate
-        RecordingManager().save_signal_info_to_db(recorded_signal_info, data_struct.stimulus_info)
+    record_code, recorded_signal = sap.sd_play_rec(recorded_dict, stimulus_dict, recorded_path)
+    if record_code != error_code.OK:
+        return record_code, recorded_signal
+
+    data_struct.store_wave_data = recorded_signal
+    sample_rate = _require_play_record_runtime_sample_rate(stimulus_dict, recorded_dict)
+    recorded_signal_info["sample_rate"] = sample_rate
+    RecordingManager().save_signal_info_to_db(recorded_signal_info, data_struct.stimulus_info)
 
     repeat_times = data_struct.stimulus_info.get("repeat_times")
     if repeat_times > 1:
@@ -56,6 +111,7 @@ def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorde
         data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
             data_struct.store_wave_data, sample_rate, **kwargs
         )
+    return record_code, data_struct.store_wave_data
 
 
 def get_recorded_info(product_model, product_number, barcode, label):
@@ -114,7 +170,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     Returns:
         tuple: (StreamingAudioProcessor instance, sample_rate)
     """
-    sample_rate = recorded_dict.get("sample_rate", data_struct.sample_rate)
+    sample_rate = _require_recording_runtime_sample_rate(recorded_dict)
     num_frames = recorded_dict.get("num_frames", 441000)
     device = recorded_dict.get("device")
     output_device = recorded_dict.get("output_device")
@@ -170,7 +226,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
     Returns:
         tuple: (StreamingAudioProcessor instance, stimulus_data, sample_rate)
     """
-    sample_rate = stimulus_dict.get("sr", data_struct.sample_rate)
+    sample_rate = _require_runtime_sample_rate(stimulus_dict.get("sr"), "stimulus")
     stimulus_data = stimulus_dict.get("data")
     prepare_frames = recorded_dict.get("prepare_frames", 1000)
     prolong_frames = recorded_dict.get("prolong_frames", 10000)

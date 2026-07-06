@@ -12,8 +12,19 @@ from consts import model_consts, error_code
 
 class TrainingModelManagement(object):
     def __init__(self):
-        self.db_path = model_consts.AUDIO_DATABASE_PATH
+        self._db_path_override = None
         ensure_audio_database_ready()
+
+    @property
+    def db_path(self):
+        if self._db_path_override:
+            return self._db_path_override
+        ensure_audio_database_ready()
+        return model_consts.AUDIO_DATABASE_PATH
+
+    @db_path.setter
+    def db_path(self, value):
+        self._db_path_override = value
 
     def save_training_model_info_to_db(self, signal_length, model_path, config_path, ret_str=None,
                                        model_description="No description"):
