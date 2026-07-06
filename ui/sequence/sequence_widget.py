@@ -117,6 +117,7 @@ class SequenceWindow(
         self._direction_waveform_cache = {"forward": None, "reverse": None}
         self._waveform_display_override_direction = ""
         self._pending_serial_trigger_direction = ""
+        self._queued_directional_trigger = ""
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None
         # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免"必须点到输入框才生效"）

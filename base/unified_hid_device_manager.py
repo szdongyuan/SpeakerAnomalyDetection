@@ -14,6 +14,10 @@ from consts.running_consts import DEFAULT_DIR
 _VALID_BARCODE_SOURCES = ("wedge", "hid", "serial")
 _DEFAULT_BARCODE_SOURCE = "hid"
 
+# 串口触发调试打印开关: 默认关闭, 避免 [serial-trigger][manager] 日志刷屏。
+# 需要排查串口时改为 True。
+SERIAL_TRIGGER_DEBUG = False
+
 
 def _safe_dict(obj):
     """Return ``obj`` if it's a dict, else an empty dict.
@@ -194,7 +198,8 @@ class UnifiedHardwareManager(QObject):
 
     @staticmethod
     def _debug_print(message):
-        print(f"[serial-trigger][manager] {message}")
+        if SERIAL_TRIGGER_DEBUG:
+            print(f"[serial-trigger][manager] {message}")
 
     def _load_scanner_memory(self):
         try:

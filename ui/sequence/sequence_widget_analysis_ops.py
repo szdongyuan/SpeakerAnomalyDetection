@@ -655,6 +655,9 @@ class SequenceWidgetAnalysisOpsMixin:
             self.player_status_flag = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
+            drain = getattr(self, "_drain_queued_directional_trigger", None)
+            if callable(drain):
+                drain()
             QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
 
@@ -682,6 +685,9 @@ class SequenceWidgetAnalysisOpsMixin:
             self.player_status_flag = False
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
+            drain = getattr(self, "_drain_queued_directional_trigger", None)
+            if callable(drain):
+                drain()
             QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
             return
 

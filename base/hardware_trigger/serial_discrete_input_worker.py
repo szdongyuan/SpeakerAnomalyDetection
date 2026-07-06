@@ -9,6 +9,10 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from base.log_manager import LogManager
 
+# 串口触发调试打印开关: 默认关闭, 避免轮询日志(如"轮询已发送，但当前未收到设备响应")
+# 在训练/评估等重定向了 stdout 的窗口里刷屏。需要排查串口时改为 True 即可。
+SERIAL_TRIGGER_DEBUG = False
+
 
 class SerialDiscreteInputWorker(QThread):
     sig_state_changed = pyqtSignal(object)
@@ -26,7 +30,8 @@ class SerialDiscreteInputWorker(QThread):
 
     @staticmethod
     def _debug_print(message):
-        print(f"[serial-trigger][worker] {message}")
+        if SERIAL_TRIGGER_DEBUG:
+            print(f"[serial-trigger][worker] {message}")
 
     def _emit_status(self, **kwargs):
         payload = {

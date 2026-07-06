@@ -1008,6 +1008,10 @@ class SequenceWidgetStreamingOpsMixin:
 
             self.default_logger.info("Streaming recording completed successfully")
 
+            drain = getattr(self, "_drain_queued_directional_trigger", None)
+            if callable(drain):
+                drain()
+
         except Exception as e:
             self.default_logger.error(f"Error in streaming completion: {e}")
             # Clean up on error
@@ -1037,6 +1041,8 @@ class SequenceWidgetStreamingOpsMixin:
             except Exception:
                 self._last_committed_barcode = None
                 self._last_committed_barcode_time = 0.0
+
+            self._queued_directional_trigger = ""
 
     def _rewrite_recorded_wav(self, samples, sample_rate) -> None:
         """Overwrite the just-finalized WAV file with trimmed ``samples``.

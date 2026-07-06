@@ -340,6 +340,7 @@ class SequenceWidgetBarcodeOpsMixin:
         self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._current_cycle_recorded_count = None
         self._pending_serial_trigger_direction = ""
+        self._queued_directional_trigger = ""
         # Cycle is over from any path (normal finish, mode switch, invalid
         # recording, manual reset). Always release the S/N lock AND clear
         # the field so the next cycle starts from a clean state. Clearing an
@@ -771,6 +772,9 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def on_directional_triggered(self, direction: str):
         """处理串口离散输入触发信号（区分正反转）"""
+        direction = self._normalize_trigger_direction(direction)
+        if not direction:
+            return
         if not getattr(self, "_record_workflow_busy", False):
             config = getattr(self, "_serial_trigger_config", {}) or {}
             delay_ms = self._resolve_serial_trigger_delay_ms(config)
@@ -789,8 +793,19 @@ class SequenceWidgetBarcodeOpsMixin:
                 self.default_logger.info(f"离散输入触发响应: 开始测试, 方向={direction}")
                 self._start_directional_workflow(direction)
         else:
-            print(f"[serial-trigger][ui] 收到方向触发: direction={direction}, busy=True，已忽略")
-            self.default_logger.info(f"正在测试中，忽略离散输入触发 (方向={direction})")
+            self._queued_directional_trigger = direction
+            print(f"[serial-trigger][ui] 收到方向触发: direction={direction}, busy=True，已暂存等待执行")
+            self.default_logger.info(f"正在测试中，暂存离散输入触发 (方向={direction})")
+
+    def _drain_queued_directional_trigger(self):
+        """busy 释放后，自动执行之前暂存的方向触发（如有）。"""
+        direction = getattr(self, "_queued_directional_trigger", "")
+        self._queued_directional_trigger = ""
+        if direction:
+            print(f"[serial-trigger][ui] busy 释放，执行暂存触发: direction={direction}")
+            self.default_logger.info(f"busy 释放，执行暂存的离散输入触发 (方向={direction})")
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(100, lambda d=direction: self.on_directional_triggered(d))
 
     def clicked_ok_or_ng(self, manual=True):
         """
