@@ -1,12 +1,110 @@
 import mock
 import numpy as np
 import pytest
+import sqlite3
 
+import base.db_manager as db_manager_module
+import base.recording_management as recording_management_module
+from base.db_manager import DataSave
 from base.recording_management import RecordingManager
-from consts import error_code
+from consts import error_code, model_consts
+
+
+@pytest.fixture(autouse=True)
+def isolated_recording_manager_state(tmp_path, monkeypatch):
+    temp_root = tmp_path / "recording-state"
+    test_cwd = temp_root / "nested" / "cwd"
+    test_cwd.mkdir(parents=True)
+    monkeypatch.chdir(test_cwd)
+
+    audio_dir = (
+        temp_root
+        / "audio_data"
+        / "stored_sample"
+        / "real_product_line"
+        / "linear_chirp_1"
+        / "S004-1_80_2000"
+        / "20240607"
+    )
+    ok_dir = audio_dir / "OK"
+    ng_dir = audio_dir / "NG"
+    label_ok_dir = audio_dir / "label" / "OK"
+    for directory in (ok_dir, ng_dir, label_ok_dir):
+        directory.mkdir(parents=True)
+
+    for filename in (
+        "20240932-01.wav",
+        "20240941-01.wav",
+        "20240946-02.wav",
+        "20240948-02.wav",
+        "20240953-01.wav",
+    ):
+        (ok_dir / filename).touch()
+
+    monkeypatch.setattr("base.recording_management.ensure_audio_database_ready", lambda: None)
+    monkeypatch.setattr(
+        "base.recording_management.model_consts.DATABASE_PATH",
+        str(temp_root / "database" / "audio_data.db"),
+    )
 
 
 class TestRecordingManager(object):
+    @mock.patch("base.recording_management.DataSave")
+    def test_db_access_uses_current_audio_database_path_after_database_path_changes(self, mock_database, monkeypatch):
+        old_path = model_consts.DATABASE_PATH
+        new_path = old_path + ".next"
+        mock_database.return_value.__enter__.return_value.query.return_value = (error_code.OK, [("audio-1",)])
+
+        manager = RecordingManager()
+        monkeypatch.setattr(model_consts, "DATABASE_PATH", new_path)
+
+        result = manager.get_record_audio_data()
+
+        assert result == (error_code.OK, [("audio-1",)])
+        mock_database.assert_called_with(new_path)
+
+    def test_default_db_access_initializes_rotated_audio_database_path(self, tmp_path, monkeypatch):
+        old_path = tmp_path / "old" / "audio_data.db"
+        new_path = tmp_path / "new" / "audio_data.db"
+        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(old_path))
+        monkeypatch.setattr(recording_management_module, "ensure_audio_database_ready",
+                            db_manager_module.ensure_audio_database_ready)
+        manager = RecordingManager()
+
+        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(new_path))
+
+        result = manager.get_record_audio_data()
+
+        assert result == (error_code.INVALID_QUERY, "Failed to query audio data.")
+        assert new_path.is_file()
+        with sqlite3.connect(new_path) as connection:
+            table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("audio_data_table",),
+            ).fetchone()
+        assert table == ("audio_data_table",)
+
+    def test_explicit_db_path_override_remains_authoritative_after_database_path_changes(self, tmp_path, monkeypatch):
+        override_path = tmp_path / "override" / "audio_data.db"
+        canonical_path = tmp_path / "canonical" / "audio_data.db"
+        database = DataSave(str(override_path))
+        code, msg = database.create_audio_tables()
+        database.close()
+        assert code == error_code.OK, msg
+        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(tmp_path / "initial" / "audio_data.db"))
+        monkeypatch.setattr(recording_management_module, "ensure_audio_database_ready",
+                            db_manager_module.ensure_audio_database_ready)
+        manager = RecordingManager()
+        manager.db_path = str(override_path)
+
+        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(canonical_path))
+
+        result = manager.get_record_audio_data()
+
+        assert result == (error_code.INVALID_QUERY, "Failed to query audio data.")
+        assert override_path.is_file()
+        assert not canonical_path.exists()
+
     @pytest.mark.parametrize("signal_db_ret, audio_info, stimulus_parameter, ret", [
         (mock.Mock(), {"recorded_signal": np.array(range(132300)), "sample_rate": 44100, "product_model": 'S004-1',
                        "record_date": '2024-06-07', "labels": 1, "file_path": ""},
@@ -70,7 +168,8 @@ class TestRecordingManager(object):
 
     # "database_set, stimulus_info_db_set, audio_info_db_set, audio_info, stimulus_parameter, ret", [
     @pytest.mark.parametrize("input_ret, result_ret", [
-        ({"database_set": mock.Mock(), "stimulus_info_db_set": [(mock.Mock(), mock.Mock())],
+        ({"database_set": mock.Mock(),
+          "stimulus_info_db_set": [([("9212f2d3-7b1e-11ef-96ff-107c610bb999", "chirp", "linear")], True)],
           "audio_info_db_set": mock.Mock(),
           "audio_info": {"recorded_signal": np.array(range(132300)), "sample_rate": 44100, "product_model": 'S004-1',
                          "record_date": '2024-06-07', "labels": 1, "file_path": "../../audio_data/stored_sample/"
@@ -81,7 +180,8 @@ class TestRecordingManager(object):
                                  "repeats": 1, "amplitude": 0.5}},
          (error_code.OK, "Successfully saved the recording and stimulus signals to the database.")
          ),
-        ({"database_set": mock.Mock(), "stimulus_info_db_set": [(mock.Mock(), mock.Mock())],
+        ({"database_set": mock.Mock(),
+          "stimulus_info_db_set": [([("9212f2d3-7b1e-11ef-96ff-107c610bb999", "chirp", "linear")], True)],
           "audio_info_db_set": mock.Mock(),
           "audio_info": {"recorded_signal": np.array(range(132300)), "sample_rate": 44100, "product_model": 'S004-1',
                          "record_date": '2024-06-07', "labels": 1, "file_path": "../../audio_data/stored_sample/"
@@ -91,7 +191,8 @@ class TestRecordingManager(object):
                                  }},
          (error_code.OK, "Successfully saved the recording and stimulus signals to the database.")
          ),
-        ({"database_set": Exception(), "stimulus_info_db_set": [(mock.Mock(), mock.Mock())],
+        ({"database_set": Exception(),
+          "stimulus_info_db_set": [([("9212f2d3-7b1e-11ef-96ff-107c610bb999", "chirp", "linear")], True)],
           "audio_info_db_set": mock.Mock(),
           "audio_info": {"recorded_signal": np.array(range(132300)), "sample_rate": 44100, "product_model": 'S004-1',
                          "record_date": '2024-06-07', "labels": 1, "file_path": "../../audio_data/stored_sample/"
@@ -99,7 +200,7 @@ class TestRecordingManager(object):
           "stimulus_parameter": {"sample_rate": 44100, "start_feq": 10, "end_feq": 2000, "sweep_duration": 3,
                                  "sweep_method": 'chirp', "sweep_type": 'linear', "repeats": 1, "amplitude": 0.5}},
          (error_code.INVALID_SAVE, "Failed to save the recording and stimulus signals to the database. "
-                                   "'Exception' object has no attribute 'insert_audio_files_info'")
+                                   "'Exception' object has no attribute 'ins")
          )
     ])
     @mock.patch("base.recording_management.RecordingManager.get_audio_info_to_db")
@@ -134,9 +235,8 @@ class TestRecordingManager(object):
     @mock.patch("base.recording_management.DataSave")
     def test_get_stimulus_info_to_db(self, mock_database, input_ret, result_ret):
         mock_database.return_value.__enter__.return_value = input_ret["database_ret"]
-        mock_database.return_value.__enter__.return_value.check_database_info_equal.return_value = input_ret[
-            "check_db_ret"]
-        mock_database.return_value.__enter__.return_value.get_data_id.return_value = input_ret["get_id_ret"]
+        input_ret["database_ret"].query_matching_data.return_value = input_ret["check_db_ret"]
+        input_ret["database_ret"].get_data_id.return_value = input_ret["get_id_ret"]
         result = RecordingManager().get_stimulus_info_to_db(input_ret["stimulus_parameter"], input_ret["database_ret"])
         assert result == result_ret
 
@@ -165,8 +265,7 @@ class TestRecordingManager(object):
     @mock.patch("base.recording_management.DataSave")
     def test_get_audio_info_to_db(self, mock_database, mock_uuid, input_ret, result_ret):
         mock_database.return_value.__enter__.return_value = input_ret["database_ret"]
-        mock_database.return_value.__enter__.return_value.check_database_info_equal.return_value = input_ret[
-            "check_db_ret"]
+        input_ret["database_ret"].query_matching_data.return_value = input_ret["check_db_ret"]
         mock_uuid.return_value = input_ret["uuid_ret"]
         result = RecordingManager().get_audio_info_to_db(input_ret["audio_info"], input_ret["stimulus_data"],
                                                          input_ret["database_ret"])
@@ -190,7 +289,7 @@ class TestRecordingManager(object):
          "../../audio_data/stored_sample/real_product_line/linear_chirp_1/S004-1_80_2000/20240607/OK/20240946-02.wav",
          "20240946-03.wav",
          (error_code.INVALID_RENAME,
-          "The rename operation failed. 'Exception' object has no attribute 'update_audio_files_info'")),
+          "The rename operation failed. 'Exception' object has no attribute 'upd")),
     ])
     @mock.patch("base.recording_management.DataSave")
     def test_rename_audio(self, mock_database, database_ret, file_path, new_name, ret):
@@ -223,7 +322,7 @@ class TestRecordingManager(object):
                        "S004-1_80_2000/20240607/OK/20240941-01.wav",
           "new_dir_path": "../../audio_data/stored_sample/real_product_line/linear_chirp_1/S004-1_80_2000/20240607/NG",
           }, (error_code.INVALID_MOVE,
-              "The move operation failed. 'Exception' object has no attribute 'update_audio_files_info'"),
+              "The move operation failed. 'Exception' object has no attribute 'upd"),
          ),
     ])
     @mock.patch("base.recording_management.DataSave")
@@ -242,7 +341,7 @@ class TestRecordingManager(object):
         (Exception(),
          "../../audio_data/stored_sample/real_product_line/linear_chirp_1/S004-1_80_2000/20240607/OK/20240932-01.wav",
          (error_code.INVALID_DELETE,
-          "The delete operation failed. 'Exception' object has no attribute 'delete_with_condition'"))
+          "The delete operation failed. 'Exception' object has no attribute 'del"))
     ])
     @mock.patch("base.recording_management.DataSave")
     def test_delete_audio(self, mock_database, database_ret, file_path, ret):

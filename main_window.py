@@ -10,12 +10,12 @@ from base.log_manager import LogManager
 from base.db_manager import DataSave, ensure_system_database_ready
 from base.sound_device_manager import SoundDeviceManager
 from consts.model_consts import SYSTEM_DATABASE_PATH
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, MenuBar, Label, Action, MessageBox
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
 
+from ui.hardware_management_window import open_hardware_management_window
 from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self.device_workflow_available = bool(startup_devices.get("device_available", bool(self.mic and self.speaker)))
         self.startup_device_error_reason = startup_devices.get("startup_device_error_reason")
         self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
+        self.startup_recovery_action = startup_devices.get("startup_recovery_action")
         if not self.device_workflow_available:
             self.mic = None
             self.speaker = None
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         self.function_action_exit = Action("退出", self)
         self.hardware_action_selection = Action("硬件选择", self)
         self.hardware_action_calibration = Action("校准", self)
+        self.hardware_action_management = Action("硬件管理", self)
         self.user_action_switch_account = Action("切换用户", self)
         self.user_action_add_account = Action("添加用户", self)
         self.user_action_change_pwd = Action("修改密码", self)
@@ -76,6 +78,7 @@ class MainWindow(QMainWindow):
             self.function_action_ai_training,
             self.hardware_action_selection,
             self.hardware_action_calibration,
+            self.hardware_action_management,
         ]
         self.widget_list_admin = self.widget_list_engineer + [self.user_action_add_account]
 
@@ -194,10 +197,46 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
+        self.sequence_window.init_data_struct_stimulus_config()
         if hasattr(self.sequence_window, "set_audio_devices_available"):
             self.sequence_window.set_audio_devices_available(
                 self.device_workflow_available, self.startup_device_error_reason or ""
             )
+
+    @staticmethod
+    def _sequence_window_uses_play_and_record(sequence_window):
+        try:
+            sequence_config = getattr(sequence_window, "sequence_config", None) or []
+            acq_config = sequence_config[0]["seq1"]["acq"]
+            return acq_config.get("mode") == "PLAY_AND_RECORD"
+        except Exception:
+            return False
+
+    @staticmethod
+    def _clear_sequence_stimulus_runtime_state(sequence_window):
+        data_struct = getattr(sequence_window, "data_struct", None)
+        if data_struct is None:
+            return
+        for attr_name in ("sample_rate", "stimulus_data", "stimulus_info"):
+            if hasattr(data_struct, attr_name):
+                setattr(data_struct, attr_name, None)
+        if hasattr(data_struct, "alignment_sample_count"):
+            delattr(data_struct, "alignment_sample_count")
+
+    def _refresh_sequence_stimulus_after_device_attach(self, sequence_window):
+        if not self._sequence_window_uses_play_and_record(sequence_window):
+            return
+        self._clear_sequence_stimulus_runtime_state(sequence_window)
+        init_stimulus_config = getattr(sequence_window, "init_data_struct_stimulus_config", None)
+        if init_stimulus_config is None:
+            return
+        try:
+            init_stimulus_config()
+        except Exception as exc:
+            logger = LogManager.set_log_handler("core")
+            if logger is not None and hasattr(logger, "warning"):
+                logger.warning(f"Failed to reinitialize sequence stimulus after audio device attach: {exc}")
+            self._clear_sequence_stimulus_runtime_state(sequence_window)
 
     def _apply_audio_devices(self, mic, speaker, mic_channels, available=True, message=""):
         self.mic = mic
@@ -215,6 +254,10 @@ class MainWindow(QMainWindow):
         sequence_window.mic = self.mic
         sequence_window.speaker = self.speaker
         sequence_window.mic_channels = self.mic_channels
+        if available:
+            self._refresh_sequence_stimulus_after_device_attach(sequence_window)
+        elif self._sequence_window_uses_play_and_record(sequence_window):
+            self._clear_sequence_stimulus_runtime_state(sequence_window)
         if hasattr(sequence_window, "set_audio_devices_available"):
             sequence_window.set_audio_devices_available(bool(available), message or "")
         if hasattr(sequence_window, "refresh_channel_windows"):
@@ -243,6 +286,16 @@ class MainWindow(QMainWindow):
     def _audio_device_selection_complete(speaker, mic, mic_channels):
         return bool(speaker and mic and mic_channels)
 
+    @staticmethod
+    def _sequence_audio_workflow_active(sequence_window):
+        return bool(
+            getattr(sequence_window, "player_status_flag", False)
+            or getattr(sequence_window, "_record_workflow_busy", False)
+        )
+
+    def _warn_hardware_change_during_audio_workflow(self):
+        MessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
+
     def init_menu(self):
         # create menu bar, and link the menu bar to action
         menu_bar = MenuBar()
@@ -264,6 +317,9 @@ class MainWindow(QMainWindow):
         self.function_audio_manager.triggered.connect(self.on_audio_manager_init)
         function_menu.addSeparator()
 
+        hardware_menu.addAction(self.hardware_action_management)
+        self.hardware_action_management.triggered.disconnect()
+        self.hardware_action_management.triggered.connect(self.on_hardware_management_window_init)
         function_menu.addAction(self.function_action_exit)
         self.function_action_exit.triggered.disconnect()
         self.function_action_exit.triggered.connect(self.on_window_close)
@@ -329,9 +385,8 @@ class MainWindow(QMainWindow):
             "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
         )
 
-    @staticmethod
-    def on_audio_manager_init():
-        dlg = ArchiveAudioDataDialog(LogManager.set_log_handler("core"))
+    def on_audio_manager_init(self):
+        dlg = ArchiveAudioDataDialog(LogManager.set_log_handler("core"), speaker=self.speaker)
         dlg.exec()
 
     @staticmethod
@@ -374,8 +429,8 @@ class MainWindow(QMainWindow):
 
     def on_hardware_window_init(self):
         # Prevent hardware changes during playback/recording
-        if self.sequence_window.player_status_flag:
-            MessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
+        if self._sequence_audio_workflow_active(getattr(self, "sequence_window", None)):
+            self._warn_hardware_change_during_audio_workflow()
             return
         # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
         driver_name = None
@@ -401,6 +456,7 @@ class MainWindow(QMainWindow):
         if self._audio_device_selection_complete(speaker, mic, mic_channels):
             self.startup_device_error_reason = None
             self.startup_device_notice_message = None
+            self.startup_recovery_action = None
             self._apply_audio_devices(mic, speaker, mic_channels, available=True)
             return
 
@@ -415,28 +471,42 @@ class MainWindow(QMainWindow):
         message = self.startup_device_error_reason or self.startup_device_notice_message
         if not message:
             return
+        can_open_hardware_management = None
+        if self.startup_recovery_action == "register_hardware":
+            can_open_hardware_management = self._can_open_hardware_management()
+            if can_open_hardware_management:
+                warning_text = f"{message}\n点击确认后将打开硬件管理。"
+            else:
+                warning_text = f"{message}\n当前用户无硬件管理权限，请联系工程师或管理员注册硬件。"
+        else:
+            warning_text = f"{message}\n请检查麦克风/扬声器连接，或重新选择设备。\n点击确认后将重新扫描设备。"
 
         MessageBox.warning(
             self,
             "提示",
-            f"{message}\n请检查麦克风/扬声器连接，或重新选择设备。\n点击确认后将重新扫描设备。",
+            warning_text,
         )
+        if self.startup_recovery_action == "register_hardware" and can_open_hardware_management is False:
+            return
         self._retry_or_select_startup_devices()
 
     def _retry_or_select_startup_devices(self):
+        if self.startup_recovery_action == "register_hardware":
+            self.on_hardware_management_window_init(startup_register_recovery=True)
+            return
+
         if not self.startup_can_retry_saved_devices:
-            try:
-                SoundDeviceManager().refresh_available_device()
-            except Exception:
-                pass
+            SoundDeviceManager().refresh_available_device()
             self._open_hardware_selection_for_recovery()
             return
 
         startup_devices = SoundDeviceManager().get_startup_devices()
         self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
+        self.startup_recovery_action = startup_devices.get("startup_recovery_action")
         if startup_devices.get("device_available"):
             self.startup_device_error_reason = None
             self.startup_device_notice_message = None
+            self.startup_recovery_action = None
             self._apply_audio_devices(
                 startup_devices.get("mic"),
                 startup_devices.get("speaker"),
@@ -448,6 +518,35 @@ class MainWindow(QMainWindow):
         self.startup_device_error_reason = (
             startup_devices.get("startup_device_error_reason") or self.startup_device_error_reason
         )
+        if self.startup_recovery_action == "register_hardware":
+            self.on_hardware_management_window_init(startup_register_recovery=True)
+            return
+        self._open_hardware_selection_for_recovery()
+
+    def _refresh_startup_recovery_after_hardware_management(self):
+        startup_devices = SoundDeviceManager().get_startup_devices() or {}
+        self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
+        self.startup_recovery_action = startup_devices.get("startup_recovery_action")
+        if startup_devices.get("device_available"):
+            self.startup_device_error_reason = None
+            self.startup_device_notice_message = None
+            self.startup_recovery_action = None
+            self._apply_audio_devices(
+                startup_devices.get("mic"),
+                startup_devices.get("speaker"),
+                startup_devices.get("mic_channels", []),
+                available=True,
+            )
+            return
+
+        self.startup_device_error_reason = (
+            startup_devices.get("startup_device_error_reason") or self.startup_device_error_reason
+        )
+        self.startup_device_notice_message = (
+            startup_devices.get("startup_notice_message") or self.startup_device_notice_message
+        )
+        if self.startup_recovery_action == "register_hardware":
+            return
         self._open_hardware_selection_for_recovery()
 
     def _open_hardware_selection_for_recovery(self):
@@ -460,11 +559,13 @@ class MainWindow(QMainWindow):
         if self._audio_device_selection_complete(speaker, mic, mic_channels):
             self.startup_device_error_reason = None
             self.startup_device_notice_message = None
+            self.startup_recovery_action = None
             self._apply_audio_devices(mic, speaker, mic_channels, available=True)
             return
 
         message = "音频设备未完成选择，请在【硬件-硬件选择】中完成设置。"
         self.startup_device_error_reason = message
+        self.startup_recovery_action = None
         self._apply_audio_devices(None, None, [], available=False, message=message)
         MessageBox.warning(self, "提示", message)
 
@@ -475,6 +576,103 @@ class MainWindow(QMainWindow):
         dlg.exec()
         if dlg.input_calibration_flag:
             self.sequence_window.update_v2pa_factor()
+
+    def _can_open_hardware_management(self):
+        def _safe_attr(name, default=None):
+            try:
+                return getattr(self, name)
+            except RuntimeError:
+                return default
+
+        role_widgets = {
+            "Operator": _safe_attr("widget_list_operator", []),
+            "Engineer": _safe_attr("widget_list_engineer", []),
+            "Admin": _safe_attr("widget_list_admin", []),
+        }
+        access_lvl = _safe_attr("access_lvl")
+        management_action = _safe_attr("hardware_action_management")
+        if management_action is not None:
+            return management_action in role_widgets.get(access_lvl, [])
+        return access_lvl in ("Engineer", "Admin")
+
+    def on_hardware_management_window_init(self, startup_register_recovery=False):
+        if not self._can_open_hardware_management():
+            MessageBox.warning(self, "提示", "当前用户无硬件管理权限，请联系工程师或管理员注册硬件。")
+            return
+        if self._sequence_audio_workflow_active(getattr(self, "sequence_window", None)):
+            self._warn_hardware_change_during_audio_workflow()
+            return
+        hardware_management_window = open_hardware_management_window(
+            parent=self,
+            audio_workflow_active_provider=lambda: self._sequence_audio_workflow_active(
+                getattr(self, "sequence_window", None)
+            ),
+        )
+        if startup_register_recovery and hardware_management_window is not None:
+            self._refresh_startup_recovery_after_hardware_management()
+
+    @staticmethod
+    def _device_matches_hardware_id(device, hardware_id):
+        return isinstance(device, dict) and str(device.get("hardware_id")) == str(hardware_id)
+
+    @staticmethod
+    def _merge_registered_audio_metadata(device, asset):
+        updated = dict(device)
+        for key in (
+            "hardware_id",
+            "display_name",
+            "device_name",
+            "hardware_type",
+            "hostapi_name",
+            "samplerate",
+            "bit_depth",
+            "latency_ms",
+        ):
+            if isinstance(asset, dict) and key in asset:
+                updated[key] = asset.get(key)
+        return updated
+
+    def on_registered_audio_hardware_updated(self, hardware_id, updated_asset):
+        if self._sequence_audio_workflow_active(getattr(self, "sequence_window", None)):
+            self._warn_hardware_change_during_audio_workflow()
+            return
+
+        mic = self.mic
+        speaker = self.speaker
+        matched = False
+        if self._device_matches_hardware_id(mic, hardware_id):
+            mic = self._merge_registered_audio_metadata(mic, updated_asset)
+            matched = True
+        if self._device_matches_hardware_id(speaker, hardware_id):
+            speaker = self._merge_registered_audio_metadata(speaker, updated_asset)
+            matched = True
+        if not matched:
+            return
+
+        try:
+            SoundDeviceManager.save_selected_devices(mic, speaker, self.mic_channels)
+        except Exception as exc:
+            MessageBox.warning(self, "提示", f"硬件配置保存失败，请重新选择设备。\n{exc}")
+            message = "硬件配置保存失败，请在【硬件-硬件选择】中重新选择设备。"
+            self.startup_device_error_reason = message
+            self.startup_device_notice_message = message
+            self.startup_can_retry_saved_devices = False
+            self.startup_recovery_action = None
+            self._apply_audio_devices(None, None, [], available=False, message=message)
+            return
+
+        self._apply_audio_devices(mic, speaker, self.mic_channels, available=True)
+
+    def on_selected_audio_hardware_deleted(self, hardware_id):
+        if self._sequence_audio_workflow_active(getattr(self, "sequence_window", None)):
+            self._warn_hardware_change_during_audio_workflow()
+            return
+        message = "当前选择的硬件已删除，请重新选择设备。"
+        self.startup_device_error_reason = message
+        self.startup_device_notice_message = message
+        self.startup_can_retry_saved_devices = False
+        self.startup_recovery_action = None
+        self._apply_audio_devices(None, None, [], available=False, message=message)
 
     def on_window_close(self):
         # close the window

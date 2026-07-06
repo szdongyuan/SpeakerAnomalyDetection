@@ -655,6 +655,10 @@ def test_output_test_calibration_uses_selected_device_params_and_preserves_ampli
     monkeypatch.setattr(calibration_window.sd, "check_output_settings", lambda **kwargs: None)
 
     class FakeCalibrationManager:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
         def calibrate_amplitude(self, target_voltage):
             return calibration_window.error_code.OK, (0.375, 3.0)
 
@@ -666,7 +670,12 @@ def test_output_test_calibration_uses_selected_device_params_and_preserves_ampli
     )
     widget = calibration_window.OutputCalibration()
     try:
-        widget.speaker = {"index": 21, "default_samplerate": 48000.0, "max_output_channels": 2}
+        widget.speaker = {
+            "hardware_id": "speaker-1",
+            "index": 21,
+            "default_samplerate": 48000.0,
+            "max_output_channels": 2,
+        }
         widget.target_voltage_box.setValue(1.25)
 
         widget.test_calibration()
@@ -691,16 +700,18 @@ def _build_widget(
     saved_channels = list(saved_channels or [])
     startup_channels = list(startup_channels if startup_channels is not None else saved_channels)
     startup_device = startup_device if startup_device is not None else {
+        "hardware_id": "mic-1",
         "name": "Demo Mic",
         "index": 7,
         "max_input_channels": 8,
+        "samplerate": 44100,
     }
     saved_factors = dict(saved_factors or {})
 
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
         "load_selected_devices",
-        staticmethod(lambda: {"mic_channels": saved_channels}),
+        staticmethod(lambda: {"mic": {"hardware_id": startup_device.get("hardware_id")}, "mic_channels": saved_channels}),
     )
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
@@ -820,9 +831,11 @@ def test_clicked_calibration_returns_false_when_stream_start_fails(qapp, monkeyp
 
 def test_clicked_calibration_uses_selected_device_and_current_channel(qapp, monkeypatch):
     startup_device = {
+        "hardware_id": "mic-1",
         "name": "Selected Mic",
         "index": 11,
         "max_input_channels": 8,
+        "samplerate": 44100,
     }
     calls = []
     processor = _DummyStreamingProcessor()
@@ -858,6 +871,82 @@ def test_clicked_calibration_uses_selected_device_and_current_channel(qapp, monk
         assert widget.streaming_poll_timer.isActive() is True
     finally:
         widget.reset_btn_clicked()
+        widget.close()
+
+
+def test_clicked_calibration_uses_registered_input_sample_rate(qapp, monkeypatch):
+    startup_device = {
+        "hardware_id": "mic-1",
+        "name": "Registered 48k Mic",
+        "index": 11,
+        "max_input_channels": 8,
+        "samplerate": 48000,
+    }
+    calls = []
+    processor = _DummyStreamingProcessor()
+    monkeypatch.setattr(
+        calibration_window,
+        "stream_record_without_play",
+        lambda recorded_dict, recorded_path, recorded_signal_info: (
+            calls.append((recorded_dict, recorded_path, recorded_signal_info)) or (processor, 48000)
+        ),
+    )
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[1, 3],
+        startup_channels=[1, 3],
+        startup_device=startup_device,
+    )
+    try:
+        widget.channel_combo_box.setCurrentIndex(1)
+        qapp.processEvents()
+
+        assert widget.clicked_calibration() is True
+
+        assert len(calls) == 1
+        payload, recorded_path, recorded_signal_info = calls[0]
+        assert recorded_path is None
+        assert recorded_signal_info is None
+        assert payload["sample_rate"] == 48000
+        assert payload["num_frames"] == 10 * 48000
+        assert payload["prolong_frames"] == 48000
+        assert payload["device"] == startup_device
+        assert payload["input_channels"] == [3]
+    finally:
+        widget.reset_btn_clicked()
+        widget.close()
+
+
+def test_clicked_calibration_rejects_missing_registered_input_sample_rate(qapp, monkeypatch):
+    startup_device = {
+        "hardware_id": "mic-1",
+        "name": "Missing Samplerate Mic",
+        "index": 11,
+        "max_input_channels": 8,
+    }
+    warnings = []
+    stream_calls = []
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    monkeypatch.setattr(
+        calibration_window,
+        "stream_record_without_play",
+        lambda *args, **kwargs: stream_calls.append((args, kwargs)) or (_DummyStreamingProcessor(), 44100),
+    )
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[1],
+        startup_channels=[1],
+        startup_device=startup_device,
+    )
+    try:
+        assert widget.clicked_calibration() is False
+        assert stream_calls == []
+        assert warnings
+    finally:
         widget.close()
 
 
@@ -1032,7 +1121,13 @@ def test_close_event_does_not_retry_successfully_persisted_final_session_result(
         calibration_window.SoundDeviceManager,
         "get_startup_devices",
         lambda self: {
-            "mic": {"name": "Demo Mic", "index": 7, "max_input_channels": 8},
+            "mic": {
+                "hardware_id": "mic-1",
+                "name": "Demo Mic",
+                "index": 7,
+                "max_input_channels": 8,
+                "samplerate": 44100,
+            },
             "mic_channels": [1],
         },
     )
@@ -1199,9 +1294,11 @@ def test_reset_clears_persisted_session_state_and_selects_first_post_reload_chan
     saved_channels = [4]
     startup_channels_by_call = [[4], [2, 4]]
     startup_device = {
+        "hardware_id": "mic-1",
         "name": "Demo Mic",
         "index": 7,
         "max_input_channels": 8,
+        "samplerate": 44100,
     }
 
     monkeypatch.setattr(
@@ -1353,9 +1450,11 @@ def test_channel_status_label_does_not_repeat_current_channel(qapp, monkeypatch)
 def test_close_event_blocks_after_final_persistence_failure(qapp, monkeypatch):
     warnings = []
     startup_device = {
+        "hardware_id": "mic-1",
         "name": "Demo Mic",
         "index": 7,
         "max_input_channels": 8,
+        "samplerate": 44100,
     }
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,

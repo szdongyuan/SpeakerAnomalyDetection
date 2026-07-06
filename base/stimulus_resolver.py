@@ -1,4 +1,5 @@
 import hashlib
+import copy
 import os
 import re
 import logging
@@ -112,14 +113,17 @@ def _iter_candidate_paths(raw_path: str, base_dirs: list) -> list:
     return normalized
 
 
-def _try_load_existing_wav(detail: dict, sample_rate: int, base_dirs: list, logger=None):
+def _try_load_existing_wav(detail: dict, sample_rate: int, base_dirs: list, logger=None, keys=None):
     """
-    Try loading wav from detail["stimulus_signal_path"] then detail["load_stimulus_signal_path"].
+    Try loading wav from configured detail path keys.
     Returns (y, used_abs_path) or (None, None).
     """
     logger = _get_logger(logger)
 
-    for key in ("stimulus_signal_path", "load_stimulus_signal_path"):
+    if keys is None:
+        keys = ("stimulus_signal_path", "load_stimulus_signal_path")
+
+    for key in keys:
         raw = (detail or {}).get(key)
         for p in _iter_candidate_paths(raw, base_dirs):
             if not p:
@@ -137,6 +141,24 @@ def _try_load_existing_wav(detail: dict, sample_rate: int, base_dirs: list, logg
     return None, None
 
 
+def _waveform_sample_count(stimulus_signal) -> int:
+    signal = np.asarray(stimulus_signal)
+    if signal.ndim == 0:
+        return 0
+    return int(signal.shape[0])
+
+
+def _sync_loaded_wav_runtime_metadata(stimulus_info: dict, stimulus_signal, sample_rate: int) -> None:
+    if not isinstance(stimulus_info, dict):
+        return
+    sample_count = _waveform_sample_count(stimulus_signal)
+    stimulus_info["sample_rate"] = int(sample_rate)
+    stimulus_info["total_time"] = float(sample_count) / float(sample_rate)
+    for key in ("sample_count", "num_samples", "playback_sample_count", "alignment_sample_count"):
+        if key in stimulus_info:
+            stimulus_info[key] = sample_count
+
+
 def _valid_frequency_stepped_mode(value):
     if value is None:
         return None
@@ -149,6 +171,32 @@ def _valid_frequency_stepped_mode(value):
 def _require_supported_stimulus_method(method):
     if method not in SUPPORTED_STIMULUS_METHODS:
         raise ValueError(f"Unsupported stimulus_method: {method}")
+
+
+def _runtime_sample_rate_value(runtime_sample_rate) -> int:
+    if isinstance(runtime_sample_rate, (bool, np.bool_)):
+        raise ValueError("runtime_sample_rate must be a positive integer")
+    try:
+        sample_rate = int(runtime_sample_rate)
+    except (TypeError, ValueError):
+        raise ValueError("runtime_sample_rate must be a positive integer") from None
+    try:
+        if float(runtime_sample_rate) != sample_rate:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError("runtime_sample_rate must be a positive integer") from None
+    if sample_rate <= 0:
+        raise ValueError("runtime_sample_rate must be a positive integer")
+    return sample_rate
+
+
+def _runtime_stimulus_info(detail: dict, runtime_sample_rate: int) -> dict:
+    stimulus_info = dict((detail or {}).get("stimulus_info") or {})
+    stimulus_info["sample_rate"] = runtime_sample_rate
+    if detail is not None:
+        detail["stimulus_info"] = stimulus_info
+        detail["sample_rate"] = runtime_sample_rate
+    return stimulus_info
 
 
 def _required_frequency_stepped_sample_rate(stimulus_info: dict) -> int:
@@ -257,30 +305,22 @@ def _generate_frequency_stepped_runtime(stimulus_info: dict):
     return result
 
 
-def generate_and_save_stimulus(detail: dict, logger=None):
-    """
-    Generate stimulus from detail["stimulus_info"], save to STORED_STIMULUS_PATH,
-    and update detail["stimulus_signal_path"] (relative to DEFAULT_DIR).
-
-    Returns (stimulus_data, sample_rate, saved_abs_path) or (None, sr, None) on failure.
-    """
+def _generate_stimulus_data(detail: dict, runtime_sample_rate: int, logger=None):
     logger = _get_logger(logger)
-    stimulus_info = (detail or {}).get("stimulus_info") or {}
+    sample_rate = _runtime_sample_rate_value(runtime_sample_rate)
+    stimulus_info = _runtime_stimulus_info(detail, sample_rate)
     method = normalize_stimulus_method(stimulus_info.get("stimulus_method", "chirp"))
     _require_supported_stimulus_method(method)
-    if method == FREQUENCY_STEPPED_METHOD:
-        sample_rate = _required_frequency_stepped_sample_rate(stimulus_info)
-    else:
-        sample_rate = int(stimulus_info.get("sample_rate") or detail.get("sample_rate") or 44100)
-    total_time = float(stimulus_info.get("total_time") or detail.get("total_time") or 0.0)
+    total_time = float(stimulus_info.get("total_time") or (detail or {}).get("total_time") or 0.0)
 
-    # Generate data
     stimulus_data = None
     try:
         if method == FREQUENCY_STEPPED_METHOD:
             result = _generate_frequency_stepped_runtime(stimulus_info)
             stimulus_data = result.data
             sample_rate = int(result.sample_rate)
+            result.metadata["sample_rate"] = sample_rate
+            result.metadata["schedule_sample_rate"] = sample_rate
             stimulus_info.clear()
             stimulus_info.update(result.metadata)
             detail["stimulus_info"] = stimulus_info
@@ -295,11 +335,12 @@ def generate_and_save_stimulus(detail: dict, logger=None):
             if create_fn is None:
                 raise ValueError(f"Unsupported stimulus_method: {method}")
             if stimulus_info.get("stimulus_method") != method:
-                stimulus_info = dict(stimulus_info)
                 stimulus_info["stimulus_method"] = method
+            stimulus_info["sample_rate"] = sample_rate
             stimulus_data, _sr = create_fn(**stimulus_info)
             if _sr:
                 sample_rate = int(_sr)
+            detail["stimulus_info"] = stimulus_info
         if stimulus_data is None:
             raise ValueError("Generated stimulus_data is None")
         stimulus_data = np.asarray(stimulus_data, dtype="float32")
@@ -309,10 +350,26 @@ def generate_and_save_stimulus(detail: dict, logger=None):
             raise ValueError(f"Failed to generate frequency_stepped stimulus: {e}") from e
         stimulus_data = None
 
-    # Fallback to silence if generation failed
     if stimulus_data is None or stimulus_data.size == 0:
         num_samples = int(max(total_time, 0.0) * sample_rate)
         stimulus_data = np.zeros(max(num_samples, 1), dtype="float32")
+
+    return stimulus_data, sample_rate, stimulus_info, method
+
+
+def generate_and_save_stimulus(detail: dict, *, runtime_sample_rate: int, logger=None):
+    """
+    Generate stimulus from detail["stimulus_info"], save to STORED_STIMULUS_PATH,
+    and update detail["stimulus_signal_path"] (relative to DEFAULT_DIR).
+
+    Returns (stimulus_data, sample_rate, saved_abs_path) or (None, sr, None) on failure.
+    """
+    logger = _get_logger(logger)
+    stimulus_data, sample_rate, stimulus_info, _method = _generate_stimulus_data(
+        detail,
+        runtime_sample_rate,
+        logger=logger,
+    )
 
     # Save to disk
     try:
@@ -330,7 +387,14 @@ def generate_and_save_stimulus(detail: dict, logger=None):
         return stimulus_data, sample_rate, None
 
 
-def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str = None, logger=None) -> bool:
+def set_data_struct_stimulus_signal(
+    data_struct,
+    detail,
+    using_config_path: str = None,
+    *,
+    runtime_sample_rate: int,
+    logger=None,
+) -> bool:
     """
     Safe variant: if stimulus wav is missing, regenerate from stimulus_info, save it,
     and update detail['stimulus_signal_path'] so caller can write back config.
@@ -342,13 +406,10 @@ def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str 
     if detail is None:
         return False
 
-    stimulus_info = detail.get("stimulus_info") or {}
+    sample_rate = _runtime_sample_rate_value(runtime_sample_rate)
+    stimulus_info = _runtime_stimulus_info(detail, sample_rate)
     method = normalize_stimulus_method(stimulus_info.get("stimulus_method", "chirp"))
     _require_supported_stimulus_method(method)
-    if method == FREQUENCY_STEPPED_METHOD:
-        sample_rate = _required_frequency_stepped_sample_rate(stimulus_info)
-    else:
-        sample_rate = int(stimulus_info.get("sample_rate") or detail.get("sample_rate") or 44100)
 
     config_dir = None
     if using_config_path:
@@ -367,7 +428,11 @@ def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str 
 
     # 2) Regenerate when missing / unloadable
     if stimulus_signal is None:
-        stimulus_signal, sample_rate, saved_path = generate_and_save_stimulus(detail, logger=logger)
+        stimulus_signal, sample_rate, saved_path = generate_and_save_stimulus(
+            detail,
+            runtime_sample_rate=sample_rate,
+            logger=logger,
+        )
         modified = True
         if saved_path:
             logger.info(f"Stimulus wav missing; regenerated and saved: {saved_path}")
@@ -389,4 +454,75 @@ def set_data_struct_stimulus_signal(data_struct, detail, using_config_path: str 
         except (TypeError, ValueError, AttributeError):
             pass
     return modified
+
+
+def set_data_struct_analysis_reference_signal(
+    data_struct,
+    detail,
+    using_config_path: str = None,
+    *,
+    runtime_sample_rate: int,
+    logger=None,
+) -> bool:
+    logger = _get_logger(logger)
+    if detail is None:
+        return False
+
+    sample_rate = _runtime_sample_rate_value(runtime_sample_rate)
+    runtime_detail = copy.deepcopy(detail)
+    stimulus_info = _runtime_stimulus_info(runtime_detail, sample_rate)
+    method = normalize_stimulus_method(stimulus_info.get("stimulus_method", "chirp"))
+    _require_supported_stimulus_method(method)
+
+    config_dir = None
+    if using_config_path:
+        try:
+            config_dir = os.path.dirname(using_config_path)
+        except Exception:
+            config_dir = None
+    base_dirs = [DEFAULT_DIR, config_dir]
+    configured_external_wav = bool((runtime_detail or {}).get("load_stimulus_signal_path"))
+
+    if method == FREQUENCY_STEPPED_METHOD:
+        stimulus_signal = None
+    elif configured_external_wav:
+        stimulus_signal, _used_path = _try_load_existing_wav(
+            runtime_detail,
+            sample_rate,
+            base_dirs,
+            logger=logger,
+            keys=("load_stimulus_signal_path",),
+        )
+    else:
+        stimulus_signal = None
+
+    if stimulus_signal is None and configured_external_wav and method != FREQUENCY_STEPPED_METHOD:
+        return False
+
+    if stimulus_signal is not None and configured_external_wav and method != FREQUENCY_STEPPED_METHOD:
+        _sync_loaded_wav_runtime_metadata(stimulus_info, stimulus_signal, sample_rate)
+
+    if stimulus_signal is None:
+        stimulus_signal, sample_rate, stimulus_info, method = _generate_stimulus_data(
+            runtime_detail,
+            sample_rate,
+            logger=logger,
+        )
+
+    if hasattr(data_struct, "alignment_sample_count"):
+        delattr(data_struct, "alignment_sample_count")
+    current_stimulus_info = runtime_detail.get("stimulus_info") or stimulus_info
+    if method == FREQUENCY_STEPPED_METHOD:
+        data_struct.stimulus_info = current_stimulus_info
+    else:
+        data_struct.stimulus_info = dict(current_stimulus_info)
+        data_struct.stimulus_info.pop("alignment_sample_count", None)
+    data_struct.stimulus_data = stimulus_signal
+    data_struct.sample_rate = sample_rate
+    if method == FREQUENCY_STEPPED_METHOD:
+        try:
+            data_struct.alignment_sample_count = int(data_struct.stimulus_info.get("alignment_sample_count"))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return True
 

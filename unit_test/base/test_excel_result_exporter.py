@@ -3,7 +3,12 @@ import tempfile
 
 import numpy as np
 
-from base.excel_result_exporter import _extract_curve_xy, export_analysis_to_excel, resolve_excel_output_path
+from base.excel_result_exporter import (
+    _extract_curve_xy,
+    build_excel_from_csv_spool,
+    export_analysis_to_excel,
+    resolve_excel_output_path,
+)
 
 
 def test_extract_curve_xy_prefers_raw_keys_when_present():
@@ -87,6 +92,26 @@ def test_export_analysis_to_excel_creates_missing_explicit_parent(tmp_path):
         analysis_config={},
         analysis_result_dict={},
         file_path=str(file_path),
+    )
+
+    assert result.ok is True
+    assert file_path.is_file()
+
+
+def test_build_excel_from_csv_spool_creates_missing_explicit_parent(tmp_path):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    (spool_dir / "SPL.csv").write_text("SN,日期,100,200\nSN001,2026-06-10 10:00:00,1.0,2.0\n", encoding="utf-8-sig")
+    file_path = tmp_path / "missing" / "excel" / "analysis.xlsx"
+    cfg = {
+        "enabled": True,
+        "lock_files": False,
+    }
+
+    result = build_excel_from_csv_spool(
+        cfg,
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
     )
 
     assert result.ok is True

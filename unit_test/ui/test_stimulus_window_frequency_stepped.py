@@ -71,7 +71,8 @@ def window_factory(qapp, monkeypatch, local_tmp_path):
                 "stimulus_info": info,
                 "stimulus_signal_path": "seed.wav",
                 "load_stimulus_signal_path": "seed.wav" if info.get("use_custom_stimulus") is False else None,
-            }
+            },
+            speaker={"name": "speaker", "samplerate": 44100, "index": 7},
         )
         qapp.processEvents()
         return window
@@ -537,6 +538,8 @@ def test_legacy_external_wav_round_trip_through_step_sc_restores_wav_branch(
         }
     )
     window.stimulus_data = wav_data.copy()
+    window.stimulus_info["total_time"] = 1.3
+    window.total_time_box.setValue(1.3)
     window.load_wav_path = "external.wav"
     window.load_stimulus_signal_path = "external.wav"
     window.graph_stimulus()
@@ -858,7 +861,8 @@ def test_constructor_legacy_non_custom_missing_wav_repairs_and_ok_does_not_samef
             "stimulus_info": legacy_payload,
             "stimulus_signal_path": None,
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 
@@ -1250,7 +1254,7 @@ def test_octave_step_sc_manual_snap_uses_visible_bounds_on_resolution_change(win
     assert resolved.metadata["frequencies"] == pytest.approx(window.stimulus_info["frequencies"])
 
 
-def test_octave_step_sc_manual_snap_uses_visible_bounds_on_sample_rate_change(window_factory):
+def test_octave_step_sc_manual_snap_keeps_speaker_rate_with_read_only_display(window_factory):
     window = window_factory(
         {"use_custom_stimulus": False, "start_freq": 80, "stop_freq": 2000, "sample_rate": 44100}
     )
@@ -1263,7 +1267,8 @@ def test_octave_step_sc_manual_snap_uses_visible_bounds_on_sample_rate_change(wi
     assert window.step_box.isReadOnly() is True
     assert window.step_box.isEnabled() is False
     assert window.resolution_combo_box.isEnabled() is True
-    assert window.sample_rate_combo_box.currentText() == "44100"
+    assert window.sample_rate_lineedit.isReadOnly() is True
+    assert window.sample_rate_lineedit.text() == "44100"
     assert window.start_freq_box.value() == pytest.approx(100.0)
     assert window.stop_freq_box.value() == pytest.approx(125.0)
     assert window.stimulus_info["start_freq"] == pytest.approx(100.0)
@@ -1277,11 +1282,10 @@ def test_octave_step_sc_manual_snap_uses_visible_bounds_on_sample_rate_change(wi
     assert window.stimulus_info["frequencies"] == pytest.approx([100.0, 125.0])
     assert window._step_sc_retained_frequencies == pytest.approx(window.stimulus_info["frequencies"])
 
-    window.sample_rate_combo_box.setCurrentText("48000")
-    resolved = resolve_frequency_stepped_schedule(window.stimulus_info, sample_rate=48000)
+    resolved = resolve_frequency_stepped_schedule(window.stimulus_info, sample_rate=44100)
 
-    assert window.sample_rate_combo_box.currentText() == "48000"
-    assert window.stimulus_info["sample_rate"] == 48000
+    assert window.sample_rate_lineedit.text() == "44100"
+    assert window.stimulus_info["sample_rate"] == 44100
     assert window.start_freq_box.value() == pytest.approx(100.0)
     assert window.stop_freq_box.value() == pytest.approx(125.0)
     assert window.stimulus_info["start_freq"] == pytest.approx(100.0)
@@ -1829,7 +1833,7 @@ def test_octave_step_sc_fractional_preferred_frequencies_display_save_and_reopen
     assert saved_info["stop_freq"] == pytest.approx(31.5)
     assert saved_info["frequencies"] == pytest.approx([12.5, 16.0, 20.0, 25.0, 31.5])
 
-    reopened = StimulusWindow(stimulus_config_data=saved)
+    reopened = StimulusWindow(stimulus_config_data=saved, speaker={"name": "speaker", "samplerate": 44100, "index": 7})
     qapp.processEvents()
 
     assert reopened.start_freq_box.value() == pytest.approx(12.5)
@@ -1924,6 +1928,7 @@ def test_step_sc_end_to_end_json_db_runtime_and_analysis_use_retained_schedule(
     database.close()
     assert code == error_code.OK, msg
     monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(db_path))
     monkeypatch.setattr(model_consts, "STORED_STIMULUS_PATH", str(stimulus_dir))
     monkeypatch.setattr(stimulus_window.model_consts, "STORED_STIMULUS_PATH", str(stimulus_dir))
     monkeypatch.setattr(stimulus_resolver.model_consts, "STORED_STIMULUS_PATH", str(stimulus_dir))
@@ -1948,7 +1953,10 @@ def test_step_sc_end_to_end_json_db_runtime_and_analysis_use_retained_schedule(
     assert saved_info["frequencies"] == retained_frequencies
     assert isinstance(saved_info["segments"][0], dict)
 
-    reopened = StimulusWindow(stimulus_config_data=decoded)
+    reopened = StimulusWindow(
+        stimulus_config_data=decoded,
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
+    )
     qapp.processEvents()
     assert reopened.stimulus_info["frequencies"] == retained_frequencies
     assert reopened._step_sc_retained_frequency_state == "clean"
@@ -1968,7 +1976,11 @@ def test_step_sc_end_to_end_json_db_runtime_and_analysis_use_retained_schedule(
 
     detail = {"stimulus_info": dict(db_info), "stimulus_signal_path": "stale.wav"}
     data_struct = SimpleNamespace()
-    assert stimulus_resolver.set_data_struct_stimulus_signal(data_struct, detail) is True
+    assert stimulus_resolver.set_data_struct_stimulus_signal(
+        data_struct,
+        detail,
+        runtime_sample_rate=48000,
+    ) is True
     playback = data_struct.stimulus_data
     sample_rate = data_struct.sample_rate
     save_path = detail["stimulus_signal_path"]
@@ -2048,7 +2060,10 @@ def test_step_sc_save_reopen_clears_persisted_legacy_external_wav_path(
     old_stale_saved["load_stimulus_signal_path"] = stale_path
     old_stale_saved["stimulus_info"]["load_stimulus_signal_path"] = stale_path
 
-    reopened = StimulusWindow(stimulus_config_data=old_stale_saved)
+    reopened = StimulusWindow(
+        stimulus_config_data=old_stale_saved,
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
+    )
     qapp.processEvents()
 
     assert reopened.stimulus_info["stimulus_method"] == "frequency_stepped"
@@ -2426,7 +2441,8 @@ def test_constructor_invalid_octave_without_resolution_warns_and_falls_back(qapp
             "stimulus_info": invalid_payload,
             "stimulus_signal_path": "seed.wav",
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 
@@ -2679,7 +2695,8 @@ def test_constructor_invalid_generator_valued_step_sc_warns_falls_back_and_has_s
             "stimulus_info": _step_sc_payload(total_time=None, min_duration=0),
             "stimulus_signal_path": "seed.wav",
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 
@@ -2708,7 +2725,8 @@ def test_constructor_missing_schedule_field_step_sc_warns_and_falls_back(qapp, m
             "stimulus_info": payload,
             "stimulus_signal_path": "seed.wav",
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 
@@ -2744,7 +2762,8 @@ def test_constructor_legacy_step_sc_method_does_not_crash_or_hydrate_as_frequenc
             ),
             "stimulus_signal_path": "generated-step-sc-artifact.wav",
             "load_stimulus_signal_path": stale_path,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 
@@ -2777,7 +2796,8 @@ def test_constructor_invalid_step_sc_missing_artifact_path_does_not_load_wav(qap
             "stimulus_info": _step_sc_payload(min_duration=0),
             "stimulus_signal_path": "missing-relative-artifact.wav",
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 
@@ -2811,7 +2831,8 @@ def test_constructor_invalid_step_sc_then_custom_off_ok_does_not_save_stale_wav_
             "stimulus_info": _step_sc_payload(min_duration=0),
             "stimulus_signal_path": stale_path,
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
     window.custom_chk_box.blockSignals(True)
@@ -2848,7 +2869,8 @@ def test_constructor_step_sc_artifact_path_then_legacy_custom_off_ok_cannot_save
             "stimulus_info": _step_sc_payload(),
             "stimulus_signal_path": artifact_path,
             "load_stimulus_signal_path": None,
-        }
+        },
+        speaker={"name": "speaker", "samplerate": 44100, "index": 7},
     )
     qapp.processEvents()
 

@@ -55,6 +55,11 @@ TARGET_METHODS = {
     "_on_streaming_complete",
     "eventFilter",
 }
+TARGET_MODULE_HELPERS = {
+    "_clear_data_struct_stimulus_runtime_state",
+    "_clear_sequence_stimulus_runtime_state",
+    "_resolve_runtime_sample_rate_for_mode",
+}
 
 
 def _recording_delay_keys(value):
@@ -92,12 +97,35 @@ def _option_list_logger():
     return types.SimpleNamespace(warning=lambda *a, **k: None, error=lambda *a, **k: None)
 
 
+def _namespace_sample_rate_from_device(device):
+    if isinstance(device, dict) and device.get("samplerate") not in (None, ""):
+        return int(device["samplerate"])
+    return 48000
+
+
+def _namespace_resolve_input_sample_rate(mic):
+    return types.SimpleNamespace(ok=True, sample_rate=_namespace_sample_rate_from_device(mic), message="")
+
+
+def _namespace_resolve_duplex_sample_rate(mic, speaker):
+    input_rate = _namespace_sample_rate_from_device(mic)
+    output_rate = _namespace_sample_rate_from_device(speaker)
+    if input_rate != output_rate:
+        return types.SimpleNamespace(ok=False, sample_rate=None, message="sample rate mismatch")
+    return types.SimpleNamespace(ok=True, sample_rate=input_rate, message="")
+
+
 def _build_method_namespace():
     source = SOURCE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     sequence_window_class = next(
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "SequenceWindow"
     )
+
+    module_helper_sources = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in TARGET_MODULE_HELPERS:
+            module_helper_sources[node.name] = textwrap.dedent(ast.get_source_segment(source, node))
 
     method_sources = {}
     for node in sequence_window_class.body:
@@ -186,6 +214,8 @@ def _build_method_namespace():
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
         "normalize_play_record_detail": normalize_play_record_detail,
         "normalize_record_only_detail": normalize_record_only_detail,
+        "resolve_input_sample_rate": _namespace_resolve_input_sample_rate,
+        "resolve_duplex_sample_rate": _namespace_resolve_duplex_sample_rate,
         "np": np,
         "SoundcardAudioProcessor": None,
         "re": re,
@@ -196,10 +226,51 @@ def _build_method_namespace():
         ),
     }
 
+    for helper_name in TARGET_MODULE_HELPERS:
+        exec(module_helper_sources[helper_name], namespace)
+
     for method_name in TARGET_METHODS:
         exec(method_sources[method_name], namespace)
 
     return namespace
+
+
+def test_method_namespace_includes_runtime_sample_rate_helper_for_reset_work_pram():
+    namespace = _build_method_namespace()
+    calls = []
+
+    def fake_input_resolver(mic):
+        calls.append(("input", mic["name"]))
+        return types.SimpleNamespace(ok=True, sample_rate=mic["samplerate"], message="")
+
+    def fake_duplex_resolver(mic, speaker):
+        calls.append(("duplex", mic["name"], speaker["name"]))
+        return types.SimpleNamespace(ok=True, sample_rate=speaker["samplerate"], message="")
+
+    namespace["resolve_input_sample_rate"] = fake_input_resolver
+    namespace["resolve_duplex_sample_rate"] = fake_duplex_resolver
+
+    window = types.SimpleNamespace(
+        mic={"name": "Mic", "samplerate": 44100},
+        speaker={"name": "Speaker", "samplerate": 48000},
+    )
+
+    input_result = namespace["_resolve_runtime_sample_rate_for_mode"](window, "RECORD_ONLY", {})
+    duplex_result = namespace["_resolve_runtime_sample_rate_for_mode"](
+        window, "RECORD_ONLY", {"monitor_playback": True}
+    )
+    play_record_result = namespace["_resolve_runtime_sample_rate_for_mode"](window, "PLAY_AND_RECORD", {})
+    import_result = namespace["_resolve_runtime_sample_rate_for_mode"](window, "IMPORT_AUDIO", {})
+
+    assert input_result.sample_rate == 44100
+    assert duplex_result.sample_rate == 48000
+    assert play_record_result.sample_rate == 48000
+    assert import_result is None
+    assert calls == [
+        ("input", "Mic"),
+        ("duplex", "Mic", "Speaker"),
+        ("duplex", "Mic", "Speaker"),
+    ]
 
 
 class FakeLogger:

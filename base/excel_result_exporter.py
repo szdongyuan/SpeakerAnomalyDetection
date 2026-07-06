@@ -935,6 +935,9 @@ def export_analysis_to_csv_spool(
 
     try:
         file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
     except Exception as e:
         return ExportResult(ok=False, message=f"保存目录不可达或无权限: {e}")
     max_points = resolve_excel_max_points(excel_cfg)
@@ -1055,6 +1058,9 @@ def build_excel_from_csv_spool(
 
     try:
         xlsx_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
+        parent_dir = os.path.dirname(xlsx_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
         spool_path = str(
             spool_dir
             or resolve_excel_spool_dir(excel_cfg, file_path=xlsx_path, product_model=product_model)
@@ -1203,6 +1209,9 @@ def export_analysis_to_excel(
 
     try:
         file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
     except Exception as e:
         return ExportResult(ok=False, message=f"保存目录不可达或无权限: {e}")
     max_points = resolve_excel_max_points(excel_cfg)

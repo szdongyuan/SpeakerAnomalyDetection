@@ -13,7 +13,10 @@ from base.acquisition_recording_defaults import (
     normalize_record_only_detail,
     save_acquisition_default,
 )
-from base.sound_device_manager import SoundDeviceManager
+from base.audio_sample_rate import resolve_duplex_sample_rate, resolve_input_sample_rate, resolve_output_sample_rate
+from base.stimulus_resolver import _generate_stimulus_data
+from base.stimulus_signal.methods import normalize_stimulus_method
+from consts.frequency_stepped_consts import FREQUENCY_STEPPED_METHOD
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import (
     PushButton,
@@ -34,14 +37,8 @@ class BaseConfigWindow(QDialog):
         super().__init__()
         self.logger = LogManager.set_log_handler("core")
         self.final_data = None
-        if mic is not None:
-            self.mic = mic
-        else:
-            _, self.mic = SoundDeviceManager().get_default_device("mic", refresh=False)
-        if speaker is not None:
-            self.speaker = speaker
-        else:
-            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
+        self.mic = mic
+        self.speaker = speaker
         self.setup_ui()
 
     def setup_ui(self):
@@ -53,19 +50,20 @@ class BaseConfigWindow(QDialog):
 
     def create_cancel_ok_buttons(self, include_default=False):
         btn_layout = QHBoxLayout()
-        cancel_btn = PushButton(" 取  消 ")
-        cancel_btn.clicked.connect(self.on_click_cancel_btn)
-        ok_btn = PushButton(" 确  认 ")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self.on_click_ok_btn)
+        self.cancel_btn = PushButton(" 取  消 ")
+        self.cancel_btn.clicked.connect(self.on_click_cancel_btn)
+        self.ok_btn = PushButton(" 确  认 ")
+        self.ok_btn.setDefault(True)
+        self.ok_btn.clicked.connect(self.on_click_ok_btn)
 
-        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(self.cancel_btn)
         btn_layout.addStretch()
         if include_default:
             default_btn = PushButton(" 设为默认 ")
             default_btn.clicked.connect(self.on_default_btn_clicked)
             btn_layout.addWidget(default_btn)
-        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(self.ok_btn)
+        self._refresh_ok_button_state()
         return btn_layout
 
     def on_click_ok_btn(self):
@@ -82,6 +80,26 @@ class BaseConfigWindow(QDialog):
             MessageBox.information(self, "保存配置", "默认配置保存成功.")
         else:
             MessageBox.warning(self, "保存配置", "默认配置保存失败.")
+
+    def _device_display_name(self, device, empty_text):
+        get_value = getattr(device, "get", None)
+        if not callable(get_value):
+            return empty_text
+        name = get_value("name")
+        if not isinstance(name, str):
+            return empty_text
+        name = name.strip()
+        return name or empty_text
+
+    def _has_device_name(self, device):
+        return self._device_display_name(device, "") != ""
+
+    def _required_devices_available(self):
+        return True
+
+    def _refresh_ok_button_state(self):
+        if hasattr(self, "ok_btn"):
+            self.ok_btn.setEnabled(bool(self._required_devices_available()))
 
     def exec(self):
         super().exec()
@@ -122,9 +140,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         label_input_device = Label("输入设备:")
         self.input_device_display = LineEdit()
         self.input_device_display.setReadOnly(True)
-        if self.mic is None:
-            MessageBox.warning(self, "设置警告", "请先连接输入设备!")
-        self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
+        self.input_device_display.setText(self._device_display_name(self.mic, "未选择输入设备"))
         label_streaming_recording = Label("流式录制:")
         self.streaming_recording_checkbox = CheckBox("启用")
         self.streaming_recording_checkbox.setChecked(
@@ -162,9 +178,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         label_output_device = Label("输出设备:")
         self.output_device_display = LineEdit()
         self.output_device_display.setReadOnly(True)
-        if self.speaker is None:
-            MessageBox.warning(self, "设置警告", "请先连接输出设备!")
-        self.output_device_display.setPlaceholderText(f"{self.speaker.get('name')}")
+        self.output_device_display.setText(self._device_display_name(self.speaker, "未选择输出设备"))
         self.config_button = PushButton("激励信号配置")
         self.config_button.clicked.connect(self.open_stimulus_window)
 
@@ -175,13 +189,60 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         out_group_box.setLayout(grid_layout)
         return out_group_box
 
+    def _required_devices_available(self):
+        return (
+            self._has_device_name(self.mic)
+            and self._has_device_name(self.speaker)
+            and resolve_duplex_sample_rate(self.mic, self.speaker).ok
+        )
+
+    def _synchronize_stimulus_payload_sample_rate(self, sample_rate):
+        self.stimulus_config_data["sample_rate"] = int(sample_rate)
+        stimulus_info = self.stimulus_config_data.get("stimulus_info")
+        if not isinstance(stimulus_info, dict):
+            return True
+
+        method = normalize_stimulus_method(stimulus_info.get("stimulus_method", ""))
+        if method == FREQUENCY_STEPPED_METHOD:
+            try:
+                _generate_stimulus_data(
+                    self.stimulus_config_data,
+                    int(sample_rate),
+                    logger=self.logger,
+                )
+            except Exception as exc:
+                MessageBox.warning(self, "采样率配置", f"激励信号采样率同步失败: {exc}")
+                return False
+        else:
+            stimulus_info["sample_rate"] = int(sample_rate)
+            self.stimulus_config_data["stimulus_info"] = stimulus_info
+        return True
+
     def on_click_ok_btn(self):
+        if not self._has_device_name(self.mic) or not self._has_device_name(self.speaker):
+            return
+        sample_rate_result = resolve_duplex_sample_rate(self.mic, self.speaker)
+        if not sample_rate_result.ok:
+            MessageBox.warning(self, "采样率配置", sample_rate_result.message)
+            return
+        if not self._synchronize_stimulus_payload_sample_rate(sample_rate_result.sample_rate):
+            return
         self.stimulus_config_data["use_streaming_recording"] = bool(self.streaming_recording_checkbox.isChecked())
         self.stimulus_config_data["recording_start_delay_ms"] = float(self.recording_start_delay_ms_input.value())
         self.final_data = self.stimulus_config_data
         self.accept()
 
     def on_default_btn_clicked(self):
+        if not self._has_device_name(self.mic):
+            MessageBox.warning(self, "采样率配置", "未选择输入设备，请在硬件管理中选择设备。")
+            return
+        if not self._has_device_name(self.speaker):
+            MessageBox.warning(self, "采样率配置", "未选择输出设备，请在硬件管理中选择设备。")
+            return
+        sample_rate_result = resolve_duplex_sample_rate(self.mic, self.speaker)
+        if not sample_rate_result.ok:
+            MessageBox.warning(self, "采样率配置", sample_rate_result.message)
+            return
         ok = save_acquisition_default(
             "PLAY_AND_RECORD",
             {
@@ -193,6 +254,10 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self._show_default_save_result(ok)
 
     def open_stimulus_window(self):
+        sample_rate_result = resolve_output_sample_rate(self.speaker)
+        if not sample_rate_result.ok:
+            MessageBox.warning(self, "采样率配置", sample_rate_result.message)
+            return
         self.clicked_stimulus_btn_flag = True
         streaming_recording = bool(self.streaming_recording_checkbox.isChecked())
         recording_start_delay_ms = float(self.recording_start_delay_ms_input.value())
@@ -256,17 +321,15 @@ class RecordConfigWindow(BaseConfigWindow):
         self.time_input.setSuffix(" 秒")
 
         label_samplerate = Label("采样率:")
-        self.samplerate_combo = ComboBox()
-        self.samplerate_combo.addItems(["44100", "48000"])
-        self.samplerate_combo.setCurrentText(str(self.input_data.get("sample_rate")))
+        self.samplerate_lineedit = LineEdit()
+        self.samplerate_lineedit.setText(str(self._input_sample_rate_for_display()))
+        self.samplerate_lineedit.setReadOnly(True)
+        self.samplerate_lineedit.setToolTip("采样率由硬件管理中选定的输入设备决定。")
 
         label_input_device = Label("输入设备:")
         self.input_device_display = LineEdit()
         self.input_device_display.setReadOnly(True)
-        if self.mic is None:
-            MessageBox.warning(self, "设置警告", "请先连接输入设备!")
-        else:
-            self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
+        self.input_device_display.setText(self._device_display_name(self.mic, "未选择输入设备"))
 
         label_monitor = Label("实时监听播放:")
         self.monitor_checkbox = CheckBox("启用")
@@ -320,7 +383,7 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.time_input, 0, 1)
 
         grid_layout.addWidget(label_samplerate, 1, 0)
-        grid_layout.addWidget(self.samplerate_combo, 1, 1)
+        grid_layout.addWidget(self.samplerate_lineedit, 1, 1)
 
         grid_layout.addWidget(label_input_device, 2, 0)
         grid_layout.addWidget(self.input_device_display, 2, 1)
@@ -338,22 +401,54 @@ class RecordConfigWindow(BaseConfigWindow):
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
+    def _required_devices_available(self):
+        return self._has_device_name(self.mic) and resolve_input_sample_rate(self.mic).ok
+
+    def _input_sample_rate_for_display(self):
+        result = resolve_input_sample_rate(self.mic)
+        if result.ok:
+            return result.sample_rate
+        return result.message or "输入设备采样率无效，请在硬件管理中设置采样率。"
+
     def _collect_record_detail(self):
-        return {
+        result = resolve_input_sample_rate(self.mic)
+        detail = {
             "total_time": self.time_input.value(),
-            "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
             "monitor_input_channel": int(self.monitor_channel_combo.currentData()),
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
             "recording_start_delay_ms": float(self.recording_start_delay_ms_input.value()),
         }
+        if result.ok:
+            detail["sample_rate"] = int(result.sample_rate)
+        return detail
 
     def on_click_ok_btn(self):
+        if not self._has_device_name(self.mic):
+            return
+        result = resolve_input_sample_rate(self.mic)
+        if not result.ok:
+            MessageBox.warning(self, "采样率配置", result.message)
+            return
+        if self.monitor_checkbox.isChecked():
+            duplex_result = resolve_duplex_sample_rate(self.mic, self.speaker)
+            if not duplex_result.ok:
+                MessageBox.warning(self, "采样率配置", duplex_result.message)
+                return
         self.final_data = self._collect_record_detail()
         self.accept()
 
     def on_default_btn_clicked(self):
+        result = resolve_input_sample_rate(self.mic)
+        if not result.ok:
+            MessageBox.warning(self, "采样率配置", result.message)
+            return
+        if self.monitor_checkbox.isChecked():
+            duplex_result = resolve_duplex_sample_rate(self.mic, self.speaker)
+            if not duplex_result.ok:
+                MessageBox.warning(self, "采样率配置", duplex_result.message)
+                return
         ok = save_acquisition_default("RECORD_ONLY", self._collect_record_detail(), logger=self.logger)
         self._show_default_save_result(ok)
 
@@ -384,38 +479,43 @@ class ImportAudioConfigWindow(BaseConfigWindow):
         grid_layout.setVerticalSpacing(15)
 
         label_samplerate = Label("采样率:")
-        self.samplerate_combo = ComboBox()
-        self.samplerate_combo.addItems(["44100", "48000"])
-        default_sr = self.input_data.get("sample_rate", 44100)
-        self.samplerate_combo.setCurrentText(str(default_sr))
+        self.samplerate_lineedit = LineEdit()
+        self.samplerate_lineedit.setText("导入文件解码后确定")
+        self.samplerate_lineedit.setReadOnly(True)
+        self.samplerate_lineedit.setToolTip("导入分析采样率来自导入录音文件。")
 
-        grid_layout.addWidget(label_samplerate, 0, 0)
-        grid_layout.addWidget(self.samplerate_combo, 0, 1)
+        label_input_device = Label("输入设备:")
+        self.input_device_display = LineEdit()
+        self.input_device_display.setReadOnly(True)
+        self.input_device_display.setText(self._device_display_name(self.mic, "未选择输入设备"))
+
+        grid_layout.addWidget(label_input_device, 0, 0)
+        grid_layout.addWidget(self.input_device_display, 0, 1)
+        grid_layout.addWidget(label_samplerate, 1, 0)
+        grid_layout.addWidget(self.samplerate_lineedit, 1, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
+    def _required_devices_available(self):
+        return self._has_device_name(self.mic)
+
     def on_click_ok_btn(self):
-        self.final_data = {
-            "sample_rate": int(self.samplerate_combo.currentText()),
-        }
+        if not self._required_devices_available():
+            return
+        self.final_data = {k: deepcopy(v) for k, v in self.input_data.items() if k != "sample_rate"}
         self.accept()
 
 
 class ImportStimulusAudioConfigWindow(BaseConfigWindow):
     def __init__(self, stimulus_config_data, mic=None, speaker=None):
-        super().__init__(mic=mic)
+        super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("导入激励与音频")
         self.setMinimumSize(220, 150)
         self.resize(220, 150)
         self.stimulus_config_data = deepcopy(stimulus_config_data or {})
         self.clicked_stimulus_btn_flag = False
         self.stimulus_signal = None
-
-        if speaker is not None:
-            self.speaker = speaker
-        else:
-            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
 
         self.init_ui()
 
@@ -447,13 +547,20 @@ class ImportStimulusAudioConfigWindow(BaseConfigWindow):
         out_group_box.setLayout(grid_layout)
         return out_group_box
 
+    def _required_devices_available(self):
+        return True
+
     def on_click_ok_btn(self):
         self.final_data = self.stimulus_config_data
         self.accept()
 
     def open_stimulus_window(self):
         self.clicked_stimulus_btn_flag = True
-        self.stimulus_window = StimulusWindow(stimulus_config_data=self.stimulus_config_data, speaker=self.speaker)
+        self.stimulus_window = StimulusWindow(
+            stimulus_config_data=self.stimulus_config_data,
+            speaker=self.speaker,
+            offline_reference_authoring=True,
+        )
         self.refresh_stimulus_flag = self.stimulus_window.on_exec()
         if self.refresh_stimulus_flag:
             self.stimulus_config_data = self.stimulus_window.final_save_data

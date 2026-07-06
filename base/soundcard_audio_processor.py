@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.signal import correlate
 
 from base.log_manager import LogManager
 from base.save_data import save_audio_simple
@@ -61,6 +62,61 @@ class SoundcardAudioProcessor(object):
             return int(device["index"])
         return device
 
+    @staticmethod
+    def _sample_rate_values(params):
+        values = {}
+        for key in ("sr", "sample_rate"):
+            if key not in params or params.get(key) in (None, ""):
+                continue
+            value = params.get(key)
+            if isinstance(value, bool):
+                return None, f"{key} sample rate is invalid."
+            try:
+                sample_rate = int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None, f"{key} sample rate is invalid."
+            try:
+                if not isinstance(value, str) and float(value) != float(sample_rate):
+                    return None, f"{key} sample rate is invalid."
+            except (TypeError, ValueError, OverflowError):
+                return None, f"{key} sample rate is invalid."
+            if sample_rate <= 0:
+                return None, f"{key} sample rate is invalid."
+            values[key] = sample_rate
+        return values, ""
+
+    @classmethod
+    def _resolve_record_sample_rate(cls, record_dict):
+        record_values, record_error = cls._sample_rate_values(record_dict)
+        if record_error:
+            return None, error_code.INVALID_RECORD, f"Record sample rate invalid: {record_error}"
+        if not record_values:
+            return None, error_code.INVALID_RECORD, "Record sample rate is missing."
+        if len(set(record_values.values())) != 1:
+            return None, error_code.INVALID_RECORD, "Record sample rate values do not match."
+        return next(iter(record_values.values())), error_code.OK, ""
+
+    @classmethod
+    def _resolve_playrec_sample_rate(cls, record_dict, stimulus_dict):
+        stimulus_values, stimulus_error = cls._sample_rate_values(stimulus_dict)
+        if stimulus_error:
+            return None, error_code.INVALID_PLAY, f"Stimulus sample rate invalid: {stimulus_error}"
+        if not stimulus_values:
+            return None, error_code.INVALID_PLAY, "Stimulus sample rate is missing."
+        if len(set(stimulus_values.values())) != 1:
+            return None, error_code.INVALID_PLAY, "Stimulus sample rate values do not match."
+        record_sample_rate, record_code, record_msg = cls._resolve_record_sample_rate(record_dict)
+        if record_code != error_code.OK:
+            return None, record_code, record_msg
+        stimulus_sample_rate = next(iter(stimulus_values.values()))
+        if stimulus_sample_rate != record_sample_rate:
+            return (
+                None,
+                error_code.INVALID_PLAY,
+                "Stimulus and record sample rates do not match.",
+            )
+        return stimulus_sample_rate, error_code.OK, ""
+
     @classmethod
     def _playrec_device_selector(cls, record_dict):
         input_device = record_dict.get("input_device") or record_dict.get("device")
@@ -79,6 +135,10 @@ class SoundcardAudioProcessor(object):
         return None
 
     def sd_play_rec(self, record_dict, stimulus_dict, recording_path):
+        sr, validation_code, validation_msg = self._resolve_playrec_sample_rate(record_dict, stimulus_dict)
+        if validation_code != error_code.OK:
+            return validation_code, validation_msg
+
         data = np.asarray(stimulus_dict.get("data")) * stimulus_dict.get("amplitude")
         alignment_reference = alignment_reference_from_stimulus(
             {
@@ -88,9 +148,7 @@ class SoundcardAudioProcessor(object):
         )
         prepare_frames = self._coerce_nonnegative_frames(record_dict.get("prepare_frames", 1000), 1000)
         prolong_frames = self._coerce_nonnegative_frames(record_dict.get("prolong_frames", 10000), 10000)
-        delay_frames = self._coerce_nonnegative_frames(
-            record_dict.get("recording_start_delay_frames", 0), 0
-        )
+        delay_frames = self._coerce_nonnegative_frames(record_dict.get("recording_start_delay_frames", 0), 0)
         prolong_data = np.concatenate(
             [
                 np.zeros(delay_frames + prepare_frames, dtype=data.dtype),
@@ -98,7 +156,6 @@ class SoundcardAudioProcessor(object):
                 np.zeros(prolong_frames, dtype=data.dtype),
             ]
         )
-        sr = stimulus_dict.get("sr")
         device = self._playrec_device_selector(record_dict)
         if device is None:
             rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
@@ -107,9 +164,7 @@ class SoundcardAudioProcessor(object):
         if delay_frames > 0:
             rec_data = rec_data[delay_frames:]
         align_frames = self.calculate_alignment(alignment_reference, rec_data)
-        aligned_data = bounded_aligned_recording_slice(
-            rec_data, align_frames, len(alignment_reference)
-        )
+        aligned_data = bounded_aligned_recording_slice(rec_data, align_frames, len(alignment_reference))
         save_audio_simple(recording_path, aligned_data, sr)
         return error_code.OK, aligned_data
 
@@ -118,11 +173,7 @@ class SoundcardAudioProcessor(object):
         try:
             data = stimulus_params.get("data") * stimulus_params.get("amplitude")
             output_channels = stimulus_params.get("output_channels")
-            if (
-                isinstance(output_channels, int)
-                and not isinstance(output_channels, bool)
-                and output_channels >= 2
-            ):
+            if isinstance(output_channels, int) and not isinstance(output_channels, bool) and output_channels >= 2:
                 data = np.asarray(data)
                 if data.ndim == 1 or (data.ndim == 2 and data.shape[1] == 1):
                     data = np.tile(data.reshape(-1, 1), (1, output_channels))
@@ -137,15 +188,15 @@ class SoundcardAudioProcessor(object):
 
     @staticmethod
     def sd_rec(recorded_dict):
-        num_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(
-            recorded_dict.get("num_frames", 441000), 441000
+        num_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(recorded_dict.get("num_frames", 441000), 441000)
+        sample_rate, validation_code, validation_msg = SoundcardAudioProcessor._resolve_record_sample_rate(
+            recorded_dict
         )
-        sample_rate = recorded_dict.get("sample_rate", recorded_dict.get("sr", 44100))
+        if validation_code != error_code.OK:
+            return validation_code, validation_msg
         channels = recorded_dict.get("channels", 1)
         blocking = recorded_dict.get("blocking", True)
-        prolong_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(
-            recorded_dict.get("prolong_frames", 0), 0
-        )
+        prolong_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(recorded_dict.get("prolong_frames", 0), 0)
         delay_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(
             recorded_dict.get("recording_start_delay_frames", 0), 0
         )
@@ -199,10 +250,10 @@ class SoundcardAudioProcessor(object):
         new_delay_samples_r = 0
         tmp_max = 0
         for i in range(n // 3, n - len(stimulus_signal) // 12, len(stimulus_signal) // 12):
-            max_min_diff = max(corr_func_shifted_r[i: i + n_11]) - min(corr_func_shifted_r[i: i + n_11])
+            max_min_diff = max(corr_func_shifted_r[i : i + n_11]) - min(corr_func_shifted_r[i : i + n_11])
             if max_min_diff >= tmp_max:
                 tmp_max = max_min_diff
-                new_delay_samples_r = i + np.argmax(np.abs(corr_func_shifted_r[i: i + n_11]))
+                new_delay_samples_r = i + np.argmax(np.abs(corr_func_shifted_r[i : i + n_11]))
         new_delay_samples_r -= max_shift
         return new_delay_samples_r, corr_func_shifted_r, max_shift
 
@@ -217,5 +268,10 @@ class SoundcardAudioProcessor(object):
         Returns:
             int: 计算出的对齐帧数（延迟）。
         """
+        if len(stimulus_signal) == 0 or len(recorded_signal) == 0:
+            return 1
+        if len(stimulus_signal) < 12:
+            corr_func = correlate(recorded_signal, stimulus_signal, mode="full")
+            return int(np.argmax(corr_func) - len(stimulus_signal) + 1)
         align_frames, corr_func, max_shift = SoundcardAudioProcessor.gcc_phat(stimulus_signal, recorded_signal)
         return align_frames

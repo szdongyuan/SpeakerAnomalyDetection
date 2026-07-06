@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QFontMetrics
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -17,6 +17,7 @@ from ui.custom_ui_widget.widgets import (
     ComboBox,
     DoubleSpinBox,
     LineEdit,
+    MessageBox,
     PushButton,
     SpinBox,
 )
@@ -30,6 +31,47 @@ def qapp():
 def _current_font(widget):
     font = widget.font
     return font() if callable(font) else font
+
+
+def _localized_standard_button_texts(message_box):
+    return {
+        standard_button: message_box.button(standard_button).text()
+        for standard_button in (
+            QMessageBox.Ok,
+            QMessageBox.Cancel,
+            QMessageBox.Yes,
+            QMessageBox.No,
+        )
+        if message_box.button(standard_button) is not None
+    }
+
+
+def test_message_box_sync_localizes_yes_no_buttons(qapp):
+    message_box = MessageBox()
+    message_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+
+    message_box._sync_buttons_style_and_text()
+
+    assert _localized_standard_button_texts(message_box) == {
+        QMessageBox.Yes: "确认",
+        QMessageBox.No: "取消",
+    }
+    assert message_box.standardButton(message_box.button(QMessageBox.Yes)) == QMessageBox.Yes
+    assert message_box.standardButton(message_box.button(QMessageBox.No)) == QMessageBox.No
+
+
+def test_message_box_sync_preserves_ok_cancel_button_localization(qapp):
+    message_box = MessageBox()
+    message_box.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+
+    message_box._sync_buttons_style_and_text()
+
+    assert _localized_standard_button_texts(message_box) == {
+        QMessageBox.Ok: "确认",
+        QMessageBox.Cancel: "取消",
+    }
+    assert message_box.standardButton(message_box.button(QMessageBox.Ok)) == QMessageBox.Ok
+    assert message_box.standardButton(message_box.button(QMessageBox.Cancel)) == QMessageBox.Cancel
 
 
 @pytest.mark.parametrize(
@@ -89,8 +131,8 @@ def test_acquisition_delay_spinbox_natural_height_fits_font(qapp):
             "stimulus_info": {"total_time": 1.0, "sample_rate": 48000},
             "recording_start_delay_ms": 50.0,
         },
-        mic={"name": "mic"},
-        speaker={"name": "speaker"},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100},
     )
     spinbox = window.recording_start_delay_ms_input
     spinbox.ensurePolished()
@@ -109,8 +151,8 @@ def test_play_record_dialog_controls_keep_readable_height_when_window_is_compact
             "stimulus_info": {"total_time": 4.0, "sample_rate": 48000},
             "recording_start_delay_ms": 50.0,
         },
-        mic={"name": "麦克风 (Dongyuan...)"},
-        speaker={"name": "扬声器 (Dongyuan...)"},
+        mic={"name": "麦克风 (Dongyuan...)", "samplerate": 44100},
+        speaker={"name": "扬声器 (Dongyuan...)", "samplerate": 44100},
     )
     window.resize(350, 350)
     window.show()

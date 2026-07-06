@@ -5,6 +5,12 @@ from base.db_users_management import UsersManagement
 from consts import error_code
 
 
+@pytest.fixture(autouse=True)
+def bypass_system_database_ready():
+    with mock.patch("base.db_users_management.ensure_system_database_ready"):
+        yield
+
+
 class TestUsersManagement(object):
     @pytest.mark.parametrize("database_ret, query_match_set, insert_set, register_user_info, result_set", [
         (mock.Mock(), [], [], {}, (error_code.INVALID_DATA_LOADING, "Missing registration information.")),
@@ -25,7 +31,7 @@ class TestUsersManagement(object):
     def test_create_user(self, mock_database, database_ret, query_match_set, insert_set, register_user_info, result_set):
         mock_database.return_value.__enter__.return_value = database_ret
         mock_database.return_value.__enter__.return_value.query_matching_data.return_value = query_match_set
-        mock_database.return_value.__enter__.return_value.insert_audio_files_info.side_effect = insert_set
+        mock_database.return_value.__enter__.return_value.insert_data_into_db.side_effect = insert_set
         result = UsersManagement().create_user(register_user_info)
         assert result == result_set
 
@@ -73,7 +79,7 @@ class TestUsersManagement(object):
     @mock.patch("base.db_users_management.DataSave")
     def test_reset_access_level(self, mock_database, database_set, update_set, user_name, access_level, result_ret):
         mock_database.return_value.__enter__.return_value = database_set
-        mock_database.return_value.__enter__.return_value.update_audio_files_info.side_effect = update_set
+        mock_database.return_value.__enter__.return_value.update_table_data.side_effect = update_set
         result = UsersManagement().reset_access_level(user_name, access_level)
         assert result == result_ret
 
@@ -104,7 +110,7 @@ class TestUsersManagement(object):
     def test_reset_password(self, mock_database, input_set, result_ret):
         mock_database.return_value.__enter__.return_value = input_set["database_set"]
         mock_database.return_value.__enter__.return_value.query_matching_data.return_value = input_set["query_match_set"]
-        mock_database.return_value.__enter__.return_value.update_audio_files_info.side_effect = input_set["update_set"]
+        mock_database.return_value.__enter__.return_value.update_table_data.side_effect = input_set["update_set"]
         result = UsersManagement().reset_password(input_set["user_name"], input_set["new_password"])
         assert result == result_ret
 

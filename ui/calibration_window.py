@@ -6,6 +6,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QDialog, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
+from base.audio_sample_rate import resolve_input_sample_rate
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.swept_sine_chirps import StimulusSignal
@@ -413,6 +414,14 @@ class OutputCalibration(QWidget):
             return None
         return getattr(window, "speaker", None)
 
+    def _selected_speaker_hardware_id(self):
+        speaker = self._selected_speaker_for_playback()
+        if speaker is None:
+            saved_devices = SoundDeviceManager.load_selected_devices() or {}
+            speaker = saved_devices.get("speaker")
+        hardware_id = self._speaker_field(speaker, "hardware_id") if speaker is not None else None
+        return hardware_id or None
+
     def _is_asio_output_playback(self):
         speaker = self._selected_speaker_for_playback()
         if speaker is None:
@@ -644,10 +653,11 @@ class OutputCalibration(QWidget):
         stimulus amplitude.
         """
         target_voltage = self.target_voltage_box.value()
-        scm = SoundcardCalibrationManager()
+        scm = SoundcardCalibrationManager(speaker_hardware_id=self._selected_speaker_hardware_id())
         calibrate_code, calibrate_result = scm.calibrate_amplitude(target_voltage)
         if calibrate_code != error_code.OK:
             self.default_logger.error(f"Failed to calculate the amplitude. {calibrate_result}")
+            return
         amplitude, max_voltage = calibrate_result
         if target_voltage > max_voltage:
             if self.test_calibration_popup():
@@ -722,7 +732,7 @@ class OutputCalibration(QWidget):
         calibration.
             After calibration, it handles the results based on the fit_code: logs and prompts success or failure.
         """
-        scm = SoundcardCalibrationManager()
+        scm = SoundcardCalibrationManager(speaker_hardware_id=self._selected_speaker_hardware_id())
         if len(self.output_voltage_value) != self.calibration_param["calibration_nums"]:
             self.calibration_popup(success_flag=False)
             self.default_logger.error("The saved voltage does not meet the requirement of calibration times.")
@@ -823,7 +833,29 @@ class InputCalibration(QWidget):
                 startup_devices.get("mic_channels")
             )
 
+    def _selected_mic_hardware_id(self):
+        if isinstance(self.selected_input_device, dict):
+            hardware_id = self.selected_input_device.get("hardware_id")
+            if hardware_id:
+                return hardware_id
+        getter = getattr(self.selected_input_device, "get", None)
+        if callable(getter):
+            hardware_id = getter("hardware_id")
+            if hardware_id:
+                return hardware_id
+        saved_devices = SoundDeviceManager.load_selected_devices() or {}
+        saved_mic = saved_devices.get("mic")
+        if isinstance(saved_mic, dict) and saved_mic.get("hardware_id"):
+            return saved_mic.get("hardware_id")
+        return None
+
     def _saved_channel_factors(self):
+        hardware_id = self._selected_mic_hardware_id()
+        if hardware_id:
+            try:
+                return load_mic_channel_v2pa_factors(hardware_id=hardware_id)
+            except TypeError:
+                return load_mic_channel_v2pa_factors()
         return load_mic_channel_v2pa_factors()
 
     def _known_calibrated_channels(self):
@@ -860,10 +892,24 @@ class InputCalibration(QWidget):
             return None
 
         try:
-            replace_mic_channel_v2pa_factors(
-                complete_factors,
-                channel_standard_spl=session_standard_spl,
-            )
+            hardware_id = self._selected_mic_hardware_id()
+            if hardware_id:
+                try:
+                    replace_mic_channel_v2pa_factors(
+                        complete_factors,
+                        channel_standard_spl=session_standard_spl,
+                        hardware_id=hardware_id,
+                    )
+                except TypeError:
+                    replace_mic_channel_v2pa_factors(
+                        complete_factors,
+                        channel_standard_spl=session_standard_spl,
+                    )
+            else:
+                replace_mic_channel_v2pa_factors(
+                    complete_factors,
+                    channel_standard_spl=session_standard_spl,
+                )
         except Exception as exc:
             self.pending_persistence_failure = True
             self.default_logger.error(f"Failed to persist input channel calibration factors: {exc}")
@@ -1116,6 +1162,15 @@ class InputCalibration(QWidget):
         if self.current_channel is None:
             MessageBox.warning(self, "提示", "未选择输入通道，请先在硬件中设置麦克风通道！")
             return False
+        if not self._selected_mic_hardware_id():
+            MessageBox.warning(self, "提示", "请先选择已注册的麦克风硬件后再进行输入校准。")
+            return False
+
+        sample_rate_result = resolve_input_sample_rate(self.selected_input_device)
+        if not sample_rate_result.ok:
+            MessageBox.warning(self, "提示", sample_rate_result.message)
+            return False
+        sample_rate = sample_rate_result.sample_rate
 
         capture_channel = int(self.current_channel)
         self.stop_timer = False
@@ -1127,9 +1182,9 @@ class InputCalibration(QWidget):
         prolong = 1
         recorded_dict = {
             "channels": 1,
-            "sample_rate": 44100,
-            "num_frames": 10 * 44100,
-            "prolong_frames": int(prolong * 44100),
+            "sample_rate": sample_rate,
+            "num_frames": int(self.recorded_time * sample_rate),
+            "prolong_frames": int(prolong * sample_rate),
             "device": self.selected_input_device,
             "input_channels": [capture_channel],
         }
@@ -1380,7 +1435,17 @@ class InputCalibration(QWidget):
         self.pending_persistence_failure = False
 
         try:
-            clear_mic_channel_v2pa_factors()
+            hardware_id = self._selected_mic_hardware_id()
+            if hardware_id:
+                try:
+                    clear_mic_channel_v2pa_factors(
+                        hardware_id=hardware_id,
+                        channel_indices=self.selected_input_channels,
+                    )
+                except TypeError:
+                    clear_mic_channel_v2pa_factors()
+            else:
+                clear_mic_channel_v2pa_factors()
         except Exception as exc:
             self.default_logger.error(f"Failed to clear input channel calibration factors: {exc}")
 

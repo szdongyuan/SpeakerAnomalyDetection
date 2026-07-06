@@ -125,3 +125,10 @@ def load_audio_simple(audio_path, sr=None):
     y, sr = librosa.load(audio_path, sr=sr)
     t = np.linspace(0, len(y) - 1, len(y)) / sr
     return y, t
+
+
+def load_audio_preserve_rate(audio_path, mono=True):
+    if not audio_path:
+        return None, None
+    data, sr = librosa.load(audio_path, sr=None, mono=mono)
+    return data, int(sr)

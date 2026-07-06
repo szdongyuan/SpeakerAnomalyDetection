@@ -1,6 +1,9 @@
+import librosa
 import os
 import threading
 import time
+from math import gcd
+from scipy.signal import resample_poly
 
 import numpy as np
 
@@ -48,6 +51,45 @@ class PlaybackController:
                 raise RuntimeError("Unsupported audio shape")
             return audio_data, int(sample_rate)
 
+    @staticmethod
+    def _coerce_sample_rate(sample_rate):
+        if isinstance(sample_rate, bool):
+            return None
+        try:
+            coerced = int(sample_rate)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        try:
+            if not isinstance(sample_rate, str) and float(sample_rate) != float(coerced):
+                return None
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return coerced if coerced > 0 else None
+
+    @staticmethod
+    def _resample_audio(audio_data, from_rate, to_rate):
+        if int(from_rate) == int(to_rate):
+            return audio_data
+        divisor = gcd(int(from_rate), int(to_rate))
+        try:
+            resampled = resample_poly(
+                audio_data,
+                up=int(to_rate) // divisor,
+                down=int(from_rate) // divisor,
+                axis=0,
+            )
+        except Exception:
+            audio_array = np.asarray(audio_data, dtype=np.float32)
+            if audio_array.ndim == 1:
+                resampled = librosa.resample(audio_array, orig_sr=int(from_rate), target_sr=int(to_rate))
+            else:
+                channels = [
+                    librosa.resample(audio_array[:, channel], orig_sr=int(from_rate), target_sr=int(to_rate))
+                    for channel in range(audio_array.shape[1])
+                ]
+                resampled = np.stack(channels, axis=1)
+        return np.asarray(resampled, dtype=np.float32)
+
     def _reset_playback_state_if_session(self, session_id):
         with self._playback_lock:
             if session_id != self._playback_session_id:
@@ -78,7 +120,7 @@ class PlaybackController:
 
             time.sleep(self._monitor_interval_sec)
 
-    def start_audio_playback(self, file_path: str, device=None):
+    def start_audio_playback(self, file_path: str, device=None, output_sample_rate=None, allow_native_rate=False):
         if not file_path:
             return error_code.INVALID_PATH, "Missing audio file path."
 
@@ -94,6 +136,21 @@ class PlaybackController:
         if audio_data.size == 0:
             return error_code.INVALID_FILE, "Audio file is empty."
 
+        if output_sample_rate is None:
+            if not allow_native_rate:
+                return error_code.INVALID_PLAY, "Missing output sample rate for playback."
+            playback_sample_rate = sample_rate
+        else:
+            playback_sample_rate = self._coerce_sample_rate(output_sample_rate)
+            if playback_sample_rate is None:
+                return error_code.INVALID_PLAY, "Invalid output sample rate for playback."
+
+        if int(playback_sample_rate) != int(sample_rate):
+            try:
+                audio_data = self._resample_audio(audio_data, sample_rate, playback_sample_rate)
+            except Exception as e:
+                return error_code.INVALID_PLAY, f"Failed to resample audio for playback: {str(e)[:80]}"
+
         with self._playback_lock:
             self._playback_session_id += 1
             session_id = self._playback_session_id
@@ -105,7 +162,7 @@ class PlaybackController:
         try:
             sd.play(
                 audio_data,
-                samplerate=sample_rate,
+                samplerate=int(playback_sample_rate),
                 device=device,
                 blocking=False,
             )

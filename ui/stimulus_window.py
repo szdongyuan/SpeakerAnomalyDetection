@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import QDialog, QFileDialog, QSizePolicy, QGridLayout, QHBo
 from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
+from base.audio_sample_rate import SampleRateResolution, resolve_output_sample_rate
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
@@ -178,18 +179,26 @@ class StimulusWindow(QDialog):
     STEP_SC_LEGACY_EXTERNAL_WAV_KEYS = {
         "load_stimulus_signal_path",
     }
+    SAMPLE_RATE_UNRESOLVED_DISPLAY = "采样率未解析"
+    OFFLINE_REFERENCE_SAMPLE_RATE_TOOLTIP = (
+        "离线参考激励的定义采样率用于生成/保存参考定义；最终分析运行采样率将在导入录音文件后由导入录音决定。"
+    )
+    OUTPUT_SAMPLE_RATE_TOOLTIP = "采样率由硬件管理中选定的输出设备决定。"
     SUPPORTED_STIMULUS_METHODS = {"chirp", "step", "noise", "frequency_stepped"}
 
-    def __init__(self, stimulus_config_data=None, speaker=None):
+    def __init__(self, stimulus_config_data=None, speaker=None, offline_reference_authoring=False):
         """Initialize stimulus window with default configurations"""
         super().__init__()
         # initialize stimulus signal type， and create variable to store stimulus signal data
         self.speaker = speaker
+        self.offline_reference_authoring = bool(offline_reference_authoring)
+        self.output_sample_rate_resolution = resolve_output_sample_rate(self.speaker)
         self.load_wav_path = ""
         self.load_stimulus_signal_path = None
         self.refresh_stimulus_info = False
         self.is_close_window = False
         self.stimulus_data = None
+        self._stimulus_data_sample_rate = None
         self.default_logger = LogManager.set_log_handler("core")
         self.box_checked_enable_dict = {}
         self.box_checked_disable_list = []
@@ -205,7 +214,7 @@ class StimulusWindow(QDialog):
         self.step_box = SpinBox()
         self.voltage_combo_box = ComboBox()
         self.voltage_spin_box = DoubleSpinBox()
-        self.sample_rate_combo_box = ComboBox()
+        self.sample_rate_lineedit = LineEdit()
         self.min_duration_box = DoubleSpinBox()
         self.min_cycles_box = DoubleSpinBox()
         self.resolution_combo_box = ComboBox()
@@ -228,6 +237,7 @@ class StimulusWindow(QDialog):
         self.step_sc_group_box = self.create_step_sc_group_box()
         self.stimulus_config_data = deepcopy(stimulus_config_data)
         self.load_stimulus_config_data(self.stimulus_config_data)
+        self._apply_output_sample_rate_authority()
         self.start_custom_check_status = self.stimulus_info.get("use_custom_stimulus", False)
         self.init_ui()
         self.update_stimulus_ui_value(self.stimulus_info)
@@ -392,10 +402,6 @@ class StimulusWindow(QDialog):
         self.voltage_spin_box.valueChanged.connect(
             lambda: self.update_stimulus_info_from_controller(self.voltage_spin_box, "voltage")
         )
-        self.sample_rate_combo_box.currentTextChanged.connect(
-            lambda: self.update_stimulus_info_from_controller(self.sample_rate_combo_box, "sample_rate")
-        )
-
     def switch_connection_off(self):
         for widget in [
             self.stimulus_type_combo_box,
@@ -409,7 +415,6 @@ class StimulusWindow(QDialog):
             self.min_cycles_box,
             self.resolution_combo_box,
             self.voltage_spin_box,
-            self.sample_rate_combo_box,
         ]:
             try:
                 widget.disconnect()
@@ -611,22 +616,211 @@ class StimulusWindow(QDialog):
 
     def create_sample_rate_group_box(self):
         """
-        Creates a GroupBox containing a sample rate selection combo box.
+        Creates a GroupBox containing a read-only sample rate display.
 
-        This function generates a GroupBox that includes a combo box for selecting the sample rate.
-        The combo box options are 44100 and 48000. When the user changes the sample rate,
-        it triggers the `stimulus_changed` signal.
+        This function generates a GroupBox that includes a line edit displaying the authoritative sample rate.
 
         Returns:
-            GroupBox: A GroupBox object containing the sample rate selection combo box.
+            GroupBox: A GroupBox object containing the sample rate display.
         """
         sample_rate_group_box = GroupBox("采样率")
-        self.sample_rate_combo_box.addItems(["44100", "48000"])
+        self.sample_rate_lineedit.setReadOnly(True)
+        self.sample_rate_lineedit.setToolTip(
+            self.OFFLINE_REFERENCE_SAMPLE_RATE_TOOLTIP
+            if self.offline_reference_authoring
+            else self.OUTPUT_SAMPLE_RATE_TOOLTIP
+        )
         sample_rate_layout = QHBoxLayout()
-        sample_rate_layout.addWidget(self.sample_rate_combo_box)
+        sample_rate_layout.addWidget(self.sample_rate_lineedit)
         sample_rate_layout.setContentsMargins(10, 10, 10, 10)
         sample_rate_group_box.setLayout(sample_rate_layout)
         return sample_rate_group_box
+
+    def _output_sample_rate(self):
+        result = resolve_output_sample_rate(self.speaker)
+        self.output_sample_rate_resolution = result
+        if result.ok:
+            return result.sample_rate
+        return None
+
+    def _definition_sample_rate(self, stimulus_info=None):
+        if stimulus_info is None:
+            stimulus_info = getattr(self, "stimulus_info", None)
+        if not isinstance(stimulus_info, dict):
+            return None
+        try:
+            sample_rate = int(stimulus_info.get("sample_rate"))
+        except (TypeError, ValueError):
+            return None
+        if sample_rate <= 0:
+            return None
+        return sample_rate
+
+    def _authoring_sample_rate(self, stimulus_info=None):
+        if not self.offline_reference_authoring:
+            return self._output_sample_rate()
+        sample_rate = self._definition_sample_rate(stimulus_info)
+        if sample_rate is None:
+            self.output_sample_rate_resolution = SampleRateResolution(
+                False,
+                None,
+                "离线参考激励缺少有效的定义采样率。",
+            )
+            return None
+        self.output_sample_rate_resolution = SampleRateResolution(True, sample_rate, "")
+        return sample_rate
+
+    def _set_sample_rate_display(self, text, tooltip=None):
+        line_edit = getattr(self, "sample_rate_lineedit", None)
+        if line_edit is None:
+            return
+        previous_signal_state = line_edit.blockSignals(True)
+        try:
+            line_edit.setText(str(text))
+        finally:
+            line_edit.blockSignals(previous_signal_state)
+        line_edit.setReadOnly(True)
+        if tooltip is not None:
+            line_edit.setToolTip(tooltip)
+
+    def _set_unresolved_sample_rate_display(self):
+        result = getattr(self, "output_sample_rate_resolution", None)
+        tooltip = getattr(result, "message", None) or "采样率未解析，请检查硬件管理中的输出设备采样率。"
+        self._set_sample_rate_display(self.SAMPLE_RATE_UNRESOLVED_DISPLAY, tooltip)
+
+    def _apply_output_sample_rate_authority(self):
+        sample_rate = self._authoring_sample_rate()
+        if sample_rate is None or not isinstance(getattr(self, "stimulus_info", None), dict):
+            self._set_unresolved_sample_rate_display()
+            return False
+        self.stimulus_info["sample_rate"] = sample_rate
+        if isinstance(self.stimulus_config_data, dict) and isinstance(
+            self.stimulus_config_data.get("stimulus_info"), dict
+        ):
+            self.stimulus_config_data["stimulus_info"]["sample_rate"] = sample_rate
+        tooltip = (
+            self.OFFLINE_REFERENCE_SAMPLE_RATE_TOOLTIP
+            if self.offline_reference_authoring
+            else self.OUTPUT_SAMPLE_RATE_TOOLTIP
+        )
+        self._set_sample_rate_display(str(sample_rate), tooltip)
+        return True
+
+    def _apply_output_sample_rate_to_candidate(self, candidate):
+        sample_rate = self._authoring_sample_rate(candidate)
+        if sample_rate is None:
+            self._set_unresolved_sample_rate_display()
+            return False
+        candidate["sample_rate"] = sample_rate
+        return True
+
+    def _warn_if_missing_output_sample_rate(self):
+        result = resolve_output_sample_rate(self.speaker)
+        self.output_sample_rate_resolution = result
+        if result.ok:
+            return False
+        self._set_unresolved_sample_rate_display()
+        MessageBox.warning(self, "采样率配置", result.message)
+        return True
+
+    def _current_authoritative_sample_rate_or_warn(self):
+        if self.offline_reference_authoring:
+            if not self._apply_output_sample_rate_authority():
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                return None
+        else:
+            if self._warn_if_missing_output_sample_rate():
+                return None
+            self._apply_output_sample_rate_authority()
+        try:
+            return int(self.stimulus_info["sample_rate"])
+        except (KeyError, TypeError, ValueError):
+            MessageBox.warning(self, "采样率配置", "激励信号缺少有效采样率。")
+            return None
+
+    def _current_playback_sample_rate_or_warn(self):
+        if self._warn_if_missing_output_sample_rate():
+            return None
+        return self.output_sample_rate_resolution.sample_rate
+
+    def _sync_external_wav_duration_metadata(self, sample_rate):
+        if self.stimulus_data is None:
+            return
+        try:
+            sample_rate = int(sample_rate)
+        except (TypeError, ValueError):
+            return
+        if sample_rate <= 0:
+            return
+        total_time = len(self.stimulus_data) / sample_rate
+        self.stimulus_info["total_time"] = total_time
+        total_time_box = getattr(self, "total_time_box", None)
+        if total_time_box is None or self._is_step_sc_active():
+            return
+        previous_signal_state = total_time_box.blockSignals(True)
+        try:
+            if total_time < total_time_box.minimum() or total_time > total_time_box.maximum():
+                total_time_box.setRange(
+                    min(total_time, total_time_box.minimum()),
+                    max(total_time, total_time_box.maximum()),
+                )
+            total_time_box.setValue(total_time)
+        finally:
+            total_time_box.blockSignals(previous_signal_state)
+
+    def _ensure_stimulus_data_matches_authoritative_sample_rate(self):
+        sample_rate = self._current_authoritative_sample_rate_or_warn()
+        if sample_rate is None:
+            return False
+        if self.stimulus_data is not None and self._stimulus_data_sample_rate == sample_rate:
+            if self._uses_legacy_external_wav_branch():
+                self._sync_external_wav_duration_metadata(sample_rate)
+            return True
+        if self._uses_legacy_external_wav_branch():
+            if not self._has_authoritative_legacy_external_wav():
+                self.miss_popup()
+                return False
+            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, sample_rate)
+            self._stimulus_data_sample_rate = sample_rate
+            self._sync_external_wav_duration_metadata(sample_rate)
+            return True
+        return self.create_signal_from_stimulus_info() is not False
+
+    def _ensure_stimulus_data_matches_playback_sample_rate(self, sample_rate):
+        if self.stimulus_data is not None and self._stimulus_data_sample_rate == sample_rate:
+            if self._uses_legacy_external_wav_branch():
+                self._sync_external_wav_duration_metadata(sample_rate)
+            return True
+        if self._uses_legacy_external_wav_branch():
+            if not self._has_authoritative_legacy_external_wav():
+                self.miss_popup()
+                return False
+            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, sample_rate)
+            self._stimulus_data_sample_rate = sample_rate
+            self._sync_external_wav_duration_metadata(sample_rate)
+            return True
+        if not self.offline_reference_authoring:
+            return self.create_signal_from_stimulus_info() is not False
+
+        original_stimulus_info = deepcopy(self.stimulus_info)
+        has_config_stimulus_info = isinstance(self.stimulus_config_data, dict) and isinstance(
+            self.stimulus_config_data.get("stimulus_info"), dict
+        )
+        original_config_stimulus_info = (
+            deepcopy(self.stimulus_config_data["stimulus_info"]) if has_config_stimulus_info else None
+        )
+        original_display_text = self.sample_rate_lineedit.text()
+        original_display_tooltip = self.sample_rate_lineedit.toolTip()
+        try:
+            self.stimulus_info["sample_rate"] = sample_rate
+            if has_config_stimulus_info:
+                self.stimulus_config_data["stimulus_info"]["sample_rate"] = sample_rate
+            return self.create_signal_from_stimulus_info() is not False
+        finally:
+            self.stimulus_info = original_stimulus_info
+            if has_config_stimulus_info:
+                self.stimulus_config_data["stimulus_info"] = original_config_stimulus_info
+            self._set_sample_rate_display(original_display_text, original_display_tooltip)
 
     def create_function_btn_layout(self):
         """
@@ -722,6 +916,7 @@ class StimulusWindow(QDialog):
         return {
             "stimulus_info": deepcopy(self.stimulus_info),
             "stimulus_data": None if self.stimulus_data is None else self.stimulus_data.copy(),
+            "stimulus_data_sample_rate": self._stimulus_data_sample_rate,
             "retained_state": self._step_sc_retained_frequency_state,
             "retained_frequencies": (
                 None if self._step_sc_retained_frequencies is None else list(self._step_sc_retained_frequencies)
@@ -734,18 +929,20 @@ class StimulusWindow(QDialog):
             "active_manual_frequency_previous_direction": self._step_sc_active_manual_frequency_previous_direction,
         }
 
-    def _restore_step_sc_snapshot(self, snapshot):
+    def _restore_step_sc_snapshot(self, snapshot, update_ui=True):
         self.stimulus_info = deepcopy(snapshot["stimulus_info"])
         self.stimulus_data = None if snapshot["stimulus_data"] is None else snapshot["stimulus_data"].copy()
+        self._stimulus_data_sample_rate = snapshot.get("stimulus_data_sample_rate")
         self._step_sc_retained_frequency_state = snapshot["retained_state"]
         self._step_sc_retained_frequencies = (
             None if snapshot["retained_frequencies"] is None else list(snapshot["retained_frequencies"])
         )
-        self._step_sc_restore_in_progress = True
-        try:
-            self.update_stimulus_ui_value(self.stimulus_info)
-        finally:
-            self._step_sc_restore_in_progress = False
+        if update_ui:
+            self._step_sc_restore_in_progress = True
+            try:
+                self.update_stimulus_ui_value(self.stimulus_info)
+            finally:
+                self._step_sc_restore_in_progress = False
         self._step_sc_intended_start_freq = snapshot.get("intended_start_freq")
         self._step_sc_intended_stop_freq = snapshot.get("intended_stop_freq")
         self._step_sc_last_manual_start_freq = snapshot.get("last_manual_start_freq")
@@ -760,13 +957,22 @@ class StimulusWindow(QDialog):
         snapshot["load_wav_path"] = self.load_wav_path
         snapshot["load_stimulus_signal_path"] = self.load_stimulus_signal_path
         snapshot["legacy_external_wav_loaded_by_user"] = self._legacy_external_wav_loaded_by_user
+        sample_rate_lineedit = getattr(self, "sample_rate_lineedit", None)
+        if sample_rate_lineedit is not None:
+            snapshot["sample_rate_display_text"] = sample_rate_lineedit.text()
+            snapshot["sample_rate_display_tooltip"] = sample_rate_lineedit.toolTip()
         return snapshot
 
-    def _restore_stimulus_state_snapshot(self, snapshot):
+    def _restore_stimulus_state_snapshot(self, snapshot, update_ui=True):
         self.load_wav_path = snapshot["load_wav_path"]
         self.load_stimulus_signal_path = snapshot["load_stimulus_signal_path"]
         self._legacy_external_wav_loaded_by_user = snapshot.get("legacy_external_wav_loaded_by_user", False)
-        self._restore_step_sc_snapshot(snapshot)
+        self._restore_step_sc_snapshot(snapshot, update_ui=update_ui)
+        if "sample_rate_display_text" in snapshot:
+            self._set_sample_rate_display(
+                snapshot["sample_rate_display_text"],
+                snapshot.get("sample_rate_display_tooltip"),
+            )
 
     @staticmethod
     def _legacy_external_wav_snapshot_is_restorable(snapshot):
@@ -798,6 +1004,7 @@ class StimulusWindow(QDialog):
         self.load_stimulus_signal_path = snapshot.get("load_stimulus_signal_path") or self.load_wav_path
         self._legacy_external_wav_loaded_by_user = True
         self.stimulus_data = snapshot["stimulus_data"].copy()
+        self._stimulus_data_sample_rate = snapshot.get("stimulus_data_sample_rate")
 
         self.switch_connection_off()
         previous_signal_state = self.custom_chk_box.blockSignals(True)
@@ -817,7 +1024,8 @@ class StimulusWindow(QDialog):
             self.step_box.setValue(int(restored_info.get("num_steps", 3)))
             self.voltage_combo_box.setCurrentText(restored_info.get("voltage_type", "RMS"))
             self.voltage_spin_box.setValue(float(restored_info.get("voltage", 2.0)))
-            self.sample_rate_combo_box.setCurrentText(str(restored_info.get("sample_rate", 44100)))
+            if self._apply_output_sample_rate_authority():
+                self._set_sample_rate_display(str(self.stimulus_info["sample_rate"]))
             self.custom_chk_box.setChecked(False)
         finally:
             self.custom_chk_box.blockSignals(previous_signal_state)
@@ -1006,7 +1214,7 @@ class StimulusWindow(QDialog):
         if self._retained_frequencies_compatible_with_info(stimulus_info, retained, retained_state):
             retained_frequencies = list(retained)
         return {
-            "sample_rate": int(stimulus_info.get("sample_rate", 44100)),
+            "sample_rate": int(stimulus_info["sample_rate"]),
             "repeat_times": int(stimulus_info.get("repeat_times", 1)),
             "min_duration": float(stimulus_info.get("min_duration", self.STEP_SC_DEFAULT_MIN_DURATION)),
             "min_cycles": float(stimulus_info.get("min_cycles", self.STEP_SC_DEFAULT_MIN_CYCLES)),
@@ -1076,6 +1284,7 @@ class StimulusWindow(QDialog):
     def _commit_frequency_stepped_candidate(self, generated_info, generated_data, retained, retained_state):
         self.stimulus_info = generated_info
         self.stimulus_data = generated_data
+        self._stimulus_data_sample_rate = int(generated_info["sample_rate"])
         self._step_sc_retained_frequencies = retained
         self._step_sc_retained_frequency_state = retained_state
         self._update_step_sc_derived_controls()
@@ -1249,10 +1458,10 @@ class StimulusWindow(QDialog):
         return start_freq, stop_freq
 
     def _current_step_sc_sample_rate(self):
-        try:
-            return int(self.sample_rate_combo_box.currentText())
-        except (TypeError, ValueError):
-            return int(self.stimulus_info.get("sample_rate", 44100))
+        sample_rate = self._authoring_sample_rate()
+        if sample_rate is not None:
+            return sample_rate
+        return None
 
     def _resolution_combo_current_code(self):
         resolution = self.resolution_combo_box.currentData()
@@ -1298,13 +1507,17 @@ class StimulusWindow(QDialog):
         try:
             for box in (self.start_freq_box, self.stop_freq_box):
                 box.setDecimals(1)
-            try:
-                frequencies = preferred_octave_frequencies(
-                    self._current_step_sc_resolution(),
-                    sample_rate=self._current_step_sc_sample_rate(),
-                )
-            except ValueError:
+            sample_rate = self._current_step_sc_sample_rate()
+            if sample_rate is None:
                 frequencies = []
+            else:
+                try:
+                    frequencies = preferred_octave_frequencies(
+                        self._current_step_sc_resolution(),
+                        sample_rate=sample_rate,
+                    )
+                except ValueError:
+                    frequencies = []
             minimum = max(float(self.start_freq_box.minimum()), float(self.stop_freq_box.minimum()))
             maximum = min(float(self.start_freq_box.maximum()), float(self.stop_freq_box.maximum()))
             frequencies = [value for value in frequencies if minimum <= value <= maximum]
@@ -1489,7 +1702,11 @@ class StimulusWindow(QDialog):
         self.stimulus_info["frequency_mode"] = mode
         self.stimulus_info["stimulus_type"] = mode
         self.stimulus_info["num_steps"] = int(self.step_box.value())
-        self.stimulus_info["sample_rate"] = int(self.sample_rate_combo_box.currentText())
+        sample_rate = self._current_step_sc_sample_rate()
+        if sample_rate is None:
+            MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+            return False
+        self.stimulus_info["sample_rate"] = sample_rate
         if mode == "octave":
             resolution = self._resolution_combo_current_code()
             if resolution not in self.STEP_SC_VALID_RESOLUTIONS:
@@ -1511,7 +1728,11 @@ class StimulusWindow(QDialog):
             self._mark_step_sc_frequency_dirty()
 
         if data_type == "sample_rate":
-            self.stimulus_info[data_type] = int(controller.currentText())
+            sample_rate = self._current_step_sc_sample_rate()
+            if sample_rate is None:
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                return
+            self.stimulus_info[data_type] = sample_rate
         elif data_type == "resolution":
             self.stimulus_info[data_type] = self._resolution_combo_current_code()
         elif data_type == "total_time":
@@ -1585,12 +1806,37 @@ class StimulusWindow(QDialog):
 
         self.stimulus_info["use_custom_stimulus"] = custom_box_checked
         if custom_box_checked:
+            if self.offline_reference_authoring:
+                if not self._apply_output_sample_rate_authority():
+                    MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                    return
+            else:
+                if self._warn_if_missing_output_sample_rate():
+                    return
+                self._apply_output_sample_rate_authority()
             self.create_signal_from_stimulus_info()
         else:
             if not self._is_step_sc_active():
                 if self.load_stimulus_signal_path:
+                    previous_load_wav_path = self.load_wav_path
                     self.load_wav_path = self.load_stimulus_signal_path
-                    self.stimulus_data, _ = load_audio_simple(self.load_wav_path, self.stimulus_info["sample_rate"])
+                    sample_rate = self._authoring_sample_rate()
+                    if sample_rate is None:
+                        self.load_wav_path = previous_load_wav_path
+                        MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                        self.custom_chk_box.blockSignals(True)
+                        self.custom_chk_box.setChecked(True)
+                        self.custom_chk_box.blockSignals(False)
+                        self.switch_group_box_availability(True)
+                        for widget in self.box_checked_disable_list:
+                            widget.setDisabled(True)
+                        self.stimulus_info["use_custom_stimulus"] = True
+                        self.graph_stimulus()
+                        return
+                    self.stimulus_info["sample_rate"] = sample_rate
+                    self.stimulus_data, _ = load_audio_simple(self.load_wav_path, sample_rate)
+                    self._stimulus_data_sample_rate = sample_rate
+                    self._sync_external_wav_duration_metadata(sample_rate)
                 elif self._warn_on_missing_legacy_wav:
                     MessageBox.warning(self, "导入配置", "缺少已加载的外部音频路径，已切换为自定义激励。")
                     self.custom_chk_box.blockSignals(True)
@@ -1693,14 +1939,27 @@ class StimulusWindow(QDialog):
             self.create_signal_from_stimulus_info()
             self.graph_stimulus()
 
-    @staticmethod
-    def get_predict_amplitude(target_voltage):
+    def _speaker_hardware_id(self):
+        speaker = getattr(self, "speaker", None)
+        if isinstance(speaker, dict):
+            hardware_id = speaker.get("hardware_id")
+            if hardware_id:
+                return hardware_id
+        return None
+
+    def _speaker_calibration_manager(self):
+        hardware_id = self._speaker_hardware_id()
+        if not hardware_id:
+            return None
+        return SoundcardCalibrationManager(speaker_hardware_id=hardware_id)
+
+    def get_predict_amplitude(self, target_voltage):
         """
         Retrieves the predicted amplitude based on the target voltage.
 
         This method uses the `SoundcardCalibrationManager` to calibrate the amplitude
-        for the given target voltage. It reads calibration coefficients from a JSON file
-        and returns the predicted amplitude if the calibration is successful. Otherwise, it returns 0.0.
+        for the given target voltage using this window's speaker hardware id. It returns
+        the predicted amplitude if the calibration is successful. Otherwise, it returns 0.0.
 
         Parameters:
         target_voltage (float): The target voltage used for calibration.
@@ -1708,9 +1967,10 @@ class StimulusWindow(QDialog):
         Returns:
         float: The predicted amplitude if calibration is successful; otherwise, 0.0.
         """
-        code, result_amplitude = SoundcardCalibrationManager().calibrate_amplitude(
-            target_voltage, json_file_name="calibration_coefficients.json"
-        )
+        manager = self._speaker_calibration_manager()
+        if manager is None:
+            return 0.0
+        code, result_amplitude = manager.calibrate_amplitude(target_voltage)
         if code == error_code.OK:
             predict_amplitude, max_voltage = result_amplitude
             return predict_amplitude
@@ -1721,12 +1981,12 @@ class StimulusWindow(QDialog):
         """
         Retrieves the maximum input voltage from the calibration coefficients.
         """
-        code, data = SoundcardCalibrationManager().load_data_from_json("calibration_coefficients.json")
-        if code == error_code.OK:
-            return data["max_voltage"]
-        else:
-            self.is_close_window = True
-            return 0.0
+        manager = self._speaker_calibration_manager()
+        max_voltage = manager.get_max_output_voltage() if manager is not None else None
+        if max_voltage is not None:
+            return max_voltage
+        self.is_close_window = True
+        return 0.0
 
     def create_signal_from_stimulus_info(self):
         """
@@ -1747,6 +2007,9 @@ class StimulusWindow(QDialog):
             No explicit return value, but updates the `stimulus_signal` attribute with the generated signal.
         """
         self._normalize_stimulus_info_method(self.stimulus_info)
+        if not self._apply_output_sample_rate_authority():
+            MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+            return False
         if self.stimulus_info["stimulus_method"] == FREQUENCY_STEPPED_METHOD:
             return self._create_frequency_stepped_signal_from_info()
 
@@ -1761,10 +2024,12 @@ class StimulusWindow(QDialog):
                 self.stimulus_info["stimulus_method"]
             )
             self.stimulus_data, _ = StimulusSignal().generate_chirps(**self.stimulus_info)
+            self._stimulus_data_sample_rate = int(self.stimulus_info["sample_rate"])
             return False
         if self.stimulus_info["stimulus_method"] == "step":
             self._restore_legacy_step_controls()
         self.stimulus_data, _ = create_function(**self.stimulus_info)
+        self._stimulus_data_sample_rate = int(self.stimulus_info["sample_rate"])
         return True
 
     def _frequency_stepped_generation_kwargs(self):
@@ -1778,6 +2043,7 @@ class StimulusWindow(QDialog):
     def _create_frequency_stepped_signal_from_info(self):
         old_info = deepcopy(self.stimulus_info)
         old_data = None if self.stimulus_data is None else self.stimulus_data.copy()
+        old_data_sample_rate = self._stimulus_data_sample_rate
         old_state = self._step_sc_retained_frequency_state
         old_frequencies = (
             None if self._step_sc_retained_frequencies is None else list(self._step_sc_retained_frequencies)
@@ -1791,6 +2057,7 @@ class StimulusWindow(QDialog):
         except Exception as exc:
             self.stimulus_info = old_info
             self.stimulus_data = old_data
+            self._stimulus_data_sample_rate = old_data_sample_rate
             self._step_sc_retained_frequency_state = old_state
             self._step_sc_retained_frequencies = old_frequencies
             self.default_logger.error(f"Failed to generate step(sc) stimulus. {exc}")
@@ -1975,7 +2242,8 @@ class StimulusWindow(QDialog):
             self._set_step_sc_resolution_code(stimulus_info.get("resolution"))
         self.voltage_combo_box.setCurrentText(stimulus_info.get("voltage_type", "RMS"))
         self.voltage_spin_box.setValue(float(stimulus_info.get("voltage", "2.0")))
-        self.sample_rate_combo_box.setCurrentText(str(stimulus_info.get("sample_rate", "44100")))
+        if self._apply_output_sample_rate_authority():
+            self._set_sample_rate_display(str(self.stimulus_info["sample_rate"]))
         if stimulus_info.get("use_custom_stimulus"):
             previous_signal_state = self.custom_chk_box.blockSignals(True)
             self.custom_chk_box.setChecked(True)
@@ -2030,6 +2298,7 @@ class StimulusWindow(QDialog):
         loaded_stimulus = dlg.exec()
         if loaded_stimulus is None:
             return
+        snapshot = self._stimulus_state_snapshot()
         self._normalize_stimulus_info_method(loaded_stimulus)
         if not self._is_supported_stimulus_method(loaded_stimulus):
             self.stimulus_info = self._unsupported_stimulus_method_fallback(
@@ -2038,6 +2307,9 @@ class StimulusWindow(QDialog):
         elif loaded_stimulus.get("stimulus_method") == FREQUENCY_STEPPED_METHOD:
             try:
                 candidate, retained, retained_state = self._prepare_frequency_stepped_info(loaded_stimulus)
+                if not self._apply_output_sample_rate_to_candidate(candidate):
+                    MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                    return
                 candidate, data, retained, retained_state = self._generate_frequency_stepped_candidate(
                     candidate, retained, retained_state
                 )
@@ -2053,6 +2325,11 @@ class StimulusWindow(QDialog):
                 pass
             elif self._is_missing_legacy_external_path_payload(self.stimulus_info, loaded_stimulus):
                 self._clear_loaded_legacy_external_paths()
+        is_legacy_load = self.stimulus_info.get("stimulus_method") != FREQUENCY_STEPPED_METHOD
+        if is_legacy_load and not self._apply_output_sample_rate_authority():
+            MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+            self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+            return
         previous_warn_on_missing_legacy_wav = self._warn_on_missing_legacy_wav
         self._warn_on_missing_legacy_wav = (
             not self._is_step_sc_active()
@@ -2061,6 +2338,7 @@ class StimulusWindow(QDialog):
         )
         try:
             if self.update_stimulus_ui_value(self.stimulus_info) is False:
+                self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
                 return
         finally:
             self._warn_on_missing_legacy_wav = previous_warn_on_missing_legacy_wav
@@ -2069,7 +2347,10 @@ class StimulusWindow(QDialog):
             self.switch_group_box_availability(False)
         else:
             self.switch_group_box_availability(True)
-            self.create_signal_from_stimulus_info()
+            generated = self.create_signal_from_stimulus_info()
+            if generated is False and is_legacy_load:
+                self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+                return
         self.graph_stimulus()
 
     def save_config_btn_clicked(self):
@@ -2085,6 +2366,8 @@ class StimulusWindow(QDialog):
         if stimulus_name is not None:
             self.stimulus_info["stimulus_name"] = stimulus_name
         else:
+            return
+        if not self._ensure_stimulus_data_matches_authoritative_sample_rate():
             return
         self.sync_voltage_info()
         save_code, msg = StimulusSignalManagement().save_stimulus_info_to_db(self.stimulus_info)
@@ -2118,7 +2401,16 @@ class StimulusWindow(QDialog):
             self, "打开音频", DEFAULT_DIR + "audio_data/stimulus", "WAV Files (*.wav)"
         )
         if self.load_wav_path:
-            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, self.stimulus_info["sample_rate"])
+            sample_rate = self._authoring_sample_rate()
+            if sample_rate is None:
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                self.load_stimulus_signal_path = load_stimulus_signal_path
+                self.load_wav_path = load_wav_path
+                return
+            self.stimulus_info["sample_rate"] = sample_rate
+            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, sample_rate)
+            self._stimulus_data_sample_rate = sample_rate
+            self._sync_external_wav_duration_metadata(sample_rate)
             self._legacy_external_wav_loaded_by_user = True
             self.graph_stimulus()
         else:
@@ -2184,31 +2476,61 @@ class StimulusWindow(QDialog):
         }
 
     def load_stimulus_config_data(self, stimulus_data):
+        snapshot = None
+        if isinstance(getattr(self, "stimulus_info", None), dict):
+            snapshot = self._stimulus_state_snapshot()
         self.stimulus_info = stimulus_data.get("stimulus_info")
         self._normalize_stimulus_info_method(self.stimulus_info)
+        sample_rate_authority_ok = self._apply_output_sample_rate_authority()
         invalid_step_sc_fallback = False
         unsupported_method_fallback = not self._is_supported_stimulus_method(self.stimulus_info)
         if unsupported_method_fallback:
             self.stimulus_info = self._unsupported_stimulus_method_fallback(
                 self.stimulus_info.get("stimulus_method")
             )
+            if not self._apply_output_sample_rate_authority():
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                if snapshot is not None:
+                    self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+                return
             self.stimulus_data, _ = StimulusSignal().generate_chirps(**self.stimulus_info)
+            self._stimulus_data_sample_rate = int(self.stimulus_info["sample_rate"])
         elif self.stimulus_info.get("stimulus_method") == FREQUENCY_STEPPED_METHOD:
+            if not sample_rate_authority_ok:
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                if snapshot is not None:
+                    self._restore_stimulus_state_snapshot(snapshot)
+                return
             try:
                 candidate, retained, retained_state = self._prepare_frequency_stepped_info(self.stimulus_info)
+                if not self._apply_output_sample_rate_to_candidate(candidate):
+                    MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                    if snapshot is not None:
+                        self._restore_stimulus_state_snapshot(snapshot)
+                    return
                 self.stimulus_info, self.stimulus_data, retained, retained_state = (
                     self._generate_frequency_stepped_candidate(candidate, retained, retained_state)
                 )
+                self._stimulus_data_sample_rate = int(self.stimulus_info["sample_rate"])
             except Exception as exc:
                 MessageBox.warning(self, "导入配置", str(exc))
                 self.stimulus_info = self._fallback_stimulus_info()
+                if not self._apply_output_sample_rate_authority():
+                    MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                    return
                 self.stimulus_data, _ = StimulusSignal().generate_chirps(**self.stimulus_info)
+                self._stimulus_data_sample_rate = int(self.stimulus_info["sample_rate"])
                 retained = None
                 retained_state = "none"
                 invalid_step_sc_fallback = True
             self._step_sc_retained_frequencies = retained
             self._step_sc_retained_frequency_state = retained_state
         else:
+            if not self.offline_reference_authoring and not sample_rate_authority_ok:
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                if snapshot is not None:
+                    self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+                return
             self.stimulus_info = self._strip_step_sc_rich_metadata(self.stimulus_info)
         if unsupported_method_fallback or invalid_step_sc_fallback:
             self.load_wav_path = ""
@@ -2227,7 +2549,14 @@ class StimulusWindow(QDialog):
             self.stimulus_info["use_custom_stimulus"] = True
             self.create_signal_from_stimulus_info()
         if self.stimulus_data is None:
-            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, self.stimulus_info["sample_rate"])
+            sample_rate = self._authoring_sample_rate()
+            if sample_rate is None:
+                MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                return
+            self.stimulus_info["sample_rate"] = sample_rate
+            self.stimulus_data, _ = load_audio_simple(self.load_wav_path, sample_rate)
+            self._stimulus_data_sample_rate = sample_rate
+            self._sync_external_wav_duration_metadata(sample_rate)
         if (
             not unsupported_method_fallback
             and not invalid_step_sc_fallback
@@ -2273,6 +2602,10 @@ class StimulusWindow(QDialog):
         elif candidate.get("stimulus_method") == FREQUENCY_STEPPED_METHOD:
             try:
                 candidate, retained, retained_state = self._prepare_frequency_stepped_info(candidate)
+                if not self._apply_output_sample_rate_to_candidate(candidate):
+                    MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+                    self._restore_stimulus_state_snapshot(snapshot)
+                    return
                 candidate, data, retained, retained_state = self._generate_frequency_stepped_candidate(
                     candidate, retained, retained_state
                 )
@@ -2284,6 +2617,11 @@ class StimulusWindow(QDialog):
             self._commit_frequency_stepped_candidate(candidate, data, retained, retained_state)
         else:
             self.stimulus_info = self._strip_step_sc_rich_metadata(candidate)
+        is_legacy_default = self.stimulus_info.get("stimulus_method") != FREQUENCY_STEPPED_METHOD
+        if is_legacy_default and not self._apply_output_sample_rate_authority():
+            MessageBox.warning(self, "采样率配置", self.output_sample_rate_resolution.message)
+            self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+            return
         previous_warn_on_missing_legacy_wav = self._warn_on_missing_legacy_wav
         self._warn_on_missing_legacy_wav = (
             not self._is_step_sc_active()
@@ -2291,7 +2629,9 @@ class StimulusWindow(QDialog):
             and not self.load_stimulus_signal_path
         )
         try:
-            self.update_stimulus_ui_value(self.stimulus_info)
+            if self.update_stimulus_ui_value(self.stimulus_info) is False:
+                self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+                return
         finally:
             self._warn_on_missing_legacy_wav = previous_warn_on_missing_legacy_wav
         self.sync_voltage_info()
@@ -2299,7 +2639,10 @@ class StimulusWindow(QDialog):
             self.switch_group_box_availability(False)
         else:
             self.switch_group_box_availability(True)
-            self.create_signal_from_stimulus_info()
+            generated = self.create_signal_from_stimulus_info()
+            if generated is False and is_legacy_default:
+                self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+                return
         self.graph_stimulus()
 
     def save_wav_btn_clicked(self):
@@ -2314,8 +2657,9 @@ class StimulusWindow(QDialog):
             self, "保存音频", DEFAULT_DIR + "audio_data/stimulus", "WAV Files (*.wav)"
         )
         if file_name:
-            sr = self.stimulus_info.get("sample_rate", 44100)
-            save_audio_simple(file_name, self.stimulus_data, sr)
+            if not self._ensure_stimulus_data_matches_authoritative_sample_rate():
+                return
+            save_audio_simple(file_name, self.stimulus_data, self.stimulus_info["sample_rate"])
 
     def play_btn_clicked(self):
         """
@@ -2325,14 +2669,30 @@ class StimulusWindow(QDialog):
         and uses an instance of the SoundcardAudioProcessor class to call the sd_play method
         for playing the signal. If the playback fails, an error log is recorded.
         """
-        # Extract device index from speaker if available
+        if self.offline_reference_authoring:
+            sample_rate = self._current_playback_sample_rate_or_warn()
+            if sample_rate is None:
+                return
+            snapshot = self._stimulus_state_snapshot()
+            if not self._ensure_stimulus_data_matches_playback_sample_rate(sample_rate):
+                self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+                return
+            stimulus_data = self.stimulus_data
+            amplitude = self.stimulus_info["amplitude"]
+            self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
+        else:
+            if not self._ensure_stimulus_data_matches_authoritative_sample_rate():
+                return
+            sample_rate = self.stimulus_info["sample_rate"]
+            stimulus_data = self.stimulus_data
+            amplitude = self.stimulus_info["amplitude"]
         device_idx = self.speaker["index"] if self.speaker else None
 
         # Construct the stimulus parameter dictionary, including signal data, amplitude, and sample rate
         stimulus_param = {
-            "data": self.stimulus_data,
-            "amplitude": self.stimulus_info["amplitude"],
-            "sr": self.stimulus_info["sample_rate"],
+            "data": stimulus_data,
+            "amplitude": amplitude,
+            "sr": sample_rate,
             "device": device_idx,
         }
         # Create an instance of SoundcardAudioProcessor and play the stimulus signal
@@ -2343,6 +2703,8 @@ class StimulusWindow(QDialog):
             self.default_logger.error(f"Failed to play the stimulus file. {msg}")
 
     def ok_btn_clicked(self):
+        if not self._ensure_stimulus_data_matches_authoritative_sample_rate():
+            return
         self.refresh_stimulus_info = True
         self.sync_voltage_info()
         if self._is_step_sc_active():
