@@ -392,12 +392,12 @@ def test_update_asset_fields_allows_only_mutable_fields(tmp_path):
 
     assert repo.update_asset_fields(
         asset["hardware_id"],
-        {"display_name": "Updated", "samplerate": 48000, "bit_depth": 24, "latency_ms": 25},
+        {"display_name": "Updated", "samplerate": 48000, "bit_depth": 64, "latency_ms": 25},
     )
     updated = repo.get_asset(asset["hardware_id"])
     assert updated["display_name"] == "Updated"
     assert updated["samplerate"] == 48000
-    assert updated["bit_depth"] == 24
+    assert updated["bit_depth"] == 64
     assert updated["latency_ms"] == 25
 
     with pytest.raises(HardwareValidationError):

@@ -2,17 +2,48 @@ import json
 import os
 
 from datetime import datetime
+import numpy as np
 from scipy.io import wavfile
 
 from base.file_ops import FileOps
+from consts.audio_consts import bit_depth_to_dtype
 from consts.running_consts import DEFAULT_DIR
 
+try:
+    from base.wav_calibration_metadata import append_wav_calibration_metadata
+except ImportError:
+    append_wav_calibration_metadata = None
 
-def save_audio_simple(save_path, audio, sr=44100):
+
+def save_audio_simple(save_path, audio, sr=44100, bit_depth=32):
     # we assume audio is mono channel
-    audio = audio.astype("float32")
+    audio = np.asarray(audio).astype(bit_depth_to_dtype(bit_depth), copy=False)
     FileOps.ensure_directory_exists(save_path)
     wavfile.write(save_path, sr, audio)
+
+
+def save_audio_with_calibration_metadata(save_path, audio, sr=44100, calibration_metadata=None, logger=None, bit_depth=32):
+    save_audio_simple(save_path, audio, sr, bit_depth=bit_depth)
+    if calibration_metadata is None:
+        return
+    if append_wav_calibration_metadata is None:
+        if logger is not None:
+            log_method = getattr(logger, "warning", None) or getattr(logger, "error", None)
+            if log_method is not None:
+                log_method("WAV calibration metadata support is unavailable")
+        return
+    try:
+        appended = append_wav_calibration_metadata(save_path, calibration_metadata, logger=logger)
+    except Exception as exc:
+        appended = False
+        if logger is not None:
+            log_method = getattr(logger, "warning", None) or getattr(logger, "error", None)
+            if log_method is not None:
+                log_method(f"Failed to append WAV calibration metadata: {exc}")
+    if not appended and logger is not None:
+        log_method = getattr(logger, "warning", None) or getattr(logger, "error", None)
+        if log_method is not None:
+            log_method("Failed to append WAV calibration metadata")
 
 
 def save_recorded_data_to_json(product_model, current_recorded_count, scanner_barcode, scanner_barcode_check):

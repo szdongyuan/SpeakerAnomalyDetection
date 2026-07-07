@@ -13,6 +13,7 @@ from base.log_manager import LogManager
 from base.sound_device_manager import sd
 from base.utils.custom_signals import sign
 from consts import error_code
+from consts.audio_consts import bit_depth_to_dtype, normalize_float_bit_depth
 
 
 class StreamingAudioProcessor:
@@ -44,6 +45,9 @@ class StreamingAudioProcessor:
         self._streaming_mode = None
         self.discard_initial_samples = 0
         self.samples_discarded = 0
+        self.bit_depth = 32
+        self.sample_dtype = np.dtype("float32")
+        self.stream_dtype = "float32"
 
     @staticmethod
     def _normalize_channel_selection(channels: Any) -> List[int]:
@@ -72,7 +76,7 @@ class StreamingAudioProcessor:
         return []
 
     @staticmethod
-    def _select_multi(indata: np.ndarray, in_sel: Sequence[int]) -> np.ndarray:
+    def _select_multi(indata: np.ndarray, in_sel: Sequence[int], dtype=np.float32) -> np.ndarray:
         """
         Select and reorder channels from indata and return a 2D float32 array (frames, channels).
 
@@ -81,19 +85,20 @@ class StreamingAudioProcessor:
         - Else: returns indata[:, in_sel] (in_sel order)
         """
 
-        data = np.asarray(indata, dtype=np.float32)
+        dtype = np.dtype(dtype)
+        data = np.asarray(indata, dtype=dtype)
         if data.ndim == 1:
             data = data.reshape(-1, 1)
 
         if not in_sel:
-            return data.astype(np.float32, copy=False)
+            return data.astype(dtype, copy=False)
 
         cols = [int(i) for i in in_sel if int(i) < data.shape[1]]
         if not cols:
             cols = [0]
         if len(cols) == 1:
-            return data[:, [cols[0]]].astype(np.float32, copy=False)
-        return data[:, cols].astype(np.float32, copy=False)
+            return data[:, [cols[0]]].astype(dtype, copy=False)
+        return data[:, cols].astype(dtype, copy=False)
 
     @staticmethod
     def _resolve_max_input_channels(input_device: Optional[dict]) -> int:
@@ -163,6 +168,13 @@ class StreamingAudioProcessor:
         except ValueError:
             return 0
 
+    @staticmethod
+    def _stream_transport_dtype(bit_depth: int) -> str:
+        bit_depth = normalize_float_bit_depth(bit_depth)
+        if bit_depth == 64:
+            return "float32"
+        return bit_depth_to_dtype(bit_depth)
+
     def _queue_chunk_and_maybe_stop(self, multi_chunk: np.ndarray) -> Tuple[dict, bool]:
         """
         Update sample counters, trim final chunk if needed, enqueue payload, and stop if target reached.
@@ -170,7 +182,7 @@ class StreamingAudioProcessor:
         Returns:
             (payload, reached_target)
         """
-        multi_chunk = np.asarray(multi_chunk, dtype=np.float32)
+        multi_chunk = np.asarray(multi_chunk, dtype=self.sample_dtype)
         if multi_chunk.ndim == 1:
             multi_chunk = multi_chunk.reshape(-1, 1)
 
@@ -186,7 +198,7 @@ class StreamingAudioProcessor:
                 self.samples_captured = self.target_samples
                 self.logger.info(f"Reached target samples: {self.target_samples}, trimmed {excess} samples")
 
-        mono_chunk = multi_chunk.mean(axis=1).astype(np.float32, copy=False).reshape(-1)
+        mono_chunk = multi_chunk.mean(axis=1).astype(self.sample_dtype, copy=False).reshape(-1)
         payload = {"mono": mono_chunk, "multi": multi_chunk}
 
         try:
@@ -236,11 +248,11 @@ class StreamingAudioProcessor:
         if status:
             self.logger.warning(f"Audio callback status: {status}")
 
-        multi = self._select_multi(indata, self._rec_in_sel)
+        multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
         if multi.shape[0] > frames:
             multi = multi[:frames, :]
         elif multi.shape[0] < frames:
-            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
+            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
             multi = np.concatenate([multi, pad], axis=0)
 
         multi, _ = self._discard_initial_multi(multi)
@@ -253,11 +265,11 @@ class StreamingAudioProcessor:
         if status:
             self.logger.warning(f"Duplex status: {status}")
 
-        multi = self._select_multi(indata, self._rec_in_sel)
+        multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
         if multi.shape[0] > frames:
             multi = multi[:frames, :]
         elif multi.shape[0] < frames:
-            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
+            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
             multi = np.concatenate([multi, pad], axis=0)
 
         outdata.fill(0)
@@ -272,11 +284,11 @@ class StreamingAudioProcessor:
             monitor_in = monitor_multi[:, self._monitor_input_column]
         else:
             monitor_in = monitor_multi[:, 0]
-        play = np.zeros(frames, dtype=np.float32)
+        play = np.zeros(frames, dtype=self.sample_dtype)
         copy_count = min(len(monitor_in), max(0, frames - discarded))
         if copy_count:
             play[discarded : discarded + copy_count] = monitor_in[:copy_count]
-        play = np.clip(play * self.monitor_gain_linear, -1.0, 1.0).astype(np.float32, copy=False)
+        play = np.clip(play * self.monitor_gain_linear, -1.0, 1.0).astype(self.sample_dtype, copy=False)
 
         if outdata.shape[1] >= 2:
             outdata[:, 0] = play
@@ -295,15 +307,15 @@ class StreamingAudioProcessor:
                 # Get all available chunks without blocking
                 payload = self.audio_queue.get_nowait()
                 if isinstance(payload, dict) and "mono" in payload and "multi" in payload:
-                    mono = np.asarray(payload.get("mono"), dtype=np.float32).reshape(-1)
-                    multi = np.asarray(payload.get("multi"), dtype=np.float32)
+                    mono = np.asarray(payload.get("mono"), dtype=self.sample_dtype).reshape(-1)
+                    multi = np.asarray(payload.get("multi"), dtype=self.sample_dtype)
                     if multi.ndim == 1:
                         multi = multi.reshape(-1, 1)
                     self.accumulated_chunks.append(mono)
                     self.accumulated_multi_chunks.append(multi)
                     emit_payload = payload
                 else:
-                    mono = np.asarray(payload, dtype=np.float32).reshape(-1)
+                    mono = np.asarray(payload, dtype=self.sample_dtype).reshape(-1)
                     self.accumulated_chunks.append(mono)
                     emit_payload = payload
 
@@ -327,18 +339,17 @@ class StreamingAudioProcessor:
                     except Exception:
                         pass
 
-    @staticmethod
-    def _coerce_mono_chunk(chunk):
+    def _coerce_mono_chunk(self, chunk):
         if isinstance(chunk, dict):
             mono = chunk.get("mono")
             if mono is None:
-                multi = np.asarray(chunk.get("multi", []), dtype=np.float32)
+                multi = np.asarray(chunk.get("multi", []), dtype=self.sample_dtype)
                 if multi.ndim == 2 and multi.shape[1] > 0:
                     mono = multi.mean(axis=1)
                 else:
                     mono = multi.reshape(-1)
             chunk = mono
-        return np.asarray(chunk, dtype=np.float32).reshape(-1)
+        return np.asarray(chunk, dtype=self.sample_dtype).reshape(-1)
 
     def start_streaming_rec(
         self,
@@ -352,6 +363,7 @@ class StreamingAudioProcessor:
         monitor_input_channel=None,
         input_channels: Any = None,
         discard_initial_samples: Any = 0,
+        bit_depth: int = 32,
     ):
         """
         Start streaming audio recording (record-only mode).
@@ -372,6 +384,9 @@ class StreamingAudioProcessor:
             target_samples = int(duration * sample_rate)
 
         self.sample_rate = sample_rate
+        self.bit_depth = normalize_float_bit_depth(bit_depth)
+        self.sample_dtype = np.dtype(bit_depth_to_dtype(self.bit_depth))
+        self.stream_dtype = self._stream_transport_dtype(self.bit_depth)
         self.target_samples = target_samples
         self.samples_captured = 0
         self.discard_initial_samples = self._coerce_nonnegative_samples(discard_initial_samples, 0)
@@ -417,6 +432,7 @@ class StreamingAudioProcessor:
                     callback=self.monitor_duplex_callback,
                     blocksize=2048,
                     device=device_selector,
+                    dtype=self.stream_dtype,
                 )
 
                 self.stream.start()
@@ -434,6 +450,7 @@ class StreamingAudioProcessor:
                 callback=self._audio_callback,
                 blocksize=2048,
                 device=input_dev_idx,
+                dtype=self.stream_dtype,
             )
 
             self.stream.start()
@@ -461,6 +478,7 @@ class StreamingAudioProcessor:
         prolong_frames=10000,
         input_channels=None,
         discard_initial_samples=0,
+        bit_depth: int = 32,
     ):
         """
         Start streaming play and record (simultaneous playback and recording).
@@ -487,6 +505,9 @@ class StreamingAudioProcessor:
             target_samples = prepare_frames + len(stimulus_data) + prolong_frames
 
         self.sample_rate = sample_rate
+        self.bit_depth = normalize_float_bit_depth(bit_depth)
+        self.sample_dtype = np.dtype(bit_depth_to_dtype(self.bit_depth))
+        self.stream_dtype = self._stream_transport_dtype(self.bit_depth)
         self.target_samples = target_samples
         self.samples_captured = 0
         self.discard_initial_samples = self._coerce_nonnegative_samples(discard_initial_samples, 0)
@@ -505,12 +526,12 @@ class StreamingAudioProcessor:
 
             self.playback_data = np.concatenate(
                 [
-                    np.zeros(self.discard_initial_samples, dtype=np.float32),
+                    np.zeros(self.discard_initial_samples, dtype=self.sample_dtype),
                     np.zeros(prepare_frames),
                     stimulus_data,
                     np.zeros(prolong_frames),
                 ]
-            ).astype(np.float32)
+            ).astype(self.sample_dtype)
             self.playback_index = 0
 
             # Build duplex device selector:
@@ -544,11 +565,11 @@ class StreamingAudioProcessor:
                 self.playback_index += frames
 
                 # ---- record (read from indata) ----
-                multi = self._select_multi(indata, self._rec_in_sel)
+                multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
                 if multi.shape[0] > frames:
                     multi = multi[:frames, :]
                 elif multi.shape[0] < frames:
-                    pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=np.float32)
+                    pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
                     multi = np.concatenate([multi, pad], axis=0)
                 multi, _ = self._discard_initial_multi(multi)
                 if multi.shape[0] == 0:
@@ -562,6 +583,7 @@ class StreamingAudioProcessor:
                 callback=duplex_callback,
                 blocksize=2048,
                 device=device,
+                dtype=self.stream_dtype,
             )
 
             self.stream.start()
@@ -611,13 +633,13 @@ class StreamingAudioProcessor:
             np.ndarray: Complete recorded audio as single numpy array
         """
         if not self.accumulated_chunks:
-            return np.array([], dtype=np.float32)
+            return np.array([], dtype=self.sample_dtype)
 
         if self.accumulated_multi_chunks and self._streaming_mode != "playrec":
-            return np.concatenate(self.accumulated_multi_chunks, axis=0).astype(np.float32)
+            return np.concatenate(self.accumulated_multi_chunks, axis=0).astype(self.sample_dtype)
 
         chunks = [self._coerce_mono_chunk(chunk) for chunk in self.accumulated_chunks]
-        return np.concatenate(chunks).astype(np.float32)
+        return np.concatenate(chunks).astype(self.sample_dtype)
 
     def get_recorded_data_multi(self) -> np.ndarray:
         """
@@ -627,25 +649,25 @@ class StreamingAudioProcessor:
             np.ndarray: Complete recorded audio as a two-dimensional array
         """
         if self.accumulated_multi_chunks:
-            return np.concatenate(self.accumulated_multi_chunks, axis=0).astype(np.float32, copy=False)
+            return np.concatenate(self.accumulated_multi_chunks, axis=0).astype(self.sample_dtype, copy=False)
 
         multi_chunks = []
         for chunk in self.accumulated_chunks:
             if isinstance(chunk, dict):
                 multi = chunk.get("multi")
                 if multi is not None:
-                    multi = np.asarray(multi, dtype=np.float32)
+                    multi = np.asarray(multi, dtype=self.sample_dtype)
                     if multi.ndim == 1:
                         multi = multi.reshape(-1, 1)
                     multi_chunks.append(multi)
 
         if multi_chunks:
-            return np.concatenate(multi_chunks, axis=0).astype(np.float32)
+            return np.concatenate(multi_chunks, axis=0).astype(self.sample_dtype)
 
         mono = self.get_recorded_data()
         if mono.size == 0:
-            return np.empty((0, 0), dtype=np.float32)
-        return mono.reshape(-1, 1).astype(np.float32)
+            return np.empty((0, 0), dtype=self.sample_dtype)
+        return mono.reshape(-1, 1).astype(self.sample_dtype)
 
     def wait_until_finished(self, timeout=None):
         """

@@ -13,7 +13,7 @@ if str(ROOT_DIR) not in sys.path:
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QSpinBox, QStyledItemDelegate
+from PyQt5.QtWidgets import QApplication, QComboBox, QDialog, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 
 @pytest.fixture
@@ -351,6 +351,7 @@ def test_registration_dialog_uses_api_first_device_defaults(qapp, monkeypatch):
 
     assert [dialog.api_combo.itemText(i) for i in range(dialog.api_combo.count())] == ["API-A", "API-B"]
     assert labels.index("显示名称") < labels.index("设备")
+    assert "延迟(ms)" not in labels
     assert "设备名称" in dialog.display_name_edit.placeholderText()
     assert dialog.device_combo.currentData() is None
     assert dialog.samplerate_combo.currentText() == ""
@@ -763,7 +764,7 @@ def test_table_model_marks_only_mutable_columns_editable(qapp):
     import ui.hardware_management_window as module
 
     model = module.HardwareManagementTableModel(FakeRepository([sample_asset()]))
-    editable = {"display_name", "samplerate", "bit_depth", "latency_ms"}
+    editable = {"display_name", "samplerate", "bit_depth"}
 
     for column, field in enumerate(model.columns):
         flags = model.flags(model.index(0, column))
@@ -783,6 +784,7 @@ def test_hardware_management_table_hides_id_and_orders_identity_columns(qapp):
     assert "硬件ID" not in headers
     assert headers[:4] == ["显示名称", "驱动", "设备名称", "类型"]
     assert window.model.columns[:4] == ("display_name", "hostapi_name", "device_name", "hardware_type")
+    assert window.table.isColumnHidden(window.model.column_index("latency_ms"))
 
 
 def test_hardware_management_table_uses_single_cell_selection(qapp):
@@ -792,6 +794,7 @@ def test_hardware_management_table_uses_single_cell_selection(qapp):
 
     assert window.table.selectionBehavior() == window.table.SelectItems
     assert window.table.selectionMode() == window.table.SingleSelection
+    assert window.table.focusPolicy() == Qt.NoFocus
 
     index = window.model.index(0, window.model.column_index("device_name"))
     window.table.setCurrentIndex(index)
@@ -800,6 +803,40 @@ def test_hardware_management_table_uses_single_cell_selection(qapp):
 
     assert window.table.selectionModel().selectedIndexes() == [index]
     assert window.table.selectionModel().selectedRows() == []
+
+
+def test_hardware_management_table_delegates_clear_focus_and_selection_paint_state(qapp):
+    import ui.hardware_management_window as module
+
+    window = module.HardwareManagementWindow(repository=FakeRepository([sample_asset()]))
+
+    assert isinstance(window.table.itemDelegate(), module.FocuslessItemDelegate)
+    assert isinstance(
+        window.table.itemDelegateForColumn(window.model.column_index("samplerate")),
+        module.FocuslessItemDelegate,
+    )
+    assert isinstance(
+        window.table.itemDelegateForColumn(window.model.column_index("bit_depth")),
+        module.FocuslessItemDelegate,
+    )
+
+    option = QStyleOptionViewItem()
+    option.state = (
+        QStyle.State_Enabled
+        | QStyle.State_HasFocus
+        | QStyle.State_Selected
+        | QStyle.State_On
+    )
+
+    clean_option = module.FocuslessItemDelegate.focusless_option(option)
+
+    assert clean_option is not option
+    assert not clean_option.state & QStyle.State_HasFocus
+    assert not clean_option.state & QStyle.State_Selected
+    assert clean_option.state & QStyle.State_Enabled
+    assert clean_option.state & QStyle.State_On
+    assert option.state & QStyle.State_HasFocus
+    assert option.state & QStyle.State_Selected
 
 
 def test_display_name_column_is_single_check_selection_source(qapp):
@@ -882,18 +919,17 @@ def test_hardware_management_actions_are_below_table(qapp):
     assert button_texts == ["注册", "删除"]
 
 
-def test_table_delegates_restrict_sample_rate_bit_depth_and_latency(qapp):
+def test_table_delegates_restrict_visible_sample_rate_and_bit_depth(qapp):
     import ui.hardware_management_window as module
 
     window = module.HardwareManagementWindow(repository=FakeRepository([sample_asset()]))
 
     samplerate_delegate = window.table.itemDelegateForColumn(window.model.column_index("samplerate"))
     bit_depth_delegate = window.table.itemDelegateForColumn(window.model.column_index("bit_depth"))
-    latency_delegate = window.table.itemDelegateForColumn(window.model.column_index("latency_ms"))
 
     assert isinstance(samplerate_delegate, QStyledItemDelegate)
     assert isinstance(bit_depth_delegate, QStyledItemDelegate)
-    assert isinstance(latency_delegate, QStyledItemDelegate)
+    assert window.table.itemDelegateForColumn(window.model.column_index("latency_ms")) is None
 
     samplerate_editor = samplerate_delegate.createEditor(
         window.table, None, window.model.index(0, window.model.column_index("samplerate"))
@@ -901,23 +937,12 @@ def test_table_delegates_restrict_sample_rate_bit_depth_and_latency(qapp):
     bit_depth_editor = bit_depth_delegate.createEditor(
         window.table, None, window.model.index(0, window.model.column_index("bit_depth"))
     )
-    latency_editor = latency_delegate.createEditor(
-        window.table, None, window.model.index(0, window.model.column_index("latency_ms"))
-    )
 
     assert isinstance(samplerate_editor, QComboBox)
     assert [samplerate_editor.itemText(i) for i in range(samplerate_editor.count())] == ["44100", "48000"]
     assert isinstance(bit_depth_editor, QComboBox)
-    assert [bit_depth_editor.itemData(i) for i in range(bit_depth_editor.count())] == [8, 16, 24, 32]
-    assert [bit_depth_editor.itemText(i) for i in range(bit_depth_editor.count())] == [
-        "8bit",
-        "16bit",
-        "24bit",
-        "32bit",
-    ]
-    assert isinstance(latency_editor, QSpinBox)
-    assert latency_editor.minimum() == 0
-    assert latency_editor.maximum() == 1000
+    assert [bit_depth_editor.itemData(i) for i in range(bit_depth_editor.count())] == [32, 64]
+    assert [bit_depth_editor.itemText(i) for i in range(bit_depth_editor.count())] == ["32bit", "64bit"]
 
 
 def test_combo_delegate_opening_existing_non_first_value_does_not_commit(qapp):

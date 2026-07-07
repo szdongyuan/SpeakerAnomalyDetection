@@ -35,7 +35,11 @@ def _window(mode, detail, mic=_DEFAULT_DEVICE, speaker=_DEFAULT_DEVICE):
 
 
 def test_record_only_uses_mic_samplerate_not_detail_sample_rate(monkeypatch):
-    win = _window("RECORD_ONLY", {"sample_rate": 44100, "total_time": 1.0})
+    win = _window(
+        "RECORD_ONLY",
+        {"sample_rate": 44100, "total_time": 1.0},
+        mic={"samplerate": 48000, "bit_depth": 64, "name": "mic", "hostapi": 1, "index": 1},
+    )
     monkeypatch.setattr(sequence_widget, "get_recorded_info", lambda *args: ("out.wav", {"labels": "not_labeled"}))
     monkeypatch.setattr(
         sequence_widget.LoadUiConfig,
@@ -48,6 +52,7 @@ def test_record_only_uses_mic_samplerate_not_detail_sample_rate(monkeypatch):
     assert sample_rate == 48000
     assert win.data_struct.sample_rate == 48000
     assert recorded_dict["sample_rate"] == 48000
+    assert recorded_dict["bit_depth"] == 64
 
 
 def test_play_and_record_blocks_mismatched_samplerates(monkeypatch):

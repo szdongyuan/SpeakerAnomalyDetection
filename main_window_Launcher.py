@@ -31,8 +31,8 @@ class MainWindowLauncher(object):
         self.loader.finished.connect(self.loader_thread.deleteLater)
 
     def load_qss(self):
-        path = ":/ui/style/dongyuan_style.qss"
-        # path = ":/ui/style/jingcheng_style.qss"
+        # path = ":/ui/style/dongyuan_style.qss"
+        path = ":/ui/style/jingcheng_style.qss"
         file = QFile(path)
         if not file.open(QFile.ReadOnly | QFile.Text):
             raise RuntimeError(f"Failed to open QSS: {path}")

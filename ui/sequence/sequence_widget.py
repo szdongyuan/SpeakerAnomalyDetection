@@ -57,6 +57,7 @@ from base.acquisition_recording_defaults import normalize_play_record_detail, no
 from base.audio_sample_rate import resolve_duplex_sample_rate, resolve_input_sample_rate
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
+from consts.audio_consts import normalize_float_bit_depth
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox
 from ui.operation_sequence import AnalysisModelSelect
@@ -1713,6 +1714,9 @@ class SequenceWindow(QWidget):
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
         recorded_dict["input_device"] = self.mic
+        recorded_dict["bit_depth"] = normalize_float_bit_depth(
+            self.mic.get("bit_depth", 32) if isinstance(self.mic, dict) else 32
+        )
 
         input_channels = list(getattr(self, "mic_channels", []) or [0])
 
@@ -1761,9 +1765,14 @@ class SequenceWindow(QWidget):
 
     def _start_streaming_recording(self, stimulus_dict, recorded_dict, sample_rate):
         nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
+        bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
+        self.streaming_bit_depth = bit_depth
         if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
             temp_path = self.recorded_path.replace(".wav", "_temp.wav")
-            self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
+            if bit_depth == 64:
+                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate, bit_depth=bit_depth)
+            else:
+                self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
             self.streaming_temp_path = temp_path
 
             self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
@@ -1772,7 +1781,12 @@ class SequenceWindow(QWidget):
             self.streaming_mode = "play_record"
 
         else:
-            self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
+            if bit_depth == 64:
+                self.streaming_wav_writer = StreamingWavWriter(
+                    self.recorded_path, sample_rate, channels=nch, bit_depth=bit_depth
+                )
+            else:
+                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
 
             self.streaming_processor, _ = stream_record_without_play(
                 recorded_dict, self.recorded_path, self.recorded_signal_info
@@ -1783,7 +1797,9 @@ class SequenceWindow(QWidget):
         self.streaming_poll_timer.start(50)
 
     def _normalize_blocking_recorded_data(self, recorded_data):
-        recorded_array = np.asarray(recorded_data, dtype=np.float32)
+        recorded_array = np.asarray(recorded_data)
+        if not np.issubdtype(recorded_array.dtype, np.floating):
+            recorded_array = recorded_array.astype(np.float32)
         if recorded_array.size == 0:
             raise ValueError("empty recorded data")
 
@@ -1803,11 +1819,11 @@ class SequenceWindow(QWidget):
         ):
             recorded_array = recorded_array.T
 
-        multi = np.asarray(recorded_array, dtype=np.float32)
+        multi = np.asarray(recorded_array)
         if multi.shape[1] == 1:
             mono = multi[:, 0]
         else:
-            mono = multi.mean(axis=1).astype(np.float32, copy=False)
+            mono = multi.mean(axis=1).astype(multi.dtype, copy=False)
         return mono.reshape(-1), multi
 
     def _finish_recording_success(self, sample_rate):
@@ -1847,6 +1863,7 @@ class SequenceWindow(QWidget):
     def _start_blocking_recording(self, stimulus_dict, recorded_dict, sample_rate):
         try:
             mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+            bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
             if mode == "PLAY_AND_RECORD":
                 record_code, recorded_data = SoundcardAudioProcessor().sd_play_rec(
                     recorded_dict, stimulus_dict, self.recorded_path
@@ -1886,9 +1903,15 @@ class SequenceWindow(QWidget):
                 self.recorded_signal_info["sample_rate"] = sample_rate
 
                 if multi_data.shape[1] > 1:
-                    save_audio_simple(self.recorded_path, multi_data, sample_rate)
+                    if bit_depth == 64:
+                        save_audio_simple(self.recorded_path, multi_data, sample_rate, bit_depth=bit_depth)
+                    else:
+                        save_audio_simple(self.recorded_path, multi_data, sample_rate)
                 else:
-                    save_audio_simple(self.recorded_path, mono_data, sample_rate)
+                    if bit_depth == 64:
+                        save_audio_simple(self.recorded_path, mono_data, sample_rate, bit_depth=bit_depth)
+                    else:
+                        save_audio_simple(self.recorded_path, mono_data, sample_rate)
 
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
                 if save_code == error_code.OK:
@@ -3082,27 +3105,34 @@ class SequenceWindow(QWidget):
         if isinstance(payload, dict):
             mono_source = payload.get("mono")
             multi_source = payload.get("multi")
+            wav_chunk = None
             if multi_source is not None:
-                multi_chunk = np.asarray(multi_source, dtype=np.float32)
+                multi_chunk = np.asarray(multi_source)
                 if multi_chunk.ndim == 0:
                     multi_chunk = multi_chunk.reshape(1, 1)
                 elif multi_chunk.ndim == 1:
                     multi_chunk = multi_chunk.reshape(-1, 1)
 
-                wav_chunk = multi_chunk
                 if mono_source is None:
                     if multi_chunk.shape[1] == 1:
-                        plot_chunk = multi_chunk[:, 0]
+                        wav_chunk = multi_chunk[:, 0]
                     else:
-                        plot_chunk = multi_chunk.mean(axis=1).astype(np.float32, copy=False)
+                        wav_chunk = multi_chunk.mean(axis=1)
+                    plot_chunk = np.asarray(wav_chunk, dtype=np.float32)
                 else:
+                    wav_chunk = np.asarray(mono_source)
                     plot_chunk = np.asarray(mono_source, dtype=np.float32)
             elif mono_source is not None:
+                wav_chunk = np.asarray(mono_source)
                 plot_chunk = np.asarray(mono_source, dtype=np.float32)
             else:
+                wav_chunk = None
                 plot_chunk = np.array([], dtype=np.float32)
         else:
-            plot_chunk = np.asarray(payload, dtype=np.float32)
+            wav_chunk = np.asarray(payload)
+            if wav_chunk.ndim > 1:
+                wav_chunk = wav_chunk[:, 0]
+            plot_chunk = np.asarray(wav_chunk, dtype=np.float32)
 
         if plot_chunk.ndim > 1:
             plot_chunk = plot_chunk[:, 0]
@@ -3130,7 +3160,7 @@ class SequenceWindow(QWidget):
         # Write chunk to file (if wav_writer is connected)
         if self.streaming_wav_writer:
             try:
-                self.streaming_wav_writer.write_chunk(mono)
+                self.streaming_wav_writer.write_chunk(wav_chunk if wav_chunk is not None else mono)
             except Exception as e:
                 self.default_logger.error(f"Error writing audio chunk to file: {e}")
 
@@ -3145,7 +3175,7 @@ class SequenceWindow(QWidget):
         multi = payload.get("multi")
         if multi is None:
             return
-        multi_arr = np.asarray(multi, dtype=np.float32)
+        multi_arr = np.asarray(multi)
         if multi_arr.ndim == 1:
             multi_arr = multi_arr.reshape(-1, 1)
         if multi_arr.ndim != 2 or multi_arr.shape[0] <= 0:
@@ -3222,6 +3252,7 @@ class SequenceWindow(QWidget):
             if self.streaming_mode == "record_only":
                 recorded_data_multi = self.streaming_processor.get_recorded_data_multi()
             sample_rate = self.data_struct.sample_rate
+            bit_depth = normalize_float_bit_depth(getattr(self, "streaming_bit_depth", 32))
 
             # VERIFICATION: Check if we captured the expected number of samples
             expected_samples = self.streaming_processor.target_samples
@@ -3252,10 +3283,13 @@ class SequenceWindow(QWidget):
 
                 # Store aligned data
                 self.data_struct.store_wave_data = aligned_data
-                self.data_struct.store_wave_data_multi = np.asarray(aligned_data, dtype=np.float32).reshape(-1, 1)
+                self.data_struct.store_wave_data_multi = np.asarray(aligned_data).reshape(-1, 1)
 
                 # Save aligned data to final file
-                save_audio_simple(self.recorded_path, aligned_data, sample_rate)
+                if bit_depth == 64:
+                    save_audio_simple(self.recorded_path, aligned_data, sample_rate, bit_depth=bit_depth)
+                else:
+                    save_audio_simple(self.recorded_path, aligned_data, sample_rate)
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
@@ -3278,9 +3312,11 @@ class SequenceWindow(QWidget):
             else:
                 # Record-only mode - no alignment needed
                 if recorded_data_multi is not None:
-                    recorded_array = np.asarray(recorded_data_multi, dtype=np.float32)
+                    recorded_array = np.asarray(recorded_data_multi)
                 else:
-                    recorded_array = np.asarray(recorded_data, dtype=np.float32)
+                    recorded_array = np.asarray(recorded_data)
+                if not np.issubdtype(recorded_array.dtype, np.floating):
+                    recorded_array = recorded_array.astype(np.float32)
                 if recorded_array.ndim == 2:
                     actual_input_channels = list(getattr(self.streaming_processor, "_rec_in_sel", []) or [])
                     if not actual_input_channels:
@@ -3293,9 +3329,9 @@ class SequenceWindow(QWidget):
                     if recorded_array.shape[1] == 1:
                         mono_recorded_data = recorded_array[:, 0]
                     elif recorded_array.shape[1] > 1:
-                        mono_recorded_data = recorded_array.mean(axis=1).astype(np.float32, copy=False)
+                        mono_recorded_data = recorded_array.mean(axis=1).astype(recorded_array.dtype, copy=False)
                     else:
-                        mono_recorded_data = np.array([], dtype=np.float32)
+                        mono_recorded_data = np.array([], dtype=recorded_array.dtype)
                 else:
                     mono_recorded_data = recorded_array.reshape(-1)
                     actual_input_channels = list(getattr(self.streaming_processor, "_rec_in_sel", []) or [])
@@ -3329,6 +3365,7 @@ class SequenceWindow(QWidget):
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            self.streaming_bit_depth = 32
             # Recording has fully ended; release S/N input and busy gating before any follow-up analysis/UI work.
             self.player_status_flag = False  # Recording complete, allow hardware access
             self._record_workflow_busy = False
@@ -3366,6 +3403,7 @@ class SequenceWindow(QWidget):
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
+            self.streaming_bit_depth = 32
             self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
             # Still enable buttons even on error
             self.data_btn.setEnabled(True)

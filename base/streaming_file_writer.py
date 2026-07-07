@@ -7,6 +7,7 @@ import os
 import numpy as np
 import wave
 from base.log_manager import LogManager
+from consts.audio_consts import bit_depth_to_dtype, normalize_float_bit_depth
 
 
 class StreamingWavWriter:
@@ -20,7 +21,7 @@ class StreamingWavWriter:
     Supports mono channel float32 audio format.
     """
 
-    def __init__(self, file_path, sample_rate=44100, channels=1):
+    def __init__(self, file_path, sample_rate=44100, channels=1, bit_depth=32):
         """
         Initialize streaming WAV writer.
 
@@ -32,6 +33,8 @@ class StreamingWavWriter:
         self.file_path = file_path
         self.sample_rate = sample_rate
         self.channels = channels
+        self.bit_depth = normalize_float_bit_depth(bit_depth)
+        self.audio_dtype = np.dtype(bit_depth_to_dtype(self.bit_depth))
         self.logger = LogManager.set_log_handler("streaming_core")
 
         try:
@@ -44,7 +47,12 @@ class StreamingWavWriter:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
             self.sf_file = sf.SoundFile(
-                file_path, mode="w", samplerate=sample_rate, channels=channels, format="WAV", subtype="FLOAT"
+                file_path,
+                mode="w",
+                samplerate=sample_rate,
+                channels=channels,
+                format="WAV",
+                subtype="DOUBLE" if self.bit_depth == 64 else "FLOAT",
             )
             self.wave_file = None
             self.logger.info(f"StreamingWavWriter initialized with soundfile: {file_path}")
@@ -54,7 +62,7 @@ class StreamingWavWriter:
             self.sf_file = None
             self.wave_file = wave.open(file_path, "wb")
             self.wave_file.setnchannels(channels)
-            self.wave_file.setsampwidth(4)  # 4 bytes for float32
+            self.wave_file.setsampwidth(8 if self.bit_depth == 64 else 4)
             self.wave_file.setframerate(sample_rate)
             self.logger.info(f"StreamingWavWriter initialized with wave module: {file_path}")
 
@@ -68,15 +76,14 @@ class StreamingWavWriter:
         Args:
             audio_chunk (np.ndarray): Audio data chunk as numpy array
                 Expected shape: (frames,) for mono or (frames, channels)
-                Expected dtype: float32
+                Expected dtype: float32 or float64
         """
         if not self.is_open:
             self.logger.warning("Attempted to write to closed StreamingWavWriter")
             return
 
         try:
-            # Ensure audio is float32
-            audio_chunk = audio_chunk.astype(np.float32)
+            audio_chunk = audio_chunk.astype(self.audio_dtype)
 
             if self.use_soundfile:
                 # soundfile handles float32 directly

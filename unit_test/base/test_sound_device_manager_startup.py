@@ -174,7 +174,7 @@ def test_v2_save_shape_with_hardware_id_omits_runtime_indexes(monkeypatch, tmp_p
     assert payload["mic"]["default_samplerate"] == 96000.0
     assert payload["speaker"]["default_samplerate"] == 44100.0
     assert payload["mic"]["samplerate"] == 44100
-    assert payload["mic"]["bit_depth"] == 24
+    assert payload["mic"]["bit_depth"] == 32
     assert payload["mic"]["latency_ms"] == 55
 
 
@@ -735,7 +735,7 @@ def test_v2_startup_restore_by_hardware_id_succeeds_with_exact_runtime_match(mon
                 "hardware_type": "audio_interface",
                 "hostapi_name": "API",
                 "samplerate": 44100,
-                "bit_depth": 24,
+                "bit_depth": 32,
                 "latency_ms": 55,
             },
             {
@@ -746,7 +746,7 @@ def test_v2_startup_restore_by_hardware_id_succeeds_with_exact_runtime_match(mon
                 "hardware_type": "audio_interface",
                 "hostapi_name": "API",
                 "samplerate": 44100,
-                "bit_depth": 24,
+                "bit_depth": 32,
                 "latency_ms": 55,
             },
             [0, 2],
@@ -905,7 +905,7 @@ def test_registered_db_row_wins_over_saved_mutable_metadata(monkeypatch, tmp_pat
     assert result["device_available"] is True
     restored_mic = saved[0][0]
     assert restored_mic["samplerate"] == 44100
-    assert restored_mic["bit_depth"] == 16
+    assert restored_mic["bit_depth"] == 32
     assert restored_mic["latency_ms"] == 25
 
 
