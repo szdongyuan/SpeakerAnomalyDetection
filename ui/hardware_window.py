@@ -15,6 +15,7 @@ from base.hardware_management import (
 from base import sound_device_manager as sound_device_manager_module
 from base.sound_device_manager import SoundDeviceManager
 from consts import model_consts
+from consts.audio_consts import normalize_float_bit_depth
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, PushButton, Label, ComboBox, GroupBox, TableView
 
@@ -646,7 +647,7 @@ class HardwareSelectionController:
             "hardware_type": asset.get("hardware_type"),
             "hostapi_name": asset.get("hostapi_name"),
             "samplerate": asset.get("samplerate"),
-            "bit_depth": asset.get("bit_depth"),
+            "bit_depth": normalize_float_bit_depth(asset.get("bit_depth")),
             "latency_ms": asset.get("latency_ms"),
         }
         for key, value in registered_metadata.items():

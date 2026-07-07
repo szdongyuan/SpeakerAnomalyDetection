@@ -19,6 +19,8 @@ from base.acquisition_recording_defaults import (
     normalize_play_record_detail,
     normalize_record_only_detail,
 )
+from base.pre_processing.alignment_processing import AlignmentProcessing
+from consts.audio_consts import normalize_float_bit_depth
 
 
 SOURCE_PATH = REPO_ROOT / "ui" / "sequence" / "sequence_widget.py"
@@ -52,6 +54,8 @@ TARGET_METHODS = {
     "_finish_recording_success",
     "_finish_recording_failure",
     "_start_blocking_recording",
+    "on_audio_chunk_received_playrec",
+    "on_audio_chunk_received_rec",
     "_on_streaming_complete",
     "eventFilter",
 }
@@ -212,6 +216,7 @@ def _build_method_namespace():
         "error_code": types.SimpleNamespace(OK="OK"),
         "save_audio_simple": lambda *args, **kwargs: None,
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
+        "normalize_float_bit_depth": normalize_float_bit_depth,
         "normalize_play_record_detail": normalize_play_record_detail,
         "normalize_record_only_detail": normalize_record_only_detail,
         "resolve_input_sample_rate": _namespace_resolve_input_sample_rate,
@@ -687,6 +692,8 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._finish_recording_success = _bind_method(window, namespace, "_finish_recording_success")
     window._finish_recording_failure = _bind_method(window, namespace, "_finish_recording_failure")
     window._start_blocking_recording = _bind_method(window, namespace, "_start_blocking_recording")
+    window.on_audio_chunk_received_playrec = _bind_method(window, namespace, "on_audio_chunk_received_playrec")
+    window.on_audio_chunk_received_rec = _bind_method(window, namespace, "on_audio_chunk_received_rec")
     window._on_streaming_complete = _bind_method(window, namespace, "_on_streaming_complete")
     window.eventFilter = _bind_method(window, namespace, "eventFilter")
     return window
@@ -1140,6 +1147,97 @@ def test_record_only_streaming_completion_stores_mono_and_multi_recorded_data():
         multi_data.mean(axis=1).astype(np.float32, copy=False),
     )
     np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, multi_data)
+
+
+def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downcast():
+    namespace = _build_method_namespace()
+    written_chunks = []
+    plotted = []
+
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+    window.streaming_mode = "record_only"
+    window.streaming_buffer_multi = []
+    window.streaming_wav_writer = types.SimpleNamespace(
+        write_chunk=lambda chunk: written_chunks.append(np.asarray(chunk).copy())
+    )
+    window.channel_workspace = types.SimpleNamespace(
+        all_subwindows=lambda: [
+            types.SimpleNamespace(
+                set_data=lambda time_axis, data: plotted.append(np.asarray(data).copy()),
+                clear_plot=lambda: None,
+            )
+        ]
+    )
+
+    payload = {"multi": np.array([[0.1], [0.2]], dtype=np.float64)}
+
+    window.on_audio_chunk_received_rec(payload)
+
+    assert written_chunks[0].dtype == np.float64
+    assert window.streaming_buffer_multi[0].dtype == np.float64
+    np.testing.assert_array_equal(written_chunks[0], payload["multi"])
+
+
+def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcast():
+    namespace = _build_method_namespace()
+    written_chunks = []
+
+    window = _build_fake_window(namespace, use_streaming=True, mode="PLAY_AND_RECORD")
+    window.streaming_mode = "play_record"
+    window.streaming_buffer_multi = []
+    window.streaming_wav_writer = types.SimpleNamespace(
+        write_chunk=lambda chunk: written_chunks.append(np.asarray(chunk).copy())
+    )
+    window.channel_workspace = types.SimpleNamespace(
+        all_subwindows=lambda: [
+            types.SimpleNamespace(set_data=lambda time_axis, data: None),
+        ]
+    )
+
+    mono = np.array([0.1, 0.2, 0.3], dtype=np.float64)
+    multi = mono.reshape(-1, 1)
+
+    window.on_audio_chunk_received_playrec({"mono": mono, "multi": multi})
+
+    assert written_chunks[0].dtype == np.float64
+    np.testing.assert_array_equal(written_chunks[0], mono)
+
+
+def test_streaming_play_record_final_save_receives_float64_aligned_data(monkeypatch):
+    namespace = _build_method_namespace()
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: ("OK", "saved")
+    )
+    namespace["AlignmentProcessing"] = AlignmentProcessing
+    saved = []
+
+    monkeypatch.setattr(
+        AlignmentProcessing,
+        "gcc_phat",
+        staticmethod(lambda stimulus, recorded: (0, None, None)),
+    )
+    namespace["save_audio_simple"] = lambda path, data, sample_rate, **kwargs: saved.append(
+        (path, np.asarray(data).copy(), sample_rate, kwargs)
+    )
+
+    processor = types.SimpleNamespace(
+        target_samples=3,
+        is_recording=False,
+        get_recorded_data=lambda: np.array([0.1, 0.2, 0.3], dtype=np.float64),
+    )
+    window = _build_fake_window(namespace, use_streaming=True, mode="PLAY_AND_RECORD")
+    window.streaming_mode = "play_record"
+    window.streaming_bit_depth = 64
+    window.streaming_processor = processor
+    window.streaming_wav_writer = types.SimpleNamespace(finalize=lambda: None)
+    window.streaming_stimulus_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+    window._on_streaming_complete()
+
+    assert saved[0][0] == "demo.wav"
+    assert saved[0][1].dtype == np.float64
+    assert saved[0][2] == 48000
+    assert saved[0][3] == {"bit_depth": 64}
 
 
 def test_streaming_start_failure_restores_sn_editability():

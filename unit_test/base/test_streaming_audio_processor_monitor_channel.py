@@ -163,6 +163,33 @@ def test_start_streaming_rec_initializes_monitor_input_column(monkeypatch):
     assert created[0]["device"] == (1, 2)
 
 
+def test_start_streaming_rec_monitor_uses_float32_transport_for_float64_samples(monkeypatch):
+    created = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(streaming_audio_processor.sd, "Stream", FakeStream)
+
+    processor = streaming_audio_processor.StreamingAudioProcessor()
+    code, _ = processor.start_streaming_rec(
+        sample_rate=44100,
+        target_samples=8,
+        device={"name": "Mic", "index": 1, "max_input_channels": 2},
+        output_device={"name": "Speaker", "index": 2, "max_output_channels": 2},
+        monitor_playback=True,
+        bit_depth=64,
+    )
+
+    assert code == error_code.OK
+    assert created[0]["dtype"] == "float32"
+    assert processor.sample_dtype == np.dtype("float64")
+
+
 def test_start_streaming_rec_preserves_final_positional_input_channels(monkeypatch):
     created = []
 

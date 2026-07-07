@@ -4,6 +4,8 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QStyle,
+    QStyleOptionViewItem,
     QStyledItemDelegate,
     QVBoxLayout,
 )
@@ -53,7 +55,6 @@ class HardwareRegistrationDialog(QDialog):
         form.addRow(Label("设备"), self.device_combo)
         form.addRow(Label("采样率"), self.samplerate_combo)
         form.addRow(Label("位深"), self.bit_depth_combo)
-        form.addRow(Label("延迟(ms)"), self.latency_spin)
 
         self.refresh_btn = PushButton("刷新")
         self.register_btn = PushButton("注册")
@@ -297,7 +298,7 @@ class HardwareManagementTableModel(QAbstractTableModel):
         "max_output_channels",
         "updated_at",
     )
-    EDITABLE_COLUMNS = ("display_name", "samplerate", "bit_depth", "latency_ms")
+    EDITABLE_COLUMNS = ("display_name", "samplerate", "bit_depth")
     COLUMNS = (
         "display_name",
         "hostapi_name",
@@ -532,9 +533,9 @@ class HardwareManagementTableModel(QAbstractTableModel):
             try:
                 bit_depth = int(value)
             except (TypeError, ValueError):
-                raise ValueError("位深必须为 8、16、24 或 32")
+                raise ValueError("位深必须为 32 或 64")
             if bit_depth not in VALID_BIT_DEPTHS:
-                raise ValueError("位深必须为 8、16、24 或 32")
+                raise ValueError("位深必须为 32 或 64")
             return bit_depth
         if field == "latency_ms":
             try:
@@ -560,7 +561,19 @@ class HardwareManagementTableModel(QAbstractTableModel):
         return True
 
 
-class ComboValueDelegate(QStyledItemDelegate):
+class FocuslessItemDelegate(QStyledItemDelegate):
+    @staticmethod
+    def focusless_option(option):
+        focusless = QStyleOptionViewItem(option)
+        focusless.state &= ~QStyle.State_HasFocus
+        focusless.state &= ~QStyle.State_Selected
+        return focusless
+
+    def paint(self, painter, option, index):
+        super().paint(painter, self.focusless_option(option), index)
+
+
+class ComboValueDelegate(FocuslessItemDelegate):
     def __init__(self, choices, parent=None):
         super().__init__(parent)
         self.choices = list(choices)
@@ -661,6 +674,9 @@ class HardwareManagementWindow(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(TableView.SelectItems)
         self.table.setSelectionMode(TableView.SingleSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setStyleSheet(f"{self.table.styleSheet()}\nTableView::item:focus {{ outline: none; }}")
+        self.table.setItemDelegate(FocuslessItemDelegate(self.table))
         self.table.setItemDelegateForColumn(
             self.model.column_index("samplerate"),
             ComboValueDelegate([(str(rate), rate) for rate in VALID_SAMPLE_RATES], self.table),
@@ -669,7 +685,7 @@ class HardwareManagementWindow(QDialog):
             self.model.column_index("bit_depth"),
             ComboValueDelegate([(f"{depth}bit", depth) for depth in VALID_BIT_DEPTHS], self.table),
         )
-        self.table.setItemDelegateForColumn(self.model.column_index("latency_ms"), LatencyDelegate(self.table))
+        self.table.setColumnHidden(self.model.column_index("latency_ms"), True)
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)

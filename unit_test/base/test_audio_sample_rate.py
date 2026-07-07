@@ -9,7 +9,7 @@ from base.audio_sample_rate import (
 def test_audio_constants_include_bit_depth_and_device_enumeration_base_exceptions():
     from consts.audio_consts import VALID_BIT_DEPTHS, DEVICE_ENUMERATION_BASE_EXCEPTIONS
 
-    assert VALID_BIT_DEPTHS == (8, 16, 24, 32)
+    assert VALID_BIT_DEPTHS == (32, 64)
     assert DEVICE_ENUMERATION_BASE_EXCEPTIONS == (ValueError, RuntimeError)
 
 

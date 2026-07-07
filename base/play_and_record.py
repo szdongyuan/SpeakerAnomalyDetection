@@ -8,6 +8,7 @@ from base.recording_management import RecordingManager
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor, alignment_reference_from_stimulus
 from base.streaming_audio_processor import StreamingAudioProcessor
+from consts.audio_consts import normalize_float_bit_depth
 from consts import error_code, model_consts
 
 data_struct = DataDealStruct()
@@ -76,7 +77,11 @@ def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
         return record_code, recorded_signal
 
     sample_rate = _require_recording_runtime_sample_rate(recorded_dict)
-    save_audio_simple(recorded_path, recorded_signal, sample_rate)
+    bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
+    if bit_depth == 32 and "bit_depth" not in recorded_dict:
+        save_audio_simple(recorded_path, recorded_signal, sample_rate)
+    else:
+        save_audio_simple(recorded_path, recorded_signal, sample_rate, bit_depth=bit_depth)
 
     data_struct.store_wave_data = recorded_signal
 
@@ -179,6 +184,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     monitor_input_channel = recorded_dict.get("monitor_input_channel")
     monitor_gain_db = float(recorded_dict.get("monitor_gain_db", 0.0))
     recording_start_delay_frames = recorded_dict.get("recording_start_delay_frames", 0)
+    bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -194,6 +200,7 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         monitor_input_channel=monitor_input_channel,
         monitor_gain_db=monitor_gain_db,
         discard_initial_samples=recording_start_delay_frames,
+        bit_depth=bit_depth,
     )
 
     if record_code == error_code.OK:
@@ -237,6 +244,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
     input_device = recorded_dict.get("input_device")
     output_device = recorded_dict.get("output_device")
     recording_start_delay_frames = recorded_dict.get("recording_start_delay_frames", 0)
+    bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
 
     # Create streaming processor
     processor = StreamingAudioProcessor()
@@ -251,6 +259,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         prepare_frames=prepare_frames,
         prolong_frames=prolong_frames,
         discard_initial_samples=recording_start_delay_frames,
+        bit_depth=bit_depth,
     )
 
     if record_code == error_code.OK:

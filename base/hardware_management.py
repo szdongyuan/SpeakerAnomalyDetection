@@ -6,7 +6,7 @@ import uuid
 from contextlib import contextmanager
 
 from consts import model_consts
-from consts.audio_consts import VALID_BIT_DEPTHS, VALID_SAMPLE_RATES
+from consts import audio_consts
 
 
 class HardwareManagementError(Exception):
@@ -83,7 +83,7 @@ def augment_runtime_device(runtime_device, asset):
             "hardware_type": asset["hardware_type"],
             "hostapi_name": asset["hostapi_name"],
             "samplerate": asset["samplerate"],
-            "bit_depth": asset["bit_depth"],
+            "bit_depth": audio_consts.normalize_float_bit_depth(asset["bit_depth"]),
             "latency_ms": asset["latency_ms"],
         }
     )
@@ -109,7 +109,7 @@ def _selected_device_entry(device):
         "hostapi_name": device["hostapi_name"],
         "default_samplerate": device.get("default_samplerate"),
         "samplerate": device["samplerate"],
-        "bit_depth": device["bit_depth"],
+        "bit_depth": audio_consts.normalize_float_bit_depth(device["bit_depth"]),
         "latency_ms": device["latency_ms"],
         "max_input_channels": device.get("max_input_channels"),
         "max_output_channels": device.get("max_output_channels"),
@@ -619,13 +619,13 @@ def _validate_output_coefficients(coefficients):
 
 
 def _validate_samplerate(value):
-    if value not in VALID_SAMPLE_RATES:
+    if value not in audio_consts.VALID_SAMPLE_RATES:
         raise HardwareValidationError("samplerate must be 44100 or 48000")
 
 
 def _validate_bit_depth(value):
-    if value not in VALID_BIT_DEPTHS:
-        raise HardwareValidationError("bit_depth must be 8, 16, 24, or 32")
+    if value not in audio_consts.VALID_BIT_DEPTHS:
+        raise HardwareValidationError("bit_depth must be 32 or 64")
 
 
 def _validate_latency(value):

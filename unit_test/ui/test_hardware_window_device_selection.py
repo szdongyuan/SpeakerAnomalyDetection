@@ -598,7 +598,7 @@ def test_ok_clicked_matches_runtime_devices_applies_order_and_returns_augmented_
         assert selected_mic["custom_runtime_key"] == "preserved"
         assert selected_mic["hardware_id"] == "mic-1"
         assert selected_mic["device_name"] == "Runtime mic"
-        assert selected_mic["bit_depth"] == 24
+        assert selected_mic["bit_depth"] == 32
         assert selected_speaker is not runtime_speaker
         assert selected_speaker["index"] == 9
         assert selected_speaker["samplerate"] == 96000

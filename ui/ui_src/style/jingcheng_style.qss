@@ -117,7 +117,7 @@ QHeaderView::section {
 }
 
 QTableView::item {
-  padding: 5px 8px;
+  padding: 0px;
 }
 
 QMainWindow {

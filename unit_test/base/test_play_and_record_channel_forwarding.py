@@ -13,6 +13,7 @@ import pytest
 
 from base.load_config import LoadUiConfig
 from base.soundcard_audio_processor import SoundcardAudioProcessor, alignment_reference_from_stimulus
+from base.streaming_audio_processor import StreamingAudioProcessor
 from consts import error_code
 
 
@@ -52,8 +53,103 @@ def test_stream_record_without_play_forwards_selected_input_channels(monkeypatch
             "monitor_input_channel": 1,
             "monitor_gain_db": -6.0,
             "discard_initial_samples": 0,
+            "bit_depth": 32,
         }
     ]
+
+
+def test_stream_record_without_play_forwards_float64_bit_depth(monkeypatch):
+    calls = []
+
+    class FakeProcessor:
+        def start_streaming_rec(self, **kwargs):
+            calls.append(kwargs)
+            return play_and_record.error_code.OK, "ok"
+
+    monkeypatch.setattr(play_and_record, "StreamingAudioProcessor", FakeProcessor)
+
+    play_and_record.stream_record_without_play(
+        {
+            "sample_rate": 48000,
+            "num_frames": 1024,
+            "device": {"index": 1, "max_input_channels": 4},
+            "bit_depth": 64,
+        },
+        "unused.wav",
+        {},
+    )
+
+    assert calls[0]["bit_depth"] == 64
+
+
+def test_streaming_rec_uses_float32_transport_for_float64_samples_and_preserves_chunks(monkeypatch):
+    calls = []
+
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr("base.streaming_audio_processor.sd.InputStream", FakeInputStream)
+    monkeypatch.setattr(StreamingAudioProcessor, "_resolve_max_input_channels", staticmethod(lambda device: 2))
+
+    processor = StreamingAudioProcessor()
+    code, _ = processor.start_streaming_rec(
+        sample_rate=48000,
+        target_samples=2,
+        device={"index": 1, "max_input_channels": 2},
+        input_channels=[0],
+        bit_depth=64,
+    )
+    processor._audio_callback(np.array([[0.1], [0.2]], dtype=np.float32), 2, None, None)
+    processor.process_queue()
+
+    assert code == error_code.OK
+    assert calls[0]["dtype"] == "float32"
+    assert processor.sample_dtype == np.dtype("float64")
+    assert processor.get_recorded_data_multi().dtype == np.float64
+
+
+def test_streaming_playrec_uses_float32_transport_for_float64_samples(monkeypatch):
+    calls = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr("base.streaming_audio_processor.sd.Stream", FakeStream)
+    monkeypatch.setattr(StreamingAudioProcessor, "_resolve_max_input_channels", staticmethod(lambda device: 2))
+
+    processor = StreamingAudioProcessor()
+    code, _ = processor.start_streaming_playrec(
+        stimulus_dict={"data": np.array([0.1, 0.2], dtype=np.float32), "amplitude": 1.0},
+        sample_rate=48000,
+        target_samples=4,
+        input_device={"index": 1, "max_input_channels": 2},
+        output_device={"index": 2, "max_output_channels": 1},
+        bit_depth=64,
+    )
+
+    assert code == error_code.OK
+    assert calls[0]["dtype"] == "float32"
+    assert processor.sample_dtype == np.dtype("float64")
+
+    callback = calls[0]["callback"]
+    callback(
+        np.array([[0.1], [0.2]], dtype=np.float32),
+        np.zeros((2, 1), dtype=np.float32),
+        2,
+        None,
+        None,
+    )
+    processor.process_queue()
+
+    assert processor.get_recorded_data().dtype == np.float64
 
 
 def test_stream_record_without_play_forwards_recording_start_delay(monkeypatch):
@@ -406,7 +502,7 @@ def test_sd_play_ignores_invalid_output_channels(monkeypatch, invalid_output_cha
 def test_blocking_play_record_aligns_and_saves_tail_free_frequency_stepped_recording(monkeypatch):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking):
+    def fake_playrec(playback_data, samplerate, channels, blocking, dtype=None):
         calls["playback_len"] = len(playback_data)
         recorded = np.concatenate([np.zeros(3), np.asarray(playback_data, dtype=float)])
         return recorded.reshape(-1, 1)
@@ -571,7 +667,7 @@ def test_blocking_play_record_without_alignment_sample_count_keeps_existing_full
 ):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking):
+    def fake_playrec(playback_data, samplerate, channels, blocking, dtype=None):
         calls["playback_len"] = len(playback_data)
         recorded = np.concatenate([np.zeros(3), np.asarray(playback_data, dtype=float)])
         return recorded.reshape(-1, 1)
@@ -597,7 +693,7 @@ def test_blocking_play_record_without_alignment_sample_count_keeps_existing_full
 def test_blocking_play_record_clamps_negative_alignment_offset(monkeypatch):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking):
+    def fake_playrec(playback_data, samplerate, channels, blocking, dtype=None):
         recorded = np.asarray(playback_data, dtype=float)
         return recorded.reshape(-1, 1)
 
@@ -628,7 +724,7 @@ def test_blocking_play_record_clamps_negative_alignment_offset(monkeypatch):
 def test_blocking_play_record_pads_alignment_offset_near_recording_end(monkeypatch):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking):
+    def fake_playrec(playback_data, samplerate, channels, blocking, dtype=None):
         recorded = np.asarray(playback_data, dtype=float)
         return recorded.reshape(-1, 1)
 
@@ -687,14 +783,35 @@ def test_stream_play_and_record_plays_full_tail_but_returns_tail_free_alignment_
     assert sample_rate == 48000
     assert calls[0]["target_samples"] == 14
     assert calls[0]["discard_initial_samples"] == 3
+    assert calls[0]["bit_depth"] == 32
     assert calls[0]["stimulus_dict"] is stimulus_dict
     np.testing.assert_array_equal(alignment_reference, np.arange(5, dtype=float))
+
+
+def test_stream_play_and_record_forwards_float64_bit_depth(monkeypatch):
+    calls = []
+
+    class FakeProcessor:
+        def start_streaming_playrec(self, **kwargs):
+            calls.append(kwargs)
+            return play_and_record.error_code.OK, "ok"
+
+    monkeypatch.setattr(play_and_record, "StreamingAudioProcessor", FakeProcessor)
+
+    play_and_record.stream_play_and_record(
+        {"data": np.arange(4, dtype=np.float32), "amplitude": 1.0, "sr": 48000},
+        {"prepare_frames": 0, "prolong_frames": 0, "bit_depth": 64},
+        "unused.wav",
+        {},
+    )
+
+    assert calls[0]["bit_depth"] == 64
 
 
 def test_play_last_stimulus_wave_persists_runtime_sample_rate_when_global_is_stale(monkeypatch):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking, device=None):
+    def fake_playrec(playback_data, samplerate, channels, blocking, device=None, dtype=None):
         calls["playrec_sample_rate"] = samplerate
         return np.asarray(playback_data, dtype=np.float32).reshape(-1, 1)
 
@@ -826,7 +943,7 @@ def test_stream_play_and_record_zero_delay_does_not_prepend_warmup(monkeypatch):
 def test_sd_rec_trims_recording_start_delay_after_extra_capture(monkeypatch):
     calls = {}
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls["frames"] = frames
         return np.arange(frames, dtype=np.float32).reshape(-1, 1)
 
@@ -849,7 +966,7 @@ def test_sd_rec_trims_recording_start_delay_after_extra_capture(monkeypatch):
 def test_sd_rec_delay_preserves_final_length_without_using_prolong_frames(monkeypatch):
     calls = {}
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls["frames"] = frames
         return np.arange(frames, dtype=np.float32).reshape(-1, 1)
 
@@ -867,7 +984,7 @@ def test_sd_rec_delay_preserves_final_length_without_using_prolong_frames(monkey
 def test_sd_rec_legacy_prolong_frames_still_shortens_output(monkeypatch):
     calls = {}
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls["frames"] = frames
         return np.arange(frames, dtype=np.float32).reshape(-1, 1)
 
@@ -890,7 +1007,7 @@ def test_sd_rec_legacy_prolong_frames_still_shortens_output(monkeypatch):
 def test_sd_rec_combines_delay_and_legacy_prolong_without_extra_prolong_capture(monkeypatch):
     calls = {}
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls["frames"] = frames
         return np.arange(frames, dtype=np.float32).reshape(-1, 1)
 
@@ -915,7 +1032,7 @@ def test_sd_rec_combines_delay_and_legacy_prolong_without_extra_prolong_capture(
 def test_sd_rec_invalid_recording_start_delay_defaults_to_zero(monkeypatch, value):
     calls = {}
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls["frames"] = frames
         return np.arange(frames, dtype=np.float32).reshape(-1, 1)
 
@@ -945,7 +1062,7 @@ def test_sd_rec_slices_selected_input_channels(monkeypatch):
         dtype=np.float32,
     )
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls.append(
             {
                 "frames": frames,
@@ -985,7 +1102,7 @@ def test_sd_rec_slices_selected_input_channels(monkeypatch):
 def test_sd_play_rec_prepends_delay_silence_and_aligns_retained_capture(monkeypatch):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking, device=None):
+    def fake_playrec(playback_data, samplerate, channels, blocking, device=None, dtype=None):
         calls["playback"] = np.asarray(playback_data)
         return np.arange(len(playback_data), dtype=np.float32).reshape(-1, 1)
 
@@ -1008,7 +1125,7 @@ def test_sd_play_rec_prepends_delay_silence_and_aligns_retained_capture(monkeypa
 def test_sd_play_rec_zero_delay_uses_original_playback_window(monkeypatch):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking, device=None):
+    def fake_playrec(playback_data, samplerate, channels, blocking, device=None, dtype=None):
         calls["playback"] = np.asarray(playback_data)
         return np.zeros((len(playback_data), 1), dtype=np.float32)
 
@@ -1030,7 +1147,7 @@ def test_sd_play_rec_zero_delay_uses_original_playback_window(monkeypatch):
 def test_sd_play_rec_invalid_recording_start_delay_defaults_to_zero(monkeypatch, value):
     calls = {}
 
-    def fake_playrec(playback_data, samplerate, channels, blocking, device=None):
+    def fake_playrec(playback_data, samplerate, channels, blocking, device=None, dtype=None):
         calls["playback"] = np.asarray(playback_data)
         return np.arange(len(playback_data), dtype=np.float32).reshape(-1, 1)
 
@@ -1061,7 +1178,7 @@ def test_sd_play_rec_forwards_selected_input_output_devices(monkeypatch):
         dtype=np.float32,
     )
 
-    def fake_playrec(data, samplerate, channels, blocking=True, device=None):
+    def fake_playrec(data, samplerate, channels, blocking=True, device=None, dtype=None):
         calls.append(
             {
                 "samplerate": samplerate,
@@ -1108,7 +1225,7 @@ def test_sd_rec_uses_sr_when_sample_rate_missing(monkeypatch):
     calls = []
     captured = np.array([1.0, 2.0], dtype=np.float32)
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         calls.append(
             {
                 "frames": frames,
@@ -1153,7 +1270,7 @@ def test_sd_rec_without_input_channels_preserves_mono_vector(monkeypatch):
         dtype=np.float32,
     )
 
-    def fake_rec(frames, samplerate, channels, device=None, blocking=True):
+    def fake_rec(frames, samplerate, channels, device=None, blocking=True, dtype=None):
         return captured
 
     monkeypatch.setattr("base.soundcard_audio_processor.sd.rec", fake_rec)

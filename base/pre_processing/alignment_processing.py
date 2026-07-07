@@ -70,6 +70,8 @@ class AlignmentProcessing:
             np.ndarray: Aligned audio data with length equal to stimulus_signal length
         """
         logger = LogManager.set_log_handler("alignment")
+        recorded_signal = np.asarray(recorded_signal)
+        result_dtype = recorded_signal.dtype if np.issubdtype(recorded_signal.dtype, np.floating) else np.float32
 
         # Calculate alignment offset using GCC-PHAT
         align_frames, _, _ = AlignmentProcessing.gcc_phat(stimulus_signal, recorded_signal)
@@ -100,4 +102,4 @@ class AlignmentProcessing:
             logger.warning(f"Aligned data is {shortfall} samples short, padding with zeros")
             aligned_data = np.pad(aligned_data, (0, shortfall), mode='constant', constant_values=0)
 
-        return aligned_data.astype(np.float32)
+        return aligned_data.astype(result_dtype, copy=False)

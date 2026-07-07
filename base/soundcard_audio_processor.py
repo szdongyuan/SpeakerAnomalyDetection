@@ -5,6 +5,7 @@ from base.log_manager import LogManager
 from base.save_data import save_audio_simple
 from base.sound_device_manager import sd
 from consts import error_code
+from consts.audio_consts import normalize_float_bit_depth, bit_depth_to_dtype
 
 
 def alignment_reference_from_stimulus(stimulus_dict):
@@ -138,6 +139,8 @@ class SoundcardAudioProcessor(object):
         sr, validation_code, validation_msg = self._resolve_playrec_sample_rate(record_dict, stimulus_dict)
         if validation_code != error_code.OK:
             return validation_code, validation_msg
+        bit_depth = normalize_float_bit_depth(record_dict.get("bit_depth", 32))
+        dtype = bit_depth_to_dtype(bit_depth)
 
         data = np.asarray(stimulus_dict.get("data")) * stimulus_dict.get("amplitude")
         alignment_reference = alignment_reference_from_stimulus(
@@ -158,14 +161,19 @@ class SoundcardAudioProcessor(object):
         )
         device = self._playrec_device_selector(record_dict)
         if device is None:
-            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True).T[0]
+            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True, dtype=dtype).T[0]
         else:
-            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True, device=device).T[0]
+            rec_data = sd.playrec(
+                prolong_data, samplerate=sr, channels=1, blocking=True, device=device, dtype=dtype
+            ).T[0]
         if delay_frames > 0:
             rec_data = rec_data[delay_frames:]
         align_frames = self.calculate_alignment(alignment_reference, rec_data)
         aligned_data = bounded_aligned_recording_slice(rec_data, align_frames, len(alignment_reference))
-        save_audio_simple(recording_path, aligned_data, sr)
+        if bit_depth == 32 and "bit_depth" not in record_dict:
+            save_audio_simple(recording_path, aligned_data, sr)
+        else:
+            save_audio_simple(recording_path, aligned_data, sr, bit_depth=bit_depth)
         return error_code.OK, aligned_data
 
     @staticmethod
@@ -194,6 +202,7 @@ class SoundcardAudioProcessor(object):
         )
         if validation_code != error_code.OK:
             return validation_code, validation_msg
+        dtype = bit_depth_to_dtype(recorded_dict.get("bit_depth", 32))
         channels = recorded_dict.get("channels", 1)
         blocking = recorded_dict.get("blocking", True)
         prolong_frames = SoundcardAudioProcessor._coerce_nonnegative_frames(recorded_dict.get("prolong_frames", 0), 0)
@@ -217,6 +226,7 @@ class SoundcardAudioProcessor(object):
             channels=record_channels,
             device=device,
             blocking=blocking,
+            dtype=dtype,
         )
         recorded_data = np.asarray(recorded_data)
         trim_frames = delay_frames + prolong_frames
