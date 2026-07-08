@@ -126,6 +126,7 @@ def _input_channel(hardware_id, label, index):
 
 
 def _build_controller(qapp, repository, monkeypatch, runtime_devices=None, warnings=None):
+    monkeypatch.setattr(module.SoundDeviceManager, "refresh_available_device", staticmethod(lambda: None))
     monkeypatch.setattr(module.SoundDeviceManager, "get_device_info", staticmethod(lambda: runtime_devices or {}))
     warnings = warnings if warnings is not None else []
     monkeypatch.setattr(module.MessageBox, "warning", staticmethod(lambda *args, **kwargs: warnings.append(args)))
@@ -393,6 +394,50 @@ def test_malformed_registered_mic_channel_index_warns_and_renders_empty_channels
         view.close()
 
 
+def test_ok_clicked_refreshes_runtime_devices_before_matching(qapp, monkeypatch):
+    speaker = _asset("speaker-1", "Registered speaker", "Runtime speaker", outputs=2)
+    mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
+    repository = FakeRepository([speaker, mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]})
+    runtime_devices = {
+        "API": {
+            "input": [_device(7, "Runtime mic", inputs=2)],
+            "output": [_device(9, "Runtime speaker", outputs=2)],
+        }
+    }
+    calls = []
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "refresh_available_device",
+        staticmethod(lambda: calls.append("refresh")),
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "get_device_info",
+        staticmethod(lambda: calls.append("get_device_info") or runtime_devices),
+    )
+    monkeypatch.setattr(module.SoundDeviceManager, "save_selected_devices", staticmethod(lambda *args: None))
+    monkeypatch.setattr(module.SoundDeviceManager, "change_default_device", staticmethod(lambda *args: None))
+    warnings = []
+    monkeypatch.setattr(module.MessageBox, "warning", staticmethod(lambda *args, **kwargs: warnings.append(args)))
+
+    model = HardwareSelectionModel(HardwareSelectionState(api_name="API"), repository=repository)
+    view = HardwareSelectionView()
+    controller = HardwareSelectionController(model, view)
+    try:
+        qapp.processEvents()
+        view.speaker_device_table.set_checked_by_predicate(lambda payload: payload["hardware_id"] == "speaker-1")
+        view.mic_device_table.set_checked_by_predicate(lambda payload: payload["hardware_id"] == "mic-1")
+        controller._restore_channels(view.mic_channel_table, [0])
+
+        controller._on_ok_clicked()
+
+        assert warnings == []
+        assert calls[:2] == ["refresh", "get_device_info"]
+        assert view.result() == QDialog.Accepted
+    finally:
+        view.close()
+
+
 @pytest.mark.parametrize(
     "select_speaker,select_mic,select_channel",
     [
@@ -407,6 +452,7 @@ def test_ok_clicked_rejects_missing_selection_before_runtime_matching(
     speaker = _asset("speaker-1", "Registered speaker", "Runtime speaker", outputs=2)
     mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
     repository = FakeRepository([speaker, mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]})
+    refresh_calls = []
     runtime_calls = []
 
     def runtime_enumeration():
@@ -421,6 +467,11 @@ def test_ok_clicked_rejects_missing_selection_before_runtime_matching(
         runtime_devices=None,
         warnings=warnings,
     )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "refresh_available_device",
+        staticmethod(lambda: refresh_calls.append(True)),
+    )
     monkeypatch.setattr(module.SoundDeviceManager, "get_device_info", staticmethod(runtime_enumeration))
     try:
         if select_speaker:
@@ -432,6 +483,7 @@ def test_ok_clicked_rejects_missing_selection_before_runtime_matching(
 
         controller._on_ok_clicked()
 
+        assert refresh_calls == []
         assert runtime_calls == []
         assert view.result() != QDialog.Accepted
         assert warnings

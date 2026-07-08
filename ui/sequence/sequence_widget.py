@@ -7,7 +7,6 @@ from datetime import datetime
 from types import SimpleNamespace
 import time
 
-import librosa
 import numpy as np
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, QSignalBlocker, Q_ARG, pyqtSlot
@@ -185,6 +184,12 @@ class SequenceWindow(QWidget):
         self.mode = None
         self.current_recorded_count = None
         self.last_play_count = None  # Cache last play count for replay
+        self._pending_recorded_count = None
+        self._active_recording_is_replay = False
+        self._active_recording_output_path = None
+        self._active_replay_output_temp_path = None
+        self._active_replay_output_backup_path = None
+        self._active_replay_output_replaced = False
 
         self.default_logger = LogManager.set_log_handler("core")
         self._missing_config_prompted = False
@@ -1577,6 +1582,155 @@ class SequenceWindow(QWidget):
         if self.analysis_config.get("auto_analysis"):
             self.run()
 
+    def _ensure_pending_recorded_count(self):
+        pending_count = getattr(self, "_pending_recorded_count", None)
+        if pending_count is None:
+            pending_count = int(getattr(self, "current_recorded_count", 0)) + 1
+            self._pending_recorded_count = pending_count
+        return pending_count
+
+    def _clear_pending_recorded_count(self):
+        self._pending_recorded_count = None
+
+    def _commit_pending_recorded_count(self):
+        pending_count = getattr(self, "_pending_recorded_count", None)
+        if pending_count is None:
+            return
+
+        self.current_recorded_count = pending_count
+        self.lineedit_count.setText(str(pending_count))
+        self.last_play_count = pending_count
+        try:
+            save_recorded_data_to_json(
+                self.lineedit_type.text(),
+                self.lineedit_count.text(),
+                self.lineedit_s_or_n.text(),
+                self.barcode_scanner_box.isChecked(),
+            )
+        except Exception as e:
+            self.default_logger.warning(f"Failed to persist recorded count after success: {e}")
+        finally:
+            self._clear_pending_recorded_count()
+
+    def _begin_recording_output_attempt(self, is_replay):
+        self._active_recording_is_replay = bool(is_replay)
+        self._active_replay_output_backup_path = None
+        self._active_replay_output_replaced = False
+        if is_replay:
+            base_path, ext = os.path.splitext(self.recorded_path)
+            if not ext:
+                ext = ".wav"
+            temp_path = f"{base_path}_replay_temp{ext}"
+            self._active_replay_output_temp_path = temp_path
+            self._active_recording_output_path = temp_path
+            return
+
+        self._active_recording_output_path = self.recorded_path
+        self._active_replay_output_temp_path = None
+
+    def _recording_output_path(self):
+        return getattr(self, "_active_recording_output_path", None) or self.recorded_path
+
+    def _clear_recording_output_attempt(self):
+        self._active_recording_is_replay = False
+        self._active_recording_output_path = None
+        self._active_replay_output_temp_path = None
+        self._active_replay_output_backup_path = None
+        self._active_replay_output_replaced = False
+
+    def _finalize_successful_replay_output(self):
+        if not getattr(self, "_active_recording_is_replay", False):
+            return
+        temp_path = getattr(self, "_active_replay_output_temp_path", None)
+        if not temp_path:
+            return
+        backup_path = None
+        if os.path.exists(self.recorded_path):
+            base_path, ext = os.path.splitext(self.recorded_path)
+            if not ext:
+                ext = ".wav"
+            backup_path = f"{base_path}_replay_backup{ext}"
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            os.replace(self.recorded_path, backup_path)
+
+        self._active_replay_output_backup_path = backup_path
+        self._active_replay_output_replaced = False
+        try:
+            os.replace(temp_path, self.recorded_path)
+            self._active_replay_output_replaced = True
+        except Exception:
+            if backup_path and os.path.exists(backup_path):
+                os.replace(backup_path, self.recorded_path)
+                self._active_replay_output_backup_path = None
+            raise
+
+    def _restore_failed_replay_output(self):
+        if not getattr(self, "_active_recording_is_replay", False):
+            return
+        if not getattr(self, "_active_replay_output_replaced", False):
+            return
+
+        backup_path = getattr(self, "_active_replay_output_backup_path", None)
+        try:
+            if backup_path and os.path.exists(backup_path):
+                os.replace(backup_path, self.recorded_path)
+                self._active_replay_output_backup_path = None
+            elif os.path.exists(self.recorded_path):
+                os.remove(self.recorded_path)
+            self._active_replay_output_replaced = False
+        except Exception as e:
+            self.default_logger.warning(f"Failed to restore replay output after failed attempt: {e}")
+
+    def _delete_successful_replay_backup(self):
+        backup_path = getattr(self, "_active_replay_output_backup_path", None)
+        if not backup_path:
+            return
+        self._delete_path_best_effort(backup_path)
+        self._active_replay_output_backup_path = None
+
+    def _delete_path_best_effort(self, path):
+        if not path:
+            return
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                self.default_logger.info(f"Deleted failed recording output: {path}")
+        except Exception as e:
+            self.default_logger.warning(f"Failed to delete failed recording output {path}: {e}")
+
+    def _delete_failed_streaming_outputs(self):
+        self._restore_failed_replay_output()
+        paths = []
+        if hasattr(self, "streaming_temp_path"):
+            paths.append(getattr(self, "streaming_temp_path", None))
+
+        if getattr(self, "_active_recording_is_replay", False):
+            paths.append(getattr(self, "_active_replay_output_temp_path", None))
+            output_path = getattr(self, "_active_recording_output_path", None)
+            if output_path != self.recorded_path:
+                paths.append(output_path)
+        else:
+            paths.append(self.recorded_path)
+            paths.append(getattr(self, "_active_recording_output_path", None))
+
+        seen = set()
+        for path in paths:
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            self._delete_path_best_effort(path)
+
+        self.streaming_temp_path = None
+        self._clear_recording_output_attempt()
+
+    def _run_post_recording_followup(self, action_name, callback, *args, **kwargs):
+        try:
+            return callback(*args, **kwargs)
+        except Exception as e:
+            self.default_logger.warning(f"{action_name} after successful recording save failed: {e}")
+            return None
+
     def start_this_play(self, label="not_labeled", skip_sn_regex_validation: bool = False):
         if getattr(self, "_record_workflow_busy", False):
             return
@@ -1597,21 +1751,7 @@ class SequenceWindow(QWidget):
             self.analysis_window = []
         if self._analysis_result_summary_window:
             self._analysis_result_summary_window = None
-        # Increment count BEFORE recording (so display count = file count)
-        self.current_recorded_count += 1
-        self.lineedit_count.setText(str(self.current_recorded_count))
 
-        # Cache this count for replay
-        self.last_play_count = self.current_recorded_count
-
-        save_recorded_data_to_json(
-            self.lineedit_type.text(),
-            self.lineedit_count.text(),
-            self.lineedit_s_or_n.text(),
-            self.barcode_scanner_box.isChecked(),
-        )
-
-        # Record with new count
         self.judge_play_and_record(label, is_replay=False)
 
         if self.clicked_player_flag is True:
@@ -1766,30 +1906,33 @@ class SequenceWindow(QWidget):
     def _start_streaming_recording(self, stimulus_dict, recorded_dict, sample_rate):
         nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
         bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
+        recording_output_path = getattr(self, "_recording_output_path", None)
+        output_path = recording_output_path() if callable(recording_output_path) else self.recorded_path
+        self.streaming_temp_path = None
         self.streaming_bit_depth = bit_depth
         if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
-            temp_path = self.recorded_path.replace(".wav", "_temp.wav")
+            temp_path = output_path.replace(".wav", "_temp.wav")
+            self.streaming_temp_path = temp_path
             if bit_depth == 64:
                 self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate, bit_depth=bit_depth)
             else:
                 self.streaming_wav_writer = StreamingWavWriter(temp_path, sample_rate)
-            self.streaming_temp_path = temp_path
 
             self.streaming_processor, self.streaming_stimulus_data, _ = stream_play_and_record(
-                stimulus_dict, recorded_dict, self.recorded_path, self.recorded_signal_info
+                stimulus_dict, recorded_dict, output_path, self.recorded_signal_info
             )
             self.streaming_mode = "play_record"
 
         else:
             if bit_depth == 64:
                 self.streaming_wav_writer = StreamingWavWriter(
-                    self.recorded_path, sample_rate, channels=nch, bit_depth=bit_depth
+                    output_path, sample_rate, channels=nch, bit_depth=bit_depth
                 )
             else:
-                self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
+                self.streaming_wav_writer = StreamingWavWriter(output_path, sample_rate, channels=nch)
 
             self.streaming_processor, _ = stream_record_without_play(
-                recorded_dict, self.recorded_path, self.recorded_signal_info
+                recorded_dict, output_path, self.recorded_signal_info
             )
             self.streaming_mode = "record_only"
             self.streaming_stimulus_data = None
@@ -1829,10 +1972,16 @@ class SequenceWindow(QWidget):
     def _finish_recording_success(self, sample_rate):
         self.player_status_flag = False
         self._record_workflow_busy = False
-        self._set_sn_input_recording_read_only(False)
 
-        self.data_btn.setEnabled(True)
-        self.replayer_btn.setEnabled(True)
+        self._commit_pending_recorded_count()
+        self._delete_successful_replay_backup()
+        self._clear_recording_output_attempt()
+
+        self._run_post_recording_followup(
+            "S/N input release", self._set_sn_input_recording_read_only, False
+        )
+        self._run_post_recording_followup("Data button enable", self.data_btn.setEnabled, True)
+        self._run_post_recording_followup("Replay button enable", self.replayer_btn.setEnabled, True)
 
         self._awaiting_ok_ng = True
         self._sn_clear_on_next_scan = True
@@ -1844,12 +1993,20 @@ class SequenceWindow(QWidget):
                 pass
 
         if self.analysis_config.get("auto_analysis", False):
-            self.run()
+            try:
+                self.run()
+            except Exception as e:
+                self.default_logger.warning(f"Auto-analysis after blocking recording failed: {e}")
 
-        self.update_player_btn_is_paused()
+        self._run_post_recording_followup("Player button pause update", self.update_player_btn_is_paused)
 
     def _finish_recording_failure(self, error):
         self.default_logger.error(f"blocking_recording_error: {error}")
+        self._clear_pending_recorded_count()
+        self._restore_failed_replay_output()
+        if getattr(self, "_active_recording_is_replay", False):
+            self._delete_path_best_effort(getattr(self, "_active_replay_output_temp_path", None))
+        self._clear_recording_output_attempt()
         self.player_status_flag = False
         self._record_workflow_busy = False
         self._set_sn_input_recording_read_only(False)
@@ -1864,9 +2021,11 @@ class SequenceWindow(QWidget):
         try:
             mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
             bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
+            recording_output_path = getattr(self, "_recording_output_path", None)
+            output_path = recording_output_path() if callable(recording_output_path) else self.recorded_path
             if mode == "PLAY_AND_RECORD":
                 record_code, recorded_data = SoundcardAudioProcessor().sd_play_rec(
-                    recorded_dict, stimulus_dict, self.recorded_path
+                    recorded_dict, stimulus_dict, output_path
                 )
                 if record_code != error_code.OK or recorded_data is None:
                     raise RuntimeError(recorded_data if recorded_data is not None else record_code)
@@ -1876,6 +2035,8 @@ class SequenceWindow(QWidget):
                 self.data_struct.store_wave_data_multi = multi_data
                 self.recorded_signal_info["sample_rate"] = sample_rate
 
+                self._finalize_successful_replay_output()
+
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(
                     self.recorded_signal_info, self.data_struct.stimulus_info
                 )
@@ -1884,13 +2045,21 @@ class SequenceWindow(QWidget):
                 else:
                     self.default_logger.error(f"Database save failed: {save_msg}")
 
-                repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
-                if repeat_times > 1:
-                    kwargs = {"repeat_times": repeat_times}
-                    self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
-                        self.data_struct.store_wave_data, sample_rate, **kwargs
-                    )
-                self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, sample_rate)
+                def split_repeat_after_save():
+                    repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
+                    if repeat_times > 1:
+                        kwargs = {"repeat_times": repeat_times}
+                        self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
+                            self.data_struct.store_wave_data, sample_rate, **kwargs
+                        )
+
+                self._run_post_recording_followup("Repeat splitting", split_repeat_after_save)
+                self._run_post_recording_followup(
+                    "Waveform plotting",
+                    self.plot_waveform_to_workspace,
+                    self.data_struct.store_wave_data_multi,
+                    sample_rate,
+                )
 
             elif mode == "RECORD_ONLY":
                 record_code, recorded_data = SoundcardAudioProcessor.sd_rec(recorded_dict)
@@ -1904,26 +2073,32 @@ class SequenceWindow(QWidget):
 
                 if multi_data.shape[1] > 1:
                     if bit_depth == 64:
-                        save_audio_simple(self.recorded_path, multi_data, sample_rate, bit_depth=bit_depth)
+                        save_audio_simple(output_path, multi_data, sample_rate, bit_depth=bit_depth)
                     else:
-                        save_audio_simple(self.recorded_path, multi_data, sample_rate)
+                        save_audio_simple(output_path, multi_data, sample_rate)
                 else:
                     if bit_depth == 64:
-                        save_audio_simple(self.recorded_path, mono_data, sample_rate, bit_depth=bit_depth)
+                        save_audio_simple(output_path, mono_data, sample_rate, bit_depth=bit_depth)
                     else:
-                        save_audio_simple(self.recorded_path, mono_data, sample_rate)
+                        save_audio_simple(output_path, mono_data, sample_rate)
+
+                self._finalize_successful_replay_output()
 
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
                     self.default_logger.error(f"Database save failed: {save_msg}")
-                self.plot_waveform_to_workspace(multi_data, sample_rate)
+                self._run_post_recording_followup(
+                    "Waveform plotting", self.plot_waveform_to_workspace, multi_data, sample_rate
+                )
 
             else:
                 raise RuntimeError(f"unsupported blocking recording mode: {mode}")
 
             self._finish_recording_success(sample_rate)
+            self._delete_successful_replay_backup()
+            self._clear_recording_output_attempt()
             self.default_logger.info("Blocking recording completed successfully")
 
         except Exception as e:
@@ -1972,19 +2147,17 @@ class SequenceWindow(QWidget):
 
         QApplication.processEvents()
 
-        # For replay: use cached count to overwrite the same file
-        # For play: use current lineedit count (already incremented in start_this_play)
+        # Replay uses the last committed count; normal recordings prepare the next count
+        # without committing it until recording succeeds.
         try:
             if is_replay:
                 stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
             else:
-                stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label)
+                pending_count = self._ensure_pending_recorded_count()
+                stimulus_dict, recorded_dict, sample_rate = self.reset_work_pram(label, count=pending_count)
         except Exception as e:
             self.default_logger.error(f"reset_work_pram_error: {e}")
-            if not is_replay:
-                # rollback the increment done in start_this_play()
-                self.current_recorded_count -= 1
-                self.lineedit_count.setText(str(self.current_recorded_count))
+            self._clear_pending_recorded_count()
             self.player_status_flag = False
             self._record_workflow_busy = False
             self._set_sn_input_recording_read_only(False)
@@ -1993,15 +2166,14 @@ class SequenceWindow(QWidget):
             return
 
         if stimulus_dict is None:
-            if not is_replay:
-                # rollback the increment done in start_this_play()
-                self.current_recorded_count -= 1
-                self.lineedit_count.setText(str(self.current_recorded_count))
+            self._clear_pending_recorded_count()
             self.player_status_flag = False
             self._record_workflow_busy = False
             self._set_sn_input_recording_read_only(False)
             self.update_player_btn_is_paused()
             return
+
+        self._begin_recording_output_attempt(is_replay)
 
         if self._should_use_streaming_recording():
             try:
@@ -2009,6 +2181,8 @@ class SequenceWindow(QWidget):
             except Exception as e:
                 self.default_logger.error(f"start_streaming_error: {e}")
                 self._cleanup_streaming_resources()
+                self._delete_failed_streaming_outputs()
+                self._clear_pending_recorded_count()
                 self.player_status_flag = False
                 self._record_workflow_busy = False
                 self._set_sn_input_recording_read_only(False)
@@ -3267,6 +3441,7 @@ class SequenceWindow(QWidget):
 
             # Perform alignment if in play+record mode
             if self.streaming_mode == "play_record" and self.streaming_stimulus_data is not None:
+                output_path = self._recording_output_path()
                 # Finalize temp file first
                 if self.streaming_wav_writer:
                     self.streaming_wav_writer.finalize()
@@ -3287,12 +3462,13 @@ class SequenceWindow(QWidget):
 
                 # Save aligned data to final file
                 if bit_depth == 64:
-                    save_audio_simple(self.recorded_path, aligned_data, sample_rate, bit_depth=bit_depth)
+                    save_audio_simple(output_path, aligned_data, sample_rate, bit_depth=bit_depth)
                 else:
-                    save_audio_simple(self.recorded_path, aligned_data, sample_rate)
+                    save_audio_simple(output_path, aligned_data, sample_rate)
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
+                self._finalize_successful_replay_output()
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(
                     self.recorded_signal_info, self.data_struct.stimulus_info
                 )
@@ -3306,6 +3482,7 @@ class SequenceWindow(QWidget):
                     if hasattr(self, "streaming_temp_path") and os.path.exists(self.streaming_temp_path):
                         os.remove(self.streaming_temp_path)
                         self.default_logger.info(f"Deleted temp file: {self.streaming_temp_path}")
+                    self.streaming_temp_path = None
                 except Exception as e:
                     self.default_logger.warning(f"Failed to delete temp file: {e}")
 
@@ -3346,20 +3523,28 @@ class SequenceWindow(QWidget):
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
+                self._finalize_successful_replay_output()
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
                     self.default_logger.error(f"Database save failed: {save_msg}")
 
+            self._commit_pending_recorded_count()
+            self._delete_successful_replay_backup()
+            self._clear_recording_output_attempt()
+
             # Handle repeat signal splitting if needed
             if self.streaming_mode == "play_record":
-                repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
-                if repeat_times > 1:
-                    kwargs = {"repeat_times": repeat_times}
-                    self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
-                        self.data_struct.store_wave_data, sample_rate, **kwargs
-                    )
+                def split_repeat_after_save():
+                    repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
+                    if repeat_times > 1:
+                        kwargs = {"repeat_times": repeat_times}
+                        self.data_struct.split_repeat_data = SplitRepeatSignal().split_repeat_signal(
+                            self.data_struct.store_wave_data, sample_rate, **kwargs
+                        )
+
+                self._run_post_recording_followup("Repeat splitting", split_repeat_after_save)
 
             # Clean up streaming state
             self.streaming_processor = None
@@ -3369,11 +3554,13 @@ class SequenceWindow(QWidget):
             # Recording has fully ended; release S/N input and busy gating before any follow-up analysis/UI work.
             self.player_status_flag = False  # Recording complete, allow hardware access
             self._record_workflow_busy = False
-            self._set_sn_input_recording_read_only(False)
+            self._run_post_recording_followup(
+                "S/N input release", self._set_sn_input_recording_read_only, False
+            )
 
             # Enable buttons for replay and data analysis
-            self.data_btn.setEnabled(True)
-            self.replayer_btn.setEnabled(True)
+            self._run_post_recording_followup("Data button enable", self.data_btn.setEnabled, True)
+            self._run_post_recording_followup("Replay button enable", self.replayer_btn.setEnabled, True)
 
             self._awaiting_ok_ng = True
             self._sn_clear_on_next_scan = True
@@ -3385,21 +3572,31 @@ class SequenceWindow(QWidget):
                 except Exception:
                     pass
 
+            self._delete_successful_replay_backup()
+
             # Run auto-analysis if enabled
             if self.analysis_config.get("auto_analysis", False):
-                self.run()
+                try:
+                    self.run()
+                except Exception as e:
+                    self.default_logger.warning(f"Auto-analysis after streaming completion failed: {e}")
 
             # Update player button state
-            self.update_player_btn_is_paused()
+            self._run_post_recording_followup("Player button pause update", self.update_player_btn_is_paused)
 
             self.default_logger.info("Streaming recording completed successfully")
 
         except Exception as e:
             self.default_logger.error(f"Error in streaming completion: {e}")
+            self._clear_pending_recorded_count()
             # Clean up on error
             if self.streaming_wav_writer:
-                self.streaming_wav_writer.finalize()
+                try:
+                    self.streaming_wav_writer.finalize()
+                except Exception as finalize_error:
+                    self.default_logger.warning(f"Failed to finalize streaming writer after error: {finalize_error}")
                 self.streaming_wav_writer = None
+            self._delete_failed_streaming_outputs()
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None

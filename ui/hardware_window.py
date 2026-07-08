@@ -525,6 +525,8 @@ class HardwareSelectionController:
             MessageBox.warning(self.view, "提示", "请选择扬声器和麦克风设备，以及麦克风通道！")
             return None
 
+        SoundDeviceManager.refresh_available_device()
+
         try:
             runtime_devices = SoundDeviceManager.get_device_info()
         except Exception as e:
