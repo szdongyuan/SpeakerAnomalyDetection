@@ -8,11 +8,7 @@ from scipy.io import wavfile
 from base.file_ops import FileOps
 from consts.audio_consts import bit_depth_to_dtype
 from consts.running_consts import DEFAULT_DIR
-
-try:
-    from base.wav_calibration_metadata import append_wav_calibration_metadata
-except ImportError:
-    append_wav_calibration_metadata = None
+from base.wav_calibration_metadata import append_wav_calibration_metadata
 
 
 def save_audio_simple(save_path, audio, sr=44100, bit_depth=32):
@@ -24,13 +20,7 @@ def save_audio_simple(save_path, audio, sr=44100, bit_depth=32):
 
 def save_audio_with_calibration_metadata(save_path, audio, sr=44100, calibration_metadata=None, logger=None, bit_depth=32):
     save_audio_simple(save_path, audio, sr, bit_depth=bit_depth)
-    if calibration_metadata is None:
-        return
-    if append_wav_calibration_metadata is None:
-        if logger is not None:
-            log_method = getattr(logger, "warning", None) or getattr(logger, "error", None)
-            if log_method is not None:
-                log_method("WAV calibration metadata support is unavailable")
+    if not calibration_metadata:
         return
     try:
         appended = append_wav_calibration_metadata(save_path, calibration_metadata, logger=logger)
@@ -39,11 +29,11 @@ def save_audio_with_calibration_metadata(save_path, audio, sr=44100, calibration
         if logger is not None:
             log_method = getattr(logger, "warning", None) or getattr(logger, "error", None)
             if log_method is not None:
-                log_method(f"Failed to append WAV calibration metadata: {exc}")
+                log_method(f"Failed to append WAV calibration metadata; audio file was kept. {exc}")
     if not appended and logger is not None:
         log_method = getattr(logger, "warning", None) or getattr(logger, "error", None)
         if log_method is not None:
-            log_method("Failed to append WAV calibration metadata")
+            log_method("Failed to append WAV calibration metadata; audio file was kept.")
 
 
 def save_recorded_data_to_json(product_model, current_recorded_count, scanner_barcode, scanner_barcode_check):

@@ -2,8 +2,9 @@ import numpy as np
 from scipy.signal import correlate
 
 from base.log_manager import LogManager
-from base.save_data import save_audio_simple
+from base.save_data import save_audio_simple, save_audio_with_calibration_metadata
 from base.sound_device_manager import sd
+from base.wav_calibration_metadata import normalize_wav_calibration_metadata
 from consts import error_code
 from consts.audio_consts import normalize_float_bit_depth, bit_depth_to_dtype
 
@@ -40,6 +41,20 @@ def bounded_aligned_recording_slice(recorded_signal, start_frame, sample_count):
     if copied_count:
         aligned_data[:copied_count] = recorded_signal[start_frame:end_frame]
     return aligned_data
+
+
+def project_calibration_metadata_to_mono_wav(metadata):
+    normalized = normalize_wav_calibration_metadata(metadata)
+    if normalized is None:
+        return metadata
+
+    channels = normalized["recorded_channels"]
+    if len(channels) == 1 and channels[0]["wav_channel_index"] == 0:
+        return metadata
+
+    retained_channel = dict(channels[0])
+    retained_channel["wav_channel_index"] = 0
+    return {"recorded_channels": [retained_channel]}
 
 
 class SoundcardAudioProcessor(object):
@@ -135,7 +150,7 @@ class SoundcardAudioProcessor(object):
             return None, output_index
         return None
 
-    def sd_play_rec(self, record_dict, stimulus_dict, recording_path):
+    def sd_play_rec(self, record_dict, stimulus_dict, recording_path, *, calibration_metadata=None):
         sr, validation_code, validation_msg = self._resolve_playrec_sample_rate(record_dict, stimulus_dict)
         if validation_code != error_code.OK:
             return validation_code, validation_msg
@@ -160,17 +175,36 @@ class SoundcardAudioProcessor(object):
             ]
         )
         device = self._playrec_device_selector(record_dict)
+        input_channels = record_dict.get("input_channels")
+        selected_channels = []
+        if input_channels is not None:
+            if isinstance(input_channels, int):
+                selected_channels = [input_channels]
+            else:
+                selected_channels = list(input_channels)
+        record_channels = max(selected_channels) + 1 if selected_channels else 1
         if device is None:
-            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=1, blocking=True, dtype=dtype).T[0]
+            rec_data = sd.playrec(prolong_data, samplerate=sr, channels=record_channels, blocking=True, dtype=dtype)
         else:
             rec_data = sd.playrec(
-                prolong_data, samplerate=sr, channels=1, blocking=True, device=device, dtype=dtype
-            ).T[0]
+                prolong_data, samplerate=sr, channels=record_channels, blocking=True, device=device, dtype=dtype
+            )
+        rec_data = np.asarray(rec_data)
+        if rec_data.ndim > 1:
+            record_channel = selected_channels[0] if selected_channels else 0
+            rec_data = rec_data[:, record_channel]
         if delay_frames > 0:
             rec_data = rec_data[delay_frames:]
         align_frames = self.calculate_alignment(alignment_reference, rec_data)
         aligned_data = bounded_aligned_recording_slice(rec_data, align_frames, len(alignment_reference))
-        if bit_depth == 32 and "bit_depth" not in record_dict:
+        metadata = calibration_metadata if calibration_metadata is not None else record_dict.get("wav_calibration_metadata")
+        metadata = project_calibration_metadata_to_mono_wav(metadata)
+        if metadata:
+            save_kwargs = {"logger": self.logger}
+            if bit_depth != 32:
+                save_kwargs["bit_depth"] = bit_depth
+            save_audio_with_calibration_metadata(recording_path, aligned_data, sr, metadata, **save_kwargs)
+        elif bit_depth == 32 and "bit_depth" not in record_dict:
             save_audio_simple(recording_path, aligned_data, sr)
         else:
             save_audio_simple(recording_path, aligned_data, sr, bit_depth=bit_depth)

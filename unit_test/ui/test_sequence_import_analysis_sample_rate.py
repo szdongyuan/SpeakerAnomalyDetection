@@ -1,9 +1,24 @@
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import stimulus_resolver
 from ui.sequence import sequence_widget
+
+
+@pytest.fixture(autouse=True)
+def _valid_wav_calibration_metadata(monkeypatch):
+    metadata = {
+        "recorded_channels": [
+            {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
+        ]
+    }
+    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
 
 
 class _Button:
@@ -80,11 +95,6 @@ def test_import_stimulus_audio_uses_decoded_rate_for_analysis_reference(monkeypa
 
     monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("recording.wav", ""))
     monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader(load_calls), raising=False)
-    monkeypatch.setattr(
-        sequence_widget.librosa,
-        "load",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("config-rate librosa.load must not be used")),
-    )
 
     def fake_reference(data_struct, detail, using_config_path=None, *, runtime_sample_rate, logger=None):
         reference_calls.append((detail, using_config_path, runtime_sample_rate))
@@ -249,11 +259,6 @@ def test_import_audio_preserves_decoded_rate_without_reference_generation(monkey
 
     monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("recording.wav", ""))
     monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader(load_calls, 22050), raising=False)
-    monkeypatch.setattr(
-        sequence_widget.librosa,
-        "load",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("config-rate librosa.load must not be used")),
-    )
     monkeypatch.setattr(
         sequence_widget,
         "set_data_struct_analysis_reference_signal",

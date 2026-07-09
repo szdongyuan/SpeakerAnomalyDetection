@@ -38,6 +38,7 @@ from base.pre_processing.spl_runtime_config import (
     resolve_spl_window_size,
 )
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
+from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
 from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
@@ -125,6 +126,23 @@ def _load_golden_baseline_result(analysis_config: dict, title_name: str):
         return None
     result = item.get("result")
     return result if isinstance(result, dict) else None
+
+
+def _missing_file_calibration_warning_text():
+    return "该音频文件未包含有效校准数据，分析结果仅供参考。"
+
+
+def resolve_imported_wav_v2pa_factor(data_struct, raw_channel, warn_callback=None):
+    metadata = getattr(data_struct, "wav_calibration_metadata", None)
+    resolution = resolve_wav_channel_v2pa_factor(metadata, raw_channel)
+    if (
+        not resolution.used_file_metadata
+        and warn_callback
+        and not getattr(data_struct, "wav_calibration_warning_shown", False)
+    ):
+        warn_callback(_missing_file_calibration_warning_text())
+        data_struct.wav_calibration_warning_shown = True
+    return float(resolution.factor)
 
 
 def resolve_analysis_channel_signal(
@@ -424,6 +442,13 @@ class AnalysisGraphWidget(QWidget):
             "_v2pa_raw_analysis_channel",
             analysis_config.get("analysis_channel", 0),
         )
+        if getattr(self.data_struct, "wav_calibration_metadata_authoritative", False):
+            self.v2pa_factor = resolve_imported_wav_v2pa_factor(
+                self.data_struct,
+                raw_channel,
+                warn_callback=lambda message: MessageBox.warning(self, "提示", message),
+            )
+            return True
         try:
             self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
                 raw_channel,
@@ -2036,6 +2061,7 @@ class PeakDetection(AnalysisGraphWidget):
         self.analysis_config = None
         self.result = None
         self.v2pa_factor = None
+        self.title_name = title_name
         self.setWindowTitle(title_name)
 
         # top status bar
@@ -2056,9 +2082,14 @@ class PeakDetection(AnalysisGraphWidget):
         """
         calculate and plot PD analysis: the upper plot is SPL time series with peak annotation;
         """
-        recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
-        if recorded_signal is None or sample_rate is None:
+        if sample_rate is None:
+            return None
+        try:
+            recorded_signal = resolve_analysis_channel_signal(
+                self.data_struct, self.analysis_config, self.title_name, strict=False
+            )
+        except Exception:
             return None
         if getattr(self, "_use_pre_resolved_v2pa_factor", False) and self.v2pa_factor is not None:
             self._use_pre_resolved_v2pa_factor = False
@@ -2336,15 +2367,21 @@ class PipelinePdPm(QWidget):
         """
         prepare the input data for the pipeline, including the recorded signal, sample rate, and the analysis config
         """
-        recorded_signal = self.data_struct.store_wave_data
         sample_rate = self.data_struct.sample_rate
-        if recorded_signal is None or sample_rate is None:
+        if sample_rate is None:
             return None
 
         cfg = self.analysis_config or {}
         head = cfg.get("head", {}) or {}
         tail = cfg.get("tail", {}) or {}
         if not head or not tail:
+            return None
+        head_config = head.get("config", {}) or {}
+        try:
+            recorded_signal = resolve_analysis_channel_signal(
+                self.data_struct, head_config, self.windowTitle(), strict=False
+            )
+        except Exception:
             return None
 
         class_mapping = get_class_mapping()
@@ -2528,14 +2565,21 @@ class PipelinePdPm(QWidget):
 
         recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls = context
         head_config = head.get("config", {}) or {}
-        try:
-            self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+        if getattr(self.data_struct, "wav_calibration_metadata_authoritative", False):
+            self.v2pa_factor = resolve_imported_wav_v2pa_factor(
+                self.data_struct,
                 head_config.get("analysis_channel", 0),
                 warn_callback=lambda message: MessageBox.warning(self, "提示", message),
             )
-        except Exception as exc:
-            MessageBox.warning(self, "提示", str(exc))
-            return None
+        else:
+            try:
+                self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
+                    head_config.get("analysis_channel", 0),
+                    warn_callback=lambda message: MessageBox.warning(self, "提示", message),
+                )
+            except Exception as exc:
+                MessageBox.warning(self, "提示", str(exc))
+                return None
 
         pd_result, peak_indices = self._execute_pd(pd_cls, head)
 
@@ -2921,6 +2965,9 @@ class LoudnessAnalysis(AnalysisGraphWidget):
 
         if recorded_signal is None or sample_rate is None:
             MessageBox.warning(self, "提示", "响度分析失败：没有可用录音数据。")
+            return False
+
+        if not self._resolve_v2pa_factor_for_analysis():
             return False
 
         sq_config = self._build_sq_config(config)

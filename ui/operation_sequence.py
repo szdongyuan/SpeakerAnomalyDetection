@@ -15,6 +15,7 @@ from base.data_struct.sequence_data import SequenceData
 from base.file_ops import FileOps
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.acquisition_recording_defaults import (
     load_acquisition_defaults,
@@ -505,7 +506,26 @@ class AnalysisModelSelect(QDialog):
             # Blocking play+record (also saves wav)
             try:
                 sap = SoundcardAudioProcessor()
-                record_code, aligned_data = sap.sd_play_rec(recorded_dict, stimulus_dict, recorded_wav_path)
+                mic = _safe_dialog_attr(self, "mic", None)
+                if mic is None:
+                    mic = _safe_dialog_attr(self.select_list, "mic", None)
+                hardware_id = mic.get("hardware_id") if isinstance(mic, dict) else None
+                input_channels = _safe_dialog_attr(self.select_list, "mic_channels", None) or [0]
+                input_channels = [int(channel) for channel in input_channels]
+                input_channels = [input_channels[0]] if input_channels else [0]
+                calibration_metadata = build_recording_wav_calibration_metadata(
+                    input_channels,
+                    hardware_id=hardware_id,
+                    logger=self.default_logger,
+                )
+                recorded_dict["input_channels"] = input_channels
+                recorded_dict["wav_calibration_metadata"] = calibration_metadata
+                record_code, aligned_data = sap.sd_play_rec(
+                    recorded_dict,
+                    stimulus_dict,
+                    recorded_wav_path,
+                    calibration_metadata=calibration_metadata,
+                )
                 if record_code != 0 or aligned_data is None:
                     MessageBox.warning(self, "提示", "录制黄金样本失败")
                     return

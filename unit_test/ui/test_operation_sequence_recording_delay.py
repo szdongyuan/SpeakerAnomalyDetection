@@ -1,8 +1,12 @@
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PyQt5.QtWidgets import QApplication
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ui import operation_sequence
 
@@ -16,7 +20,7 @@ def test_record_golden_sample_converts_configured_recording_start_delay(qapp, mo
     captured = {}
 
     class FakeSoundcardAudioProcessor:
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             captured["recorded_dict"] = dict(recorded_dict)
             captured["stimulus_dict"] = dict(stimulus_dict)
             captured["path"] = path
