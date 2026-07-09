@@ -1,8 +1,11 @@
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ui import operation_sequence
 
@@ -64,7 +67,7 @@ def test_record_golden_sample_uses_duplex_samplerate_not_config(monkeypatch):
     monkeypatch.setattr(
         operation_sequence.SoundcardAudioProcessor,
         "sd_play_rec",
-        lambda self, record, stimulus, path: (1, None),
+        lambda self, record, stimulus, path, calibration_metadata=None: (1, None),
     )
     monkeypatch.setattr(operation_sequence.MessageBox, "warning", lambda *args: None)
     monkeypatch.setattr(operation_sequence.LoadUiConfig, "save_sequence_config_to_json", lambda *args: True)
@@ -89,6 +92,54 @@ def test_record_golden_sample_blocks_mismatched_samplerates(monkeypatch):
     operation_sequence.AnalysisModelSelect.record_golden_sample_btn_clicked(selector)
 
     assert warnings
+
+
+def test_record_golden_sample_passes_wav_calibration_metadata(monkeypatch):
+    selector = _selector({"samplerate": 48000, "hostapi": 1, "hardware_id": "mic-1"}, {"samplerate": 48000, "hostapi": 1})
+    selector.select_list.mic_channels = [2, 4]
+    metadata = {
+        "recorded_channels": [
+            {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
+        ]
+    }
+    build_calls = []
+    record_calls = []
+
+    monkeypatch.setattr(
+        operation_sequence.AnalysisModelSelect,
+        "set_data_struct_stimulus_signal",
+        staticmethod(lambda data_struct, detail, using_config_path=None, logger=None, runtime_sample_rate=None: True),
+    )
+    monkeypatch.setattr(
+        operation_sequence.LoadUiConfig,
+        "get_rec_and_play_dict_base_sequence_dict",
+        lambda data_struct, recording_start_delay_ms=None: (
+            {"sr": data_struct.sample_rate, "data": np.zeros(4, dtype=np.float32), "amplitude": 1.0},
+            {"sample_rate": data_struct.sample_rate, "sr": data_struct.sample_rate},
+        ),
+    )
+    monkeypatch.setattr(operation_sequence.os, "makedirs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        operation_sequence,
+        "build_recording_wav_calibration_metadata",
+        lambda input_channels, hardware_id=None, logger=None: build_calls.append((list(input_channels), hardware_id))
+        or metadata,
+    )
+
+    def fake_sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
+        record_calls.append((list(recorded_dict.get("input_channels", [])), calibration_metadata))
+        return 0, np.zeros(4, dtype=np.float32)
+
+    monkeypatch.setattr(operation_sequence.SoundcardAudioProcessor, "sd_play_rec", fake_sd_play_rec)
+    monkeypatch.setattr(operation_sequence, "get_class_mapping", lambda: {})
+    monkeypatch.setattr(operation_sequence.QFileDialog, "getSaveFileName", lambda *args, **kwargs: ("", ""))
+    monkeypatch.setattr(operation_sequence.MessageBox, "warning", lambda *args: None)
+    selector.set_data_struct_stimulus_signal = operation_sequence.AnalysisModelSelect.set_data_struct_stimulus_signal
+
+    operation_sequence.AnalysisModelSelect.record_golden_sample_btn_clicked(selector)
+
+    assert build_calls == [([2], "mic-1")]
+    assert record_calls == [([2], metadata)]
 
 
 def test_record_golden_sample_cancel_save_restores_shared_runtime_state(monkeypatch):
@@ -132,7 +183,7 @@ def test_record_golden_sample_cancel_save_restores_shared_runtime_state(monkeypa
     monkeypatch.setattr(
         operation_sequence.SoundcardAudioProcessor,
         "sd_play_rec",
-        lambda self, record, stimulus, path: (0, np.zeros(3, dtype=np.float32)),
+        lambda self, record, stimulus, path, calibration_metadata=None: (0, np.zeros(3, dtype=np.float32)),
     )
     monkeypatch.setattr(operation_sequence, "get_class_mapping", lambda: {})
     monkeypatch.setattr(operation_sequence.QFileDialog, "getSaveFileName", lambda *args, **kwargs: ("", ""))
@@ -194,7 +245,7 @@ def test_record_golden_sample_success_saves_runtime_payload_then_restores_shared
     monkeypatch.setattr(
         operation_sequence.SoundcardAudioProcessor,
         "sd_play_rec",
-        lambda self, record, stimulus, path: (0, np.zeros(3, dtype=np.float32)),
+        lambda self, record, stimulus, path, calibration_metadata=None: (0, np.zeros(3, dtype=np.float32)),
     )
     monkeypatch.setattr(operation_sequence, "get_class_mapping", lambda: {})
     monkeypatch.setattr(

@@ -63,6 +63,8 @@ TARGET_METHODS = {
     "_should_use_streaming_recording",
     "_start_streaming_recording",
     "_normalize_blocking_recorded_data",
+    "_build_current_wav_calibration_metadata",
+    "_current_metadata_input_channels",
     "_finish_recording_success",
     "_finish_recording_failure",
     "_start_blocking_recording",
@@ -73,6 +75,7 @@ TARGET_METHODS = {
 }
 TARGET_MODULE_HELPERS = {
     "_clear_data_struct_stimulus_runtime_state",
+    "_clear_wav_calibration_runtime_state",
     "_clear_sequence_stimulus_runtime_state",
     "_resolve_runtime_sample_rate_for_mode",
 }
@@ -227,6 +230,21 @@ def _build_method_namespace():
         "SplitRepeatSignal": lambda: types.SimpleNamespace(split_repeat_signal=lambda data, sample_rate, **kwargs: []),
         "error_code": types.SimpleNamespace(OK="OK"),
         "save_audio_simple": lambda *args, **kwargs: None,
+        "save_audio_with_calibration_metadata": lambda save_path, audio, sr=44100, calibration_metadata=None, logger=None, bit_depth=32: namespace[
+            "save_audio_simple"
+        ](save_path, audio, sr, bit_depth=bit_depth),
+        "append_wav_calibration_metadata": lambda *args, **kwargs: True,
+        "build_recording_wav_calibration_metadata": lambda input_channels, hardware_id=None, logger=None: {
+            "recorded_channels": [
+                {
+                    "wav_channel_index": wav_channel_index,
+                    "v2pa_factor": None,
+                    "standard_spl": None,
+                    "calibrated": False,
+                }
+                for wav_channel_index, _channel in enumerate(input_channels)
+            ]
+        },
         "save_recorded_data_to_json": lambda *args, **kwargs: None,
         "normalize_float_bit_depth": normalize_float_bit_depth,
         "normalize_play_record_detail": normalize_play_record_detail,
@@ -387,16 +405,22 @@ class FakeButton:
     def __init__(self):
         self.disabled = None
         self.enabled = None
+        self._enabled_state = True
         self.disabled_values = []
         self.icon_values = []
         self.icon_size_values = []
 
     def setDisabled(self, value):
         self.disabled = value
+        self._enabled_state = not bool(value)
         self.disabled_values.append(bool(value))
 
     def setEnabled(self, value):
         self.enabled = value
+        self._enabled_state = bool(value)
+
+    def isEnabled(self):
+        return self._enabled_state
 
     def setIcon(self, value):
         self.icon_values.append(value)
@@ -739,6 +763,10 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
     window._should_use_streaming_recording = _bind_method(window, namespace, "_should_use_streaming_recording")
     window._start_streaming_recording = _bind_method(window, namespace, "_start_streaming_recording")
     window._normalize_blocking_recorded_data = _bind_method(window, namespace, "_normalize_blocking_recorded_data")
+    window._build_current_wav_calibration_metadata = _bind_method(
+        window, namespace, "_build_current_wav_calibration_metadata"
+    )
+    window._current_metadata_input_channels = _bind_method(window, namespace, "_current_metadata_input_channels")
     window._finish_recording_success = _bind_method(window, namespace, "_finish_recording_success")
     window._finish_recording_failure = _bind_method(window, namespace, "_finish_recording_failure")
     window._start_blocking_recording = _bind_method(window, namespace, "_start_blocking_recording")
@@ -1027,7 +1055,7 @@ def test_existing_sequence_config_without_recording_delay_runs_to_blocking_start
             captured["recorded_dict"] = dict(recorded_dict)
             return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
 
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             captured["recorded_dict"] = dict(recorded_dict)
             captured["stimulus_dict"] = dict(stimulus_dict)
             return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
@@ -2019,6 +2047,66 @@ def test_streaming_start_failure_restores_sn_editability():
     assert window.paused_updates == 1
 
 
+def test_replay_streaming_start_failure_restores_buttons_after_disable():
+    namespace = _build_method_namespace()
+    namespace["StreamingWavWriter"] = FakeWavWriter
+
+    def _raise_start_error(*args, **kwargs):
+        raise RuntimeError("stream start failed")
+
+    namespace["stream_record_without_play"] = _raise_start_error
+
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY")
+
+    window.judge_play_and_record(is_replay=True)
+
+    assert window.replayer_btn.disabled_values == [True]
+    assert window.data_btn.disabled_values == [True]
+    assert window.replayer_btn.enabled is True
+    assert window.data_btn.enabled is True
+    assert window._record_workflow_busy is False
+    assert window.player_status_flag is False
+    assert window.lineedit_s_or_n.isReadOnly() is False
+    assert window.paused_updates == 1
+
+
+@pytest.mark.parametrize("failure_kind", ["reset_exception", "empty_stimulus", "stream_start_exception"])
+def test_replay_startup_failure_preserves_previously_disabled_buttons(failure_kind):
+    namespace = _build_method_namespace()
+    namespace["StreamingWavWriter"] = FakeWavWriter
+    namespace["stream_play_and_record"] = lambda *args, **kwargs: (FakeStreamingProcessor(), [1, 2, 3], None)
+    namespace["stream_record_without_play"] = lambda *args, **kwargs: (FakeStreamingProcessor(), None)
+
+    reset_result = (None, None, None) if failure_kind == "empty_stimulus" else None
+    window = _build_fake_window(namespace, use_streaming=True, mode="RECORD_ONLY", reset_result=reset_result)
+    window.data_btn.setEnabled(False)
+    window.replayer_btn.setEnabled(False)
+
+    if failure_kind == "reset_exception":
+
+        def _raise_reset_error(label, count=None):
+            raise RuntimeError("reset failed")
+
+        window.reset_work_pram = _raise_reset_error
+    elif failure_kind == "stream_start_exception":
+
+        def _raise_start_error(*args, **kwargs):
+            raise RuntimeError("stream start failed")
+
+        namespace["stream_record_without_play"] = _raise_start_error
+
+    window.judge_play_and_record(is_replay=True)
+
+    assert window.replayer_btn.disabled_values == [True]
+    assert window.data_btn.disabled_values == [True]
+    assert window.replayer_btn.enabled is False
+    assert window.data_btn.enabled is False
+    assert window._record_workflow_busy is False
+    assert window.player_status_flag is False
+    assert window.lineedit_s_or_n.isReadOnly() is False
+    assert window.paused_updates == 1
+
+
 def test_missing_streaming_flag_uses_blocking_recording():
     namespace = _build_method_namespace()
     calls = {"stream": 0, "blocking": 0}
@@ -2081,7 +2169,7 @@ def test_play_record_missing_streaming_flag_uses_blocking_recording():
     )
 
     class FakeSoundcardAudioProcessor:
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             calls["playrec"] += 1
             return namespace["error_code"].OK, np.array([1.0, 2.0], dtype=np.float32)
 
@@ -2115,6 +2203,9 @@ def test_reset_failure_and_empty_stimulus_restore_sn_editability():
     assert reset_error_window.lineedit_s_or_n.isReadOnly() is False
     assert reset_error_window.barcode_scanner_box.isEnabled() is True
     assert reset_error_window._record_workflow_busy is False
+    assert reset_error_window.player_status_flag is False
+    assert reset_error_window.data_btn.enabled is True
+    assert reset_error_window.replayer_btn.enabled is True
 
     empty_stimulus_window = _build_fake_window(
         namespace,
@@ -2127,6 +2218,9 @@ def test_reset_failure_and_empty_stimulus_restore_sn_editability():
     assert empty_stimulus_window.lineedit_s_or_n.isReadOnly() is False
     assert empty_stimulus_window.barcode_scanner_box.isEnabled() is True
     assert empty_stimulus_window._record_workflow_busy is False
+    assert empty_stimulus_window.player_status_flag is False
+    assert empty_stimulus_window.data_btn.enabled is True
+    assert empty_stimulus_window.replayer_btn.enabled is True
 
 
 def test_streaming_completion_error_restores_sn_editability():
@@ -2453,7 +2547,7 @@ def test_normal_blocking_post_db_split_failure_keeps_output_and_commits_count(tm
     )
 
     class FakeSoundcardAudioProcessor:
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             Path(path).write_bytes(b"successful-recording")
             return namespace["error_code"].OK, np.array([1.0, 2.0, 3.0], dtype=np.float32)
 
@@ -2502,7 +2596,7 @@ def test_blocking_replay_post_db_split_failure_keeps_new_output_and_deletes_temp
     )
 
     class FakeSoundcardAudioProcessor:
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             Path(path).write_bytes(b"new-replay")
             return namespace["error_code"].OK, np.array([1.0, 2.0, 3.0], dtype=np.float32)
 
@@ -2663,8 +2757,10 @@ def test_blocking_record_only_multi_channel_stores_multi_and_mean_mono():
         save_signal_info_to_db=lambda *args, **kwargs: (namespace["error_code"].OK, "saved")
     )
     saved_audio = []
-    namespace["save_audio_simple"] = lambda path, data, sample_rate: saved_audio.append(
-        (path, np.asarray(data), sample_rate)
+    namespace["save_audio_with_calibration_metadata"] = (
+        lambda path, data, sample_rate, calibration_metadata=None, logger=None, bit_depth=None: saved_audio.append(
+            (path, np.asarray(data), sample_rate, calibration_metadata)
+        )
     )
 
     window = _build_fake_window(namespace, use_streaming=False, mode="RECORD_ONLY")
@@ -2684,7 +2780,7 @@ def test_blocking_play_record_normalizes_frames_by_channels_output():
     recorded = np.array([[1.0, 3.0], [2.0, 4.0]], dtype=np.float32)
 
     class FakeSoundcardAudioProcessor:
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             return namespace["error_code"].OK, recorded
 
     namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor
@@ -2707,7 +2803,7 @@ def test_blocking_play_record_transposes_channel_by_frames_output():
     recorded_transposed = np.array([[1.0, 2.0, 3.0], [11.0, 12.0, 13.0]], dtype=np.float32)
 
     class FakeSoundcardAudioProcessor:
-        def sd_play_rec(self, recorded_dict, stimulus_dict, path):
+        def sd_play_rec(self, recorded_dict, stimulus_dict, path, calibration_metadata=None):
             return namespace["error_code"].OK, recorded_transposed
 
     namespace["SoundcardAudioProcessor"] = FakeSoundcardAudioProcessor

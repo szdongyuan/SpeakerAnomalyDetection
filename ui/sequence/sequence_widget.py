@@ -45,11 +45,18 @@ from base.play_and_record import (
     stream_record_without_play,
 )
 from base.recording_management import RecordingManager
-from base.save_data import ensure_test_result_file, save_recorded_data_to_json, save_audio_simple
+from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
+from base.save_data import (
+    ensure_test_result_file,
+    save_recorded_data_to_json,
+    save_audio_simple,
+    save_audio_with_calibration_metadata,
+)
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.streaming_file_writer import StreamingWavWriter
+from base.wav_calibration_metadata import append_wav_calibration_metadata, read_wav_calibration_metadata
 from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.acquisition_recording_defaults import normalize_play_record_detail, normalize_record_only_detail
@@ -81,8 +88,21 @@ def _clear_data_struct_stimulus_runtime_state(data_struct, *, clear_sample_rate:
         delattr(data_struct, "alignment_sample_count")
 
 
+def _clear_wav_calibration_runtime_state(data_struct) -> None:
+    if data_struct is None:
+        return
+    data_struct.wav_calibration_metadata = None
+    data_struct.wav_calibration_metadata_authoritative = False
+    data_struct.wav_calibration_warning_shown = False
+
+
+def _missing_file_calibration_warning_text():
+    return "该音频文件未包含有效校准数据，分析结果仅供参考。"
+
+
 def _clear_sequence_stimulus_runtime_state(window, *, clear_sample_rate: bool = True) -> None:
     _clear_data_struct_stimulus_runtime_state(getattr(window, "data_struct", None), clear_sample_rate=clear_sample_rate)
+    _clear_wav_calibration_runtime_state(getattr(window, "data_struct", None))
     if hasattr(window, "streaming_stimulus_data"):
         window.streaming_stimulus_data = None
 
@@ -105,6 +125,7 @@ def _clear_import_analysis_runtime_state(window) -> None:
         data_struct.audio_lenth = None
         data_struct.stimulus_data = None
         data_struct.stimulus_info = None
+        _clear_wav_calibration_runtime_state(data_struct)
         if hasattr(data_struct, "alignment_sample_count"):
             delattr(data_struct, "alignment_sample_count")
     window.recorded_path = None
@@ -239,6 +260,7 @@ class SequenceWindow(QWidget):
         self.streaming_wav_writer = None  # WAV file writer for incremental saving
         self.streaming_processor = None  # StreamingAudioProcessor instance
         self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
+        self.streaming_wav_calibration_metadata = None
         self.streaming_mode = None  # "play_record" or "record_only"
         self._active_input_channels = [0]
         self.channel_workspace = None
@@ -540,6 +562,7 @@ class SequenceWindow(QWidget):
     def on_mark_btn_clicked(self):
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
+        _clear_wav_calibration_runtime_state(self.data_struct)
         self._clear_plot_area()
         self._close_analysis_windows()
         self.player_btn.setDisabled(False)
@@ -1209,6 +1232,7 @@ class SequenceWindow(QWidget):
                 self.data_struct.store_wave_data = None
             if hasattr(self.data_struct, "store_wave_data_multi"):
                 self.data_struct.store_wave_data_multi = None
+            _clear_wav_calibration_runtime_state(self.data_struct)
         except Exception:
             pass
         try:
@@ -1423,6 +1447,7 @@ class SequenceWindow(QWidget):
         self.mark_result()
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
+        _clear_wav_calibration_runtime_state(self.data_struct)
         self.replayer_btn.setEnabled(False)
         self.data_btn.setEnabled(False)
         self.player_status_flag = False
@@ -1534,6 +1559,22 @@ class SequenceWindow(QWidget):
             _clear_import_analysis_runtime_state(self)
             MessageBox.warning(self, "提示", "导入音频失败，请重新选择音频文件。")
             return
+        try:
+            wav_calibration_metadata = read_wav_calibration_metadata(
+                file_path,
+                logger=getattr(self, "default_logger", None),
+            )
+        except Exception as exc:
+            logger = getattr(self, "default_logger", None)
+            if logger is not None:
+                logger.warning(f"读取WAV校准数据失败: {exc}")
+            wav_calibration_metadata = None
+        self.data_struct.wav_calibration_metadata = wav_calibration_metadata
+        self.data_struct.wav_calibration_metadata_authoritative = True
+        self.data_struct.wav_calibration_warning_shown = False
+        if wav_calibration_metadata is None:
+            MessageBox.warning(self, "提示", _missing_file_calibration_warning_text())
+            self.data_struct.wav_calibration_warning_shown = True
         audio_multi = np.asarray(audio_multi, dtype=np.float32)
         if audio_multi.ndim == 1:
             audio_multi = audio_multi.reshape(1, -1)
@@ -1880,6 +1921,7 @@ class SequenceWindow(QWidget):
             recorded_dict["output_device"] = None
 
         self._active_input_channels = [int(x) for x in input_channels]
+        recorded_dict["wav_calibration_metadata"] = self._build_current_wav_calibration_metadata()
 
         in_dev = recorded_dict.get("input_device")
         out_dev = recorded_dict.get("output_device")
@@ -1910,6 +1952,11 @@ class SequenceWindow(QWidget):
         output_path = recording_output_path() if callable(recording_output_path) else self.recorded_path
         self.streaming_temp_path = None
         self.streaming_bit_depth = bit_depth
+        metadata = recorded_dict.get("wav_calibration_metadata")
+        if metadata is None:
+            metadata = self._build_current_wav_calibration_metadata()
+            recorded_dict["wav_calibration_metadata"] = metadata
+        self.streaming_wav_calibration_metadata = metadata
         if self.sequence_config[0]["seq1"]["acq"]["mode"] in ["PLAY_AND_RECORD"]:
             temp_path = output_path.replace(".wav", "_temp.wav")
             self.streaming_temp_path = temp_path
@@ -1969,6 +2016,28 @@ class SequenceWindow(QWidget):
             mono = multi.mean(axis=1).astype(multi.dtype, copy=False)
         return mono.reshape(-1), multi
 
+    def _build_current_wav_calibration_metadata(self):
+        hardware_id = None
+        mic = getattr(self, "mic", None)
+        if isinstance(mic, dict):
+            hardware_id = mic.get("hardware_id")
+        input_channels = self._current_metadata_input_channels()
+        return build_recording_wav_calibration_metadata(
+            input_channels,
+            hardware_id=hardware_id,
+            logger=getattr(self, "default_logger", None),
+        )
+
+    def _current_metadata_input_channels(self):
+        input_channels = [int(channel) for channel in (getattr(self, "_active_input_channels", []) or [0])]
+        try:
+            mode = self.sequence_config[0]["seq1"]["acq"].get("mode")
+        except Exception:
+            mode = None
+        if mode == "PLAY_AND_RECORD" and input_channels:
+            return [input_channels[0]]
+        return input_channels
+
     def _finish_recording_success(self, sample_rate):
         self.player_status_flag = False
         self._record_workflow_busy = False
@@ -1977,9 +2046,7 @@ class SequenceWindow(QWidget):
         self._delete_successful_replay_backup()
         self._clear_recording_output_attempt()
 
-        self._run_post_recording_followup(
-            "S/N input release", self._set_sn_input_recording_read_only, False
-        )
+        self._run_post_recording_followup("S/N input release", self._set_sn_input_recording_read_only, False)
         self._run_post_recording_followup("Data button enable", self.data_btn.setEnabled, True)
         self._run_post_recording_followup("Replay button enable", self.replayer_btn.setEnabled, True)
 
@@ -2023,9 +2090,16 @@ class SequenceWindow(QWidget):
             bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
             recording_output_path = getattr(self, "_recording_output_path", None)
             output_path = recording_output_path() if callable(recording_output_path) else self.recorded_path
+            calibration_metadata = recorded_dict.get("wav_calibration_metadata")
+            if calibration_metadata is None:
+                calibration_metadata = self._build_current_wav_calibration_metadata()
+                recorded_dict["wav_calibration_metadata"] = calibration_metadata
             if mode == "PLAY_AND_RECORD":
                 record_code, recorded_data = SoundcardAudioProcessor().sd_play_rec(
-                    recorded_dict, stimulus_dict, output_path
+                    recorded_dict,
+                    stimulus_dict,
+                    output_path,
+                    calibration_metadata=calibration_metadata,
                 )
                 if record_code != error_code.OK or recorded_data is None:
                     raise RuntimeError(recorded_data if recorded_data is not None else record_code)
@@ -2072,15 +2146,23 @@ class SequenceWindow(QWidget):
                 self.recorded_signal_info["sample_rate"] = sample_rate
 
                 if multi_data.shape[1] > 1:
-                    if bit_depth == 64:
-                        save_audio_simple(output_path, multi_data, sample_rate, bit_depth=bit_depth)
-                    else:
-                        save_audio_simple(output_path, multi_data, sample_rate)
+                    save_audio_with_calibration_metadata(
+                        output_path,
+                        multi_data,
+                        sample_rate,
+                        calibration_metadata,
+                        logger=self.default_logger,
+                        bit_depth=bit_depth,
+                    )
                 else:
-                    if bit_depth == 64:
-                        save_audio_simple(output_path, mono_data, sample_rate, bit_depth=bit_depth)
-                    else:
-                        save_audio_simple(output_path, mono_data, sample_rate)
+                    save_audio_with_calibration_metadata(
+                        output_path,
+                        mono_data,
+                        sample_rate,
+                        calibration_metadata,
+                        logger=self.default_logger,
+                        bit_depth=bit_depth,
+                    )
 
                 self._finalize_successful_replay_output()
 
@@ -2142,6 +2224,8 @@ class SequenceWindow(QWidget):
 
         # Disable replay and data buttons during recording/playback
         # They will be re-enabled in _on_streaming_complete()
+        replayer_btn_was_enabled = self.replayer_btn.isEnabled()
+        data_btn_was_enabled = self.data_btn.isEnabled()
         self.replayer_btn.setDisabled(True)
         self.data_btn.setDisabled(True)
 
@@ -2161,6 +2245,8 @@ class SequenceWindow(QWidget):
             self.player_status_flag = False
             self._record_workflow_busy = False
             self._set_sn_input_recording_read_only(False)
+            self.data_btn.setEnabled(data_btn_was_enabled)
+            self.replayer_btn.setEnabled(replayer_btn_was_enabled)
             self.update_player_btn_is_paused()
             MessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
@@ -2170,6 +2256,8 @@ class SequenceWindow(QWidget):
             self.player_status_flag = False
             self._record_workflow_busy = False
             self._set_sn_input_recording_read_only(False)
+            self.data_btn.setEnabled(data_btn_was_enabled)
+            self.replayer_btn.setEnabled(replayer_btn_was_enabled)
             self.update_player_btn_is_paused()
             return
 
@@ -2186,6 +2274,8 @@ class SequenceWindow(QWidget):
                 self.player_status_flag = False
                 self._record_workflow_busy = False
                 self._set_sn_input_recording_read_only(False)
+                self.data_btn.setEnabled(data_btn_was_enabled)
+                self.replayer_btn.setEnabled(replayer_btn_was_enabled)
                 self.update_player_btn_is_paused()
                 MessageBox.warning(self, "提示", f"启动录音失败: {e}")
                 return
@@ -2816,7 +2906,7 @@ class SequenceWindow(QWidget):
                         raw_channel = 0
                 if raw_channel < 0:
                     raw_channel = 0
-                if requires_v2pa:
+                if requires_v2pa and self.mode not in {"IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"}:
                     try:
                         class_instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
                             raw_channel,
@@ -3178,6 +3268,7 @@ class SequenceWindow(QWidget):
         self.data_btn.setDisabled(True)
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
+        _clear_wav_calibration_runtime_state(self.data_struct)
 
         # 1. 强制清除下拉框焦点
         self.using_file_combobox.clearFocus()
@@ -3427,6 +3518,7 @@ class SequenceWindow(QWidget):
                 recorded_data_multi = self.streaming_processor.get_recorded_data_multi()
             sample_rate = self.data_struct.sample_rate
             bit_depth = normalize_float_bit_depth(getattr(self, "streaming_bit_depth", 32))
+            output_path = self._recording_output_path()
 
             # VERIFICATION: Check if we captured the expected number of samples
             expected_samples = self.streaming_processor.target_samples
@@ -3441,14 +3533,28 @@ class SequenceWindow(QWidget):
 
             # Perform alignment if in play+record mode
             if self.streaming_mode == "play_record" and self.streaming_stimulus_data is not None:
-                output_path = self._recording_output_path()
                 # Finalize temp file first
                 if self.streaming_wav_writer:
                     self.streaming_wav_writer.finalize()
                     self.streaming_wav_writer = None
 
+                alignment_input_data = recorded_data
+                get_recorded_data_multi = getattr(self.streaming_processor, "get_recorded_data_multi", None)
+                if callable(get_recorded_data_multi):
+                    try:
+                        retained_multi = np.asarray(get_recorded_data_multi(), dtype=np.float32)
+                    except Exception as exc:
+                        self.default_logger.warning(
+                            f"Failed to read retained streaming channels; using mono data. {exc}"
+                        )
+                    else:
+                        if retained_multi.ndim == 2 and retained_multi.shape[1] > 0:
+                            alignment_input_data = retained_multi[:, 0].reshape(-1)
+                        elif retained_multi.ndim == 1 and retained_multi.size > 0:
+                            alignment_input_data = retained_multi.reshape(-1)
+
                 aligned_data = AlignmentProcessing.align_play_and_rec_data_using_gccphat(
-                    self.streaming_stimulus_data, recorded_data
+                    self.streaming_stimulus_data, alignment_input_data
                 )
 
                 # Update plot with aligned data (refresh display)
@@ -3460,11 +3566,19 @@ class SequenceWindow(QWidget):
                 self.data_struct.store_wave_data = aligned_data
                 self.data_struct.store_wave_data_multi = np.asarray(aligned_data).reshape(-1, 1)
 
+                calibration_metadata = getattr(self, "streaming_wav_calibration_metadata", None)
+                if calibration_metadata is None:
+                    calibration_metadata = self._build_current_wav_calibration_metadata()
+
                 # Save aligned data to final file
-                if bit_depth == 64:
-                    save_audio_simple(output_path, aligned_data, sample_rate, bit_depth=bit_depth)
-                else:
-                    save_audio_simple(output_path, aligned_data, sample_rate)
+                save_audio_with_calibration_metadata(
+                    output_path,
+                    aligned_data,
+                    sample_rate,
+                    calibration_metadata,
+                    logger=self.default_logger,
+                    bit_depth=bit_depth,
+                )
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
@@ -3499,7 +3613,9 @@ class SequenceWindow(QWidget):
                     if not actual_input_channels:
                         actual_input_channels = list(getattr(self, "_active_input_channels", []) or [])
                     if actual_input_channels:
-                        self._active_input_channels = [int(ch) for ch in actual_input_channels[: recorded_array.shape[1]]]
+                        self._active_input_channels = [
+                            int(ch) for ch in actual_input_channels[: recorded_array.shape[1]]
+                        ]
                     if len(getattr(self, "_active_input_channels", []) or []) != recorded_array.shape[1]:
                         self._active_input_channels = list(range(recorded_array.shape[1]))
                     self.data_struct.store_wave_data_multi = recorded_array
@@ -3520,6 +3636,20 @@ class SequenceWindow(QWidget):
                 if self.streaming_wav_writer:
                     self.streaming_wav_writer.finalize()
                     self.streaming_wav_writer = None
+                calibration_metadata = self._build_current_wav_calibration_metadata()
+                try:
+                    ok = append_wav_calibration_metadata(
+                        output_path,
+                        calibration_metadata,
+                        logger=self.default_logger,
+                    )
+                except Exception as exc:
+                    self.default_logger.warning(
+                        f"Failed to append WAV calibration metadata; audio file was kept. {exc}"
+                    )
+                else:
+                    if not ok:
+                        self.default_logger.warning("Failed to append WAV calibration metadata; audio file was kept.")
 
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
@@ -3536,6 +3666,7 @@ class SequenceWindow(QWidget):
 
             # Handle repeat signal splitting if needed
             if self.streaming_mode == "play_record":
+
                 def split_repeat_after_save():
                     repeat_times = self.data_struct.stimulus_info.get("repeat_times", 1)
                     if repeat_times > 1:
@@ -3551,12 +3682,11 @@ class SequenceWindow(QWidget):
             self.streaming_stimulus_data = None
             self.streaming_mode = None
             self.streaming_bit_depth = 32
+            self.streaming_wav_calibration_metadata = None
             # Recording has fully ended; release S/N input and busy gating before any follow-up analysis/UI work.
             self.player_status_flag = False  # Recording complete, allow hardware access
             self._record_workflow_busy = False
-            self._run_post_recording_followup(
-                "S/N input release", self._set_sn_input_recording_read_only, False
-            )
+            self._run_post_recording_followup("S/N input release", self._set_sn_input_recording_read_only, False)
 
             # Enable buttons for replay and data analysis
             self._run_post_recording_followup("Data button enable", self.data_btn.setEnabled, True)
@@ -3601,6 +3731,7 @@ class SequenceWindow(QWidget):
             self.streaming_stimulus_data = None
             self.streaming_mode = None
             self.streaming_bit_depth = 32
+            self.streaming_wav_calibration_metadata = None
             self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
             # Still enable buttons even on error
             self.data_btn.setEnabled(True)

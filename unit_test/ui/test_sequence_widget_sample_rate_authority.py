@@ -1,6 +1,10 @@
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import play_and_record
 from ui.sequence import sequence_widget
@@ -30,6 +34,7 @@ def _window(mode, detail, mic=_DEFAULT_DEVICE, speaker=_DEFAULT_DEVICE):
     obj.lineedit_count = SimpleNamespace(text=lambda: "1")
     obj.lineedit_s_or_n = SimpleNamespace(text=lambda: "")
     obj._active_input_channels = []
+    obj._build_current_wav_calibration_metadata = lambda: {"recorded_channels": []}
     obj.using_config_path = "sequence.json"
     return obj
 
@@ -296,7 +301,13 @@ def test_import_audio_preserves_file_native_samplerate(monkeypatch):
     win.data_btn = SimpleNamespace(setEnabled=lambda enabled: None)
     win.analysis_config = {"auto_analysis": False}
     load_calls = []
+    metadata = {
+        "recorded_channels": [
+            {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
+        ]
+    }
     monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("input.wav", ""))
+    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
     monkeypatch.setattr(
         sequence_widget,
         "load_audio_preserve_rate",
@@ -319,7 +330,13 @@ def test_import_stimulus_audio_generates_temporary_reference_at_recording_rate(m
     win.data_btn = SimpleNamespace(setEnabled=lambda enabled: None)
     win.analysis_config = {"auto_analysis": False}
     calls = []
+    metadata = {
+        "recorded_channels": [
+            {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
+        ]
+    }
     monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("input.wav", ""))
+    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
     monkeypatch.setattr(
         sequence_widget,
         "load_audio_preserve_rate",

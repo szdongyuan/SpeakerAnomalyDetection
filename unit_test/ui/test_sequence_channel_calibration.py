@@ -2,18 +2,21 @@ import ast
 import copy
 import json
 import os
+import sys
 import types
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
 from base.acquisition_recording_defaults import normalize_play_record_detail
 from base import soundcard_calibration_manager as calibration_manager
 from base.soundcard_calibration_manager import MicChannelCalibrationResult
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 SEQUENCE_WIDGET_PATH = REPO_ROOT / "ui" / "sequence" / "sequence_widget.py"
 OPERATION_SEQUENCE_PATH = REPO_ROOT / "ui" / "operation_sequence.py"
 
@@ -51,12 +54,14 @@ def _load_class_method(
 
 
 def _load_record_golden_sample_method(namespace: dict):
+    namespace.setdefault("build_recording_wav_calibration_metadata", lambda *args, **kwargs: {"recorded_channels": []})
     return _load_class_method(
         OPERATION_SEQUENCE_PATH,
         "AnalysisModelSelect",
         "record_golden_sample_btn_clicked",
         namespace,
         helper_names=(
+            "_safe_dialog_attr",
             "_snapshot_golden_sample_runtime_state",
             "_restore_golden_sample_runtime_state",
         ),
@@ -450,6 +455,35 @@ def test_sequence_non_record_only_uses_shared_helper_and_surfaces_fallback_warni
     assert DummyMessageBox.warnings == ["In4 未校准，本次使用 In1 的校准系数。"]
 
 
+@pytest.mark.parametrize("mode", ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"])
+def test_sequence_import_modes_do_not_pre_resolve_calibration_from_database(mode):
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        raise AssertionError("imported WAV analysis should resolve calibration from DataDealStruct")
+
+    window = _build_sequence_window(
+        resolve_impl,
+        mode=mode,
+        analysis_config={"golden_sample_result_path": "golden.json"},
+    )
+
+    params = {"analysis_channel": 3}
+    window.instance_analysis_class("SPL2", "SPL", params)
+
+    assert resolve_calls == []
+    assert len(window.analysis_window) == 1
+    instance = window.analysis_window[0]
+    assert instance.name == "SPL2"
+    assert instance.v2pa_factor is None
+    assert not hasattr(instance, "_use_pre_resolved_v2pa_factor")
+    assert not hasattr(instance, "_v2pa_raw_analysis_channel")
+    assert instance.analysis_config["analysis_channel"] == 3
+    assert instance.analysis_config["golden_sample_result_path"] == "golden.json"
+    assert DummyMessageBox.warnings == []
+
+
 def test_sequence_batch_coalesces_duplicate_uncalibrated_mic_warnings():
     resolve_calls = []
 
@@ -517,7 +551,7 @@ def test_golden_sample_rb_standard_thd_skips_calibration_resolution(tmp_path):
         ),
         "normalize_play_record_detail": normalize_play_record_detail,
         "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
-            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path: (0, [0.1, 0.2, 0.3])
+            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path, calibration_metadata=None: (0, [0.1, 0.2, 0.3])
         ),
         "get_class_mapping": lambda: {"RB": FakeAnalysis},
         "MessageBox": DummyMessageBox,
@@ -587,7 +621,7 @@ def test_golden_sample_fr_skips_calibration_requirement(tmp_path):
         ),
         "normalize_play_record_detail": normalize_play_record_detail,
         "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
-            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path: (0, [0.1, 0.2, 0.3])
+            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path, calibration_metadata=None: (0, [0.1, 0.2, 0.3])
         ),
         "get_class_mapping": lambda: {"FR": FakeAnalysis},
         "MessageBox": DummyMessageBox,
@@ -657,7 +691,7 @@ def test_golden_sample_rb_standard_thd_missing_calibration_does_not_warn(tmp_pat
         ),
         "normalize_play_record_detail": normalize_play_record_detail,
         "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
-            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path: (0, [0.1, 0.2, 0.3])
+            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path, calibration_metadata=None: (0, [0.1, 0.2, 0.3])
         ),
         "get_class_mapping": lambda: {"RB": FakeAnalysis},
         "MessageBox": DummyMessageBox,

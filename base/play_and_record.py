@@ -2,16 +2,18 @@ import os
 from datetime import datetime
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.log_manager import LogManager
 from base.system_intervction.hardware_intervction import get_mac_address
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.recording_management import RecordingManager
-from base.save_data import save_audio_simple
+from base.save_data import save_audio_simple, save_audio_with_calibration_metadata
 from base.soundcard_audio_processor import SoundcardAudioProcessor, alignment_reference_from_stimulus
 from base.streaming_audio_processor import StreamingAudioProcessor
 from consts.audio_consts import normalize_float_bit_depth
 from consts import error_code, model_consts
 
 data_struct = DataDealStruct()
+logger = LogManager.set_log_handler("soundcard_core")
 
 
 def _coerce_runtime_sample_rate(sample_rate):
@@ -78,7 +80,19 @@ def record_without_play(recorded_dict, recorded_path, recorded_signal_info):
 
     sample_rate = _require_recording_runtime_sample_rate(recorded_dict)
     bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
-    if bit_depth == 32 and "bit_depth" not in recorded_dict:
+    calibration_metadata = recorded_dict.get("wav_calibration_metadata")
+    if calibration_metadata:
+        save_kwargs = {"logger": logger}
+        if bit_depth != 32:
+            save_kwargs["bit_depth"] = bit_depth
+        save_audio_with_calibration_metadata(
+            recorded_path,
+            recorded_signal,
+            sample_rate,
+            calibration_metadata,
+            **save_kwargs,
+        )
+    elif bit_depth == 32 and "bit_depth" not in recorded_dict:
         save_audio_simple(recorded_path, recorded_signal, sample_rate)
     else:
         save_audio_simple(recorded_path, recorded_signal, sample_rate, bit_depth=bit_depth)
@@ -101,7 +115,12 @@ def play_last_stimulus_wave(stimulus_dict, recorded_dict, recorded_path, recorde
     sample_rate = data_struct.sample_rate
 
     sap = SoundcardAudioProcessor()
-    record_code, recorded_signal = sap.sd_play_rec(recorded_dict, stimulus_dict, recorded_path)
+    record_code, recorded_signal = sap.sd_play_rec(
+        recorded_dict,
+        stimulus_dict,
+        recorded_path,
+        calibration_metadata=recorded_dict.get("wav_calibration_metadata"),
+    )
     if record_code != error_code.OK:
         return record_code, recorded_signal
 
@@ -243,6 +262,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
 
     input_device = recorded_dict.get("input_device")
     output_device = recorded_dict.get("output_device")
+    input_channels = recorded_dict.get("input_channels")
     recording_start_delay_frames = recorded_dict.get("recording_start_delay_frames", 0)
     bit_depth = normalize_float_bit_depth(recorded_dict.get("bit_depth", 32))
 
@@ -256,6 +276,7 @@ def stream_play_and_record(stimulus_dict, recorded_dict, recorded_path, recorded
         target_samples=target_samples,  # Use exact sample count instead of duration
         input_device=input_device,
         output_device=output_device,
+        input_channels=input_channels,
         prepare_frames=prepare_frames,
         prolong_frames=prolong_frames,
         discard_initial_samples=recording_start_delay_frames,
