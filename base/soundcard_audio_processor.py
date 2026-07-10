@@ -150,7 +150,7 @@ class SoundcardAudioProcessor(object):
             return None, output_index
         return None
 
-    def sd_play_rec(self, record_dict, stimulus_dict, recording_path, *, calibration_metadata=None):
+    def sd_play_rec(self, record_dict, stimulus_dict, recording_path, calibration_metadata=None):
         sr, validation_code, validation_msg = self._resolve_playrec_sample_rate(record_dict, stimulus_dict)
         if validation_code != error_code.OK:
             return validation_code, validation_msg
