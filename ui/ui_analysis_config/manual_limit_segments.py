@@ -13,31 +13,40 @@ class ManualLimitValidationError(ValueError):
     pass
 
 
+_FIELD_LABELS = {
+    "start_x": "起始X",
+    "start_y": "起始Y",
+    "end_x": "截止X",
+    "end_y": "截止Y",
+}
+
+
 def normalize_segments(raw_segments) -> list[dict[str, float]]:
     if raw_segments is None:
         return []
     if isinstance(raw_segments, (str, bytes)) or not isinstance(raw_segments, Sequence):
-        raise ManualLimitValidationError("manual limit segments must be a sequence")
+        raise ManualLimitValidationError("手动上下限段配置必须是列表")
 
     normalized = []
     for index, raw_segment in enumerate(raw_segments, start=1):
         if not isinstance(raw_segment, Mapping):
-            raise ManualLimitValidationError(f"segment {index} must be a mapping")
+            raise ManualLimitValidationError(f"第{index}段必须是配置对象")
 
         segment = {}
         for key in ("start_x", "start_y", "end_x", "end_y"):
+            field_label = _FIELD_LABELS[key]
             try:
                 raw_value = raw_segment[key]
             except KeyError as exc:
-                raise ManualLimitValidationError(f"segment {index} is missing {key}") from exc
+                raise ManualLimitValidationError(f"第{index}段缺少{field_label}") from exc
             if isinstance(raw_value, (bool, np.bool_)):
-                raise ManualLimitValidationError(f"segment {index} {key} must be numeric")
+                raise ManualLimitValidationError(f"第{index}段{field_label}必须是数字")
             try:
                 value = float(raw_value)
             except (TypeError, ValueError) as exc:
-                raise ManualLimitValidationError(f"segment {index} {key} must be numeric") from exc
+                raise ManualLimitValidationError(f"第{index}段{field_label}必须是数字") from exc
             if not math.isfinite(value):
-                raise ManualLimitValidationError(f"segment {index} {key} must be finite")
+                raise ManualLimitValidationError(f"第{index}段{field_label}必须是有限数字")
             segment[key] = value
         normalized.append(segment)
     return normalized
@@ -71,7 +80,7 @@ def _normalized_enabled_segments(config: dict | None):
     upper_enabled = bool(config.get("manual_upper_enabled", True))
     lower_enabled = bool(config.get("manual_lower_enabled", False))
     if not upper_enabled and not lower_enabled:
-        raise ManualLimitValidationError("at least one manual limit must be enabled")
+        raise ManualLimitValidationError("手动上下限至少需要启用一个")
 
     upper_segments = []
     lower_segments = []
@@ -89,19 +98,19 @@ def _normalized_enabled_segments(config: dict | None):
 
 def _validate_normalized_segments(segments: list[dict[str, float]], *, label: str) -> None:
     if not segments:
-        raise ManualLimitValidationError(f"{label} must include at least one segment")
+        raise ManualLimitValidationError(f"{label}至少需要包含一段配置")
     if segments[0]["start_x"] < 0:
-        raise ManualLimitValidationError(f"{label} segment 1 start_x must be non-negative")
+        raise ManualLimitValidationError(f"{label}第1段起始X必须大于或等于0")
 
     previous_end_x = None
     for index, segment in enumerate(segments, start=1):
         start_x = segment["start_x"]
         end_x = segment["end_x"]
         if end_x <= start_x:
-            raise ManualLimitValidationError(f"{label} segment {index} end_x must be greater than start_x")
+            raise ManualLimitValidationError(f"{label}第{index}段截止X必须大于起始X")
         if previous_end_x is not None and start_x < previous_end_x:
             raise ManualLimitValidationError(
-                f"{label} segment {index} start_x must be greater than or equal to the previous end_x"
+                f"{label}第{index}段起始X必须大于或等于上一段截止X"
             )
         previous_end_x = end_x
 
@@ -117,17 +126,12 @@ def _validate_lower_not_above_upper(
             if right <= left:
                 continue
 
-            checks = (
-                (left, "immediately right of the overlap start"),
-                (right, "at the overlap end"),
-            )
-            for x_value, position in checks:
+            for x_value in (left, right):
                 upper_y = _segment_value_at(upper_segment, x_value)
                 lower_y = _segment_value_at(lower_segment, x_value)
                 if lower_y > upper_y:
                     raise ManualLimitValidationError(
-                        "下限 cannot be greater than 上限 "
-                        f"{position} for upper segment {upper_index} and lower segment {lower_index}"
+                        f"下限不能大于上限：上限第{upper_index}段与下限第{lower_index}段在重叠区间内不合法"
                     )
 
 
