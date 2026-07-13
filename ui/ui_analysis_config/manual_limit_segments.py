@@ -9,9 +9,6 @@ from typing import Any
 import numpy as np
 
 
-SEGMENT_KEYS = ("start_x", "start_y", "end_x", "end_y")
-
-
 class ManualLimitValidationError(ValueError):
     pass
 
@@ -28,7 +25,7 @@ def normalize_segments(raw_segments) -> list[dict[str, float]]:
             raise ManualLimitValidationError(f"segment {index} must be a mapping")
 
         segment = {}
-        for key in SEGMENT_KEYS:
+        for key in ("start_x", "start_y", "end_x", "end_y"):
             try:
                 raw_value = raw_segment[key]
             except KeyError as exc:
