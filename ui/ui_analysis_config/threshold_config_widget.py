@@ -68,6 +68,7 @@ def _draw_limit_curve(plot_widget: PlotWidget, result_data: tuple) -> None:
 class _ManualLimitEditorWidget(QWidget):
     MANUAL_SEGMENT_KEYS = ("start_x", "start_y", "end_x", "end_y")
     MANUAL_SEGMENT_ROW_LABELS = ("起始X", "起始Y", "截止X", "截止Y")
+    MANUAL_SEGMENT_COLUMN_WIDTH = 80
 
     config_changed = pyqtSignal()
 
@@ -175,7 +176,7 @@ class _ManualLimitEditorWidget(QWidget):
         table.setRowCount(len(self.MANUAL_SEGMENT_ROW_LABELS))
         table.setColumnCount(1)
         table.setVerticalHeaderLabels(self.MANUAL_SEGMENT_ROW_LABELS)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._configure_manual_table_columns(table)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table.setMinimumWidth(360)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -200,6 +201,15 @@ class _ManualLimitEditorWidget(QWidget):
             height += scroll_bar.sizeHint().height()
         table.setFixedHeight(height)
 
+    def _configure_manual_table_columns(self, table: TableWidget) -> None:
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setMinimumSectionSize(self.MANUAL_SEGMENT_COLUMN_WIDTH)
+        header.setDefaultSectionSize(self.MANUAL_SEGMENT_COLUMN_WIDTH)
+        for column in range(table.columnCount()):
+            if table.columnWidth(column) < self.MANUAL_SEGMENT_COLUMN_WIDTH:
+                table.setColumnWidth(column, self.MANUAL_SEGMENT_COLUMN_WIDTH)
+
     def _load_manual_segments(self, table: TableWidget, raw_segments) -> None:
         segments = raw_segments if isinstance(raw_segments, list) else []
         column_count = max(len(segments) + 1, 1)
@@ -218,6 +228,7 @@ class _ManualLimitEditorWidget(QWidget):
                     value = segment.get(key, "")
                     table.item(row, column).setText("" if value is None else str(value))
             self._update_manual_table_headers(table)
+            self._configure_manual_table_columns(table)
             self._fit_manual_table_height(table)
         finally:
             self._syncing_manual_table = previous_syncing
@@ -246,6 +257,7 @@ class _ManualLimitEditorWidget(QWidget):
             table.setColumnCount(1)
             self._ensure_manual_table_items(table)
             self._update_manual_table_headers(table)
+            self._configure_manual_table_columns(table)
             self._fit_manual_table_height(table)
             return
         state, _segment = self._manual_table_column_state(table, table.columnCount() - 1)
@@ -253,6 +265,7 @@ class _ManualLimitEditorWidget(QWidget):
             table.insertColumn(table.columnCount())
             self._ensure_manual_table_items(table)
             self._update_manual_table_headers(table)
+            self._configure_manual_table_columns(table)
             self._fit_manual_table_height(table)
 
     def _on_manual_check_changed(self, *args) -> None:
