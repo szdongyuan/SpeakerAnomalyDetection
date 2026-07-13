@@ -165,7 +165,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
-            allow_manual_limits=self.model_type != "SPLF",
+            allow_manual_limits=True,
         )
 
         self.weighting_selector = WeightingSelectorWidget(self.load_config, parent=self)

@@ -116,7 +116,7 @@ def _commit_analysis_reference_state(data_struct, staged_reference) -> None:
         data_struct.alignment_sample_count = staged_reference.alignment_sample_count
 
 
-def _clear_import_analysis_runtime_state(window) -> None:
+def _clear_import_analysis_runtime_state(window, *, clear_plot: bool = True) -> None:
     data_struct = getattr(window, "data_struct", None)
     if data_struct is not None:
         data_struct.store_wave_data = None
@@ -133,10 +133,11 @@ def _clear_import_analysis_runtime_state(window) -> None:
     data_btn = getattr(window, "data_btn", None)
     if data_btn is not None:
         data_btn.setEnabled(False)
-    try:
-        window._clear_plot_area()
-    except Exception:
-        pass
+    if clear_plot:
+        try:
+            window._clear_plot_area()
+        except Exception:
+            pass
 
 
 def _resolve_runtime_sample_rate_for_mode(window, acq_mode, acq_detail):
@@ -402,6 +403,112 @@ class SequenceWindow(QWidget):
         self._show_external_trigger_mode_warning(trigger_source, current_mode)
         return False
 
+    def _is_positive_runtime_integer(self, value):
+        return (
+            not isinstance(value, (bool, np.bool_))
+            and isinstance(value, (int, np.integer))
+            and int(value) > 0
+        )
+
+    def _has_runtime_samples(self, value):
+        if value is None:
+            return False
+        try:
+            return np.asarray(value).size > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _has_imported_recording_runtime_state(self):
+        data_struct = self.data_struct
+        return (
+            SequenceWindow._is_positive_runtime_integer(self, getattr(data_struct, "sample_rate", None))
+            and SequenceWindow._is_positive_runtime_integer(self, getattr(data_struct, "audio_lenth", None))
+            and SequenceWindow._has_runtime_samples(self, getattr(data_struct, "store_wave_data", None))
+            and SequenceWindow._has_runtime_samples(self, getattr(data_struct, "store_wave_data_multi", None))
+        )
+
+    def _has_import_stimulus_runtime_reference(self):
+        data_struct = self.data_struct
+        stimulus_info = getattr(data_struct, "stimulus_info", None)
+        if not isinstance(stimulus_info, dict):
+            return False
+        recording_rate = getattr(data_struct, "sample_rate", None)
+        reference_rate = stimulus_info.get("sample_rate")
+        return (
+            SequenceWindow._is_positive_runtime_integer(self, recording_rate)
+            and SequenceWindow._is_positive_runtime_integer(self, reference_rate)
+            and int(recording_rate) == int(reference_rate)
+            and SequenceWindow._has_runtime_samples(self, getattr(data_struct, "stimulus_data", None))
+        )
+
+    def _validate_import_stimulus_analysis_readiness(self):
+        readiness_message = (
+            "分析参考激励尚未就绪或采样率与导入音频不一致，请检查激励配置后重试。"
+        )
+        if not (
+            SequenceWindow._has_imported_recording_runtime_state(self)
+            and SequenceWindow._has_import_stimulus_runtime_reference(self)
+        ):
+            MessageBox.warning(self, "提示", readiness_message)
+            return False
+
+        stimulus_info = self.data_struct.stimulus_info
+        total_time = stimulus_info.get("total_time")
+        if isinstance(total_time, (bool, np.bool_)) or not isinstance(
+            total_time,
+            (int, float, np.integer, np.floating),
+        ):
+            MessageBox.warning(self, "提示", readiness_message)
+            return False
+
+        total_time = float(total_time)
+        if not np.isfinite(total_time) or total_time <= 0:
+            MessageBox.warning(self, "提示", readiness_message)
+            return False
+
+        stimulus_length = round(total_time * int(stimulus_info["sample_rate"]))
+        if int(self.data_struct.audio_lenth) != stimulus_length:
+            MessageBox.warning(
+                self,
+                "音频长度校验失败",
+                f"导入音频长度({self.data_struct.audio_lenth})\n"
+                f"与激励信号长度({stimulus_length})不一致！无法分析！",
+            )
+            return False
+        return True
+
+    def _refresh_import_stimulus_analysis_reference(self, acq_detail):
+        if not self._has_imported_recording_runtime_state():
+            self.data_btn.setEnabled(False)
+            return False
+
+        runtime_sample_rate = int(self.data_struct.sample_rate)
+        staged_reference = SimpleNamespace(sample_rate=runtime_sample_rate)
+        try:
+            reference_ready = set_data_struct_analysis_reference_signal(
+                staged_reference,
+                acq_detail,
+                using_config_path=self.using_config_path,
+                runtime_sample_rate=runtime_sample_rate,
+                logger=LogManager.set_log_handler("core"),
+            )
+        except Exception as exc:
+            _clear_data_struct_stimulus_runtime_state(self.data_struct, clear_sample_rate=False)
+            self.data_btn.setEnabled(False)
+            MessageBox.warning(self, "提示", f"加载分析参考激励失败: {str(exc)[:200]}")
+            return False
+
+        if not reference_ready:
+            _clear_data_struct_stimulus_runtime_state(self.data_struct, clear_sample_rate=False)
+            self.data_btn.setEnabled(False)
+            MessageBox.warning(self, "提示", "加载分析参考激励失败，请检查激励配置。")
+            return False
+
+        _commit_analysis_reference_state(self.data_struct, staged_reference)
+        self.data_struct.sample_rate = runtime_sample_rate
+        self.data_btn.setEnabled(True)
+        return True
+
     def on_sequence_config_updated(self, *_):
         """
         Called when the test-queue window confirms config changes.
@@ -410,17 +517,44 @@ class SequenceWindow(QWidget):
         main window immediately reflects newly saved/imported entries.
         """
         try:
-            old_mode = self.mode
+            from copy import deepcopy
+
+            old_acq = (
+                deepcopy(self.sequence_config[0]["seq1"]["acq"])
+                if self.sequence_config
+                else None
+            )
+            old_mode = old_acq.get("mode") if old_acq else None
+            old_detail = old_acq.get("detail") if old_acq else None
             self.update_using_file_combobox()
             self.get_sequence_config_from_json()
-            new_mode = self.mode
+            new_acq = self.sequence_config[0]["seq1"]["acq"] if self.sequence_config else None
+            new_mode = new_acq.get("mode") if new_acq else None
+            new_detail = new_acq.get("detail") if new_acq else None
             mode_changed = old_mode != new_mode
 
             if mode_changed:
                 self._clear_plot_area()
                 self.data_struct.clear_data()
+                import_modes = {"IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"}
+                if old_mode in import_modes or new_mode in import_modes:
+                    _clear_import_analysis_runtime_state(self, clear_plot=False)
                 self.refresh_channel_windows()
-            self.init_data_struct_stimulus_config()
+
+            preserve_import_runtime = not mode_changed and new_mode == "IMPORT_STIMULUS_AUDIO"
+            if preserve_import_runtime:
+                if old_detail != new_detail:
+                    if self._has_imported_recording_runtime_state():
+                        self._refresh_import_stimulus_analysis_reference(new_detail)
+                    else:
+                        _clear_import_analysis_runtime_state(self)
+                elif not (
+                    self._has_imported_recording_runtime_state()
+                    and self._has_import_stimulus_runtime_reference()
+                ):
+                    self.data_btn.setEnabled(False)
+            else:
+                self.init_data_struct_stimulus_config()
             self.init_fft_and_stft_flag()
 
             if self.count_board:
@@ -2295,20 +2429,12 @@ class SequenceWindow(QWidget):
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
-        # Only reflect THIS run(): clear previous summary results first
-        self.data_struct.analysis_result_dict.clear()
         if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_STIMULUS_AUDIO":
-            stimulus_length = round(
-                self.data_struct.stimulus_info.get("total_time") * self.data_struct.stimulus_info.get("sample_rate")
-            )
-            if self.data_struct.audio_lenth != stimulus_length:
-                MessageBox.warning(
-                    self,
-                    "音频长度校验失败",
-                    f"导入音频长度({self.data_struct.audio_lenth})\n"
-                    f"与激励信号长度({stimulus_length})不一致！无法分析！",
-                )
+            if not SequenceWindow._validate_import_stimulus_analysis_readiness(self):
                 return
+
+        # Only reflect THIS successful run(): clear previous summary results after readiness gates pass.
+        self.data_struct.analysis_result_dict.clear()
         if self.analysis_window:
             self.analysis_window = []
         if self._analysis_result_summary_window:

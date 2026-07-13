@@ -1,12 +1,16 @@
 import os
 import sys
 import types
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import numpy as np
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QStandardItemModel
-from PyQt5.QtWidgets import QApplication, QTableView
+from PyQt5.QtWidgets import QApplication, QHeaderView, QSizePolicy, QTableView, QTableWidgetItem
 
 from consts import error_code
 
@@ -90,6 +94,570 @@ def assert_vertical_golden_size(window):
     assert window.minimumWidth() == 630
     assert window.minimumHeight() == 840
     assert round(window.minimumWidth() / window.minimumHeight(), 2) == 0.75
+
+
+def create_threshold_widget(qapp, load_config):
+    from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
+
+    widget = ThresholdConfigWidget(
+        load_config=load_config,
+        model_type="SPL",
+        allow_manual_limits=True,
+    )
+    widget.show()
+    qapp.processEvents()
+    return widget
+
+
+def create_manual_dialog(widget):
+    dialog = widget._create_manual_limit_dialog()
+    dialog.show()
+    QApplication.instance().processEvents()
+    return dialog
+
+
+def confirm_dialog(dialog):
+    dialog._on_confirm_clicked()
+    QApplication.instance().processEvents()
+
+
+def plot_data_snapshot(plot_widget):
+    snapshot = []
+    for item in plot_widget.listDataItems():
+        x_data, y_data = item.getData()
+        snapshot.append((np.asarray(x_data).tolist(), np.asarray(y_data).tolist()))
+    return snapshot
+
+
+def _manual_table_content_height(table):
+    height = (
+        table.horizontalHeader().height()
+        + sum(table.rowHeight(row) for row in range(table.rowCount()))
+        + table.frameWidth() * 2
+    )
+    scroll_bar = table.horizontalScrollBar()
+    if scroll_bar.maximum() > scroll_bar.minimum():
+        height += scroll_bar.sizeHint().height()
+    return height
+
+
+def set_table_cell(table, row, column, value):
+    item = table.item(row, column)
+    if item is None:
+        item = QTableWidgetItem()
+        table.setItem(row, column, item)
+    item.setText(str(value))
+    QApplication.instance().processEvents()
+
+
+def set_segment_column(table, column, values):
+    for row, value in enumerate(values):
+        set_table_cell(table, row, column, value)
+
+
+def clear_segment_column(table, column):
+    for row in range(table.rowCount()):
+        set_table_cell(table, row, column, "")
+
+
+def assert_blank_column(table, column):
+    assert [table.item(row, column).text() if table.item(row, column) else "" for row in range(4)] == ["", "", "", ""]
+
+
+def test_threshold_widget_manual_mode_without_segment_keys_starts_blank_not_scalar_derived(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_upper": 88.5,
+            "manual_lower_enabled": True,
+            "manual_lower": 20.0,
+        },
+    )
+
+    assert widget.manual_edit_button.isVisible() is True
+    assert not hasattr(widget, "manual_upper_table")
+    assert not hasattr(widget, "manual_lower_table")
+    dialog = create_manual_dialog(widget)
+
+    assert dialog.editor.manual_upper_table.rowCount() == 4
+    assert dialog.editor.manual_lower_table.rowCount() == 4
+    assert dialog.editor.manual_upper_table.columnCount() == 1
+    assert dialog.editor.manual_lower_table.columnCount() == 1
+    assert_blank_column(dialog.editor.manual_upper_table, 0)
+    assert_blank_column(dialog.editor.manual_lower_table, 0)
+    assert not hasattr(widget, "manual_upper_spin")
+    assert not hasattr(widget, "manual_lower_spin")
+
+
+def test_threshold_widget_filling_final_upper_column_auto_appends_blank_column(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True},
+    )
+    dialog = create_manual_dialog(widget)
+
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+
+    assert dialog.editor.manual_upper_table.columnCount() == 2
+    assert_blank_column(dialog.editor.manual_upper_table, 1)
+
+
+def test_threshold_widget_partial_non_trailing_column_is_invalid_and_warns(qapp, monkeypatch):
+    from ui.ui_analysis_config import threshold_config_widget
+
+    warnings = []
+    monkeypatch.setattr(threshold_config_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+    widget = create_threshold_widget(
+        qapp,
+        {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True},
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+    set_table_cell(dialog.editor.manual_upper_table, 0, 0, "")
+
+    confirm_dialog(dialog)
+    assert warnings
+    assert dialog.result() != dialog.Accepted
+
+
+def test_threshold_widget_blank_before_later_nonblank_column_is_invalid_and_warns(qapp, monkeypatch):
+    from ui.ui_analysis_config import threshold_config_widget
+
+    warnings = []
+    monkeypatch.setattr(threshold_config_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+    widget = create_threshold_widget(
+        qapp,
+        {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True},
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+    set_segment_column(dialog.editor.manual_upper_table, 1, [2, 30, 3, 40])
+    clear_segment_column(dialog.editor.manual_upper_table, 0)
+
+    confirm_dialog(dialog)
+    assert warnings
+    assert dialog.result() != dialog.Accepted
+
+
+def test_threshold_widget_manual_config_serializes_segments_without_scalar_keys(qapp, monkeypatch):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+        },
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+    monkeypatch.setattr(dialog, "exec_", lambda: (dialog._on_confirm_clicked() or dialog.result()))
+    monkeypatch.setattr(widget, "_create_manual_limit_dialog", lambda: dialog)
+    widget.manual_edit_button.click()
+    qapp.processEvents()
+    config = widget.get_config()
+
+    assert config["limit_mode"] == "manual"
+    assert config["manual_upper_enabled"] is True
+    assert config["manual_lower_enabled"] is False
+    assert config["manual_upper_segments"] == [{"start_x": 0.0, "start_y": 10.0, "end_x": 1.0, "end_y": 20.0}]
+    assert config["manual_lower_segments"] == []
+    assert "manual_upper" not in config
+    assert "manual_lower" not in config
+
+
+def test_threshold_widget_threshold_unchecked_hides_limit_group(qapp):
+    widget = create_threshold_widget(qapp, {"limit_checked": False, "limit_mode": "manual"})
+
+    assert widget.limit_group_box.isVisible() is False
+
+
+def test_threshold_widget_mode_visibility_switches_between_csv_and_manual(qapp):
+    widget = create_threshold_widget(qapp, {"limit_checked": True, "limit_mode": "manual"})
+
+    assert widget.manual_widget.isVisible() is True
+    assert widget.manual_edit_button.isVisible() is True
+    assert widget.config_dir_box.isVisible() is False
+
+    widget.csv_mode_radio.setChecked(True)
+    qapp.processEvents()
+
+    assert widget.manual_widget.isVisible() is False
+    assert widget.manual_edit_button.isVisible() is False
+    assert widget.config_dir_box.isVisible() is True
+
+
+def test_threshold_widget_unchecked_upper_lower_hide_their_tables(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+        },
+    )
+    dialog = create_manual_dialog(widget)
+
+    assert dialog.editor.manual_upper_table.isVisible() is True
+    assert dialog.editor.manual_lower_table.isVisible() is True
+
+    dialog.editor.manual_upper_check.setChecked(False)
+    dialog.editor.manual_lower_check.setChecked(False)
+    qapp.processEvents()
+
+    assert dialog.editor.manual_upper_table.isVisible() is False
+    assert dialog.editor.manual_lower_table.isVisible() is False
+
+
+def test_manual_segment_tables_fit_rendered_content_without_bottom_blank(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+            "manual_upper_segments": [],
+            "manual_lower_segments": [],
+        },
+    )
+    dialog = create_manual_dialog(widget)
+
+    for table in (dialog.editor.manual_upper_table, dialog.editor.manual_lower_table):
+        assert table.sizePolicy().verticalPolicy() == QSizePolicy.Fixed
+        assert table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+        assert table.height() == _manual_table_content_height(table)
+
+
+def manual_segments(count):
+    return [
+        {"start_x": index * 100, "start_y": 10 + index, "end_x": index * 100 + 50, "end_y": 20 + index}
+        for index in range(count)
+    ]
+
+
+def assert_manual_table_uses_stretch(table, expected_columns):
+    header = table.horizontalHeader()
+    assert table.columnCount() == expected_columns
+    assert header.sectionResizeMode(0) == QHeaderView.Stretch
+    assert header.minimumSectionSize() < 80
+
+
+def assert_manual_table_uses_interactive_80px_columns(table, expected_columns):
+    header = table.horizontalHeader()
+    assert table.columnCount() == expected_columns
+    assert header.sectionResizeMode(0) == QHeaderView.Interactive
+    assert header.minimumSectionSize() == 80
+    assert header.defaultSectionSize() == 80
+    for column in range(table.columnCount()):
+        assert table.columnWidth(column) >= 80
+
+
+def test_manual_segment_tables_use_stretch_until_seven_actual_columns(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+            "manual_upper_segments": [],
+            "manual_lower_segments": [],
+        },
+    )
+    dialog = create_manual_dialog(widget)
+
+    for table in (dialog.editor.manual_upper_table, dialog.editor.manual_lower_table):
+        assert_manual_table_uses_stretch(table, expected_columns=1)
+
+    dialog.editor.load_manual_config(
+        {
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+            "manual_upper_segments": manual_segments(7),
+            "manual_lower_segments": manual_segments(7),
+        }
+    )
+    qapp.processEvents()
+
+    for table in (dialog.editor.manual_upper_table, dialog.editor.manual_lower_table):
+        assert_manual_table_uses_interactive_80px_columns(table, expected_columns=8)
+
+    dialog.editor.load_manual_config(
+        {
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+            "manual_upper_segments": manual_segments(6),
+            "manual_lower_segments": manual_segments(6),
+        }
+    )
+    qapp.processEvents()
+
+    for table in (dialog.editor.manual_upper_table, dialog.editor.manual_lower_table):
+        assert_manual_table_uses_stretch(table, expected_columns=7)
+
+
+def test_manual_segment_tables_use_interactive_80px_columns_after_seven_actual_columns(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+            "manual_upper_segments": manual_segments(7),
+            "manual_lower_segments": manual_segments(7),
+        },
+    )
+    dialog = create_manual_dialog(widget)
+
+    for table in (dialog.editor.manual_upper_table, dialog.editor.manual_lower_table):
+        assert_manual_table_uses_interactive_80px_columns(table, expected_columns=8)
+
+
+def test_manual_segment_table_height_includes_required_horizontal_scrollbar(qapp):
+    complete_segments = manual_segments(9)
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+            "manual_upper_segments": complete_segments,
+            "manual_lower_segments": [],
+        },
+    )
+    dialog = create_manual_dialog(widget)
+    dialog.setFixedWidth(dialog.minimumSizeHint().width())
+    qapp.processEvents()
+
+    table = dialog.editor.manual_upper_table
+    scroll_bar = table.horizontalScrollBar()
+    assert table.columnCount() == 10
+    assert scroll_bar.maximum() > scroll_bar.minimum()
+    assert table.height() == _manual_table_content_height(table)
+
+
+def test_threshold_widget_manual_mode_recomputes_scroll_height_after_being_enabled(qapp):
+    from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "SPLF": {
+                "splf_calc_mode": "fundamental",
+                "octave_smoothing": 0,
+                "golden_sample_checked": False,
+                "limit_checked": False,
+                "limit_mode": "csv",
+                "limit_data": None,
+                "manual_upper_enabled": True,
+                "manual_upper_segments": [],
+                "manual_lower_enabled": True,
+                "manual_lower_segments": [],
+                "weighting": "Z",
+                "analysis_channel": 0,
+            }
+        }
+    )
+    window = SplConfigWindow(config_manager, "SPLF", available_channels=[0])
+    window.show()
+    qapp.processEvents()
+
+    widget = window.threshold_widget
+    widget.limit_checkbox.setChecked(True)
+    widget.manual_mode_radio.setChecked(True)
+    qapp.processEvents()
+
+    assert window.section_container.minimumHeight() >= window.section_container.sizeHint().height()
+    assert widget.limit_group_box.height() >= widget.limit_group_box.sizeHint().height()
+    assert widget.manual_edit_button.isVisible() is True
+
+    window.close()
+
+
+def test_threshold_widget_manual_preview_inserts_gap_between_disconnected_segments(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+        },
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+    set_segment_column(dialog.editor.manual_upper_table, 1, [2, 30, 3, 40])
+
+    x_values, upper_values, lower_values = dialog.editor.manual_limit_preview_data()
+
+    assert x_values[:2] == [0.0, 1.0]
+    assert np.isnan(x_values[2])
+    assert x_values[3:] == [2.0, 3.0]
+    assert upper_values[:2] == [10.0, 20.0]
+    assert np.isnan(upper_values[2])
+    assert upper_values[3:] == [30.0, 40.0]
+    assert np.all(np.isnan(lower_values))
+
+
+def test_threshold_widget_switching_to_csv_without_data_clears_manual_preview(qapp, monkeypatch):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "limit_data": None,
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+        },
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+    monkeypatch.setattr(dialog, "exec_", lambda: (dialog._on_confirm_clicked() or dialog.result()))
+    monkeypatch.setattr(widget, "_create_manual_limit_dialog", lambda: dialog)
+    widget.manual_edit_button.click()
+    qapp.processEvents()
+
+    assert len(widget.limit_graph.listDataItems()) == 1
+
+    widget.csv_mode_radio.setChecked(True)
+    qapp.processEvents()
+
+    assert widget.current_limit_mode() == "csv"
+    assert widget.limit_data is None
+    assert widget.limit_graph.listDataItems() == []
+
+
+def test_manual_limit_dialog_reject_keeps_parent_config_unchanged(qapp, monkeypatch):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+            "manual_upper_segments": [{"start_x": 0.0, "start_y": 10.0, "end_x": 1.0, "end_y": 20.0}],
+            "manual_lower_segments": [],
+        },
+    )
+    before = widget.get_config()
+    before_plot = plot_data_snapshot(widget.limit_graph)
+
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 99, 1, 100])
+    monkeypatch.setattr(dialog, "exec_", lambda: dialog.Rejected)
+    monkeypatch.setattr(widget, "_create_manual_limit_dialog", lambda: dialog)
+    widget.manual_edit_button.click()
+    qapp.processEvents()
+
+    assert widget.get_config() == before
+    assert plot_data_snapshot(widget.limit_graph) == before_plot
+
+
+def test_manual_limit_dialog_button_confirm_updates_parent_config_and_preview(qapp, monkeypatch):
+    widget = create_threshold_widget(
+        qapp,
+        {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True},
+    )
+
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
+
+    def accept_from_button_path():
+        dialog._on_confirm_clicked()
+        return dialog.result()
+
+    monkeypatch.setattr(dialog, "exec_", accept_from_button_path)
+    monkeypatch.setattr(widget, "_create_manual_limit_dialog", lambda: dialog)
+    widget.manual_edit_button.click()
+    qapp.processEvents()
+
+    config = widget.get_config()
+    assert config["manual_upper_segments"] == [{"start_x": 0.0, "start_y": 10.0, "end_x": 1.0, "end_y": 20.0}]
+    assert len(widget.limit_graph.listDataItems()) == 1
+
+
+def test_manual_limit_dialog_confirm_replaces_accepted_segments_without_stale_preview(qapp, monkeypatch):
+    stale_segment = {"start_x": 2.0, "start_y": 30.0, "end_x": 3.0, "end_y": 40.0}
+    replacement_segments = [{"start_x": 0.0, "start_y": 10.0, "end_x": 1.0, "end_y": 20.0}]
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+            "manual_upper_segments": [replacement_segments[0], stale_segment],
+            "manual_lower_segments": [],
+        },
+    )
+
+    dialog = create_manual_dialog(widget)
+    clear_segment_column(dialog.editor.manual_upper_table, 1)
+
+    def accept_from_button_path():
+        dialog._on_confirm_clicked()
+        return dialog.result()
+
+    monkeypatch.setattr(dialog, "exec_", accept_from_button_path)
+    monkeypatch.setattr(widget, "_create_manual_limit_dialog", lambda: dialog)
+    widget.manual_edit_button.click()
+    qapp.processEvents()
+
+    config = widget.get_config()
+    assert config["manual_upper_segments"] == replacement_segments
+    assert stale_segment not in config["manual_upper_segments"]
+    assert_blank_column(widget._manual_state_editor.manual_upper_table, 1)
+    assert plot_data_snapshot(widget.limit_graph) == [([0.0, 1.0], [10.0, 20.0])]
+
+
+def test_manual_limit_dialog_invalid_warning_is_chinese_and_dialog_stays_open(qapp, monkeypatch):
+    from ui.ui_analysis_config import threshold_config_widget
+
+    warnings = []
+    monkeypatch.setattr(threshold_config_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+        },
+    )
+
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 0, 1, 0])
+    set_segment_column(dialog.editor.manual_lower_table, 0, [0, 1, 1, 0])
+    confirm_dialog(dialog)
+
+    assert warnings
+    assert "下限不能大于上限" in warnings[-1][2]
+    assert dialog.result() != dialog.Accepted
+    assert dialog.isVisible() is True
+
+
+def test_threshold_widget_without_manual_limits_keeps_csv_only_behavior(qapp):
+    from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
+
+    widget = ThresholdConfigWidget(
+        load_config={"limit_checked": True, "limit_data": None},
+        model_type="SPL",
+        allow_manual_limits=False,
+    )
+    widget.show()
+    qapp.processEvents()
+
+    assert widget.config_dir_box.isVisible() is True
+    assert not hasattr(widget, "csv_mode_radio")
+    assert not hasattr(widget, "manual_mode_radio")
+    assert not hasattr(widget, "manual_edit_button")
+    assert widget.get_config() == {"limit_checked": True, "limit_data": None}
 
 
 def test_ai_dialog_uses_shared_channel_selector_without_changing_config(qapp, monkeypatch):
@@ -221,9 +789,9 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "limit_data": None,
         "limit_mode": "csv",
         "manual_upper_enabled": True,
-        "manual_upper": 0.0,
+        "manual_upper_segments": [],
         "manual_lower_enabled": False,
-        "manual_lower": 0.0,
+        "manual_lower_segments": [],
         "show_overall_spl": True,
         "weighting": "C",
         "analysis_channel": 2,
@@ -261,6 +829,11 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "golden_sample_checked": True,
         "limit_checked": False,
         "limit_data": None,
+        "limit_mode": "csv",
+        "manual_upper_enabled": True,
+        "manual_upper_segments": [],
+        "manual_lower_enabled": False,
+        "manual_lower_segments": [],
         "weighting": "Z",
         "analysis_channel": 1,
     }
@@ -278,9 +851,9 @@ def test_spl_dialog_preserves_manual_threshold_config(qapp):
                 "limit_mode": "manual",
                 "limit_data": None,
                 "manual_upper_enabled": True,
-                "manual_upper": 88.5,
+                "manual_upper_segments": [{"start_x": 0.0, "start_y": 88.5, "end_x": 1.0, "end_y": 88.5}],
                 "manual_lower_enabled": True,
-                "manual_lower": 20.0,
+                "manual_lower_segments": [{"start_x": 0.0, "start_y": 20.0, "end_x": 1.0, "end_y": 20.0}],
                 "weighting": "A",
                 "analysis_channel": 0,
             }
@@ -293,11 +866,149 @@ def test_spl_dialog_preserves_manual_threshold_config(qapp):
     assert config["limit_checked"] is True
     assert config["limit_mode"] == "manual"
     assert config["manual_upper_enabled"] is True
-    assert config["manual_upper"] == 88.5
+    assert config["manual_upper_segments"] == [{"start_x": 0.0, "start_y": 88.5, "end_x": 1.0, "end_y": 88.5}]
     assert config["manual_lower_enabled"] is True
-    assert config["manual_lower"] == 20.0
+    assert config["manual_lower_segments"] == [{"start_x": 0.0, "start_y": 20.0, "end_x": 1.0, "end_y": 20.0}]
     assert config["show_overall_spl"] is False
     assert window.threshold_widget.validate() is True
+
+
+def test_requested_dialogs_return_manual_segment_keys_from_threshold_widget(qapp):
+    from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
+    from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
+    from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
+    from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
+    from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+    upper_segments = [{"start_x": 0.0, "start_y": 80.0, "end_x": 1.0, "end_y": 82.0}]
+    lower_segments = [{"start_x": 0.0, "start_y": 20.0, "end_x": 1.0, "end_y": 21.0}]
+
+    cases = [
+        (
+            "SPLF",
+            SplConfigWindow(
+                FakeConfigManager(
+                    {
+                        "SPLF": {
+                            "splf_calc_mode": "fundamental",
+                            "octave_smoothing": 0,
+                            "golden_sample_checked": False,
+                            "limit_checked": True,
+                            "limit_mode": "manual",
+                            "limit_data": None,
+                            "manual_upper_enabled": True,
+                            "manual_upper_segments": upper_segments,
+                            "manual_lower_enabled": True,
+                            "manual_lower_segments": lower_segments,
+                            "weighting": "Z",
+                            "analysis_channel": 0,
+                        }
+                    }
+                ),
+                "SPLF",
+                available_channels=[0],
+            ),
+        ),
+        (
+            "FR",
+            FrConfigWindow(
+                FakeConfigManager(
+                    {
+                        "FR": {
+                            "octave_smoothing": 0,
+                            "golden_sample_checked": False,
+                            "limit_checked": True,
+                            "limit_mode": "manual",
+                            "limit_data": None,
+                            "manual_upper_enabled": True,
+                            "manual_upper_segments": upper_segments,
+                            "manual_lower_enabled": True,
+                            "manual_lower_segments": lower_segments,
+                        }
+                    }
+                ),
+                "FR",
+            ),
+        ),
+        (
+            "HD",
+            HdConfigWindow(
+                FakeConfigManager(
+                    {
+                        "HD": {
+                            "selected_labels": [2],
+                            "all_checked": False,
+                            "golden_sample_checked": False,
+                            "limit_checked": True,
+                            "limit_mode": "manual",
+                            "limit_data": None,
+                            "manual_upper_enabled": True,
+                            "manual_upper_segments": upper_segments,
+                            "manual_lower_enabled": True,
+                            "manual_lower_segments": lower_segments,
+                        }
+                    }
+                ),
+                "HD",
+            ),
+        ),
+        (
+            "RB",
+            RbConfigWindow(
+                FakeConfigManager(
+                    {
+                        "RB": {
+                            "selected_labels": [10],
+                            "all_checked": False,
+                            "golden_sample_checked": False,
+                            "limit_checked": True,
+                            "limit_mode": "manual",
+                            "limit_data": None,
+                            "manual_upper_enabled": True,
+                            "manual_upper_segments": upper_segments,
+                            "manual_lower_enabled": True,
+                            "manual_lower_segments": lower_segments,
+                        }
+                    }
+                ),
+                "RB",
+            ),
+        ),
+        (
+            "PRB",
+            PerceptualRbConfigWindow(
+                FakeConfigManager(
+                    {
+                        "PRB": {
+                            "masking_config": {"sc_metric": "totalnl_x_ehs"},
+                            "golden_sample_checked": False,
+                            "limit_checked": True,
+                            "limit_mode": "manual",
+                            "limit_data": None,
+                            "manual_upper_enabled": True,
+                            "manual_upper_segments": upper_segments,
+                            "manual_lower_enabled": True,
+                            "manual_lower_segments": lower_segments,
+                        }
+                    }
+                ),
+                "PRB",
+            ),
+        ),
+    ]
+
+    for analysis_type, window in cases:
+        assert hasattr(window.threshold_widget, "manual_edit_button"), analysis_type
+        assert not hasattr(window.threshold_widget, "manual_upper_table"), analysis_type
+        assert not hasattr(window.threshold_widget, "manual_lower_table"), analysis_type
+        config = window.get_default_config()
+        assert config["limit_mode"] == "manual", analysis_type
+        assert config["manual_upper_enabled"] is True, analysis_type
+        assert config["manual_upper_segments"] == upper_segments, analysis_type
+        assert config["manual_lower_enabled"] is True, analysis_type
+        assert config["manual_lower_segments"] == lower_segments, analysis_type
+        assert "manual_upper" not in config
+        assert "manual_lower" not in config
 
 
 def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
@@ -323,6 +1034,11 @@ def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
         "golden_sample_checked": True,
         "limit_checked": False,
         "limit_data": None,
+        "limit_mode": "csv",
+        "manual_upper_enabled": True,
+        "manual_upper_segments": [],
+        "manual_lower_enabled": False,
+        "manual_lower_segments": [],
     }
 
 
@@ -369,9 +1085,9 @@ def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
         "limit_data": None,
         "limit_mode": "csv",
         "manual_upper_enabled": True,
-        "manual_upper": 0.0,
+        "manual_upper_segments": [],
         "manual_lower_enabled": False,
-        "manual_lower": 0.0,
+        "manual_lower_segments": [],
         "show_overall_spl": True,
         "weighting": "C",
         "analysis_channel": 1,
@@ -480,6 +1196,11 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
         "golden_sample_checked": True,
         "limit_checked": False,
         "limit_data": None,
+        "limit_mode": "csv",
+        "manual_upper_enabled": True,
+        "manual_upper_segments": [],
+        "manual_lower_enabled": False,
+        "manual_lower_segments": [],
     }
 
 
@@ -508,6 +1229,11 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
         "golden_sample_checked": False,
         "limit_checked": False,
         "limit_data": None,
+        "limit_mode": "csv",
+        "manual_upper_enabled": True,
+        "manual_upper_segments": [],
+        "manual_lower_enabled": False,
+        "manual_lower_segments": [],
     }
 
 
@@ -535,6 +1261,11 @@ def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
     assert config["golden_sample_checked"] is True
     assert config["limit_checked"] is False
     assert config["limit_data"] is None
+    assert config["limit_mode"] == "csv"
+    assert config["manual_upper_enabled"] is True
+    assert config["manual_upper_segments"] == []
+    assert config["manual_lower_enabled"] is False
+    assert config["manual_lower_segments"] == []
 
 
 def test_rsc_dialog_keeps_smoothing_key_after_shared_selector_migration(qapp, monkeypatch):

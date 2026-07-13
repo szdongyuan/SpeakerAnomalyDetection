@@ -24,6 +24,15 @@ EXPOSED_ANALYSIS_TYPES = {
     "Excel",
 }
 
+MANUAL_SEGMENT_ANALYSIS_TYPES = ("SPL", "SPLF", "FR", "HD", "RB", "PRB")
+MANUAL_SEGMENT_DEFAULT_KEYS = (
+    "limit_mode",
+    "manual_upper_enabled",
+    "manual_lower_enabled",
+    "manual_upper_segments",
+    "manual_lower_segments",
+)
+
 
 def load_defaults():
     with DEFAULT_CONFIG_PATH.open("r", encoding="utf-8") as file:
@@ -58,6 +67,26 @@ def test_curve_and_distortion_defaults_keep_legacy_threshold_and_golden_keys():
         assert defaults[analysis_type]["golden_sample_checked"] is False
 
 
+def test_manual_segment_enabled_defaults_have_stable_schema_without_scalar_keys():
+    defaults = load_defaults()
+
+    for analysis_type in MANUAL_SEGMENT_ANALYSIS_TYPES:
+        config = defaults[analysis_type]
+        for key in MANUAL_SEGMENT_DEFAULT_KEYS:
+            assert key in config, analysis_type
+        assert config["limit_mode"] == "csv"
+        assert config["manual_upper_enabled"] is True
+        assert config["manual_lower_enabled"] is False
+        assert config["manual_upper_segments"] == []
+        assert config["manual_lower_segments"] == []
+        assert "manual_upper" not in config
+        assert "manual_lower" not in config
+
+    assert "limit_mode" not in defaults["FBA"]
+    assert "manual_upper_segments" not in defaults["FBA"]
+    assert "manual_lower_segments" not in defaults["FBA"]
+
+
 def test_channel_defaults_are_present_for_channel_aware_dialogs():
     defaults = load_defaults()
 
@@ -84,9 +113,9 @@ def test_special_dialog_defaults_include_required_legacy_keys():
         "analysis_end_time_sec",
         "limit_mode",
         "manual_upper_enabled",
-        "manual_upper",
         "manual_lower_enabled",
-        "manual_lower",
+        "manual_upper_segments",
+        "manual_lower_segments",
         "show_overall_spl",
     ):
         assert key in spl_defaults

@@ -50,6 +50,7 @@ class HdConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
+            allow_manual_limits=True,
         )
 
         self.add_semantic_section("detection", widget=harmonic_group_box)
