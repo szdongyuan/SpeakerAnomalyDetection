@@ -15,6 +15,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QWidget,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QVBoxLayout,
@@ -26,12 +27,350 @@ from PyQt5.QtWidgets import (
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, RadioButton, TableWidget
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget
 from ui.ui_analysis_config.manual_limit_segments import ManualLimitValidationError, validate_manual_limit_config
 from ui.ui_src import ui_resources
 
 class _ManualTableValidationError(ValueError):
     pass
+
+
+def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
+    model_type = model_type or ""
+    if "SPLF" in model_type:
+        plot_widget.setLabel("left", "SPLF (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "SPL" in model_type:
+        plot_widget.setLabel("left", "SPL (dB)")
+        plot_widget.setLabel("bottom", "Time (s)")
+    elif "FR" in model_type:
+        plot_widget.setLabel("left", "Amplitude (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "PRB" in model_type:
+        plot_widget.setLabel("left", "phon")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "RB" in model_type or "HD" in model_type:
+        plot_widget.setLabel("left", "Distortion (%)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+
+
+def _draw_limit_curve(plot_widget: PlotWidget, result_data: tuple) -> None:
+    plot_widget.clear()
+    if not result_data:
+        return
+    duration, upper_limit, lower_limit = result_data
+    if upper_limit is not None and not np.all(np.isnan(upper_limit)):
+        plot_widget.plot(duration, upper_limit, pen=mkPen(color="r", width=2), name="Upper Limit")
+    if lower_limit is not None and not np.all(np.isnan(lower_limit)):
+        plot_widget.plot(duration, lower_limit, pen=mkPen(color="b", width=2), name="Lower Limit")
+
+
+class _ManualLimitEditorWidget(QWidget):
+    MANUAL_SEGMENT_KEYS = ("start_x", "start_y", "end_x", "end_y")
+    MANUAL_SEGMENT_ROW_LABELS = ("起始X", "起始Y", "截止X", "截止Y")
+
+    config_changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._syncing_manual_table = False
+
+        self.manual_upper_check = CheckBox("上限", self)
+        self.manual_lower_check = CheckBox("下限", self)
+        self.manual_upper_table = self._create_manual_segment_table()
+        self.manual_lower_table = self._create_manual_segment_table()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        upper_row = QHBoxLayout()
+        upper_row.addWidget(self.manual_upper_check)
+        upper_row.addStretch()
+        layout.addLayout(upper_row)
+        layout.addWidget(self.manual_upper_table)
+
+        lower_row = QHBoxLayout()
+        lower_row.addWidget(self.manual_lower_check)
+        lower_row.addStretch()
+        layout.addLayout(lower_row)
+        layout.addWidget(self.manual_lower_table)
+
+        self.manual_upper_check.stateChanged.connect(self._on_manual_check_changed)
+        self.manual_lower_check.stateChanged.connect(self._on_manual_check_changed)
+
+    def load_manual_config(self, config: dict) -> None:
+        config = config or {}
+        self._syncing_manual_table = True
+        try:
+            self.manual_upper_check.setChecked(bool(config.get("manual_upper_enabled", True)))
+            self.manual_lower_check.setChecked(bool(config.get("manual_lower_enabled", False)))
+            self._load_manual_segments(self.manual_upper_table, config.get("manual_upper_segments", []))
+            self._load_manual_segments(self.manual_lower_table, config.get("manual_lower_segments", []))
+        finally:
+            self._syncing_manual_table = False
+        self._sync_table_visibility()
+
+    def editable_manual_config(self) -> dict:
+        return {
+            "manual_upper_enabled": self.manual_upper_check.isChecked(),
+            "manual_lower_enabled": self.manual_lower_check.isChecked(),
+            "manual_upper_segments": self._manual_table_raw_segments(self.manual_upper_table),
+            "manual_lower_segments": self._manual_table_raw_segments(self.manual_lower_table),
+        }
+
+    def manual_config(self) -> dict:
+        return {
+            "manual_upper_enabled": self.manual_upper_check.isChecked(),
+            "manual_lower_enabled": self.manual_lower_check.isChecked(),
+            "manual_upper_segments": self._complete_manual_table_segments(self.manual_upper_table),
+            "manual_lower_segments": self._complete_manual_table_segments(self.manual_lower_table),
+        }
+
+    def manual_config_for_validation(self) -> dict:
+        upper_enabled = self.manual_upper_check.isChecked()
+        lower_enabled = self.manual_lower_check.isChecked()
+        return {
+            "manual_upper_enabled": upper_enabled,
+            "manual_lower_enabled": lower_enabled,
+            "manual_upper_segments": (
+                self._manual_table_segments_for_validation(self.manual_upper_table, "上限") if upper_enabled else []
+            ),
+            "manual_lower_segments": (
+                self._manual_table_segments_for_validation(self.manual_lower_table, "下限") if lower_enabled else []
+            ),
+        }
+
+    def manual_limit_preview_data(self):
+        upper_enabled = bool(self.manual_upper_check.isChecked())
+        lower_enabled = bool(self.manual_lower_check.isChecked())
+        upper_segments = self._complete_manual_table_segments(self.manual_upper_table) if upper_enabled else []
+        lower_segments = self._complete_manual_table_segments(self.manual_lower_table) if lower_enabled else []
+        x_values, upper_values, lower_values = [], [], []
+
+        def append_gap_if_needed():
+            if x_values:
+                x_values.append(np.nan)
+                upper_values.append(np.nan)
+                lower_values.append(np.nan)
+
+        for segment in upper_segments:
+            append_gap_if_needed()
+            x_values.extend([segment["start_x"], segment["end_x"]])
+            upper_values.extend([segment["start_y"], segment["end_y"]])
+            lower_values.extend([np.nan, np.nan])
+
+        for segment in lower_segments:
+            append_gap_if_needed()
+            x_values.extend([segment["start_x"], segment["end_x"]])
+            upper_values.extend([np.nan, np.nan])
+            lower_values.extend([segment["start_y"], segment["end_y"]])
+
+        if not x_values:
+            return ([0.0], [np.nan], [np.nan])
+        return (x_values, upper_values, lower_values)
+
+    def _create_manual_segment_table(self) -> TableWidget:
+        table = TableWidget(self)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        table.setRowCount(len(self.MANUAL_SEGMENT_ROW_LABELS))
+        table.setColumnCount(1)
+        table.setVerticalHeaderLabels(self.MANUAL_SEGMENT_ROW_LABELS)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setMinimumWidth(360)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._ensure_manual_table_items(table)
+        self._update_manual_table_headers(table)
+        table.horizontalScrollBar().rangeChanged.connect(
+            lambda _minimum, _maximum, current_table=table: self._fit_manual_table_height(current_table)
+        )
+        self._fit_manual_table_height(table)
+        table.itemChanged.connect(lambda _item, current_table=table: self._on_manual_table_item_changed(current_table))
+        return table
+
+    def _fit_manual_table_height(self, table: TableWidget) -> None:
+        table.resizeRowsToContents()
+        height = (
+            table.horizontalHeader().height()
+            + sum(table.rowHeight(row) for row in range(table.rowCount()))
+            + table.frameWidth() * 2
+        )
+        scroll_bar = table.horizontalScrollBar()
+        if scroll_bar.maximum() > scroll_bar.minimum():
+            height += scroll_bar.sizeHint().height()
+        table.setFixedHeight(height)
+
+    def _load_manual_segments(self, table: TableWidget, raw_segments) -> None:
+        segments = raw_segments if isinstance(raw_segments, list) else []
+        column_count = max(len(segments) + 1, 1)
+        previous_syncing = self._syncing_manual_table
+        self._syncing_manual_table = True
+        try:
+            table.setColumnCount(column_count)
+            self._ensure_manual_table_items(table)
+            for row in range(table.rowCount()):
+                for column in range(table.columnCount()):
+                    table.item(row, column).setText("")
+            for column, segment in enumerate(segments):
+                if not isinstance(segment, dict):
+                    continue
+                for row, key in enumerate(self.MANUAL_SEGMENT_KEYS):
+                    value = segment.get(key, "")
+                    table.item(row, column).setText("" if value is None else str(value))
+            self._update_manual_table_headers(table)
+            self._fit_manual_table_height(table)
+        finally:
+            self._syncing_manual_table = previous_syncing
+
+    def _ensure_manual_table_items(self, table: TableWidget) -> None:
+        for row in range(table.rowCount()):
+            for column in range(table.columnCount()):
+                if table.item(row, column) is None:
+                    table.setItem(row, column, QTableWidgetItem(""))
+
+    def _update_manual_table_headers(self, table: TableWidget) -> None:
+        table.setHorizontalHeaderLabels([str(index + 1) for index in range(table.columnCount())])
+
+    def _on_manual_table_item_changed(self, table: TableWidget) -> None:
+        if self._syncing_manual_table:
+            return
+        self._syncing_manual_table = True
+        try:
+            self._ensure_trailing_blank_manual_column(table)
+        finally:
+            self._syncing_manual_table = False
+        self.config_changed.emit()
+
+    def _ensure_trailing_blank_manual_column(self, table: TableWidget) -> None:
+        if table.columnCount() == 0:
+            table.setColumnCount(1)
+            self._ensure_manual_table_items(table)
+            self._update_manual_table_headers(table)
+            self._fit_manual_table_height(table)
+            return
+        state, _segment = self._manual_table_column_state(table, table.columnCount() - 1)
+        if state == "complete":
+            table.insertColumn(table.columnCount())
+            self._ensure_manual_table_items(table)
+            self._update_manual_table_headers(table)
+            self._fit_manual_table_height(table)
+
+    def _on_manual_check_changed(self, *args) -> None:
+        if self._syncing_manual_table:
+            return
+        self._sync_table_visibility()
+        self.config_changed.emit()
+
+    def _sync_table_visibility(self) -> None:
+        self.manual_upper_table.setVisible(self.manual_upper_check.isChecked())
+        self.manual_lower_table.setVisible(self.manual_lower_check.isChecked())
+
+    def _manual_table_column_texts(self, table: TableWidget, column: int) -> list[str]:
+        values = []
+        for row in range(len(self.MANUAL_SEGMENT_KEYS)):
+            item = table.item(row, column)
+            values.append(item.text().strip() if item is not None else "")
+        return values
+
+    def _manual_table_column_state(self, table: TableWidget, column: int) -> tuple[str, dict[str, float] | None]:
+        values = self._manual_table_column_texts(table, column)
+        if all(value == "" for value in values):
+            return "blank", None
+        if any(value == "" for value in values):
+            return "partial", None
+        try:
+            numeric_values = [float(value) for value in values]
+        except ValueError:
+            return "invalid", None
+        if not np.all(np.isfinite(numeric_values)):
+            return "invalid", None
+        return "complete", dict(zip(self.MANUAL_SEGMENT_KEYS, numeric_values))
+
+    def _manual_table_has_nonblank_column_after(self, table: TableWidget, column: int) -> bool:
+        for later_column in range(column + 1, table.columnCount()):
+            state, _segment = self._manual_table_column_state(table, later_column)
+            if state != "blank":
+                return True
+        return False
+
+    def _manual_table_segments_for_validation(self, table: TableWidget, label: str) -> list[dict[str, float]]:
+        segments = []
+        for column in range(table.columnCount()):
+            state, segment = self._manual_table_column_state(table, column)
+            column_label = column + 1
+            if state == "blank":
+                if self._manual_table_has_nonblank_column_after(table, column):
+                    raise _ManualTableValidationError(f"{label}第{column_label}列为空，但后续列存在数据")
+                continue
+            if state == "partial":
+                raise _ManualTableValidationError(f"{label}第{column_label}列未填写完整")
+            if state == "invalid":
+                raise _ManualTableValidationError(f"{label}第{column_label}列必须填写有限数字")
+            segments.append(segment)
+        return segments
+
+    def _complete_manual_table_segments(self, table: TableWidget) -> list[dict[str, float]]:
+        segments = []
+        for column in range(table.columnCount()):
+            state, segment = self._manual_table_column_state(table, column)
+            if state == "complete":
+                segments.append(segment)
+        return segments
+
+    def _manual_table_raw_segments(self, table: TableWidget) -> list[dict[str, str]]:
+        segments = []
+        for column in range(table.columnCount()):
+            values = self._manual_table_column_texts(table, column)
+            if all(value == "" for value in values):
+                continue
+            segments.append(dict(zip(self.MANUAL_SEGMENT_KEYS, values)))
+        return segments
+
+
+class _ManualLimitEditorDialog(QDialog):
+    def __init__(self, parent, manual_config: dict, model_type: str):
+        super().__init__(parent)
+        self._accepted_manual_config = {}
+        self.setWindowTitle("编辑上下限")
+        self.setModal(True)
+
+        self.editor = _ManualLimitEditorWidget(self)
+        self.editor.load_manual_config(manual_config)
+
+        self.limit_graph = PlotWidget()
+        self.limit_graph.showGrid(True, True, 0.7)
+        self.limit_graph.setMinimumSize(180, 180)
+        _set_graph_label_until(self.limit_graph, model_type)
+
+        self.confirm_button = PushButton("确定", self)
+        self.confirm_button.clicked.connect(self._on_confirm_clicked)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(self.confirm_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.editor)
+        layout.addWidget(self.limit_graph)
+        layout.addLayout(button_layout)
+
+        self.editor.config_changed.connect(self._refresh_preview)
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        _draw_limit_curve(self.limit_graph, self.editor.manual_limit_preview_data())
+
+    def _on_confirm_clicked(self) -> None:
+        try:
+            validate_manual_limit_config(self.editor.manual_config_for_validation())
+        except (_ManualTableValidationError, ManualLimitValidationError) as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return
+        self._accepted_manual_config = self.editor.manual_config()
+        self.accept()
+
+    def manual_config(self) -> dict:
+        return dict(self._accepted_manual_config)
 
 
 class ThresholdConfigWidget(QWidget):
@@ -140,7 +479,6 @@ class ThresholdConfigWidget(QWidget):
             self.config_dir_box.setText("已加载")
 
     def _create_manual_limit_controls(self) -> None:
-        self._syncing_manual_table = False
         limit_mode = str(self.load_config.get("limit_mode", "csv") or "csv").lower()
         self.csv_mode_radio = RadioButton("CSV阈值曲线")
         self.manual_mode_radio = RadioButton("手动上下限")
@@ -151,120 +489,18 @@ class ThresholdConfigWidget(QWidget):
         self.csv_mode_radio.toggled.connect(self._on_limit_mode_changed)
         self.manual_mode_radio.toggled.connect(self._on_limit_mode_changed)
 
+        self._manual_state_editor = _ManualLimitEditorWidget(self)
+        self._manual_state_editor.hide()
+        self._manual_state_editor.load_manual_config(self.load_config)
+
         self.manual_widget = QWidget(self)
         self.manual_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        manual_layout = QVBoxLayout(self.manual_widget)
+        manual_layout = QHBoxLayout(self.manual_widget)
         manual_layout.setContentsMargins(0, 0, 0, 0)
-
-        upper_row = QHBoxLayout()
-        self.manual_upper_check = CheckBox("上限")
-        self.manual_upper_check.setChecked(bool(self.load_config.get("manual_upper_enabled", True)))
-        upper_row.addWidget(self.manual_upper_check)
-        upper_row.addStretch()
-        self.manual_upper_table = self._create_manual_segment_table()
-        self._load_manual_segments(self.manual_upper_table, self.load_config.get("manual_upper_segments", []))
-
-        lower_row = QHBoxLayout()
-        self.manual_lower_check = CheckBox("下限")
-        self.manual_lower_check.setChecked(bool(self.load_config.get("manual_lower_enabled", False)))
-        lower_row.addWidget(self.manual_lower_check)
-        lower_row.addStretch()
-        self.manual_lower_table = self._create_manual_segment_table()
-        self._load_manual_segments(self.manual_lower_table, self.load_config.get("manual_lower_segments", []))
-
-        manual_layout.addLayout(upper_row)
-        manual_layout.addWidget(self.manual_upper_table)
-        manual_layout.addLayout(lower_row)
-        manual_layout.addWidget(self.manual_lower_table)
-
-        for widget in (
-            self.manual_upper_check,
-            self.manual_lower_check,
-        ):
-            if hasattr(widget, "stateChanged"):
-                widget.stateChanged.connect(self._on_manual_limit_changed)
-
-    def _create_manual_segment_table(self) -> TableWidget:
-        table = TableWidget(self.manual_widget)
-        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        table.setRowCount(len(self.MANUAL_SEGMENT_ROW_LABELS))
-        table.setColumnCount(1)
-        table.setVerticalHeaderLabels(self.MANUAL_SEGMENT_ROW_LABELS)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        table.setMinimumWidth(360)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._ensure_manual_table_items(table)
-        self._update_manual_table_headers(table)
-        table.horizontalScrollBar().rangeChanged.connect(
-            lambda _minimum, _maximum, current_table=table: self._fit_manual_table_height(current_table)
-        )
-        self._fit_manual_table_height(table)
-        table.itemChanged.connect(lambda _item, current_table=table: self._on_manual_table_item_changed(current_table))
-        return table
-
-    def _fit_manual_table_height(self, table: TableWidget) -> None:
-        table.resizeRowsToContents()
-        height = (
-            table.horizontalHeader().height()
-            + sum(table.rowHeight(row) for row in range(table.rowCount()))
-            + table.frameWidth() * 2
-        )
-        scroll_bar = table.horizontalScrollBar()
-        if scroll_bar.maximum() > scroll_bar.minimum():
-            height += scroll_bar.sizeHint().height()
-        table.setFixedHeight(height)
-
-    def _load_manual_segments(self, table: TableWidget, raw_segments) -> None:
-        segments = raw_segments if isinstance(raw_segments, list) else []
-        column_count = max(len(segments) + 1, 1)
-        self._syncing_manual_table = True
-        try:
-            table.setColumnCount(column_count)
-            self._ensure_manual_table_items(table)
-            for column, segment in enumerate(segments):
-                if not isinstance(segment, dict):
-                    continue
-                for row, key in enumerate(self.MANUAL_SEGMENT_KEYS):
-                    value = segment.get(key, "")
-                    table.item(row, column).setText("" if value is None else str(value))
-            self._update_manual_table_headers(table)
-            self._fit_manual_table_height(table)
-        finally:
-            self._syncing_manual_table = False
-
-    def _ensure_manual_table_items(self, table: TableWidget) -> None:
-        for row in range(table.rowCount()):
-            for column in range(table.columnCount()):
-                if table.item(row, column) is None:
-                    table.setItem(row, column, QTableWidgetItem(""))
-
-    def _update_manual_table_headers(self, table: TableWidget) -> None:
-        table.setHorizontalHeaderLabels([str(index + 1) for index in range(table.columnCount())])
-
-    def _on_manual_table_item_changed(self, table: TableWidget) -> None:
-        if self._syncing_manual_table:
-            return
-        self._syncing_manual_table = True
-        try:
-            self._ensure_trailing_blank_manual_column(table)
-        finally:
-            self._syncing_manual_table = False
-        self._on_manual_limit_changed()
-
-    def _ensure_trailing_blank_manual_column(self, table: TableWidget) -> None:
-        if table.columnCount() == 0:
-            table.setColumnCount(1)
-            self._ensure_manual_table_items(table)
-            self._update_manual_table_headers(table)
-            self._fit_manual_table_height(table)
-            return
-        state, _segment = self._manual_table_column_state(table, table.columnCount() - 1)
-        if state == "complete":
-            table.insertColumn(table.columnCount())
-            self._ensure_manual_table_items(table)
-            self._update_manual_table_headers(table)
-            self._fit_manual_table_height(table)
+        self.manual_edit_button = PushButton("编辑上下限", self.manual_widget)
+        self.manual_edit_button.clicked.connect(self._on_manual_edit_clicked)
+        manual_layout.addWidget(self.manual_edit_button)
+        manual_layout.addStretch()
 
     def _on_limit_checkbox_changed(self, state):
         """阈值复选框状态变更处理"""
@@ -275,62 +511,19 @@ class ThresholdConfigWidget(QWidget):
         self.config_changed.emit()
         self._sync_limit_mode_controls()
 
-    def _on_manual_limit_changed(self, *args):
+    def _accepted_manual_config(self) -> dict:
+        return self._manual_state_editor.editable_manual_config()
+
+    def _create_manual_limit_dialog(self) -> _ManualLimitEditorDialog:
+        return _ManualLimitEditorDialog(self, self._accepted_manual_config(), self.model_type)
+
+    def _on_manual_edit_clicked(self) -> None:
+        dialog = self._create_manual_limit_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        self._manual_state_editor.load_manual_config(dialog.manual_config())
         self.config_changed.emit()
-        if self.allow_manual_limits:
-            self._sync_limit_mode_controls()
-
-    def _manual_table_column_texts(self, table: TableWidget, column: int) -> list[str]:
-        values = []
-        for row in range(len(self.MANUAL_SEGMENT_KEYS)):
-            item = table.item(row, column)
-            values.append(item.text().strip() if item is not None else "")
-        return values
-
-    def _manual_table_column_state(self, table: TableWidget, column: int) -> tuple[str, dict[str, float] | None]:
-        values = self._manual_table_column_texts(table, column)
-        if all(value == "" for value in values):
-            return "blank", None
-        if any(value == "" for value in values):
-            return "partial", None
-        try:
-            numeric_values = [float(value) for value in values]
-        except ValueError:
-            return "invalid", None
-        if not np.all(np.isfinite(numeric_values)):
-            return "invalid", None
-        return "complete", dict(zip(self.MANUAL_SEGMENT_KEYS, numeric_values))
-
-    def _manual_table_has_nonblank_column_after(self, table: TableWidget, column: int) -> bool:
-        for later_column in range(column + 1, table.columnCount()):
-            state, _segment = self._manual_table_column_state(table, later_column)
-            if state != "blank":
-                return True
-        return False
-
-    def _manual_table_segments_for_validation(self, table: TableWidget, label: str) -> list[dict[str, float]]:
-        segments = []
-        for column in range(table.columnCount()):
-            state, segment = self._manual_table_column_state(table, column)
-            column_label = column + 1
-            if state == "blank":
-                if self._manual_table_has_nonblank_column_after(table, column):
-                    raise _ManualTableValidationError(f"{label}第{column_label}列为空，但后续列存在数据")
-                continue
-            if state == "partial":
-                raise _ManualTableValidationError(f"{label}第{column_label}列未填写完整")
-            if state == "invalid":
-                raise _ManualTableValidationError(f"{label}第{column_label}列必须填写有限数字")
-            segments.append(segment)
-        return segments
-
-    def _complete_manual_table_segments(self, table: TableWidget) -> list[dict[str, float]]:
-        segments = []
-        for column in range(table.columnCount()):
-            state, segment = self._manual_table_column_state(table, column)
-            if state == "complete":
-                segments.append(segment)
-        return segments
+        self._sync_limit_mode_controls()
 
     def current_limit_mode(self) -> str:
         if self.allow_manual_limits and hasattr(self, "manual_mode_radio") and self.manual_mode_radio.isChecked():
@@ -355,8 +548,6 @@ class ThresholdConfigWidget(QWidget):
         if self.manual_widget is not None:
             self.manual_widget.setEnabled(True)
             self.manual_widget.setVisible(manual)
-            self.manual_upper_table.setVisible(manual and self.manual_upper_check.isChecked())
-            self.manual_lower_table.setVisible(manual and self.manual_lower_check.isChecked())
         if manual:
             self.draw_limit_curve(self._manual_limit_preview_data())
         else:
@@ -375,33 +566,7 @@ class ThresholdConfigWidget(QWidget):
             parent = parent.parentWidget()
 
     def _manual_limit_preview_data(self):
-        upper_enabled = bool(self.manual_upper_check.isChecked())
-        lower_enabled = bool(self.manual_lower_check.isChecked())
-        upper_segments = self._complete_manual_table_segments(self.manual_upper_table) if upper_enabled else []
-        lower_segments = self._complete_manual_table_segments(self.manual_lower_table) if lower_enabled else []
-        x_values, upper_values, lower_values = [], [], []
-
-        def append_gap_if_needed():
-            if x_values:
-                x_values.append(np.nan)
-                upper_values.append(np.nan)
-                lower_values.append(np.nan)
-
-        for segment in upper_segments:
-            append_gap_if_needed()
-            x_values.extend([segment["start_x"], segment["end_x"]])
-            upper_values.extend([segment["start_y"], segment["end_y"]])
-            lower_values.extend([np.nan, np.nan])
-
-        for segment in lower_segments:
-            append_gap_if_needed()
-            x_values.extend([segment["start_x"], segment["end_x"]])
-            upper_values.extend([np.nan, np.nan])
-            lower_values.extend([segment["start_y"], segment["end_y"]])
-
-        if not x_values:
-            return ([0.0], [np.nan], [np.nan])
-        return (x_values, upper_values, lower_values)
+        return self._manual_state_editor.manual_limit_preview_data()
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -429,22 +594,7 @@ class ThresholdConfigWidget(QWidget):
             model_type: 模型类型
         """
         self.model_type = model_type
-        # 此处可根据 model_type 设置不同的图表标签
-        if "SPLF" in model_type:
-            self.limit_graph.setLabel("left", "SPLF (dB)")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        elif "SPL" in model_type:
-            self.limit_graph.setLabel("left", "SPL (dB)")
-            self.limit_graph.setLabel("bottom", "Time (s)")
-        elif "FR" in model_type:
-            self.limit_graph.setLabel("left", "Amplitude (dB)")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        elif "PRB" in model_type:
-            self.limit_graph.setLabel("left", "phon")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        elif "RB" in model_type or "HD" in model_type:
-            self.limit_graph.setLabel("left", "Distortion (%)")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+        _set_graph_label_until(self.limit_graph, model_type)
 
     def draw_limit_curve(self, result_data: tuple):
         """
@@ -453,14 +603,7 @@ class ThresholdConfigWidget(QWidget):
         Args:
             result_data: 包含横坐标、上限和下限数据的元组
         """
-        self.limit_graph.clear()
-        if not result_data:
-            return
-        duration, upper_limit, lower_limit = result_data
-        if upper_limit is not None and not np.all(np.isnan(upper_limit)):
-            self.limit_graph.plot(duration, upper_limit, pen=mkPen(color="r", width=2), name="Upper Limit")
-        if lower_limit is not None and not np.all(np.isnan(lower_limit)):
-            self.limit_graph.plot(duration, lower_limit, pen=mkPen(color="b", width=2), name="Lower Limit")
+        _draw_limit_curve(self.limit_graph, result_data)
 
     def get_config(self) -> dict:
         """
@@ -481,25 +624,11 @@ class ThresholdConfigWidget(QWidget):
             return {}
         return {
             "limit_mode": self.current_limit_mode(),
-            "manual_upper_enabled": self.manual_upper_check.isChecked(),
-            "manual_lower_enabled": self.manual_lower_check.isChecked(),
-            "manual_upper_segments": self._complete_manual_table_segments(self.manual_upper_table),
-            "manual_lower_segments": self._complete_manual_table_segments(self.manual_lower_table),
+            **self._manual_state_editor.manual_config(),
         }
 
     def _manual_limit_config_for_validation(self) -> dict:
-        upper_enabled = self.manual_upper_check.isChecked()
-        lower_enabled = self.manual_lower_check.isChecked()
-        return {
-            "manual_upper_enabled": upper_enabled,
-            "manual_lower_enabled": lower_enabled,
-            "manual_upper_segments": (
-                self._manual_table_segments_for_validation(self.manual_upper_table, "上限") if upper_enabled else []
-            ),
-            "manual_lower_segments": (
-                self._manual_table_segments_for_validation(self.manual_lower_table, "下限") if lower_enabled else []
-            ),
-        }
+        return self._manual_state_editor.manual_config_for_validation()
 
     def validate(self) -> bool:
         """

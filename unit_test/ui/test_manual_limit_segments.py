@@ -15,6 +15,29 @@ from ui.ui_analysis_config.manual_limit_segments import (
 )
 
 
+def test_manual_limit_validation_messages_are_chinese():
+    with pytest.raises(ManualLimitValidationError, match="手动上下限段配置必须是列表"):
+        normalize_segments("bad")
+
+    with pytest.raises(ManualLimitValidationError, match="第1段起始X必须是数字"):
+        normalize_segments([{"start_x": True, "start_y": 1, "end_x": 2, "end_y": 3}])
+
+    with pytest.raises(ManualLimitValidationError, match="上限至少需要包含一段配置"):
+        validate_manual_segments([], label="上限")
+
+    with pytest.raises(ManualLimitValidationError, match="上限第1段截止X必须大于起始X"):
+        validate_manual_segments([{"start_x": 1, "start_y": 1, "end_x": 1, "end_y": 1}], label="上限")
+
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [{"start_x": 0, "start_y": 0, "end_x": 1, "end_y": 0}],
+        "manual_lower_segments": [{"start_x": 0, "start_y": 1, "end_x": 1, "end_y": 0}],
+    }
+    with pytest.raises(ManualLimitValidationError, match="下限不能大于上限"):
+        validate_manual_limit_config(config)
+
+
 def test_segment_values_are_left_open_right_closed():
     config = {
         "manual_upper_enabled": True,
