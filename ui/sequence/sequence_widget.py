@@ -116,7 +116,7 @@ def _commit_analysis_reference_state(data_struct, staged_reference) -> None:
         data_struct.alignment_sample_count = staged_reference.alignment_sample_count
 
 
-def _clear_import_analysis_runtime_state(window, *, clear_plot: bool = True) -> None:
+def _clear_import_analysis_runtime_state(window, clear_plot: bool = True) -> None:
     data_struct = getattr(window, "data_struct", None)
     if data_struct is not None:
         data_struct.store_wave_data = None
