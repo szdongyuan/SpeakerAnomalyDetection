@@ -16,9 +16,9 @@
         "limit_mode": "csv",
         "limit_data": null,
         "manual_upper_enabled": true,
-        "manual_upper": 0.0,
         "manual_lower_enabled": false,
-        "manual_lower": 0.0,
+        "manual_upper_segments": [],
+        "manual_lower_segments": [],
         "weighting": "Z",
         "show_overall_spl": false,
         "analysis_channel": 0
@@ -29,6 +29,11 @@
         "golden_sample_checked": false,
         "limit_checked": false,
         "limit_data": null,
+        "limit_mode": "csv",
+        "manual_upper_enabled": true,
+        "manual_lower_enabled": false,
+        "manual_upper_segments": [],
+        "manual_lower_segments": [],
         "weighting": "Z",
         "analysis_channel": 0
     },
@@ -65,7 +70,12 @@
         "octave_smoothing": 0,
         "golden_sample_checked": false,
         "limit_checked": false,
-        "limit_data": null
+        "limit_data": null,
+        "limit_mode": "csv",
+        "manual_upper_enabled": true,
+        "manual_lower_enabled": false,
+        "manual_upper_segments": [],
+        "manual_lower_segments": []
     },
     "FBA": {
         "band_strategy": "1/3 \u500d\u9891\u7a0b",
@@ -92,7 +102,12 @@
         "all_checked": false,
         "golden_sample_checked": false,
         "limit_checked": false,
-        "limit_data": null
+        "limit_data": null,
+        "limit_mode": "csv",
+        "manual_upper_enabled": true,
+        "manual_lower_enabled": false,
+        "manual_upper_segments": [],
+        "manual_lower_segments": []
     },
     "RB": {
         "selected_labels": [
@@ -116,7 +131,12 @@
         "all_checked": false,
         "golden_sample_checked": false,
         "limit_checked": false,
-        "limit_data": null
+        "limit_data": null,
+        "limit_mode": "csv",
+        "manual_upper_enabled": true,
+        "manual_lower_enabled": false,
+        "manual_upper_segments": [],
+        "manual_lower_segments": []
     },
     "PRB": {
         "prb_method": "sc",
@@ -125,7 +145,12 @@
         },
         "golden_sample_checked": false,
         "limit_checked": false,
-        "limit_data": null
+        "limit_data": null,
+        "limit_mode": "csv",
+        "manual_upper_enabled": true,
+        "manual_lower_enabled": false,
+        "manual_upper_segments": [],
+        "manual_lower_segments": []
     },
     "LP": {
         "trigger_threshold": 22,
