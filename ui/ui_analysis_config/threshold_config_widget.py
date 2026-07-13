@@ -69,6 +69,8 @@ class _ManualLimitEditorWidget(QWidget):
     MANUAL_SEGMENT_KEYS = ("start_x", "start_y", "end_x", "end_y")
     MANUAL_SEGMENT_ROW_LABELS = ("起始X", "起始Y", "截止X", "截止Y")
     MANUAL_SEGMENT_COLUMN_WIDTH = 80
+    MANUAL_SEGMENT_STRETCH_COLUMN_LIMIT = 7
+    MANUAL_SEGMENT_STRETCH_MINIMUM_SECTION_SIZE = 0
 
     config_changed = pyqtSignal()
 
@@ -203,6 +205,11 @@ class _ManualLimitEditorWidget(QWidget):
 
     def _configure_manual_table_columns(self, table: TableWidget) -> None:
         header = table.horizontalHeader()
+        if table.columnCount() <= self.MANUAL_SEGMENT_STRETCH_COLUMN_LIMIT:
+            header.setMinimumSectionSize(self.MANUAL_SEGMENT_STRETCH_MINIMUM_SECTION_SIZE)
+            header.setSectionResizeMode(QHeaderView.Stretch)
+            return
+
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setMinimumSectionSize(self.MANUAL_SEGMENT_COLUMN_WIDTH)
         header.setDefaultSectionSize(self.MANUAL_SEGMENT_COLUMN_WIDTH)
