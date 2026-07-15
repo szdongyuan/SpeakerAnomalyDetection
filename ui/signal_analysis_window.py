@@ -1073,6 +1073,9 @@ class Spl(AnalysisGraphWidget):
             MessageBox.warning(self, "提示", str(e))
             return False
         sample_rate = self.data_struct.sample_rate
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "声压级分析失败：没有可用录音数据。")
+            return False
         if not self._resolve_v2pa_factor_for_analysis():
             return False
         reference_pressure = 20e-6

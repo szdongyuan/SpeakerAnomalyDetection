@@ -879,6 +879,67 @@ def test_frequency_stepped_recording_save_creates_valid_metadata_row(monkeypatch
     assert loaded_rows[0]["stimulus_payload"]["frequencies"] == metadata["frequencies"]
 
 
+@pytest.mark.parametrize("name_update", ["__missing__", None, "   "])
+def test_frequency_stepped_recording_auto_insert_without_usable_name_generates_deletable_name(
+    monkeypatch, local_tmp_path, name_update
+):
+    db_path = local_tmp_path / "recording_step_sc_insert_without_name.db"
+    _create_database(db_path)
+    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(db_path))
+
+    manager = RecordingManager()
+    manager.db_path = str(db_path)
+    metadata = _step_sc_metadata(stimulus_name="should_be_removed", start_freq=1, stop_freq=2, num_steps=99)
+    if name_update == "__missing__":
+        metadata.pop("stimulus_name")
+    else:
+        metadata["stimulus_name"] = name_update
+
+    code, msg = manager.save_signal_info_to_db(
+        {
+            "file_path": "audio_data/stored_data/step_sc_recording_without_name.wav",
+            "product_model": "S004",
+            "sample_rate": 48000,
+            "record_date": "2026-05-18",
+            "labels": "OK",
+            "barcode": "step-sc-no-name",
+        },
+        metadata,
+    )
+
+    assert code == error_code.OK, msg
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT stimulus_name, stimulus_metadata_json
+            FROM stimulus_signal_table
+            WHERE stimulus_method = 'frequency_stepped'
+            """
+        ).fetchone()
+
+    assert row is not None
+    generated_name = row[0]
+    assert isinstance(generated_name, str)
+    assert generated_name.strip()
+    parsed_metadata = json.loads(row[1])
+    assert parsed_metadata["stimulus_name"] == generated_name
+
+    query_code, loaded_rows = StimulusSignalManagement.query_all_stimulus_info()
+    assert query_code == error_code.OK
+    assert loaded_rows[0]["stimulus_name"] == generated_name
+    assert loaded_rows[0]["stimulus_payload"]["stimulus_name"] == generated_name
+    assert loaded_rows[0]["stimulus_payload"]["stimulus_id"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM audio_data_table")
+    delete_code, delete_msg = StimulusSignalManagement.delete_stimulus_info_from_db(generated_name)
+    assert delete_code == error_code.OK, delete_msg
+    with sqlite3.connect(db_path) as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM stimulus_signal_table").fetchone()[0]
+    assert remaining == 0
+
+
 def test_frequency_stepped_recording_save_reuses_existing_rich_row(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "recording_step_sc_reuse.db"
     _create_database(db_path)

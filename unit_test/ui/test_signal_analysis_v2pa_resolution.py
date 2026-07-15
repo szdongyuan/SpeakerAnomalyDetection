@@ -389,6 +389,24 @@ def test_spl_direct_analysis_displays_configured_overall_spl_with_weighting_unit
     assert titles == ["总体声压级：100.00 dBC"]
 
 
+def test_spl_missing_sample_rate_warns_and_returns_false(qapp, monkeypatch):
+    warnings = []
+    widget = saw.Spl("SPL")
+    widget.analysis_config = {"analysis_channel": 0, "weighting": "A"}
+    widget.data_struct.store_wave_data = np.ones(32, dtype=np.float32)
+    widget.data_struct.store_wave_data_multi = np.ones((32, 1), dtype=np.float32)
+    widget.data_struct.sample_rate = None
+    monkeypatch.setattr(saw.MessageBox, "warning", lambda parent, title, message: warnings.append((title, message)))
+    monkeypatch.setattr(
+        saw,
+        "resolve_analysis_v2pa_factor_for_channel",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("missing data must stop before calibration")),
+    )
+
+    assert widget.calculate_spl() is False
+    assert warnings == [("提示", "声压级分析失败：没有可用录音数据。")]
+
+
 def test_spl_frequency_direct_analysis_passes_resolved_v2pa(qapp, monkeypatch):
     resolver_calls = _install_resolver(monkeypatch, factor=3.5)
     captured = {}

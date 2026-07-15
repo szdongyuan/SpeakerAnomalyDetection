@@ -31,6 +31,33 @@ def _frequency_stepped_insert_metadata(insert_values):
     return json.loads(insert_data["stimulus_metadata_json"])
 
 
+def _is_blank_stimulus_name(value):
+    return value is None or not str(value).strip()
+
+
+def _frequency_stepped_auto_stimulus_name(row_data):
+    stimulus_id = str(row_data.get("stimulus_id") or "")
+    stimulus_type = row_data.get("stimulus_type") or "frequency_stepped"
+    start_freq = row_data.get("start_freq")
+    stop_freq = row_data.get("stop_freq")
+    num_steps = row_data.get("num_steps")
+    id_prefix = stimulus_id.split("-")[0] if stimulus_id else "auto"
+    return f"step_sc-{stimulus_type}-{start_freq}-{stop_freq}-{num_steps}-{id_prefix}"
+
+
+def _frequency_stepped_row_with_fallback_name(generated_row):
+    row_data = dict(zip(model_consts.DB_STIMULUS_COLUMNS, generated_row))
+    if not _is_blank_stimulus_name(row_data.get("stimulus_name")):
+        return generated_row
+
+    stimulus_name = _frequency_stepped_auto_stimulus_name(row_data)
+    metadata = json.loads(row_data["stimulus_metadata_json"])
+    metadata["stimulus_name"] = stimulus_name
+    row_data["stimulus_name"] = stimulus_name
+    row_data["stimulus_metadata_json"] = json.dumps(metadata, ensure_ascii=False)
+    return tuple(row_data[column] for column in model_consts.DB_STIMULUS_COLUMNS)
+
+
 class RecordingManager(object):
     def __init__(self):
         self._db_path_override = None
@@ -150,6 +177,7 @@ class RecordingManager(object):
         is_default = database.set_default("stimulus_signal_table")
         stimulus_data = frequency_stepped_insert_values(stimulus_parameter, is_default)
         stimulus_data = database.get_data_id([stimulus_data], 0)
+        stimulus_data = [_frequency_stepped_row_with_fallback_name(stimulus_data[0])]
         return stimulus_data, True
 
     @staticmethod
