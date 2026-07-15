@@ -33,7 +33,6 @@ from ui.custom_ui_widget.widgets import (
     MessageBox,
 )
 from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase
-from ui.ui_src import ui_resources
 
 
 class PatternMatchConfigWindow(AnalysisConfigDialogBase):

@@ -7,7 +7,7 @@ from copy import deepcopy
 import numpy as np
 import pyqtgraph
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QDialog, QFileDialog, QSizePolicy, QGridLayout, QHBoxLayout, QVBoxLayout
 
 from base.file_ops import FileOps
@@ -40,7 +40,6 @@ from ui.custom_ui_widget.widgets import (
     MessageBox,
 )
 from ui.load_stimulus_dialog import LoadStimulusDialog
-from ui.ui_src import ui_resources
 
 
 class PreferredFrequencySpinBox(DoubleSpinBox):
@@ -256,7 +255,6 @@ class StimulusWindow(QDialog):
     def init_ui(self):
         # set window titlebar style
         self.setObjectName("StimulusWindow")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("激励信号")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         # if ui_style_const._FONT_SCALE < 0.8:
@@ -2718,7 +2716,6 @@ class StimulusWindow(QDialog):
                 return
             if self.start_custom_check_status:
                 self.set_ai_popup()
-            # elif self.load_wav_path != self.load_stimulus_signal_path:
             elif not self._paths_reference_same_file(self.load_wav_path, self.load_stimulus_signal_path):
                 self.set_ai_popup()
             self.load_stimulus_signal_path = self.load_wav_path
@@ -2837,7 +2834,6 @@ class SetConfigName(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("设置配置名称")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         congfig_name_layout = self.config_name_layout()
         btn_layout = self.btn_layout()

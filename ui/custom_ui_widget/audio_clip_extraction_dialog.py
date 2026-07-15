@@ -3,7 +3,7 @@ import sys
 import librosa
 import numpy as np
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QCursor, QIcon
+from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QToolTip, QVBoxLayout, QApplication, QFileDialog
 import pyqtgraph as pg
 
@@ -12,7 +12,6 @@ from base.save_data import save_audio_simple
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, LineEdit, CheckBox, DoubleSpinBox, MessageBox
 from ui.graph_widget import DraggablePlotWidget
-from ui.ui_src import ui_resources
 
 
 class AudioClipExtractionDialog(QDialog):
@@ -44,7 +43,6 @@ class AudioClipExtractionDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle(self.dialog_title)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.open_file_layout = self.create_open_file_layout()
         self.plot_widget = self.create_plot_widget()

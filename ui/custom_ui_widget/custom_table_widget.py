@@ -74,13 +74,10 @@
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
+from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView
 
-from base.log_manager import LogManager
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TableView, Label
-from ui.ui_src import ui_resources
 
 
 class DataManageDialog(QDialog):
@@ -97,7 +94,6 @@ class DataManageDialog(QDialog):
         self.column_alignment = dict()
 
     def init_ui_layout(self, row: int, column: int, editable_column: list[int]):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.resize(900, 350)
 

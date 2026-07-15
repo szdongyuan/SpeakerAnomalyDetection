@@ -6,7 +6,6 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import PushButton, Label, GroupBox, CheckBox, LineEdit, SpinBox, MessageBox
 from ui.ui_analysis_config.common_widgets import SemanticAnalysisConfigDialogBase
-from ui.ui_src import ui_resources
 
 
 class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):

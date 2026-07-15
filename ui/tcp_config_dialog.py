@@ -1,12 +1,9 @@
 import re
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QDialog
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, LineEdit, CheckBox, GroupBox, MessageBox
-from ui.ui_src import ui_resources
 
 
 class TcpConfigDialog(QDialog):
@@ -35,7 +32,6 @@ class TcpConfigDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("TCP配置")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.setMinimumSize(300, 200)
         self.resize(300, 250)

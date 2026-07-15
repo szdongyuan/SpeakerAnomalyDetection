@@ -324,7 +324,6 @@ class SequenceWindow(QWidget):
         their respective handlers and applies style sheets to the widgets.
         """
         self.setObjectName("SequenceWindow")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumHeight(600)
         waveform_layout = self.create_waveform_layout()
 

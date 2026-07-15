@@ -6,7 +6,6 @@ from functools import partial
 from typing import Any, Callable
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -28,7 +27,6 @@ from ui.ui_analysis_config.config_normalization import (
     normalize_weighting,
     weighting_to_display_label,
 )
-from ui.ui_src import ui_resources
 
 
 OCTAVE_SMOOTHING_LABELS = {
@@ -70,7 +68,6 @@ class AnalysisConfigDialogBase(QDialog):
         if disable_close_button:
             self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
     def create_standard_button_layout(self, default_callback, ok_callback) -> QHBoxLayout:
         btn_layout = QHBoxLayout()

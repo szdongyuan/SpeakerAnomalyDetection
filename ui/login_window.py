@@ -2,7 +2,7 @@ import hashlib
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QSizePolicy, QVBoxLayout
 
 from base.db_manager import DataSave, ensure_system_database_ready
@@ -11,7 +11,6 @@ from base.log_manager import LogManager
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, ComboBox, LineEdit, Label, MessageBox
-from ui.ui_src import ui_resources
 
 
 ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
@@ -28,7 +27,6 @@ class LoginWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("登录")
         self.setMaximumSize(600, 600)
         self.setMinimumSize(300, 400)
@@ -208,7 +206,6 @@ class AddAccountWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("添加账号")
         self.setFixedSize(350, 240)
         layout = QVBoxLayout()
@@ -317,7 +314,6 @@ class ChangePwdWindow(QDialog):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("修改密码")
         self.setFixedSize(350, 200)
 

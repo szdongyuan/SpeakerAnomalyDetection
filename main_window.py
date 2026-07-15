@@ -102,7 +102,6 @@ class MainWindow(QMainWindow):
     def set_title(self):
         # hide the window title bar and reset the window title bar
         self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         title_layout = QHBoxLayout()
         title_btn_layout = self.set_title_btn()
         icon_label = Label()
