@@ -195,6 +195,7 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
                 "limit_checked": False,
                 "limit_data": None,
                 "weighting": "C",
+                "show_overall_spl": True,
                 "analysis_channel": 2,
             }
         }
@@ -204,6 +205,8 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
 
     assert_vertical_golden_size(window)
     assert window.semantic_group_keys() == ["input", "preprocess", "compute", "judgment"]
+    assert window.show_overall_spl_box.text() == "显示总体声压级"
+    assert window.show_overall_spl_box.isChecked() is True
     assert window.get_default_config() == {
         "spl_window_unit": "points",
         "spl_window_time_sec": 0.0272,
@@ -221,6 +224,7 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "manual_upper": 0.0,
         "manual_lower_enabled": False,
         "manual_lower": 0.0,
+        "show_overall_spl": True,
         "weighting": "C",
         "analysis_channel": 2,
         "analysis_time_range_enabled": False,
@@ -250,6 +254,7 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
 
     assert_vertical_golden_size(window)
     assert window.semantic_group_keys() == ["input", "compute", "reference", "judgment"]
+    assert window.show_overall_spl_box is None
     assert window.get_default_config() == {
         "splf_calc_mode": "total",
         "octave_smoothing": 3,
@@ -291,6 +296,7 @@ def test_spl_dialog_preserves_manual_threshold_config(qapp):
     assert config["manual_upper"] == 88.5
     assert config["manual_lower_enabled"] is True
     assert config["manual_lower"] == 20.0
+    assert config["show_overall_spl"] is False
     assert window.threshold_widget.validate() is True
 
 
@@ -342,6 +348,7 @@ def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
             "limit_checked": False,
             "limit_data": None,
             "weighting": "C",
+            "show_overall_spl": True,
             "analysis_channel": 1,
         }
     }
@@ -365,6 +372,7 @@ def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
         "manual_upper": 0.0,
         "manual_lower_enabled": False,
         "manual_lower": 0.0,
+        "show_overall_spl": True,
         "weighting": "C",
         "analysis_channel": 1,
         "analysis_time_range_enabled": False,
