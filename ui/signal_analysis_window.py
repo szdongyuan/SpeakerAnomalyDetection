@@ -12,7 +12,7 @@ from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt, QModelIndex
-from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
+from PyQt5.QtGui import QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -60,7 +60,6 @@ from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     limits_from_manual_segments,
 )
-from ui.ui_src import ui_resources
 
 
 def get_class_mapping():
@@ -313,7 +312,6 @@ class AnalysisResultSummaryWindow(QWidget):
     def __init__(self, result_dict: dict[str, bool], title: str = "分析结果汇总"):
         super().__init__()
         self.setWindowTitle(title)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         self._overall_label = Label(self)
         self._overall_label.setObjectName("overallResultLabel")
@@ -410,7 +408,6 @@ class AnalysisGraphWidget(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         self.analysis_plot.setBackground("white")
 
@@ -1712,7 +1709,6 @@ class AI(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         ai_analyse_layout = self.create_ai_analyse_layout()
         self.setLayout(ai_analyse_layout)
 
@@ -1838,7 +1834,6 @@ class Spectrogram(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
 
         self.plot_container = QWidget()
@@ -2233,7 +2228,6 @@ class PatternMatch(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
         self.result_display = TextEdit()
         self.result_display.setReadOnly(True)
@@ -2383,7 +2377,6 @@ class PipelinePdPm(QWidget):
         return seg_len, left_point, right_point
 
     def _init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
         # plot area for summary
         self.plot_widget = pg.PlotWidget(background="white")

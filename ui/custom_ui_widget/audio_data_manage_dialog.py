@@ -32,16 +32,13 @@ import copy
 from re import fullmatch
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout
 
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
 from consts import error_code
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 from ui.custom_ui_widget.widgets import PushButton, CheckBox, GroupBox, ComboBox, MessageBox
-from ui.ui_src import ui_resources
 
 
 class AudioDataManageDialog(DataManageDialog):
@@ -264,7 +261,6 @@ class FilterAudioDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("筛选")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint)
         self.resize(300, 300)
 

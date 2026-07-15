@@ -2,7 +2,7 @@ import os
 import sys
 
 from PyQt5.QtCore import QEventLoop, QThread, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QTextCursor
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -24,7 +24,6 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, GroupBox, Label, LineEdit, ComboBox, RadioButton, MessageBox
 from ui.model_manager_widget import ModelInfoList
 from ui.ai_select_audio_data import SelectAudioDataView
-from ui.ui_src import ui_resources
 
 default_log = LogManager.set_log_handler("train")
 
@@ -64,7 +63,6 @@ class AiWindow(QDialog):
         Connect signals and slots.
         """
         self.setObjectName("AiWindow")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("AI训练窗口")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         window_width = ui_style_const.scale_size_px(730)
@@ -816,7 +814,6 @@ class AiBrainModelStructure(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("AI模型结构")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         layout = self.create_text_edit()
         self.setLayout(layout)
@@ -851,7 +848,6 @@ class Process_Widget(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("训练评估")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         layout = self.create_text_edit()
         self.setLayout(layout)
 

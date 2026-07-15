@@ -1,6 +1,7 @@
 import sys
 
 from PyQt5.QtCore import QThread, QFile, QTextStream
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 from ui.splash_screen_window import Splash, LoaderThread
 
@@ -11,6 +12,7 @@ from ui.ui_src import ui_resources
 class MainWindowLauncher(object):
     def __init__(self):
         self.app = QApplication(sys.argv)
+        self.app.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         qss = self.load_qss()
         self.app.setStyleSheet(qss)
         self.splash = Splash()

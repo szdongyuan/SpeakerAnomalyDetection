@@ -4,7 +4,7 @@ import os
 import sys
 
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QStandardItemModel, QIcon
+from PyQt5.QtGui import QStandardItemModel
 from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QVBoxLayout, QHBoxLayout, QSizePolicy
 
 from base.file_ops import FileOps
@@ -15,7 +15,6 @@ from consts.running_consts import DEFAULT_DIR
 from machine_learning.model_builder import build_and_save_model_from_config
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 from ui.custom_ui_widget.widgets import PushButton, ComboBox, LineEdit, Label, GroupBox, MessageBox
-from ui.ui_src import ui_resources
 
 
 def setdata(model, index, value, role=Qt.EditRole):
@@ -341,7 +340,6 @@ class SetModelConfig(QDialog):
     def init_ui(self):
         self.setWindowTitle("设置模型信息")
         self.setMinimumWidth(600)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         if self.dim:
             self.input_dim_left = self.dim["input_left"]

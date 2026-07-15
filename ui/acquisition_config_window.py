@@ -4,7 +4,6 @@ from copy import deepcopy
 from base.log_manager import LogManager
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QApplication, QSizePolicy
 
 
@@ -29,7 +28,6 @@ from ui.custom_ui_widget.widgets import (
     MessageBox,
 )
 from ui.stimulus_window import StimulusWindow
-from ui.ui_src import ui_resources
 
 
 class BaseConfigWindow(QDialog):
@@ -43,7 +41,6 @@ class BaseConfigWindow(QDialog):
 
     def setup_ui(self):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setMinimumSize(200, 270)
         self.resize(350, 350)
         self.main_layout = QVBoxLayout(self)

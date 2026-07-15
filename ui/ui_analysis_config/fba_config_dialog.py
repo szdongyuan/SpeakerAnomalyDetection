@@ -2,7 +2,6 @@ import re
 from typing import List, Optional
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QSizePolicy, QWidget
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 
 # 确保这里导入的是你项目中正确的 ThresholdConfigWidget 路径
@@ -13,7 +12,6 @@ from ui.ui_analysis_config.common_widgets import (
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.custom_ui_widget.widgets import ComboBox, Label, GroupBox, DoubleSpinBox, PlainTextEdit, MessageBox
-from ui.ui_src import ui_resources
 
 
 class FbaConfigWindow(SemanticAnalysisConfigDialogBase):

@@ -3,11 +3,9 @@ from typing import List, Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, Label, ComboBox, SpinBox, MessageBox
 from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
-from ui.ui_src import ui_resources
 
 
 class SpecConfigWindow(SemanticAnalysisConfigDialogBase):

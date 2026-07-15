@@ -3,7 +3,7 @@ import importlib
 
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
 from PyQt5.QtWidgets import QWidget, QProgressBar, QLabel
-from consts.running_consts import DEFAULT_DIR, MODULES_LOAD
+from consts.running_consts import MODULES_LOAD
 from PyQt5.QtGui import QPixmap
 from ui.ui_src import ui_resources
 

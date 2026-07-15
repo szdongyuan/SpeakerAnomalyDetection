@@ -3,7 +3,6 @@ import threading
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QDialog, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from base.audio_sample_rate import resolve_input_sample_rate
@@ -33,7 +32,6 @@ from ui.custom_ui_widget.widgets import (
     GroupBox,
     MessageBox,
 )
-from ui.ui_src import ui_resources
 
 
 class CalibrationWindow(QDialog):
@@ -49,7 +47,6 @@ class CalibrationWindow(QDialog):
         and creates tabs for output and input calibration.
         """
         self.setObjectName("CalibrationWindow")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowTitle("校准窗口")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setMinimumSize(500, 550)

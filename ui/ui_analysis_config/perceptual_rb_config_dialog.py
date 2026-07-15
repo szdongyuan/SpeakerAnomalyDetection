@@ -8,12 +8,10 @@ PRB 使用固定谐波范围 (2阶-35阶) 结合 SoundCheck/Listen (SC) 心理�
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QVBoxLayout
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.common_widgets import GoldenSampleWidget, SemanticAnalysisConfigDialogBase
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 from ui.custom_ui_widget.widgets import GroupBox, Label, ComboBox
-from ui.ui_src import ui_resources
 
 
 class PerceptualRbConfigWindow(SemanticAnalysisConfigDialogBase):

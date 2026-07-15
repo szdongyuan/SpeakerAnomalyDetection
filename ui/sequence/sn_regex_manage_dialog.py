@@ -2,13 +2,11 @@ import copy
 import uuid
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QMessageBox, QVBoxLayout
 
 from base.load_config import LoadUiConfig
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 from ui.custom_ui_widget.widgets import Label, LineEdit, MessageBox, PushButton
-from ui.ui_src import ui_resources
 
 
 ENABLE_COLUMN = 0
@@ -49,7 +47,6 @@ class AddSnRegexRuleDialog(QDialog):
     def init_ui(self):
         self.setObjectName("SnRegexRuleInputDialog")
         self.setWindowTitle("新增 SN 规则")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlags(Qt.WindowCloseButtonHint)
         self.resize(640, 180)
 
