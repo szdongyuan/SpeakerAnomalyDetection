@@ -51,6 +51,7 @@ def _runtime_window(detail=None):
         alignment_sample_count=320,
         wav_calibration_metadata={"source": "recording.wav"},
         wav_calibration_metadata_authoritative=True,
+        wav_calibration_warning_shown=True,
         analysis_result_dict={"old": (True, "OK")},
     )
     window = SimpleNamespace(
@@ -283,6 +284,27 @@ def test_mode_change_uses_existing_full_reset_path_and_clears_import_runtime():
     assert window.data_struct.wav_calibration_warning_shown is False
     assert window._has_imported_recording_runtime_state() is False
     assert window._has_import_stimulus_runtime_reference() is False
+
+
+@pytest.mark.parametrize("mode", ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"])
+def test_import_mode_stimulus_config_init_preserves_imported_recording_sample_rate(mode):
+    window = _runtime_window()
+    window.sequence_config = _sequence({}, mode=mode)
+    original_mono = window.data_struct.store_wave_data
+    original_multi = window.data_struct.store_wave_data_multi
+    original_calibration = window.data_struct.wav_calibration_metadata
+
+    sequence_widget.SequenceWindow.init_data_struct_stimulus_config(window)
+
+    assert window.data_struct.sample_rate == 32000
+    assert window.data_struct.audio_lenth == 320
+    assert window.data_struct.store_wave_data is original_mono
+    assert window.data_struct.store_wave_data_multi is original_multi
+    assert window.data_struct.wav_calibration_metadata is original_calibration
+    assert window.data_struct.wav_calibration_metadata_authoritative is True
+    assert window.data_struct.wav_calibration_warning_shown is True
+    assert window.data_struct.stimulus_data is None
+    assert window.data_struct.stimulus_info is None
 
 
 READINESS_WARNING = "分析参考激励尚未就绪或采样率与导入音频不一致，请检查激励配置后重试。"

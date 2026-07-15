@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -11,6 +12,13 @@ if str(REPO_ROOT) not in sys.path:
 from base.data_struct.data_deal_struct import DataDealStruct
 from consts import error_code
 from ui.sequence import sequence_widget
+
+
+@pytest.fixture(autouse=True)
+def reset_data_deal_struct_singleton():
+    DataDealStruct._instance = None
+    yield
+    DataDealStruct._instance = None
 
 
 class FakeLogger:

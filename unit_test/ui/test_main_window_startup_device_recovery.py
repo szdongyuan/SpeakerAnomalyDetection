@@ -748,6 +748,96 @@ def test_startup_unavailable_state_schedules_recovery_prompt(main_window_module,
     assert scheduled[-1][1] == window.show_startup_device_warning
 
 
+def test_init_ui_does_not_schedule_startup_recovery_when_login_fails(main_window_module, monkeypatch):
+    window = _window(main_window_module)
+    window.sequence_window.close = lambda: None
+    window.sequence_window.refresh_channel_windows = lambda: None
+    scheduled = []
+
+    monkeypatch.setattr(main_window_module.MainWindow, "init_sequence_widget", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "show_statusbar_layout", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "showMaximized", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "on_access_lvl_changed", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "on_login_window_init", lambda self: False)
+    monkeypatch.setattr(
+        main_window_module.MainWindow,
+        "_schedule_startup_device_recovery_if_needed",
+        lambda self: scheduled.append(True),
+    )
+
+    main_window_module.MainWindow.init_ui(window)
+
+    assert scheduled == []
+
+
+def test_init_ui_schedules_startup_recovery_after_successful_login(main_window_module, monkeypatch):
+    window = _window(main_window_module)
+    window.sequence_window.close = lambda: None
+    window.sequence_window.refresh_channel_windows = lambda: None
+    scheduled = []
+
+    monkeypatch.setattr(main_window_module.MainWindow, "init_sequence_widget", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "show_statusbar_layout", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "showMaximized", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "on_access_lvl_changed", lambda self: None)
+    monkeypatch.setattr(main_window_module.MainWindow, "on_login_window_init", lambda self: True)
+    monkeypatch.setattr(
+        main_window_module.MainWindow,
+        "_schedule_startup_device_recovery_if_needed",
+        lambda self: scheduled.append(True),
+    )
+
+    main_window_module.MainWindow.init_ui(window)
+
+    assert scheduled == [True]
+
+
+def test_on_login_window_init_returns_false_for_unsuccessful_login(main_window_module, monkeypatch):
+    class FakeLoginWindow:
+        def on_exec(self):
+            return None, None
+
+    window = _window(main_window_module)
+    window.access_lvl = None
+    window.user_name = None
+    access_refreshes = []
+    monkeypatch.setattr(main_window_module, "LoginWindow", FakeLoginWindow)
+    monkeypatch.setattr(window, "on_access_lvl_changed", lambda: access_refreshes.append(True))
+
+    result = window.on_login_window_init()
+
+    assert result is False
+    assert window.access_lvl is None
+    assert window.user_name is None
+    assert access_refreshes == [True]
+
+
+def test_on_login_window_init_returns_true_for_successful_login(main_window_module, monkeypatch):
+    class FakeLoginWindow:
+        def on_exec(self):
+            return "Engineer", "alice"
+
+    window = _window(main_window_module)
+    window.sequence_window.show_calls = 0
+    window.sequence_window.show = lambda: setattr(
+        window.sequence_window,
+        "show_calls",
+        window.sequence_window.show_calls + 1,
+    )
+    access_refreshes = []
+    monkeypatch.setattr(main_window_module, "LoginWindow", FakeLoginWindow)
+    monkeypatch.setattr(window, "on_access_lvl_changed", lambda: access_refreshes.append(True))
+
+    result = window.on_login_window_init()
+
+    assert result is True
+    assert window.access_lvl == "Engineer"
+    assert window.user_name == "alice"
+    assert window.sequence_window.show_calls == 1
+    assert window.statusbar_updates == 1
+    assert access_refreshes == [True]
+
+
 def test_apply_startup_audio_devices_syncs_unavailable_state_before_prompt(main_window_module):
     window = _window(main_window_module)
     window.startup_device_error_reason = "设备不可用"

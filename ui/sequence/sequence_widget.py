@@ -100,9 +100,12 @@ def _missing_file_calibration_warning_text():
     return "该音频文件未包含有效校准数据，分析结果仅供参考。"
 
 
-def _clear_sequence_stimulus_runtime_state(window, *, clear_sample_rate: bool = True) -> None:
+def _clear_sequence_stimulus_runtime_state(
+    window, *, clear_sample_rate: bool = True, clear_wav_calibration: bool = True
+) -> None:
     _clear_data_struct_stimulus_runtime_state(getattr(window, "data_struct", None), clear_sample_rate=clear_sample_rate)
-    _clear_wav_calibration_runtime_state(getattr(window, "data_struct", None))
+    if clear_wav_calibration:
+        _clear_wav_calibration_runtime_state(getattr(window, "data_struct", None))
     if hasattr(window, "streaming_stimulus_data"):
         window.streaming_stimulus_data = None
 
@@ -787,7 +790,9 @@ class SequenceWindow(QWidget):
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
         if acq_config["mode"] in ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"]:
-            _clear_sequence_stimulus_runtime_state(self, clear_sample_rate=True)
+            _clear_sequence_stimulus_runtime_state(
+                self, clear_sample_rate=False, clear_wav_calibration=False
+            )
             return
         if acq_config["mode"] == "PLAY_AND_RECORD":
             result = _resolve_runtime_sample_rate_for_mode(self, acq_config["mode"], acq_config["detail"])
