@@ -20,6 +20,7 @@
         "manual_lower_enabled": false,
         "manual_lower": 0.0,
         "weighting": "Z",
+        "show_overall_spl": false,
         "analysis_channel": 0
     },
     "SPLF": {

@@ -365,6 +365,28 @@ def test_spl_direct_analysis_passes_resolved_v2pa(qapp, monkeypatch):
     assert resolver_calls == [3]
     assert captured["v2pa_factor"] == 2.5
     assert result["signal_spl"] == [42.0, 43.0]
+    assert "overall_spl" not in result
+
+
+def test_spl_direct_analysis_displays_configured_overall_spl_with_weighting_unit(qapp, monkeypatch):
+    _install_resolver(monkeypatch, factor=2.0)
+    titles = []
+
+    def spl_calculation(self, recorded_signal, reference_pressure=20e-6, **kwargs):
+        return np.array([42.0, 43.0])
+
+    widget = _recording_widget(saw.Spl("SPL"), analysis_channel=3)
+    widget.analysis_config.update({"weighting": "C", "show_overall_spl": True})
+    widget.data_struct.store_wave_data_multi[:, 3] = np.tile([1.0, -1.0], 16)
+    monkeypatch.setattr(saw, "apply_weighting_filter", lambda signal, *args, **kwargs: signal)
+    monkeypatch.setattr(saw.AudioThdFrequencyResponseAnalysis, "spl_calculation", spl_calculation)
+    monkeypatch.setattr(widget, "plot_spl", lambda *args, **kwargs: None)
+    monkeypatch.setattr(widget.analysis_plot, "setTitle", lambda title, **kwargs: titles.append(title))
+
+    result = widget.calculate_spl()
+
+    assert result["overall_spl"] == pytest.approx(100.0)
+    assert titles == ["总体声压级：100.00 dBC"]
 
 
 def test_spl_frequency_direct_analysis_passes_resolved_v2pa(qapp, monkeypatch):

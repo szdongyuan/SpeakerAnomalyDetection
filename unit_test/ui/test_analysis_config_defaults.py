@@ -87,8 +87,10 @@ def test_special_dialog_defaults_include_required_legacy_keys():
         "manual_upper",
         "manual_lower_enabled",
         "manual_lower",
+        "show_overall_spl",
     ):
         assert key in spl_defaults
+    assert spl_defaults["show_overall_spl"] is False
 
     assert defaults["RSC"]["smoothing"] == 0
     assert "octave_smoothing" not in defaults["RSC"]

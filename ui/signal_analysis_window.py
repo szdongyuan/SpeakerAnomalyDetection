@@ -34,7 +34,9 @@ from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.spl_runtime_config import (
     apply_spl_analysis_time_range,
+    calculate_overall_spl,
     resolve_spl_smoothing,
+    resolve_spl_unit,
     resolve_spl_window_size,
 )
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
@@ -982,18 +984,23 @@ class Spl(AnalysisGraphWidget):
 
     def _get_spl_label(self):
         """Get SPL y-axis label based on weighting type."""
+        return f"SPL ({self._get_spl_unit()})"
+
+    def _get_spl_unit(self):
+        """Get the display unit based on the configured frequency weighting."""
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
-        weighting = weighting.upper()
-        if weighting == "A":
-            return "SPL (dBA)"
-        elif weighting == "B":
-            return "SPL (dBB)"
-        elif weighting == "C":
-            return "SPL (dBC)"
-        elif weighting == "D":
-            return "SPL (dBD)"
-        else:  # Z or None
-            return "SPL (dB)"
+        return resolve_spl_unit(weighting)
+
+    def _set_overall_spl_title(self, overall_spl):
+        if overall_spl is None:
+            self.analysis_plot.setTitle("")
+            return
+        value_text = "--" if not np.isfinite(overall_spl) else f"{float(overall_spl):.2f}"
+        self.analysis_plot.setTitle(
+            f"总体声压级：{value_text} {self._get_spl_unit()}",
+            size="14px",
+            color="k",
+        )
 
     def _resolve_spl_window_size(self, sample_rate):
         return resolve_spl_window_size(self.analysis_config, sample_rate)
@@ -1022,6 +1029,14 @@ class Spl(AnalysisGraphWidget):
                 recorded_signal, sample_rate, weighting=weighting, zero_phase=False
             )
         analysis_signal, analysis_start_sample = self._apply_spl_analysis_time_range(recorded_signal, sample_rate)
+        show_overall_spl = bool((self.analysis_config or {}).get("show_overall_spl", False))
+        overall_spl = None
+        if show_overall_spl:
+            overall_spl = calculate_overall_spl(
+                analysis_signal,
+                reference_pressure,
+                v2pa_factor=self.v2pa_factor,
+            )
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             analysis_signal,
             reference_pressure,
@@ -1058,11 +1073,14 @@ class Spl(AnalysisGraphWidget):
             self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
+        self._set_overall_spl_title(overall_spl)
         self.result = {
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": np.asarray(analysis_signal).tolist(),
             "signal_spl": signal_spl.tolist(),
         }
+        if show_overall_spl:
+            self.result["overall_spl"] = overall_spl
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
@@ -1132,7 +1150,7 @@ class Spl(AnalysisGraphWidget):
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
         self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
-        self.analysis_plot.setLabel("left", "SPL (dB)")
+        self.analysis_plot.setLabel("left", self._get_spl_label())
         self.analysis_plot.setLabel("bottom", "Time (s)")
         self.analysis_plot.showGrid(x=True, y=True)
 

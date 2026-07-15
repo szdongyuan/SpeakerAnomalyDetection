@@ -169,6 +169,10 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         )
 
         self.weighting_selector = WeightingSelectorWidget(self.load_config, parent=self)
+        self.show_overall_spl_box = None
+        if self.model_type != "SPLF":
+            self.show_overall_spl_box = CheckBox("显示总体声压级", self)
+            self.show_overall_spl_box.setChecked(bool(self.load_config.get("show_overall_spl", False)))
 
         if self.show_channel_selector:
             self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
@@ -208,6 +212,8 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         compute_layout.setContentsMargins(0, 0, 0, 0)
         compute_layout.setSpacing(8)
         compute_layout.addWidget(self.weighting_selector)
+        if self.show_overall_spl_box is not None:
+            compute_layout.addWidget(self.show_overall_spl_box)
         if self.splf_mode_group_box is not None:
             compute_layout.addWidget(self.splf_mode_group_box)
             compute_layout.addWidget(self.smoothing_selector)
@@ -232,6 +238,8 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
                 config["smooth_checked"] = bool(smoothing_config["smooth_enabled"])
             if self.analysis_time_range_widget is not None:
                 config.update(self.analysis_time_range_widget.get_config())
+            if self.show_overall_spl_box is not None:
+                config["show_overall_spl"] = self.show_overall_spl_box.isChecked()
         if self.model_type == "SPLF":
             calc_mode = "fundamental"
             if hasattr(self, "radio_total") and self.radio_total.isChecked():
