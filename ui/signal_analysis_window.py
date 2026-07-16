@@ -41,7 +41,7 @@ from base.pre_processing.spl_runtime_config import (
 )
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
-from base.core_algorithm.response import FrequencyResponseAnalyzer, SplFrequencyAnalyzer
+from base.core_algorithm.response import FftAnalyzer, FrequencyResponseAnalyzer, SplFrequencyAnalyzer
 from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
     FrequencyBandAnalyzer,
@@ -75,6 +75,7 @@ def get_class_mapping():
     class_mapping = {
         "SPL": Spl,
         "SPLF": SplFrequency,
+        "FFT": FftAnalysis,
         "FR": Frequency,
         "RSC": ReferenceSpectrumCompareWindow,
         "HD": Distortion,
@@ -1693,6 +1694,340 @@ class Frequency(AnalysisGraphWidget):
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
+
+
+class FftAnalysis(AnalysisGraphWidget):
+    """Welch FFT spectrum analysis window."""
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.result = {}
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_fft(self):
+        config = self.analysis_config or {}
+        try:
+            recorded_signal = resolve_analysis_channel_signal(
+                self.data_struct,
+                config,
+                self.title_name,
+            )
+        except Exception as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            self.plot_fft(np.array([]), np.array([]), x_axis_scale=config.get("x_axis_scale", "log"))
+            self.result = {}
+            return False
+
+        sample_rate = self.data_struct.sample_rate
+        if sample_rate is None:
+            return False
+        if not self._resolve_v2pa_factor_for_analysis():
+            return False
+
+        try:
+            n_fft = int(config.get("n_fft", 4096))
+            window = str(config.get("window", "hann") or "hann")
+            overlap_ratio = float(config.get("overlap_ratio", 0.5))
+            weighting = str(config.get("weighting", "Z") or "Z")
+            analyzer = FftAnalyzer()
+            main_result = analyzer.analyze(
+                recorded_signal,
+                fs=int(sample_rate),
+                n_fft=n_fft,
+                window=window,
+                overlap_ratio=overlap_ratio,
+                weighting=weighting,
+                v2pa_factor=self.v2pa_factor or 1.0,
+            )
+        except Exception as exc:
+            MessageBox.warning(self, "提示", f"FFT 分析失败: {str(exc)[:200]}")
+            self.plot_fft(np.array([]), np.array([]), x_axis_scale=config.get("x_axis_scale", "log"))
+            self.result = {}
+            return False
+
+        frequency = np.asarray(main_result.frequencies_hz, dtype=float)
+        fft_db = np.asarray(main_result.spectrum_db, dtype=float)
+        baseline_db = self._load_baseline(
+            config,
+            analyzer,
+            frequency,
+            sample_rate=int(sample_rate),
+            n_fft=n_fft,
+            window=window,
+            overlap_ratio=overlap_ratio,
+            weighting=weighting,
+        )
+
+        display_mode = str(config.get("baseline_display_mode", "overlay") or "overlay")
+        curves = self._build_display_curves(frequency, fft_db, baseline_db, display_mode)
+        plot_y = np.asarray(curves["plot_y"], dtype=float)
+        delta_db = curves["delta_db"]
+
+        x_axis_scale = str(config.get("x_axis_scale", "log") or "log")
+        focus_enabled = bool(config.get("focus_range_enabled", True))
+        focus_min_hz = float(config.get("focus_min_hz", 100) or 100)
+        focus_max_hz = float(config.get("focus_max_hz", 20000) or 20000)
+        mask = self._build_frequency_mask(
+            frequency,
+            focus_enabled,
+            focus_min_hz,
+            focus_max_hz,
+            x_axis_scale,
+        )
+
+        plot_x = frequency[mask]
+        display_y = plot_y[mask]
+        display_baseline = baseline_db[mask] if baseline_db is not None else None
+        display_fft = fft_db[mask]
+        display_delta = delta_db[mask] if isinstance(delta_db, np.ndarray) else None
+
+        y_label = f"FFT Spectrum [dB({weighting}) SPL]" if weighting != "Z" else "FFT Spectrum [dB SPL]"
+        if display_mode == "delta" and display_delta is not None:
+            y_label = "FFT - Baseline [dB]"
+
+        if bool(config.get("limit_checked", False)):
+            limit_data = config.get("limit_data")
+            if not limit_data:
+                MessageBox.warning(self, "提示", "已启用阈值，但未加载 CSV 配置文件。")
+                return False
+            csv_x, csv_upper, csv_lower = limit_data
+            self.plot_fft_with_limits(
+                plot_x,
+                display_y,
+                csv_x,
+                csv_upper,
+                csv_lower,
+                x_axis_scale=x_axis_scale,
+                y_label=y_label,
+                baseline_y=display_baseline if display_mode == "overlay" else None,
+            )
+        else:
+            self.plot_fft(
+                plot_x,
+                display_y,
+                x_axis_scale=x_axis_scale,
+                y_label=y_label,
+                baseline_y=display_baseline if display_mode == "overlay" else None,
+            )
+
+        self.result = {
+            "frequency_bins": plot_x.tolist(),
+            "fft_db": display_fft.tolist(),
+            "baseline_db": display_baseline.tolist() if isinstance(display_baseline, np.ndarray) else [],
+            "delta_db": display_delta.tolist() if isinstance(display_delta, np.ndarray) else [],
+            "plot_db": display_y.tolist(),
+            "weighting": weighting,
+            "display_mode": display_mode,
+            "baseline_smooth_third_octave": bool(config.get("baseline_smooth_third_octave", False)),
+            "n_fft": n_fft,
+            "window": window,
+            "overlap_ratio": overlap_ratio,
+            "x_axis_scale": x_axis_scale,
+        }
+        return self.result
+
+    def _load_baseline(
+        self,
+        config,
+        analyzer,
+        frequency,
+        *,
+        sample_rate,
+        n_fft,
+        window,
+        overlap_ratio,
+        weighting,
+    ):
+        baseline_file_path = str(config.get("baseline_file_path", "") or "").strip()
+        if not baseline_file_path:
+            return None
+        try:
+            baseline_signal, _ = librosa.load(
+                baseline_file_path,
+                sr=sample_rate,
+                mono=True,
+            )
+            baseline_result = analyzer.analyze(
+                baseline_signal,
+                fs=sample_rate,
+                n_fft=n_fft,
+                window=window,
+                overlap_ratio=overlap_ratio,
+                weighting=weighting,
+                v2pa_factor=self.v2pa_factor or 1.0,
+            )
+            baseline_db = np.interp(
+                frequency,
+                np.asarray(baseline_result.frequencies_hz, dtype=float),
+                np.asarray(baseline_result.spectrum_db, dtype=float),
+                left=np.nan,
+                right=np.nan,
+            )
+            if bool(config.get("baseline_smooth_third_octave", False)):
+                baseline_db = self._smooth_baseline_third_octave(frequency, baseline_db)
+            return baseline_db
+        except Exception as exc:
+            MessageBox.warning(self, "提示", f"背景噪声基线加载失败: {str(exc)[:200]}")
+            return None
+
+    @staticmethod
+    def _build_display_curves(frequency, spectrum_db, baseline_db, display_mode):
+        spectrum = np.asarray(spectrum_db, dtype=float)
+        baseline = None if baseline_db is None else np.asarray(baseline_db, dtype=float)
+        delta = None
+        plot_y = spectrum
+        if str(display_mode or "overlay") == "delta" and baseline is not None:
+            delta = spectrum - baseline
+            plot_y = delta
+        elif baseline is not None:
+            delta = spectrum - baseline
+        return {
+            "frequency": frequency,
+            "plot_y": plot_y,
+            "fft_db": spectrum,
+            "baseline_db": baseline,
+            "delta_db": delta,
+        }
+
+    @staticmethod
+    def _smooth_baseline_third_octave(frequency, baseline_db):
+        frequency = np.asarray(frequency, dtype=float)
+        baseline = np.asarray(baseline_db, dtype=float)
+        smoothed = np.full_like(baseline, np.nan, dtype=float)
+        factor = 2.0 ** (1.0 / 6.0)
+
+        valid_points = np.isfinite(frequency) & np.isfinite(baseline)
+        if not np.any(valid_points):
+            return smoothed
+
+        sorted_indices = np.argsort(frequency[valid_points])
+        sorted_frequency = frequency[valid_points][sorted_indices]
+        sorted_power = np.power(10.0, baseline[valid_points][sorted_indices] / 10.0)
+        prefix_power = np.concatenate(([0.0], np.cumsum(sorted_power)))
+
+        valid_centers = np.isfinite(frequency) & (frequency > 0)
+        if not np.any(valid_centers):
+            return smoothed
+
+        lower_frequency = frequency[valid_centers] / factor
+        upper_frequency = frequency[valid_centers] * factor
+        left_indices = np.searchsorted(sorted_frequency, lower_frequency, side="left")
+        right_indices = np.searchsorted(sorted_frequency, upper_frequency, side="right")
+        counts = right_indices - left_indices
+        power_sum = prefix_power[right_indices] - prefix_power[left_indices]
+
+        center_values = np.full(counts.shape, np.nan, dtype=float)
+        non_empty = counts > 0
+        center_values[non_empty] = 10.0 * np.log10(
+            np.maximum(power_sum[non_empty] / counts[non_empty], 1e-30)
+        )
+        smoothed[valid_centers] = center_values
+        return smoothed
+
+    @staticmethod
+    def _build_frequency_mask(frequency, focus_enabled, focus_min_hz, focus_max_hz, x_axis_scale):
+        frequency = np.asarray(frequency, dtype=float)
+        mask = np.isfinite(frequency)
+        if str(x_axis_scale or "linear").lower() == "log":
+            mask &= frequency > 0
+        if focus_enabled:
+            mask &= (frequency >= float(focus_min_hz)) & (frequency <= float(focus_max_hz))
+        return mask
+
+    def plot_fft(
+        self,
+        frequency,
+        spectrum_db,
+        *,
+        x_axis_scale="log",
+        y_label="FFT Spectrum [dB SPL]",
+        baseline_y=None,
+    ):
+        self.analysis_plot.clear()
+        self.analysis_plot.plot(
+            frequency,
+            spectrum_db,
+            pen=mkPen(color=(51, 196, 77), width=2),
+            name="FFT",
+        )
+        if baseline_y is not None:
+            self.analysis_plot.plot(
+                frequency,
+                baseline_y,
+                pen=mkPen(color=(128, 128, 128), width=2),
+                name="Baseline",
+            )
+        self.analysis_plot.setLabel("left", y_label)
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        self.analysis_plot.setLogMode(x=str(x_axis_scale).lower() == "log", y=False)
+        self.analysis_plot.showGrid(x=True, y=True)
+
+    def plot_fft_with_limits(
+        self,
+        frequency,
+        spectrum_db,
+        csv_freq_list,
+        csv_upper_list,
+        csv_lower_list,
+        *,
+        x_axis_scale="log",
+        y_label="FFT Spectrum [dB SPL]",
+        baseline_y=None,
+    ):
+        frequency = np.asarray(frequency, dtype=float)
+        spectrum_db = np.asarray(spectrum_db, dtype=float)
+        mask = np.isfinite(frequency) & np.isfinite(spectrum_db)
+        if str(x_axis_scale).lower() == "log":
+            mask &= frequency > 0
+        valid_frequency = frequency[mask]
+        valid_spectrum = spectrum_db[mask]
+        sort_indices = None
+        if valid_frequency.size > 1:
+            sort_indices = np.argsort(valid_frequency)
+            valid_frequency = valid_frequency[sort_indices]
+            valid_spectrum = valid_spectrum[sort_indices]
+
+        LimitPlotUtils.setup_limit_plot(
+            self.analysis_plot,
+            valid_frequency,
+            valid_spectrum,
+            np.asarray(csv_freq_list, dtype=float),
+            np.asarray(csv_upper_list, dtype=float),
+            np.asarray(csv_lower_list, dtype=float),
+            x_label="Frequency (Hz)",
+            y_label=y_label,
+            log_x=str(x_axis_scale).lower() == "log",
+            curve_name="FFT",
+        )
+        if baseline_y is not None:
+            baseline = np.asarray(baseline_y, dtype=float)[mask]
+            if sort_indices is not None:
+                baseline = baseline[sort_indices]
+            self.analysis_plot.plot(
+                valid_frequency,
+                baseline,
+                pen=mkPen(color=(128, 128, 128), width=2),
+                name="Baseline",
+            )
+
+        try:
+            out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
+                valid_frequency,
+                valid_spectrum,
+                np.asarray(csv_freq_list, dtype=float),
+                np.asarray(csv_upper_list, dtype=float),
+                np.asarray(csv_lower_list, dtype=float),
+            )
+        except Exception:
+            is_ok, deviation = False, 0.0
+            out_mask = np.zeros(len(valid_frequency), dtype=bool)
+            plot_x, plot_y = valid_frequency, valid_spectrum
+        self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
 
 
 class AI(QWidget):
