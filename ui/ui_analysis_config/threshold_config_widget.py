@@ -46,6 +46,9 @@ def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
     elif "FR" in model_type:
         plot_widget.setLabel("left", "Amplitude (dB)")
         plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "FFT" in model_type:
+        plot_widget.setLabel("left", "FFT Spectrum (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
     elif "PRB" in model_type:
         plot_widget.setLabel("left", "phon")
         plot_widget.setLabel("bottom", "Frequency (Hz)")
@@ -558,6 +561,7 @@ class ThresholdConfigWidget(QWidget):
         self.limit_graph.setVisible(enabled)
         if not self.allow_manual_limits:
             self.config_dir_box.setVisible(enabled)
+            self._refresh_parent_scroll_layout()
             return
 
         manual = enabled and self.current_limit_mode() == "manual"

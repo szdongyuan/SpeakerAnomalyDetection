@@ -9,6 +9,7 @@ OPERATION_SEQUENCE_PATH = Path("ui/operation_sequence.py")
 EXPOSED_ANALYSIS_TYPES = {
     "SPL",
     "SPLF",
+    "FFT",
     "Spec",
     "RSC",
     "FR",
@@ -47,13 +48,15 @@ def test_every_exposed_analysis_type_has_default_config():
         assert isinstance(defaults[analysis_type], dict), analysis_type
 
 
-def test_fft_default_is_preserved_as_legacy_or_future_item():
+def test_fft_default_contains_active_fft_configuration_only():
     defaults = load_defaults()
 
     assert "FFT" in defaults
     assert defaults["FFT"]["n_fft"] == 4096
     assert defaults["FFT"]["limit_checked"] is False
     assert defaults["FFT"]["limit_data"] is None
+    assert defaults["FFT"]["analysis_channel"] == 0
+    assert not any(key.startswith("dominant_tone") for key in defaults["FFT"])
 
 
 def test_curve_and_distortion_defaults_keep_legacy_threshold_and_golden_keys():
@@ -90,7 +93,7 @@ def test_manual_segment_enabled_defaults_have_stable_schema_without_scalar_keys(
 def test_channel_defaults_are_present_for_channel_aware_dialogs():
     defaults = load_defaults()
 
-    for analysis_type in ("SPL", "SPLF", "Spec", "FBA", "LP", "AI"):
+    for analysis_type in ("SPL", "SPLF", "FFT", "Spec", "FBA", "LP", "AI"):
         assert defaults[analysis_type]["analysis_channel"] == 0
 
 

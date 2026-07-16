@@ -167,7 +167,19 @@ class SequenceWindow(QWidget):
         self.toolsbar = SequenceToolsBar()
 
         self.v2pa_factor = None
-        self.analysis_types_requiring_v2pa = {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA", "LOUD"}
+        self.analysis_types_requiring_v2pa = {
+            "SPL",
+            "SPLF",
+            "FFT",
+            "HD",
+            "RB",
+            "PRB",
+            "LP",
+            "PD",
+            "ED",
+            "FBA",
+            "LOUD",
+        }
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()
@@ -665,7 +677,7 @@ class SequenceWindow(QWidget):
             if t == "AI":
                 candidates.append(key)
                 continue
-            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB"):
+            if t in ("SPL", "SPLF", "FFT", "FR", "HD", "RB", "PRB"):
                 if item_cfg.get("limit_checked"):
                     candidates.append(key)
 
@@ -2483,6 +2495,11 @@ class SequenceWindow(QWidget):
                     instance.show()
                 elif hasattr(instance, "calculate_fr"):
                     result = instance.calculate_fr()
+                    if not result:
+                        continue
+                    instance.show()
+                elif hasattr(instance, "calculate_fft"):
+                    result = instance.calculate_fft()
                     if not result:
                         continue
                     instance.show()
