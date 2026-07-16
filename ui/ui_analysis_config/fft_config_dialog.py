@@ -5,6 +5,11 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
+from base.core_algorithm.response.fft_analyzer import (
+    MAX_FFT_SIZE,
+    MAX_OVERLAP_RATIO,
+    MIN_FFT_SIZE,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
@@ -29,7 +34,16 @@ from ui.ui_src import ui_resources
 class FftConfigWindow(SemanticAnalysisConfigDialogBase):
     """FFT 分析配置窗口，不包含主频识别功能。"""
 
-    FFT_PRESETS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65535]
+    FFT_PRESETS = [
+        MIN_FFT_SIZE,
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+        MAX_FFT_SIZE,
+    ]
     WINDOWS = ["hann", "hamming", "blackman", "boxcar"]
     X_AXIS_SCALES = ["linear", "log"]
     BASELINE_DISPLAY_MODES = {
@@ -95,7 +109,7 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         overlap_layout = QHBoxLayout()
         overlap_layout.addWidget(Label("重叠率:"))
         self.overlap_spin = DoubleSpinBox()
-        self.overlap_spin.setRange(0, 95)
+        self.overlap_spin.setRange(0, MAX_OVERLAP_RATIO * 100.0)
         self.overlap_spin.setDecimals(0)
         self.overlap_spin.setSuffix(" %")
         self.overlap_spin.setValue(float(self.load_config.get("overlap_ratio", 0.5)) * 100.0)
@@ -235,8 +249,12 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         if not self.threshold_widget.validate():
             return False
         config = self.get_default_config()
-        if not (512 <= int(config["n_fft"]) <= 65535):
-            MessageBox.warning(self, "设置警告", "FFT 点数必须在 512 ~ 65535 范围内。")
+        if not (MIN_FFT_SIZE <= int(config["n_fft"]) <= MAX_FFT_SIZE):
+            MessageBox.warning(
+                self,
+                "设置警告",
+                f"FFT 点数必须在 {MIN_FFT_SIZE} ~ {MAX_FFT_SIZE} 范围内。",
+            )
             return False
         if config["focus_range_enabled"] and config["focus_max_hz"] <= config["focus_min_hz"]:
             MessageBox.warning(self, "设置警告", "频率聚焦上限必须大于下限。")

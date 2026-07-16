@@ -103,7 +103,8 @@ class FftAnalyzer:
         except (TypeError, ValueError) as exc:
             raise ValueError("重叠率必须为数字") from exc
         if not (0.0 <= overlap_ratio <= MAX_OVERLAP_RATIO):
-            raise ValueError("重叠率必须在 0% ~ 95% 范围内")
+            max_overlap_percent = MAX_OVERLAP_RATIO * 100.0
+            raise ValueError(f"重叠率必须在 0% ~ {max_overlap_percent:g}% 范围内")
         return overlap_ratio
 
     @staticmethod
