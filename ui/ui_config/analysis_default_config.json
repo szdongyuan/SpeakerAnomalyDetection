@@ -256,6 +256,7 @@
         "mes_file_name": "Results"
     },
     "FFT": {
+        "analysis_channel": 0,
         "n_fft": 4096,
         "window": "hann",
         "overlap_ratio": 0.5,
@@ -267,10 +268,6 @@
         "baseline_file_path": "",
         "baseline_display_mode": "overlay",
         "baseline_smooth_third_octave": false,
-        "dominant_tone_enabled": false,
-        "dominant_tone_intervals_text": "",
-        "dominant_tone_min_prominence_db": 3.0,
-        "dominant_tone_use_display_curve": true,
         "limit_checked": false,
         "limit_data": null
     },

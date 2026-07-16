@@ -660,6 +660,25 @@ def test_threshold_widget_without_manual_limits_keeps_csv_only_behavior(qapp):
     assert widget.get_config() == {"limit_checked": True, "limit_data": None}
 
 
+def test_fft_csv_only_threshold_expands_scrollable_section(qapp):
+    from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
+
+    config_manager = FakeConfigManager({"FFT": {"limit_checked": False, "limit_data": None}})
+    window = FftConfigWindow(config_manager, "FFT")
+    window.show()
+    qapp.processEvents()
+
+    widget = window.threshold_widget
+    widget.limit_checkbox.setChecked(True)
+    qapp.processEvents()
+
+    assert widget.limit_graph.isVisible() is True
+    assert widget.maximumHeight() >= widget.sizeHint().height()
+    assert window.section_container.minimumHeight() >= window.section_container.sizeHint().height()
+
+    window.close()
+
+
 def test_ai_dialog_uses_shared_channel_selector_without_changing_config(qapp, monkeypatch):
     class FakeTrainingModelManagement:
         def get_all_model_name_from_db(self):
