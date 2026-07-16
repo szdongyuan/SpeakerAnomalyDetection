@@ -5,11 +5,9 @@ from PyQt5.QtWidgets import QHBoxLayout, QSizePolicy
 
 from base.training_model_management import TrainingModelManagement
 from consts import error_code
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import ComboBox, Label, GroupBox, MessageBox
 from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, SemanticAnalysisConfigDialogBase
-from ui.ui_src import ui_resources
 
 
 class AIConfigWindow(SemanticAnalysisConfigDialogBase):

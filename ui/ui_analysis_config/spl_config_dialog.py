@@ -7,7 +7,6 @@ from typing import List, Optional
 
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label, RadioButton, SpinBox
 from ui.ui_analysis_config.common_widgets import (
@@ -20,7 +19,6 @@ from ui.ui_analysis_config.common_widgets import (
     WeightingSelectorWidget,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.ui_src import ui_resources
 
 
 class ConfigSubsectionWidget(GroupBox):
@@ -165,7 +163,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
-            allow_manual_limits=self.model_type != "SPLF",
+            allow_manual_limits=True,
         )
 
         self.weighting_selector = WeightingSelectorWidget(self.load_config, parent=self)

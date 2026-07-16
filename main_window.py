@@ -94,14 +94,14 @@ class MainWindow(QMainWindow):
         self.on_access_lvl_changed()
         self.show_statusbar_layout()
         self.showMaximized()
-        self.on_login_window_init()
-        self._schedule_startup_device_recovery_if_needed()
+        login_succeeded = self.on_login_window_init()
+        if login_succeeded:
+            self._schedule_startup_device_recovery_if_needed()
         self.sequence_window.refresh_channel_windows()
 
     def set_title(self):
         # hide the window title bar and reset the window title bar
         self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         title_layout = QHBoxLayout()
         title_btn_layout = self.set_title_btn()
         icon_label = Label()
@@ -410,11 +410,13 @@ class MainWindow(QMainWindow):
         # check the user info, if the user info is correct, then show the main window
         dlg = LoginWindow()
         access_lvl, user_name = dlg.on_exec()
-        if access_lvl is not None:
+        login_succeeded = access_lvl is not None
+        if login_succeeded:
             self.access_lvl, self.user_name = access_lvl, user_name
             self.sequence_window.show()
             self.update_statusbar()
         self.on_access_lvl_changed()
+        return login_succeeded
 
     @staticmethod
     def on_add_account_window_init():

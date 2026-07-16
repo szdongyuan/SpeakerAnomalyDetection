@@ -1,7 +1,6 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout
 
-from consts.running_consts import DEFAULT_DIR
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
 from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
@@ -14,7 +13,6 @@ from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.custom_ui_widget.widgets import GroupBox, Label, PushButton, CheckBox, SpinBox, MessageBox
 from ui.ui_analysis_config.common_widgets import AnalysisConfigDialogBase
-from ui.ui_src import ui_resources
 
 
 class PipelineConfigWindow(AnalysisConfigDialogBase):

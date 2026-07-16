@@ -12,7 +12,7 @@ from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt, QModelIndex
-from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
+from PyQt5.QtGui import QTextCursor, QTextCharFormat, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -56,7 +56,10 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
 from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
-from ui.ui_src import ui_resources
+from ui.ui_analysis_config.manual_limit_segments import (
+    ManualLimitValidationError,
+    limits_from_manual_segments,
+)
 
 
 def get_class_mapping():
@@ -289,6 +292,16 @@ def _has_duplicate_finite_frequency_points(frequencies) -> bool:
     return np.unique(freq).size != freq.size
 
 
+def _sorted_finite_positive_x_for_limits(x_values, y_values):
+    x_arr = np.asarray(x_values, dtype=float)
+    y_arr = np.asarray(y_values, dtype=float)
+    mask = np.isfinite(x_arr) & np.isfinite(y_arr) & (x_arr > 0)
+    x_valid = x_arr[mask]
+    if x_valid.size > 1:
+        x_valid = x_valid[np.argsort(x_valid)]
+    return x_valid
+
+
 class AnalysisResultSummaryWindow(QWidget):
     """
     Summary window for DataDealStruct.analysis_result_dict.
@@ -299,7 +312,6 @@ class AnalysisResultSummaryWindow(QWidget):
     def __init__(self, result_dict: dict[str, bool], title: str = "分析结果汇总"):
         super().__init__()
         self.setWindowTitle(title)
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         self._overall_label = Label(self)
         self._overall_label.setObjectName("overallResultLabel")
@@ -396,7 +408,6 @@ class AnalysisGraphWidget(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
 
         self.analysis_plot.setBackground("white")
 
@@ -601,14 +612,13 @@ class Distortion(AnalysisGraphWidget):
         if analysis_config and analysis_config.get("limit_checked"):
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual" and valid_data:
-                n = len(freq_value)
-                upper_ok = bool(analysis_config.get("manual_upper_enabled", True))
-                lower_ok = bool(analysis_config.get("manual_lower_enabled", False))
-                upper = float(analysis_config.get("manual_upper", 0.0) or 0.0)
-                lower = float(analysis_config.get("manual_lower", 0.0) or 0.0)
-                csv_freq_list = freq_value
-                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
-                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+                try:
+                    csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                        analysis_config, freq_value
+                    )
+                except ManualLimitValidationError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return
             else:
                 result = analysis_config.get("limit_data")
                 if not result:
@@ -633,7 +643,14 @@ class Distortion(AnalysisGraphWidget):
                 if self.selected_label is not None:
                     self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
                 # Highlight out-of-limit segments
-                self._highlight_out_of_range_curve(freq_value, thd, csv_freq_list, csv_upper_list, csv_lower_list)
+                self._highlight_out_of_range_curve(
+                    freq_value,
+                    thd,
+                    csv_freq_list,
+                    csv_upper_list,
+                    csv_lower_list,
+                    covered_limit_margins_only=(limit_mode == "manual"),
+                )
                 return
 
         # === Without limit config: original logic ===
@@ -647,7 +664,16 @@ class Distortion(AnalysisGraphWidget):
         self.analysis_plot.setLogMode(x=True, y=False)
         self.analysis_plot.showGrid(x=True, y=True)
 
-    def _highlight_out_of_range_curve(self, freq_value, y_data, csv_freq_list, csv_upper_list, csv_lower_list):
+    def _highlight_out_of_range_curve(
+        self,
+        freq_value,
+        y_data,
+        csv_freq_list,
+        csv_upper_list,
+        csv_lower_list,
+        *,
+        covered_limit_margins_only=False,
+    ):
         """
         Highlight out-of-limit segments in THD curve.
 
@@ -666,6 +692,8 @@ class Distortion(AnalysisGraphWidget):
         freq_arr = np.asarray(freq_value)
         y_arr = np.asarray(y_data)
         csv_freq_arr = np.asarray(csv_freq_list)
+        csv_upper_arr = np.asarray(csv_upper_list, dtype=float)
+        csv_lower_arr = np.asarray(csv_lower_list, dtype=float)
 
         max_csv_freq = max(csv_freq_list)
         min_csv_freq = min(csv_freq_list)
@@ -678,6 +706,9 @@ class Distortion(AnalysisGraphWidget):
         out_mask = np.zeros(freq_arr_capacity, dtype=bool)
 
         for i, f in enumerate(freq_arr):
+            if covered_limit_margins_only and (not np.isfinite(f) or not np.isfinite(y_arr[i])):
+                continue
+
             # Find nearest CSV frequency point
             table_index = int(np.argmin(np.abs(csv_freq_arr - f)))
             if (i + 1) != freq_arr_capacity:
@@ -691,18 +722,24 @@ class Distortion(AnalysisGraphWidget):
             if f > max_csv_freq and table_index == next_table_index:
                 continue
 
-            upper_val = csv_upper_list[table_index]
-            lower_val = csv_lower_list[table_index]
+            upper_val = csv_upper_arr[table_index]
+            lower_val = csv_lower_arr[table_index]
+            if covered_limit_margins_only:
+                has_upper_limit = np.isfinite(upper_val)
+                has_lower_limit = np.isfinite(lower_val)
+            else:
+                has_upper_limit = not np.isnan(upper_val)
+                has_lower_limit = not np.isnan(lower_val)
 
             is_out = False
-            if not np.isnan(upper_val) and y_arr[i] > upper_val:
+            if has_upper_limit and y_arr[i] > upper_val:
                 if no_deviation_flag:
                     deviation = 0.0
                     no_deviation_flag = False
                 deviation = max(deviation, abs(y_arr[i] - upper_val))
                 is_out = True
 
-            if not np.isnan(lower_val) and y_arr[i] < lower_val:
+            if has_lower_limit and y_arr[i] < lower_val:
                 if no_deviation_flag:
                     deviation = 0.0
                     no_deviation_flag = False
@@ -711,8 +748,18 @@ class Distortion(AnalysisGraphWidget):
 
             out_mask[i] = is_out
 
-            if not is_out and no_deviation_flag:
-                # THD special logic: calculate distance using current point's limits
+            if not is_out and no_deviation_flag and covered_limit_margins_only:
+                # Manual segment arrays use NaN gaps; uncovered samples must not influence margins.
+                margins = []
+                if has_upper_limit:
+                    margins.append(abs(y_arr[i] - upper_val))
+                if has_lower_limit:
+                    margins.append(abs(y_arr[i] - lower_val))
+                if margins:
+                    deviation_value = min(margins)
+                    deviation = min(deviation, deviation_value) if deviation > 0 else deviation_value
+            elif not is_out and no_deviation_flag:
+                # Legacy CSV behavior: compare every data point to both matched table limits.
                 deviation_value = min(min(np.abs(y_arr - upper_val)), min(np.abs(y_arr - lower_val)))
                 deviation = min(deviation, deviation_value) if deviation > 0 else deviation_value
 
@@ -914,14 +961,13 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         if analysis_config and analysis_config.get("limit_checked"):
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual" and valid_data:
-                n = len(freq_value)
-                upper_ok = bool(analysis_config.get("manual_upper_enabled", True))
-                lower_ok = bool(analysis_config.get("manual_lower_enabled", False))
-                upper = float(analysis_config.get("manual_upper", 0.0) or 0.0)
-                lower = float(analysis_config.get("manual_lower", 0.0) or 0.0)
-                csv_freq_list = freq_value
-                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
-                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+                try:
+                    csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                        analysis_config, freq_value
+                    )
+                except ManualLimitValidationError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return
             else:
                 result = analysis_config.get("limit_data")
                 if not result:
@@ -950,7 +996,12 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 # 2) Use parent's _highlight_out_of_range_curve() for limit check + highlight
                 #    This uses nearest-neighbor matching and highlights on original data points
                 self._highlight_out_of_range_curve(
-                    freq_value, perceptual_loudness, csv_freq_list, csv_upper_list, csv_lower_list
+                    freq_value,
+                    perceptual_loudness,
+                    csv_freq_list,
+                    csv_upper_list,
+                    csv_lower_list,
+                    covered_limit_margins_only=(limit_mode == "manual"),
                 )
                 return
 
@@ -1019,6 +1070,9 @@ class Spl(AnalysisGraphWidget):
             MessageBox.warning(self, "提示", str(e))
             return False
         sample_rate = self.data_struct.sample_rate
+        if recorded_signal is None or sample_rate is None:
+            MessageBox.warning(self, "提示", "声压级分析失败：没有可用录音数据。")
+            return False
         if not self._resolve_v2pa_factor_for_analysis():
             return False
         reference_pressure = 20e-6
@@ -1057,14 +1111,13 @@ class Spl(AnalysisGraphWidget):
         if limit_checked:
             limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual":
-                n = len(signal_duration)
-                upper_ok = bool(self.analysis_config.get("manual_upper_enabled", True))
-                lower_ok = bool(self.analysis_config.get("manual_lower_enabled", False))
-                upper = float(self.analysis_config.get("manual_upper", 0.0) or 0.0)
-                lower = float(self.analysis_config.get("manual_lower", 0.0) or 0.0)
-                csv_time_list = signal_duration
-                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
-                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+                try:
+                    csv_time_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                        self.analysis_config, signal_duration
+                    )
+                except ManualLimitValidationError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return False
             else:
                 result = self.analysis_config.get("limit_data")
                 if not result:
@@ -1265,14 +1318,14 @@ class SplFrequency(AnalysisGraphWidget):
         if limit_checked:
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual":
-                n = len(frequency_list)
-                upper_ok = bool(analysis_config.get("manual_upper_enabled", True))
-                lower_ok = bool(analysis_config.get("manual_lower_enabled", False))
-                upper = float(analysis_config.get("manual_upper", 0.0) or 0.0)
-                lower = float(analysis_config.get("manual_lower", 0.0) or 0.0)
-                csv_freq_list = frequency_list
-                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
-                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+                try:
+                    manual_limit_x = _sorted_finite_positive_x_for_limits(frequency_list, spl_db)
+                    csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                        analysis_config, manual_limit_x
+                    )
+                except ManualLimitValidationError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return False
             else:
                 result = analysis_config.get("limit_data")
                 if not result:
@@ -1453,18 +1506,18 @@ class Frequency(AnalysisGraphWidget):
                 MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
-            limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
+            limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual":
-                n = len(frequency_list)
-                upper_ok = bool(self.analysis_config.get("manual_upper_enabled", True))
-                lower_ok = bool(self.analysis_config.get("manual_lower_enabled", False))
-                upper = float(self.analysis_config.get("manual_upper", 0.0) or 0.0)
-                lower = float(self.analysis_config.get("manual_lower", 0.0) or 0.0)
-                csv_freq_list = frequency_list
-                csv_upper_list = (np.full(n, upper) if upper_ok else np.full(n, np.nan)).tolist()
-                csv_lower_list = (np.full(n, lower) if lower_ok else np.full(n, np.nan)).tolist()
+                try:
+                    manual_limit_x = _sorted_finite_positive_x_for_limits(frequency_list, fr)
+                    csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                        analysis_config, manual_limit_x
+                    )
+                except ManualLimitValidationError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return False
             else:
-                result = self.analysis_config.get("limit_data")
+                result = analysis_config.get("limit_data")
                 if not result:
                     return False
                 csv_freq_list, csv_upper_list, csv_lower_list = result
@@ -1656,7 +1709,6 @@ class AI(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         ai_analyse_layout = self.create_ai_analyse_layout()
         self.setLayout(ai_analyse_layout)
 
@@ -1782,7 +1834,6 @@ class Spectrogram(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
 
         self.plot_container = QWidget()
@@ -2177,7 +2228,6 @@ class PatternMatch(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
         self.result_display = TextEdit()
         self.result_display.setReadOnly(True)
@@ -2327,7 +2377,6 @@ class PipelinePdPm(QWidget):
         return seg_len, left_point, right_point
 
     def _init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.main_layout = QVBoxLayout(self)
         # plot area for summary
         self.plot_widget = pg.PlotWidget(background="white")

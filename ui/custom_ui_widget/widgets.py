@@ -342,9 +342,14 @@ class TableWidget(QTableWidget):
         self.font = QFont()
         self.font.setFamily("SimSun")
         self.font.setPixelSize(self.font_size)
+        self._apply_font()
+
+    def _apply_font(self):
         self.setFont(self.font)
+        self.horizontalHeader().setFont(self.font)
+        self.verticalHeader().setFont(self.font)
 
     def set_font_size(self, font_size):
         self.font_size = scale_size_px(font_size)
         self.font.setPixelSize(self.font_size)
-        self.setFont(self.font)
+        self._apply_font()

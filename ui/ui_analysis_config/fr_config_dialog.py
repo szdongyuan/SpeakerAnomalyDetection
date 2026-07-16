@@ -2,7 +2,6 @@
 FR (Frequency Response) 分析配置对话框
 """
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.common_widgets import (
     GoldenSampleWidget,
@@ -10,7 +9,6 @@ from ui.ui_analysis_config.common_widgets import (
     SemanticAnalysisConfigDialogBase,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.ui_src import ui_resources
 
 
 class FrConfigWindow(SemanticAnalysisConfigDialogBase):
@@ -42,6 +40,7 @@ class FrConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
+            allow_manual_limits=True,
         )
 
         self.add_semantic_section("compute", widget=self.smoothing_selector)

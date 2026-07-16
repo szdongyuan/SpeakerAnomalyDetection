@@ -1,10 +1,8 @@
 import pyqtgraph as pg
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
-from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import custom_log_tick_strings
-from ui.ui_src import ui_resources
 
 
 class AnalysisGraphWidget(QWidget):
@@ -18,8 +16,6 @@ class AnalysisGraphWidget(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
-
         self.analysis_plot.setBackground("white")
 
         layout = QVBoxLayout()

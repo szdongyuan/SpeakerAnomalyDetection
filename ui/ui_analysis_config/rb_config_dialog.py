@@ -6,7 +6,6 @@ Rub & Buzz 使用高阶谐波失真 (10阶-35阶) 来检测扬声器的摩擦和
 
 from PyQt5.QtWidgets import QVBoxLayout
 
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import GroupBox, MessageBox
 from ui.ui_analysis_config.common_widgets import (
@@ -15,7 +14,6 @@ from ui.ui_analysis_config.common_widgets import (
     SemanticAnalysisConfigDialogBase,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.ui_src import ui_resources
 
 
 class RbConfigWindow(SemanticAnalysisConfigDialogBase):
@@ -57,6 +55,7 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
+            allow_manual_limits=True,
         )
 
         self.add_semantic_section("detection", widget=harmonic_group_box)

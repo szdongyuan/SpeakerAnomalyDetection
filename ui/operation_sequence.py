@@ -208,7 +208,6 @@ class AnalysisModelSelect(QDialog):
 
     def init_ui(self):
         self.setObjectName("OperationSequenceDialog")
-        self.setWindowIcon(QIcon(":/ui/icon/ting.ico"))
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setWindowTitle("测试队列")
 
