@@ -5,7 +5,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
-from base.core_algorithm.response.fft_analyzer import (
+from base.core_algorithm.response.fft_consts import (
+    FFT_SIZE_PRESETS,
     MAX_FFT_SIZE,
     MAX_OVERLAP_RATIO,
     MIN_FFT_SIZE,
@@ -34,16 +35,7 @@ from ui.ui_src import ui_resources
 class FftConfigWindow(SemanticAnalysisConfigDialogBase):
     """FFT 分析配置窗口，不包含主频识别功能。"""
 
-    FFT_PRESETS = [
-        MIN_FFT_SIZE,
-        1024,
-        2048,
-        4096,
-        8192,
-        16384,
-        32768,
-        MAX_FFT_SIZE,
-    ]
+    FFT_PRESETS = FFT_SIZE_PRESETS
     WINDOWS = ["hann", "hamming", "blackman", "boxcar"]
     X_AXIS_SCALES = ["linear", "log"]
     BASELINE_DISPLAY_MODES = {

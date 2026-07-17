@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from base.core_algorithm.response.fft_analyzer import (
+from base.core_algorithm.response.fft_consts import (
     MAX_FFT_SIZE,
     MAX_OVERLAP_RATIO,
     MIN_FFT_SIZE,
@@ -68,7 +68,7 @@ def test_fft_size_editor_uses_combo_box_font(qapp):
     assert editor.font().pixelSize() == window.window_combo.font().pixelSize()
 
 
-def test_fft_config_uses_analyzer_limits(qapp):
+def test_fft_config_uses_shared_fft_constraints(qapp):
     window = FftConfigWindow(FakeConfigManager({"FFT1": {"type": "FFT"}}), "FFT1")
 
     preset_values = [
@@ -79,6 +79,9 @@ def test_fft_config_uses_analyzer_limits(qapp):
     assert preset_values[0] == MIN_FFT_SIZE
     assert preset_values[-1] == MAX_FFT_SIZE
     assert window.overlap_spin.maximum() == pytest.approx(MAX_OVERLAP_RATIO * 100.0)
+
+    window.fft_size_box.setCurrentText(str(MAX_FFT_SIZE))
+    assert window._validate_config() is True
 
 
 def test_fft_config_loads_saved_values_and_channel(qapp):

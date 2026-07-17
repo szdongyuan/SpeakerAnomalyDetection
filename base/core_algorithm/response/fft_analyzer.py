@@ -8,12 +8,14 @@ import numpy as np
 from scipy.signal import get_window, welch
 
 from base.core_algorithm.response.frequency_band_analyzer import get_weighting_fn
+from base.core_algorithm.response.fft_consts import (
+    MAX_FFT_SIZE,
+    MAX_OVERLAP_RATIO,
+    MIN_FFT_SIZE,
+)
 
 
 REFERENCE_PRESSURE_PA = 20e-6
-MIN_FFT_SIZE = 512
-MAX_FFT_SIZE = 65535
-MAX_OVERLAP_RATIO = 0.95
 
 
 @dataclass
