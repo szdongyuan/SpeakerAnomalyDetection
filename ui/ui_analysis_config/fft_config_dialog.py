@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
-from base.core_algorithm.response.fft_consts import (
+from consts.acoustic_analysis.specific_consts.fft_consts import (
     FFT_SIZE_PRESETS,
     MAX_FFT_SIZE,
     MAX_OVERLAP_RATIO,

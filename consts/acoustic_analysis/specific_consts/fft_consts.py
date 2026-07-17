@@ -1,4 +1,4 @@
-"""Shared constraints for the configurable FFT analysis."""
+"""Constraints for the configurable FFT analysis."""
 
 FFT_SIZE_PRESETS = (512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
 MIN_FFT_SIZE = FFT_SIZE_PRESETS[0]
