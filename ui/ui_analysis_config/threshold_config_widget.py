@@ -22,13 +22,12 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QSizePolicy,
     QLayout,
-    QMenu,
     QApplication,
 )
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget, Menu
 from ui.ui_analysis_config.manual_limit_segments import ManualLimitValidationError, validate_manual_limit_config
 from ui.ui_analysis_config.threshold_csv_manual import (
     ThresholdCsvManualError,
@@ -447,7 +446,7 @@ class _ManualLimitEditorWidget(QWidget):
         row = table.rowAt(pos.y())
         self._activate_manual_table_column(table, row, column)
 
-        menu = QMenu(self)
+        menu = Menu(self)
         clear_table_action = menu.addAction("清空表格数据")
         delete_column_action = menu.addAction("删除列")
         insert_column_action = menu.addAction("添加列")
