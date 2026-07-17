@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from base.core_algorithm.response.fft_consts import (
+from consts.acoustic_analysis.specific_consts.fft_consts import (
     MAX_FFT_SIZE,
     MAX_OVERLAP_RATIO,
     MIN_FFT_SIZE,
