@@ -42,7 +42,7 @@ def test_operation_sequence_exposes_single_fft_item():
         and "(FFT)" in node.value
     ]
 
-    assert labels.count("快速傅里叶频谱 (FFT) ") == 1
+    assert labels.count("快速傅里叶变换 (FFT) ") == 1
 
 
 def test_runtime_registers_and_dispatches_fft_analysis():
