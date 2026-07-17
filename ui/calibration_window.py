@@ -147,11 +147,6 @@ class CalibrationWindow(QDialog):
             return True
         if current_tab_index == 1:
             self.input_cal_wnd._reload_selected_input_hardware(preferred_channel=self.input_cal_wnd.current_channel)
-            missing = self.input_cal_wnd.uncalibrated_selected_channels()
-            if missing:
-                labels = self.input_cal_wnd._format_channel_labels(missing)
-                MessageBox.warning(self, "提示", f"以下输入通道未校准：{labels}\n请完成校准后再退出。")
-                return False
             selected_dirty_channels = set(self.input_cal_wnd.selected_input_channels) & set(
                 self.input_cal_wnd.unsaved_session_channels
             )
