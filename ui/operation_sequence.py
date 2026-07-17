@@ -303,7 +303,7 @@ class AnalysisModelSelect(QDialog):
         analysis_items = [
             "声压级 (SPL) ",
             "声压级-频率 (SPLF) ",
-            "快速傅里叶频谱 (FFT) ",
+            "快速傅里叶变换 (FFT) ",
             "频谱分析 (Spec) ",
             "参考频谱对比 (RSC) ",
             "频响 (FR) ",

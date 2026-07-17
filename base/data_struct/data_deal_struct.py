@@ -52,13 +52,13 @@ class DataDealStruct(object):
         # self.ai_flag = 0
 
     def add_stft_or_fft_count(self, text):
-        if text in ["频响 (FR) ", "谐波失真 (HD) ", "快速傅里叶频谱 (FFT) ", "FR", "HD", "FFT"]:
+        if text in ["频响 (FR) ", "谐波失真 (HD) ", "快速傅里叶变换 (FFT) ", "FR", "HD", "FFT"]:
             self.fft_flag += 1
         elif text in ["频谱分析 (Spec) ", "Spec"]:
             self.stft_flag += 1
 
     def minus_stft_or_fft_count(self, text):
-        if text in ["频响 (FR) ", "谐波失真 (HD) ", "快速傅里叶频谱 (FFT) ", "FR", "HD", "FFT"]:
+        if text in ["频响 (FR) ", "谐波失真 (HD) ", "快速傅里叶变换 (FFT) ", "FR", "HD", "FFT"]:
             self.fft_flag -= 1
         elif text in ["频谱分析 (Spec) ", "Spec"]:
             self.stft_flag -= 1
