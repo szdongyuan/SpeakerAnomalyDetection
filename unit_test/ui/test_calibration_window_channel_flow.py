@@ -1717,7 +1717,7 @@ def test_close_event_blocks_when_reload_completion_persistence_fails(qapp, monke
 def test_close_event_blocks_when_close_persistence_payload_becomes_incomplete(qapp, monkeypatch):
     warnings = []
     replace_calls = []
-    saved_factor_reads = [{3: 3.5}, {}]
+    saved_factor_reads = [{}]
 
     monkeypatch.setattr(
         calibration_window.MessageBox,
@@ -1773,28 +1773,53 @@ def test_close_event_blocks_when_close_persistence_payload_becomes_incomplete(qa
         window.close()
 
 
-def test_close_event_blocks_window_button_when_input_channels_missing(qapp, monkeypatch):
-    warnings = []
-    monkeypatch.setattr(
-        calibration_window.MessageBox,
-        "warning",
-        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
-    )
+def test_close_event_allows_window_button_when_all_input_channels_uncalibrated(qapp, monkeypatch):
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {})
     window = calibration_window.CalibrationWindow()
     try:
         window.tabwidget.setCurrentIndex(1)
-        window.input_cal_wnd._reload_selected_input_hardware = lambda preferred_channel=None: None
-        window.input_cal_wnd.current_channel = 0
-        window.input_cal_wnd.uncalibrated_selected_channels = lambda: [0, 2]
+        widget = window.input_cal_wnd
+        widget._reload_selected_input_hardware = lambda preferred_channel=None: None
+        widget.selected_input_channels = [0, 2]
+        widget.unsaved_session_channels.clear()
+        widget.pending_persistence_failure = False
+        widget.uncalibrated_selected_channels = lambda: [0, 2]
 
         event = _FakeCloseEvent()
+
         window.closeEvent(event)
 
-        assert event.ignored is True
-        assert event.accepted is False
-        assert warnings
-        assert "In1, In3" in warnings[-1][0][2]
+        assert event.accepted is True
+        assert event.ignored is False
     finally:
+        window.input_cal_wnd.pending_persistence_failure = False
+        window.input_cal_wnd.selected_input_channels = []
+        window.tabwidget.setCurrentIndex(0)
+        window.close()
+
+
+def test_close_event_allows_window_button_when_some_input_channels_uncalibrated(qapp, monkeypatch):
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {})
+    window = calibration_window.CalibrationWindow()
+    try:
+        window.tabwidget.setCurrentIndex(1)
+        widget = window.input_cal_wnd
+        widget._reload_selected_input_hardware = lambda preferred_channel=None: None
+        widget.selected_input_channels = [0, 2]
+        widget.unsaved_session_channels.clear()
+        widget.pending_persistence_failure = False
+        widget.uncalibrated_selected_channels = lambda: [2]
+
+        event = _FakeCloseEvent()
+
+        window.closeEvent(event)
+
+        assert event.accepted is True
+        assert event.ignored is False
+    finally:
+        window.input_cal_wnd.pending_persistence_failure = False
+        window.input_cal_wnd.selected_input_channels = []
+        window.tabwidget.setCurrentIndex(0)
         window.close()
 
 
