@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base.core_algorithm.response.fft_analyzer import FftAnalyzer
+from base.core_algorithm.response.fft_consts import MAX_FFT_SIZE
 
 
 def test_welch_fft_detects_sine_peak_near_frequency():
@@ -35,6 +36,13 @@ def test_welch_fft_accepts_positional_configuration_arguments():
     result = FftAnalyzer().analyze(np.ones(1024), 48000, 512)
 
     assert result.n_fft == 512
+
+
+def test_welch_fft_accepts_maximum_fft_size():
+    result = FftAnalyzer().analyze(np.ones(MAX_FFT_SIZE), 48000, MAX_FFT_SIZE)
+
+    assert result.n_fft == MAX_FFT_SIZE
+    assert result.frequencies_hz.size == MAX_FFT_SIZE // 2 + 1
 
 
 def test_a_weighting_reduces_low_frequency_more_than_z_weighting():
@@ -69,7 +77,7 @@ def test_v2pa_factor_changes_spectrum_by_expected_level():
     ("n_fft", "overlap_ratio", "match"),
     [
         (511, 0.5, "FFT 点数"),
-        (65536, 0.5, "FFT 点数"),
+        (MAX_FFT_SIZE + 1, 0.5, "FFT 点数"),
         (1024, 0.99, "重叠率"),
     ],
 )
