@@ -27,6 +27,14 @@ from PyQt5.QtWidgets import (
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
+from consts.acoustic_analysis.curve_style_consts import (
+    LOWER_LIMIT_COLOR,
+    UPPER_LIMIT_COLOR,
+)
+from ui.curve_style import (
+    normalize_curve_color,
+    resolve_curve_colors,
+)
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget, Menu
 from ui.ui_analysis_config.manual_limit_segments import ManualLimitValidationError, validate_manual_limit_config
 from ui.ui_analysis_config.threshold_csv_manual import (
@@ -64,15 +72,21 @@ def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
         plot_widget.setLabel("bottom", "Frequency (Hz)")
 
 
-def _draw_limit_curve(plot_widget: PlotWidget, result_data: tuple) -> None:
+def _draw_limit_curve(plot_widget: PlotWidget, result_data: tuple, curve_colors=None) -> None:
     plot_widget.clear()
     if not result_data:
         return
+    colors = resolve_curve_colors({})
+    if curve_colors:
+        for key, fallback in colors.items():
+            colors[key] = normalize_curve_color(curve_colors.get(key), fallback)
     duration, upper_limit, lower_limit = result_data
     if upper_limit is not None and not np.all(np.isnan(upper_limit)):
-        plot_widget.plot(duration, upper_limit, pen=mkPen(color="r", width=2), name="Upper Limit")
+        upper_pen = mkPen(color=colors[UPPER_LIMIT_COLOR], width=2, style=Qt.DashLine)
+        plot_widget.plot(duration, upper_limit, pen=upper_pen, name="Upper Limit")
     if lower_limit is not None and not np.all(np.isnan(lower_limit)):
-        plot_widget.plot(duration, lower_limit, pen=mkPen(color="b", width=2), name="Lower Limit")
+        lower_pen = mkPen(color=colors[LOWER_LIMIT_COLOR], width=2, style=Qt.DashLine)
+        plot_widget.plot(duration, lower_limit, pen=lower_pen, name="Lower Limit")
 
 
 class _ManualLimitEditorWidget(QWidget):
@@ -701,6 +715,7 @@ class ThresholdConfigWidget(QWidget):
         self.limit_data = self.load_config.get("limit_data", None)
         self.model_type = model_type
         self.allow_manual_limits = bool(allow_manual_limits)
+        self._curve_color_widget = None
 
         self._init_ui()
 
@@ -918,7 +933,21 @@ class ThresholdConfigWidget(QWidget):
         Args:
             result_data: 包含横坐标、上限和下限数据的元组
         """
-        _draw_limit_curve(self.limit_graph, result_data)
+        _draw_limit_curve(self.limit_graph, result_data, self._curve_colors())
+
+    def bind_curve_color_widget(self, color_widget):
+        """Bind shared curve colors to this threshold preview and config output."""
+        self._curve_color_widget = color_widget
+        color_widget.colors_changed.connect(self._on_curve_colors_changed)
+        self.draw_limit_curve(self.limit_data)
+
+    def _on_curve_colors_changed(self, colors):
+        self.draw_limit_curve(self.limit_data)
+
+    def _curve_colors(self):
+        if self._curve_color_widget is not None:
+            return self._curve_color_widget.colors()
+        return resolve_curve_colors(self.load_config)
 
     def get_config(self) -> dict:
         """
@@ -932,6 +961,8 @@ class ThresholdConfigWidget(QWidget):
             "limit_data": self.limit_data,
         }
         config.update(self._manual_limit_config())
+        if self._curve_color_widget is not None:
+            config.update(self._curve_color_widget.get_config())
         return config
 
     def _manual_limit_config(self) -> dict:

@@ -197,7 +197,7 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
             load_config=self.load_config,
             model_type="FFT",
         )
-        self.add_semantic_section("judgment", widget=self.threshold_widget)
+        self.add_threshold_curve_sections(self.threshold_widget, self.load_config)
 
     def _on_focus_changed(self, state):
         if hasattr(self, "focus_widget"):

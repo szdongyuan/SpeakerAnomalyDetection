@@ -57,9 +57,11 @@ from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
 from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
+from consts.acoustic_analysis.curve_style_consts import MAIN_CURVE_COLOR
 from consts.acoustic_analysis.specific_consts import spec_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
+from ui.curve_style import resolve_curve_colors
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
 from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_analysis_config.manual_limit_segments import (
@@ -422,6 +424,11 @@ class AnalysisGraphWidget(QWidget):
         layout.addWidget(self.analysis_plot)
         self.setLayout(layout)
 
+    def curve_colors(self, analysis_config=None):
+        if analysis_config is None:
+            analysis_config = getattr(self, "analysis_config", None) or {}
+        return resolve_curve_colors(analysis_config)
+
     def set_plot_font_size(self, font_size: int):
         font_size = ui_style_const.scale_size_px(font_size)
         font = QFont()
@@ -645,6 +652,7 @@ class Distortion(AnalysisGraphWidget):
                     y_label="Distortion(%)",
                     log_x=True,
                     curve_name="THD",
+                    curve_colors=self.curve_colors(analysis_config),
                 )
                 # THD specific title
                 if self.selected_label is not None:
@@ -663,7 +671,8 @@ class Distortion(AnalysisGraphWidget):
         # === Without limit config: original logic ===
         self.analysis_plot.clear()
         if valid_data:
-            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color=(51, 196, 77), width=2), name="THD")
+            main_color = self.curve_colors(analysis_config)[MAIN_CURVE_COLOR]
+            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color=main_color, width=2), name="THD")
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
@@ -995,6 +1004,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                     y_label=self._prb_y_label,
                     log_x=True,
                     curve_name=self._prb_curve_label,
+                    curve_colors=self.curve_colors(analysis_config),
                 )
 
                 if self.selected_label is not None:
@@ -1018,7 +1028,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             self.analysis_plot.plot(
                 freq_value,
                 perceptual_loudness,
-                pen=mkPen(color=(51, 196, 77), width=2),
+                pen=mkPen(color=self.curve_colors(analysis_config)[MAIN_CURVE_COLOR], width=2),
                 name=self._prb_curve_label,
             )
         if self.selected_label is not None:
@@ -1172,6 +1182,7 @@ class Spl(AnalysisGraphWidget):
             x_label="Time (s)",
             y_label=self._get_spl_label(),
             log_x=False,
+            curve_colors=self.curve_colors(),
         )
 
         # === 2. Matching: nearest neighbor + time threshold filter (SPL specific) ===
@@ -1209,7 +1220,8 @@ class Spl(AnalysisGraphWidget):
 
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
+        main_color = self.curve_colors()[MAIN_CURVE_COLOR]
+        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=main_color, width=2))
         self.analysis_plot.setLabel("left", self._get_spl_label())
         self.analysis_plot.setLabel("bottom", "Time (s)")
         self.analysis_plot.showGrid(x=True, y=True)
@@ -1387,6 +1399,7 @@ class SplFrequency(AnalysisGraphWidget):
             x_label="Frequency (Hz)",
             y_label="SPL (dB)",
             log_x=True,
+            curve_colors=self.curve_colors(),
         )
 
         # === 3. Limit check using LimitPlotUtils ===
@@ -1409,7 +1422,8 @@ class SplFrequency(AnalysisGraphWidget):
 
     def plot_spl_frequency(self, frequency_list, spl_db):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77), width=2))
+        main_color = self.curve_colors()[MAIN_CURVE_COLOR]
+        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=main_color, width=2))
         self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
@@ -1672,6 +1686,7 @@ class Frequency(AnalysisGraphWidget):
             x_label="Frequency (Hz)",
             y_label="Amplitude (dB)",
             log_x=True,
+            curve_colors=self.curve_colors(),
         )
 
         # === 3. Limit check using LimitPlotUtils ===
@@ -1695,7 +1710,8 @@ class Frequency(AnalysisGraphWidget):
     def plot_fr(self, frequency_list, fr):
         self.analysis_plot.clear()
         # fr = fr + 94 + self.v2pa_factor  # Todo: modify later
-        self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=(51, 196, 77), width=2))
+        main_color = self.curve_colors()[MAIN_CURVE_COLOR]
+        self.analysis_plot.plot(frequency_list, fr, pen=mkPen(color=main_color, width=2))
         self.analysis_plot.setLabel("left", "Amplitude (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)
@@ -1957,7 +1973,7 @@ class FftAnalysis(AnalysisGraphWidget):
         self.analysis_plot.plot(
             frequency,
             spectrum_db,
-            pen=mkPen(color=(51, 196, 77), width=2),
+            pen=mkPen(color=self.curve_colors()[MAIN_CURVE_COLOR], width=2),
             name="FFT",
         )
         if baseline_y is not None:
@@ -2008,6 +2024,7 @@ class FftAnalysis(AnalysisGraphWidget):
             y_label=y_label,
             log_x=str(x_axis_scale).lower() == "log",
             curve_name="FFT",
+            curve_colors=self.curve_colors(),
         )
         if baseline_y is not None:
             baseline = np.asarray(baseline_y, dtype=float)[mask]

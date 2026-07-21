@@ -60,7 +60,7 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
 
         self.add_semantic_section("detection", widget=harmonic_group_box)
         self.add_semantic_section("reference", widget=self.golden_chk_box)
-        self.add_semantic_section("judgment", widget=self.threshold_widget)
+        self.add_threshold_curve_sections(self.threshold_widget, self.load_config)
 
     def create_btn(self):
         return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
