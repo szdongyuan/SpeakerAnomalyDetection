@@ -24,6 +24,10 @@ from PyQt5.QtWidgets import (
 from scipy.signal import find_peaks
 
 from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_filter
+from base.core_algorithm.response.mel_spectrogram_analyzer import (
+    InvalidMelBandConfigurationError,
+    MelSpectrogramAnalyzer,
+)
 from base.core_algorithm.sound_quality import run_sound_quality
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
@@ -52,6 +56,8 @@ from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
+from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
+from consts.acoustic_analysis.specific_consts import spec_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
@@ -2158,13 +2164,14 @@ class Spectrogram(QWidget):
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
-        self.v2pa_factor = None
         self.analysis_config = None
         self.title_name = title_name
         self.current_plot_widget = None
         self.stft_plot_widget = None
         self.img_item = None
         self.stft_colorbar = None
+        self.linear_colorbar = None
+        self.default_logger = LogManager.set_log_handler("core")
         self.init_ui()
         self.setWindowTitle(title_name)
 
@@ -2211,38 +2218,73 @@ class Spectrogram(QWidget):
             # color_bar_axis.setStyle(tickTextOffset=10)
 
     def calculate_spec(self):
-        recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
+        config = self.analysis_config or {}
+        freq_scale_type = config.get(
+            "freq_scale_type", spec_consts.DEFAULT_SPEC_MODE
+        )
+        try:
+            self._calculate_spec()
+        except Exception as exc:
+            self.default_logger.exception(
+                "频谱分析失败: mode=%s, sample_rate=%s Hz, n_fft=%s, "
+                "hop_length=%s, n_mels=%s, fmin_hz=%s, "
+                "fmax_mode=%s, fmax_hz=%s",
+                freq_scale_type,
+                self.data_struct.sample_rate,
+                config.get("n_fft", spec_consts.DEFAULT_SPEC_N_FFT),
+                config.get("hop_length", spec_consts.DEFAULT_SPEC_HOP_LENGTH),
+                config.get("mel_n_mels", spec_consts.DEFAULT_MEL_BAND_COUNT),
+                config.get("mel_fmin_hz", spec_consts.DEFAULT_MEL_FMIN_HZ),
+                config.get("mel_fmax_mode", spec_consts.DEFAULT_MEL_FMAX_MODE),
+                config.get("mel_fmax_hz"),
+            )
+            if isinstance(exc, InvalidMelBandConfigurationError):
+                message = "Mel 频谱计算失败，请减少 Mel 频带数量或增大 FFT 窗长。"
+            else:
+                message = "频谱分析失败，请检查参数设置。"
+            MessageBox.warning(self, "提示", message)
+            return False
+        return True
+
+    def _calculate_spec(self):
+        config = self.analysis_config or {}
+        recorded_signal = resolve_analysis_channel_signal(self.data_struct, config, self.title_name)
         sample_rate = self.data_struct.sample_rate
 
-        n_fft = self.analysis_config.get("n_fft", 2048)
-        hop_length = self.analysis_config.get("hop_length", 256)
-        color_map = self.analysis_config.get("color_map", "viridis")
-        window_func = self.analysis_config.get("window_func", "hann")
-        freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
-        top_limit = self.analysis_config.get("top_limit", 70)
-        bottom_limit = self.analysis_config.get("bottom_limit", 50)
-        custom_limit_flag = self.analysis_config.get("custom_limit", False)
+        n_fft = config.get("n_fft", spec_consts.DEFAULT_SPEC_N_FFT)
+        hop_length = config.get("hop_length", spec_consts.DEFAULT_SPEC_HOP_LENGTH)
+        color_map = config.get("color_map", spec_consts.DEFAULT_SPEC_COLOR_MAP)
+        window_func = config.get("window_func", spec_consts.DEFAULT_SPEC_WINDOW)
+        freq_scale_type = config.get("freq_scale_type", spec_consts.DEFAULT_SPEC_MODE)
+        top_limit = config.get("top_limit", spec_consts.DEFAULT_SPEC_TOP_LIMIT)
+        bottom_limit = config.get("bottom_limit", spec_consts.DEFAULT_SPEC_BOTTOM_LIMIT)
+        custom_limit_flag = config.get("custom_limit", spec_consts.DEFAULT_SPEC_CUSTOM_LIMIT)
+        custom_z_range = (bottom_limit, top_limit) if custom_limit_flag else None
 
-        mid_value = (top_limit - bottom_limit) / 2
-        max_value = top_limit + mid_value
-        min_value = bottom_limit - mid_value
-
-        if freq_scale_type == "log":
-            fmin_cqt = librosa.note_to_hz("C1")
+        if freq_scale_type == spec_consts.SPEC_MODE_MEL:
+            self._calculate_mel_spectrogram(
+                recorded_signal,
+                sample_rate,
+                config,
+                z_range=custom_z_range,
+            )
+            self.set_color_font_size()
+            return
+        elif freq_scale_type == spec_consts.SPEC_MODE_LOG:
+            fmin_cqt = librosa.note_to_hz(spec_consts.SPEC_CQT_MIN_NOTE)
             CQT_complex, freqs, times = AudioThdFrequencyResponseAnalysis().compute_cqt(
                 y=recorded_signal, sr=sample_rate, hop_length=hop_length, n_fft=n_fft, fmin=fmin_cqt
             )
 
             CQT_mag = np.abs(CQT_complex)
-            CQT_db = librosa.amplitude_to_db(CQT_mag, ref=20e-6)
+            CQT_db = librosa.amplitude_to_db(CQT_mag, ref=REFERENCE_PRESSURE_PA)
             Z = CQT_db.T
 
-            target_ticks_hz = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
             major_ticks = []
             custom_y_ticks = None
 
             y_min_hz, y_max_hz = freqs.min(), freqs.max()
-            for freq in target_ticks_hz:
+            for freq in spec_consts.SPEC_LOG_FREQUENCY_TICKS_HZ:
                 if y_min_hz <= freq <= y_max_hz:
                     label = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
                     major_ticks.append((freq, label))
@@ -2253,21 +2295,20 @@ class Spectrogram(QWidget):
                 x=times,
                 y=freqs,
                 z=Z,
-                title="Spectrogram(Log Scale)",
-                xlabel="Time (s)",
-                ylabel="Frequency (Hz)",
+                title="对数频谱",
+                xlabel="时间 (s)",
+                ylabel="频率 (Hz)",
                 colormap=color_map,
                 x_range=(times.min(), times.max()),
                 y_range=(freqs.min(), freqs.max()),
                 y_ticks=custom_y_ticks,
                 background_color="white",
             )
-            self.plot_container_layout.addWidget(cqt_plot_widget)
-            self.current_plot_widget = cqt_plot_widget
+            self._show_plot_widget(cqt_plot_widget)
 
         else:
             spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
-            spec_dB = librosa.amplitude_to_db(spec, ref=20e-6)
+            spec_dB = librosa.amplitude_to_db(spec, ref=REFERENCE_PRESSURE_PA)
             freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
             times = librosa.times_like(spec_dB, sr=sample_rate, hop_length=hop_length)
 
@@ -2283,18 +2324,20 @@ class Spectrogram(QWidget):
 
             self.img_item.setRect(pg.QtCore.QRectF(times_min, freqs_min, width, height))
 
-            self.stft_plot_widget.setTitle("Spectrogram (Linear Scale)")
-            self.stft_plot_widget.setLabel("bottom", "Time (s)")
-            self.stft_plot_widget.setLabel("left", "Frequency (Hz)")
+            self.stft_plot_widget.setTitle("线性频谱")
+            self.stft_plot_widget.setLabel("bottom", "时间 (s)")
+            self.stft_plot_widget.setLabel("left", "频率 (Hz)")
             self.stft_plot_widget.setLogMode(x=False, y=False)
 
-            pos = np.linspace(0.0, 1.0, 256)
+            pos = np.linspace(0.0, 1.0, spec_consts.SPEC_COLOR_MAP_TABLE_SIZE)
 
-            colors = pg.colormap.get(color_map).getLookupTable(nPts=256)
+            colors = pg.colormap.get(color_map).getLookupTable(
+                nPts=spec_consts.SPEC_COLOR_MAP_TABLE_SIZE
+            )
             cmap = pg.ColorMap(pos, colors)
             db_min, db_max = np.nanmin(spec_dB), np.nanmax(spec_dB)
 
-            lut = cmap.getLookupTable(nPts=256)
+            lut = cmap.getLookupTable(nPts=spec_consts.SPEC_COLOR_MAP_TABLE_SIZE)
             self.img_item.setLookupTable(lut)
             self.img_item.setLevels([db_min, db_max])
 
@@ -2306,17 +2349,104 @@ class Spectrogram(QWidget):
             self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
             plot_item = self.stft_plot_widget.getPlotItem()
             if plot_item:
-                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
-                self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
+                if self.linear_colorbar is None:
+                    self.linear_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
+                    self.linear_colorbar.setImageItem(self.img_item, insert_in=plot_item)
+                else:
+                    self.linear_colorbar.setColorMap(cmap)
+                    self.linear_colorbar.setLevels((db_min, db_max))
+                self.stft_colorbar = self.linear_colorbar
             else:
                 self.stft_colorbar = None
-            self.plot_container_layout.addWidget(self.stft_plot_widget)
-            self.current_plot_widget = self.stft_plot_widget
+            self._show_plot_widget(self.stft_plot_widget)
 
-        if custom_limit_flag:
-            self.stft_colorbar.setLevels((min_value, max_value))
+        if custom_z_range is not None:
+            self.stft_colorbar.setLevels(custom_z_range)
 
         self.set_color_font_size()
+
+    def _calculate_mel_spectrogram(
+        self, recorded_signal, sample_rate, config, z_range=None
+    ):
+        configured_fmax_hz = self._resolve_mel_fmax_hz(config)
+        times_s, mel_frequencies_hz, mel_power_db = MelSpectrogramAnalyzer().analyze(
+            recorded_signal,
+            sample_rate,
+            n_fft=int(config.get("n_fft", spec_consts.DEFAULT_SPEC_N_FFT)),
+            hop_length=int(config.get("hop_length", spec_consts.DEFAULT_SPEC_HOP_LENGTH)),
+            n_mels=int(config.get("mel_n_mels", spec_consts.DEFAULT_MEL_BAND_COUNT)),
+            fmin_hz=float(
+                config.get("mel_fmin_hz", spec_consts.DEFAULT_MEL_FMIN_HZ)
+                or spec_consts.DEFAULT_MEL_FMIN_HZ
+            ),
+            fmax_hz=configured_fmax_hz,
+            window=str(
+                config.get("window_func", spec_consts.DEFAULT_SPEC_WINDOW)
+                or spec_consts.DEFAULT_SPEC_WINDOW
+            ),
+        )
+        mel_plot_widget, self.stft_colorbar = plot_2d_image(
+            x=times_s,
+            y=mel_frequencies_hz,
+            z=mel_power_db.T,
+            title="Mel 频谱",
+            xlabel="时间 (s)",
+            ylabel="频率 (Hz)",
+            colormap=str(
+                config.get("color_map", spec_consts.DEFAULT_SPEC_COLOR_MAP)
+                or spec_consts.DEFAULT_SPEC_COLOR_MAP
+            ),
+            x_range=(float(times_s.min()), float(times_s.max())),
+            y_range=(float(mel_frequencies_hz.min()), float(mel_frequencies_hz.max())),
+            z_range=z_range,
+            y_ticks=[self._mel_frequency_ticks(mel_frequencies_hz), []],
+            background_color="white",
+        )
+        self._show_plot_widget(mel_plot_widget)
+
+    @staticmethod
+    def _resolve_mel_fmax_hz(config):
+        mel_fmax_mode = config.get(
+            "mel_fmax_mode", spec_consts.DEFAULT_MEL_FMAX_MODE
+        )
+        if mel_fmax_mode == spec_consts.MEL_FMAX_MODE_NYQUIST:
+            return None
+        if mel_fmax_mode == spec_consts.MEL_FMAX_MODE_MANUAL:
+            if "mel_fmax_hz" not in config:
+                raise ValueError("手动 Mel 频率上限缺少 mel_fmax_hz")
+            return float(config["mel_fmax_hz"])
+        raise ValueError(f"不支持的 Mel 频率上限模式: {mel_fmax_mode}")
+
+    @staticmethod
+    def _mel_frequency_ticks(mel_frequencies_hz):
+        frequencies = np.asarray(mel_frequencies_hz, dtype=float)
+        if frequencies.size == 0:
+            return []
+        lower_hz = float(frequencies.min())
+        upper_hz = float(frequencies.max())
+        ticks = []
+        for frequency_hz in spec_consts.SPEC_MEL_FREQUENCY_TICKS_HZ:
+            if lower_hz <= frequency_hz <= upper_hz:
+                label = (
+                    f"{frequency_hz} Hz"
+                    if frequency_hz < 1000
+                    else f"{frequency_hz / 1000:g} kHz"
+                )
+                ticks.append((frequency_hz, label))
+        return ticks
+
+    def _show_plot_widget(self, plot_widget):
+        if self.current_plot_widget is plot_widget:
+            return
+        if self.current_plot_widget is not None:
+            previous_plot_widget = self.current_plot_widget
+            self.plot_container_layout.removeWidget(previous_plot_widget)
+            previous_plot_widget.hide()
+            if previous_plot_widget is not self.stft_plot_widget:
+                previous_plot_widget.deleteLater()
+        self.plot_container_layout.addWidget(plot_widget)
+        plot_widget.show()
+        self.current_plot_widget = plot_widget
 
 
 class LooseParticle(AnalysisGraphWidget):

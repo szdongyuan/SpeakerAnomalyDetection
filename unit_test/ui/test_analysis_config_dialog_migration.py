@@ -11,9 +11,10 @@ import numpy as np
 import pytest
 from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt
 from PyQt5.QtGui import QStandardItemModel
-from PyQt5.QtWidgets import QApplication, QHeaderView, QSizePolicy, QTableView, QTableWidgetItem
+from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel, QSizePolicy, QTableView, QTableWidgetItem
 
 from consts import error_code
+from consts.acoustic_analysis.specific_consts import spec_consts
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1946,17 +1947,109 @@ def test_spec_dialog_preserves_saved_keys_after_channel_migration(qapp):
 
     assert_vertical_golden_size(window)
     assert window.semantic_group_keys() == ["input", "compute", "display"]
+    assert [window.freq_scale_box.itemText(index) for index in range(window.freq_scale_box.count())] == [
+        label for _mode, label, _tooltip in spec_consts.SPEC_SPECTRUM_MODES
+    ]
+    assert [window.freq_scale_box.itemData(index) for index in range(window.freq_scale_box.count())] == [
+        mode for mode, _label, _tooltip in spec_consts.SPEC_SPECTRUM_MODES
+    ]
+    assert window.mel_param_group.isHidden()
     assert window.get_default_config() == {
         "n_fft": 1024,
         "hop_length": 128,
         "window_func": "hamming",
         "color_map": "magma",
         "freq_scale_type": "log",
+        "mel_n_mels": 128,
+        "mel_fmin_hz": 0,
+        "mel_fmax_mode": spec_consts.MEL_FMAX_MODE_NYQUIST,
         "top_limit": 75,
         "bottom_limit": 35,
         "custom_limit": True,
         "analysis_channel": 3,
     }
+    window.show()
+    qapp.processEvents()
+    window.freq_scale_box.setCurrentIndex(window.freq_scale_box.findData("mel"))
+    qapp.processEvents()
+    assert not window.mel_param_group.isHidden()
+    assert window.mel_param_group.height() >= window.mel_param_group.minimumSizeHint().height()
+    assert window.section_scroll_area.verticalScrollBar().maximum() > 0
+    window.freq_scale_box.setCurrentIndex(window.freq_scale_box.findData("log"))
+    qapp.processEvents()
+    assert window.mel_param_group.isHidden()
+    assert window.section_scroll_area.verticalScrollBar().maximum() == 0
+    window.close()
+
+
+def test_spec_dialog_shows_mel_parameters_for_mel_mode(qapp):
+    from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "Spec": {
+                "n_fft": 2048,
+                "hop_length": 256,
+                "window_func": "hann",
+                "color_map": "magma",
+                "top_limit": 0,
+                "bottom_limit": -80,
+                "custom_limit": False,
+                "freq_scale_type": "mel",
+                "mel_n_mels": 64,
+                "mel_fmin_hz": 50,
+                "mel_fmax_mode": spec_consts.MEL_FMAX_MODE_MANUAL,
+                "mel_fmax_hz": 12000,
+                "analysis_channel": 1,
+            }
+        }
+    )
+
+    window = SpecConfigWindow(config_manager, "Spec", available_channels=[0, 1])
+
+    assert_vertical_golden_size(window)
+    assert window.semantic_group_keys() == ["input", "compute", "display"]
+    assert window.freq_scale_box.currentData() == "mel"
+    assert not window.mel_param_group.isHidden()
+    assert [window.fft_size_box.itemText(index) for index in range(window.fft_size_box.count())] == [
+        str(value) for value in spec_consts.SPEC_FFT_SIZE_PRESETS
+    ]
+    assert [window.hop_length_box.itemText(index) for index in range(window.hop_length_box.count())] == [
+        str(value) for value in spec_consts.SPEC_HOP_LENGTH_PRESETS
+    ]
+    assert [window.window_func_box.itemText(index) for index in range(window.window_func_box.count())] == list(
+        spec_consts.SPEC_WINDOW_OPTIONS
+    )
+    assert [window.colormap_box.itemText(index) for index in range(window.colormap_box.count())] == list(
+        spec_consts.SPEC_COLOR_MAP_OPTIONS
+    )
+    assert window.mel_n_mels_spinbox.minimum() == spec_consts.MIN_MEL_BAND_COUNT
+    assert window.mel_n_mels_spinbox.maximum() == spec_consts.MAX_MEL_BAND_COUNT
+    assert window.mel_fmin_spinbox.minimum() == spec_consts.MIN_MEL_FREQUENCY_HZ
+    assert window.mel_fmin_spinbox.maximum() == spec_consts.MAX_MEL_FREQUENCY_HZ
+    assert window.mel_fmax_spinbox.minimum() == spec_consts.MEL_FMAX_NYQUIST_SPINBOX_VALUE
+    assert window.mel_fmax_spinbox.maximum() == spec_consts.MAX_MEL_FREQUENCY_HZ
+    assert window.mel_fmax_spinbox.specialValueText() == "采样率 / 2"
+    assert window.top_limit_spinbox.minimum() == spec_consts.MIN_SPEC_COLOR_LIMIT_DB
+    assert window.top_limit_spinbox.maximum() == spec_consts.MAX_SPEC_COLOR_LIMIT_DB
+    assert window.bottom_limit_spinbox.minimum() == spec_consts.MIN_SPEC_COLOR_LIMIT_DB
+    assert window.bottom_limit_spinbox.maximum() == spec_consts.MAX_SPEC_COLOR_LIMIT_DB
+    assert window.top_limit_spinbox.value() == 0
+    assert window.bottom_limit_spinbox.value() == -80
+    mel_parameter_labels = {label.text() for label in window.mel_param_group.findChildren(QLabel)}
+    assert {"频率下限", "频率上限"}.issubset(mel_parameter_labels)
+    config = window.get_default_config()
+    assert config["mel_n_mels"] == 64
+    assert config["mel_fmin_hz"] == 50
+    assert config["mel_fmax_mode"] == spec_consts.MEL_FMAX_MODE_MANUAL
+    assert config["mel_fmax_hz"] == 12000
+    assert config["freq_scale_type"] == "mel"
+    assert config["top_limit"] == 0
+    assert config["bottom_limit"] == -80
+    assert "v2pa_factor" not in config
+    assert "weighting" not in config
+    assert "main_tones_hz" not in config
+    assert "core_range_hz" not in config
 
 
 def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
