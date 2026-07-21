@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, Label, PushButton, RadioButton, SpinBox
+from ui.ui_analysis_config.curve_color_config_widget import CurveColorConfigWidget
 from ui.ui_analysis_config.config_normalization import (
     OCTAVE_SMOOTHING_OPTIONS,
     WEIGHTING_OPTIONS,
@@ -117,6 +118,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._ok_callback: Callable[[], Any] | None = None
         self._cancel_callback: Callable[[], Any] | None = None
         self._syncing_scroll = False
+        self.curve_color_widget = None
         self.setObjectName("semanticAnalysisConfigDialog")
         self.setStyleSheet(self._semantic_dialog_stylesheet())
 
@@ -412,6 +414,33 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
     def semantic_group_keys(self) -> list[str]:
         return list(self._semantic_sections.keys())
 
+    def add_or_append_semantic_widget(self, group_key, widget, title=None):
+        """Add a semantic section or append a widget to an existing section."""
+        if group_key not in self._semantic_sections:
+            return self.add_semantic_section(group_key, title=title, widget=widget)
+        content_layout = self._semantic_section_contents[group_key].layout()
+        widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+        content_layout.addWidget(widget)
+        self._refresh_section_container_minimum_height()
+        return content_layout
+
+    def enable_curve_color_config(self, load_config, threshold_widget=None):
+        """Mount curve colors in the display section and optionally bind thresholds."""
+        self.curve_color_widget = CurveColorConfigWidget(load_config, self)
+        self.curve_color_widget.expanded_changed.connect(self._on_curve_color_expanded)
+        self.add_or_append_semantic_widget("display", self.curve_color_widget)
+        if threshold_widget is not None:
+            threshold_widget.bind_curve_color_widget(self.curve_color_widget)
+        return self.curve_color_widget
+
+    def _on_curve_color_expanded(self, _expanded):
+        self._refresh_section_container_minimum_height()
+
+    def add_threshold_curve_sections(self, threshold_widget, load_config):
+        """Opt in to shared curve colors and add the threshold section."""
+        self.enable_curve_color_config(load_config, threshold_widget)
+        return self.add_semantic_section("judgment", widget=threshold_widget)
+
     def current_semantic_group_key(self) -> str | None:
         return self._active_semantic_group_key
 
@@ -428,6 +457,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._semantic_section_indicators.clear()
         self._semantic_section_collapsed.clear()
         self._active_semantic_group_key = None
+        self.curve_color_widget = None
         self._refresh_section_container_minimum_height()
 
     def is_semantic_section_collapsed(self, group_key: str) -> bool:

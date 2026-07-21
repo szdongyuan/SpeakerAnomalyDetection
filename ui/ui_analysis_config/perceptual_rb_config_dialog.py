@@ -78,7 +78,7 @@ class PerceptualRbConfigWindow(SemanticAnalysisConfigDialogBase):
 
         self.add_semantic_section("compute", widget=group)
         self.add_semantic_section("reference", widget=self.golden_chk_box)
-        self.add_semantic_section("judgment", widget=self.threshold_widget)
+        self.add_threshold_curve_sections(self.threshold_widget, self.load_config)
 
     def get_default_config(self):
         """获取配置数据"""

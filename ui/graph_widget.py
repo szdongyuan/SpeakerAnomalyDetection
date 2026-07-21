@@ -7,6 +7,16 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
 from PyQt5.QtWidgets import QHBoxLayout
 
+from consts.acoustic_analysis.curve_style_consts import (
+    LOWER_LIMIT_COLOR,
+    MAIN_CURVE_COLOR,
+    UPPER_LIMIT_COLOR,
+)
+from ui.curve_style import (
+    normalize_curve_color,
+    resolve_curve_colors,
+)
+
 
 def custom_log_tick_strings(values, scale, spacing):
     estrings = ["%0.1g" % x for x in 10 ** np.array(values).astype(float) * np.array(scale)]
@@ -408,6 +418,7 @@ class LimitPlotUtils:
         curve_color: tuple = (51, 196, 77),
         curve_width: int = 2,
         curve_name: str = None,
+        curve_colors: dict = None,
     ):
         """
         Common plot setup function (used by all 4 functions).
@@ -427,16 +438,25 @@ class LimitPlotUtils:
             curve_color: Main curve color, default green (51, 196, 77)
             curve_width: Main curve width
             curve_name: Main curve name (optional, THD uses "THD")
+            curve_colors: Main, upper-limit, and lower-limit color mapping
         """
         plot_widget.clear()
+        colors = resolve_curve_colors({})
+        if curve_colors is None:
+            colors[MAIN_CURVE_COLOR] = curve_color
+        else:
+            for key, fallback in colors.items():
+                colors[key] = normalize_curve_color(curve_colors.get(key), fallback)
+        main_color = colors[MAIN_CURVE_COLOR]
 
         # 1. Draw main curve (supports name parameter for legend)
-        plot_widget.plot(data_x, data_y, pen=mkPen(color=curve_color, width=curve_width), name=curve_name)
+        plot_widget.plot(data_x, data_y, pen=mkPen(color=main_color, width=curve_width), name=curve_name)
 
-        # 2. Draw limit curves (purple dashed)
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
-        plot_widget.plot(csv_x, csv_upper, pen=dashed_pen)
-        plot_widget.plot(csv_x, csv_lower, pen=dashed_pen)
+        # 2. Draw limit curves
+        upper_pen = mkPen(color=colors[UPPER_LIMIT_COLOR], width=2, style=Qt.DashLine)
+        lower_pen = mkPen(color=colors[LOWER_LIMIT_COLOR], width=2, style=Qt.DashLine)
+        plot_widget.plot(csv_x, csv_upper, pen=upper_pen)
+        plot_widget.plot(csv_x, csv_lower, pen=lower_pen)
 
         # 3. Set axis labels
         plot_widget.setLabel("left", y_label)

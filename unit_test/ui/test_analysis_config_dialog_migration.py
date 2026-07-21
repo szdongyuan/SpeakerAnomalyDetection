@@ -14,6 +14,7 @@ from PyQt5.QtGui import QStandardItemModel
 from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel, QSizePolicy, QTableView, QTableWidgetItem
 
 from consts import error_code
+from consts.acoustic_analysis.curve_style_consts import DEFAULT_CURVE_COLORS
 from consts.acoustic_analysis.specific_consts import spec_consts
 
 
@@ -2071,7 +2072,7 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
     window = SplConfigWindow(config_manager, "SPL", available_channels=[0, 2])
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["input", "preprocess", "compute", "judgment"]
+    assert window.semantic_group_keys() == ["input", "preprocess", "compute", "display", "judgment"]
     assert window.show_overall_spl_box.text() == "显示总体声压级"
     assert window.show_overall_spl_box.isChecked() is True
     assert window.get_default_config() == {
@@ -2097,6 +2098,7 @@ def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "analysis_time_range_enabled": False,
         "analysis_start_time_sec": 0.0,
         "analysis_end_time_sec": 0.0,
+        "display": dict(DEFAULT_CURVE_COLORS),
     }
 
 
@@ -2120,7 +2122,7 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
     window = SplConfigWindow(config_manager, "SPLF", available_channels=[0, 1])
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["input", "compute", "reference", "judgment"]
+    assert window.semantic_group_keys() == ["input", "compute", "reference", "display", "judgment"]
     assert window.show_overall_spl_box is None
     assert window.get_default_config() == {
         "splf_calc_mode": "total",
@@ -2135,6 +2137,7 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "manual_lower_segments": [],
         "weighting": "Z",
         "analysis_channel": 1,
+        "display": dict(DEFAULT_CURVE_COLORS),
     }
 
 
@@ -2327,7 +2330,7 @@ def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
     window = FrConfigWindow(config_manager, "FR")
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["compute", "reference", "judgment"]
+    assert window.semantic_group_keys() == ["compute", "reference", "display", "judgment"]
     assert window.get_default_config() == {
         "octave_smoothing": 6,
         "golden_sample_checked": True,
@@ -2338,6 +2341,7 @@ def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
         "manual_upper_segments": [],
         "manual_lower_enabled": False,
         "manual_lower_segments": [],
+        "display": dict(DEFAULT_CURVE_COLORS),
     }
 
 
@@ -2369,7 +2373,7 @@ def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
     }
     window.on_restore_default_btn_clicked()
 
-    assert window.semantic_group_keys() == ["input", "preprocess", "compute", "judgment"]
+    assert window.semantic_group_keys() == ["input", "preprocess", "compute", "display", "judgment"]
     assert window.get_default_config() == {
         "spl_window_unit": "points",
         "spl_window_time_sec": 0.0272,
@@ -2393,6 +2397,7 @@ def test_spl_dialog_restore_default_reloads_semantic_sections(qapp):
         "analysis_time_range_enabled": False,
         "analysis_start_time_sec": 0.0,
         "analysis_end_time_sec": 0.0,
+        "display": dict(DEFAULT_CURVE_COLORS),
     }
 
 
@@ -2488,7 +2493,7 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
     window = HdConfigWindow(config_manager, "HD")
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["detection", "reference", "judgment"]
+    assert window.semantic_group_keys() == ["detection", "reference", "display", "judgment"]
     assert window.get_default_config() == {
         "selected_labels": [2, 3],
         "all_checked": False,
@@ -2500,6 +2505,7 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
         "manual_upper_segments": [],
         "manual_lower_enabled": False,
         "manual_lower_segments": [],
+        "display": dict(DEFAULT_CURVE_COLORS),
     }
 
 
@@ -2521,7 +2527,7 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
     window = RbConfigWindow(config_manager, "RB")
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["detection", "reference", "judgment"]
+    assert window.semantic_group_keys() == ["detection", "reference", "display", "judgment"]
     assert window.get_default_config() == {
         "selected_labels": [10, 12],
         "all_checked": False,
@@ -2533,6 +2539,7 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
         "manual_upper_segments": [],
         "manual_lower_enabled": False,
         "manual_lower_segments": [],
+        "display": dict(DEFAULT_CURVE_COLORS),
     }
 
 
@@ -2554,7 +2561,7 @@ def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
     config = window.get_default_config()
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["compute", "reference", "judgment"]
+    assert window.semantic_group_keys() == ["compute", "reference", "display", "judgment"]
     assert config["prb_method"] == "sc"
     assert config["masking_config"] == {"sc_metric": "totalnl_x_ehs", "keep": "value"}
     assert config["golden_sample_checked"] is True
