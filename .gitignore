@@ -15,22 +15,16 @@ ui/readme.md
 .vscode/*
 .idea/
 requirements.txt
-temp_program.py
 .cursor/
 build/
-main_window_Launcher.spec
+*.spec
 .agents/
 .codex
 .worktrees/
 docs/
 ui/ui_src/icon
 build_onedir.py
-stream_test.py
-123123.py
-unit_test/test_123123_wasapi_playback.py
 unit_test/ui/test_custom_double_spin_box.py
 
-.worktrees/
 dist
 create_hardware_tables.exe
-tmp
