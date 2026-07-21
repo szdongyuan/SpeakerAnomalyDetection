@@ -2,6 +2,8 @@ import ast
 import json
 from pathlib import Path
 
+from consts.acoustic_analysis.specific_consts import spec_consts
+
 
 DEFAULT_CONFIG_PATH = Path("ui/ui_config/analysis_default_config.json")
 OPERATION_SEQUENCE_PATH = Path("ui/operation_sequence.py")
@@ -46,6 +48,30 @@ def test_every_exposed_analysis_type_has_default_config():
     assert EXPOSED_ANALYSIS_TYPES.issubset(defaults)
     for analysis_type in EXPOSED_ANALYSIS_TYPES:
         assert isinstance(defaults[analysis_type], dict), analysis_type
+
+
+def test_mel_is_integrated_into_the_spec_analysis_item():
+    tree = ast.parse(OPERATION_SEQUENCE_PATH.read_text(encoding="utf-8"))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "create_analysis_list_layout":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "analysis_items"
+                for target in child.targets
+            ):
+                continue
+
+            analysis_items = ast.literal_eval(child.value)
+            assert "频谱分析 (Spec) " in analysis_items
+            assert "梅尔频谱图 (MEL) " not in analysis_items
+            assert "时频谱图 (Spec) " not in analysis_items
+            return
+
+    raise AssertionError("analysis_items was not found")
 
 
 def test_fft_default_contains_active_fft_configuration_only():
@@ -95,6 +121,28 @@ def test_channel_defaults_are_present_for_channel_aware_dialogs():
 
     for analysis_type in ("SPL", "SPLF", "FFT", "Spec", "FBA", "LP", "AI"):
         assert defaults[analysis_type]["analysis_channel"] == 0
+
+
+def test_spec_defaults_include_all_spectrum_modes():
+    defaults = load_defaults()
+    spec_defaults = defaults["Spec"]
+
+    assert spec_defaults["n_fft"] == spec_consts.DEFAULT_SPEC_N_FFT
+    assert spec_defaults["hop_length"] == spec_consts.DEFAULT_SPEC_HOP_LENGTH
+    assert spec_defaults["window_func"] == spec_consts.DEFAULT_SPEC_WINDOW
+    assert spec_defaults["color_map"] == spec_consts.DEFAULT_SPEC_COLOR_MAP
+    assert spec_defaults["freq_scale_type"] == spec_consts.DEFAULT_SPEC_MODE
+    assert spec_defaults["mel_n_mels"] == spec_consts.DEFAULT_MEL_BAND_COUNT
+    assert spec_defaults["mel_fmin_hz"] == spec_consts.DEFAULT_MEL_FMIN_HZ
+    assert spec_defaults["mel_fmax_mode"] == spec_consts.DEFAULT_MEL_FMAX_MODE
+    assert "mel_fmax_hz" not in spec_defaults
+    assert spec_defaults["top_limit"] == spec_consts.DEFAULT_SPEC_TOP_LIMIT
+    assert spec_defaults["bottom_limit"] == spec_consts.DEFAULT_SPEC_BOTTOM_LIMIT
+    assert spec_defaults["custom_limit"] is spec_consts.DEFAULT_SPEC_CUSTOM_LIMIT
+    assert spec_defaults["analysis_channel"] == spec_consts.DEFAULT_SPEC_ANALYSIS_CHANNEL
+    assert "MEL" not in defaults
+    assert "v2pa_factor" not in spec_defaults
+    assert "weighting" not in spec_defaults
 
 
 def test_special_dialog_defaults_include_required_legacy_keys():

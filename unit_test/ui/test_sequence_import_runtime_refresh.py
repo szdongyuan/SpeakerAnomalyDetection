@@ -424,3 +424,59 @@ def test_run_clears_previous_results_after_all_import_gates_pass(monkeypatch):
     assert window.instantiated_analysis == [
         ("item", "FAKE", window.analysis_config["item"])
     ]
+
+
+def test_run_skips_failed_spec_and_continues_later_analysis_and_exports():
+    window = _run_window()
+    events = []
+
+    class FailedSpec:
+        _sequence_analysis_key = "spec"
+
+        def calculate_spec(self):
+            events.append("spec_calculate")
+            return False
+
+        def show(self):
+            events.append("spec_show")
+
+    class SuccessfulFft:
+        _sequence_analysis_key = "fft"
+
+        def calculate_fft(self):
+            events.append("fft_calculate")
+            return True
+
+        def show(self):
+            events.append("fft_show")
+
+        def setGeometry(self, *args):
+            pass
+
+        def setMinimumSize(self, *args):
+            pass
+
+        def installEventFilter(self, *args):
+            pass
+
+    window.analysis_config = {
+        "display_sequence": ["spec", "fft"],
+        "spec": {"type": "Spec"},
+        "fft": {"type": "FFT"},
+    }
+
+    def instance_analysis_class(key, item_type, config):
+        if key == "spec":
+            window.analysis_window.append(FailedSpec())
+        else:
+            window.analysis_window.append(SuccessfulFft())
+
+    window.instance_analysis_class = instance_analysis_class
+    window._analysis_window_key_by_obj = {}
+    window._get_analysis_window_geometry = lambda _key: None
+    window._set_analysis_window_geometry = lambda *_args: None
+    window._handle_post_analysis_exports = lambda: events.append("export")
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert events == ["spec_calculate", "fft_calculate", "fft_show", "export"]
