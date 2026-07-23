@@ -14,6 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from PyQt5.QtWidgets import QApplication
 
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_FOURIER,
+    HARMONIC_DETECTION_METHOD_KEY,
+    HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
+)
 from ui import signal_analysis_window as saw
 
 
@@ -300,6 +305,7 @@ def test_distortion_standard_thd_does_not_resolve_v2pa(qapp, monkeypatch):
 
     widget = _recording_widget(saw.Distortion("HD"), analysis_channel=2)
     widget.analysis_config["selected_labels"] = [2]
+    widget.analysis_config[HARMONIC_DETECTION_METHOD_KEY] = HARMONIC_DETECTION_METHOD_FOURIER
     monkeypatch.setattr(saw, "resolve_analysis_v2pa_factor_for_channel", fail_resolver)
     monkeypatch.setattr(saw.AudioThdFrequencyResponseAnalysis, "calculate_thd_three_phase", calculate_thd)
     monkeypatch.setattr(widget, "plot_graph", lambda freq, thd, *args: plot_calls.append((freq, thd)))
@@ -309,11 +315,77 @@ def test_distortion_standard_thd_does_not_resolve_v2pa(qapp, monkeypatch):
 
     assert captured["sample_rate"] == 48000
     assert captured["thd_kwargs"]["harmonic_orders"] == [2]
+    assert captured["thd_kwargs"][HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_FOURIER
     assert result["thd"] == [10.0]
     assert widget.result["thd"] == [10.0]
     assert widget.v2pa_factor is None
     assert plot_calls[-1][0].tolist() == [1000.0]
     assert warnings == []
+
+
+def test_distortion_standard_thd_defaults_missing_detection_method_to_synchronous(qapp, monkeypatch):
+    captured = {}
+
+    def calculate_thd(self, recorded_signal, sample_rate, thd_kwargs):
+        captured["thd_kwargs"] = thd_kwargs
+        return np.array([1000.0]), np.array([[2.0]]), np.array([10.0])
+
+    widget = _recording_widget(saw.Distortion("HD"), analysis_channel=2)
+    widget.analysis_config["selected_labels"] = [2]
+    widget.analysis_config.pop(HARMONIC_DETECTION_METHOD_KEY, None)
+    monkeypatch.setattr(saw.AudioThdFrequencyResponseAnalysis, "calculate_thd_three_phase", calculate_thd)
+    monkeypatch.setattr(widget, "plot_graph", lambda *args, **kwargs: None)
+    monkeypatch.setattr(saw.MessageBox, "warning", lambda *args, **kwargs: None)
+
+    widget.calculate_thd()
+
+    assert captured["thd_kwargs"][HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
+
+
+def test_distortion_standard_thd_normalizes_invalid_persisted_detection_method(qapp, monkeypatch):
+    captured = {}
+
+    def calculate_thd(self, recorded_signal, sample_rate, thd_kwargs):
+        captured["thd_kwargs"] = thd_kwargs
+        return np.array([1000.0]), np.array([[2.0]]), np.array([10.0])
+
+    widget = _recording_widget(saw.Distortion("HD"), analysis_channel=2)
+    widget.analysis_config["selected_labels"] = [2]
+    widget.analysis_config[HARMONIC_DETECTION_METHOD_KEY] = "bad"
+    monkeypatch.setattr(saw.AudioThdFrequencyResponseAnalysis, "calculate_thd_three_phase", calculate_thd)
+    monkeypatch.setattr(widget, "plot_graph", lambda *args, **kwargs: None)
+    monkeypatch.setattr(saw.MessageBox, "warning", lambda *args, **kwargs: None)
+
+    widget.calculate_thd()
+
+    assert captured["thd_kwargs"][HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
+
+
+def test_prb_perceptual_thd_does_not_pass_detection_method(qapp, monkeypatch):
+    captured = {}
+
+    def calculate_perceptual(self, recorded_signal, sample_rate, thd_kwargs, v2pa_factor=None):
+        captured["thd_kwargs"] = thd_kwargs
+        return np.array([1000.0]), np.array([10]), np.array([4.0])
+
+    widget = _recording_widget(saw.PerceptualRubAndBuzz("PRB"), analysis_channel=2)
+    widget.analysis_config[HARMONIC_DETECTION_METHOD_KEY] = HARMONIC_DETECTION_METHOD_FOURIER
+    monkeypatch.setattr(
+        saw,
+        "resolve_analysis_v2pa_factor_for_channel",
+        lambda *args, **kwargs: 1.0,
+    )
+    monkeypatch.setattr(
+        saw.AudioThdFrequencyResponseAnalysis,
+        "calculate_perceptual_thd_three_phase",
+        calculate_perceptual,
+    )
+    monkeypatch.setattr(widget, "plot_graph", lambda *args, **kwargs: None)
+    monkeypatch.setattr(saw.MessageBox, "warning", lambda *args, **kwargs: None)
+
+    widget.calculate_thd()
+
+    assert HARMONIC_DETECTION_METHOD_KEY not in captured["thd_kwargs"]
 
 
 def test_prb_resolver_failure_after_success_clears_stale_result(qapp, monkeypatch):

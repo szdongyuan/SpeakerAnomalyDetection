@@ -6,9 +6,15 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
 
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_FOURIER,
+    HARMONIC_DETECTION_METHOD_KEY,
+    HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
+)
 from ui.ui_analysis_config.common_widgets import (
     ChannelSelectorWidget,
     GoldenSampleWidget,
+    HarmonicDetectionMethodSelectorWidget,
     HarmonicSelectorWidget,
     OctaveSmoothingSelectorWidget,
     SemanticAnalysisConfigDialogBase,
@@ -56,6 +62,28 @@ def test_weighting_selector_respects_allowed_options(qapp):
     widget = WeightingSelectorWidget({"weighting": "B"}, allowed_options=("Z", "A", "C"), default="A")
 
     assert widget.current_weighting() == "A"
+
+
+def test_harmonic_detection_method_selector_defaults_to_synchronous(qapp):
+    widget = HarmonicDetectionMethodSelectorWidget({})
+
+    assert widget.combo_box.currentText() == "同步检波"
+    assert widget.current_method() == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
+    assert widget.get_config() == {HARMONIC_DETECTION_METHOD_KEY: HARMONIC_DETECTION_METHOD_SYNCHRONOUS}
+
+
+def test_harmonic_detection_method_selector_loads_fourier(qapp):
+    widget = HarmonicDetectionMethodSelectorWidget({HARMONIC_DETECTION_METHOD_KEY: "fourier"})
+
+    assert widget.combo_box.currentText() == "傅里叶变换"
+    assert widget.current_method() == HARMONIC_DETECTION_METHOD_FOURIER
+    assert widget.get_config() == {HARMONIC_DETECTION_METHOD_KEY: HARMONIC_DETECTION_METHOD_FOURIER}
+
+
+def test_harmonic_detection_method_selector_normalizes_invalid_saved_value(qapp):
+    widget = HarmonicDetectionMethodSelectorWidget({HARMONIC_DETECTION_METHOD_KEY: "bad"})
+
+    assert widget.current_method() == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
 
 
 def test_octave_smoothing_selector_reads_explicit_key(qapp):

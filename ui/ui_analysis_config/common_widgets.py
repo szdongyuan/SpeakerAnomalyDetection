@@ -17,6 +17,11 @@ from PyQt5.QtWidgets import (
 )
 
 from consts.acoustic_analysis.curve_style_consts import PLOT_VIEW_DIALOG_WIDTH
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_KEY,
+    HARMONIC_DETECTION_METHOD_LABELS,
+    normalize_harmonic_detection_method,
+)
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
     CheckBox,
@@ -680,6 +685,33 @@ class WeightingSelectorWidget(QWidget):
 
     def get_config(self) -> dict[str, str]:
         return {"weighting": self.current_weighting()}
+
+
+class HarmonicDetectionMethodSelectorWidget(QWidget):
+    """Standard HD/RB detection method selector."""
+
+    def __init__(self, cfg: dict[str, Any] | None = None, parent=None):
+        super().__init__(parent)
+        self.combo_box = ComboBox(self)
+        for method, label in HARMONIC_DETECTION_METHOD_LABELS.items():
+            self.combo_box.addItem(label, method)
+
+        selected = normalize_harmonic_detection_method((cfg or {}).get(HARMONIC_DETECTION_METHOD_KEY))
+        selected_idx = self.combo_box.findData(selected)
+        self.combo_box.setCurrentIndex(selected_idx if selected_idx >= 0 else 0)
+        self.combo_box.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(Label("检测算法:"))
+        layout.addWidget(self.combo_box)
+        layout.addStretch()
+
+    def current_method(self) -> str:
+        return normalize_harmonic_detection_method(self.combo_box.currentData())
+
+    def get_config(self) -> dict[str, str]:
+        return {HARMONIC_DETECTION_METHOD_KEY: self.current_method()}
 
 
 class OctaveSmoothingSelectorWidget(QWidget):

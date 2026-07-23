@@ -33,6 +33,12 @@ def _create_database(path):
     db.close()
 
 
+def _patch_local_database(monkeypatch, path):
+    db_path = str(path)
+    monkeypatch.setattr(model_consts, "DATABASE_PATH", db_path)
+    monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", db_path)
+
+
 def test_frequency_stepped_persistence_helpers_are_public():
     assert callable(frequency_stepped_insert_values)
     assert callable(parse_frequency_stepped_row)
@@ -180,7 +186,7 @@ def test_ensure_audio_database_ready_uses_canonical_database_path(monkeypatch, l
 def test_legacy_save_stores_null_metadata_and_query_all_preserves_legacy_row(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "legacy_save.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     code, msg = StimulusSignalManagement.save_stimulus_info_to_db(
         {
@@ -223,7 +229,7 @@ def test_legacy_chirp_step_and_noise_db_paths_store_null_metadata(
 ):
     db_path = local_tmp_path / f"legacy_{method}.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
     stimulus_name = f"legacy_{method}"
 
     code, msg = StimulusSignalManagement.save_stimulus_info_to_db(
@@ -275,7 +281,7 @@ def test_frequency_stepped_save_requires_frequencies_derives_summary_and_seriali
 ):
     db_path = local_tmp_path / "step_sc_save.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     missing = _step_sc_metadata(stimulus_name="missing_frequencies")
     missing.pop("frequencies")
@@ -322,7 +328,7 @@ def test_frequency_stepped_octave_save_with_valid_resolution_serializes_metadata
 ):
     db_path = local_tmp_path / "octave_resolution_save.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _octave_step_sc_metadata(stimulus_name="valid_octave")
     code, msg = StimulusSignalManagement.save_stimulus_info_to_db(metadata)
@@ -355,7 +361,7 @@ def test_frequency_stepped_octave_save_rejects_missing_or_invalid_resolution(
 ):
     db_path = local_tmp_path / "octave_bad_resolution_save.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _octave_step_sc_metadata(stimulus_name="invalid_octave_resolution")
     if resolution_update == "__missing__":
@@ -388,7 +394,7 @@ def test_frequency_stepped_save_rejects_invalid_authoritative_frequencies(
 ):
     db_path = local_tmp_path / "invalid_frequencies_save.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _step_sc_metadata(stimulus_name="invalid_frequencies", frequencies=frequencies)
     code, msg = StimulusSignalManagement.save_stimulus_info_to_db(metadata)
@@ -403,7 +409,7 @@ def test_frequency_stepped_save_rejects_invalid_authoritative_frequencies(
 def test_frequency_stepped_serialization_failure_does_not_insert(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "serialize.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _step_sc_metadata(stimulus_name="bad_json", unserializable=object())
     code, msg = StimulusSignalManagement.save_stimulus_info_to_db(metadata)
@@ -418,7 +424,7 @@ def test_frequency_stepped_serialization_failure_does_not_insert(monkeypatch, lo
 def test_query_all_marks_valid_and_invalid_frequency_stepped_metadata(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "load.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     valid = _step_sc_metadata(stimulus_name="valid_row")
     invalid = {"stimulus_method": "chirp", "frequencies": [1000]}
@@ -505,7 +511,7 @@ def test_query_all_reconstructs_frequency_stepped_payload_when_retained_frequenc
 ):
     db_path = local_tmp_path / "load_without_retained_frequencies.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = {
         "stimulus_method": "frequency_stepped",
@@ -559,7 +565,7 @@ def test_query_all_reconstructs_frequency_stepped_payload_when_retained_frequenc
 def test_query_all_loads_valid_octave_frequency_stepped_metadata(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "valid_octave_load.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _octave_step_sc_metadata(stimulus_name="valid_octave_row")
     _insert_raw_stimulus(
@@ -607,7 +613,7 @@ def test_query_all_rejects_octave_retained_frequencies_without_supported_resolut
 ):
     db_path = local_tmp_path / "invalid_octave_resolution_load.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _octave_step_sc_metadata(stimulus_name="invalid_octave_resolution_row")
     if resolution_update == "__missing__":
@@ -660,7 +666,7 @@ def test_query_all_rejects_malformed_retained_frequency_stepped_frequencies(
 ):
     db_path = local_tmp_path / "malformed_retained_frequencies.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _step_sc_metadata(
         stimulus_name="malformed_frequencies_row",
@@ -700,7 +706,7 @@ def test_query_all_rejects_malformed_retained_frequency_stepped_frequencies(
 def test_query_all_overwrites_stale_metadata_identity_list_fields_from_db(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "stale_identity.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _step_sc_metadata(
         stimulus_id="stale-id",
@@ -750,7 +756,7 @@ def test_query_all_overwrites_stale_metadata_identity_list_fields_from_db(monkey
 def test_service_blocks_scalar_edits_for_frequency_stepped_but_allows_rename_delete(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "edit.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
     metadata = _step_sc_metadata(stimulus_name="editable_name")
     assert StimulusSignalManagement.save_stimulus_info_to_db(metadata)[0] == error_code.OK
 
@@ -773,7 +779,7 @@ def test_service_blocks_scalar_edits_for_frequency_stepped_but_allows_rename_del
 def test_recording_and_sample_import_legacy_matching_stays_scalar_only(local_tmp_path, monkeypatch):
     db_path = local_tmp_path / "legacy_paths.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     with DataSave(str(db_path)) as database:
         seen = {}
@@ -809,7 +815,7 @@ def test_recording_and_sample_import_legacy_matching_stays_scalar_only(local_tmp
 def test_legacy_recording_insert_lets_metadata_default_to_null(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "recording_insert.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     manager = RecordingManager()
     manager.db_path = str(db_path)
@@ -843,7 +849,7 @@ def test_legacy_recording_insert_lets_metadata_default_to_null(monkeypatch, loca
 def test_frequency_stepped_recording_save_creates_valid_metadata_row(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "recording_step_sc_insert.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     manager = RecordingManager()
     manager.db_path = str(db_path)
@@ -885,8 +891,7 @@ def test_frequency_stepped_recording_auto_insert_without_usable_name_generates_d
 ):
     db_path = local_tmp_path / "recording_step_sc_insert_without_name.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
-    monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     manager = RecordingManager()
     manager.db_path = str(db_path)
@@ -943,7 +948,7 @@ def test_frequency_stepped_recording_auto_insert_without_usable_name_generates_d
 def test_frequency_stepped_recording_save_reuses_existing_rich_row(monkeypatch, local_tmp_path):
     db_path = local_tmp_path / "recording_step_sc_reuse.db"
     _create_database(db_path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
+    _patch_local_database(monkeypatch, db_path)
 
     metadata = _step_sc_metadata(stimulus_name="existing_step_sc", start_freq=1, stop_freq=2, num_steps=99)
     save_code, msg = StimulusSignalManagement.save_stimulus_info_to_db(metadata)

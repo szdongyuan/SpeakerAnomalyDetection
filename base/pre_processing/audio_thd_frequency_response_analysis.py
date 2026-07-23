@@ -10,6 +10,10 @@ import librosa
 from base.utils.plot_audio_features import PlotManager
 from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
+from base.core_algorithm.harmonic_distortion.synchronous_harmonic_detector import (
+    SynchronousHarmonicDetector,
+    validate_selected_harmonic_orders,
+)
 from base.core_algorithm.harmonic_distortion.chirp_signal_hd import ChirpSignalHD
 from base.core_algorithm.harmonic_distortion.perceptual_step_signal_hd import PerceptualStepSignalHD
 from base.core_algorithm.harmonic_distortion.perceptual_chirp_signal_hd import PerceptualChirpSignalHD
@@ -18,6 +22,12 @@ from consts.frequency_stepped_consts import (
     FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER,
     FREQUENCY_STEPPED_METHOD,
     FREQUENCY_STEPPED_MIN_PERCEPTUAL_HARMONIC_ORDER,
+)
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_FOURIER,
+    HARMONIC_DETECTION_METHOD_KEY,
+    HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
+    normalize_harmonic_detection_method,
 )
 
 
@@ -231,13 +241,17 @@ class AudioThdFrequencyResponseAnalysis(object):
         """
         NEW METHOD: Calculate THD using three-phase architecture.
 
-        Step signals use STFT exclusively. Chirp signals use STFT exclusively.`
+        Ordinary step signals use synchronous harmonic fitting. Chirp signals use STFT.
 
         Returns: (x, h, thd) for plotting (backward compatible with existing plots)
         """
         stimulus_metadata = thd_kwargs["stimulus_metadata"]
         harmonic_orders = thd_kwargs.get("harmonic_orders", [2, 3, 4, 5])
         stimulus_method = stimulus_metadata["stimulus_method"]
+        detection_method = normalize_harmonic_detection_method(
+            thd_kwargs.get(HARMONIC_DETECTION_METHOD_KEY),
+            strict=True,
+        )
 
         if stimulus_method == FREQUENCY_STEPPED_METHOD:
             return self._calculate_frequency_stepped_thd(
@@ -246,27 +260,68 @@ class AudioThdFrequencyResponseAnalysis(object):
                 stimulus_metadata=stimulus_metadata,
                 harmonic_orders=harmonic_orders,
                 stft_window_type=thd_kwargs.get("stft_window_type", "hann"),
+                harmonic_detection_method=detection_method,
             )
+
+        if stimulus_method == "steps":
+            analyzer = StepSignalHD(sample_rate=sr)
+            if detection_method == HARMONIC_DETECTION_METHOD_SYNCHRONOUS:
+                result = analyzer.compute_distortion(
+                    recorded_signal,
+                    stimulus_metadata,
+                    harmonic_orders,
+                    harmonic_mask=None,
+                    stft_window_type=thd_kwargs.get("stft_window_type", "hann"),
+                    harmonic_detection_method=detection_method,
+                )
+                x = result["frequencies"]
+                return x, result["harmonic_amplitudes"], result["thd"]
+
+            if detection_method == HARMONIC_DETECTION_METHOD_FOURIER:
+                validated_harmonic_orders = list(
+                    validate_selected_harmonic_orders(
+                        harmonic_orders,
+                        FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER,
+                    )
+                )
+                single_rep_duration = stimulus_metadata["total_time"] / stimulus_metadata["repeat_times"]
+                step_duration = single_rep_duration / stimulus_metadata["num_steps"]
+                step_samples = int(step_duration * sr)
+                builder = HarmonicIndexBuilder()
+                index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
+                    stimulus_metadata,
+                    sr=sr,
+                    n_fft=step_samples,
+                    max_harmonic_order=FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER,
+                )
+                mask_matrix = builder.create_mask_from_indices(index_matrix, validated_harmonic_orders, len(fft_freqs))
+                fundamental_bins = index_matrix[:, 1]
+                result = analyzer.compute_distortion(
+                    recorded_signal,
+                    stimulus_metadata,
+                    validated_harmonic_orders,
+                    harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
+                    stft_window_type=thd_kwargs.get("stft_window_type", "hann"),
+                    harmonic_detection_method=detection_method,
+                )
+                x = result["frequencies"]
+                h = np.zeros((6, len(x)), dtype=float)
+                h[0, :] = x
+                spectrum = result["spectrum_matrix"]
+                for step_idx in range(len(x)):
+                    for harmonic_order in range(1, 6):
+                        if harmonic_order < index_matrix.shape[1]:
+                            bin_idx = int(index_matrix[step_idx, harmonic_order])
+                            if bin_idx > 0:
+                                h[harmonic_order, step_idx] = float(spectrum[bin_idx, step_idx])
+                return x, h, result["thd"]
 
         # ═══════════════════════════════════════════════════════════════════
         # PHASE 1A: Build Overall Index Matrix
         # ═══════════════════════════════════════════════════════════════════
         builder = HarmonicIndexBuilder()
 
-        if stimulus_metadata["stimulus_method"] == "steps":
-            # STFT window type for step signals
-            stft_window_type = thd_kwargs.get("stft_window_type", "hann")
-
-            # Calculate STFT parameters (full step duration - no trimming)
-            single_rep_duration = stimulus_metadata["total_time"] / stimulus_metadata["repeat_times"]
-            step_duration = single_rep_duration / stimulus_metadata["num_steps"]
-            step_samples = int(step_duration * sr)
-            n_fft = step_samples  # STFT window size = step duration
-
-            index_matrix, fund_freqs, fft_freqs = builder.build_step_signal_index_matrix(
-                stimulus_metadata, sr=sr, n_fft=n_fft, max_harmonic_order=FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER
-            )
-        elif stimulus_metadata["stimulus_method"] == "chirps":
+        if stimulus_metadata["stimulus_method"] == "chirps":
             stft_window_size = thd_kwargs.get("stft_window_size", 2048)
             stft_hop_size = thd_kwargs.get("stft_hop_size", 1024)
 
@@ -289,33 +344,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         # ═══════════════════════════════════════════════════════════════════
         # PHASE 2: Calculate THD
         # ═══════════════════════════════════════════════════════════════════
-        if stimulus_metadata["stimulus_method"] == "steps":
-            analyzer = StepSignalHD(sample_rate=sr)
-            result = analyzer.compute_distortion(
-                recorded_signal,
-                stimulus_metadata,
-                harmonic_orders,
-                harmonic_mask=(mask_matrix, fund_freqs, fundamental_bins),
-                stft_window_type=stft_window_type,
-            )
-
-            x = result["frequencies"]
-            thd = result["thd"]
-            # h needs to be (6, n_steps) for plotting - 6 harmonics expected by plot_harmonic
-            # Row 0: fundamental, Rows 1-5: harmonics 1-5
-            h = np.zeros((6, len(x)))
-            h[0, :] = x  # First row is fundamental frequencies (used as placeholder)
-
-            # Extract harmonic amplitudes from STFT spectrum using index matrix
-            spectrum = result["spectrum_matrix"]  # Shape: (n_bins+1, n_steps) with dummy bin
-            for step_idx in range(len(x)):
-                # Extract harmonics 1-5 using index matrix
-                for harmonic_order in range(1, 6):
-                    bin_idx = index_matrix[step_idx, harmonic_order]
-                    if bin_idx > 0:  # Not sentinel/dummy bin
-                        h[harmonic_order, step_idx] = spectrum[bin_idx, step_idx]
-
-        elif stimulus_metadata["stimulus_method"] == "chirps":
+        if stimulus_metadata["stimulus_method"] == "chirps":
             analyzer = ChirpSignalHD(sample_rate=sr)
             stft_window_size = thd_kwargs.get("stft_window_size", 2048)
             stft_hop_size = thd_kwargs.get("stft_hop_size", 1024)
@@ -352,6 +381,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         stimulus_metadata,
         harmonic_orders,
         stft_window_type="hann",
+        harmonic_detection_method=HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
     ):
         schedule, segment_pairs = _frequency_stepped_analysis_segments(
             recorded_signal,
@@ -361,9 +391,58 @@ class AudioThdFrequencyResponseAnalysis(object):
         if not segment_pairs:
             return np.array([]), np.zeros((6, 0), dtype=float), np.array([])
 
-        max_harmonic_order = max(
-            [FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER, *[int(order) for order in harmonic_orders]]
+        method = normalize_harmonic_detection_method(harmonic_detection_method, strict=True)
+        if method == HARMONIC_DETECTION_METHOD_FOURIER:
+            return self._calculate_frequency_stepped_fourier_thd(
+                segment_pairs=segment_pairs,
+                sample_rate=int(sample_rate),
+                harmonic_orders=harmonic_orders,
+                stft_window_type=stft_window_type,
+            )
+
+        detector = SynchronousHarmonicDetector()
+
+        frequencies = []
+        harmonic_columns = []
+        thd_values = []
+        for segment, segment_signal in segment_pairs:
+            amplitudes, distortion = detector.analyze(
+                segment_signal,
+                f0=float(segment.frequency_hz),
+                sample_rate=int(sample_rate),
+                harmonic_orders=harmonic_orders,
+                stft_window_type=stft_window_type,
+            )
+
+            frequencies.append(float(segment.frequency_hz))
+            harmonic_column = np.zeros(6, dtype=float)
+            harmonic_column[0] = float(segment.frequency_hz)
+            for order in range(1, 6):
+                harmonic_column[order] = float(amplitudes.get(order, 0.0))
+            harmonic_columns.append(harmonic_column)
+            thd_values.append(float(distortion))
+
+        x = np.asarray(frequencies, dtype=float)
+        h = np.column_stack(harmonic_columns)
+        thd = np.asarray(thd_values, dtype=float)
+        sort_idx = np.argsort(x, kind="stable")
+        return x[sort_idx], h[:, sort_idx], thd[sort_idx]
+
+    def _calculate_frequency_stepped_fourier_thd(
+        self,
+        *,
+        segment_pairs,
+        sample_rate,
+        harmonic_orders,
+        stft_window_type="hann",
+    ):
+        validated_harmonic_orders = list(
+            validate_selected_harmonic_orders(
+                harmonic_orders,
+                FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER,
+            )
         )
+        max_harmonic_order = max([FREQUENCY_STEPPED_DEFAULT_MAX_HARMONIC_ORDER, *validated_harmonic_orders])
         builder = HarmonicIndexBuilder()
         analyzer = StepSignalHD(sample_rate=int(sample_rate))
 
@@ -380,15 +459,25 @@ class AudioThdFrequencyResponseAnalysis(object):
             )
             index_matrix = index_row.reshape(1, -1)
             spectrum = _frequency_stepped_spectrum_column(segment_signal, int(sample_rate), stft_window_type)
-            mask_matrix = builder.create_mask_from_indices(index_matrix, harmonic_orders, len(fft_freqs))
+            mask_matrix = builder.create_mask_from_indices(
+                index_matrix,
+                validated_harmonic_orders,
+                len(fft_freqs),
+            )
             fundamental_bins = index_matrix[:, 1]
             thd = analyzer.compute_thd_batch(spectrum, mask_matrix, fundamental_bins)
 
-            frequencies.append(float(segment.frequency_hz))
             harmonic_column = np.zeros(6, dtype=float)
             harmonic_column[0] = float(segment.frequency_hz)
+            for order in range(1, 6):
+                if order < index_matrix.shape[1]:
+                    bin_idx = int(index_matrix[0, order])
+                    if bin_idx > 0:
+                        harmonic_column[order] = float(spectrum[bin_idx, 0])
+
+            frequencies.append(float(segment.frequency_hz))
             harmonic_columns.append(harmonic_column)
-            thd_values.append(float(thd[0]))
+            thd_values.append(float(np.asarray(thd).reshape(-1)[0]))
 
         x = np.asarray(frequencies, dtype=float)
         h = np.column_stack(harmonic_columns)

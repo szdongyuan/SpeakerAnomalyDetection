@@ -39,6 +39,14 @@ def _pen_color(plot_item):
     return plot_item.opts["pen"].color().name().upper()
 
 
+def _plot_data_snapshot(plot_widget):
+    snapshot = []
+    for item in plot_widget.listDataItems():
+        x_data, y_data = item.getData()
+        snapshot.append((np.asarray(x_data).tolist(), np.asarray(y_data).tolist()))
+    return snapshot
+
+
 def _rgb_channels(color):
     return tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
 
@@ -225,6 +233,39 @@ def test_threshold_preview_uses_bound_upper_and_lower_colors(qapp):
     assert [_pen_color(item) for item in items] == ["#DC2626", "#2563EB"]
     assert all(item.opts["pen"].style() == Qt.DashLine for item in items)
     assert threshold_widget.get_config()["display"][LOWER_LIMIT_COLOR] == "#2563EB"
+
+
+def test_threshold_manual_preview_survives_curve_color_binding_and_changes(qapp):
+    stale_csv_limit_data = (
+        np.array([100.0, 1000.0]),
+        np.array([80.0, 90.0]),
+        np.array([10.0, 20.0]),
+    )
+    expected_manual_preview = [([1.0, 3.0], [2.0, 4.0])]
+    threshold_widget = ThresholdConfigWidget(
+        load_config={
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "limit_data": stale_csv_limit_data,
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+            "manual_upper_segments": [
+                {"start_x": 1.0, "start_y": 2.0, "end_x": 3.0, "end_y": 4.0}
+            ],
+            "manual_lower_segments": [],
+        },
+        model_type="FR",
+        allow_manual_limits=True,
+    )
+    color_widget = CurveColorConfigWidget()
+
+    assert _plot_data_snapshot(threshold_widget.limit_graph) == expected_manual_preview
+
+    threshold_widget.bind_curve_color_widget(color_widget)
+    assert _plot_data_snapshot(threshold_widget.limit_graph) == expected_manual_preview
+
+    color_widget.set_color(UPPER_LIMIT_COLOR, "#16A34A")
+    assert _plot_data_snapshot(threshold_widget.limit_graph) == expected_manual_preview
 
 
 def test_shared_dialog_base_appends_display_and_binds_threshold(qapp):

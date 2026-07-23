@@ -1,5 +1,13 @@
 import pytest
 
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_DEFAULT,
+    HARMONIC_DETECTION_METHOD_FOURIER,
+    HARMONIC_DETECTION_METHOD_KEY,
+    HARMONIC_DETECTION_METHOD_LABELS,
+    HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
+    normalize_harmonic_detection_method,
+)
 from ui.ui_analysis_config.config_normalization import (
     CONFIG_CONCEPTS,
     normalize_analysis_channel,
@@ -97,6 +105,40 @@ def test_normalize_analysis_channel_falls_back_safely(cfg, available_channels, e
     assert normalize_analysis_channel(cfg, available_channels) == expected
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+        ("", HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+        ("synchronous", HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+        ("同步检波", HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+        ("sync", HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+        ("fourier", HARMONIC_DETECTION_METHOD_FOURIER),
+        ("傅里叶变换", HARMONIC_DETECTION_METHOD_FOURIER),
+        ("fft", HARMONIC_DETECTION_METHOD_FOURIER),
+        ("bad", HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+    ],
+)
+def test_normalize_harmonic_detection_method_returns_canonical_value(value, expected):
+    assert normalize_harmonic_detection_method(value) == expected
+
+
+def test_normalize_harmonic_detection_method_strict_rejects_invalid_non_empty_value():
+    with pytest.raises(ValueError, match="Unsupported harmonic detection method"):
+        normalize_harmonic_detection_method("bad", strict=True)
+
+
+def test_normalize_harmonic_detection_method_strict_allows_missing_default():
+    assert normalize_harmonic_detection_method(None, strict=True) == HARMONIC_DETECTION_METHOD_DEFAULT
+
+
+def test_harmonic_detection_constants_are_stable_serialized_boundaries():
+    assert HARMONIC_DETECTION_METHOD_KEY == "harmonic_detection_method"
+    assert HARMONIC_DETECTION_METHOD_DEFAULT == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
+    assert HARMONIC_DETECTION_METHOD_LABELS[HARMONIC_DETECTION_METHOD_SYNCHRONOUS] == "同步检波"
+    assert HARMONIC_DETECTION_METHOD_LABELS[HARMONIC_DETECTION_METHOD_FOURIER] == "傅里叶变换"
+
+
 def test_config_concepts_document_step_one_taxonomy():
     expected_concepts = {
         "analysis_channel",
@@ -107,8 +149,10 @@ def test_config_concepts_document_step_one_taxonomy():
         "reference_threshold",
         "golden_sample",
         "harmonic_selection",
+        "harmonic_detection_method",
     }
 
     assert expected_concepts.issubset(CONFIG_CONCEPTS)
     assert "octave_smoothing" in CONFIG_CONCEPTS["frequency_smoothing"]["legacy_keys"]
     assert "smooth_enabled" in CONFIG_CONCEPTS["time_smoothing"]["legacy_keys"]
+    assert HARMONIC_DETECTION_METHOD_KEY in CONFIG_CONCEPTS["harmonic_detection_method"]["legacy_keys"]
