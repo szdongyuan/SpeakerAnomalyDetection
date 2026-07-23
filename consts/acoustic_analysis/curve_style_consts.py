@@ -11,6 +11,22 @@ DEFAULT_CURVE_COLORS = {
     LOWER_LIMIT_COLOR: "#800080",
 }
 
+PLOT_VIEW_KEY = "plot_view"
+DEFAULT_PLOT_VIEW_CONFIG = {
+    "x_enabled": False,
+    "x_min": None,
+    "x_max": None,
+    "y_enabled": False,
+    "y_min": None,
+    "y_max": None,
+}
+PLOT_VIEW_DIALOG_WIDTH = 700
+PLOT_VIEW_MIN_VALUE = -1_000_000_000.0
+PLOT_VIEW_MAX_VALUE = 1_000_000_000.0
+PLOT_VIEW_DECIMALS = 3
+PLOT_VIEW_DEFAULT_SINGLE_STEP = 1.0
+PLOT_VIEW_TIME_SINGLE_STEP = 0.001
+
 CURVE_COLOR_FIELDS = (
     (MAIN_CURVE_COLOR, "主曲线颜色"),
     (UPPER_LIMIT_COLOR, "上限颜色"),

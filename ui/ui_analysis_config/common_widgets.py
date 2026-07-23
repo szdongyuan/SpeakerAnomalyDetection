@@ -16,9 +16,21 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from consts.acoustic_analysis.curve_style_consts import PLOT_VIEW_DIALOG_WIDTH
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, Label, PushButton, RadioButton, SpinBox
+from ui.custom_ui_widget.widgets import (
+    CheckBox,
+    ComboBox,
+    DoubleSpinBox,
+    Label,
+    MessageBox,
+    PushButton,
+    RadioButton,
+    SpinBox,
+)
+from ui.plot_view import build_plot_view_config
 from ui.ui_analysis_config.curve_color_config_widget import CurveColorConfigWidget
+from ui.ui_analysis_config.plot_view_config_widget import PlotViewConfigWidget
 from ui.ui_analysis_config.config_normalization import (
     OCTAVE_SMOOTHING_OPTIONS,
     WEIGHTING_OPTIONS,
@@ -119,6 +131,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._cancel_callback: Callable[[], Any] | None = None
         self._syncing_scroll = False
         self.curve_color_widget = None
+        self.plot_view_config_widget = None
         self.setObjectName("semanticAnalysisConfigDialog")
         self.setStyleSheet(self._semantic_dialog_stylesheet())
 
@@ -427,14 +440,64 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
     def enable_curve_color_config(self, load_config, threshold_widget=None):
         """Mount curve colors in the display section and optionally bind thresholds."""
         self.curve_color_widget = CurveColorConfigWidget(load_config, self)
-        self.curve_color_widget.expanded_changed.connect(self._on_curve_color_expanded)
+        self.curve_color_widget.expanded_changed.connect(self._on_display_config_expanded)
         self.add_or_append_semantic_widget("display", self.curve_color_widget)
         if threshold_widget is not None:
             threshold_widget.bind_curve_color_widget(self.curve_color_widget)
         return self.curve_color_widget
 
-    def _on_curve_color_expanded(self, _expanded):
+    def _on_display_config_expanded(self, _expanded):
         self._refresh_section_container_minimum_height()
+
+    def enable_plot_view_config(
+        self,
+        load_config,
+        x_unit="",
+        y_unit="",
+        allow_x=True,
+        allow_y=True,
+        positive_x=False,
+    ):
+        """Mount optional plot-view range controls in the display section."""
+        self.plot_view_config_widget = PlotViewConfigWidget(
+            load_config,
+            x_unit,
+            y_unit,
+            allow_x,
+            allow_y,
+            positive_x,
+            self,
+        )
+        self.plot_view_config_widget.expanded_changed.connect(self._on_display_config_expanded)
+        self.add_or_append_semantic_widget("display", self.plot_view_config_widget)
+        if self.width() < PLOT_VIEW_DIALOG_WIDTH:
+            self.resize(PLOT_VIEW_DIALOG_WIDTH, self.height())
+        return self.plot_view_config_widget
+
+    def merge_plot_view_config(self, config):
+        """Merge plot-view values without overwriting curve colors."""
+        if self.plot_view_config_widget is None or not self.plot_view_config_widget.should_save():
+            return config
+        source_config = dict(self.load_config) if isinstance(self.load_config, dict) else {}
+        if isinstance(config.get("display"), dict):
+            source_config["display"] = config["display"]
+        config.update(
+            build_plot_view_config(
+                source_config,
+                self.plot_view_config_widget.plot_view_config(),
+            )
+        )
+        return config
+
+    def validate_plot_view_config(self):
+        """Validate enabled custom ranges and show a focused UI warning."""
+        if self.plot_view_config_widget is None:
+            return True
+        error_message = self.plot_view_config_widget.validation_error()
+        if error_message is None:
+            return True
+        MessageBox.warning(self, "设置警告", error_message)
+        return False
 
     def add_threshold_curve_sections(self, threshold_widget, load_config):
         """Opt in to shared curve colors and add the threshold section."""
@@ -458,6 +521,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._semantic_section_collapsed.clear()
         self._active_semantic_group_key = None
         self.curve_color_widget = None
+        self.plot_view_config_widget = None
         self._refresh_section_container_minimum_height()
 
     def is_semantic_section_collapsed(self, group_key: str) -> bool:

@@ -63,6 +63,7 @@ from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
 from ui.curve_style import resolve_curve_colors
 from ui.graph_widget import plot_2d_image, custom_log_tick_strings, LimitPlotUtils
+from ui.plot_view import apply_plot_view_range
 from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
@@ -408,10 +409,14 @@ class AnalysisResultSummaryWindow(QWidget):
 
 class AnalysisGraphWidget(QWidget):
 
+    plot_view_allow_x = False
+    plot_view_allow_y = False
+
     def __init__(self):
         super().__init__()
 
         self.analysis_plot = pg.PlotWidget()
+        self._plot_view_initial_checked = False
 
         self.set_plot_font_size(20)
         self.init_ui()
@@ -428,6 +433,19 @@ class AnalysisGraphWidget(QWidget):
         if analysis_config is None:
             analysis_config = getattr(self, "analysis_config", None) or {}
         return resolve_curve_colors(analysis_config)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._plot_view_initial_checked:
+            return
+        analysis_config = getattr(self, "analysis_config", None) or {}
+        apply_plot_view_range(
+            self.analysis_plot,
+            analysis_config,
+            self.plot_view_allow_x,
+            self.plot_view_allow_y,
+        )
+        self._plot_view_initial_checked = True
 
     def set_plot_font_size(self, font_size: int):
         font_size = ui_style_const.scale_size_px(font_size)
@@ -489,6 +507,9 @@ class AnalysisGraphWidget(QWidget):
 
 
 class Distortion(AnalysisGraphWidget):
+    plot_view_allow_x = True
+    plot_view_allow_y = True
+
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -1040,6 +1061,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
 
 class Spl(AnalysisGraphWidget):
+    plot_view_allow_x = True
+    plot_view_allow_y = True
+
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -1233,6 +1257,9 @@ class SplFrequency(AnalysisGraphWidget):
 
     Requires stimulus_info (step/chirp) to map each segment/frame to a frequency.
     """
+
+    plot_view_allow_x = True
+    plot_view_allow_y = True
 
     def __init__(self, title_name):
         super().__init__()
@@ -1431,6 +1458,9 @@ class SplFrequency(AnalysisGraphWidget):
 
 
 class Frequency(AnalysisGraphWidget):
+
+    plot_view_allow_x = True
+    plot_view_allow_y = True
 
     def __init__(self, title_name):
         super().__init__()
@@ -1720,6 +1750,9 @@ class Frequency(AnalysisGraphWidget):
 
 class FftAnalysis(AnalysisGraphWidget):
     """Welch FFT spectrum analysis window."""
+
+    plot_view_allow_x = True
+    plot_view_allow_y = True
 
     def __init__(self, title_name):
         super().__init__()
@@ -3175,6 +3208,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         "等宽": ("equal_width", {}),
         "自定义": ("custom", {}),
     }
+    plot_view_allow_y = True
 
     def __init__(self, title_name):
         super().__init__()
