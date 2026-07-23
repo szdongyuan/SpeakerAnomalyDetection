@@ -27,7 +27,6 @@ JSON_DIR_PATH = DEFAULT_DIR + "ui/ui_config"
 
 SYSTEM_DATABASE_PATH = DEFAULT_DIR + "database/system_data.db"
 AUDIO_DATABASE_PATH = DEFAULT_DIR + "database/audio_data.db"
-DATABASE_PATH = AUDIO_DATABASE_PATH
 
 HARDWARE_ASSETS_TABLE = "hardware_assets"
 HARDWARE_CHANNEL_CALIBRATIONS_TABLE = "hardware_channel_calibrations"

@@ -1927,7 +1927,6 @@ def test_step_sc_end_to_end_json_db_runtime_and_analysis_use_retained_schedule(
     code, msg = database.create_table()
     database.close()
     assert code == error_code.OK, msg
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(db_path))
     monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(db_path))
     monkeypatch.setattr(model_consts, "STORED_STIMULUS_PATH", str(stimulus_dir))
     monkeypatch.setattr(stimulus_window.model_consts, "STORED_STIMULUS_PATH", str(stimulus_dir))

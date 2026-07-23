@@ -111,7 +111,7 @@ def copy_from_restored_audio_database(dest_train_dir=model_consts.TRAIN_PATH,
     try:
         data_load_config = load_config("data_load")
         ensure_audio_database_ready()
-        with DataSave(model_consts.DATABASE_PATH) as database:
+        with DataSave(model_consts.AUDIO_DATABASE_PATH) as database:
             query_data = database.query_conditions()
         if over_write:
             for dest_dir in [dest_train_dir, dest_test_dir]:

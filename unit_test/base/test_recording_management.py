@@ -43,7 +43,7 @@ def isolated_recording_manager_state(tmp_path, monkeypatch):
 
     monkeypatch.setattr("base.recording_management.ensure_audio_database_ready", lambda: None)
     monkeypatch.setattr(
-        "base.recording_management.model_consts.DATABASE_PATH",
+        "base.recording_management.model_consts.AUDIO_DATABASE_PATH",
         str(temp_root / "database" / "audio_data.db"),
     )
 
@@ -51,12 +51,12 @@ def isolated_recording_manager_state(tmp_path, monkeypatch):
 class TestRecordingManager(object):
     @mock.patch("base.recording_management.DataSave")
     def test_db_access_uses_current_audio_database_path_after_database_path_changes(self, mock_database, monkeypatch):
-        old_path = model_consts.DATABASE_PATH
+        old_path = model_consts.AUDIO_DATABASE_PATH
         new_path = old_path + ".next"
         mock_database.return_value.__enter__.return_value.query.return_value = (error_code.OK, [("audio-1",)])
 
         manager = RecordingManager()
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", new_path)
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", new_path)
 
         result = manager.get_record_audio_data()
 
@@ -66,12 +66,12 @@ class TestRecordingManager(object):
     def test_default_db_access_initializes_rotated_audio_database_path(self, tmp_path, monkeypatch):
         old_path = tmp_path / "old" / "audio_data.db"
         new_path = tmp_path / "new" / "audio_data.db"
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(old_path))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(old_path))
         monkeypatch.setattr(recording_management_module, "ensure_audio_database_ready",
                             db_manager_module.ensure_audio_database_ready)
         manager = RecordingManager()
 
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(new_path))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(new_path))
 
         result = manager.get_record_audio_data()
 
@@ -91,13 +91,13 @@ class TestRecordingManager(object):
         code, msg = database.create_audio_tables()
         database.close()
         assert code == error_code.OK, msg
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(tmp_path / "initial" / "audio_data.db"))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(tmp_path / "initial" / "audio_data.db"))
         monkeypatch.setattr(recording_management_module, "ensure_audio_database_ready",
                             db_manager_module.ensure_audio_database_ready)
         manager = RecordingManager()
         manager.db_path = str(override_path)
 
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(canonical_path))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(canonical_path))
 
         result = manager.get_record_audio_data()
 

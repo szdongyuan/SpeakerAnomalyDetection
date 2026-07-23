@@ -18,7 +18,7 @@ class TestTrainingModelManagement(object):
 
     @mock.patch("base.training_model_management.DataSave")
     def test_db_access_uses_current_audio_database_path_after_database_path_changes(self, mock_database, monkeypatch):
-        old_path = model_consts.DATABASE_PATH
+        old_path = model_consts.AUDIO_DATABASE_PATH
         new_path = old_path + ".next"
         mock_database.return_value.__enter__.return_value.query.return_value = (
             error_code.OK,
@@ -26,7 +26,7 @@ class TestTrainingModelManagement(object):
         )
 
         manager = TrainingModelManagement()
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", new_path)
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", new_path)
 
         result = manager.get_all_model_name_from_db()
 
@@ -36,12 +36,12 @@ class TestTrainingModelManagement(object):
     def test_default_db_access_initializes_rotated_audio_database_path(self, tmp_path, monkeypatch):
         old_path = tmp_path / "old" / "audio_data.db"
         new_path = tmp_path / "new" / "audio_data.db"
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(old_path))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(old_path))
         monkeypatch.setattr(training_model_management_module, "ensure_audio_database_ready",
                             db_manager_module.ensure_audio_database_ready)
         manager = TrainingModelManagement()
 
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(new_path))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(new_path))
 
         result = manager.get_all_model_name_from_db()
 
@@ -61,13 +61,13 @@ class TestTrainingModelManagement(object):
         code, msg = database.create_audio_tables()
         database.close()
         assert code == error_code.OK, msg
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(tmp_path / "initial" / "audio_data.db"))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(tmp_path / "initial" / "audio_data.db"))
         monkeypatch.setattr(training_model_management_module, "ensure_audio_database_ready",
                             db_manager_module.ensure_audio_database_ready)
         manager = TrainingModelManagement()
         manager.db_path = str(override_path)
 
-        monkeypatch.setattr(model_consts, "DATABASE_PATH", str(canonical_path))
+        monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(canonical_path))
 
         result = manager.get_all_model_name_from_db()
 

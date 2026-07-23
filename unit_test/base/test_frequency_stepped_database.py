@@ -35,7 +35,6 @@ def _create_database(path):
 
 def _patch_local_database(monkeypatch, path):
     db_path = str(path)
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", db_path)
     monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", db_path)
 
 
@@ -170,7 +169,7 @@ def test_stimulus_metadata_column_created_migrated_and_kept_out_of_scalar_consta
 def test_ensure_audio_database_ready_uses_canonical_database_path(monkeypatch, local_tmp_path):
     canonical_path = local_tmp_path / "canonical" / "runtime.db"
     stale_audio_path = local_tmp_path / "stale" / "audio_data.db"
-    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(canonical_path))
+    monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(canonical_path))
     monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(stale_audio_path))
 
     code, msg = db_manager_module.ensure_audio_database_ready()
