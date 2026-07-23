@@ -591,7 +591,7 @@ def ensure_system_database_ready():
 
 
 def ensure_audio_database_ready():
-    db_path = model_consts.DATABASE_PATH
+    db_path = model_consts.AUDIO_DATABASE_PATH
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)

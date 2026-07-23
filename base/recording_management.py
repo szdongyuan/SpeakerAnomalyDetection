@@ -68,7 +68,7 @@ class RecordingManager(object):
         if self._db_path_override:
             return self._db_path_override
         ensure_audio_database_ready()
-        return model_consts.DATABASE_PATH
+        return model_consts.AUDIO_DATABASE_PATH
 
     @db_path.setter
     def db_path(self, value):
