@@ -8,6 +8,12 @@ from typing import Dict, Tuple
 from scipy import signal as scipy_signal
 from base.core_algorithm.harmonic_distortion.harmonic_distortion_analyzer import HarmonicDistortionAnalyzer
 from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
+from base.core_algorithm.harmonic_distortion.synchronous_harmonic_detector import SynchronousHarmonicDetector
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_FOURIER,
+    HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
+    normalize_harmonic_detection_method,
+)
 
 
 class StepSignalHD(HarmonicDistortionAnalyzer):
@@ -18,76 +24,152 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
         recorded_signal: np.ndarray,
         stimulus_metadata: Dict,
         harmonic_orders: list,
-        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray],
+        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray] = None,
         stft_window_type: str = 'hann',
         **kwargs
     ) -> Dict:
         """
-        Compute THD for step signals using pre-built mask and STFT.
+        Compute THD for ordinary step signals using synchronous harmonic fitting.
 
         Args:
             recorded_signal: Recorded audio
             stimulus_metadata: Config with num_steps, repeat_times, total_time
-            harmonic_orders: Selected harmonics (for reference only)
-            harmonic_mask: (mask_matrix, fundamental_freqs, fundamental_bins) from Phase 1B
-            stft_window_type: Window function for STFT (default 'hann')
+            harmonic_orders: Selected harmonics
+            harmonic_mask: Optional (mask_matrix, fundamental_freqs, fundamental_bins) from Phase 1B
+            stft_window_type: Window function for weighted fitting (default 'hann')
 
         Returns:
             {
                 'frequencies': fundamental_freqs,
                 'thd': thd_values,
                 'num_repetitions': repeat_times,
-                'spectrum_matrix': averaged_spectrum (with dummy bin at index 0)
+                'harmonic_amplitudes': averaged fitted amplitudes, rows 0-5
             }
         """
-        mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+        method = normalize_harmonic_detection_method(
+            kwargs.get("harmonic_detection_method", HARMONIC_DETECTION_METHOD_SYNCHRONOUS),
+            strict=True,
+        )
+        if method == HARMONIC_DETECTION_METHOD_FOURIER:
+            return self._compute_distortion_fourier(
+                recorded_signal,
+                stimulus_metadata,
+                harmonic_orders,
+                harmonic_mask=harmonic_mask,
+                stft_window_type=stft_window_type,
+            )
+        return self._compute_distortion_synchronous(
+            recorded_signal,
+            stimulus_metadata,
+            harmonic_orders,
+            harmonic_mask=harmonic_mask,
+            stft_window_type=stft_window_type,
+        )
 
-        num_steps = stimulus_metadata['num_steps']
-        repeat_times = stimulus_metadata['repeat_times']
-        total_time = stimulus_metadata['total_time']
+    def _compute_distortion_synchronous(
+        self,
+        recorded_signal: np.ndarray,
+        stimulus_metadata: Dict,
+        harmonic_orders: list,
+        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray] = None,
+        stft_window_type: str = 'hann',
+    ) -> Dict:
+        if harmonic_mask is not None:
+            _, fundamental_freqs, _ = harmonic_mask
+        else:
+            fundamental_freqs = self._step_frequencies(stimulus_metadata)
+
+        num_steps = int(stimulus_metadata['num_steps'])
+        repeat_times = int(stimulus_metadata['repeat_times'])
+        total_time = float(stimulus_metadata['total_time'])
+        single_rep_duration = total_time / repeat_times
+        step_duration = single_rep_duration / num_steps
+        step_samples = int(step_duration * self.sample_rate)
 
         # Split into repetitions
         repetitions = self._split_repetitions(recorded_signal, repeat_times)
 
+        detector = SynchronousHarmonicDetector()
         thd_per_rep = []
-        spectrum_per_rep = []
+        amplitude_per_rep = []
+        fundamental_freqs = np.asarray(fundamental_freqs, dtype=float)
         for repetition_signal in repetitions:
-            # Calculate STFT parameters
-            single_rep_duration = total_time / repeat_times
-            step_duration = single_rep_duration / num_steps
-            step_samples = int(step_duration * self.sample_rate)
-            stft_window_size = step_samples
-            stft_hop_size = step_samples  # No overlap
+            rep_thd = []
+            rep_amplitudes = np.zeros((6, num_steps), dtype=float)
+            rep_amplitudes[0, :] = fundamental_freqs[:num_steps]
 
-            # Compute STFT (results in exactly num_steps frames)
-            spectrum_matrix = self._compute_stft(
-                repetition_signal, stft_window_size, stft_hop_size, stft_window_type
-            )
+            for step_idx, f0 in enumerate(fundamental_freqs[:num_steps]):
+                start = step_idx * step_samples
+                end = start + step_samples
+                segment = repetition_signal[start:end]
+                amplitudes, distortion = detector.analyze(
+                    segment,
+                    f0=float(f0),
+                    sample_rate=self.sample_rate,
+                    harmonic_orders=harmonic_orders,
+                    stft_window_type=stft_window_type,
+                )
+                rep_thd.append(distortion)
+                for order in range(1, 6):
+                    rep_amplitudes[order, step_idx] = float(amplitudes.get(order, 0.0))
 
-            # Add dummy bin
-            spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
-
-            # Validate and align frame counts (defensive programming)
-            num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
-            spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
-            mask_trimmed = mask_matrix[:, :num_frames]
-            fund_bins_trimmed = fundamental_bins[:num_frames]
-
-            # Compute THD using pre-built mask
-            thd = self.compute_thd_batch(spectrum_trimmed, mask_trimmed, fund_bins_trimmed)
-            thd_per_rep.append(thd)
-            spectrum_per_rep.append(spectrum_trimmed)
+            thd_per_rep.append(np.asarray(rep_thd, dtype=float))
+            amplitude_per_rep.append(rep_amplitudes)
 
         # Average across repetitions
         averaged_thd = np.mean(thd_per_rep, axis=0)
-        averaged_spectrum = np.mean(spectrum_per_rep, axis=0)
+        averaged_amplitudes = np.mean(amplitude_per_rep, axis=0)
         num_frames = len(averaged_thd)
 
         return {
             'frequencies': fundamental_freqs[:num_frames],
             'thd': averaged_thd,
             'num_repetitions': repeat_times,
-            'spectrum_matrix': averaged_spectrum
+            'harmonic_amplitudes': averaged_amplitudes[:, :num_frames],
+        }
+
+    def _compute_distortion_fourier(
+        self,
+        recorded_signal: np.ndarray,
+        stimulus_metadata: Dict,
+        harmonic_orders: list,
+        harmonic_mask: Tuple[np.ndarray, np.ndarray, np.ndarray] = None,
+        stft_window_type: str = "hann",
+    ) -> Dict:
+        if harmonic_mask is None:
+            raise ValueError("Fourier step HD/RB analysis requires a harmonic mask")
+        mask_matrix, fundamental_freqs, fundamental_bins = harmonic_mask
+
+        num_steps = int(stimulus_metadata["num_steps"])
+        repeat_times = int(stimulus_metadata["repeat_times"])
+        total_time = float(stimulus_metadata["total_time"])
+        repetitions = self._split_repetitions(recorded_signal, repeat_times)
+
+        thd_per_rep = []
+        spectrum_per_rep = []
+        for repetition_signal in repetitions:
+            single_rep_duration = total_time / repeat_times
+            step_duration = single_rep_duration / num_steps
+            step_samples = int(step_duration * self.sample_rate)
+            spectrum_matrix = self._compute_stft(repetition_signal, step_samples, step_samples, stft_window_type)
+            spectrum_with_dummy = np.insert(spectrum_matrix, 0, 0.0, axis=0)
+
+            num_frames = min(spectrum_with_dummy.shape[1], mask_matrix.shape[1])
+            spectrum_trimmed = spectrum_with_dummy[:, :num_frames]
+            mask_trimmed = mask_matrix[:, :num_frames]
+            fund_bins_trimmed = fundamental_bins[:num_frames]
+
+            thd_per_rep.append(self.compute_thd_batch(spectrum_trimmed, mask_trimmed, fund_bins_trimmed))
+            spectrum_per_rep.append(spectrum_trimmed)
+
+        averaged_thd = np.mean(thd_per_rep, axis=0)
+        averaged_spectrum = np.mean(spectrum_per_rep, axis=0)
+        num_frames = len(averaged_thd)
+        return {
+            "frequencies": np.asarray(fundamental_freqs, dtype=float)[:num_frames],
+            "thd": averaged_thd,
+            "num_repetitions": repeat_times,
+            "spectrum_matrix": averaged_spectrum,
         }
 
     def _split_repetitions(self, signal: np.ndarray, repeat_times: int) -> list:
@@ -97,6 +179,18 @@ class StepSignalHD(HarmonicDistortionAnalyzer):
 
         rep_length = len(signal) // repeat_times
         return [signal[i*rep_length:(i+1)*rep_length] for i in range(repeat_times)]
+
+    @staticmethod
+    def _step_frequencies(stimulus_metadata: Dict) -> np.ndarray:
+        num_steps = int(stimulus_metadata["num_steps"])
+        start_freq = float(stimulus_metadata.get("start_freq", 100))
+        stop_freq = float(stimulus_metadata.get("stop_freq", 1000))
+        stimulus_type = stimulus_metadata.get("stimulus_type", "linear")
+        if stimulus_type == "linear":
+            return np.linspace(start_freq, stop_freq, num_steps)
+        if stimulus_type == "log":
+            return np.logspace(np.log10(start_freq), np.log10(stop_freq), num_steps)
+        raise Exception("Invalid step type.")
 
     def _compute_stft(
         self,

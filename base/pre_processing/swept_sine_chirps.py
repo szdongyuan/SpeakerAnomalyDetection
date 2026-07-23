@@ -20,21 +20,13 @@ class StimulusSignal(object):
         else:
             raise Exception("Invalid step type.")
         y_t = np.zeros(num_samples * num_steps)
-        t1 = np.linspace(0, t_time, num_samples)
-        t2 = np.linspace(0, t_time, num_samples + 1)
-        phase_position = 0
-        start = 0
-        end = 0
-        for i in range(num_steps):
-            if i == 0:
-                time = t1
-            else:
-                time = t2
-                start = end - 1
-            end = start + len(time)
-            fr = frequencies[i]
-            y_t[start:end] = np.sin(2 * pi * fr * time + phase_position)
-            phase_position = (phase_position + 2 * pi * fr * time[-1]) % (2 * pi)
+        sample_offsets = np.arange(num_samples, dtype=float)
+        phase_position = 0.0
+        for i, fr in enumerate(frequencies):
+            start = i * num_samples
+            end = start + num_samples
+            y_t[start:end] = np.sin(phase_position + 2 * pi * float(fr) * sample_offsets / sample_rate)
+            phase_position = (phase_position + 2 * pi * float(fr) * num_samples / sample_rate) % (2 * pi)
         y_total = np.array(list(y_t) * repeat_times)
         return y_total, sample_rate
 

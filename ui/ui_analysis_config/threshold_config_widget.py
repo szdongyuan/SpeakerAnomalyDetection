@@ -864,10 +864,7 @@ class ThresholdConfigWidget(QWidget):
         if self.manual_widget is not None:
             self.manual_widget.setEnabled(True)
             self.manual_widget.setVisible(manual)
-        if manual:
-            self.draw_limit_curve(self._manual_limit_preview_data())
-        else:
-            self.draw_limit_curve(self.limit_data)
+        self._refresh_current_limit_preview()
         self._refresh_parent_scroll_layout()
 
     def _refresh_parent_scroll_layout(self) -> None:
@@ -898,7 +895,7 @@ class ThresholdConfigWidget(QWidget):
             if result:
                 self.limit_data = result
                 self._pending_manual_seed_data = result if self.allow_manual_limits else None
-                self.draw_limit_curve(self.limit_data)
+                self._refresh_current_limit_preview()
                 self.config_dir_box.setText("已加载")
             else:
                 self.config_dir_box.setText("未加载")
@@ -926,6 +923,12 @@ class ThresholdConfigWidget(QWidget):
         self.model_type = model_type
         _set_graph_label_until(self.limit_graph, model_type)
 
+    def _refresh_current_limit_preview(self) -> None:
+        if self.allow_manual_limits and self.current_limit_mode() == "manual":
+            self.draw_limit_curve(self._manual_limit_preview_data())
+            return
+        self.draw_limit_curve(self.limit_data)
+
     def draw_limit_curve(self, result_data: tuple):
         """
         绘制阈值曲线
@@ -939,10 +942,10 @@ class ThresholdConfigWidget(QWidget):
         """Bind shared curve colors to this threshold preview and config output."""
         self._curve_color_widget = color_widget
         color_widget.colors_changed.connect(self._on_curve_colors_changed)
-        self.draw_limit_curve(self.limit_data)
+        self._refresh_current_limit_preview()
 
     def _on_curve_colors_changed(self, colors):
-        self.draw_limit_curve(self.limit_data)
+        self._refresh_current_limit_preview()
 
     def _curve_colors(self):
         if self._curve_color_widget is not None:

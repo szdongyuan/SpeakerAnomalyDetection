@@ -10,6 +10,7 @@ from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import GroupBox, MessageBox
 from ui.ui_analysis_config.common_widgets import (
     GoldenSampleWidget,
+    HarmonicDetectionMethodSelectorWidget,
     HarmonicSelectorWidget,
     SemanticAnalysisConfigDialogBase,
 )
@@ -44,7 +45,9 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
         harmonic_group_box.setObjectName("harmonic_group_box")
         harmonic_slider_layout = QVBoxLayout()
         harmonic_slider_layout.setSpacing(12)
+        self.detection_method_selector = HarmonicDetectionMethodSelectorWidget(self.load_config, parent=self)
         self.harmonic_selector = HarmonicSelectorWidget(self.load_config, start_order=10, end_order=35, parent=self)
+        harmonic_slider_layout.addWidget(self.detection_method_selector)
         harmonic_slider_layout.addWidget(self.harmonic_selector)
         harmonic_group_box.setLayout(harmonic_slider_layout)
 
@@ -69,6 +72,7 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
     def get_default_config(self):
         """获取配置数据"""
         config = {}
+        config.update(self.detection_method_selector.get_config())
         config.update(self.harmonic_selector.get_config())
         config.update(self.golden_chk_box.get_config())
         config.update(self.threshold_widget.get_config())

@@ -28,3 +28,4 @@ unit_test/ui/test_custom_double_spin_box.py
 
 dist
 create_hardware_tables.exe
+tmp

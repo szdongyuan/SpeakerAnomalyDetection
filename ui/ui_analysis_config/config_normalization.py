@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from consts.harmonic_detection_consts import HARMONIC_DETECTION_METHOD_KEY
+
 
 WEIGHTING_OPTIONS = ("Z", "A", "B", "C", "D")
 WEIGHTING_DISPLAY_LABELS = {
@@ -60,6 +62,10 @@ CONFIG_CONCEPTS = {
     "harmonic_selection": {
         "meaning": "Selected harmonic orders.",
         "legacy_keys": ("selected_labels", "all_checked"),
+    },
+    "harmonic_detection_method": {
+        "meaning": "Standard HD/THD and RB/high-order harmonic detection algorithm.",
+        "legacy_keys": (HARMONIC_DETECTION_METHOD_KEY,),
     },
 }
 

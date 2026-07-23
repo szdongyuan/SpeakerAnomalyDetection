@@ -16,6 +16,11 @@ from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel, QSizePolicy, QTab
 from consts import error_code
 from consts.acoustic_analysis.curve_style_consts import DEFAULT_CURVE_COLORS
 from consts.acoustic_analysis.specific_consts import spec_consts
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_FOURIER,
+    HARMONIC_DETECTION_METHOD_KEY,
+    HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -94,6 +99,13 @@ def stub_pattern_match_import_dependencies(monkeypatch):
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def stable_pyqtgraph_paint(monkeypatch):
+    from pyqtgraph.widgets.GraphicsView import GraphicsView
+
+    monkeypatch.setattr(GraphicsView, "paintEvent", lambda self, event: None)
 
 
 @pytest.fixture
@@ -1644,7 +1656,7 @@ def test_manual_table_context_menu_delete_enabled_for_blank_column(qapp, monkeyp
         def exec_(self, pos):
             self.exec_pos = pos
 
-    monkeypatch.setattr(threshold_config_widget, "QMenu", FakeMenu, raising=False)
+    monkeypatch.setattr(threshold_config_widget, "Menu", FakeMenu)
     widget = create_threshold_widget(
         qapp,
         {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True},
@@ -1704,7 +1716,7 @@ def test_manual_table_context_menu_sets_current_clicked_column(qapp, monkeypatch
         def exec_(self, _pos):
             pass
 
-    monkeypatch.setattr(threshold_config_widget, "QMenu", FakeMenu, raising=False)
+    monkeypatch.setattr(threshold_config_widget, "Menu", FakeMenu)
     widget = create_threshold_widget(qapp, {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True})
     dialog = create_manual_dialog(widget)
     table = dialog.editor.manual_upper_table
@@ -1744,7 +1756,7 @@ def test_manual_table_context_menu_does_not_emit_when_target_already_active(qapp
         def exec_(self, _pos):
             pass
 
-    monkeypatch.setattr(threshold_config_widget, "QMenu", FakeMenu, raising=False)
+    monkeypatch.setattr(threshold_config_widget, "Menu", FakeMenu)
     widget = create_threshold_widget(qapp, {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True})
     dialog = create_manual_dialog(widget)
     table = dialog.editor.manual_upper_table
@@ -1785,7 +1797,7 @@ def test_manual_table_context_menu_right_click_other_table_controls_preview_high
         def exec_(self, _pos):
             pass
 
-    monkeypatch.setattr(threshold_config_widget, "QMenu", FakeMenu, raising=False)
+    monkeypatch.setattr(threshold_config_widget, "Menu", FakeMenu)
     widget = create_threshold_widget(
         qapp,
         {"limit_checked": True, "limit_mode": "manual", "manual_upper_enabled": True, "manual_lower_enabled": True},
@@ -2462,7 +2474,7 @@ def test_fba_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
     window = FbaConfigWindow(config_manager, "FBA", available_channels=[1, 3])
 
     assert_vertical_golden_size(window)
-    assert window.semantic_group_keys() == ["input", "compute", "judgment"]
+    assert window.semantic_group_keys() == ["input", "compute", "display", "judgment"]
     assert window.get_default_config() == {
         "band_strategy": "1/3 倍频程",
         "f_min": 50,
@@ -2495,6 +2507,7 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
     assert_vertical_golden_size(window)
     assert window.semantic_group_keys() == ["detection", "reference", "display", "judgment"]
     assert window.get_default_config() == {
+        HARMONIC_DETECTION_METHOD_KEY: HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
         "selected_labels": [2, 3],
         "all_checked": False,
         "golden_sample_checked": True,
@@ -2529,6 +2542,7 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
     assert_vertical_golden_size(window)
     assert window.semantic_group_keys() == ["detection", "reference", "display", "judgment"]
     assert window.get_default_config() == {
+        HARMONIC_DETECTION_METHOD_KEY: HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
         "selected_labels": [10, 12],
         "all_checked": False,
         "golden_sample_checked": False,
@@ -2541,6 +2555,96 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
         "manual_lower_segments": [],
         "display": dict(DEFAULT_CURVE_COLORS),
     }
+
+
+def test_hd_dialog_preserves_explicit_fourier_detection_method(qapp):
+    from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
+
+    window = HdConfigWindow(
+        FakeConfigManager(
+            {
+                "HD": {
+                    HARMONIC_DETECTION_METHOD_KEY: HARMONIC_DETECTION_METHOD_FOURIER,
+                    "selected_labels": [2],
+                    "all_checked": False,
+                    "golden_sample_checked": False,
+                    "limit_checked": False,
+                    "limit_data": None,
+                }
+            }
+        ),
+        "HD",
+    )
+
+    assert window.get_default_config()[HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_FOURIER
+    assert window.detection_method_selector.combo_box.currentText() == "傅里叶变换"
+
+
+def test_hd_dialog_normalizes_invalid_detection_method_to_synchronous(qapp):
+    from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
+
+    window = HdConfigWindow(
+        FakeConfigManager(
+            {
+                "HD": {
+                    HARMONIC_DETECTION_METHOD_KEY: "bad",
+                    "selected_labels": [2],
+                    "all_checked": False,
+                    "golden_sample_checked": False,
+                    "limit_checked": False,
+                    "limit_data": None,
+                }
+            }
+        ),
+        "HD",
+    )
+
+    assert window.get_default_config()[HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
+
+
+def test_rb_dialog_preserves_explicit_fourier_detection_method(qapp):
+    from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
+
+    window = RbConfigWindow(
+        FakeConfigManager(
+            {
+                "RB": {
+                    HARMONIC_DETECTION_METHOD_KEY: HARMONIC_DETECTION_METHOD_FOURIER,
+                    "selected_labels": [10],
+                    "all_checked": False,
+                    "golden_sample_checked": False,
+                    "limit_checked": False,
+                    "limit_data": None,
+                }
+            }
+        ),
+        "RB",
+    )
+
+    assert window.get_default_config()[HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_FOURIER
+    assert window.detection_method_selector.combo_box.currentText() == "傅里叶变换"
+
+
+def test_rb_dialog_normalizes_invalid_detection_method_to_synchronous(qapp):
+    from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
+
+    window = RbConfigWindow(
+        FakeConfigManager(
+            {
+                "RB": {
+                    HARMONIC_DETECTION_METHOD_KEY: "bad",
+                    "selected_labels": [10],
+                    "all_checked": False,
+                    "golden_sample_checked": False,
+                    "limit_checked": False,
+                    "limit_data": None,
+                }
+            }
+        ),
+        "RB",
+    )
+
+    assert window.get_default_config()[HARMONIC_DETECTION_METHOD_KEY] == HARMONIC_DETECTION_METHOD_SYNCHRONOUS
 
 
 def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
@@ -2572,6 +2676,7 @@ def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
     assert config["manual_upper_segments"] == []
     assert config["manual_lower_enabled"] is False
     assert config["manual_lower_segments"] == []
+    assert HARMONIC_DETECTION_METHOD_KEY not in config
 
 
 def test_rsc_dialog_keeps_smoothing_key_after_shared_selector_migration(qapp, monkeypatch):

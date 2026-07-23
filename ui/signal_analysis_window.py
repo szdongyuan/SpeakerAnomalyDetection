@@ -59,6 +59,10 @@ from consts import error_code, ui_style_const
 from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
 from consts.acoustic_analysis.curve_style_consts import MAIN_CURVE_COLOR
 from consts.acoustic_analysis.specific_consts import spec_consts
+from consts.harmonic_detection_consts import (
+    HARMONIC_DETECTION_METHOD_KEY,
+    normalize_harmonic_detection_method,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, TextEdit, Label, TableWidget
 from ui.curve_style import resolve_curve_colors
@@ -568,7 +572,14 @@ class Distortion(AnalysisGraphWidget):
 
         # Call the new three-phase architecture
         atfra = AudioThdFrequencyResponseAnalysis()
-        thd_kwargs = {"stimulus_metadata": stimulus_metadata, "harmonic_orders": self.selected_harmonics}
+        detection_method = normalize_harmonic_detection_method(
+            self.analysis_config.get(HARMONIC_DETECTION_METHOD_KEY)
+        )
+        thd_kwargs = {
+            "stimulus_metadata": stimulus_metadata,
+            "harmonic_orders": self.selected_harmonics,
+            HARMONIC_DETECTION_METHOD_KEY: detection_method,
+        }
 
         freq_value, harmonic, thd = atfra.calculate_thd_three_phase(recorded_signal, sample_rate, thd_kwargs)
 
