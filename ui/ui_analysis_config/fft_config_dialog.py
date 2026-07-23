@@ -198,6 +198,29 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
             model_type="FFT",
         )
         self.add_threshold_curve_sections(self.threshold_widget, self.load_config)
+        self.enable_plot_view_config(
+            self.load_config,
+            "Hz",
+            self._plot_view_y_unit(),
+            True,
+            True,
+            self.x_axis_combo.currentText() == "log",
+        )
+        self.x_axis_combo.currentIndexChanged.connect(self._sync_plot_view_x_constraint)
+        self.weighting_selector.combo_box.currentIndexChanged.connect(self._sync_plot_view_y_unit)
+        self.baseline_mode_combo.currentIndexChanged.connect(self._sync_plot_view_y_unit)
+
+    def _sync_plot_view_x_constraint(self, _index=None):
+        self.plot_view_config_widget.set_positive_x(self.x_axis_combo.currentText() == "log")
+
+    def _plot_view_y_unit(self):
+        if self.baseline_mode_combo.currentData() == "delta":
+            return "dB"
+        weighting = self.weighting_selector.current_weighting()
+        return f"dB({weighting}) SPL"
+
+    def _sync_plot_view_y_unit(self, _index=None):
+        self.plot_view_config_widget.set_axis_units(None, self._plot_view_y_unit())
 
     def _on_focus_changed(self, state):
         if hasattr(self, "focus_widget"):
@@ -235,9 +258,11 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         }
         config.update(self.weighting_selector.get_config())
         config.update(self.threshold_widget.get_config())
-        return config
+        return self.merge_plot_view_config(config)
 
     def _validate_config(self):
+        if not self.validate_plot_view_config():
+            return False
         if not self.threshold_widget.validate():
             return False
         config = self.get_default_config()

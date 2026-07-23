@@ -79,6 +79,7 @@ class PerceptualRbConfigWindow(SemanticAnalysisConfigDialogBase):
         self.add_semantic_section("compute", widget=group)
         self.add_semantic_section("reference", widget=self.golden_chk_box)
         self.add_threshold_curve_sections(self.threshold_widget, self.load_config)
+        self.enable_plot_view_config(self.load_config, "Hz", "phon", True, True, True)
 
     def get_default_config(self):
         """获取配置数据"""
@@ -97,10 +98,12 @@ class PerceptualRbConfigWindow(SemanticAnalysisConfigDialogBase):
         config = {"prb_method": "sc", "masking_config": masking_config}
         config.update(self.golden_chk_box.get_config())
         config.update(self.threshold_widget.get_config())
-        return config
+        return self.merge_plot_view_config(config)
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
+        if not self.validate_plot_view_config():
+            return
         if not self.threshold_widget.validate():
             return
         save_flag = self.config_manager.save_default_config("PRB", config_data)
@@ -113,6 +116,8 @@ class PerceptualRbConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
+        if not self.validate_plot_view_config():
+            return
         if not self.threshold_widget.validate():
             return
         self.accept()

@@ -220,6 +220,10 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         if self.golden_chk_box is not None:
             self.add_semantic_section("reference", widget=self.golden_chk_box)
         self.add_threshold_curve_sections(self.threshold_widget, self.load_config)
+        if self.model_type == "SPLF":
+            self.enable_plot_view_config(self.load_config, "Hz", "dB", True, True, True)
+        else:
+            self.enable_plot_view_config(self.load_config, "s", "dB", True, True, False)
 
     def create_btn(self):
         return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
@@ -252,10 +256,12 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             config.update(self.channel_selector.get_config())
         else:
             config["analysis_channel"] = int(self.load_config.get("analysis_channel", 0) or 0)
-        return config
+        return self.merge_plot_view_config(config)
 
     def on_default_btn_clicked(self):
         config_data = self.get_default_config()
+        if not self.validate_plot_view_config():
+            return
         if not self.threshold_widget.validate():
             return
         save_flag = self.config_manager.save_default_config(self.model_type, config_data)
@@ -268,6 +274,8 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()
+        if not self.validate_plot_view_config():
+            return
         if not self.threshold_widget.validate():
             return
         self.accept()

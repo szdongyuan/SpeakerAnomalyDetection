@@ -158,6 +158,7 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
         self.threshold_widget.setMaximumHeight(360)
         self.threshold_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.add_semantic_section("compute", widget=compute_widget)
+        self.enable_plot_view_config(self.load_config, "", "dB", False, True, False)
         self.add_semantic_section("judgment", widget=self.threshold_widget)
 
         # --- 信号连接 ---
@@ -254,10 +255,12 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
 
         # 获取阈值组件的配置
         config.update(self.threshold_widget.get_config())
-        return config
+        return self.merge_plot_view_config(config)
 
     def on_default_btn_clicked(self):
         if not self._validate_custom_bands_if_needed():
+            return
+        if not self.validate_plot_view_config():
             return
         if not self.threshold_widget.validate():
             return
@@ -273,6 +276,8 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def on_click_ok_btn(self):
         if not self._validate_custom_bands_if_needed():
+            return
+        if not self.validate_plot_view_config():
             return
         if not self.threshold_widget.validate():
             return
