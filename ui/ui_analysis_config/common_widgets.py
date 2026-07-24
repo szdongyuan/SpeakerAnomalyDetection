@@ -23,7 +23,7 @@ from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
     GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
     LIMIT_VALUE_SEMANTICS_BOUNDS,
-    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    LIMIT_VALUE_SEMANTICS_OFFSET,
 )
 from consts.acoustic_analysis.curve_style_consts import PLOT_VIEW_DIALOG_WIDTH
 from consts.harmonic_detection_consts import (
@@ -893,9 +893,9 @@ class GoldenSampleWidget(QWidget):
             self.display_mode_combo.addItem(label, value)
         self.display_mode_combo.setToolTip(
             "偏差曲线模式：上下限为偏差曲线的最终范围；"
-            "黄金样本上下框线模式：上限值为向上容差，下限值为向下容差；"
+            "黄金样本上下框线模式：上下限均为相对黄金样本曲线的带符号偏移量；"
             "上框线 = 黄金样本曲线 + 上限值；"
-            "下框线 = 黄金样本曲线 - 下限值。"
+            "下框线 = 黄金样本曲线 + 下限值。"
         )
         saved_mode = str(
             config.get(
@@ -930,7 +930,7 @@ class GoldenSampleWidget(QWidget):
 
     def limit_value_semantics(self) -> str:
         if self.is_checked() and self.display_mode() == GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
-            return LIMIT_VALUE_SEMANTICS_TOLERANCE
+            return LIMIT_VALUE_SEMANTICS_OFFSET
         return LIMIT_VALUE_SEMANTICS_BOUNDS
 
     def get_config(self) -> dict[str, Any]:

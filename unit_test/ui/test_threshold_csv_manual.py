@@ -17,7 +17,7 @@ from ui.ui_analysis_config.threshold_csv_manual import (
     validate_limit_data_values,
     write_manual_config_csv,
 )
-from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_TOLERANCE
+from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_OFFSET
 
 
 @pytest.fixture
@@ -220,46 +220,46 @@ def test_load_threshold_csv_rejects_unique_row_lower_above_upper(local_tmp_path)
         load_threshold_csv(str(path))
 
 
-def test_tolerance_csv_allows_independent_downward_and_upward_values(local_tmp_path):
-    path = local_tmp_path / "tolerance.csv"
-    path.write_text("x,upperbound,lowerbound\n0,3,5\n1,4,6\n", encoding="utf-8")
+def test_offset_csv_allows_signed_ordered_values(local_tmp_path):
+    path = local_tmp_path / "offset.csv"
+    path.write_text("x,upperbound,lowerbound\n0,3,-5\n1,-2,-5\n", encoding="utf-8")
 
     limit_data = load_threshold_csv(
         str(path),
-        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
     )
 
-    assert limit_data == ([0.0, 1.0], [3.0, 4.0], [5.0, 6.0])
+    assert limit_data == ([0.0, 1.0], [3.0, -2.0], [-5.0, -5.0])
     config = manual_config_from_limit_data(
         limit_data,
-        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
     )
     assert config["manual_upper_enabled"] is True
     assert config["manual_lower_enabled"] is True
 
 
 @pytest.mark.parametrize(
-    ("row", "message"),
-    [("0,-1,5", "向上容差"), ("0,3,-1", "向下容差")],
+    "row",
+    ["0,-5,-2", "0,2,5"],
 )
-def test_tolerance_csv_rejects_negative_values(local_tmp_path, row, message):
-    path = local_tmp_path / "negative_tolerance.csv"
+def test_offset_csv_rejects_lower_above_upper(local_tmp_path, row):
+    path = local_tmp_path / "invalid_offset.csv"
     path.write_text(f"x,upperbound,lowerbound\n{row}\n", encoding="utf-8")
 
-    with pytest.raises(ThresholdCsvManualError, match=message):
+    with pytest.raises(ThresholdCsvManualError, match="下限不能大于上限"):
         load_threshold_csv(
             str(path),
-            value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+            value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
         )
 
 
-def test_loaded_csv_can_be_revalidated_after_switching_to_tolerance_mode():
-    limit_data = ([0.0, 1.0], [3.0, 4.0], [-1.0, 2.0])
+def test_loaded_csv_can_be_revalidated_after_switching_to_offset_mode():
+    limit_data = ([0.0, 1.0], [3.0, 4.0], [-1.0, 5.0])
 
-    with pytest.raises(ThresholdCsvManualError, match="向下容差"):
+    with pytest.raises(ThresholdCsvManualError, match="下限不能大于上限"):
         validate_limit_data_values(
             limit_data,
-            value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+            value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
         )
 
 
@@ -341,19 +341,19 @@ def test_csv_export_rejects_invalid_manual_config():
         )
 
 
-def test_csv_export_uses_tolerance_semantics_when_requested():
+def test_csv_export_uses_offset_semantics_when_requested():
     config = _config(
         [_upper_segment(0.0, 3.0, 1.0, 3.0)],
-        [_upper_segment(0.0, 5.0, 1.0, 5.0)],
+        [_upper_segment(0.0, -5.0, 1.0, -5.0)],
     )
 
     assert csv_rows_from_manual_config(
         config,
-        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
     ) == [
         ["x", "upperbound", "lowerbound"],
-        ["0.0", "3.0", "5.0"],
-        ["1.0", "3.0", "5.0"],
+        ["0.0", "3.0", "-5.0"],
+        ["1.0", "3.0", "-5.0"],
     ]
 
 

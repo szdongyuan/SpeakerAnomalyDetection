@@ -8,10 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from consts.acoustic_analysis.common_consts import (
-    LIMIT_VALUE_SEMANTICS_BOUNDS,
-    LIMIT_VALUE_SEMANTICS_TOLERANCE,
-)
+from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_BOUNDS
 
 
 class ManualLimitValidationError(ValueError):
@@ -111,12 +108,7 @@ def _normalized_enabled_segments(
     if lower_enabled:
         lower_segments = normalize_segments(config.get("manual_lower_segments", []))
         _validate_normalized_segments(lower_segments, label="下限")
-    if value_semantics == LIMIT_VALUE_SEMANTICS_TOLERANCE:
-        if upper_enabled:
-            _validate_non_negative_tolerances(upper_segments, label="向上容差")
-        if lower_enabled:
-            _validate_non_negative_tolerances(lower_segments, label="向下容差")
-    elif upper_enabled and lower_enabled:
+    if upper_enabled and lower_enabled:
         _validate_lower_not_above_upper(upper_segments, lower_segments)
 
     return upper_enabled, lower_enabled, upper_segments, lower_segments
@@ -139,16 +131,6 @@ def _validate_normalized_segments(segments: list[dict[str, float]], *, label: st
                 f"{label}第{index}段起始X必须大于或等于上一段截止X"
             )
         previous_end_x = end_x
-
-
-def _validate_non_negative_tolerances(
-    segments: list[dict[str, float]],
-    *,
-    label: str,
-) -> None:
-    for index, segment in enumerate(segments, start=1):
-        if segment["start_y"] < 0 or segment["end_y"] < 0:
-            raise ManualLimitValidationError(f"{label}第{index}段不能小于0")
 
 
 def _validate_lower_not_above_upper(
