@@ -123,9 +123,26 @@ def test_curve_color_widget_updates_preview_and_nested_config(qapp):
         "下限颜色",
         "示意预览",
     }
-    assert all("color: #475467" in label.styleSheet() for label in content_labels)
-    assert all("font-size: 14px" in label.styleSheet() for label in content_labels)
-    assert all("font-weight: 400" in label.styleSheet() for label in content_labels)
+    field_labels = [
+        label
+        for label in content_labels
+        if label.objectName() == "curveColorFieldLabel"
+    ]
+    preview_label = widget.content_widget.findChild(QLabel, "curveColorPreviewLabel")
+    assert len(field_labels) == 3
+    assert all("color: #344054" in label.styleSheet() for label in field_labels)
+    assert all("font-size: 15px" in label.styleSheet() for label in field_labels)
+    assert all("font-weight: 400" in label.styleSheet() for label in field_labels)
+    assert preview_label is not None
+    assert "color: #344054" in preview_label.styleSheet()
+    assert "font-size: 15px" in preview_label.styleSheet()
+    assert "font-weight: 500" in preview_label.styleSheet()
+    color_buttons = list(widget._color_buttons.values())
+    assert all(button.cursor().shape() == Qt.PointingHandCursor for button in color_buttons)
+    assert all("QPushButton:hover" in button.styleSheet() for button in color_buttons)
+    assert all("border: 2px solid #2563EB" in button.styleSheet() for button in color_buttons)
+    assert all("QPushButton:pressed" in button.styleSheet() for button in color_buttons)
+    assert all("border: 2px solid #1D4ED8" in button.styleSheet() for button in color_buttons)
     assert emitted[-1][MAIN_CURVE_COLOR] == "#2563EB"
     assert config["display"][MAIN_CURVE_COLOR] == "#2563EB"
     assert config["display"]["grid_visible"] is True

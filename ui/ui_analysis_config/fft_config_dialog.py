@@ -3,7 +3,14 @@ from typing import List, Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from consts.acoustic_analysis.specific_consts.fft_consts import (
     FFT_SIZE_PRESETS,
@@ -78,35 +85,32 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         compute_layout.setSpacing(12)
 
         fft_group = GroupBox("FFT 参数")
-        fft_layout = QVBoxLayout(fft_group)
+        fft_layout = QFormLayout(fft_group)
+        fft_layout.setContentsMargins(8, 12, 8, 8)
+        fft_layout.setHorizontalSpacing(12)
+        fft_layout.setVerticalSpacing(8)
+        fft_layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        fft_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        fft_layout.setRowWrapPolicy(QFormLayout.DontWrapRows)
 
-        fft_size_layout = QHBoxLayout()
-        fft_size_layout.addWidget(Label("FFT 点数:"))
         self.fft_size_box = ComboBox()
         self.fft_size_box.setEditable(True)
         self.fft_size_box.lineEdit().setFont(self.fft_size_box.font())
         self.fft_size_box.addItems([str(value) for value in self.FFT_PRESETS])
         self.fft_size_box.setCurrentText(str(int(self.load_config.get("n_fft", 4096))))
-        fft_size_layout.addWidget(self.fft_size_box, 1)
-        fft_layout.addLayout(fft_size_layout)
+        fft_layout.addRow(Label("FFT 点数:"), self.fft_size_box)
 
-        window_layout = QHBoxLayout()
-        window_layout.addWidget(Label("窗函数:"))
         self.window_combo = ComboBox()
         self.window_combo.addItems(self.WINDOWS)
         self.window_combo.setCurrentText(str(self.load_config.get("window", "hann")))
-        window_layout.addWidget(self.window_combo, 1)
-        fft_layout.addLayout(window_layout)
+        fft_layout.addRow(Label("窗函数:"), self.window_combo)
 
-        overlap_layout = QHBoxLayout()
-        overlap_layout.addWidget(Label("重叠率:"))
         self.overlap_spin = DoubleSpinBox()
         self.overlap_spin.setRange(0, MAX_OVERLAP_RATIO * 100.0)
         self.overlap_spin.setDecimals(0)
         self.overlap_spin.setSuffix(" %")
         self.overlap_spin.setValue(float(self.load_config.get("overlap_ratio", 0.5)) * 100.0)
-        overlap_layout.addWidget(self.overlap_spin, 1)
-        fft_layout.addLayout(overlap_layout)
+        fft_layout.addRow(Label("重叠率:"), self.overlap_spin)
         compute_layout.addWidget(fft_group)
 
         self.weighting_selector = WeightingSelectorWidget(
@@ -118,10 +122,25 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         compute_layout.addWidget(self.weighting_selector)
         self.add_semantic_section("compute", widget=compute_widget)
 
-        display_widget = QWidget(self)
-        display_layout = QVBoxLayout(display_widget)
+        self.spectrum_display_widget = QWidget(self)
+        display_layout = QVBoxLayout(self.spectrum_display_widget)
         display_layout.setContentsMargins(0, 0, 0, 0)
         display_layout.setSpacing(12)
+
+        self.spectrum_expand_button = QToolButton(self)
+        self.spectrum_expand_button.setText("频谱显示设置")
+        self.spectrum_expand_button.setCheckable(True)
+        self.spectrum_expand_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.spectrum_expand_button.setCursor(Qt.PointingHandCursor)
+        self.spectrum_expand_button.setStyleSheet(
+            "color: #344054; font-size: 16px; font-weight: 600; border: none;"
+        )
+        display_layout.addWidget(self.spectrum_expand_button)
+
+        self.spectrum_content_widget = QWidget(self)
+        spectrum_content_layout = QVBoxLayout(self.spectrum_content_widget)
+        spectrum_content_layout.setContentsMargins(16, 2, 0, 0)
+        spectrum_content_layout.setSpacing(10)
 
         axis_layout = QHBoxLayout()
         axis_layout.addWidget(Label("横轴:"))
@@ -129,12 +148,12 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         self.x_axis_combo.addItems(self.X_AXIS_SCALES)
         self.x_axis_combo.setCurrentText(str(self.load_config.get("x_axis_scale", "log")))
         axis_layout.addWidget(self.x_axis_combo, 1)
-        display_layout.addLayout(axis_layout)
+        spectrum_content_layout.addLayout(axis_layout)
 
         self.focus_checkbox = CheckBox("启用频率聚焦范围")
         self.focus_checkbox.setChecked(bool(self.load_config.get("focus_range_enabled", True)))
         self.focus_checkbox.stateChanged.connect(self._on_focus_changed)
-        display_layout.addWidget(self.focus_checkbox)
+        spectrum_content_layout.addWidget(self.focus_checkbox)
 
         self.focus_widget = QWidget(self)
         focus_layout = QHBoxLayout(self.focus_widget)
@@ -151,9 +170,12 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         self.focus_max_spin.setSuffix(" Hz")
         self.focus_max_spin.setValue(int(self.load_config.get("focus_max_hz", 20000)))
         focus_layout.addWidget(self.focus_max_spin)
-        display_layout.addWidget(self.focus_widget)
+        spectrum_content_layout.addWidget(self.focus_widget)
+        display_layout.addWidget(self.spectrum_content_widget)
         self._on_focus_changed(self.focus_checkbox.checkState())
-        self.add_semantic_section("display", widget=display_widget)
+        self.add_semantic_section("display", widget=self.spectrum_display_widget)
+        self.spectrum_expand_button.toggled.connect(self._set_spectrum_display_expanded)
+        self._set_spectrum_display_expanded(False)
 
         baseline_widget = QWidget(self)
         baseline_layout = QVBoxLayout(baseline_widget)
@@ -209,6 +231,16 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         self.x_axis_combo.currentIndexChanged.connect(self._sync_plot_view_x_constraint)
         self.weighting_selector.combo_box.currentIndexChanged.connect(self._sync_plot_view_y_unit)
         self.baseline_mode_combo.currentIndexChanged.connect(self._sync_plot_view_y_unit)
+
+    def _set_spectrum_display_expanded(self, expanded):
+        expanded = bool(expanded)
+        self.spectrum_expand_button.setArrowType(
+            Qt.DownArrow if expanded else Qt.RightArrow
+        )
+        self.spectrum_content_widget.setVisible(expanded)
+        self.spectrum_content_widget.updateGeometry()
+        self.spectrum_display_widget.updateGeometry()
+        self._on_display_config_expanded(expanded)
 
     def _sync_plot_view_x_constraint(self, _index=None):
         self.plot_view_config_widget.set_positive_x(self.x_axis_combo.currentText() == "log")
