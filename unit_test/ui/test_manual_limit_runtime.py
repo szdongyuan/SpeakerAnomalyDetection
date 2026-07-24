@@ -155,7 +155,7 @@ def test_splf_invalid_golden_envelope_skips_limit_judgment_and_clears_result(
         "limit_data": (
             np.array([100.0, 200.0, 300.0]),
             np.array([3.0, 3.0, 3.0]),
-            np.array([5.0, 5.0, 5.0]),
+            np.array([-5.0, -5.0, -5.0]),
         ),
     }
     widget = _recording_widget(saw.SplFrequency("SPLF"), config)
@@ -213,7 +213,7 @@ def test_nearest_envelope_without_comparable_limit_point_does_not_write_ok(
         "limit_data": (
             np.array([1000.0, 2000.0]),
             np.array([3.0, 3.0]),
-            np.array([5.0, 5.0]),
+            np.array([-5.0, -5.0]),
         ),
     }
     warnings = []
@@ -257,7 +257,7 @@ def test_nearest_envelope_single_comparable_point_is_still_judged(
         "limit_data": (
             np.array([100.0, 200.0]),
             np.array([3.0, 3.0]),
-            np.array([5.0, 5.0]),
+            np.array([-5.0, -5.0]),
         ),
     }
     warnings = []
@@ -288,9 +288,9 @@ def test_nearest_envelope_single_comparable_point_is_still_judged(
     [
         ([5.0, 5.0], [np.nan, np.nan], [1.0, 2.0], (True, 3.0), [False, False]),
         ([5.0, 5.0], [np.nan, np.nan], [5.0, 2.0], (True, 0.0), [False, False]),
-        ([np.nan, np.nan], [5.0, 5.0], [-1.0, -2.0], (True, 3.0), [False, False]),
-        ([3.0, 3.0], [5.0, 5.0], [1.0, -2.0], (True, 2.0), [False, False]),
-        ([np.nan, np.nan], [5.0, 5.0], [-6.0, -2.0], (False, 1.0), [True, False]),
+        ([np.nan, np.nan], [-5.0, -5.0], [-1.0, -2.0], (True, 3.0), [False, False]),
+        ([3.0, 3.0], [-5.0, -5.0], [1.0, -2.0], (True, 2.0), [False, False]),
+        ([np.nan, np.nan], [-5.0, -5.0], [-6.0, -2.0], (False, 1.0), [True, False]),
     ],
 )
 def test_nearest_envelope_margin_uses_only_configured_sides(
@@ -360,7 +360,7 @@ def test_interpolated_envelope_without_comparable_limit_point_does_not_write_ok(
         np.array([0.0, 0.0]),
         np.array([1000.0, 2000.0]),
         np.array([3.0, 3.0]),
-        np.array([5.0, 5.0]),
+        np.array([-5.0, -5.0]),
         raw_y=np.array([100.0, 100.0]),
         baseline_aligned=np.array([100.0, 100.0]),
         display_mode="envelope",
@@ -397,7 +397,7 @@ def test_interpolated_envelope_single_comparable_point_is_still_judged(
         np.array([10.0]),
         np.array([100.0, 200.0]),
         np.array([3.0, 3.0]),
-        np.array([5.0, 5.0]),
+        np.array([-5.0, -5.0]),
         raw_y=np.array([110.0]),
         baseline_aligned=np.array([100.0]),
         display_mode="envelope",

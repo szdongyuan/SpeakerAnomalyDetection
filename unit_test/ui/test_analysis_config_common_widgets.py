@@ -154,13 +154,13 @@ def test_golden_sample_widget_preserves_envelope_mode_and_enabled_state(qapp):
 
     assert widget.display_mode_combo.isEnabled() is True
     assert widget.display_mode() == "envelope"
-    assert widget.limit_value_semantics() == "tolerance"
+    assert widget.limit_value_semantics() == "offset"
     assert "黄金样本上下框线" in widget.display_mode_combo.currentText()
     assert "偏差曲线模式" in widget.display_mode_combo.toolTip()
-    assert "向上容差" in widget.display_mode_combo.toolTip()
-    assert "向下容差" in widget.display_mode_combo.toolTip()
+    assert "带符号偏移量" in widget.display_mode_combo.toolTip()
     assert "上框线" in widget.display_mode_combo.toolTip()
     assert "下框线" in widget.display_mode_combo.toolTip()
+    assert "下框线 = 黄金样本曲线 + 下限值" in widget.display_mode_combo.toolTip()
     widget.enabled_checkbox.setChecked(False)
     assert widget.display_mode_combo.isEnabled() is False
     assert widget.limit_value_semantics() == "bounds"

@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_TOLERANCE
+from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_OFFSET
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     limits_from_manual_segments,
@@ -166,54 +166,73 @@ def test_lower_equal_upper_on_shared_boundary_is_valid():
     validate_manual_limit_config(config)
 
 
-def test_tolerance_semantics_allow_downward_tolerance_above_upward_tolerance():
+@pytest.mark.parametrize(
+    ("upper_y", "lower_y"),
+    [(-2, -5), (5, 2), (3, -5)],
+)
+def test_offset_semantics_allow_signed_ordered_values(upper_y, lower_y):
     config = {
         "manual_upper_enabled": True,
         "manual_lower_enabled": True,
         "manual_upper_segments": [
-            {"start_x": 0, "start_y": 3, "end_x": 1, "end_y": 3}
+            {"start_x": 0, "start_y": upper_y, "end_x": 1, "end_y": upper_y}
         ],
         "manual_lower_segments": [
-            {"start_x": 0, "start_y": 5, "end_x": 1, "end_y": 5}
+            {"start_x": 0, "start_y": lower_y, "end_x": 1, "end_y": lower_y}
         ],
     }
 
     validate_manual_limit_config(
         config,
-        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
     )
     _x, upper, lower = limits_from_manual_segments(
         config,
         np.array([0.5, 1.0]),
-        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
     )
 
-    assert upper == [3.0, 3.0]
-    assert lower == [5.0, 5.0]
+    assert upper == [float(upper_y), float(upper_y)]
+    assert lower == [float(lower_y), float(lower_y)]
 
 
-@pytest.mark.parametrize(
-    ("side", "message"),
-    [("upper", "向上容差"), ("lower", "向下容差")],
-)
-def test_tolerance_semantics_reject_negative_enabled_side(side, message):
+def test_offset_semantics_reject_lower_above_upper():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 0, "start_y": -5, "end_x": 1, "end_y": -5}
+        ],
+        "manual_lower_segments": [
+            {"start_x": 0, "start_y": -2, "end_x": 1, "end_y": -2}
+        ],
+    }
+
+    with pytest.raises(ManualLimitValidationError, match="下限不能大于上限"):
+        validate_manual_limit_config(
+            config,
+            value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
+        )
+
+
+@pytest.mark.parametrize("side", ["upper", "lower"])
+def test_offset_semantics_allow_negative_one_sided_values(side):
     config = {
         "manual_upper_enabled": side == "upper",
         "manual_lower_enabled": side == "lower",
         "manual_upper_segments": (
-            [{"start_x": 0, "start_y": -1, "end_x": 1, "end_y": 1}]
+            [{"start_x": 0, "start_y": -2, "end_x": 1, "end_y": -1}]
             if side == "upper"
             else []
         ),
         "manual_lower_segments": (
-            [{"start_x": 0, "start_y": 1, "end_x": 1, "end_y": -1}]
+            [{"start_x": 0, "start_y": -5, "end_x": 1, "end_y": -3}]
             if side == "lower"
             else []
         ),
     }
 
-    with pytest.raises(ManualLimitValidationError, match=message):
-        validate_manual_limit_config(
-            config,
-            value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
-        )
+    validate_manual_limit_config(
+        config,
+        value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
+    )

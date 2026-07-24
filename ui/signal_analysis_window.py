@@ -50,8 +50,8 @@ from base.golden_sample_comparison import (
     build_golden_curve_comparison as _build_golden_curve_comparison,
     build_golden_envelope_limits as _build_golden_envelope_limits,
     build_interpolated_golden_envelope_plot as _build_interpolated_golden_envelope_plot,
-    build_golden_tolerance_deviation_limits as _build_golden_tolerance_deviation_limits,
-    golden_tolerance_comparison_mask as _golden_tolerance_comparison_mask,
+    build_golden_offset_deviation_limits as _build_golden_offset_deviation_limits,
+    golden_offset_comparison_mask as _golden_offset_comparison_mask,
     interpolate_relative_limits as _interpolate_relative_limits,
     is_invalid_golden_envelope_limit_comparison as _is_invalid_golden_envelope_limit_comparison,
     match_nearest_relative_limits as _match_nearest_relative_limits,
@@ -73,7 +73,7 @@ from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
     GOLDEN_SAMPLE_RESULT_PATH_KEY,
     LIMIT_VALUE_SEMANTICS_BOUNDS,
-    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    LIMIT_VALUE_SEMANTICS_OFFSET,
     REFERENCE_PRESSURE_PA,
 )
 from consts.acoustic_analysis.curve_style_consts import MAIN_CURVE_COLOR
@@ -100,7 +100,7 @@ def _golden_limit_value_semantics(analysis_config) -> str:
         and analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY)
         and _normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
     ):
-        return LIMIT_VALUE_SEMANTICS_TOLERANCE
+        return LIMIT_VALUE_SEMANTICS_OFFSET
     return LIMIT_VALUE_SEMANTICS_BOUNDS
 
 
@@ -721,7 +721,7 @@ class Distortion(AnalysisGraphWidget):
                 plot_upper = csv_upper_list
                 plot_lower = csv_lower_list
                 if envelope_mode:
-                    upper_tolerance, lower_tolerance = _match_nearest_relative_limits(
+                    upper_offset, lower_offset = _match_nearest_relative_limits(
                         freq_value,
                         csv_freq_list,
                         csv_upper_list,
@@ -729,8 +729,8 @@ class Distortion(AnalysisGraphWidget):
                     )
                     plot_upper, plot_lower = _build_golden_envelope_limits(
                         baseline_aligned,
-                        upper_tolerance,
-                        lower_tolerance,
+                        upper_offset,
+                        lower_offset,
                     )
                     plot_limit_x = freq_value
                 # Use common function for plot setup
@@ -752,15 +752,15 @@ class Distortion(AnalysisGraphWidget):
                     self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
                 # Highlight out-of-limit segments
                 judgment_upper, judgment_lower = (
-                    _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                    _build_golden_offset_deviation_limits(csv_upper_list, csv_lower_list)
                     if envelope_mode
                     else (csv_upper_list, csv_lower_list)
                 )
                 if envelope_mode:
-                    comparison_mask = _golden_tolerance_comparison_mask(
+                    comparison_mask = _golden_offset_comparison_mask(
                         thd,
-                        upper_tolerance,
-                        lower_tolerance,
+                        upper_offset,
+                        lower_offset,
                     )
                     if not np.any(comparison_mask):
                         _clear_golden_envelope_result(self)
@@ -1147,7 +1147,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 plot_upper = csv_upper_list
                 plot_lower = csv_lower_list
                 if envelope_mode:
-                    upper_tolerance, lower_tolerance = _match_nearest_relative_limits(
+                    upper_offset, lower_offset = _match_nearest_relative_limits(
                         freq_value,
                         csv_freq_list,
                         csv_upper_list,
@@ -1155,8 +1155,8 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                     )
                     plot_upper, plot_lower = _build_golden_envelope_limits(
                         baseline_aligned,
-                        upper_tolerance,
-                        lower_tolerance,
+                        upper_offset,
+                        lower_offset,
                     )
                     plot_limit_x = freq_value
 
@@ -1181,15 +1181,15 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 # 2) Use parent's _highlight_out_of_range_curve() for limit check + highlight
                 #    This uses nearest-neighbor matching and highlights on original data points
                 judgment_upper, judgment_lower = (
-                    _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                    _build_golden_offset_deviation_limits(csv_upper_list, csv_lower_list)
                     if envelope_mode
                     else (csv_upper_list, csv_lower_list)
                 )
                 if envelope_mode:
-                    comparison_mask = _golden_tolerance_comparison_mask(
+                    comparison_mask = _golden_offset_comparison_mask(
                         perceptual_loudness,
-                        upper_tolerance,
-                        lower_tolerance,
+                        upper_offset,
+                        lower_offset,
                     )
                     if not np.any(comparison_mask):
                         _clear_golden_envelope_result(self)
@@ -1664,7 +1664,7 @@ class SplFrequency(AnalysisGraphWidget):
         # === 3. Limit check using LimitPlotUtils ===
         try:
             judgment_upper, judgment_lower = (
-                _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                _build_golden_offset_deviation_limits(csv_upper_list, csv_lower_list)
                 if envelope_mode
                 else (csv_upper_list, csv_lower_list)
             )
@@ -1675,7 +1675,7 @@ class SplFrequency(AnalysisGraphWidget):
                     judgment_upper,
                     judgment_lower,
                 )
-                comparison_mask = _golden_tolerance_comparison_mask(
+                comparison_mask = _golden_offset_comparison_mask(
                     spl_valid,
                     upper_at_data,
                     lower_at_data,
@@ -2052,7 +2052,7 @@ class Frequency(AnalysisGraphWidget):
         # === 3. Limit check using LimitPlotUtils ===
         try:
             judgment_upper, judgment_lower = (
-                _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                _build_golden_offset_deviation_limits(csv_upper_list, csv_lower_list)
                 if envelope_mode
                 else (csv_upper_list, csv_lower_list)
             )
@@ -2063,7 +2063,7 @@ class Frequency(AnalysisGraphWidget):
                     judgment_upper,
                     judgment_lower,
                 )
-                comparison_mask = _golden_tolerance_comparison_mask(
+                comparison_mask = _golden_offset_comparison_mask(
                     fr_valid,
                     upper_at_data,
                     lower_at_data,

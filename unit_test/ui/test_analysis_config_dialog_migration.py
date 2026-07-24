@@ -349,7 +349,7 @@ def test_threshold_widget_manual_config_serializes_segments_without_scalar_keys(
     assert "manual_lower" not in config
 
 
-def test_threshold_widget_manual_dialog_uses_tolerance_semantics(qapp):
+def test_threshold_widget_manual_dialog_uses_signed_offset_semantics(qapp):
     widget = create_threshold_widget(
         qapp,
         {
@@ -358,18 +358,50 @@ def test_threshold_widget_manual_dialog_uses_tolerance_semantics(qapp):
             "manual_upper_enabled": True,
             "manual_lower_enabled": True,
         },
-        limit_value_semantics_provider=lambda: "tolerance",
+        limit_value_semantics_provider=lambda: "offset",
     )
     dialog = create_manual_dialog(widget)
     set_segment_column(dialog.editor.manual_upper_table, 0, [0, 3, 1, 3])
-    set_segment_column(dialog.editor.manual_lower_table, 0, [0, 5, 1, 5])
+    set_segment_column(dialog.editor.manual_lower_table, 0, [0, -5, 1, -5])
 
     confirm_dialog(dialog)
 
     assert dialog.result() == dialog.Accepted
 
 
-def test_threshold_widget_revalidates_loaded_csv_after_semantics_change(qapp, monkeypatch):
+def test_threshold_widget_manual_dialog_rejects_crossed_offsets_on_confirm(
+    qapp,
+    monkeypatch,
+):
+    from ui.ui_analysis_config import threshold_config_widget
+
+    warnings = []
+    monkeypatch.setattr(
+        threshold_config_widget.MessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+        },
+        limit_value_semantics_provider=lambda: "offset",
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, -5, 1, -5])
+    set_segment_column(dialog.editor.manual_lower_table, 0, [0, -2, 1, -2])
+
+    confirm_dialog(dialog)
+
+    assert dialog.result() == dialog.Rejected
+    assert "下限不能大于上限" in warnings[-1][2]
+
+
+def test_threshold_widget_accepts_signed_csv_offsets_after_semantics_change(qapp, monkeypatch):
     from ui.ui_analysis_config import threshold_config_widget
 
     semantics = {"value": "bounds"}
@@ -390,9 +422,9 @@ def test_threshold_widget_revalidates_loaded_csv_after_semantics_change(qapp, mo
     )
 
     assert widget.validate() is True
-    semantics["value"] = "tolerance"
-    assert widget.validate() is False
-    assert "向下容差" in warnings[-1][2]
+    semantics["value"] = "offset"
+    assert widget.validate() is True
+    assert warnings == []
 
 
 def test_threshold_widget_threshold_unchecked_hides_limit_group(qapp):
@@ -2376,7 +2408,7 @@ def test_requested_dialogs_return_manual_segment_keys_from_threshold_widget(qapp
         window.golden_chk_box.enabled_checkbox.setChecked(True)
         envelope_index = window.golden_chk_box.display_mode_combo.findData("envelope")
         window.golden_chk_box.display_mode_combo.setCurrentIndex(envelope_index)
-        assert window.threshold_widget.current_limit_value_semantics() == "tolerance", analysis_type
+        assert window.threshold_widget.current_limit_value_semantics() == "offset", analysis_type
 
 
 def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):

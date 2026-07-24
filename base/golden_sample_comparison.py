@@ -165,28 +165,28 @@ def match_nearest_relative_limits(data_x, limit_x, upper_limits, lower_limits):
     return upper_at_data, lower_at_data
 
 
-def build_golden_envelope_limits(baseline_aligned, upper_tolerance, lower_tolerance):
-    """Build absolute envelope curves from upward/downward tolerance magnitudes."""
+def build_golden_envelope_limits(baseline_aligned, upper_offset, lower_offset):
+    """Build absolute envelope curves from signed golden-sample offsets."""
     baseline = np.asarray(baseline_aligned, dtype=float)
-    upper = baseline + np.asarray(upper_tolerance, dtype=float)
-    lower = baseline - np.asarray(lower_tolerance, dtype=float)
+    upper = baseline + np.asarray(upper_offset, dtype=float)
+    lower = baseline + np.asarray(lower_offset, dtype=float)
     return upper, lower
 
 
-def build_golden_tolerance_deviation_limits(upper_tolerance, lower_tolerance):
+def build_golden_offset_deviation_limits(upper_offset, lower_offset):
     """Return deviation-coordinate limits equivalent to the absolute envelope."""
-    upper = np.asarray(upper_tolerance, dtype=float)
-    lower = -np.asarray(lower_tolerance, dtype=float)
+    upper = np.asarray(upper_offset, dtype=float)
+    lower = np.asarray(lower_offset, dtype=float)
     return upper, lower
 
 
-def golden_tolerance_comparison_mask(deviation, upper_tolerance, lower_tolerance):
-    """Return points where deviation and at least one matched tolerance are valid."""
+def golden_offset_comparison_mask(deviation, upper_offset, lower_offset):
+    """Return points where deviation and at least one matched offset are valid."""
     deviation_arr = np.asarray(deviation, dtype=float)
-    upper_arr = np.asarray(upper_tolerance, dtype=float)
-    lower_arr = np.asarray(lower_tolerance, dtype=float)
+    upper_arr = np.asarray(upper_offset, dtype=float)
+    lower_arr = np.asarray(lower_offset, dtype=float)
     if deviation_arr.shape != upper_arr.shape or deviation_arr.shape != lower_arr.shape:
-        raise ValueError("偏差曲线与上下框线容差数组长度不一致")
+        raise ValueError("偏差曲线与上下框线偏移量数组长度不一致")
     return np.isfinite(deviation_arr) & (
         np.isfinite(upper_arr) | np.isfinite(lower_arr)
     )
@@ -215,7 +215,7 @@ def build_interpolated_golden_envelope_plot(
         display_y = display_y[sort_indices]
         display_baseline = display_baseline[sort_indices]
 
-    upper_tolerance, lower_tolerance = interpolate_relative_limits(
+    upper_offset, lower_offset = interpolate_relative_limits(
         display_x,
         limit_x,
         upper_limits,
@@ -223,7 +223,7 @@ def build_interpolated_golden_envelope_plot(
     )
     absolute_upper, absolute_lower = build_golden_envelope_limits(
         display_baseline,
-        upper_tolerance,
-        lower_tolerance,
+        upper_offset,
+        lower_offset,
     )
     return display_x, display_y, absolute_upper, absolute_lower

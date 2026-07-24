@@ -12,7 +12,7 @@ import numpy as np
 
 from consts.acoustic_analysis.common_consts import (
     LIMIT_VALUE_SEMANTICS_BOUNDS,
-    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    LIMIT_VALUE_SEMANTICS_OFFSET,
 )
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
@@ -88,7 +88,7 @@ def validate_limit_data_values(
     value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
     source_path: str | None = None,
 ) -> None:
-    """Validate parsed threshold values using final-bound or tolerance semantics."""
+    """Validate parsed threshold values using final-bound or signed-offset semantics."""
     x_values, upper_values, lower_values = _limit_data_lists(limit_data)
     duplicate_counts = Counter(x_values)
     source_text = f"\n文件: {source_path}" if source_path else ""
@@ -97,24 +97,16 @@ def validate_limit_data_values(
         zip(x_values, upper_values, lower_values),
         start=2,
     ):
-        if value_semantics == LIMIT_VALUE_SEMANTICS_TOLERANCE:
-            if not _is_missing_number(upper_value) and float(upper_value) < 0:
-                raise ThresholdCsvManualError(
-                    f"黄金样本上下框线配置错误：向上容差不能小于0。\n"
-                    f"位置: 第{line_number}条数据, X={x_value}, upper={upper_value}{source_text}"
-                )
-            if not _is_missing_number(lower_value) and float(lower_value) < 0:
-                raise ThresholdCsvManualError(
-                    f"黄金样本上下框线配置错误：向下容差不能小于0。\n"
-                    f"位置: 第{line_number}条数据, X={x_value}, lower={lower_value}{source_text}"
-                )
-            continue
-
         if duplicate_counts[x_value] != 1:
             continue
         if not _is_missing_number(upper_value) and not _is_missing_number(lower_value) and lower_value > upper_value:
+            error_prefix = (
+                "黄金样本上下框线偏移量配置错误"
+                if value_semantics == LIMIT_VALUE_SEMANTICS_OFFSET
+                else "CSV 上下限配置错误"
+            )
             raise ThresholdCsvManualError(
-                f"CSV 上下限配置错误：下限不能大于上限。\n"
+                f"{error_prefix}：下限不能大于上限。\n"
                 f"位置: 第{line_number}条数据, X={x_value}\n"
                 f"lower={lower_value}, upper={upper_value}{source_text}"
             )

@@ -3,9 +3,9 @@ import numpy as np
 from base.golden_sample_comparison import (
     build_golden_curve_comparison,
     build_golden_envelope_limits,
-    build_golden_tolerance_deviation_limits,
+    build_golden_offset_deviation_limits,
     build_interpolated_golden_envelope_plot,
-    golden_tolerance_comparison_mask,
+    golden_offset_comparison_mask,
     has_valid_golden_overlap,
     interpolate_relative_limits,
     is_invalid_golden_envelope_limit_comparison,
@@ -120,7 +120,7 @@ def test_linear_relative_limits_build_absolute_golden_envelope():
         [50.0, 100.0, 200.0, 400.0],
         [100.0, 200.0],
         [3.0, 5.0],
-        [3.0, 5.0],
+        [-3.0, -5.0],
     )
     upper, lower = build_golden_envelope_limits(
         [np.nan, 90.0, 92.0, np.nan],
@@ -134,9 +134,9 @@ def test_linear_relative_limits_build_absolute_golden_envelope():
     np.testing.assert_allclose(lower[1:3], [87.0, 87.0])
 
 
-def test_golden_envelope_treats_existing_limits_as_upward_and_downward_tolerances():
-    upper, lower = build_golden_envelope_limits([10.0], [0.2], [0.1])
-    deviation_upper, deviation_lower = build_golden_tolerance_deviation_limits([0.2], [0.1])
+def test_golden_envelope_treats_limits_as_signed_offsets():
+    upper, lower = build_golden_envelope_limits([10.0], [0.2], [-0.1])
+    deviation_upper, deviation_lower = build_golden_offset_deviation_limits([0.2], [-0.1])
 
     np.testing.assert_allclose(upper, [10.2])
     np.testing.assert_allclose(lower, [9.9])
@@ -144,29 +144,29 @@ def test_golden_envelope_treats_existing_limits_as_upward_and_downward_tolerance
     np.testing.assert_allclose(deviation_lower, [-0.1])
 
 
-def test_golden_envelope_supports_independent_one_sided_tolerances():
+def test_golden_envelope_supports_independent_one_sided_offsets():
     upper, lower = build_golden_envelope_limits(
         [100.0, 100.0],
         [30.0, np.nan],
-        [np.nan, 20.0],
+        [np.nan, -20.0],
     )
 
     np.testing.assert_allclose(upper, [130.0, np.nan], equal_nan=True)
     np.testing.assert_allclose(lower, [np.nan, 80.0], equal_nan=True)
 
 
-def test_golden_tolerance_comparison_mask_requires_a_curve_and_one_limit_side():
-    mask = golden_tolerance_comparison_mask(
+def test_golden_offset_comparison_mask_requires_a_curve_and_one_limit_side():
+    mask = golden_offset_comparison_mask(
         [np.nan, 1.0, 2.0, 3.0],
         [3.0, np.nan, 3.0, np.nan],
-        [5.0, 5.0, np.nan, np.nan],
+        [-5.0, -5.0, np.nan, np.nan],
     )
 
     np.testing.assert_array_equal(mask, [False, True, True, False])
 
 
-def test_golden_tolerance_comparison_mask_accepts_one_comparable_point():
-    mask = golden_tolerance_comparison_mask([10.0], [3.0], [5.0])
+def test_golden_offset_comparison_mask_accepts_one_comparable_point():
+    mask = golden_offset_comparison_mask([10.0], [3.0], [-5.0])
 
     np.testing.assert_array_equal(mask, [True])
 
@@ -178,7 +178,7 @@ def test_interpolated_envelope_keeps_full_raw_curve_but_gaps_limits_outside_gold
         [np.nan, np.nan, 91.0, 89.0],
         [100.0, 200.0],
         [3.0, 5.0],
-        [3.0, 5.0],
+        [-3.0, -5.0],
     )
 
     np.testing.assert_allclose(display_x, [50.0, 100.0, 200.0, 400.0])
@@ -192,7 +192,7 @@ def test_nearest_relative_limits_keep_hd_rb_prb_boundary_rule():
         [80.0, 90.0, 100.0, 200.0, 220.0, 240.0],
         [100.0, 200.0],
         [3.0, 5.0],
-        [3.0, 5.0],
+        [-3.0, -5.0],
     )
 
     np.testing.assert_allclose(
@@ -202,25 +202,25 @@ def test_nearest_relative_limits_keep_hd_rb_prb_boundary_rule():
     )
     np.testing.assert_allclose(
         lower,
-        [np.nan, np.nan, 3.0, 5.0, np.nan, np.nan],
+        [np.nan, np.nan, -3.0, -5.0, np.nan, np.nan],
         equal_nan=True,
     )
 
 
-def test_envelope_raw_and_tolerance_coordinates_are_mathematically_equivalent():
+def test_envelope_raw_and_offset_coordinates_are_mathematically_equivalent():
     raw = np.asarray([91.0, 87.0, 95.0])
     baseline = np.asarray([90.0, 92.0, 94.0])
     deviation = raw - baseline
-    upper_tolerance = np.asarray([3.0, 3.0, 3.0])
-    lower_tolerance = np.asarray([3.0, 3.0, 3.0])
+    upper_offset = np.asarray([3.0, 3.0, 3.0])
+    lower_offset = np.asarray([-3.0, -3.0, -3.0])
     absolute_upper, absolute_lower = build_golden_envelope_limits(
         baseline,
-        upper_tolerance,
-        lower_tolerance,
+        upper_offset,
+        lower_offset,
     )
-    deviation_upper, deviation_lower = build_golden_tolerance_deviation_limits(
-        upper_tolerance,
-        lower_tolerance,
+    deviation_upper, deviation_lower = build_golden_offset_deviation_limits(
+        upper_offset,
+        lower_offset,
     )
 
     deviation_out = (deviation > deviation_upper) | (deviation < deviation_lower)
@@ -228,17 +228,19 @@ def test_envelope_raw_and_tolerance_coordinates_are_mathematically_equivalent():
     np.testing.assert_array_equal(envelope_out, deviation_out)
 
 
-def test_display_modes_intentionally_apply_different_lower_limit_semantics():
-    deviation = np.asarray([0.0])
-    configured_lower = np.asarray([20.0])
-    configured_upper = np.asarray([30.0])
-
-    deviation_mode_out = (deviation > configured_upper) | (deviation < configured_lower)
-    envelope_upper, envelope_lower = build_golden_tolerance_deviation_limits(
-        configured_upper,
-        configured_lower,
+def test_golden_envelope_allows_both_offsets_to_be_negative_or_positive():
+    negative_upper, negative_lower = build_golden_envelope_limits(
+        [100.0],
+        [-2.0],
+        [-5.0],
     )
-    envelope_mode_out = (deviation > envelope_upper) | (deviation < envelope_lower)
+    positive_upper, positive_lower = build_golden_envelope_limits(
+        [100.0],
+        [5.0],
+        [2.0],
+    )
 
-    np.testing.assert_array_equal(deviation_mode_out, [True])
-    np.testing.assert_array_equal(envelope_mode_out, [False])
+    np.testing.assert_allclose(negative_upper, [98.0])
+    np.testing.assert_allclose(negative_lower, [95.0])
+    np.testing.assert_allclose(positive_upper, [105.0])
+    np.testing.assert_allclose(positive_lower, [102.0])
