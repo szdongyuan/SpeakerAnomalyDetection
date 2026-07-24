@@ -8,6 +8,11 @@ from typing import Any
 
 import numpy as np
 
+from consts.acoustic_analysis.common_consts import (
+    LIMIT_VALUE_SEMANTICS_BOUNDS,
+    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+)
+
 
 class ManualLimitValidationError(ValueError):
     pass
@@ -57,12 +62,24 @@ def validate_manual_segments(segments: list[dict[str, float]], *, label: str) ->
     _validate_normalized_segments(normalized, label=label)
 
 
-def validate_manual_limit_config(config: dict) -> None:
-    _normalized_enabled_segments(config)
+def validate_manual_limit_config(
+    config: dict,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> None:
+    _normalized_enabled_segments(config, value_semantics=value_semantics)
 
 
-def limits_from_manual_segments(config: dict, target_x) -> tuple[list[float], list[float], list[float]]:
-    upper_enabled, lower_enabled, upper_segments, lower_segments = _normalized_enabled_segments(config)
+def limits_from_manual_segments(
+    config: dict,
+    target_x,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> tuple[list[float], list[float], list[float]]:
+    upper_enabled, lower_enabled, upper_segments, lower_segments = _normalized_enabled_segments(
+        config,
+        value_semantics=value_semantics,
+    )
     x_values = np.asarray(target_x, dtype=float)
     upper_values = np.full(x_values.shape, np.nan, dtype=float)
     lower_values = np.full(x_values.shape, np.nan, dtype=float)
@@ -75,7 +92,11 @@ def limits_from_manual_segments(config: dict, target_x) -> tuple[list[float], li
     return x_values.tolist(), upper_values.tolist(), lower_values.tolist()
 
 
-def _normalized_enabled_segments(config: dict | None):
+def _normalized_enabled_segments(
+    config: dict | None,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+):
     config = config or {}
     upper_enabled = bool(config.get("manual_upper_enabled", True))
     lower_enabled = bool(config.get("manual_lower_enabled", False))
@@ -90,7 +111,12 @@ def _normalized_enabled_segments(config: dict | None):
     if lower_enabled:
         lower_segments = normalize_segments(config.get("manual_lower_segments", []))
         _validate_normalized_segments(lower_segments, label="下限")
-    if upper_enabled and lower_enabled:
+    if value_semantics == LIMIT_VALUE_SEMANTICS_TOLERANCE:
+        if upper_enabled:
+            _validate_non_negative_tolerances(upper_segments, label="向上容差")
+        if lower_enabled:
+            _validate_non_negative_tolerances(lower_segments, label="向下容差")
+    elif upper_enabled and lower_enabled:
         _validate_lower_not_above_upper(upper_segments, lower_segments)
 
     return upper_enabled, lower_enabled, upper_segments, lower_segments
@@ -113,6 +139,16 @@ def _validate_normalized_segments(segments: list[dict[str, float]], *, label: st
                 f"{label}第{index}段起始X必须大于或等于上一段截止X"
             )
         previous_end_x = end_x
+
+
+def _validate_non_negative_tolerances(
+    segments: list[dict[str, float]],
+    *,
+    label: str,
+) -> None:
+    for index, segment in enumerate(segments, start=1):
+        if segment["start_y"] < 0 or segment["end_y"] < 0:
+            raise ManualLimitValidationError(f"{label}第{index}段不能小于0")
 
 
 def _validate_lower_not_above_upper(

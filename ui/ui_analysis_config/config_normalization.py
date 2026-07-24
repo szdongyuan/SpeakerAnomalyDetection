@@ -9,6 +9,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_CHECKED_KEY,
+    GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+    GOLDEN_SAMPLE_RESULT_PATH_KEY,
+)
 from consts.harmonic_detection_consts import HARMONIC_DETECTION_METHOD_KEY
 
 
@@ -57,7 +62,11 @@ CONFIG_CONCEPTS = {
     },
     "golden_sample": {
         "meaning": "Comparison against a golden baseline result.",
-        "legacy_keys": ("golden_sample_checked", "golden_sample_result_path"),
+        "legacy_keys": (
+            GOLDEN_SAMPLE_CHECKED_KEY,
+            GOLDEN_SAMPLE_RESULT_PATH_KEY,
+            GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+        ),
     },
     "harmonic_selection": {
         "meaning": "Selected harmonic orders.",

@@ -10,6 +10,10 @@ from typing import Any
 
 import numpy as np
 
+from consts.acoustic_analysis.common_consts import (
+    LIMIT_VALUE_SEMANTICS_BOUNDS,
+    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+)
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     normalize_segments,
@@ -36,7 +40,11 @@ class _SideEndpoint:
     end: float | None = None
 
 
-def load_threshold_csv(csv_path: str) -> tuple[list[float], list[float], list[float]]:
+def load_threshold_csv(
+    csv_path: str,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> tuple[list[float], list[float], list[float]]:
     """Parse two-column or three-column threshold CSV into limit_data."""
     with open(csv_path, "r", encoding="utf-8", newline="") as file:
         rows = list(csv.reader(file))
@@ -65,25 +73,58 @@ def load_threshold_csv(csv_path: str) -> tuple[list[float], list[float], list[fl
         upper_values.append(upper_value)
         lower_values.append(lower_value)
 
+    validate_limit_data_values(
+        (x_values, upper_values, lower_values),
+        value_semantics=value_semantics,
+        source_path=csv_path,
+    )
+
+    return x_values, upper_values, lower_values
+
+
+def validate_limit_data_values(
+    limit_data,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+    source_path: str | None = None,
+) -> None:
+    """Validate parsed threshold values using final-bound or tolerance semantics."""
+    x_values, upper_values, lower_values = _limit_data_lists(limit_data)
     duplicate_counts = Counter(x_values)
+    source_text = f"\n文件: {source_path}" if source_path else ""
+
     for line_number, (x_value, upper_value, lower_value) in enumerate(
         zip(x_values, upper_values, lower_values),
         start=2,
     ):
+        if value_semantics == LIMIT_VALUE_SEMANTICS_TOLERANCE:
+            if not _is_missing_number(upper_value) and float(upper_value) < 0:
+                raise ThresholdCsvManualError(
+                    f"黄金样本上下框线配置错误：向上容差不能小于0。\n"
+                    f"位置: 第{line_number}条数据, X={x_value}, upper={upper_value}{source_text}"
+                )
+            if not _is_missing_number(lower_value) and float(lower_value) < 0:
+                raise ThresholdCsvManualError(
+                    f"黄金样本上下框线配置错误：向下容差不能小于0。\n"
+                    f"位置: 第{line_number}条数据, X={x_value}, lower={lower_value}{source_text}"
+                )
+            continue
+
         if duplicate_counts[x_value] != 1:
             continue
         if not _is_missing_number(upper_value) and not _is_missing_number(lower_value) and lower_value > upper_value:
             raise ThresholdCsvManualError(
                 f"CSV 上下限配置错误：下限不能大于上限。\n"
                 f"位置: 第{line_number}条数据, X={x_value}\n"
-                f"lower={lower_value}, upper={upper_value}\n"
-                f"文件: {csv_path}"
+                f"lower={lower_value}, upper={upper_value}{source_text}"
             )
 
-    return x_values, upper_values, lower_values
 
-
-def manual_config_from_limit_data(limit_data) -> dict:
+def manual_config_from_limit_data(
+    limit_data,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> dict:
     """Convert limit_data to manual_upper/lower segment config."""
     x_values, upper_values, lower_values = _limit_data_lists(limit_data)
     upper_segments = _segments_from_side_limit_data(x_values, upper_values, label="上限")
@@ -95,7 +136,7 @@ def manual_config_from_limit_data(limit_data) -> dict:
         "manual_lower_segments": lower_segments,
     }
     try:
-        validate_manual_limit_config(config)
+        validate_manual_limit_config(config, value_semantics=value_semantics)
     except ManualLimitValidationError as exc:
         raise ThresholdCsvManualError(str(exc)) from exc
     return config
@@ -116,11 +157,15 @@ def manual_config_has_complete_segments(config: dict) -> bool:
     return False
 
 
-def csv_rows_from_manual_config(config: dict) -> list[list[str]]:
+def csv_rows_from_manual_config(
+    config: dict,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> list[list[str]]:
     """Return CSV rows for the current valid manual config, including header."""
     config = config or {}
     try:
-        validate_manual_limit_config(config)
+        validate_manual_limit_config(config, value_semantics=value_semantics)
     except ManualLimitValidationError as exc:
         raise ThresholdCsvManualError(str(exc)) from exc
 
@@ -138,10 +183,17 @@ def csv_rows_from_manual_config(config: dict) -> list[list[str]]:
     return _two_sided_rows(upper_endpoints, lower_endpoints)
 
 
-def write_manual_config_csv(config: dict, csv_path: str) -> None:
+def write_manual_config_csv(
+    config: dict,
+    csv_path: str,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> None:
     """Write csv_rows_from_manual_config(config) to disk with UTF-8 newline-safe csv.writer."""
     with open(csv_path, "w", encoding="utf-8", newline="") as file:
-        csv.writer(file).writerows(csv_rows_from_manual_config(config))
+        csv.writer(file).writerows(
+            csv_rows_from_manual_config(config, value_semantics=value_semantics)
+        )
 
 
 def _csv_bound_indexes(headers: list[str]) -> tuple[int | None, int | None]:

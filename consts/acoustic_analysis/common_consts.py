@@ -1,3 +1,14 @@
 """Common constants for acoustic analysis algorithms."""
 
 REFERENCE_PRESSURE_PA = 20e-6
+
+GOLDEN_SAMPLE_CHECKED_KEY = "golden_sample_checked"
+GOLDEN_SAMPLE_RESULT_PATH_KEY = "golden_sample_result_path"
+GOLDEN_SAMPLE_DISPLAY_MODE_KEY = "golden_sample_display_mode"
+
+GOLDEN_SAMPLE_DISPLAY_DEVIATION = "deviation"
+GOLDEN_SAMPLE_DISPLAY_ENVELOPE = "envelope"
+DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE = GOLDEN_SAMPLE_DISPLAY_DEVIATION
+
+LIMIT_VALUE_SEMANTICS_BOUNDS = "bounds"
+LIMIT_VALUE_SEMANTICS_TOLERANCE = "tolerance"

@@ -137,7 +137,43 @@ def test_golden_sample_widget_outputs_legacy_key(qapp):
     widget = GoldenSampleWidget({"golden_sample_checked": True})
 
     assert widget.is_checked() is True
-    assert widget.get_config() == {"golden_sample_checked": True}
+    assert widget.display_mode() == "deviation"
+    assert widget.get_config() == {
+        "golden_sample_checked": True,
+        "golden_sample_display_mode": "deviation",
+    }
+
+
+def test_golden_sample_widget_preserves_envelope_mode_and_enabled_state(qapp):
+    widget = GoldenSampleWidget(
+        {
+            "golden_sample_checked": True,
+            "golden_sample_display_mode": "envelope",
+        }
+    )
+
+    assert widget.display_mode_combo.isEnabled() is True
+    assert widget.display_mode() == "envelope"
+    assert widget.limit_value_semantics() == "tolerance"
+    assert "黄金样本上下框线" in widget.display_mode_combo.currentText()
+    assert "偏差曲线模式" in widget.display_mode_combo.toolTip()
+    assert "向上容差" in widget.display_mode_combo.toolTip()
+    assert "向下容差" in widget.display_mode_combo.toolTip()
+    assert "上框线" in widget.display_mode_combo.toolTip()
+    assert "下框线" in widget.display_mode_combo.toolTip()
+    widget.enabled_checkbox.setChecked(False)
+    assert widget.display_mode_combo.isEnabled() is False
+    assert widget.limit_value_semantics() == "bounds"
+    assert widget.get_config() == {
+        "golden_sample_checked": False,
+        "golden_sample_display_mode": "envelope",
+    }
+
+
+def test_golden_sample_widget_invalid_display_mode_falls_back_to_deviation(qapp):
+    widget = GoldenSampleWidget({"golden_sample_display_mode": "unsupported"})
+
+    assert widget.display_mode() == "deviation"
 
 
 def test_harmonic_selector_filters_to_range(qapp):

@@ -14,8 +14,10 @@ from ui.ui_analysis_config.threshold_csv_manual import (
     load_threshold_csv,
     manual_config_from_limit_data,
     manual_config_has_complete_segments,
+    validate_limit_data_values,
     write_manual_config_csv,
 )
+from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_TOLERANCE
 
 
 @pytest.fixture
@@ -218,6 +220,49 @@ def test_load_threshold_csv_rejects_unique_row_lower_above_upper(local_tmp_path)
         load_threshold_csv(str(path))
 
 
+def test_tolerance_csv_allows_independent_downward_and_upward_values(local_tmp_path):
+    path = local_tmp_path / "tolerance.csv"
+    path.write_text("x,upperbound,lowerbound\n0,3,5\n1,4,6\n", encoding="utf-8")
+
+    limit_data = load_threshold_csv(
+        str(path),
+        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    )
+
+    assert limit_data == ([0.0, 1.0], [3.0, 4.0], [5.0, 6.0])
+    config = manual_config_from_limit_data(
+        limit_data,
+        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    )
+    assert config["manual_upper_enabled"] is True
+    assert config["manual_lower_enabled"] is True
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [("0,-1,5", "向上容差"), ("0,3,-1", "向下容差")],
+)
+def test_tolerance_csv_rejects_negative_values(local_tmp_path, row, message):
+    path = local_tmp_path / "negative_tolerance.csv"
+    path.write_text(f"x,upperbound,lowerbound\n{row}\n", encoding="utf-8")
+
+    with pytest.raises(ThresholdCsvManualError, match=message):
+        load_threshold_csv(
+            str(path),
+            value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        )
+
+
+def test_loaded_csv_can_be_revalidated_after_switching_to_tolerance_mode():
+    limit_data = ([0.0, 1.0], [3.0, 4.0], [-1.0, 2.0])
+
+    with pytest.raises(ThresholdCsvManualError, match="向下容差"):
+        validate_limit_data_values(
+            limit_data,
+            value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+        )
+
+
 def test_load_threshold_csv_defers_duplicate_x_lower_upper_validation_until_conversion(local_tmp_path):
     path = local_tmp_path / "limit.csv"
     path.write_text("x,upperbound,lowerbound\n0,10,\n1,20,25\n1,30,\n2,40,26\n", encoding="utf-8")
@@ -294,6 +339,22 @@ def test_csv_export_rejects_invalid_manual_config():
                 [_upper_segment(0.0, 11.0, 1.0, 11.0)],
             )
         )
+
+
+def test_csv_export_uses_tolerance_semantics_when_requested():
+    config = _config(
+        [_upper_segment(0.0, 3.0, 1.0, 3.0)],
+        [_upper_segment(0.0, 5.0, 1.0, 5.0)],
+    )
+
+    assert csv_rows_from_manual_config(
+        config,
+        value_semantics=LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    ) == [
+        ["x", "upperbound", "lowerbound"],
+        ["0.0", "3.0", "5.0"],
+        ["1.0", "3.0", "5.0"],
+    ]
 
 
 @pytest.mark.parametrize(

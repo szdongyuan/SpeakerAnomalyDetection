@@ -59,6 +59,7 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
             load_config=self.load_config,
             model_type=self.model_type,
             allow_manual_limits=True,
+            limit_value_semantics_provider=self.golden_chk_box.limit_value_semantics,
         )
 
         self.add_semantic_section("detection", widget=harmonic_group_box)
@@ -79,11 +80,11 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
         return self.merge_plot_view_config(config)
 
     def on_default_btn_clicked(self):
-        config_data = self.get_default_config()
         if not self.validate_plot_view_config():
             return
         if not self.threshold_widget.validate():
             return
+        config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("RB", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
 
@@ -96,10 +97,10 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
         if not self.harmonic_selector.selected_labels():
             MessageBox.warning(self, "设置警告", "请选择Rub & Buzz阶数")
         else:
-            config_data = self.get_default_config()
             if not self.validate_plot_view_config():
                 return
             if not self.threshold_widget.validate():
                 return
+            config_data = self.get_default_config()
             self.accept()
             return config_data
