@@ -46,6 +46,17 @@ from base.pre_processing.spl_runtime_config import (
 from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
 from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
 from base.core_algorithm.response import FftAnalyzer, FrequencyResponseAnalyzer, SplFrequencyAnalyzer
+from base.golden_sample_comparison import (
+    build_golden_curve_comparison as _build_golden_curve_comparison,
+    build_golden_envelope_limits as _build_golden_envelope_limits,
+    build_interpolated_golden_envelope_plot as _build_interpolated_golden_envelope_plot,
+    build_golden_tolerance_deviation_limits as _build_golden_tolerance_deviation_limits,
+    golden_tolerance_comparison_mask as _golden_tolerance_comparison_mask,
+    interpolate_relative_limits as _interpolate_relative_limits,
+    is_invalid_golden_envelope_limit_comparison as _is_invalid_golden_envelope_limit_comparison,
+    match_nearest_relative_limits as _match_nearest_relative_limits,
+    normalize_golden_sample_display_mode as _normalize_golden_sample_display_mode,
+)
 from base.stimulus_signal.methods import analysis_stimulus_method
 from base.core_algorithm.response.frequency_band_analyzer import (
     FrequencyBandAnalyzer,
@@ -56,7 +67,15 @@ from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
 from base.utils.octave_smoothing import smooth_to_octave_grid
 from consts import error_code, ui_style_const
-from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
+from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_CHECKED_KEY,
+    GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+    GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+    GOLDEN_SAMPLE_RESULT_PATH_KEY,
+    LIMIT_VALUE_SEMANTICS_BOUNDS,
+    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+    REFERENCE_PRESSURE_PA,
+)
 from consts.acoustic_analysis.curve_style_consts import MAIN_CURVE_COLOR
 from consts.acoustic_analysis.specific_consts import spec_consts
 from consts.harmonic_detection_consts import (
@@ -73,6 +92,36 @@ from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     limits_from_manual_segments,
 )
+
+
+def _golden_limit_value_semantics(analysis_config) -> str:
+    if (
+        isinstance(analysis_config, dict)
+        and analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY)
+        and _normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+    ):
+        return LIMIT_VALUE_SEMANTICS_TOLERANCE
+    return LIMIT_VALUE_SEMANTICS_BOUNDS
+
+
+def _clear_golden_envelope_result(widget) -> None:
+    widget.data_struct.analysis_result_dict.pop(widget.title_name, None)
+
+
+def _warn_invalid_golden_envelope(widget) -> None:
+    MessageBox.warning(
+        widget,
+        "提示",
+        "黄金样本无效或与测试曲线没有有效频率重叠，已仅显示测试曲线，本次未进行上下框线判定。",
+    )
+
+
+def _warn_no_golden_envelope_limit_overlap(widget) -> None:
+    MessageBox.warning(
+        widget,
+        "提示",
+        "测试曲线、黄金样本与上下限没有共同的有效频率范围，已仅显示测试曲线，本次未进行上下框线判定。",
+    )
 
 
 def get_class_mapping():
@@ -126,7 +175,7 @@ def _load_golden_baseline_result(analysis_config: dict, title_name: str):
     """
     if not isinstance(analysis_config, dict):
         return None
-    path = analysis_config.get("golden_sample_result_path")
+    path = analysis_config.get(GOLDEN_SAMPLE_RESULT_PATH_KEY)
     resolved = _resolve_golden_baseline_path(path)
     if not resolved or (not os.path.exists(resolved)):
         return None
@@ -200,57 +249,14 @@ def resolve_analysis_channel_signal(
 
 
 def _abs_deviation_curve(x_current, y_current, x_base, y_base):
-    """
-    Compute absolute deviation curve: abs(current - interp(base->current_x)).
-    Points outside baseline x-range are set to NaN.
-    """
-    x_c = np.asarray(x_current, dtype=float)
-    y_c = np.asarray(y_current, dtype=float)
-    x_b = np.asarray(x_base, dtype=float)
-    y_b = np.asarray(y_base, dtype=float)
-
-    if x_c.size == 0 or y_c.size == 0 or x_b.size == 0 or y_b.size == 0:
-        return y_c
-
-    m = np.isfinite(x_b) & np.isfinite(y_b)
-    x_b = x_b[m]
-    y_b = y_b[m]
-    if x_b.size < 2:
-        return y_c
-
-    if np.unique(x_b).size != x_b.size and x_c.size == y_c.size:
-        x_c_flat = np.ravel(x_c)
-        y_c_flat = np.ravel(y_c)
-        current_mask = np.isfinite(x_c_flat) & np.isfinite(y_c_flat)
-        if int(np.count_nonzero(current_mask)) == x_b.size:
-            current_order = np.argsort(x_c_flat[current_mask], kind="stable")
-            baseline_order = np.argsort(x_b, kind="stable")
-            current_sorted_x = x_c_flat[current_mask][current_order]
-            baseline_sorted_x = x_b[baseline_order]
-            if current_sorted_x.shape == baseline_sorted_x.shape and np.allclose(
-                current_sorted_x,
-                baseline_sorted_x,
-                rtol=1e-9,
-                atol=1e-9,
-            ):
-                paired_deviation = y_c_flat[current_mask][current_order] - y_b[baseline_order]
-                deviation = np.asarray(y_c_flat, dtype=float).copy()
-                current_indices = np.flatnonzero(current_mask)
-                deviation[current_indices[current_order]] = paired_deviation
-                return deviation.reshape(y_c.shape)
-
-    sort_idx = np.argsort(x_b, kind="stable")
-    x_b = x_b[sort_idx]
-    y_b = y_b[sort_idx]
-    x_b, uniq_idx = np.unique(x_b, return_index=True)
-    y_b = y_b[uniq_idx]
-    if x_b.size < 2:
-        return y_c
-
-    interp = np.interp(x_c, x_b, y_b)
-    in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
-    interp = np.where(in_range, interp, np.nan)
-    return y_c - interp
+    """Return the existing signed deviation curve: current minus golden."""
+    deviation, _baseline_aligned = _build_golden_curve_comparison(
+        x_current,
+        y_current,
+        x_base,
+        y_base,
+    )
+    return deviation
 
 
 def _analysis_stimulus_metadata(stimulus_info: dict, sample_rate):
@@ -606,24 +612,47 @@ class Distortion(AnalysisGraphWidget):
 
         # Keep the absolute curve for export/saving (do not subtract golden baseline).
         thd_raw = thd
+        baseline_aligned = None
 
-        # Golden sample baseline: use abs(current - golden) deviation curve
-        if isinstance(self.analysis_config, dict) and self.analysis_config.get("golden_sample_checked"):
+        # Golden sample baseline: use the signed current-minus-golden deviation curve.
+        if isinstance(self.analysis_config, dict) and self.analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY):
             baseline = _load_golden_baseline_result(self.analysis_config, self.title_name)
             if baseline:
                 base_freq = baseline.get("freq_value")
                 base_thd = baseline.get("thd")
                 if base_freq is not None and base_thd is not None:
                     try:
-                        thd = _abs_deviation_curve(freq_value, thd_raw, base_freq, base_thd)
+                        thd, baseline_aligned = _build_golden_curve_comparison(
+                            freq_value,
+                            thd_raw,
+                            base_freq,
+                            base_thd,
+                        )
                     except Exception:
                         pass
-            else:
+            elif _normalize_golden_sample_display_mode(self.analysis_config) != GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
                 MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
-        # Plot the results with threshold support
-        self.plot_graph(freq_value, thd, self.analysis_config)
+        invalid_golden_envelope = _is_invalid_golden_envelope_limit_comparison(
+            self.analysis_config,
+            baseline_aligned,
+            thd_raw,
+        )
+        plot_config = self.analysis_config
+        if invalid_golden_envelope:
+            _clear_golden_envelope_result(self)
+            _warn_invalid_golden_envelope(self)
+            plot_config = dict(self.analysis_config)
+            plot_config["limit_checked"] = False
 
+        # Plot the results with threshold support
+        self.plot_graph(
+            freq_value,
+            thd,
+            plot_config,
+            raw_y=thd_raw,
+            baseline_aligned=baseline_aligned,
+        )
         # Convert to list format for result storage
         if isinstance(harmonic, np.ndarray):
             harmonic = harmonic.tolist()
@@ -637,7 +666,15 @@ class Distortion(AnalysisGraphWidget):
         self.result = {"freq_value": freq_value, "harmonic": harmonic, "thd": thd, "thd_raw": thd_raw}
         return self.result
 
-    def plot_graph(self, freq_value, thd, analysis_config=None):
+    def plot_graph(
+        self,
+        freq_value,
+        thd,
+        analysis_config=None,
+        *,
+        raw_y=None,
+        baseline_aligned=None,
+    ):
         """
         绑制 THD 曲线，支持可选的阈值限制。
 
@@ -653,6 +690,12 @@ class Distortion(AnalysisGraphWidget):
         """
         # Validate data
         valid_data = self.check_valid_data(freq_value) and self.check_valid_data(thd)
+        envelope_mode = (
+            _normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+            and baseline_aligned is not None
+            and raw_y is not None
+        )
+        display_y = raw_y if envelope_mode else thd
 
         # === With limit config: use setup_limit_plot() ===
         if analysis_config and analysis_config.get("limit_checked"):
@@ -660,7 +703,9 @@ class Distortion(AnalysisGraphWidget):
             if limit_mode == "manual" and valid_data:
                 try:
                     csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
-                        analysis_config, freq_value
+                        analysis_config,
+                        freq_value,
+                        value_semantics=_golden_limit_value_semantics(analysis_config),
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -672,14 +717,30 @@ class Distortion(AnalysisGraphWidget):
                 csv_freq_list, csv_upper_list, csv_lower_list = result
 
             if valid_data:
+                plot_limit_x = csv_freq_list
+                plot_upper = csv_upper_list
+                plot_lower = csv_lower_list
+                if envelope_mode:
+                    upper_tolerance, lower_tolerance = _match_nearest_relative_limits(
+                        freq_value,
+                        csv_freq_list,
+                        csv_upper_list,
+                        csv_lower_list,
+                    )
+                    plot_upper, plot_lower = _build_golden_envelope_limits(
+                        baseline_aligned,
+                        upper_tolerance,
+                        lower_tolerance,
+                    )
+                    plot_limit_x = freq_value
                 # Use common function for plot setup
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
                     freq_value,
-                    thd,
-                    csv_freq_list,
-                    csv_upper_list,
-                    csv_lower_list,
+                    display_y,
+                    plot_limit_x,
+                    plot_upper,
+                    plot_lower,
                     x_label="Frequency (Hz)",
                     y_label="Distortion(%)",
                     log_x=True,
@@ -690,13 +751,31 @@ class Distortion(AnalysisGraphWidget):
                 if self.selected_label is not None:
                     self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
                 # Highlight out-of-limit segments
+                judgment_upper, judgment_lower = (
+                    _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                    if envelope_mode
+                    else (csv_upper_list, csv_lower_list)
+                )
+                if envelope_mode:
+                    comparison_mask = _golden_tolerance_comparison_mask(
+                        thd,
+                        upper_tolerance,
+                        lower_tolerance,
+                    )
+                    if not np.any(comparison_mask):
+                        _clear_golden_envelope_result(self)
+                        _warn_no_golden_envelope_limit_overlap(self)
+                        return
                 self._highlight_out_of_range_curve(
                     freq_value,
                     thd,
                     csv_freq_list,
-                    csv_upper_list,
-                    csv_lower_list,
-                    covered_limit_margins_only=(limit_mode == "manual"),
+                    judgment_upper,
+                    judgment_lower,
+                    covered_limit_margins_only=(
+                        limit_mode == "manual" or envelope_mode
+                    ),
+                    plot_y_data=display_y,
                 )
                 return
 
@@ -704,7 +783,7 @@ class Distortion(AnalysisGraphWidget):
         self.analysis_plot.clear()
         if valid_data:
             main_color = self.curve_colors(analysis_config)[MAIN_CURVE_COLOR]
-            self.analysis_plot.plot(freq_value, thd, pen=mkPen(color=main_color, width=2), name="THD")
+            self.analysis_plot.plot(freq_value, display_y, pen=mkPen(color=main_color, width=2), name="THD")
         if self.selected_label is not None:
             self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
         self.analysis_plot.setLabel("left", "Distortion(%)")
@@ -721,6 +800,7 @@ class Distortion(AnalysisGraphWidget):
         csv_lower_list,
         *,
         covered_limit_margins_only=False,
+        plot_y_data=None,
     ):
         """
         Highlight out-of-limit segments in THD curve.
@@ -751,6 +831,7 @@ class Distortion(AnalysisGraphWidget):
         # Note: original logic retained due to THD's special deviation requirements
         deviation: float = 0.0
         no_deviation_flag = True
+        margin_initialized = False
         out_mask = np.zeros(freq_arr_capacity, dtype=bool)
 
         for i, f in enumerate(freq_arr):
@@ -797,7 +878,7 @@ class Distortion(AnalysisGraphWidget):
             out_mask[i] = is_out
 
             if not is_out and no_deviation_flag and covered_limit_margins_only:
-                # Manual segment arrays use NaN gaps; uncovered samples must not influence margins.
+                # Manual gaps and one-sided envelope limits use NaN for uncovered sides.
                 margins = []
                 if has_upper_limit:
                     margins.append(abs(y_arr[i] - upper_val))
@@ -805,7 +886,8 @@ class Distortion(AnalysisGraphWidget):
                     margins.append(abs(y_arr[i] - lower_val))
                 if margins:
                     deviation_value = min(margins)
-                    deviation = min(deviation, deviation_value) if deviation > 0 else deviation_value
+                    deviation = min(deviation, deviation_value) if margin_initialized else deviation_value
+                    margin_initialized = True
             elif not is_out and no_deviation_flag:
                 # Legacy CSV behavior: compare every data point to both matched table limits.
                 deviation_value = min(min(np.abs(y_arr - upper_val)), min(np.abs(y_arr - lower_val)))
@@ -817,7 +899,8 @@ class Distortion(AnalysisGraphWidget):
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
 
         # === 3. Plot out-of-limit segments using LimitPlotUtils ===
-        LimitPlotUtils.plot_out_segments(self.analysis_plot, freq_arr, y_arr, out_mask)
+        plotted_y = y_arr if plot_y_data is None else np.asarray(plot_y_data)
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, freq_arr, plotted_y, out_mask)
 
     @staticmethod
     def check_valid_data(data):
@@ -955,26 +1038,47 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
         # Keep the absolute curve for export/saving (do not subtract golden baseline).
         perceptual_loudness_raw = perceptual_loudness
+        baseline_aligned = None
 
-        # Golden sample baseline: use abs(current - golden) deviation curve
-        if isinstance(self.analysis_config, dict) and self.analysis_config.get("golden_sample_checked"):
+        # Golden sample baseline: use the signed current-minus-golden deviation curve.
+        if isinstance(self.analysis_config, dict) and self.analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY):
             baseline = _load_golden_baseline_result(self.analysis_config, self.title_name)
             if baseline:
                 base_freq = baseline.get("freq_value")
                 base_y = baseline.get("thd")  # stored under 'thd' for backward compatibility
                 if base_freq is not None and base_y is not None:
                     try:
-                        perceptual_loudness = _abs_deviation_curve(
-                            freq_value, perceptual_loudness_raw, base_freq, base_y
+                        perceptual_loudness, baseline_aligned = _build_golden_curve_comparison(
+                            freq_value,
+                            perceptual_loudness_raw,
+                            base_freq,
+                            base_y,
                         )
                     except Exception:
                         pass
-            else:
+            elif _normalize_golden_sample_display_mode(self.analysis_config) != GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
                 MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
-        # Plot the results with threshold support (Y-axis will be in phons)
-        self.plot_graph(freq_value, perceptual_loudness, self.analysis_config)
+        invalid_golden_envelope = _is_invalid_golden_envelope_limit_comparison(
+            self.analysis_config,
+            baseline_aligned,
+            perceptual_loudness_raw,
+        )
+        plot_config = self.analysis_config
+        if invalid_golden_envelope:
+            _clear_golden_envelope_result(self)
+            _warn_invalid_golden_envelope(self)
+            plot_config = dict(self.analysis_config)
+            plot_config["limit_checked"] = False
 
+        # Plot the results with threshold support (Y-axis will be in phons)
+        self.plot_graph(
+            freq_value,
+            perceptual_loudness,
+            plot_config,
+            raw_y=perceptual_loudness_raw,
+            baseline_aligned=baseline_aligned,
+        )
         # Convert to list format for result storage
         if isinstance(harmonic, np.ndarray):
             harmonic = harmonic.tolist()
@@ -994,7 +1098,15 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         }
         return self.result
 
-    def plot_graph(self, freq_value, perceptual_loudness, analysis_config=None):
+    def plot_graph(
+        self,
+        freq_value,
+        perceptual_loudness,
+        analysis_config=None,
+        *,
+        raw_y=None,
+        baseline_aligned=None,
+    ):
         """
         Plot perceptual loudness (phons) and optionally apply limit curves.
 
@@ -1004,6 +1116,12 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         - This differs from SPLF/FR which use interpolation (check_interp_limits).
         """
         valid_data = self.check_valid_data(freq_value) and self.check_valid_data(perceptual_loudness)
+        envelope_mode = (
+            _normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+            and baseline_aligned is not None
+            and raw_y is not None
+        )
+        display_y = raw_y if envelope_mode else perceptual_loudness
 
         # === With limit config: use THD-style limit handling (nearest-neighbor) ===
         if analysis_config and analysis_config.get("limit_checked"):
@@ -1011,7 +1129,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             if limit_mode == "manual" and valid_data:
                 try:
                     csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
-                        analysis_config, freq_value
+                        analysis_config,
+                        freq_value,
+                        value_semantics=_golden_limit_value_semantics(analysis_config),
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1023,15 +1143,31 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 csv_freq_list, csv_upper_list, csv_lower_list = result
 
             if valid_data:
+                plot_limit_x = csv_freq_list
+                plot_upper = csv_upper_list
+                plot_lower = csv_lower_list
+                if envelope_mode:
+                    upper_tolerance, lower_tolerance = _match_nearest_relative_limits(
+                        freq_value,
+                        csv_freq_list,
+                        csv_upper_list,
+                        csv_lower_list,
+                    )
+                    plot_upper, plot_lower = _build_golden_envelope_limits(
+                        baseline_aligned,
+                        upper_tolerance,
+                        lower_tolerance,
+                    )
+                    plot_limit_x = freq_value
 
                 # 1) Plot main curve + limit curves (same as THD)
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
                     freq_value,
-                    perceptual_loudness,
-                    csv_freq_list,
-                    csv_upper_list,
-                    csv_lower_list,
+                    display_y,
+                    plot_limit_x,
+                    plot_upper,
+                    plot_lower,
                     x_label="Frequency (Hz)",
                     y_label=self._prb_y_label,
                     log_x=True,
@@ -1044,13 +1180,31 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
                 # 2) Use parent's _highlight_out_of_range_curve() for limit check + highlight
                 #    This uses nearest-neighbor matching and highlights on original data points
+                judgment_upper, judgment_lower = (
+                    _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                    if envelope_mode
+                    else (csv_upper_list, csv_lower_list)
+                )
+                if envelope_mode:
+                    comparison_mask = _golden_tolerance_comparison_mask(
+                        perceptual_loudness,
+                        upper_tolerance,
+                        lower_tolerance,
+                    )
+                    if not np.any(comparison_mask):
+                        _clear_golden_envelope_result(self)
+                        _warn_no_golden_envelope_limit_overlap(self)
+                        return
                 self._highlight_out_of_range_curve(
                     freq_value,
                     perceptual_loudness,
                     csv_freq_list,
-                    csv_upper_list,
-                    csv_lower_list,
-                    covered_limit_margins_only=(limit_mode == "manual"),
+                    judgment_upper,
+                    judgment_lower,
+                    covered_limit_margins_only=(
+                        limit_mode == "manual" or envelope_mode
+                    ),
+                    plot_y_data=display_y,
                 )
                 return
 
@@ -1059,7 +1213,7 @@ class PerceptualRubAndBuzz(RubAndBuzz):
         if valid_data:
             self.analysis_plot.plot(
                 freq_value,
-                perceptual_loudness,
+                display_y,
                 pen=mkPen(color=self.curve_colors(analysis_config)[MAIN_CURVE_COLOR], width=2),
                 name=self._prb_curve_label,
             )
@@ -1356,29 +1510,46 @@ class SplFrequency(AnalysisGraphWidget):
 
         # Keep the absolute curve for export/saving (do not subtract golden baseline).
         spl_db_raw = spl_db
+        baseline_aligned = None
 
-        # Golden sample baseline: use abs(current - golden) deviation curve
-        if analysis_config.get("golden_sample_checked"):
+        # Golden sample baseline: use the signed current-minus-golden deviation curve.
+        if analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY):
             baseline = _load_golden_baseline_result(analysis_config, self.title_name)
             if baseline:
                 base_freq = baseline.get("frequency_list")
                 base_spl = baseline.get("spl_db")
                 if base_freq is not None and base_spl is not None:
                     try:
-                        spl_db = _abs_deviation_curve(frequency_list, spl_db_raw, base_freq, base_spl)
+                        spl_db, baseline_aligned = _build_golden_curve_comparison(
+                            frequency_list,
+                            spl_db_raw,
+                            base_freq,
+                            base_spl,
+                        )
                     except Exception:
                         pass
-            else:
+            elif _normalize_golden_sample_display_mode(analysis_config) != GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
                 MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
 
+        invalid_golden_envelope = _is_invalid_golden_envelope_limit_comparison(
+            analysis_config,
+            baseline_aligned,
+            spl_db_raw,
+        )
         limit_checked = analysis_config.get("limit_checked")
-        if limit_checked:
+        if invalid_golden_envelope:
+            _clear_golden_envelope_result(self)
+            _warn_invalid_golden_envelope(self)
+            self.plot_spl_frequency(frequency_list, spl_db_raw)
+        elif limit_checked:
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual":
                 try:
                     manual_limit_x = _sorted_finite_positive_x_for_limits(frequency_list, spl_db)
                     csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
-                        analysis_config, manual_limit_x
+                        analysis_config,
+                        manual_limit_x,
+                        value_semantics=_golden_limit_value_semantics(analysis_config),
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1388,9 +1559,24 @@ class SplFrequency(AnalysisGraphWidget):
                 if not result:
                     return False
                 csv_freq_list, csv_upper_list, csv_lower_list = result
-            self.plot_spl_frequency_with_limits(frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list)
+            self.plot_spl_frequency_with_limits(
+                frequency_list,
+                spl_db,
+                csv_freq_list,
+                csv_upper_list,
+                csv_lower_list,
+                raw_y=spl_db_raw,
+                baseline_aligned=baseline_aligned,
+                display_mode=_normalize_golden_sample_display_mode(analysis_config),
+            )
         else:
-            self.plot_spl_frequency(frequency_list, spl_db)
+            display_y = (
+                spl_db_raw
+                if baseline_aligned is not None
+                and _normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+                else spl_db
+            )
+            self.plot_spl_frequency(frequency_list, display_y)
 
         self.result = {
             "frequency_list": frequency_list.tolist(),
@@ -1399,7 +1585,18 @@ class SplFrequency(AnalysisGraphWidget):
         }
         return self.result
 
-    def plot_spl_frequency_with_limits(self, frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list):
+    def plot_spl_frequency_with_limits(
+        self,
+        frequency_list,
+        spl_db,
+        csv_freq_list,
+        csv_upper_list,
+        csv_lower_list,
+        *,
+        raw_y=None,
+        baseline_aligned=None,
+        display_mode=GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+    ):
         """
         Plot SPLF (SPL-Frequency) curve and highlight out-of-limit segments.
 
@@ -1421,19 +1618,43 @@ class SplFrequency(AnalysisGraphWidget):
         mask = np.isfinite(freq_arr) & np.isfinite(spl_arr) & (freq_arr > 0)
         freq_valid = freq_arr[mask]
         spl_valid = spl_arr[mask]
+        envelope_mode = (
+            display_mode == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+            and raw_y is not None
+            and baseline_aligned is not None
+        )
+        display_valid = np.asarray(raw_y, dtype=float)[mask] if envelope_mode else spl_valid
         if freq_valid.size > 1:
             sort_idx = np.argsort(freq_valid)
             freq_valid = freq_valid[sort_idx]
             spl_valid = spl_valid[sort_idx]
+            display_valid = display_valid[sort_idx]
+
+        display_x = freq_valid
+        display_y = display_valid
+        if envelope_mode:
+            display_x, display_y, plot_upper, plot_lower = _build_interpolated_golden_envelope_plot(
+                freq_arr,
+                raw_y,
+                baseline_aligned,
+                csv_freq_list,
+                csv_upper_list,
+                csv_lower_list,
+            )
+            plot_limit_x = display_x
+        else:
+            plot_limit_x = csv_freq_list
+            plot_upper = csv_upper_list
+            plot_lower = csv_lower_list
 
         # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            freq_valid,
-            spl_valid,
-            csv_freq_list,
-            csv_upper_list,
-            csv_lower_list,
+            display_x,
+            display_y,
+            plot_limit_x,
+            plot_upper,
+            plot_lower,
             x_label="Frequency (Hz)",
             y_label="SPL (dB)",
             log_x=True,
@@ -1442,13 +1663,42 @@ class SplFrequency(AnalysisGraphWidget):
 
         # === 3. Limit check using LimitPlotUtils ===
         try:
-            out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
-                freq_valid,
-                spl_valid,
-                np.asarray(csv_freq_list, dtype=float),
-                np.asarray(csv_upper_list, dtype=float),
-                np.asarray(csv_lower_list, dtype=float),
+            judgment_upper, judgment_lower = (
+                _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                if envelope_mode
+                else (csv_upper_list, csv_lower_list)
             )
+            if envelope_mode:
+                upper_at_data, lower_at_data = _interpolate_relative_limits(
+                    freq_valid,
+                    csv_freq_list,
+                    judgment_upper,
+                    judgment_lower,
+                )
+                comparison_mask = _golden_tolerance_comparison_mask(
+                    spl_valid,
+                    upper_at_data,
+                    lower_at_data,
+                )
+                if not np.any(comparison_mask):
+                    _clear_golden_envelope_result(self)
+                    _warn_no_golden_envelope_limit_overlap(self)
+                    return
+                out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+                    spl_valid,
+                    upper_at_data,
+                    lower_at_data,
+                    valid_mask=comparison_mask,
+                )
+                plot_x, plot_y = freq_valid, spl_valid
+            else:
+                out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
+                    freq_valid,
+                    spl_valid,
+                    np.asarray(csv_freq_list, dtype=float),
+                    np.asarray(judgment_upper, dtype=float),
+                    np.asarray(judgment_lower, dtype=float),
+                )
         except Exception:
             is_ok, deviation = False, 0.0
             out_mask = np.zeros(len(freq_valid), dtype=bool)
@@ -1456,7 +1706,8 @@ class SplFrequency(AnalysisGraphWidget):
 
         # === 4. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
-        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
+        plotted_y = display_valid if envelope_mode else plot_y
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plotted_y, out_mask)
 
     def plot_spl_frequency(self, frequency_list, spl_db):
         self.analysis_plot.clear()
@@ -1552,28 +1803,46 @@ class Frequency(AnalysisGraphWidget):
 
         # Keep the absolute curve for export/saving (do not subtract golden baseline).
         fr_raw = fr
+        baseline_aligned = None
 
-        # Golden sample baseline: use abs(current - golden) deviation curve
-        if analysis_config.get("golden_sample_checked"):
+        # Golden sample baseline: use the signed current-minus-golden deviation curve.
+        if analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY):
             baseline = _load_golden_baseline_result(analysis_config, self.title_name)
             if baseline:
                 base_freq = baseline.get("frequency_list")
                 base_fr = baseline.get("fr")
                 if base_freq is not None and base_fr is not None:
                     try:
-                        fr = _abs_deviation_curve(frequency_list, fr_raw, base_freq, base_fr)
+                        fr, baseline_aligned = _build_golden_curve_comparison(
+                            frequency_list,
+                            fr_raw,
+                            base_freq,
+                            base_fr,
+                        )
                     except Exception:
                         pass
-            else:
+            elif _normalize_golden_sample_display_mode(analysis_config) != GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
                 MessageBox.warning(self, "提示", "未找到黄金样本基准文件或基准数据，已按原始曲线分析")
+
+        invalid_golden_envelope = _is_invalid_golden_envelope_limit_comparison(
+            analysis_config,
+            baseline_aligned,
+            fr_raw,
+        )
         limit_checked = analysis_config.get("limit_checked")
-        if limit_checked:
+        if invalid_golden_envelope:
+            _clear_golden_envelope_result(self)
+            _warn_invalid_golden_envelope(self)
+            self.plot_fr(frequency_list, fr_raw)
+        elif limit_checked:
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual":
                 try:
                     manual_limit_x = _sorted_finite_positive_x_for_limits(frequency_list, fr)
                     csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
-                        analysis_config, manual_limit_x
+                        analysis_config,
+                        manual_limit_x,
+                        value_semantics=_golden_limit_value_semantics(analysis_config),
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1583,9 +1852,24 @@ class Frequency(AnalysisGraphWidget):
                 if not result:
                     return False
                 csv_freq_list, csv_upper_list, csv_lower_list = result
-            self.plot_fr_with_limits(frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list)
+            self.plot_fr_with_limits(
+                frequency_list,
+                fr,
+                csv_freq_list,
+                csv_upper_list,
+                csv_lower_list,
+                raw_y=fr_raw,
+                baseline_aligned=baseline_aligned,
+                display_mode=_normalize_golden_sample_display_mode(analysis_config),
+            )
         else:
-            self.plot_fr(frequency_list, fr)
+            display_y = (
+                fr_raw
+                if baseline_aligned is not None
+                and _normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+                else fr
+            )
+            self.plot_fr(frequency_list, display_y)
         self.result = {
             "fr": fr.tolist(),
             "frequency_list": frequency_list.tolist(),
@@ -1686,7 +1970,18 @@ class Frequency(AnalysisGraphWidget):
             np.asarray(csv_lower_list, dtype=float),
         )
 
-    def plot_fr_with_limits(self, frequency_list, fr, csv_freq_list, csv_upper_list, csv_lower_list):
+    def plot_fr_with_limits(
+        self,
+        frequency_list,
+        fr,
+        csv_freq_list,
+        csv_upper_list,
+        csv_lower_list,
+        *,
+        raw_y=None,
+        baseline_aligned=None,
+        display_mode=GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+    ):
         """
         Plot Frequency Response (FR) curve and highlight out-of-limit segments.
 
@@ -1711,19 +2006,43 @@ class Frequency(AnalysisGraphWidget):
         mask = np.isfinite(freq_arr) & np.isfinite(fr_arr) & (freq_arr > 0)
         freq_valid = freq_arr[mask]
         fr_valid = fr_arr[mask]
+        envelope_mode = (
+            display_mode == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+            and raw_y is not None
+            and baseline_aligned is not None
+        )
+        display_valid = np.asarray(raw_y, dtype=float)[mask] if envelope_mode else fr_valid
         if freq_valid.size > 1:
             sort_idx = np.argsort(freq_valid)
             freq_valid = freq_valid[sort_idx]
             fr_valid = fr_valid[sort_idx]
+            display_valid = display_valid[sort_idx]
+
+        display_x = freq_valid
+        display_y = display_valid
+        if envelope_mode:
+            display_x, display_y, plot_upper, plot_lower = _build_interpolated_golden_envelope_plot(
+                freq_arr,
+                raw_y,
+                baseline_aligned,
+                csv_freq_list,
+                csv_upper_list,
+                csv_lower_list,
+            )
+            plot_limit_x = display_x
+        else:
+            plot_limit_x = csv_freq_list
+            plot_upper = csv_upper_list
+            plot_lower = csv_lower_list
 
         # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
-            freq_valid,
-            fr_valid,
-            csv_freq_list,
-            csv_upper_list,
-            csv_lower_list,
+            display_x,
+            display_y,
+            plot_limit_x,
+            plot_upper,
+            plot_lower,
             x_label="Frequency (Hz)",
             y_label="Amplitude (dB)",
             log_x=True,
@@ -1732,13 +2051,42 @@ class Frequency(AnalysisGraphWidget):
 
         # === 3. Limit check using LimitPlotUtils ===
         try:
-            out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
-                freq_valid,
-                fr_valid,
-                np.asarray(csv_freq_list, dtype=float),
-                np.asarray(csv_upper_list, dtype=float),
-                np.asarray(csv_lower_list, dtype=float),
+            judgment_upper, judgment_lower = (
+                _build_golden_tolerance_deviation_limits(csv_upper_list, csv_lower_list)
+                if envelope_mode
+                else (csv_upper_list, csv_lower_list)
             )
+            if envelope_mode:
+                upper_at_data, lower_at_data = _interpolate_relative_limits(
+                    freq_valid,
+                    csv_freq_list,
+                    judgment_upper,
+                    judgment_lower,
+                )
+                comparison_mask = _golden_tolerance_comparison_mask(
+                    fr_valid,
+                    upper_at_data,
+                    lower_at_data,
+                )
+                if not np.any(comparison_mask):
+                    _clear_golden_envelope_result(self)
+                    _warn_no_golden_envelope_limit_overlap(self)
+                    return
+                out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+                    fr_valid,
+                    upper_at_data,
+                    lower_at_data,
+                    valid_mask=comparison_mask,
+                )
+                plot_x, plot_y = freq_valid, fr_valid
+            else:
+                out_mask, plot_x, plot_y, deviation, is_ok = LimitPlotUtils.check_interp_limits(
+                    freq_valid,
+                    fr_valid,
+                    np.asarray(csv_freq_list, dtype=float),
+                    np.asarray(judgment_upper, dtype=float),
+                    np.asarray(judgment_lower, dtype=float),
+                )
         except Exception:
             is_ok, deviation = False, 0.0
             out_mask = np.zeros(len(freq_valid), dtype=bool)
@@ -1746,7 +2094,8 @@ class Frequency(AnalysisGraphWidget):
 
         # === 4. Save result and plot out-of-limit segments ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
-        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plot_y, out_mask)
+        plotted_y = display_valid if envelope_mode else plot_y
+        LimitPlotUtils.plot_out_segments(self.analysis_plot, plot_x, plotted_y, out_mask)
 
     def plot_fr(self, frequency_list, fr):
         self.analysis_plot.clear()

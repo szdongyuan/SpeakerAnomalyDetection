@@ -28,6 +28,10 @@ from base.stimulus_resolver import (
 )
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from consts import ui_style_const
+from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_CHECKED_KEY,
+    GOLDEN_SAMPLE_RESULT_PATH_KEY,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import (
     RecordConfigWindow,
@@ -451,7 +455,7 @@ class AnalysisModelSelect(QDialog):
             key_config = analysis_cfg.get(key)
             if not isinstance(key_config, dict):
                 continue
-            if not key_config.get("golden_sample_checked", False):
+            if not key_config.get(GOLDEN_SAMPLE_CHECKED_KEY, False):
                 continue
             item_type = key_config.get("type")
             if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
@@ -542,7 +546,7 @@ class AnalysisModelSelect(QDialog):
                 key_config = analysis_cfg.get(key)
                 if not isinstance(key_config, dict):
                     continue
-                if not key_config.get("golden_sample_checked", False):
+                if not key_config.get(GOLDEN_SAMPLE_CHECKED_KEY, False):
                     continue
                 item_type = key_config.get("type")
                 if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
@@ -555,8 +559,8 @@ class AnalysisModelSelect(QDialog):
                 try:
                     params = copy.deepcopy(key_config)
                     # When generating baseline, always disable golden/threshold influence
-                    params["golden_sample_checked"] = False
-                    params.pop("golden_sample_result_path", None)
+                    params[GOLDEN_SAMPLE_CHECKED_KEY] = False
+                    params.pop(GOLDEN_SAMPLE_RESULT_PATH_KEY, None)
                     params["limit_checked"] = False
                     params["limit_data"] = None
 
@@ -622,7 +626,7 @@ class AnalysisModelSelect(QDialog):
                 return
 
             # Store path into sequence analysis config; persisted when user clicks 保存/确定
-            analysis_cfg["golden_sample_result_path"] = json_path.replace("\\", "/")
+            analysis_cfg[GOLDEN_SAMPLE_RESULT_PATH_KEY] = json_path.replace("\\", "/")
         finally:
             _restore_golden_sample_runtime_state(data_struct, runtime_state_snapshot)
 

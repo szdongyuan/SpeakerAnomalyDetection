@@ -132,13 +132,14 @@ def assert_vertical_golden_size(window):
     assert round(window.minimumWidth() / window.minimumHeight(), 2) == 0.75
 
 
-def create_threshold_widget(qapp, load_config):
+def create_threshold_widget(qapp, load_config, limit_value_semantics_provider=None):
     from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
     widget = ThresholdConfigWidget(
         load_config=load_config,
         model_type="SPL",
         allow_manual_limits=True,
+        limit_value_semantics_provider=limit_value_semantics_provider,
     )
     widget.show()
     qapp.processEvents()
@@ -346,6 +347,52 @@ def test_threshold_widget_manual_config_serializes_segments_without_scalar_keys(
     assert config["manual_lower_segments"] == []
     assert "manual_upper" not in config
     assert "manual_lower" not in config
+
+
+def test_threshold_widget_manual_dialog_uses_tolerance_semantics(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+        },
+        limit_value_semantics_provider=lambda: "tolerance",
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 3, 1, 3])
+    set_segment_column(dialog.editor.manual_lower_table, 0, [0, 5, 1, 5])
+
+    confirm_dialog(dialog)
+
+    assert dialog.result() == dialog.Accepted
+
+
+def test_threshold_widget_revalidates_loaded_csv_after_semantics_change(qapp, monkeypatch):
+    from ui.ui_analysis_config import threshold_config_widget
+
+    semantics = {"value": "bounds"}
+    warnings = []
+    monkeypatch.setattr(
+        threshold_config_widget.MessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": ([0.0, 1.0], [3.0, 4.0], [-1.0, 2.0]),
+        },
+        limit_value_semantics_provider=lambda: semantics["value"],
+    )
+
+    assert widget.validate() is True
+    semantics["value"] = "tolerance"
+    assert widget.validate() is False
+    assert "向下容差" in warnings[-1][2]
 
 
 def test_threshold_widget_threshold_unchecked_hides_limit_group(qapp):
@@ -2123,6 +2170,7 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
                 "splf_calc_mode": "total",
                 "octave_smoothing": 3,
                 "golden_sample_checked": True,
+                "golden_sample_display_mode": "envelope",
                 "limit_checked": False,
                 "limit_data": None,
                 "weighting": "Z（None）",
@@ -2140,6 +2188,7 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "splf_calc_mode": "total",
         "octave_smoothing": 3,
         "golden_sample_checked": True,
+        "golden_sample_display_mode": "envelope",
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2323,6 +2372,11 @@ def test_requested_dialogs_return_manual_segment_keys_from_threshold_widget(qapp
         assert config["manual_lower_segments"] == lower_segments, analysis_type
         assert "manual_upper" not in config
         assert "manual_lower" not in config
+        assert window.threshold_widget.current_limit_value_semantics() == "bounds", analysis_type
+        window.golden_chk_box.enabled_checkbox.setChecked(True)
+        envelope_index = window.golden_chk_box.display_mode_combo.findData("envelope")
+        window.golden_chk_box.display_mode_combo.setCurrentIndex(envelope_index)
+        assert window.threshold_widget.current_limit_value_semantics() == "tolerance", analysis_type
 
 
 def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
@@ -2346,6 +2400,7 @@ def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
     assert window.get_default_config() == {
         "octave_smoothing": 6,
         "golden_sample_checked": True,
+        "golden_sample_display_mode": "deviation",
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2511,6 +2566,7 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
         "selected_labels": [2, 3],
         "all_checked": False,
         "golden_sample_checked": True,
+        "golden_sample_display_mode": "deviation",
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2546,6 +2602,7 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
         "selected_labels": [10, 12],
         "all_checked": False,
         "golden_sample_checked": False,
+        "golden_sample_display_mode": "deviation",
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2669,6 +2726,7 @@ def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
     assert config["prb_method"] == "sc"
     assert config["masking_config"] == {"sc_metric": "totalnl_x_ehs", "keep": "value"}
     assert config["golden_sample_checked"] is True
+    assert config["golden_sample_display_mode"] == "deviation"
     assert config["limit_checked"] is False
     assert config["limit_data"] is None
     assert config["limit_mode"] == "csv"

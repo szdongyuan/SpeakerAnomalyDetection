@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
+from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_BOUNDS
 from consts.acoustic_analysis.curve_style_consts import (
     LOWER_LIMIT_COLOR,
     UPPER_LIMIT_COLOR,
@@ -36,12 +37,16 @@ from ui.curve_style import (
     resolve_curve_colors,
 )
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget, Menu
-from ui.ui_analysis_config.manual_limit_segments import ManualLimitValidationError, validate_manual_limit_config
+from ui.ui_analysis_config.manual_limit_segments import (
+    ManualLimitValidationError,
+    validate_manual_limit_config,
+)
 from ui.ui_analysis_config.threshold_csv_manual import (
     ThresholdCsvManualError,
     load_threshold_csv,
     manual_config_from_limit_data,
     manual_config_has_complete_segments,
+    validate_limit_data_values,
     write_manual_config_csv,
 )
 from ui.ui_src import ui_resources
@@ -602,9 +607,16 @@ class _ManualLimitEditorWidget(QWidget):
 
 
 class _ManualLimitEditorDialog(QDialog):
-    def __init__(self, parent, manual_config: dict, model_type: str):
+    def __init__(
+        self,
+        parent,
+        manual_config: dict,
+        model_type: str,
+        value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+    ):
         super().__init__(parent)
         self._accepted_manual_config = {}
+        self.value_semantics = value_semantics
         self.setWindowTitle("编辑上下限")
         self.setModal(True)
 
@@ -645,7 +657,10 @@ class _ManualLimitEditorDialog(QDialog):
 
     def _on_confirm_clicked(self) -> None:
         try:
-            validate_manual_limit_config(self.editor.manual_config_for_validation())
+            validate_manual_limit_config(
+                self.editor.manual_config_for_validation(),
+                value_semantics=self.value_semantics,
+            )
         except (_ManualTableValidationError, ManualLimitValidationError) as exc:
             MessageBox.warning(self, "提示", str(exc))
             return
@@ -654,7 +669,10 @@ class _ManualLimitEditorDialog(QDialog):
 
     def _on_export_clicked(self) -> None:
         try:
-            validate_manual_limit_config(self.editor.manual_config_for_validation())
+            validate_manual_limit_config(
+                self.editor.manual_config_for_validation(),
+                value_semantics=self.value_semantics,
+            )
         except (_ManualTableValidationError, ManualLimitValidationError) as exc:
             MessageBox.warning(self, "提示", str(exc))
             return
@@ -669,7 +687,11 @@ class _ManualLimitEditorDialog(QDialog):
             return
 
         try:
-            write_manual_config_csv(self.editor.manual_config(), file_path)
+            write_manual_config_csv(
+                self.editor.manual_config(),
+                file_path,
+                value_semantics=self.value_semantics,
+            )
         except ThresholdCsvManualError as exc:
             MessageBox.warning(self, "提示", str(exc))
         except OSError as exc:
@@ -699,6 +721,7 @@ class ThresholdConfigWidget(QWidget):
         csv_validator=None,
         model_type: str = None,
         allow_manual_limits: bool = False,
+        limit_value_semantics_provider=None,
     ):
         """
         初始化阈值配置组件
@@ -715,6 +738,7 @@ class ThresholdConfigWidget(QWidget):
         self.limit_data = self.load_config.get("limit_data", None)
         self.model_type = model_type
         self.allow_manual_limits = bool(allow_manual_limits)
+        self.limit_value_semantics_provider = limit_value_semantics_provider
         self._curve_color_widget = None
 
         self._init_ui()
@@ -829,7 +853,17 @@ class ThresholdConfigWidget(QWidget):
         return self._manual_state_editor.editable_manual_config()
 
     def _create_manual_limit_dialog(self) -> _ManualLimitEditorDialog:
-        return _ManualLimitEditorDialog(self, self._accepted_manual_config(), self.model_type)
+        return _ManualLimitEditorDialog(
+            self,
+            self._accepted_manual_config(),
+            self.model_type,
+            self.current_limit_value_semantics(),
+        )
+
+    def current_limit_value_semantics(self) -> str:
+        if self.limit_value_semantics_provider is None:
+            return LIMIT_VALUE_SEMANTICS_BOUNDS
+        return self.limit_value_semantics_provider()
 
     def _on_manual_edit_clicked(self) -> None:
         dialog = self._create_manual_limit_dialog()
@@ -891,7 +925,10 @@ class ThresholdConfigWidget(QWidget):
             if self.csv_validator is not None:
                 result = self.csv_validator(file_path)
             else:
-                result = ThresholdConfigWidget.load_excel_limit(file_path)
+                result = ThresholdConfigWidget.load_excel_limit(
+                    file_path,
+                    value_semantics=self.current_limit_value_semantics(),
+                )
             if result:
                 self.limit_data = result
                 self._pending_manual_seed_data = result if self.allow_manual_limits else None
@@ -906,7 +943,10 @@ class ThresholdConfigWidget(QWidget):
         if not self._pending_manual_seed_data:
             return
         try:
-            manual_config = manual_config_from_limit_data(self._pending_manual_seed_data)
+            manual_config = manual_config_from_limit_data(
+                self._pending_manual_seed_data,
+                value_semantics=self.current_limit_value_semantics(),
+            )
         except ThresholdCsvManualError as exc:
             MessageBox.warning(self, "提示", f"CSV阈值无法自动转换为手动分段：{exc}")
             return
@@ -989,13 +1029,25 @@ class ThresholdConfigWidget(QWidget):
         if self.limit_checkbox.isChecked():
             if self.allow_manual_limits and self.current_limit_mode() == "manual":
                 try:
-                    validate_manual_limit_config(self._manual_limit_config_for_validation())
+                    validate_manual_limit_config(
+                        self._manual_limit_config_for_validation(),
+                        value_semantics=self.current_limit_value_semantics(),
+                    )
                 except (_ManualTableValidationError, ManualLimitValidationError) as exc:
                     MessageBox.warning(self, "提示", str(exc))
                     return False
             elif not self.limit_data:
                 MessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
                 return False
+            else:
+                try:
+                    validate_limit_data_values(
+                        self.limit_data,
+                        value_semantics=self.current_limit_value_semantics(),
+                    )
+                except ThresholdCsvManualError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return False
         return True
 
     def set_csv_validator(self, validator):
@@ -1008,14 +1060,21 @@ class ThresholdConfigWidget(QWidget):
         self.csv_validator = validator
 
     @staticmethod
-    def load_excel_limit(excel_path):
+    def load_excel_limit(
+        excel_path,
+        *,
+        value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+    ):
         if not excel_path:
             MessageBox.warning(None, "提示", f"未选择配置文件，请选择一个配置文件！")
             return None
         ext = os.path.splitext(excel_path)[1].lower()
         if ext == ".csv":
             try:
-                return load_threshold_csv(excel_path)
+                return load_threshold_csv(
+                    excel_path,
+                    value_semantics=value_semantics,
+                )
             except ThresholdCsvManualError as exc:
                 MessageBox.warning(None, "提示", str(exc))
                 return None

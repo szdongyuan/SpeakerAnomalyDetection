@@ -16,6 +16,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from consts.acoustic_analysis.common_consts import (
+    DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE,
+    GOLDEN_SAMPLE_CHECKED_KEY,
+    GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+    GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+    GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+    LIMIT_VALUE_SEMANTICS_BOUNDS,
+    LIMIT_VALUE_SEMANTICS_TOLERANCE,
+)
 from consts.acoustic_analysis.curve_style_consts import PLOT_VIEW_DIALOG_WIDTH
 from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_KEY,
@@ -863,18 +872,72 @@ class TimeSmoothingWidget(QWidget):
         return config
 
 
-class GoldenSampleWidget(CheckBox):
-    """Golden sample checkbox that preserves golden_sample_checked."""
+class GoldenSampleWidget(QWidget):
+    """Golden-sample enable switch and display-mode selector."""
+
+    DISPLAY_MODES = {
+        GOLDEN_SAMPLE_DISPLAY_DEVIATION: "偏差曲线（测试 - 黄金）",
+        GOLDEN_SAMPLE_DISPLAY_ENVELOPE: "测试曲线 + 黄金样本上下框线",
+    }
 
     def __init__(self, cfg: dict[str, Any] | None = None, parent=None):
-        super().__init__("使用黄金样本", parent)
-        self.setChecked(bool((cfg or {}).get("golden_sample_checked", False)))
+        super().__init__(parent)
+        config = cfg or {}
+
+        self.enabled_checkbox = CheckBox("使用黄金样本", self)
+        self.enabled_checkbox.setChecked(bool(config.get(GOLDEN_SAMPLE_CHECKED_KEY, False)))
+        self.enabled_checkbox.stateChanged.connect(self._sync_display_mode_enabled)
+
+        self.display_mode_combo = ComboBox(self)
+        for value, label in self.DISPLAY_MODES.items():
+            self.display_mode_combo.addItem(label, value)
+        self.display_mode_combo.setToolTip(
+            "偏差曲线模式：上下限为偏差曲线的最终范围；"
+            "黄金样本上下框线模式：上限值为向上容差，下限值为向下容差；"
+            "上框线 = 黄金样本曲线 + 上限值；"
+            "下框线 = 黄金样本曲线 - 下限值。"
+        )
+        saved_mode = str(
+            config.get(
+                GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+                DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE,
+            )
+            or DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE
+        ).lower()
+        mode_index = self.display_mode_combo.findData(saved_mode)
+        self.display_mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(Label("图形显示方式：", self))
+        mode_row.addWidget(self.display_mode_combo, 1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.enabled_checkbox)
+        layout.addLayout(mode_row)
+        self._sync_display_mode_enabled()
+
+    def _sync_display_mode_enabled(self, *args) -> None:
+        self.display_mode_combo.setEnabled(self.enabled_checkbox.isChecked())
 
     def is_checked(self) -> bool:
-        return self.isChecked()
+        return self.enabled_checkbox.isChecked()
 
-    def get_config(self) -> dict[str, bool]:
-        return {"golden_sample_checked": self.is_checked()}
+    def display_mode(self) -> str:
+        mode = str(self.display_mode_combo.currentData() or DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE)
+        return mode if mode in self.DISPLAY_MODES else DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE
+
+    def limit_value_semantics(self) -> str:
+        if self.is_checked() and self.display_mode() == GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
+            return LIMIT_VALUE_SEMANTICS_TOLERANCE
+        return LIMIT_VALUE_SEMANTICS_BOUNDS
+
+    def get_config(self) -> dict[str, Any]:
+        return {
+            GOLDEN_SAMPLE_CHECKED_KEY: self.is_checked(),
+            GOLDEN_SAMPLE_DISPLAY_MODE_KEY: self.display_mode(),
+        }
 
 
 class HarmonicSelectorWidget(QWidget):

@@ -63,6 +63,7 @@ from base.acquisition_recording_defaults import normalize_play_record_detail, no
 from base.audio_sample_rate import resolve_duplex_sample_rate, resolve_input_sample_rate
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
+from consts.acoustic_analysis.common_consts import GOLDEN_SAMPLE_RESULT_PATH_KEY
 from consts.audio_consts import normalize_float_bit_depth
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox
@@ -3038,9 +3039,9 @@ class SequenceWindow(QWidget):
                     runtime_params["analysis_channel"] = mapped_channel
                     # Inject sequence-level golden baseline path into per-item params
                     if isinstance(getattr(self, "analysis_config", None), dict):
-                        golden_path = self.analysis_config.get("golden_sample_result_path")
+                        golden_path = self.analysis_config.get(GOLDEN_SAMPLE_RESULT_PATH_KEY)
                         if golden_path:
-                            runtime_params["golden_sample_result_path"] = golden_path
+                            runtime_params[GOLDEN_SAMPLE_RESULT_PATH_KEY] = golden_path
                     class_instance.analysis_config = runtime_params
                     self.analysis_window.append(class_instance)
                     return
@@ -3069,9 +3070,9 @@ class SequenceWindow(QWidget):
                         return
                 # Inject sequence-level golden baseline path into per-item params
                 if isinstance(params, dict) and isinstance(getattr(self, "analysis_config", None), dict):
-                    golden_path = self.analysis_config.get("golden_sample_result_path")
+                    golden_path = self.analysis_config.get(GOLDEN_SAMPLE_RESULT_PATH_KEY)
                     if golden_path:
-                        params["golden_sample_result_path"] = golden_path
+                        params[GOLDEN_SAMPLE_RESULT_PATH_KEY] = golden_path
                 class_instance.analysis_config = params
                 self.analysis_window.append(class_instance)
 
