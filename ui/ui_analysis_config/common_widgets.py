@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QDialog,
     QHBoxLayout,
+    QLayout,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -54,8 +55,6 @@ from ui.ui_analysis_config.config_normalization import (
     normalize_weighting,
     weighting_to_display_label,
 )
-
-
 OCTAVE_SMOOTHING_LABELS = {
     0: "不平滑",
     1: "1/1 Oct",
@@ -178,6 +177,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self.section_layout = QVBoxLayout(self.section_container)
         self.section_layout.setContentsMargins(0, 0, 0, 0)
         self.section_layout.setSpacing(22)
+        self.section_layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.section_layout.addStretch(1)
         self.section_scroll_area.setWidget(self.section_container)
         self.section_scroll_area.verticalScrollBar().valueChanged.connect(self._sync_active_section_from_scroll)
@@ -434,9 +434,18 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         return content_layout
 
     def _refresh_section_container_minimum_height(self) -> None:
+        for content in self._semantic_section_contents.values():
+            content.layout().invalidate()
+            content.layout().activate()
+            content.updateGeometry()
+        for section in self._semantic_sections.values():
+            section.layout().invalidate()
+            section.layout().activate()
+            section.updateGeometry()
+        self.section_container.setMinimumHeight(0)
+        self.section_layout.invalidate()
         self.section_layout.activate()
-        self.section_container.setMinimumWidth(0)
-        self.section_container.setMinimumHeight(max(0, self.section_container.sizeHint().height()))
+        self.section_container.updateGeometry()
 
     def semantic_group_keys(self) -> list[str]:
         return list(self._semantic_sections.keys())

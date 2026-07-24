@@ -200,7 +200,7 @@ class CurveColorConfigWidget(QWidget):
         layout.setSpacing(10)
         for key, label in CURVE_COLOR_FIELDS:
             layout.addLayout(self._create_color_row(key, label))
-        layout.addWidget(self._create_label("示意预览"))
+        layout.addWidget(self._create_label("示意预览", True))
         self.preview_widget = CurveColorPreviewWidget(self._colors, content_widget)
         layout.addWidget(self.preview_widget)
         return content_widget
@@ -221,9 +221,14 @@ class CurveColorConfigWidget(QWidget):
     def is_expanded(self):
         return not self.content_widget.isHidden()
 
-    def _create_label(self, text):
+    def _create_label(self, text, preview=False):
         label = Label(text, self)
-        label.setStyleSheet("color: #475467; font-size: 14px; font-weight: 400;")
+        if preview:
+            label.setObjectName("curveColorPreviewLabel")
+            label.setStyleSheet("color: #344054; font-size: 15px; font-weight: 500;")
+        else:
+            label.setObjectName("curveColorFieldLabel")
+            label.setStyleSheet("color: #344054; font-size: 15px; font-weight: 400;")
         return label
 
     def _create_color_row(self, key, label):
@@ -232,6 +237,7 @@ class CurveColorConfigWidget(QWidget):
         row.addStretch()
         button = QPushButton(self)
         button.setFixedSize(72, 30)
+        button.setCursor(Qt.PointingHandCursor)
         button.setToolTip("点击选择预设颜色")
         button.clicked.connect(partial(self._choose_color, key))
         self._color_buttons[key] = button
@@ -259,7 +265,21 @@ class CurveColorConfigWidget(QWidget):
         color = self._colors[key]
         button = self._color_buttons[key]
         button.setAccessibleName(f"{dict(CURVE_COLOR_FIELDS)[key]} {color}")
-        button.setStyleSheet(f"background-color: {color}; border: 1px solid #667085; border-radius: 5px;")
+        button.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {color};
+                border: 1px solid #667085;
+                border-radius: 5px;
+            }}
+            QPushButton:hover {{
+                border: 2px solid #2563EB;
+            }}
+            QPushButton:pressed {{
+                border: 2px solid #1D4ED8;
+            }}
+            """
+        )
 
     def colors(self):
         return dict(self._colors)
