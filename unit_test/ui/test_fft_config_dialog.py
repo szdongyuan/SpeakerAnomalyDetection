@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PyQt5.QtCore import Qt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -66,6 +67,51 @@ def test_fft_size_editor_uses_combo_box_font(qapp):
     assert editor is not None
     assert editor.font().pixelSize() == window.fft_size_box.font().pixelSize()
     assert editor.font().pixelSize() == window.window_combo.font().pixelSize()
+
+
+def test_fft_parameter_fields_share_the_same_form_column(qapp):
+    window = FftConfigWindow(
+        FakeConfigManager({"FFT1": {"type": "FFT"}}),
+        "FFT1",
+        available_channels=[0],
+    )
+    window.show()
+    qapp.processEvents()
+
+    fields = (window.fft_size_box, window.window_combo, window.overlap_spin)
+    assert len({field.geometry().left() for field in fields}) == 1
+    assert len({field.geometry().right() for field in fields}) == 1
+    assert all(
+        lower.geometry().top() > upper.geometry().bottom()
+        for upper, lower in zip(fields, fields[1:])
+    )
+    assert (
+        window.section_container.minimumHeight()
+        >= window.section_container.sizeHint().height()
+    )
+    window.close()
+
+
+def test_fft_spectrum_display_settings_have_collapsible_title(qapp):
+    window = FftConfigWindow(FakeConfigManager({"FFT1": {"type": "FFT"}}), "FFT1")
+    window.show()
+    qapp.processEvents()
+
+    assert window.spectrum_expand_button.text() == "频谱显示设置"
+    assert window.spectrum_expand_button.arrowType() == Qt.RightArrow
+    assert window.spectrum_content_widget.isHidden() is True
+
+    collapsed_container_height = window.section_container.minimumHeight()
+    window.spectrum_expand_button.setChecked(True)
+    qapp.processEvents()
+    assert window.spectrum_expand_button.arrowType() == Qt.DownArrow
+    assert window.spectrum_content_widget.isHidden() is False
+    assert window.section_container.minimumHeight() > collapsed_container_height
+
+    window.spectrum_expand_button.setChecked(False)
+    qapp.processEvents()
+    assert window.section_container.minimumHeight() == collapsed_container_height
+    window.close()
 
 
 def test_fft_config_uses_shared_fft_constraints(qapp):
