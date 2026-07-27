@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QApplication, QSizePolicy, QWidget, QVBoxLayout
 
 from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_FOURIER,
@@ -207,6 +207,90 @@ def _filler_widget(min_height=120):
     layout = QVBoxLayout(widget)
     layout.addWidget(ChannelSelectorWidget({"analysis_channel": 0}, [0]))
     return widget
+
+
+def test_semantic_dialog_refresh_respects_nested_group_size_hint(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    nested = QWidget()
+    layout = QVBoxLayout(nested)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(_filler_widget(80))
+    layout.addWidget(_filler_widget(80))
+    dialog.add_semantic_section("compute", widget=nested)
+    dialog.show()
+    qapp.processEvents()
+
+    dialog._refresh_section_container_minimum_height()
+
+    assert dialog._semantic_sections["compute"].height() >= (
+        dialog._semantic_sections["compute"].layout().sizeHint().height()
+    )
+    dialog.close()
+
+
+def test_semantic_dialog_refresh_protected_maximum_height(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    capped = QWidget()
+    capped_layout = QVBoxLayout(capped)
+    capped_layout.addWidget(_filler_widget(80))
+    capped_layout.addWidget(_filler_widget(80))
+    capped.setMaximumHeight(64)
+    dialog.add_semantic_section("compute", widget=capped)
+    dialog.show()
+    qapp.processEvents()
+
+    dialog._refresh_section_container_minimum_height()
+
+    assert capped.maximumHeight() == 64
+    assert capped.minimumHeight() <= capped.maximumHeight()
+    dialog.close()
+
+
+def test_semantic_dialog_refresh_protected_fixed_height(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    fixed = _filler_widget(80)
+    fixed.setFixedHeight(64)
+    dialog.add_semantic_section("compute", widget=fixed)
+    dialog.show()
+    qapp.processEvents()
+
+    dialog._refresh_section_container_minimum_height()
+
+    assert fixed.height() == 64
+    assert fixed.minimumHeight() == 64
+    assert fixed.maximumHeight() == 64
+    dialog.close()
+
+
+def test_semantic_dialog_refresh_protected_fixed_vertical_policy(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    fixed_policy = _filler_widget(80)
+    fixed_policy.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    dialog.add_semantic_section("compute", widget=fixed_policy)
+    dialog.show()
+    qapp.processEvents()
+
+    dialog._refresh_section_container_minimum_height()
+
+    assert fixed_policy.sizePolicy().verticalPolicy() == QSizePolicy.Fixed
+    dialog.close()
+
+
+def test_semantic_dialog_refresh_protected_visible_container_height(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("input", widget=_filler_widget(90))
+    dialog.add_semantic_section("compute", widget=_filler_widget(110))
+    dialog.add_semantic_section("display", widget=_filler_widget(100))
+    dialog.show()
+    qapp.processEvents()
+
+    dialog._refresh_section_container_minimum_height()
+
+    visible_sections = [section for section in dialog._semantic_sections.values() if section.isVisible()]
+    expected = sum(section.sizeHint().height() for section in visible_sections)
+    expected += dialog.section_layout.spacing() * max(0, len(visible_sections) - 1)
+    assert dialog.section_container.minimumHeight() >= expected - 2
+    dialog.close()
 
 
 def test_semantic_dialog_registers_only_added_groups(qapp):

@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QDialog,
     QLabel,
+    QSplitter,
 )
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.excel_result_exporter import (
@@ -342,8 +343,9 @@ class SequenceWindow(QWidget):
 
         sequence_layout = QVBoxLayout()
         sequence_layout.addWidget(self.toolsbar)
-        sequence_layout.addLayout(waveform_layout)
-        sequence_layout.setAlignment(Qt.AlignCenter)
+        sequence_layout.addLayout(waveform_layout, stretch=1)
+        sequence_layout.setAlignment(Qt.AlignTop)
+        sequence_layout.setSpacing(0)
         sequence_layout.setContentsMargins(1, 0, 1, 0)
 
         self.add_file_to_using_file_combobox()
@@ -863,11 +865,164 @@ class SequenceWindow(QWidget):
 
         self.channel_workspace = ChannelPlotWorkspace(self)
 
-        layout.addWidget(self.count_board, stretch=1)
-        layout.addSpacing(20)
-        layout.addWidget(self.channel_workspace, stretch=8)
+        self.waveform_splitter = QSplitter(Qt.Horizontal)
+        self.waveform_splitter.setObjectName("SequenceWaveformSplitter")
+        self.waveform_splitter.setChildrenCollapsible(False)
+        splitter_side_padding = ui_style_const.scale_size_px(3)
+        self.waveform_splitter.setHandleWidth(1)
+        self.waveform_splitter.setStyleSheet(
+            f"""
+            QSplitter#SequenceWaveformSplitter::handle {{
+                background-color: #b8b8b8;
+                border: 0;
+                margin-left: {splitter_side_padding}px;
+                margin-right: {splitter_side_padding}px;
+            }}
+            """
+        )
+        self.waveform_splitter.addWidget(self.count_board)
+        self.waveform_splitter.addWidget(self.channel_workspace)
+        self.waveform_splitter.setStretchFactor(0, 1)
+        self.waveform_splitter.setStretchFactor(1, 8)
+
+        self._init_count_board_splitter_state()
+
+        layout.addWidget(self.waveform_splitter)
         layout.setContentsMargins(40, 20, 40, 20)
         return layout
+
+    def _init_count_board_splitter_state(self) -> None:
+        collapsed_hint = self.count_board.collapsed_width_hint()
+        self._count_board_collapsed_width = max(collapsed_hint, ui_style_const.scale_size_px(36))
+        self._count_board_collapse_threshold = self._count_board_collapsed_width + ui_style_const.scale_size_px(16)
+        self._count_board_expand_threshold = self._count_board_collapse_threshold + ui_style_const.scale_size_px(24)
+        self._last_count_board_expanded_width = self.count_board.expanded_width_hint()
+        self._count_board_max_width = self._last_count_board_expanded_width + ui_style_const.scale_size_px(120)
+        self._applying_count_board_splitter_state = False
+        self._count_board_splitter_reconcile_pending = False
+
+        self.count_board.set_compact_resize_enabled(True)
+        self.count_board.setMaximumWidth(self._count_board_max_width)
+        self.waveform_splitter.installEventFilter(self)
+        self.count_board.installEventFilter(self)
+        self.count_board.collapsed_changed.connect(self._on_count_board_collapsed_changed)
+        self.waveform_splitter.splitterMoved.connect(self._on_waveform_splitter_moved)
+        QTimer.singleShot(0, self._apply_initial_waveform_splitter_sizes)
+
+    def _apply_initial_waveform_splitter_sizes(self) -> None:
+        if not hasattr(self, "waveform_splitter"):
+            return
+        available_width = self._count_board_splitter_available_width()
+        if available_width <= 0:
+            QTimer.singleShot(0, self._apply_initial_waveform_splitter_sizes)
+            return
+
+        if not self._can_expand_count_board(available_width):
+            was_collapsed = self.count_board.is_collapsed()
+            self.count_board.set_collapsed(True)
+            if was_collapsed:
+                self._apply_count_board_splitter_sizes(True)
+            return
+
+        expanded_width = self._bounded_count_board_width(self.count_board.expanded_width_hint())
+        left_width = min(expanded_width, max(0, available_width - 1))
+        self.waveform_splitter.setSizes([left_width, max(1, available_width - left_width)])
+
+    def _schedule_count_board_splitter_reconcile(self) -> None:
+        if self._applying_count_board_splitter_state:
+            return
+        if getattr(self, "_count_board_splitter_reconcile_pending", False):
+            return
+        self._count_board_splitter_reconcile_pending = True
+        QTimer.singleShot(0, self._reconcile_count_board_splitter_state)
+
+    def _reconcile_count_board_splitter_state(self) -> None:
+        self._count_board_splitter_reconcile_pending = False
+        if self._applying_count_board_splitter_state:
+            return
+        if not hasattr(self, "waveform_splitter"):
+            return
+
+        sizes = self.waveform_splitter.sizes()
+        left_width = sizes[0] if sizes else 0
+        available_width = self._count_board_splitter_available_width()
+        minimum_expanded_width = self.count_board.expanded_width_hint()
+
+        if not self.count_board.is_collapsed() and (
+            left_width < minimum_expanded_width or not self._can_expand_count_board(available_width)
+        ):
+            self.count_board.set_collapsed(True)
+
+    def _on_count_board_collapsed_changed(self, collapsed: bool) -> None:
+        if self._applying_count_board_splitter_state:
+            return
+        self._apply_count_board_splitter_sizes(bool(collapsed))
+
+    def _on_waveform_splitter_moved(self, pos: int, index: int) -> None:
+        if self._applying_count_board_splitter_state:
+            return
+
+        sizes = self.waveform_splitter.sizes()
+        left_width = sizes[0] if sizes else int(pos)
+        minimum_expanded_width = self.count_board.expanded_width_hint()
+
+        if left_width < minimum_expanded_width:
+            was_collapsed = self.count_board.is_collapsed()
+            self.count_board.set_collapsed(True)
+            if was_collapsed:
+                self._apply_count_board_splitter_sizes(True)
+            return
+
+        self._last_count_board_expanded_width = self._bounded_count_board_width(left_width)
+        self.count_board.set_collapsed(False)
+        if left_width > self._count_board_max_width:
+            self._apply_count_board_splitter_sizes(False)
+
+    def _apply_count_board_splitter_sizes(self, collapsed: bool) -> None:
+        total_width = self._count_board_splitter_available_width()
+        if total_width <= 0:
+            total_width = self.count_board.expanded_width_hint() * 4
+
+        if collapsed:
+            left_width = self._count_board_collapsed_width
+        else:
+            if not self._can_expand_count_board(total_width):
+                self._applying_count_board_splitter_state = True
+                try:
+                    self.count_board.set_collapsed(True)
+                    left_width = min(self._count_board_collapsed_width, max(0, total_width - 1))
+                    self.waveform_splitter.setSizes([left_width, max(1, total_width - left_width)])
+                finally:
+                    self._applying_count_board_splitter_state = False
+                return
+
+            left_width = max(self._last_count_board_expanded_width, self.count_board.expanded_width_hint())
+            left_width = self._bounded_count_board_width(left_width)
+            left_width = min(left_width, max(self._count_board_expand_threshold + 1, total_width - 1))
+
+        right_width = max(1, total_width - left_width)
+        self._applying_count_board_splitter_state = True
+        try:
+            self.waveform_splitter.setSizes([left_width, right_width])
+        finally:
+            self._applying_count_board_splitter_state = False
+
+    def _bounded_count_board_width(self, width: int) -> int:
+        return min(max(int(width), self._count_board_collapsed_width), self._count_board_max_width)
+
+    def _count_board_splitter_available_width(self) -> int:
+        sizes = self.waveform_splitter.sizes()
+        total_width = sum(sizes) if sizes else 0
+        if total_width > 0:
+            return total_width
+        return max(0, self.waveform_splitter.width() - self.waveform_splitter.handleWidth())
+
+    def _can_expand_count_board(self, available_width=None) -> bool:
+        if available_width is None:
+            available_width = self._count_board_splitter_available_width()
+        if available_width <= 0:
+            return True
+        return available_width >= self.count_board.expanded_width_hint() + 1
 
     def init_fft_and_stft_flag(self):
         model_item_list = self.analysis_config.get("display_sequence", "")
@@ -3080,18 +3235,27 @@ class SequenceWindow(QWidget):
         """
         Persist analysis window geometry on move/resize (no close handling).
         """
+        is_count_board_splitter_resize = (
+            obj is getattr(self, "waveform_splitter", None) or obj is getattr(self, "count_board", None)
+        ) and event.type() == QEvent.Resize
+        if is_count_board_splitter_resize:
+            self._schedule_count_board_splitter_reconcile()
+
+        analysis_window_key_by_obj = getattr(self, "_analysis_window_key_by_obj", None)
         try:
-            if obj in self._analysis_window_key_by_obj:
+            if analysis_window_key_by_obj is not None and obj in analysis_window_key_by_obj:
                 et = event.type()
                 if et in (QEvent.Move, QEvent.Resize):
-                    key = self._analysis_window_key_by_obj.get(obj)
+                    key = analysis_window_key_by_obj.get(obj)
                     if key:
                         rect = obj.geometry()
                         geo = {"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()}
                         self._set_analysis_window_geometry(key, geo)
         except Exception as e:
             # Never break Qt event loop
-            self.default_logger.error(f"eventFilter geometry persist error: {e}")
+            log_error = getattr(getattr(self, "default_logger", None), "error", None)
+            if callable(log_error):
+                log_error(f"eventFilter geometry persist error: {e}")
 
         # 键盘事件捕获（扫码枪键盘楔入模式）
         try:
