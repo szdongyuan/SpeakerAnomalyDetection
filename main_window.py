@@ -10,6 +10,7 @@ from base.log_manager import LogManager
 from base.db_manager import DataSave, ensure_system_database_ready
 from base.sound_device_manager import SoundDeviceManager
 from consts.model_consts import SYSTEM_DATABASE_PATH
+from consts.running_consts import APP_DISPLAY_NAME
 from ui.custom_ui_widget.widgets import PushButton, MenuBar, Label, Action, MessageBox
 from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
@@ -28,6 +29,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.setWindowTitle(APP_DISPLAY_NAME)
         # set up statusbar object data
         self.user_name = None
         self.access_lvl = None
@@ -111,7 +113,7 @@ class MainWindow(QMainWindow):
         icon_label.setFixedSize(25, 25)
         icon_label.setScaledContents(True)
         current_version = self.get_current_version()
-        title_label = Label(f"希听异音检测 -{current_version} beta")
+        title_label = Label(f"{APP_DISPLAY_NAME} -{current_version} beta")
         h_spacer = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         title_layout.addWidget(icon_label)
         title_layout.addWidget(title_label)
