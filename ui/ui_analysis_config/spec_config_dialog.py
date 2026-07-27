@@ -99,7 +99,7 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _on_spectrum_mode_changed(self, _index=None):
         self.mel_param_group.setVisible(self._selected_spectrum_mode() == spec_consts.SPEC_MODE_MEL)
-        self.section_container.setMinimumHeight(0)
+        self.mel_param_group.updateGeometry()
         QTimer.singleShot(0, self._resize_after_spectrum_mode_changed)
 
     def _resize_after_spectrum_mode_changed(self):

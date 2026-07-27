@@ -173,7 +173,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self.section_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.section_container = QWidget(self.section_scroll_area)
         self.section_container.setObjectName("semanticSectionContainer")
-        self.section_container.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+        self.section_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.section_layout = QVBoxLayout(self.section_container)
         self.section_layout.setContentsMargins(0, 0, 0, 0)
         self.section_layout.setSpacing(22)
@@ -373,7 +373,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         section_widget.setObjectName("semanticSectionCard")
         section_widget.setProperty("semanticGroupKey", group_key)
         section_widget.setAttribute(Qt.WA_StyledBackground, True)
-        section_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+        self._apply_semantic_size_policy(section_widget)
         section_layout = QVBoxLayout(section_widget)
         section_layout.setContentsMargins(0, 0, 0, 0)
         section_layout.setSpacing(0)
@@ -411,12 +411,12 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         content_widget = QWidget(section_widget)
         content_widget.setObjectName("semanticSectionContent")
         content_widget.setAttribute(Qt.WA_StyledBackground, True)
-        content_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+        self._apply_semantic_size_policy(content_widget)
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(14, 12, 14, 14)
         content_layout.setSpacing(10)
         if widget is not None:
-            widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+            self._apply_semantic_size_policy(widget)
             content_layout.addWidget(widget)
         if layout is not None:
             content_layout.addLayout(layout)
@@ -446,6 +446,93 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self.section_layout.invalidate()
         self.section_layout.activate()
         self.section_container.updateGeometry()
+        visible_sections = [
+            section for section in self._semantic_sections.values() if not section.isHidden()
+        ]
+        for section in visible_sections:
+            self._refresh_widget_minimum_height(section)
+        self.section_layout.activate()
+        spacing = self.section_layout.spacing()
+        height = sum(section.sizeHint().height() for section in visible_sections)
+        height += spacing * max(0, len(visible_sections) - 1)
+        self.section_container.setMinimumWidth(0)
+        self.section_container.setMinimumHeight(max(0, height))
+        self.section_container.updateGeometry()
+        self.section_container.adjustSize()
+
+    def _apply_semantic_size_policy(self, widget: QWidget) -> None:
+        policy = widget.sizePolicy()
+        vertical_policy = policy.verticalPolicy()
+        if (
+            vertical_policy != QSizePolicy.Fixed
+            and not self._has_fixed_height(widget)
+        ):
+            vertical_policy = QSizePolicy.Minimum
+        widget.setSizePolicy(QSizePolicy.Expanding, vertical_policy)
+
+    def _refresh_widget_minimum_height(self, widget: QWidget) -> None:
+        if widget.isHidden():
+            return
+
+        layout = widget.layout()
+        if layout is not None:
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                child_widget = item.widget()
+                if child_widget is not None:
+                    self._refresh_widget_minimum_height(child_widget)
+                    continue
+                child_layout = item.layout()
+                if child_layout is not None:
+                    self._activate_visible_layouts(child_layout)
+            layout.activate()
+
+        widget.updateGeometry()
+        if widget.sizePolicy().verticalPolicy() == QSizePolicy.Fixed or self._has_fixed_height(widget):
+            return
+
+        base_minimum = widget.property("_semanticBaseMinimumHeight")
+        if base_minimum is None:
+            base_minimum = widget.minimumHeight()
+            widget.setProperty("_semanticBaseMinimumHeight", int(base_minimum))
+
+        hint_heights = [int(base_minimum)]
+        minimum_hint_height = widget.minimumSizeHint().height()
+        if minimum_hint_height > 0:
+            hint_heights.append(minimum_hint_height)
+        if layout is not None:
+            layout_hint_height = layout.sizeHint().height()
+            if layout_hint_height > 0:
+                hint_heights.append(layout_hint_height)
+
+        desired_height = max(hint_heights)
+        maximum_height = widget.maximumHeight()
+        if maximum_height < 16777215:
+            desired_height = min(desired_height, maximum_height)
+        widget.setMinimumHeight(max(0, desired_height))
+        widget.updateGeometry()
+
+    def _activate_visible_layouts(self, layout) -> None:
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            child_widget = item.widget()
+            if child_widget is not None:
+                if child_widget.isHidden():
+                    continue
+                child_layout = child_widget.layout()
+                if child_layout is not None:
+                    self._activate_visible_layouts(child_layout)
+                child_widget.updateGeometry()
+                continue
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._activate_visible_layouts(child_layout)
+        layout.activate()
+
+    @staticmethod
+    def _has_fixed_height(widget: QWidget) -> bool:
+        maximum_height = widget.maximumHeight()
+        return maximum_height < 16777215 and widget.minimumHeight() == maximum_height
 
     def semantic_group_keys(self) -> list[str]:
         return list(self._semantic_sections.keys())
@@ -455,7 +542,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         if group_key not in self._semantic_sections:
             return self.add_semantic_section(group_key, title=title, widget=widget)
         content_layout = self._semantic_section_contents[group_key].layout()
-        widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Minimum)
+        self._apply_semantic_size_policy(widget)
         content_layout.addWidget(widget)
         self._refresh_section_container_minimum_height()
         return content_layout

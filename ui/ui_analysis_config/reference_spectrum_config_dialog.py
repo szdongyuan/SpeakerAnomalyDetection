@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import List, Optional
 
 import numpy as np
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -415,6 +415,14 @@ class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
             row_widget.setLayout(row_layout)
             self.channel_name_layout.addWidget(row_widget)
             self._channel_name_inputs[channel_index] = line_edit
+        self.channel_name_layout.activate()
+        if hasattr(self, "channel_name_container"):
+            self.channel_name_container.updateGeometry()
+        if hasattr(self, "channel_name_group"):
+            self.channel_name_group.updateGeometry()
+        if hasattr(self, "_semantic_sections"):
+            self._refresh_section_container_minimum_height()
+            QTimer.singleShot(0, self._refresh_section_container_minimum_height)
 
     def _collect_channel_labels(self) -> dict:
         if not getattr(self, "custom_channel_name_checkbox", None) or not self.custom_channel_name_checkbox.isChecked():
@@ -472,15 +480,23 @@ class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _on_advanced_visibility_changed(self, state):
         self.advanced_container.setVisible(state == Qt.Checked)
+        self.advanced_container.updateGeometry()
+        self._refresh_section_container_minimum_height()
 
     def _on_band_visibility_changed(self, state):
         self.band_container.setVisible(state == Qt.Checked)
+        self.band_container.updateGeometry()
+        self._refresh_section_container_minimum_height()
 
     def _on_threshold_visibility_changed(self, state):
         self.threshold_container.setVisible(state == Qt.Checked)
+        self.threshold_container.updateGeometry()
+        self._refresh_section_container_minimum_height()
 
     def _on_channel_name_visibility_changed(self, state):
         self.channel_name_container.setVisible(state == Qt.Checked)
+        self.channel_name_container.updateGeometry()
+        self._refresh_section_container_minimum_height()
 
     def _generate_reference_data(self):
         source_path = self.reference_source_path_edit.text().strip()

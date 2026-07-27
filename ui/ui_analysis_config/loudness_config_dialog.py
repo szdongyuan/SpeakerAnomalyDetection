@@ -90,6 +90,22 @@ class LoudnessConfigPanel(QWidget):
         layout.addStretch()
         self.setLayout(layout)
 
+    def _set_visible_and_refresh(self, widget: QWidget, visible: bool) -> None:
+        widget.setVisible(bool(visible))
+        widget.updateGeometry()
+        self._refresh_parent_semantic_layout()
+
+    def _refresh_parent_semantic_layout(self) -> None:
+        self.updateGeometry()
+        parent = self.parentWidget()
+        while parent is not None:
+            parent.updateGeometry()
+            refresh = getattr(parent, "_refresh_section_container_minimum_height", None)
+            if callable(refresh):
+                refresh()
+                return
+            parent = parent.parentWidget()
+
     def _create_algorithm_group(self):
         group = QWidget()
         layout = QVBoxLayout()
@@ -147,7 +163,7 @@ class LoudnessConfigPanel(QWidget):
         file_layout.addWidget(self.background_noise_path_edit, 1)
         noise_layout.addWidget(self.background_noise_file_widget)
         self.background_noise_enabled_box.toggled.connect(
-            self.background_noise_file_widget.setVisible
+            lambda checked: self._set_visible_and_refresh(self.background_noise_file_widget, checked)
         )
         self.background_noise_file_widget.setVisible(
             self.background_noise_enabled_box.isChecked()
@@ -294,7 +310,12 @@ class LoudnessConfigPanel(QWidget):
             exceedance_layout.addWidget(self.specific_exceedance_ref_widget)
 
             self.specific_exceedance_threshold_widget.setLayout(exceedance_layout)
-            self.show_specific_exceedance_box.toggled.connect(self.specific_exceedance_threshold_widget.setVisible)
+            self.show_specific_exceedance_box.toggled.connect(
+                lambda checked: self._set_visible_and_refresh(
+                    self.specific_exceedance_threshold_widget,
+                    checked,
+                )
+            )
             self.specific_exceedance_threshold_widget.setVisible(self.show_specific_exceedance_box.isChecked())
             self.specific_exceedance_mode_combo.currentTextChanged.connect(
                 self._refresh_exceedance_mode
@@ -324,7 +345,9 @@ class LoudnessConfigPanel(QWidget):
         curve_y_unit = str(advanced_cfg.get("curve_y_unit", "sone") or "sone").lower()
         self.curve_y_unit_combo.setCurrentText("phon" if curve_y_unit == "phon" else "sone")
         self.curve_y_unit_combo.setToolTip("响度时间曲线的纵轴单位。sone 为响度 N，phon 为响度级 LN。")
-        self.show_curve_box.toggled.connect(self.curve_y_unit_widget.setVisible)
+        self.show_curve_box.toggled.connect(
+            lambda checked: self._set_visible_and_refresh(self.curve_y_unit_widget, checked)
+        )
         self.curve_y_unit_combo.setMinimumWidth(120)
         self.curve_y_unit_combo.setMaximumWidth(180)
         curve_y_unit_layout.addWidget(self.curve_y_unit_combo)
@@ -357,7 +380,9 @@ class LoudnessConfigPanel(QWidget):
         profile_mode_layout.addWidget(self.specific_profile_mode_combo)
         profile_mode_layout.addStretch(1)
         self.specific_profile_mode_widget.setLayout(profile_mode_layout)
-        self.show_specific_profile_box.toggled.connect(self.specific_profile_mode_widget.setVisible)
+        self.show_specific_profile_box.toggled.connect(
+            lambda checked: self._set_visible_and_refresh(self.specific_profile_mode_widget, checked)
+        )
         self.specific_profile_mode_widget.setVisible(self.show_specific_profile_box.isChecked())
         self.specific_colormap_widget = QWidget(self)
         specific_colormap_layout = QHBoxLayout()
@@ -367,7 +392,9 @@ class LoudnessConfigPanel(QWidget):
         self.specific_colormap_combo.addItems(["viridis", "plasma", "magma", "inferno"])
         self.specific_colormap_combo.setCurrentText(advanced_cfg.get("specific_loudness_colormap", "viridis"))
         self.specific_colormap_combo.setToolTip("特征响度分布图使用的颜色映射。")
-        self.show_specific_box.toggled.connect(self.specific_colormap_widget.setVisible)
+        self.show_specific_box.toggled.connect(
+            lambda checked: self._set_visible_and_refresh(self.specific_colormap_widget, checked)
+        )
         self.specific_colormap_combo.setMinimumWidth(140)
         self.specific_colormap_combo.setMaximumWidth(200)
         specific_colormap_layout.addWidget(self.specific_colormap_combo)
@@ -508,6 +535,9 @@ class LoudnessConfigPanel(QWidget):
         is_ref = mode == "ref_line"
         self.specific_exceedance_t_widget.setVisible(not is_ref)
         self.specific_exceedance_ref_widget.setVisible(is_ref)
+        self.specific_exceedance_t_widget.updateGeometry()
+        self.specific_exceedance_ref_widget.updateGeometry()
+        self._refresh_parent_semantic_layout()
 
     def _exceedance_ref_line_value(self, advanced_cfg):
         if self.comparison_only:

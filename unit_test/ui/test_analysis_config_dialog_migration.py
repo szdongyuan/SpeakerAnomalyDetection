@@ -132,6 +132,72 @@ def assert_vertical_golden_size(window):
     assert round(window.minimumWidth() / window.minimumHeight(), 2) == 0.75
 
 
+def _process_layout(qapp, widget):
+    widget.show()
+    for _ in range(3):
+        qapp.processEvents()
+        widget.updateGeometry()
+        layout = widget.layout()
+        if layout is not None:
+            layout.activate()
+
+
+def _global_rect(widget):
+    top_left = widget.mapToGlobal(widget.rect().topLeft())
+    return top_left.x(), top_left.y(), widget.width(), widget.height()
+
+
+def _rects_overlap_2d(left, right, tolerance=1):
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    x_overlap = min(lx + lw, rx + rw) - max(lx, rx)
+    y_overlap = min(ly + lh, ry + rh) - max(ly, ry)
+    return x_overlap > tolerance and y_overlap > tolerance
+
+
+def _visible_layout_leaf_widgets(widget):
+    widgets = []
+
+    def collect(layout):
+        if layout is None:
+            return
+        layout.activate()
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            child_widget = item.widget()
+            if child_widget is not None:
+                if not child_widget.isVisible() or child_widget.width() <= 0 or child_widget.height() <= 0:
+                    continue
+                child_layout = child_widget.layout()
+                if child_layout is not None and child_layout.count() > 0:
+                    collect(child_layout)
+                else:
+                    widgets.append(child_widget)
+                continue
+            child_layout = item.layout()
+            if child_layout is not None:
+                collect(child_layout)
+
+    collect(widget.layout())
+    return widgets
+
+
+def _assert_visible_layout_children_do_not_overlap(widget):
+    visible_widgets = _visible_layout_leaf_widgets(widget)
+    for left_index, left_widget in enumerate(visible_widgets):
+        for right_widget in visible_widgets[left_index + 1 :]:
+            assert not _rects_overlap_2d(
+                _global_rect(left_widget),
+                _global_rect(right_widget),
+            ), f"{left_widget!r} overlaps {right_widget!r}"
+
+
+def _assert_semantic_section_fits_layout(window, group_key):
+    section = window._semantic_sections[group_key]
+    assert section.height() >= section.layout().sizeHint().height()
+    _assert_visible_layout_children_do_not_overlap(section)
+
+
 def create_threshold_widget(qapp, load_config, limit_value_semantics_provider=None):
     from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
@@ -2144,6 +2210,48 @@ def test_spec_dialog_shows_mel_parameters_for_mel_mode(qapp):
     assert "core_range_hz" not in config
 
 
+def test_spec_dialog_mel_parameters_fit_after_mode_toggle(qapp):
+    from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "Spec": {
+                "n_fft": 2048,
+                "hop_length": 256,
+                "window_func": "hann",
+                "color_map": "magma",
+                "freq_scale_type": "mel",
+                "mel_n_mels": 64,
+                "mel_fmin_hz": 50,
+                "mel_fmax_mode": spec_consts.MEL_FMAX_MODE_MANUAL,
+                "mel_fmax_hz": 12000,
+                "analysis_channel": 1,
+            }
+        }
+    )
+    window = SpecConfigWindow(config_manager, "Spec", available_channels=[0, 1])
+
+    _process_layout(qapp, window)
+
+    assert window.mel_param_group.height() >= window.mel_param_group.layout().sizeHint().height()
+    assert window._semantic_sections["compute"].height() >= (
+        window._semantic_sections["compute"].layout().sizeHint().height()
+    )
+    _assert_visible_layout_children_do_not_overlap(window.mel_param_group)
+
+    window.freq_scale_box.setCurrentIndex(window.freq_scale_box.findData("log"))
+    _process_layout(qapp, window)
+    window.freq_scale_box.setCurrentIndex(window.freq_scale_box.findData("mel"))
+    _process_layout(qapp, window)
+
+    assert window.mel_param_group.height() >= window.mel_param_group.layout().sizeHint().height()
+    assert window._semantic_sections["compute"].height() >= (
+        window._semantic_sections["compute"].layout().sizeHint().height()
+    )
+    _assert_visible_layout_children_do_not_overlap(window.mel_param_group)
+    window.close()
+
+
 def test_spl_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
     from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
@@ -2574,6 +2682,37 @@ def test_fba_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
     }
 
 
+def test_fba_dialog_custom_strategy_refreshes_semantic_layout(qapp):
+    from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "FBA": {
+                "band_strategy": "1/3 倍频程",
+                "f_min": 50,
+                "f_max": 16000,
+                "bandwidth": 200,
+                "weighting": "Z（None）",
+                "limit_checked": False,
+                "limit_data": None,
+            }
+        }
+    )
+    window = FbaConfigWindow(config_manager, "FBA", available_channels=[1, 3])
+
+    _process_layout(qapp, window)
+    window.strategy_combo.setCurrentText("自定义")
+    _process_layout(qapp, window)
+
+    assert window.custom_widget.isVisible()
+    assert window._semantic_sections["compute"].height() >= (
+        window._semantic_sections["compute"].layout().sizeHint().height()
+    )
+    assert window.threshold_widget.maximumHeight() == 360
+    assert window.threshold_widget.minimumHeight() <= 360
+    window.close()
+
+
 def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
     from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
 
@@ -2804,6 +2943,121 @@ def test_rsc_dialog_keeps_smoothing_key_after_shared_selector_migration(qapp, mo
     assert config["enable_threshold_judgment"] is True
     assert config["lower_offset_db"] == -2.0
     assert config["upper_offset_db"] == 2.0
+
+
+def test_rsc_dialog_optional_sections_refresh_without_overlap(qapp, monkeypatch):
+    from ui.ui_analysis_config import reference_spectrum_config_dialog as rsc_dialog
+
+    monkeypatch.setattr(rsc_dialog, "get_reference_data_state", lambda **_: "not_generated")
+    config_manager = FakeConfigManager(
+        {
+            "RSC": {
+                "reference_source_path": "",
+                "reference_data_path": "",
+                "use_custom_band": False,
+                "start_freq_hz": 100,
+                "end_freq_hz": 1000,
+                "highlight_analysis_band": False,
+                "enable_threshold_judgment": False,
+                "channel_labels": {},
+                "window": "hann",
+                "nperseg": 4096,
+                "overlap_ratio": 0.5,
+                "smoothing": 0,
+            }
+        }
+    )
+    window = rsc_dialog.ReferenceSpectrumConfigWindow(config_manager, "RSC")
+
+    _process_layout(qapp, window)
+
+    optional_paths = [
+        (window.custom_band_checkbox, window.band_container, "compute"),
+        (window.show_advanced_checkbox, window.advanced_container, "compute"),
+        (window.enable_threshold_checkbox, window.threshold_container, "judgment"),
+        (window.custom_channel_name_checkbox, window.channel_name_container, "display"),
+    ]
+    for checkbox, container, group_key in optional_paths:
+        checkbox.setChecked(True)
+        _process_layout(qapp, window)
+        assert container.isVisible()
+        assert container.height() > 0
+        _assert_semantic_section_fits_layout(window, group_key)
+
+    window._rebuild_channel_name_rows(3)
+    _process_layout(qapp, window)
+    assert window.channel_name_group.height() >= window.channel_name_group.layout().sizeHint().height()
+    _assert_visible_layout_children_do_not_overlap(window.channel_name_group)
+
+    window._probe_audio_file = lambda _path: (np.zeros((16, 3), dtype=np.float32), 48000)
+    window._probe_and_refresh_reference_meta("dummy.wav")
+    _process_layout(qapp, window)
+    assert window.channel_name_group.height() >= window.channel_name_group.layout().sizeHint().height()
+    _assert_visible_layout_children_do_not_overlap(window.channel_name_group)
+    window.close()
+
+
+def test_loudness_dialog_dynamic_visibility_refreshes_semantic_layout(qapp):
+    from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
+
+    config_manager = FakeConfigManager(
+        {
+            "LOUD": {
+                "advanced": {},
+                "display": {"summary_metrics": [], "curves": [], "heatmaps": []},
+                "limit_checked": False,
+            }
+        }
+    )
+    window = LoudnessConfigWindow(config_manager, "LOUD")
+    panel = window.panel
+
+    _process_layout(qapp, window)
+
+    panel.background_noise_enabled_box.setChecked(True)
+    _process_layout(qapp, window)
+    assert panel.background_noise_file_widget.isVisible()
+    assert panel.background_noise_file_widget.height() > 0
+    _assert_semantic_section_fits_layout(window, "compute")
+
+    panel.show_specific_exceedance_box.setChecked(True)
+    _process_layout(qapp, window)
+    assert panel.specific_exceedance_threshold_widget.isVisible()
+    assert panel.specific_exceedance_threshold_widget.height() > 0
+    _assert_semantic_section_fits_layout(window, "display")
+
+    panel.specific_exceedance_mode_combo.setCurrentText("参考曲线 (SSTS)")
+    _process_layout(qapp, window)
+    assert panel.specific_exceedance_t_widget.isHidden()
+    assert panel.specific_exceedance_ref_widget.isVisible()
+    assert panel.specific_exceedance_ref_widget.height() > 0
+    _assert_semantic_section_fits_layout(window, "display")
+
+    panel.specific_exceedance_mode_combo.setCurrentText("固定限值 T")
+    _process_layout(qapp, window)
+    assert panel.specific_exceedance_t_widget.isVisible()
+    assert panel.specific_exceedance_t_widget.height() > 0
+    assert panel.specific_exceedance_ref_widget.isHidden()
+    _assert_semantic_section_fits_layout(window, "display")
+
+    panel.show_curve_box.setChecked(True)
+    _process_layout(qapp, window)
+    assert panel.curve_y_unit_widget.isVisible()
+    assert panel.curve_y_unit_widget.height() > 0
+    _assert_semantic_section_fits_layout(window, "display")
+
+    panel.show_specific_profile_box.setChecked(True)
+    _process_layout(qapp, window)
+    assert panel.specific_profile_mode_widget.isVisible()
+    assert panel.specific_profile_mode_widget.height() > 0
+    _assert_semantic_section_fits_layout(window, "display")
+
+    panel.show_specific_box.setChecked(True)
+    _process_layout(qapp, window)
+    assert panel.specific_colormap_widget.isVisible()
+    assert panel.specific_colormap_widget.height() > 0
+    _assert_semantic_section_fits_layout(window, "display")
+    window.close()
 
 
 def test_excel_dialog_preserves_output_config_after_semantic_migration(qapp):

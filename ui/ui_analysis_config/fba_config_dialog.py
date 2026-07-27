@@ -179,6 +179,9 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
 
         self.bandwidth_widget.setVisible(is_equal)
         self.custom_widget.setVisible(is_custom)
+        self.bandwidth_widget.updateGeometry()
+        self.custom_widget.updateGeometry()
+        self._refresh_section_container_minimum_height()
 
     def create_btn(self):
         return self.create_standard_button_layout(self.on_default_btn_clicked, self.on_click_ok_btn)
