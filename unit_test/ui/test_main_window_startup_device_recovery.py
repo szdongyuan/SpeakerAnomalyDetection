@@ -215,6 +215,7 @@ def test_hardware_management_menu_action_matches_hardware_role_and_opens_window(
     )
 
     window = main_window_module.MainWindow()
+    assert window.windowTitle() == "希听声学检测"
     window.access_lvl = "Engineer"
     menu_bar = window.init_menu()
 

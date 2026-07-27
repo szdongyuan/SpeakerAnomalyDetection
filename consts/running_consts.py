@@ -1,6 +1,8 @@
 import os
 import sys
 
+APP_DISPLAY_NAME = "希听声学检测"
+
 # DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
 DEFAULT_DIR = os.path.dirname(os.path.realpath(sys.argv[0])).replace("\\", "/") + "/"
 

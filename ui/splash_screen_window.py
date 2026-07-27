@@ -3,8 +3,8 @@ import importlib
 
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
 from PyQt5.QtWidgets import QWidget, QProgressBar, QLabel
-from consts.running_consts import MODULES_LOAD
-from PyQt5.QtGui import QPixmap
+from consts.running_consts import APP_DISPLAY_NAME, MODULES_LOAD
+from PyQt5.QtGui import QFont, QPixmap
 from ui.ui_src import ui_resources
 
 
@@ -35,12 +35,23 @@ class Splash(QWidget):
         self.label.setScaledContents(True)
         self.label.setObjectName("label")
 
+        self.product_name_label = QLabel(self)
+        self.product_name_label.setGeometry(QRect(20, 285, 591, 50))
+        self.product_name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        product_name_font = QFont("SimSun")
+        product_name_font.setPixelSize(22)
+        self.product_name_label.setFont(product_name_font)
+        self.product_name_label.setStyleSheet("background-color: #ffffff; color: #111111;")
+        self.product_name_label.setText(f"欢迎使用{APP_DISPLAY_NAME}系统")
+        self.product_name_label.setObjectName("productNameLabel")
+
         self.lab = QLabel(self)
         self.lab.setGeometry(QRect(30, 340, 200, 16))
         self.lab.setObjectName("lab")
         self.lab.setText("正在初始化...0%")
 
         self.label.raise_()
+        self.product_name_label.raise_()
         self.prg.raise_()
         self.lab.raise_()
 
