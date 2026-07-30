@@ -33,6 +33,7 @@ from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
 from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpectrumConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
 
@@ -44,9 +45,10 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "参考频谱对比 (RSC) ",
     "AI 分析 ",
     "松散颗粒 (LP) ",
+    "快速傅里叶变换 (FFT) ",
     "结果导出 (Excel) ",
 ]
-SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "RSC", "AI", "LP", "Excel"}
+SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "RSC", "AI", "LP", "FFT", "Excel"}
 
 
 class AnalysisModelSelect(QDialog):
@@ -743,6 +745,12 @@ class OptionList(QListView):
             )
         if type == "LP":
             return LPConfigWindow(config_manager, name, available_channels=available_channels)
+        if type == "FFT":
+            return FftConfigWindow(
+                config_manager,
+                name,
+                available_channels=available_channels,
+            )
         if type == "Excel":
             return ExcelConfigWindow(config_manager, name)
         return None
@@ -1285,9 +1293,16 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            return
+            if analysis_type != "FFT":
+                return
+            data = {}
 
         default_of_type = dict(data.get(analysis_type, {}))
+        if analysis_type == "FFT":
+            default_of_type = {
+                **FftConfigWindow.DEFAULT_CONFIG,
+                **default_of_type,
+            }
         default_of_type.pop("golden_sample_checked", None)
         default_of_type.pop("golden_sample_result_path", None)
         self.config[0].analysis_list[list_item_text] = default_of_type

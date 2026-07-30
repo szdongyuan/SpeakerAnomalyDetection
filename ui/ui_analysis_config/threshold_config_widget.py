@@ -8,15 +8,696 @@
 """
 
 import os
-import csv
 import numpy as np
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QWidget, QCheckBox, QGroupBox, QLineEdit, QFileDialog, QVBoxLayout, QMessageBox
+from PyQt5.QtWidgets import (
+    QWidget,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QVBoxLayout,
+    QHeaderView,
+    QTableWidgetItem,
+    QSizePolicy,
+    QLayout,
+    QApplication,
+)
 from pyqtgraph import PlotWidget, mkPen
 
 from consts.running_consts import DEFAULT_DIR
+from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_BOUNDS
+from consts.acoustic_analysis.curve_style_consts import (
+    LOWER_LIMIT_COLOR,
+    UPPER_LIMIT_COLOR,
+)
+from ui.curve_style import (
+    normalize_curve_color,
+    resolve_curve_colors,
+)
+from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget, Menu
+from ui.ui_analysis_config.manual_limit_segments import (
+    ManualLimitValidationError,
+    validate_manual_limit_config,
+)
+from ui.ui_analysis_config.threshold_csv_manual import (
+    ThresholdCsvManualError,
+    load_threshold_csv,
+    manual_config_from_limit_data,
+    manual_config_has_complete_segments,
+    validate_limit_data_values,
+    write_manual_config_csv,
+)
+
+class _ManualTableValidationError(ValueError):
+    pass
+
+
+def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
+    model_type = model_type or ""
+    if "SPLF" in model_type:
+        plot_widget.setLabel("left", "SPLF (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "SPL" in model_type:
+        plot_widget.setLabel("left", "SPL (dB)")
+        plot_widget.setLabel("bottom", "Time (s)")
+    elif "FR" in model_type:
+        plot_widget.setLabel("left", "Amplitude (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "FFT" in model_type:
+        plot_widget.setLabel("left", "FFT Spectrum (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "PRB" in model_type:
+        plot_widget.setLabel("left", "phon")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "RB" in model_type or "HD" in model_type:
+        plot_widget.setLabel("left", "Distortion (%)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
+
+
+def _draw_limit_curve(plot_widget: PlotWidget, result_data: tuple, curve_colors=None) -> None:
+    plot_widget.clear()
+    if not result_data:
+        return
+    colors = resolve_curve_colors({})
+    if curve_colors:
+        for key, fallback in colors.items():
+            colors[key] = normalize_curve_color(curve_colors.get(key), fallback)
+    duration, upper_limit, lower_limit = result_data
+    if upper_limit is not None and not np.all(np.isnan(upper_limit)):
+        upper_pen = mkPen(color=colors[UPPER_LIMIT_COLOR], width=2, style=Qt.DashLine)
+        plot_widget.plot(duration, upper_limit, pen=upper_pen, name="Upper Limit")
+    if lower_limit is not None and not np.all(np.isnan(lower_limit)):
+        lower_pen = mkPen(color=colors[LOWER_LIMIT_COLOR], width=2, style=Qt.DashLine)
+        plot_widget.plot(duration, lower_limit, pen=lower_pen, name="Lower Limit")
+
+
+class _ManualLimitEditorWidget(QWidget):
+    MANUAL_SEGMENT_KEYS = ("start_x", "start_y", "end_x", "end_y")
+    MANUAL_SEGMENT_ROW_LABELS = ("起始X", "起始Y", "截止X", "截止Y")
+    MANUAL_SEGMENT_COLUMN_WIDTH = 80
+    MANUAL_SEGMENT_STRETCH_COLUMN_LIMIT = 7
+    MANUAL_SEGMENT_STRETCH_MINIMUM_SECTION_SIZE = 0
+    MANUAL_SEGMENT_HIGHLIGHT_COLOR = (255, 193, 7)
+    MANUAL_SEGMENT_HIGHLIGHT_WIDTH = 4
+
+    config_changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._syncing_manual_table = False
+        self._active_manual_table = None
+
+        self.manual_upper_check = CheckBox("上限", self)
+        self.manual_lower_check = CheckBox("下限", self)
+        self.manual_upper_table = self._create_manual_segment_table()
+        self.manual_lower_table = self._create_manual_segment_table()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        upper_row = QHBoxLayout()
+        upper_row.addWidget(self.manual_upper_check)
+        upper_row.addStretch()
+        layout.addLayout(upper_row)
+        layout.addWidget(self.manual_upper_table)
+
+        lower_row = QHBoxLayout()
+        lower_row.addWidget(self.manual_lower_check)
+        lower_row.addStretch()
+        layout.addLayout(lower_row)
+        layout.addWidget(self.manual_lower_table)
+
+        self.manual_upper_check.stateChanged.connect(self._on_manual_check_changed)
+        self.manual_lower_check.stateChanged.connect(self._on_manual_check_changed)
+
+    def load_manual_config(self, config: dict) -> None:
+        config = config or {}
+        self._syncing_manual_table = True
+        try:
+            self.manual_upper_check.setChecked(bool(config.get("manual_upper_enabled", True)))
+            self.manual_lower_check.setChecked(bool(config.get("manual_lower_enabled", False)))
+            self._load_manual_segments(self.manual_upper_table, config.get("manual_upper_segments", []))
+            self._load_manual_segments(self.manual_lower_table, config.get("manual_lower_segments", []))
+        finally:
+            self._syncing_manual_table = False
+        self._sync_table_visibility()
+
+    def editable_manual_config(self) -> dict:
+        return {
+            "manual_upper_enabled": self.manual_upper_check.isChecked(),
+            "manual_lower_enabled": self.manual_lower_check.isChecked(),
+            "manual_upper_segments": self._manual_table_raw_segments(self.manual_upper_table),
+            "manual_lower_segments": self._manual_table_raw_segments(self.manual_lower_table),
+        }
+
+    def manual_config(self) -> dict:
+        return {
+            "manual_upper_enabled": self.manual_upper_check.isChecked(),
+            "manual_lower_enabled": self.manual_lower_check.isChecked(),
+            "manual_upper_segments": self._complete_manual_table_segments(self.manual_upper_table),
+            "manual_lower_segments": self._complete_manual_table_segments(self.manual_lower_table),
+        }
+
+    def manual_config_for_validation(self) -> dict:
+        upper_enabled = self.manual_upper_check.isChecked()
+        lower_enabled = self.manual_lower_check.isChecked()
+        return {
+            "manual_upper_enabled": upper_enabled,
+            "manual_lower_enabled": lower_enabled,
+            "manual_upper_segments": (
+                self._manual_table_segments_for_validation(self.manual_upper_table, "上限") if upper_enabled else []
+            ),
+            "manual_lower_segments": (
+                self._manual_table_segments_for_validation(self.manual_lower_table, "下限") if lower_enabled else []
+            ),
+        }
+
+    def manual_limit_preview_data(self):
+        upper_enabled = bool(self.manual_upper_check.isChecked())
+        lower_enabled = bool(self.manual_lower_check.isChecked())
+        upper_segments = self._complete_manual_table_segments(self.manual_upper_table) if upper_enabled else []
+        lower_segments = self._complete_manual_table_segments(self.manual_lower_table) if lower_enabled else []
+        x_values, upper_values, lower_values = [], [], []
+
+        def append_gap_if_needed():
+            if x_values:
+                x_values.append(np.nan)
+                upper_values.append(np.nan)
+                lower_values.append(np.nan)
+
+        for segment in upper_segments:
+            append_gap_if_needed()
+            x_values.extend([segment["start_x"], segment["end_x"]])
+            upper_values.extend([segment["start_y"], segment["end_y"]])
+            lower_values.extend([np.nan, np.nan])
+
+        for segment in lower_segments:
+            append_gap_if_needed()
+            x_values.extend([segment["start_x"], segment["end_x"]])
+            upper_values.extend([np.nan, np.nan])
+            lower_values.extend([segment["start_y"], segment["end_y"]])
+
+        if not x_values:
+            return ([0.0], [np.nan], [np.nan])
+        return (x_values, upper_values, lower_values)
+
+    def selected_manual_limit_preview_segments(self) -> list[tuple[list[float], list[float]]]:
+        table = self._focused_manual_table() or self._active_manual_table
+        if table is self.manual_upper_table:
+            if not self.manual_upper_check.isChecked():
+                return []
+        elif table is self.manual_lower_table:
+            if not self.manual_lower_check.isChecked():
+                return []
+        else:
+            return []
+
+        current_column = table.currentColumn()
+        if current_column < 0 or current_column >= table.columnCount():
+            return []
+        state, segment = self._manual_table_column_state(table, current_column)
+        if state != "complete" or segment is None:
+            return []
+        return [([segment["start_x"], segment["end_x"]], [segment["start_y"], segment["end_y"]])]
+
+    def _create_manual_segment_table(self) -> TableWidget:
+        table = TableWidget(self)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        table.setRowCount(len(self.MANUAL_SEGMENT_ROW_LABELS))
+        table.setColumnCount(1)
+        table.setSelectionMode(table.SingleSelection)
+        table.setSelectionBehavior(table.SelectItems)
+        table.setVerticalHeaderLabels(self.MANUAL_SEGMENT_ROW_LABELS)
+        self._configure_manual_table_columns(table)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setMinimumWidth(360)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._ensure_manual_table_items(table)
+        self._update_manual_table_headers(table)
+        table.horizontalScrollBar().rangeChanged.connect(
+            lambda _minimum, _maximum, current_table=table: self._fit_manual_table_height(current_table)
+        )
+        self._fit_manual_table_height(table)
+        table.itemChanged.connect(lambda _item, current_table=table: self._on_manual_table_item_changed(current_table))
+        table.customContextMenuRequested.connect(
+            lambda pos, current_table=table: self._show_manual_table_context_menu(current_table, pos)
+        )
+        table.currentCellChanged.connect(
+            lambda _current_row, _current_column, _previous_row, _previous_column, current_table=table: (
+                self._on_manual_table_current_cell_changed(current_table)
+            )
+        )
+        table.itemSelectionChanged.connect(
+            lambda current_table=table: self._on_manual_table_selection_changed(current_table)
+        )
+        table.installEventFilter(self)
+        table.viewport().installEventFilter(self)
+        return table
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.FocusIn:
+            for table in self._manual_tables():
+                if watched is table or watched is table.viewport() or table.isAncestorOf(watched):
+                    self._on_manual_table_focus_in(table)
+                    break
+        return super().eventFilter(watched, event)
+
+    def _fit_manual_table_height(self, table: TableWidget) -> None:
+        table.resizeRowsToContents()
+        height = (
+            table.horizontalHeader().height()
+            + sum(table.rowHeight(row) for row in range(table.rowCount()))
+            + table.frameWidth() * 2
+        )
+        scroll_bar = table.horizontalScrollBar()
+        if scroll_bar.maximum() > scroll_bar.minimum():
+            height += scroll_bar.sizeHint().height()
+        table.setFixedHeight(height)
+
+    def _configure_manual_table_columns(self, table: TableWidget) -> None:
+        header = table.horizontalHeader()
+        if table.columnCount() <= self.MANUAL_SEGMENT_STRETCH_COLUMN_LIMIT:
+            header.setMinimumSectionSize(self.MANUAL_SEGMENT_STRETCH_MINIMUM_SECTION_SIZE)
+            header.setSectionResizeMode(QHeaderView.Stretch)
+            return
+
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setMinimumSectionSize(self.MANUAL_SEGMENT_COLUMN_WIDTH)
+        header.setDefaultSectionSize(self.MANUAL_SEGMENT_COLUMN_WIDTH)
+        for column in range(table.columnCount()):
+            if table.columnWidth(column) < self.MANUAL_SEGMENT_COLUMN_WIDTH:
+                table.setColumnWidth(column, self.MANUAL_SEGMENT_COLUMN_WIDTH)
+
+    def _load_manual_segments(self, table: TableWidget, raw_segments) -> None:
+        segments = raw_segments if isinstance(raw_segments, list) else []
+        column_count = max(len(segments) + 1, 1)
+        previous_syncing = self._syncing_manual_table
+        self._syncing_manual_table = True
+        try:
+            table.setColumnCount(column_count)
+            self._ensure_manual_table_items(table)
+            for row in range(table.rowCount()):
+                for column in range(table.columnCount()):
+                    table.item(row, column).setText("")
+            for column, segment in enumerate(segments):
+                if not isinstance(segment, dict):
+                    continue
+                for row, key in enumerate(self.MANUAL_SEGMENT_KEYS):
+                    value = segment.get(key, "")
+                    table.item(row, column).setText("" if value is None else str(value))
+            self._update_manual_table_headers(table)
+            self._configure_manual_table_columns(table)
+            self._fit_manual_table_height(table)
+        finally:
+            self._syncing_manual_table = previous_syncing
+
+    def _ensure_manual_table_items(self, table: TableWidget) -> None:
+        for row in range(table.rowCount()):
+            for column in range(table.columnCount()):
+                if table.item(row, column) is None:
+                    table.setItem(row, column, QTableWidgetItem(""))
+
+    def _update_manual_table_headers(self, table: TableWidget) -> None:
+        table.setHorizontalHeaderLabels([str(index + 1) for index in range(table.columnCount())])
+
+    def _clear_manual_table_data(self, table: TableWidget) -> None:
+        previous_syncing = self._syncing_manual_table
+        self._syncing_manual_table = True
+        try:
+            table.setColumnCount(1)
+            self._ensure_manual_table_items(table)
+            for row in range(table.rowCount()):
+                table.item(row, 0).setText("")
+            self._refresh_manual_table_shape(table)
+        finally:
+            self._syncing_manual_table = previous_syncing
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _clear_manual_table_column(self, table: TableWidget, column: int) -> None:
+        if column < 0 or column >= table.columnCount():
+            return
+        previous_syncing = self._syncing_manual_table
+        self._syncing_manual_table = True
+        try:
+            self._ensure_manual_table_items(table)
+            for row in range(table.rowCount()):
+                table.item(row, column).setText("")
+            self._refresh_manual_table_shape(table)
+        finally:
+            self._syncing_manual_table = previous_syncing
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _manual_tables(self) -> tuple[TableWidget, ...]:
+        return tuple(
+            table
+            for table in (getattr(self, "manual_upper_table", None), getattr(self, "manual_lower_table", None))
+            if table is not None
+        )
+
+    def _remember_active_manual_table(self, table: TableWidget) -> None:
+        if table in self._manual_tables():
+            self._active_manual_table = table
+
+    def _manual_table_has_focus(self, table: TableWidget) -> bool:
+        focus_widget = QApplication.focusWidget()
+        if focus_widget is None:
+            return False
+        return focus_widget is table or focus_widget is table.viewport() or table.isAncestorOf(focus_widget)
+
+    def _focused_manual_table(self) -> TableWidget | None:
+        if self._manual_table_has_focus(self.manual_upper_table):
+            return self.manual_upper_table
+        if self._manual_table_has_focus(self.manual_lower_table):
+            return self.manual_lower_table
+        return None
+
+    def _manual_table_columns_for_delete(self, table: TableWidget, clicked_column: int) -> list[int]:
+        if clicked_column < 0 or clicked_column >= table.columnCount():
+            return []
+        return [clicked_column]
+
+    def _delete_manual_table_columns(self, table: TableWidget, clicked_column: int) -> None:
+        columns = self._manual_table_columns_for_delete(table, clicked_column)
+        if not columns:
+            return
+        previous_syncing = self._syncing_manual_table
+        self._syncing_manual_table = True
+        try:
+            for column in columns:
+                if 0 <= column < table.columnCount():
+                    table.removeColumn(column)
+            if table.columnCount() == 0:
+                table.setColumnCount(1)
+            self._refresh_manual_table_shape(table)
+        finally:
+            self._syncing_manual_table = previous_syncing
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _delete_manual_table_column(self, table: TableWidget, column: int) -> None:
+        self._delete_manual_table_columns(table, clicked_column=column)
+
+    def _insert_manual_table_column_after(self, table: TableWidget, column: int) -> None:
+        if column < 0 or column >= table.columnCount():
+            return
+        previous_syncing = self._syncing_manual_table
+        self._syncing_manual_table = True
+        try:
+            table.insertColumn(column + 1)
+            self._refresh_manual_table_shape(table)
+        finally:
+            self._syncing_manual_table = previous_syncing
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _refresh_manual_table_shape(self, table: TableWidget) -> None:
+        self._ensure_manual_table_items(table)
+        last_nonblank_column = None
+        for column in range(table.columnCount()):
+            if not self._manual_table_column_is_blank(table, column):
+                last_nonblank_column = column
+
+        desired_column_count = 1 if last_nonblank_column is None else last_nonblank_column + 2
+        if table.columnCount() != desired_column_count:
+            table.setColumnCount(desired_column_count)
+            self._ensure_manual_table_items(table)
+
+        self._update_manual_table_headers(table)
+        self._configure_manual_table_columns(table)
+        self._fit_manual_table_height(table)
+
+    def _manual_table_column_is_blank(self, table: TableWidget, column: int) -> bool:
+        if column < 0 or column >= table.columnCount():
+            return True
+        state, _segment = self._manual_table_column_state(table, column)
+        return state == "blank"
+
+    def _activate_manual_table_column(self, table: TableWidget, row: int, column: int) -> None:
+        if column < 0 or column >= table.columnCount():
+            return
+        if row < 0 or row >= table.rowCount():
+            row = table.currentRow()
+        if row < 0 or row >= table.rowCount():
+            row = 0
+
+        previous_table = self._active_manual_table
+        previous_row = table.currentRow()
+        previous_column = table.currentColumn()
+        self._remember_active_manual_table(table)
+        table.setFocus()
+        if previous_row != row or previous_column != column:
+            table.setCurrentCell(row, column)
+            return
+        if previous_table is not table:
+            self.config_changed.emit()
+
+    def _show_manual_table_context_menu(self, table: TableWidget, pos) -> None:
+        column = table.columnAt(pos.x())
+        if column < 0 or column >= table.columnCount():
+            return
+
+        row = table.rowAt(pos.y())
+        self._activate_manual_table_column(table, row, column)
+
+        menu = Menu(self)
+        clear_table_action = menu.addAction("清空表格数据")
+        delete_column_action = menu.addAction("删除列")
+        insert_column_action = menu.addAction("添加列")
+
+        delete_column_action.setEnabled(True)
+
+        clear_table_action.triggered.connect(
+            lambda _checked=False, current_table=table: self._clear_manual_table_data(current_table)
+        )
+        delete_column_action.triggered.connect(
+            lambda _checked=False, current_table=table, current_column=column: self._delete_manual_table_columns(
+                current_table, clicked_column=current_column
+            )
+        )
+        insert_column_action.triggered.connect(
+            lambda _checked=False, current_table=table, current_column=column: self._insert_manual_table_column_after(
+                current_table, current_column
+            )
+        )
+        menu.exec_(table.viewport().mapToGlobal(pos))
+
+    def _on_manual_table_item_changed(self, table: TableWidget) -> None:
+        if self._syncing_manual_table:
+            return
+        self._syncing_manual_table = True
+        try:
+            self._ensure_trailing_blank_manual_column(table)
+        finally:
+            self._syncing_manual_table = False
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _ensure_trailing_blank_manual_column(self, table: TableWidget) -> None:
+        if table.columnCount() == 0:
+            table.setColumnCount(1)
+            self._ensure_manual_table_items(table)
+            self._update_manual_table_headers(table)
+            self._configure_manual_table_columns(table)
+            self._fit_manual_table_height(table)
+            return
+        state, _segment = self._manual_table_column_state(table, table.columnCount() - 1)
+        if state == "complete":
+            table.insertColumn(table.columnCount())
+            self._ensure_manual_table_items(table)
+            self._update_manual_table_headers(table)
+            self._configure_manual_table_columns(table)
+            self._fit_manual_table_height(table)
+
+    def _on_manual_table_current_cell_changed(self, table: TableWidget) -> None:
+        if self._syncing_manual_table:
+            return
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _on_manual_table_selection_changed(self, table: TableWidget) -> None:
+        if self._syncing_manual_table:
+            return
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _on_manual_table_focus_in(self, table: TableWidget) -> None:
+        if self._syncing_manual_table:
+            return
+        if self._active_manual_table is table:
+            return
+        self._remember_active_manual_table(table)
+        self.config_changed.emit()
+
+    def _on_manual_check_changed(self, *args) -> None:
+        if self._syncing_manual_table:
+            return
+        self._sync_table_visibility()
+        self.config_changed.emit()
+
+    def _sync_table_visibility(self) -> None:
+        self.manual_upper_table.setVisible(self.manual_upper_check.isChecked())
+        self.manual_lower_table.setVisible(self.manual_lower_check.isChecked())
+
+    def _manual_table_column_texts(self, table: TableWidget, column: int) -> list[str]:
+        values = []
+        for row in range(len(self.MANUAL_SEGMENT_KEYS)):
+            item = table.item(row, column)
+            values.append(item.text().strip() if item is not None else "")
+        return values
+
+    def _manual_table_column_state(self, table: TableWidget, column: int) -> tuple[str, dict[str, float] | None]:
+        values = self._manual_table_column_texts(table, column)
+        if all(value == "" for value in values):
+            return "blank", None
+        if any(value == "" for value in values):
+            return "partial", None
+        try:
+            numeric_values = [float(value) for value in values]
+        except ValueError:
+            return "invalid", None
+        if not np.all(np.isfinite(numeric_values)):
+            return "invalid", None
+        return "complete", dict(zip(self.MANUAL_SEGMENT_KEYS, numeric_values))
+
+    def _manual_table_has_nonblank_column_after(self, table: TableWidget, column: int) -> bool:
+        for later_column in range(column + 1, table.columnCount()):
+            state, _segment = self._manual_table_column_state(table, later_column)
+            if state != "blank":
+                return True
+        return False
+
+    def _manual_table_segments_for_validation(self, table: TableWidget, label: str) -> list[dict[str, float]]:
+        segments = []
+        for column in range(table.columnCount()):
+            state, segment = self._manual_table_column_state(table, column)
+            column_label = column + 1
+            if state == "blank":
+                if self._manual_table_has_nonblank_column_after(table, column):
+                    raise _ManualTableValidationError(f"{label}第{column_label}列为空，但后续列存在数据")
+                continue
+            if state == "partial":
+                raise _ManualTableValidationError(f"{label}第{column_label}列未填写完整")
+            if state == "invalid":
+                raise _ManualTableValidationError(f"{label}第{column_label}列必须填写有限数字")
+            segments.append(segment)
+        return segments
+
+    def _complete_manual_table_segments(self, table: TableWidget) -> list[dict[str, float]]:
+        segments = []
+        for column in range(table.columnCount()):
+            state, segment = self._manual_table_column_state(table, column)
+            if state == "complete":
+                segments.append(segment)
+        return segments
+
+    def _manual_table_raw_segments(self, table: TableWidget) -> list[dict[str, str]]:
+        segments = []
+        for column in range(table.columnCount()):
+            values = self._manual_table_column_texts(table, column)
+            if all(value == "" for value in values):
+                continue
+            segments.append(dict(zip(self.MANUAL_SEGMENT_KEYS, values)))
+        return segments
+
+
+class _ManualLimitEditorDialog(QDialog):
+    def __init__(
+        self,
+        parent,
+        manual_config: dict,
+        model_type: str,
+        value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+    ):
+        super().__init__(parent)
+        self._accepted_manual_config = {}
+        self.value_semantics = value_semantics
+        self.setWindowTitle("编辑上下限")
+        self.setModal(True)
+
+        self.editor = _ManualLimitEditorWidget(self)
+        self.editor.load_manual_config(manual_config)
+
+        self.limit_graph = PlotWidget()
+        self.limit_graph.showGrid(True, True, 0.7)
+        self.limit_graph.setMinimumSize(180, 180)
+        _set_graph_label_until(self.limit_graph, model_type)
+
+        self.export_button = PushButton("导出CSV", self)
+        self.export_button.clicked.connect(self._on_export_clicked)
+        self.confirm_button = PushButton("确定", self)
+        self.confirm_button.clicked.connect(self._on_confirm_clicked)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(self.export_button)
+        button_layout.addWidget(self.confirm_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.editor)
+        layout.addWidget(self.limit_graph)
+        layout.addLayout(button_layout)
+
+        self.editor.config_changed.connect(self._refresh_preview)
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        _draw_limit_curve(self.limit_graph, self.editor.manual_limit_preview_data())
+        highlight_pen = mkPen(
+            color=_ManualLimitEditorWidget.MANUAL_SEGMENT_HIGHLIGHT_COLOR,
+            width=_ManualLimitEditorWidget.MANUAL_SEGMENT_HIGHLIGHT_WIDTH,
+        )
+        for x_values, y_values in self.editor.selected_manual_limit_preview_segments():
+            self.limit_graph.plot(x_values, y_values, pen=highlight_pen)
+
+    def _on_confirm_clicked(self) -> None:
+        try:
+            validate_manual_limit_config(
+                self.editor.manual_config_for_validation(),
+                value_semantics=self.value_semantics,
+            )
+        except (_ManualTableValidationError, ManualLimitValidationError) as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return
+        self._accepted_manual_config = self.editor.manual_config()
+        self.accept()
+
+    def _on_export_clicked(self) -> None:
+        try:
+            validate_manual_limit_config(
+                self.editor.manual_config_for_validation(),
+                value_semantics=self.value_semantics,
+            )
+        except (_ManualTableValidationError, ManualLimitValidationError) as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出阈值CSV",
+            DEFAULT_DIR + "ui/ui_config",
+            "CSV 文件 (*.csv)",
+        )
+        if not file_path:
+            return
+
+        try:
+            write_manual_config_csv(
+                self.editor.manual_config(),
+                file_path,
+                value_semantics=self.value_semantics,
+            )
+        except ThresholdCsvManualError as exc:
+            MessageBox.warning(self, "提示", str(exc))
+        except OSError as exc:
+            MessageBox.warning(self, "提示", f"导出CSV失败：{exc}")
+
+    def manual_config(self) -> dict:
+        return dict(self._accepted_manual_config)
 
 
 class ThresholdConfigWidget(QWidget):
@@ -27,6 +708,9 @@ class ThresholdConfigWidget(QWidget):
         config_changed: 配置变更信号
     """
 
+    MANUAL_SEGMENT_KEYS = ("start_x", "start_y", "end_x", "end_y")
+    MANUAL_SEGMENT_ROW_LABELS = ("起始X", "起始Y", "截止X", "截止Y")
+
     config_changed = pyqtSignal()
 
     def __init__(
@@ -35,6 +719,8 @@ class ThresholdConfigWidget(QWidget):
         load_config: dict = None,
         csv_validator=None,
         model_type: str = None,
+        allow_manual_limits: bool = False,
+        limit_value_semantics_provider=None,
     ):
         """
         初始化阈值配置组件
@@ -50,22 +736,25 @@ class ThresholdConfigWidget(QWidget):
         self.csv_validator = csv_validator
         self.limit_data = self.load_config.get("limit_data", None)
         self.model_type = model_type
+        self.allow_manual_limits = bool(allow_manual_limits)
+        self.limit_value_semantics_provider = limit_value_semantics_provider
+        self._curve_color_widget = None
 
         self._init_ui()
 
     def _init_ui(self):
         """初始化 UI 组件"""
+        self
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         # 创建阈值复选框
-        self.limit_checkbox = QCheckBox("阈值", self)
+        self.limit_checkbox = CheckBox("阈值", self)
         self.limit_checkbox.setChecked(self.load_config.get("limit_checked", False))
         self.limit_checkbox.stateChanged.connect(self._on_limit_checkbox_changed)
 
         # 创建阈值选项组
-        self.limit_group_box = QGroupBox("选择阈值", self)
-        self.limit_group_box.setMinimumSize(180, 180)
-        if not self.limit_checkbox.isChecked():
-            self.limit_group_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+        self.limit_group_box = GroupBox("选择阈值", self)
+        self.limit_group_box.setMinimumWidth(400)
+        self.limit_group_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
         # 配置数据展示
         self.limit_graph = PlotWidget()
@@ -77,48 +766,153 @@ class ThresholdConfigWidget(QWidget):
         # 文件选择
         self._create_config_dir()
 
+        self.manual_widget = None
+        self._pending_manual_seed_data = None
+        if self.allow_manual_limits:
+            self._create_manual_limit_controls()
+            if self.limit_data and not manual_config_has_complete_segments(self.load_config):
+                self._pending_manual_seed_data = self.limit_data
+            self._seed_manual_from_pending_limit_data_if_needed()
+
         # 组合布局
         group_layout = QVBoxLayout()
+        group_layout.setSizeConstraint(QLayout.SetMinimumSize)
+        if self.allow_manual_limits:
+            mode_layout = QHBoxLayout()
+            mode_layout.addWidget(self.csv_mode_radio)
+            mode_layout.addWidget(self.manual_mode_radio)
+            mode_layout.addStretch()
+            group_layout.addLayout(mode_layout)
         group_layout.addWidget(self.config_dir_box)
+        if self.manual_widget is not None:
+            group_layout.addWidget(self.manual_widget)
         group_layout.addWidget(self.limit_graph)
         self.limit_group_box.setLayout(group_layout)
 
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.limit_checkbox)
-        main_layout.addStretch()
         main_layout.addWidget(self.limit_group_box)
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(main_layout)
+        self._sync_limit_mode_controls()
 
     def _create_config_dir(self) -> None:
         """创建配置文件选择布局"""
-        self.config_dir_box = QLineEdit()
+        self.config_dir_box = LineEdit()
         self.config_dir_box.setReadOnly(True)
-        if not self.limit_checkbox.isChecked():
-            self.config_dir_box.setDisabled(True)
         self.config_dir_box.textChanged.connect(self.config_changed.emit)
 
         icon_path = DEFAULT_DIR + "ui/ui_pic/folder/folder-s.png"
         config_dir_icon = QIcon(icon_path)
-        config_dir_action = self.config_dir_box.addAction(config_dir_icon, QLineEdit.TrailingPosition)
+        config_dir_action = self.config_dir_box.addAction(config_dir_icon, LineEdit.TrailingPosition)
         config_dir_action.setToolTip("选择配置文件")
         config_dir_action.triggered.connect(self._on_config_dir_btn_clicked)
 
         if self.load_config.get("limit_data", None):
             self.config_dir_box.setText("已加载")
 
+    def _create_manual_limit_controls(self) -> None:
+        limit_mode = str(self.load_config.get("limit_mode", "csv") or "csv").lower()
+        self.csv_mode_radio = RadioButton("CSV阈值曲线")
+        self.manual_mode_radio = RadioButton("手动上下限")
+        if limit_mode == "manual":
+            self.manual_mode_radio.setChecked(True)
+        else:
+            self.csv_mode_radio.setChecked(True)
+        self.csv_mode_radio.toggled.connect(self._on_limit_mode_changed)
+        self.manual_mode_radio.toggled.connect(self._on_limit_mode_changed)
+
+        self._manual_state_editor = _ManualLimitEditorWidget(self)
+        self._manual_state_editor.hide()
+        self._manual_state_editor.load_manual_config(self.load_config)
+
+        self.manual_widget = QWidget(self)
+        self.manual_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        manual_layout = QHBoxLayout(self.manual_widget)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        self.manual_edit_button = PushButton("编辑上下限", self.manual_widget)
+        self.manual_edit_button.clicked.connect(self._on_manual_edit_clicked)
+        manual_layout.addWidget(self.manual_edit_button)
+        manual_layout.addStretch()
+
     def _on_limit_checkbox_changed(self, state):
         """阈值复选框状态变更处理"""
         self.config_changed.emit()
-        if state == Qt.Checked:
-            self.limit_group_box.setDisabled(False)
-            self.config_dir_box.setDisabled(False)
-            self.limit_group_box.setStyleSheet("color: rgb(0, 0, 0);")
-        else:
-            self.limit_group_box.setDisabled(True)
-            self.config_dir_box.setDisabled(True)
-            self.limit_group_box.setStyleSheet("color: rgb(162, 162, 162);")
+        self._sync_limit_mode_controls()
+
+    def _on_limit_mode_changed(self, checked=True):
+        if checked is False:
+            return
+        self._seed_manual_from_pending_limit_data_if_needed()
+        self._sync_limit_mode_controls()
+        self.config_changed.emit()
+
+    def _accepted_manual_config(self) -> dict:
+        return self._manual_state_editor.editable_manual_config()
+
+    def _create_manual_limit_dialog(self) -> _ManualLimitEditorDialog:
+        return _ManualLimitEditorDialog(
+            self,
+            self._accepted_manual_config(),
+            self.model_type,
+            self.current_limit_value_semantics(),
+        )
+
+    def current_limit_value_semantics(self) -> str:
+        if self.limit_value_semantics_provider is None:
+            return LIMIT_VALUE_SEMANTICS_BOUNDS
+        return self.limit_value_semantics_provider()
+
+    def _on_manual_edit_clicked(self) -> None:
+        dialog = self._create_manual_limit_dialog()
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        self._manual_state_editor.load_manual_config(dialog.manual_config())
+        self._pending_manual_seed_data = None
+        self.config_changed.emit()
+        self._sync_limit_mode_controls()
+
+    def current_limit_mode(self) -> str:
+        if self.allow_manual_limits and hasattr(self, "manual_mode_radio") and self.manual_mode_radio.isChecked():
+            return "manual"
+        return "csv"
+
+    def _sync_limit_mode_controls(self) -> None:
+        enabled = self.limit_checkbox.isChecked()
+        self.limit_group_box.setEnabled(True)
+        self.config_dir_box.setEnabled(True)
+        self.limit_group_box.setVisible(enabled)
+        self.limit_graph.setVisible(enabled)
+        if not self.allow_manual_limits:
+            self.config_dir_box.setVisible(enabled)
+            self._refresh_parent_scroll_layout()
+            return
+
+        manual = enabled and self.current_limit_mode() == "manual"
+        csv = enabled and not manual
+        self.csv_mode_radio.setVisible(enabled)
+        self.manual_mode_radio.setVisible(enabled)
+        self.config_dir_box.setVisible(csv)
+        if self.manual_widget is not None:
+            self.manual_widget.setEnabled(True)
+            self.manual_widget.setVisible(manual)
+        self._refresh_current_limit_preview()
+        self._refresh_parent_scroll_layout()
+
+    def _refresh_parent_scroll_layout(self) -> None:
+        self.updateGeometry()
+        parent = self.parentWidget()
+        while parent is not None:
+            parent.updateGeometry()
+            refresh = getattr(parent, "_refresh_section_container_minimum_height", None)
+            if callable(refresh):
+                refresh()
+                return
+            parent = parent.parentWidget()
+
+    def _manual_limit_preview_data(self):
+        return self._manual_state_editor.manual_limit_preview_data()
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -130,13 +924,33 @@ class ThresholdConfigWidget(QWidget):
             if self.csv_validator is not None:
                 result = self.csv_validator(file_path)
             else:
-                result = ThresholdConfigWidget.load_excel_limit(file_path)
+                result = ThresholdConfigWidget.load_excel_limit(
+                    file_path,
+                    value_semantics=self.current_limit_value_semantics(),
+                )
             if result:
                 self.limit_data = result
-                self.draw_limit_curve(self.limit_data)
+                self._pending_manual_seed_data = result if self.allow_manual_limits else None
+                self._refresh_current_limit_preview()
                 self.config_dir_box.setText("已加载")
             else:
                 self.config_dir_box.setText("未加载")
+
+    def _seed_manual_from_pending_limit_data_if_needed(self) -> None:
+        if not self.allow_manual_limits or self.current_limit_mode() != "manual":
+            return
+        if not self._pending_manual_seed_data:
+            return
+        try:
+            manual_config = manual_config_from_limit_data(
+                self._pending_manual_seed_data,
+                value_semantics=self.current_limit_value_semantics(),
+            )
+        except ThresholdCsvManualError as exc:
+            MessageBox.warning(self, "提示", f"CSV阈值无法自动转换为手动分段：{exc}")
+            return
+        self._manual_state_editor.load_manual_config(manual_config)
+        self._pending_manual_seed_data = None
 
     def set_graph_label_until(self, model_type: str):
         """
@@ -146,22 +960,13 @@ class ThresholdConfigWidget(QWidget):
             model_type: 模型类型
         """
         self.model_type = model_type
-        # 此处可根据 model_type 设置不同的图表标签
-        if "SPLF" in model_type:
-            self.limit_graph.setLabel("left", "SPLF (dB)")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        elif "SPL" in model_type:
-            self.limit_graph.setLabel("left", "SPL (dB)")
-            self.limit_graph.setLabel("bottom", "Time (s)")
-        elif "FR" in model_type:
-            self.limit_graph.setLabel("left", "Amplitude (dB)")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        elif "PRB" in model_type:
-            self.limit_graph.setLabel("left", "phon")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
-        elif "RB" in model_type or "HD" in model_type:
-            self.limit_graph.setLabel("left", "Distortion (%)")
-            self.limit_graph.setLabel("bottom", "Frequency (Hz)")
+        _set_graph_label_until(self.limit_graph, model_type)
+
+    def _refresh_current_limit_preview(self) -> None:
+        if self.allow_manual_limits and self.current_limit_mode() == "manual":
+            self.draw_limit_curve(self._manual_limit_preview_data())
+            return
+        self.draw_limit_curve(self.limit_data)
 
     def draw_limit_curve(self, result_data: tuple):
         """
@@ -170,14 +975,21 @@ class ThresholdConfigWidget(QWidget):
         Args:
             result_data: 包含横坐标、上限和下限数据的元组
         """
-        if not result_data:
-            return
-        duration, upper_limit, lower_limit = result_data
-        self.limit_graph.clear()
-        if upper_limit is not None and not np.all(np.isnan(upper_limit)):
-            self.limit_graph.plot(duration, upper_limit, pen=mkPen(color="r", width=2), name="Upper Limit")
-        if lower_limit is not None and not np.all(np.isnan(lower_limit)):
-            self.limit_graph.plot(duration, lower_limit, pen=mkPen(color="b", width=2), name="Lower Limit")
+        _draw_limit_curve(self.limit_graph, result_data, self._curve_colors())
+
+    def bind_curve_color_widget(self, color_widget):
+        """Bind shared curve colors to this threshold preview and config output."""
+        self._curve_color_widget = color_widget
+        color_widget.colors_changed.connect(self._on_curve_colors_changed)
+        self._refresh_current_limit_preview()
+
+    def _on_curve_colors_changed(self, colors):
+        self._refresh_current_limit_preview()
+
+    def _curve_colors(self):
+        if self._curve_color_widget is not None:
+            return self._curve_color_widget.colors()
+        return resolve_curve_colors(self.load_config)
 
     def get_config(self) -> dict:
         """
@@ -186,10 +998,25 @@ class ThresholdConfigWidget(QWidget):
         Returns:
             dict: 包含阈值配置的字典
         """
-        return {
+        config = {
             "limit_checked": self.limit_checkbox.isChecked(),
             "limit_data": self.limit_data,
         }
+        config.update(self._manual_limit_config())
+        if self._curve_color_widget is not None:
+            config.update(self._curve_color_widget.get_config())
+        return config
+
+    def _manual_limit_config(self) -> dict:
+        if not self.allow_manual_limits:
+            return {}
+        return {
+            "limit_mode": self.current_limit_mode(),
+            **self._manual_state_editor.manual_config(),
+        }
+
+    def _manual_limit_config_for_validation(self) -> dict:
+        return self._manual_state_editor.manual_config_for_validation()
 
     def validate(self) -> bool:
         """
@@ -199,9 +1026,27 @@ class ThresholdConfigWidget(QWidget):
             bool: 配置是否有效
         """
         if self.limit_checkbox.isChecked():
-            if not self.limit_data:
-                QMessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
+            if self.allow_manual_limits and self.current_limit_mode() == "manual":
+                try:
+                    validate_manual_limit_config(
+                        self._manual_limit_config_for_validation(),
+                        value_semantics=self.current_limit_value_semantics(),
+                    )
+                except (_ManualTableValidationError, ManualLimitValidationError) as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return False
+            elif not self.limit_data:
+                MessageBox.warning(self, "提示", "请先选择 CSV 配置文件！")
                 return False
+            else:
+                try:
+                    validate_limit_data_values(
+                        self.limit_data,
+                        value_semantics=self.current_limit_value_semantics(),
+                    )
+                except ThresholdCsvManualError as exc:
+                    MessageBox.warning(self, "提示", str(exc))
+                    return False
         return True
 
     def set_csv_validator(self, validator):
@@ -214,95 +1059,24 @@ class ThresholdConfigWidget(QWidget):
         self.csv_validator = validator
 
     @staticmethod
-    def load_excel_limit(excel_path):
+    def load_excel_limit(
+        excel_path,
+        *,
+        value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+    ):
         if not excel_path:
-            QMessageBox.warning(None, "提示", f"未选择配置文件，请选择一个配置文件！")
+            MessageBox.warning(None, "提示", f"未选择配置文件，请选择一个配置文件！")
             return None
         ext = os.path.splitext(excel_path)[1].lower()
         if ext == ".csv":
-            with open(excel_path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.reader(f)
-                rows = list(reader)
+            try:
+                return load_threshold_csv(
+                    excel_path,
+                    value_semantics=value_semantics,
+                )
+            except ThresholdCsvManualError as exc:
+                MessageBox.warning(None, "提示", str(exc))
+                return None
         else:
-            QMessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
+            MessageBox.warning(None, "提示", f"不支持对这种Excel格式的分析:\n{excel_path}")
             return None
-
-        if not rows or len(rows) == 0:
-            QMessageBox.warning(None, "提示", f"CSV文件为空或格式不正确:\n{excel_path}")
-            return None
-
-        csv_duration_list, csv_upper_list, csv_lower_list = [], [], []
-        lenth = len(rows[0])
-        if lenth == 3 and rows[0][1] == "upperbound":
-            upperbound = True
-        elif lenth == 3 and rows[0][1] == "lowerbound":
-            upperbound = False
-        elif lenth == 2 and rows[0][1] == "upperbound":
-            upperbound = True
-        elif lenth == 2 and rows[0][1] == "lowerbound":
-            upperbound = False
-        else:
-            QMessageBox.warning(None, "提示", "Excel/CSV 格式不符合要求!")
-            return None
-        for index, row in enumerate(rows[1:], start=2):
-            csv_line_no = index
-            if lenth == 3 and upperbound:
-                try:
-                    fval = float(row[0])
-                    uval = float(row[1])
-                    lval = float(row[2])
-                except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
-                    return None
-                csv_duration_list.append(fval)
-                csv_upper_list.append(uval)
-                csv_lower_list.append(lval)
-            elif lenth == 3 and not upperbound:
-                try:
-                    fval = float(row[0])
-                    uval = float(row[2])
-                    lval = float(row[1])
-                except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
-                    return None
-                csv_duration_list.append(fval)
-                csv_upper_list.append(uval)
-                csv_lower_list.append(lval)
-            elif lenth == 2 and upperbound:
-                try:
-                    fval = float(row[0])
-                    uval = float(row[1])
-                except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
-                    return None
-                csv_duration_list.append(fval)
-                csv_upper_list.append(uval)
-                csv_lower_list.append(np.nan)
-            elif lenth == 2 and not upperbound:
-                try:
-                    fval = float(row[0])
-                    lval = float(row[1])
-                except ValueError:
-                    QMessageBox.warning(None, "提示", f"CSV 数据错误:第 {csv_line_no} 行存在空值或非数字,无法解析\n")
-                    return None
-                csv_duration_list.append(fval)
-                csv_upper_list.append(np.nan)
-                csv_lower_list.append(lval)
-        for i, (x, u, l) in enumerate(zip(csv_duration_list, csv_upper_list, csv_lower_list)):
-            if (u is not None) and (l is not None) and (not np.isnan(u)) and (not np.isnan(l)):
-                if l > u:
-                    QMessageBox.warning(
-                        None,
-                        "提示",
-                        f"CSV 上下限配置错误：下限不能大于上限。\n"
-                        f"位置: 第{i+2}条数据, X={x}\n"
-                        f"lower={l}, upper={u}\n"
-                        f"文件: {excel_path}",
-                    )
-                    return None
-
-        return (
-            csv_duration_list,
-            csv_upper_list,
-            csv_lower_list,
-        )

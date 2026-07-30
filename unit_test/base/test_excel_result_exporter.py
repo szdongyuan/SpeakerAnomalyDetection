@@ -1,6 +1,6 @@
 import numpy as np
 
-from base.excel_result_exporter import _extract_curve_xy
+from base.excel_result_exporter import _export_unit, _extract_curve_xy
 
 
 def test_extract_curve_xy_prefers_raw_keys_when_present():
@@ -30,4 +30,18 @@ def test_extract_curve_xy_handles_numpy_arrays_and_prefers_raw():
     x, y = _extract_curve_xy(result)
     assert x == [100.0, 200.0]
     assert y == [-10.0, -20.0]
+
+
+def test_extract_curve_xy_supports_fft_display_curve():
+    result = {
+        "frequency_bins": [100.0, 1000.0],
+        "fft_db": [60.0, 70.0],
+        "plot_db": [-2.0, 3.0],
+    }
+
+    x, y = _extract_curve_xy(result)
+
+    assert x == [100.0, 1000.0]
+    assert y == [-2.0, 3.0]
+    assert _export_unit("FFT", {}) == "dB"
 

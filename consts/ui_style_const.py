@@ -1,7 +1,15 @@
 from string import Template
 
+from PyQt5.QtWidgets import QApplication
+
 
 UI_FONT_FAMILY = "'SimSun'"
+
+_BASE_SCREEN_HEIGHT = 1080
+_MIN_FONT_SCALE = 0.70
+_MAX_FONT_SCALE = 1.50
+CUSTOM_WIDGET_CONTROL_VERTICAL_PADDING_PX = 8
+CUSTOM_WIDGET_BUTTON_VERTICAL_PADDING_PX = 10
 
 COLOR_TITLE_BAR_BG = "#E9EEF5"
 COLOR_MENU_BAR_BG = "#F5F7FA"
@@ -23,6 +31,27 @@ COLOR_DISABLED_BG = "#EEF3F8"
 COLOR_DISABLED_TEXT = "#94A3B8"
 COLOR_OK = "#16A34A"
 COLOR_NG = "#DC2626"
+
+
+def _get_font_scale() -> float:
+    app = QApplication.instance()
+    if app is None:
+        return 1.0
+    screen = app.primaryScreen()
+    if screen is None:
+        return 1.0
+    size = screen.size()
+    if size.width() <= 0 or size.height() <= 0:
+        return 1.0
+    scale = size.height() / float(_BASE_SCREEN_HEIGHT)
+    return max(_MIN_FONT_SCALE, min(scale, _MAX_FONT_SCALE))
+
+
+_FONT_SCALE = _get_font_scale()
+
+
+def scale_size_px(size_px: float) -> int:
+    return max(1, int(round(size_px * _FONT_SCALE)))
 
 
 def _style(template: str) -> str:
