@@ -1,7 +1,15 @@
 from string import Template
 
+from PyQt5.QtWidgets import QApplication
+
 
 UI_FONT_FAMILY = "'SimSun'"
+
+_BASE_SCREEN_HEIGHT = 1080
+_MIN_FONT_SCALE = 0.70
+_MAX_FONT_SCALE = 1.50
+CUSTOM_WIDGET_CONTROL_VERTICAL_PADDING_PX = 8
+CUSTOM_WIDGET_BUTTON_VERTICAL_PADDING_PX = 10
 
 COLOR_TITLE_BAR_BG = "#E9EEF5"
 COLOR_MENU_BAR_BG = "#F5F7FA"
@@ -23,6 +31,27 @@ COLOR_DISABLED_BG = "#EEF3F8"
 COLOR_DISABLED_TEXT = "#94A3B8"
 COLOR_OK = "#16A34A"
 COLOR_NG = "#DC2626"
+
+
+def _get_font_scale() -> float:
+    app = QApplication.instance()
+    if app is None:
+        return 1.0
+    screen = app.primaryScreen()
+    if screen is None:
+        return 1.0
+    size = screen.size()
+    if size.width() <= 0 or size.height() <= 0:
+        return 1.0
+    scale = size.height() / float(_BASE_SCREEN_HEIGHT)
+    return max(_MIN_FONT_SCALE, min(scale, _MAX_FONT_SCALE))
+
+
+_FONT_SCALE = _get_font_scale()
+
+
+def scale_size_px(size_px: float) -> int:
+    return max(1, int(round(size_px * _FONT_SCALE)))
 
 
 def _style(template: str) -> str:
@@ -872,6 +901,74 @@ recent_session_table_style = _style("""
                 border: none;
                 border-right: 1px solid #E6EEF8;
                 border-bottom: 1px solid #DCE6F2;
+            }
+""")
+
+product_test_program_dialog_style = _style("""
+            QDialog#productTestProgramDialog {
+                background-color: $COLOR_PAGE_BG;
+            }
+            QLabel#productProgramFieldLabel,
+            QLabel#productProgramSectionTitle {
+                color: $COLOR_TEXT;
+                font-family: $UI_FONT_FAMILY;
+                font-size: 20px;
+                font-weight: bold;
+            }
+            QLabel#productProgramStatus {
+                min-height: 24px;
+                border: 1px solid $COLOR_BORDER;
+                border-radius: 5px;
+                padding: 6px 10px;
+                font-family: $UI_FONT_FAMILY;
+                font-size: 18px;
+            }
+            QLabel#productProgramStatus[statusTone="ok"] {
+                color: $COLOR_OK;
+                background-color: #F0FDF4;
+                border-color: #86EFAC;
+            }
+            QLabel#productProgramStatus[statusTone="warning"] {
+                color: #B45309;
+                background-color: #FFF7ED;
+                border-color: #FDBA74;
+            }
+            QLabel#productProgramStatus[statusTone="error"] {
+                color: $COLOR_NG;
+                background-color: #FEF2F2;
+                border-color: #FCA5A5;
+            }
+            QPushButton#productProgramPrimaryButton {
+                color: #FFFFFF;
+                background-color: $COLOR_PRIMARY;
+                border-color: $COLOR_PRIMARY;
+                font-weight: bold;
+            }
+            QPushButton#productProgramPrimaryButton:hover {
+                background-color: $COLOR_PRIMARY_HOVER;
+                border-color: $COLOR_PRIMARY_HOVER;
+            }
+            QFrame#productProgramFooterSeparator {
+                color: $COLOR_BORDER;
+            }
+""")
+
+product_test_program_config_selector_style = _style("""
+            QComboBox,
+            QComboBox QLineEdit {
+                font-family: $UI_FONT_FAMILY;
+                font-size: 20px;
+            }
+""")
+
+product_test_program_table_style = recent_session_table_style + _style("""
+            QTableWidget#productProgramTable {
+                font-size: 17px;
+            }
+            QTableWidget#productProgramTable QHeaderView::section {
+                font-size: 17px;
+                font-weight: bold;
+                padding: 5px 6px;
             }
 """)
 

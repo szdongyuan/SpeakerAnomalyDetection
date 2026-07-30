@@ -777,6 +777,18 @@ class SequenceWidgetAnalysisOpsMixin:
                         instance.calculate_pipeline_pd_pm()
                         if show_windows:
                             instance.show()
+                    elif hasattr(instance, "calculate_fba"):
+                        result = instance.calculate_fba()
+                        if not result:
+                            continue
+                        if show_windows:
+                            instance.show()
+                    elif hasattr(instance, "calculate_fft"):
+                        result = instance.calculate_fft()
+                        if not result:
+                            continue
+                        if show_windows:
+                            instance.show()
                 except ValueError as e:
                     if self._is_channel_mismatch_error(e):
                         self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
