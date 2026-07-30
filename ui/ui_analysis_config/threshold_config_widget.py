@@ -68,6 +68,9 @@ def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
     elif "FFT" in model_type:
         plot_widget.setLabel("left", "FFT Spectrum (dB)")
         plot_widget.setLabel("bottom", "Frequency (Hz)")
+    elif "FBA" in model_type:
+        plot_widget.setLabel("left", "SPL (dB)")
+        plot_widget.setLabel("bottom", "Frequency (Hz)")
     elif "PRB" in model_type:
         plot_widget.setLabel("left", "phon")
         plot_widget.setLabel("bottom", "Frequency (Hz)")
