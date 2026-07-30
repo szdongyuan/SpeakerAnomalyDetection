@@ -777,6 +777,12 @@ class SequenceWidgetAnalysisOpsMixin:
                         instance.calculate_pipeline_pd_pm()
                         if show_windows:
                             instance.show()
+                    elif hasattr(instance, "calculate_fba"):
+                        result = instance.calculate_fba()
+                        if not result:
+                            continue
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_fft"):
                         result = instance.calculate_fft()
                         if not result:
