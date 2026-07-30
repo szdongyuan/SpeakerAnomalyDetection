@@ -19,6 +19,28 @@ class SequenceWidgetUiOpsMixin:
         mode = str(mode_value or "").strip().lower()
         return mode if mode in ("test", "mark") else ""
 
+    def _current_condition_mode(self):
+        mode = self._normalize_saved_sequence_mode(getattr(getattr(self, "count_board", None), "mode", ""))
+        return mode or "test"
+
+    def _apply_condition_mode_to_waveforms(self, mode=None):
+        channel_workspace = getattr(self, "channel_workspace", None)
+        if channel_workspace is None or not hasattr(channel_workspace, "set_mode"):
+            return
+        channel_workspace.set_mode(self._normalize_saved_sequence_mode(mode) or self._current_condition_mode())
+
+    def _sync_condition_mode_combobox_from_count_board(self):
+        combo = getattr(getattr(self, "toolsbar", None), "condition_mode_combobox", None)
+        if combo is None:
+            return
+        text = "标记" if self._current_condition_mode() == "mark" else "测试"
+        was_blocked = combo.blockSignals(True)
+        try:
+            combo.setCurrentText(text)
+        finally:
+            combo.blockSignals(was_blocked)
+        self._apply_condition_mode_to_waveforms()
+
     def _persist_sequence_page_state(self, sequence_mode=None):
         """
         Persist product_model / scanner_barcode (and optionally sequence_mode).
@@ -159,6 +181,20 @@ class SequenceWidgetUiOpsMixin:
         self.count_board.reset_btn.clicked.connect(self.on_reset_statistics_clicked)
         self.count_board.mark_btn.clicked.connect(self.on_mark_btn_clicked)
         self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
+        self.condition_mode_combobox.currentTextChanged.connect(self.on_condition_mode_combobox_changed)
+        self._sync_condition_mode_combobox_from_count_board()
+
+    def on_condition_mode_combobox_changed(self, text):
+        target_mode = "mark" if str(text or "").strip() == "标记" else "test"
+        if self.count_board is None:
+            self._apply_condition_mode_to_waveforms(target_mode)
+            return
+
+        if target_mode == "mark":
+            self.count_board.on_mark_btn_clicked()
+        else:
+            self.count_board.on_test_btn_clicked()
+        self._sync_condition_mode_combobox_from_count_board()
 
     def on_mark_btn_clicked(self):
         self.data_struct.store_wave_data = None
@@ -212,6 +248,10 @@ class SequenceWidgetUiOpsMixin:
     @property
     def using_file_combobox(self):
         return self.toolsbar.using_file_combobox
+
+    @property
+    def condition_mode_combobox(self):
+        return self.toolsbar.condition_mode_combobox
 
     @property
     def lineedit_type(self):

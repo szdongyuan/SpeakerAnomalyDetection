@@ -69,7 +69,11 @@ class SequenceWindow(
 
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
-        self.left_panel = MotorDetectionLeftPanel(self.count_board)
+        self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs()
+        self.left_panel = MotorDetectionLeftPanel(
+            self.count_board,
+            condition_configs=self.product_test_condition_configs,
+        )
         self._refresh_test_mode_availability()
         self.player_status_flag = False
         # True while a record run is still processing (record -> analysis -> save -> count updates).
@@ -115,6 +119,7 @@ class SequenceWindow(
         self._mark_cycle_direction_labels = {"forward": "not_labeled", "reverse": "not_labeled"}
         self._mark_cycle_summary_label = ""
         self._direction_waveform_cache = {"forward": None, "reverse": None}
+        self._condition_record_cache = {}
         self._waveform_display_override_direction = ""
         self._pending_serial_trigger_direction = ""
         self._queued_directional_trigger = ""

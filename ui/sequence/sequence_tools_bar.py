@@ -19,6 +19,7 @@ class SequenceToolsBar(QWidget):
         self.serial_trigger_btn = QPushButton()
         self.data_btn = QPushButton()
         self.using_file_combobox = QComboBox()
+        self.condition_mode_combobox = QComboBox()
         self.lineedit_type = QLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = QLineEdit()
@@ -65,6 +66,7 @@ class SequenceToolsBar(QWidget):
         mode_type_layout = self.create_mode_type_layout()
         barcode_scanner_layout = self.create_barcode_scanner_layout()
         using_file_combobox_layout = self.create_using_file_combobox()
+        condition_mode_layout = self.create_condition_mode_layout()
 
         layout = QHBoxLayout()
         layout.addWidget(self.player_btn)
@@ -79,6 +81,7 @@ class SequenceToolsBar(QWidget):
         layout.addLayout(self.create_serial_trigger_status_layout())
         layout.addWidget(vertical_line_5)
         layout.addLayout(using_file_combobox_layout)
+        layout.addLayout(condition_mode_layout)
         layout.addLayout(mode_type_layout)
         layout.addLayout(barcode_scanner_layout)
 
@@ -145,6 +148,23 @@ class SequenceToolsBar(QWidget):
         using_file_combobox_layout.addWidget(vertical_line)
 
         return using_file_combobox_layout
+
+    def create_condition_mode_layout(self):
+        mode_label = QLabel(" 模式：")
+        mode_label.setFixedHeight(40)
+        mode_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
+        self.condition_mode_combobox.setFixedSize(110, 35)
+        self.condition_mode_combobox.addItems(["测试", "标记"])
+        self.condition_mode_combobox.setStyleSheet(ui_style_const.toolbar_combobox_style)
+        vertical_line = self._create_separator(QFrame.VLine)
+
+        condition_mode_layout = self.create_part_layout()
+        condition_mode_layout.addWidget(mode_label)
+        condition_mode_layout.addWidget(self.condition_mode_combobox)
+        condition_mode_layout.addSpacing(10)
+        condition_mode_layout.addWidget(vertical_line)
+
+        return condition_mode_layout
 
     def create_serial_trigger_status_layout(self):
         self.serial_trigger_status_label.setAlignment(Qt.AlignCenter)

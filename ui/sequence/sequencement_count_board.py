@@ -251,7 +251,9 @@ class SequenceCountBoard(QWidget):
         self._notify_mode_state_changed()
 
     def on_mark_btn_clicked(self):
-        self.stacked_widget.setCurrentIndex(1)
+        # Keep the operation summary visually stable; mark/test mode is now
+        # selected from the top toolbar and mark actions live on waveform cards.
+        self.stacked_widget.setCurrentIndex(0)
         self.mode = "mark"
         self.test_btn.setStyleSheet(ui_style_const.count_board_mode_inactive_style)
         self.mark_btn.setStyleSheet(ui_style_const.count_board_mode_active_style)

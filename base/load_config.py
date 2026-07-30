@@ -183,6 +183,53 @@ class LoadUiConfig(object):
             return error_code.INVALID_DATA_LOADING, err_msg
 
     @staticmethod
+    def get_product_test_program_default_config_path():
+        return os.path.join(
+            DEFAULT_DIR,
+            "ui",
+            "ui_config",
+            "product_test_programs",
+            "default_config.json",
+        ).replace("\\", "/")
+
+    @staticmethod
+    def load_product_test_program_condition_configs(config_path: str = None):
+        """
+        Load condition rows from product_test_programs/default_config.json.
+
+        The UI only needs stable display names plus a lookup key. Keep the raw
+        trigger_state/test_queue fields so later runtime wiring can route by
+        either value without re-reading the file.
+        """
+        path = config_path or LoadUiConfig.get_product_test_program_default_config_path()
+        load_code, data = LoadUiConfig.load_data_from_json(path)
+        if load_code != error_code.OK or not isinstance(data, dict):
+            return []
+
+        sub_configs = data.get("sub_configs", [])
+        if not isinstance(sub_configs, list):
+            return []
+
+        result = []
+        for index, item in enumerate(sub_configs):
+            if not isinstance(item, dict):
+                continue
+            condition_name = str(item.get("condition_name") or "").strip()
+            if not condition_name:
+                continue
+            trigger_state = str(item.get("trigger_state") or "").strip()
+            test_queue = str(item.get("test_queue") or "").strip()
+            result.append(
+                {
+                    "key": trigger_state or test_queue or f"condition_{index + 1}",
+                    "condition_name": condition_name,
+                    "trigger_state": trigger_state,
+                    "test_queue": test_queue,
+                }
+            )
+        return result
+
+    @staticmethod
     def save_sequence_config_to_json(config_data, json_file_path):
         """Save ``config_data`` (the inner analysis_list dict) back to json file using the new format."""
         return LoadUiConfig.save_data_to_json(config_data, json_file_path, 6)

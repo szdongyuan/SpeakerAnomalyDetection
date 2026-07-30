@@ -41,6 +41,13 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         self.assertEqual(toolbar.objectName(), "sequenceToolsBar")
         self.assertIn(ui_style_const.COLOR_TOOLBAR_BG, toolbar.styleSheet())
 
+    def test_toolbar_has_condition_mode_combobox(self):
+        toolbar = SequenceToolsBar()
+
+        self.assertEqual(toolbar.condition_mode_combobox.itemText(0), "测试")
+        self.assertEqual(toolbar.condition_mode_combobox.itemText(1), "标记")
+        self.assertIn(ui_style_const.COLOR_BORDER_STRONG, toolbar.condition_mode_combobox.styleSheet())
+
     def test_serial_status_badge_updates_style_with_connection_state(self):
         widget = _DummySerialStatusWidget()
 
