@@ -39,6 +39,7 @@ from ui.curve_style import (
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget, Menu
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
+    assemble_manual_plot_data,
     validate_manual_limit_config,
 )
 from ui.ui_analysis_config.threshold_csv_manual import (
@@ -180,25 +181,10 @@ class _ManualLimitEditorWidget(QWidget):
         lower_enabled = bool(self.manual_lower_check.isChecked())
         upper_segments = self._complete_manual_table_segments(self.manual_upper_table) if upper_enabled else []
         lower_segments = self._complete_manual_table_segments(self.manual_lower_table) if lower_enabled else []
-        x_values, upper_values, lower_values = [], [], []
-
-        def append_gap_if_needed():
-            if x_values:
-                x_values.append(np.nan)
-                upper_values.append(np.nan)
-                lower_values.append(np.nan)
-
-        for segment in upper_segments:
-            append_gap_if_needed()
-            x_values.extend([segment["start_x"], segment["end_x"]])
-            upper_values.extend([segment["start_y"], segment["end_y"]])
-            lower_values.extend([np.nan, np.nan])
-
-        for segment in lower_segments:
-            append_gap_if_needed()
-            x_values.extend([segment["start_x"], segment["end_x"]])
-            upper_values.extend([np.nan, np.nan])
-            lower_values.extend([segment["start_y"], segment["end_y"]])
+        x_values, upper_values, lower_values = assemble_manual_plot_data(
+            upper_segments,
+            lower_segments,
+        )
 
         if not x_values:
             return ([0.0], [np.nan], [np.nan])

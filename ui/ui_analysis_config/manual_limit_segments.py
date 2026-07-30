@@ -89,6 +89,91 @@ def limits_from_manual_segments(
     return x_values.tolist(), upper_values.tolist(), lower_values.tolist()
 
 
+def assemble_manual_plot_data(
+    upper_segments: Sequence[Mapping[str, float]],
+    lower_segments: Sequence[Mapping[str, float]],
+    *,
+    positive_x_support=None,
+) -> tuple[list[float], list[float], list[float]]:
+    """Assemble plot-only geometry from ordered, finite manual segments."""
+    upper_x, upper_y = _assemble_side_plot_data(
+        upper_segments,
+        positive_x_support=positive_x_support,
+    )
+    lower_x, lower_y = _assemble_side_plot_data(
+        lower_segments,
+        positive_x_support=positive_x_support,
+    )
+
+    if upper_x and lower_x:
+        separator = [np.nan]
+        x_values = upper_x + separator + lower_x
+        upper_values = upper_y + separator + [np.nan] * len(lower_x)
+        lower_values = [np.nan] * len(upper_x) + separator + lower_y
+        return x_values, upper_values, lower_values
+    if upper_x:
+        return upper_x, upper_y, [np.nan] * len(upper_x)
+    if lower_x:
+        return lower_x, [np.nan] * len(lower_x), lower_y
+    return [], [], []
+
+
+def manual_limit_plot_data(
+    config: dict,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+    positive_x_support=None,
+) -> tuple[list[float], list[float], list[float]]:
+    """Build validated runtime plot geometry from exact configured endpoints."""
+    upper_enabled, lower_enabled, upper_segments, lower_segments = _normalized_enabled_segments(
+        config,
+        value_semantics=value_semantics,
+    )
+    return assemble_manual_plot_data(
+        upper_segments if upper_enabled else [],
+        lower_segments if lower_enabled else [],
+        positive_x_support=positive_x_support,
+    )
+
+
+def _assemble_side_plot_data(
+    segments: Sequence[Mapping[str, float]],
+    *,
+    positive_x_support=None,
+) -> tuple[list[float], list[float]]:
+    support = None
+    if positive_x_support is not None:
+        support = np.asarray(positive_x_support, dtype=float).reshape(-1)
+        support = support[np.isfinite(support) & (support > 0)]
+
+    x_values: list[float] = []
+    y_values: list[float] = []
+    previous_segment_rendered = False
+
+    for segment in segments:
+        start_x = float(segment["start_x"])
+        start_y = float(segment["start_y"])
+        end_x = float(segment["end_x"])
+        end_y = float(segment["end_y"])
+
+        if support is not None and start_x <= 0:
+            supported_x = support[(support > start_x) & (support <= end_x)]
+            if supported_x.size == 0:
+                previous_segment_rendered = False
+                continue
+            start_x = float(np.min(supported_x))
+            start_y = float(_segment_value_at(segment, start_x))
+
+        if x_values and not previous_segment_rendered:
+            x_values.append(np.nan)
+            y_values.append(np.nan)
+        x_values.extend([start_x, end_x])
+        y_values.extend([start_y, end_y])
+        previous_segment_rendered = True
+
+    return x_values, y_values
+
+
 def _normalized_enabled_segments(
     config: dict | None,
     *,
@@ -137,20 +222,49 @@ def _validate_lower_not_above_upper(
     upper_segments: list[dict[str, float]],
     lower_segments: list[dict[str, float]],
 ) -> None:
-    for upper_index, upper_segment in enumerate(upper_segments, start=1):
-        for lower_index, lower_segment in enumerate(lower_segments, start=1):
-            left = max(upper_segment["start_x"], lower_segment["start_x"])
-            right = min(upper_segment["end_x"], lower_segment["end_x"])
+    effective_upper = _effective_segments_with_connectors(upper_segments)
+    effective_lower = _effective_segments_with_connectors(lower_segments)
+
+    for upper_piece in effective_upper:
+        for lower_piece in effective_lower:
+            left = max(upper_piece["start_x"], lower_piece["start_x"])
+            right = min(upper_piece["end_x"], lower_piece["end_x"])
             if right <= left:
                 continue
 
             for x_value in (left, right):
-                upper_y = _segment_value_at(upper_segment, x_value)
-                lower_y = _segment_value_at(lower_segment, x_value)
+                upper_y = _segment_value_at(upper_piece, x_value)
+                lower_y = _segment_value_at(lower_piece, x_value)
                 if lower_y > upper_y:
                     raise ManualLimitValidationError(
-                        f"下限不能大于上限：上限第{upper_index}段与下限第{lower_index}段在重叠区间内不合法"
+                        "下限不能大于上限：有效阈值线在重叠区间内不合法"
                     )
+
+
+def _effective_segments_with_connectors(
+    segments: Sequence[Mapping[str, float]],
+) -> list[dict[str, float]]:
+    effective = []
+    previous = None
+    for segment in segments:
+        current = {
+            "start_x": float(segment["start_x"]),
+            "start_y": float(segment["start_y"]),
+            "end_x": float(segment["end_x"]),
+            "end_y": float(segment["end_y"]),
+        }
+        if previous is not None and current["start_x"] > previous["end_x"]:
+            effective.append(
+                {
+                    "start_x": previous["end_x"],
+                    "start_y": previous["end_y"],
+                    "end_x": current["start_x"],
+                    "end_y": current["start_y"],
+                }
+            )
+        effective.append(current)
+        previous = current
+    return effective
 
 
 def _apply_segments(
@@ -158,7 +272,7 @@ def _apply_segments(
     x_values: np.ndarray,
     segments: list[dict[str, float]],
 ) -> None:
-    for segment in segments:
+    for segment in _effective_segments_with_connectors(segments):
         mask = (x_values > segment["start_x"]) & (x_values <= segment["end_x"])
         output_values[mask] = _segment_value_at(segment, x_values[mask])
 

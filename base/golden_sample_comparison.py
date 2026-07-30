@@ -227,3 +227,150 @@ def build_interpolated_golden_envelope_plot(
         lower_offset,
     )
     return display_x, display_y, absolute_upper, absolute_lower
+
+
+def _sorted_unique_baseline(data_x, baseline_aligned):
+    x_arr = np.asarray(data_x, dtype=float)
+    baseline_arr = np.asarray(baseline_aligned, dtype=float)
+    baseline_mask = np.isfinite(x_arr) & np.isfinite(baseline_arr) & (x_arr > 0)
+    baseline_x = x_arr[baseline_mask]
+    baseline_y = baseline_arr[baseline_mask]
+    if baseline_x.size > 1:
+        sort_indices = np.argsort(baseline_x, kind="stable")
+        baseline_x = baseline_x[sort_indices]
+        baseline_y = baseline_y[sort_indices]
+        baseline_x, unique_indices = np.unique(baseline_x, return_index=True)
+        baseline_y = baseline_y[unique_indices]
+    return baseline_x, baseline_y
+
+
+def _manual_value_between(start_x, start_y, end_x, end_y, target_x):
+    if not np.isfinite(start_y) or not np.isfinite(end_y):
+        return np.nan
+    if start_x == end_x:
+        return float(end_y)
+    ratio = (target_x - start_x) / (end_x - start_x)
+    return float(start_y + ratio * (end_y - start_y))
+
+
+def _enrich_manual_geometry_run(
+    run_x,
+    run_upper,
+    run_lower,
+    baseline_x,
+):
+    enriched_x = [float(run_x[0])]
+    enriched_upper = [float(run_upper[0])]
+    enriched_lower = [float(run_lower[0])]
+
+    for index in range(1, run_x.size):
+        start_x = float(run_x[index - 1])
+        end_x = float(run_x[index])
+        low_x = min(start_x, end_x)
+        high_x = max(start_x, end_x)
+        interior_x = baseline_x[(baseline_x > low_x) & (baseline_x < high_x)]
+        if end_x < start_x:
+            interior_x = interior_x[::-1]
+
+        for sample_x in interior_x:
+            sample_x = float(sample_x)
+            enriched_x.append(sample_x)
+            enriched_upper.append(
+                _manual_value_between(
+                    start_x,
+                    run_upper[index - 1],
+                    end_x,
+                    run_upper[index],
+                    sample_x,
+                )
+            )
+            enriched_lower.append(
+                _manual_value_between(
+                    start_x,
+                    run_lower[index - 1],
+                    end_x,
+                    run_lower[index],
+                    sample_x,
+                )
+            )
+
+        enriched_x.append(end_x)
+        enriched_upper.append(float(run_upper[index]))
+        enriched_lower.append(float(run_lower[index]))
+
+    return enriched_x, enriched_upper, enriched_lower
+
+
+def build_manual_endpoint_golden_envelope_plot(
+    data_x,
+    raw_y,
+    baseline_aligned,
+    plot_x,
+    upper_offsets,
+    lower_offsets,
+):
+    """Build a raw display curve and endpoint-aware manual golden envelope."""
+    x_arr = np.asarray(data_x, dtype=float)
+    raw_arr = np.asarray(raw_y, dtype=float)
+    display_mask = np.isfinite(x_arr) & np.isfinite(raw_arr) & (x_arr > 0)
+    display_x = x_arr[display_mask]
+    display_y = raw_arr[display_mask]
+    if display_x.size > 1:
+        sort_indices = np.argsort(display_x, kind="stable")
+        display_x = display_x[sort_indices]
+        display_y = display_y[sort_indices]
+
+    baseline_x, baseline_y = _sorted_unique_baseline(data_x, baseline_aligned)
+    geometry_x = np.asarray(plot_x, dtype=float)
+    geometry_upper = np.asarray(upper_offsets, dtype=float)
+    geometry_lower = np.asarray(lower_offsets, dtype=float)
+
+    limit_x = []
+    enriched_upper = []
+    enriched_lower = []
+    run_start = 0
+    while run_start < geometry_x.size:
+        if not np.isfinite(geometry_x[run_start]):
+            if limit_x and not np.isnan(limit_x[-1]):
+                limit_x.append(np.nan)
+                enriched_upper.append(np.nan)
+                enriched_lower.append(np.nan)
+            run_start += 1
+            continue
+
+        run_end = run_start + 1
+        while run_end < geometry_x.size and np.isfinite(geometry_x[run_end]):
+            run_end += 1
+        run_values = _enrich_manual_geometry_run(
+            geometry_x[run_start:run_end],
+            geometry_upper[run_start:run_end],
+            geometry_lower[run_start:run_end],
+            baseline_x,
+        )
+        limit_x.extend(run_values[0])
+        enriched_upper.extend(run_values[1])
+        enriched_lower.extend(run_values[2])
+        run_start = run_end
+
+    limit_x_arr = np.asarray(limit_x, dtype=float)
+    upper_offset_arr = np.asarray(enriched_upper, dtype=float)
+    lower_offset_arr = np.asarray(enriched_lower, dtype=float)
+    baseline_at_limit = np.full(limit_x_arr.shape, np.nan, dtype=float)
+    if baseline_x.size:
+        finite_limit = np.isfinite(limit_x_arr)
+        in_baseline_range = (
+            finite_limit
+            & (limit_x_arr >= baseline_x[0])
+            & (limit_x_arr <= baseline_x[-1])
+        )
+        baseline_at_limit[in_baseline_range] = np.interp(
+            limit_x_arr[in_baseline_range],
+            baseline_x,
+            baseline_y,
+        )
+    absolute_upper, absolute_lower = build_golden_envelope_limits(
+        baseline_at_limit,
+        upper_offset_arr,
+        lower_offset_arr,
+    )
+    return display_x, display_y, limit_x_arr, absolute_upper, absolute_lower

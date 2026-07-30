@@ -1,10 +1,12 @@
 import numpy as np
+import pytest
 
 from base.golden_sample_comparison import (
     build_golden_curve_comparison,
     build_golden_envelope_limits,
     build_golden_offset_deviation_limits,
     build_interpolated_golden_envelope_plot,
+    build_manual_endpoint_golden_envelope_plot,
     golden_offset_comparison_mask,
     has_valid_golden_overlap,
     interpolate_relative_limits,
@@ -185,6 +187,113 @@ def test_interpolated_envelope_keeps_full_raw_curve_but_gaps_limits_outside_gold
     np.testing.assert_allclose(display_y, [80.0, 90.0, 92.0, 96.0])
     np.testing.assert_allclose(upper, [np.nan, 92.0, 96.0, np.nan], equal_nan=True)
     np.testing.assert_allclose(lower, [np.nan, 86.0, 86.0, np.nan], equal_nan=True)
+
+
+def test_manual_envelope_plot_keeps_exact_endpoints_and_interior_baseline_samples():
+    data_x = np.array([50.0, 75.0, 100.0, 110.0, 1000.0])
+    raw_y = np.array([20.0, 21.0, 22.0, 23.0, 24.0])
+    baseline = np.array([10.0, 11.0, 12.0, 13.0, 14.0])
+
+    display_x, display_y, limit_x, upper, lower = (
+        build_manual_endpoint_golden_envelope_plot(
+            data_x,
+            raw_y,
+            baseline,
+            [50.0, 100.0, 100.1, 1000.0],
+            [4.0, 4.0, 3.0, 3.0],
+            [np.nan, np.nan, np.nan, np.nan],
+        )
+    )
+
+    assert display_x.tolist() == data_x.tolist()
+    assert display_y.tolist() == raw_y.tolist()
+    assert limit_x.tolist() == [50.0, 75.0, 100.0, 100.1, 110.0, 1000.0]
+    assert upper[3] == pytest.approx(15.01)
+    assert np.isnan(lower).all()
+
+
+def test_manual_envelope_plot_keeps_duplicate_boundary_for_vertical_step():
+    _, _, limit_x, upper, _ = build_manual_endpoint_golden_envelope_plot(
+        np.array([50.0, 75.0, 100.0, 110.0, 1000.0]),
+        np.array([20.0, 21.0, 22.0, 23.0, 24.0]),
+        np.array([10.0, 11.0, 12.0, 13.0, 14.0]),
+        [50.0, 100.0, 100.0, 1000.0],
+        [4.0, 4.0, 3.0, 3.0],
+        [np.nan, np.nan, np.nan, np.nan],
+    )
+
+    assert limit_x.tolist() == [50.0, 75.0, 100.0, 100.0, 110.0, 1000.0]
+    assert upper[2:4].tolist() == [16.0, 15.0]
+
+
+def test_manual_envelope_plot_does_not_extrapolate_outside_baseline_overlap():
+    _, _, limit_x, upper, _ = build_manual_endpoint_golden_envelope_plot(
+        np.array([50.0, 100.0, 1000.0]),
+        np.array([20.0, 22.0, 24.0]),
+        np.array([10.0, 12.0, 14.0]),
+        [40.0, 50.0, 1000.0, 1100.0],
+        [4.0, 4.0, 3.0, 3.0],
+        [np.nan, np.nan, np.nan, np.nan],
+    )
+
+    assert limit_x[[0, -1]].tolist() == [40.0, 1100.0]
+    assert np.isnan(upper[[0, -1]]).all()
+
+
+def test_manual_envelope_plot_keeps_upper_and_lower_runs_independent():
+    _, _, limit_x, upper, lower = build_manual_endpoint_golden_envelope_plot(
+        np.array([50.0, 75.0, 100.0]),
+        np.array([20.0, 21.0, 22.0]),
+        np.array([10.0, 11.0, 12.0]),
+        [50.0, 100.0, np.nan, 50.0, 100.0],
+        [4.0, 4.0, np.nan, np.nan, np.nan],
+        [np.nan, np.nan, np.nan, -3.0, -3.0],
+    )
+
+    np.testing.assert_allclose(
+        limit_x,
+        [50.0, 75.0, 100.0, np.nan, 50.0, 75.0, 100.0],
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        upper,
+        [14.0, 15.0, 16.0, np.nan, np.nan, np.nan, np.nan],
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        lower,
+        [np.nan, np.nan, np.nan, np.nan, 7.0, 8.0, 9.0],
+        equal_nan=True,
+    )
+
+
+def test_manual_envelope_uses_baseline_samples_excluded_from_raw_display():
+    display_x, _, limit_x, upper, _ = build_manual_endpoint_golden_envelope_plot(
+        np.array([50.0, 75.0, 100.0]),
+        np.array([20.0, np.nan, 22.0]),
+        np.array([10.0, 11.0, 12.0]),
+        [50.0, 100.0],
+        [2.0, 4.0],
+        [np.nan, np.nan],
+    )
+
+    assert display_x.tolist() == [50.0, 100.0]
+    assert limit_x.tolist() == [50.0, 75.0, 100.0]
+    assert upper.tolist() == pytest.approx([12.0, 14.0, 16.0])
+
+
+def test_manual_envelope_sorts_baseline_and_keeps_first_duplicate():
+    _, _, limit_x, upper, _ = build_manual_endpoint_golden_envelope_plot(
+        np.array([100.0, 50.0, 100.0, 75.0]),
+        np.array([22.0, 20.0, 99.0, 21.0]),
+        np.array([12.0, 10.0, 99.0, 11.0]),
+        [50.0, 100.0],
+        [2.0, 4.0],
+        [np.nan, np.nan],
+    )
+
+    assert limit_x.tolist() == [50.0, 75.0, 100.0]
+    assert upper.tolist() == pytest.approx([12.0, 14.0, 16.0])
 
 
 def test_nearest_relative_limits_keep_hd_rb_prb_boundary_rule():
