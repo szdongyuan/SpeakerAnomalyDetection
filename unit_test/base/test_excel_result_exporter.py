@@ -32,6 +32,20 @@ def test_extract_curve_xy_handles_numpy_arrays_and_prefers_raw():
     assert y == [-10.0, -20.0]
 
 
+def test_extract_curve_xy_supports_fba_weighted_band_levels():
+    result = {
+        "band_centers": [100.0, 1000.0],
+        "band_levels_db": [60.0, 70.0],
+        "band_levels_weighted_db": [41.0, 70.0],
+    }
+
+    x, y = _extract_curve_xy(result)
+
+    assert x == [100.0, 1000.0]
+    assert y == [41.0, 70.0]
+    assert _export_unit("FBA", {}) == "dB"
+
+
 def test_extract_curve_xy_supports_fft_display_curve():
     result = {
         "frequency_bins": [100.0, 1000.0],

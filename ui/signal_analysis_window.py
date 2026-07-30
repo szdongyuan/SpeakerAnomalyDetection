@@ -40,7 +40,9 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.core_algorithm.response import (
+    BandAnalysisResult,
     FftAnalyzer,
+    FrequencyBandAnalyzer,
     FrequencyResponseAnalyzer,
     SplFrequencyAnalyzer,
 )
@@ -88,6 +90,7 @@ def get_class_mapping():
         "PD": PeakDetection,
         "PM": PatternMatch,
         "ED": PipelinePdPm,
+        "FBA": FrequencyBandAnalysis,
         "FFT": FftAnalysis,
     }
     return class_mapping
@@ -276,6 +279,8 @@ class AnalysisResultSummaryWindow(QWidget):
             elif "FR" in name:
                 deviation = f"{deviation:.2f} dB"
             elif "RSC" in name:
+                deviation = f"{deviation:.2f} dB"
+            elif "FBA" in name:
                 deviation = f"{deviation:.2f} dB"
             elif "FFT" in name:
                 deviation = f"{deviation:.2f} dB"
@@ -2975,6 +2980,419 @@ class FftAnalysis(AnalysisGraphWidget):
                 width=2,
                 style=Qt.DashLine,
             ),
+        )
+
+
+class FrequencyBandAnalysis(AnalysisGraphWidget):
+    """频段能量分析窗口。"""
+
+    STRATEGY_LABELS = {
+        "1/1 倍频程": ("octave", {"fraction": 1}),
+        "1/3 倍频程": ("octave", {"fraction": 3}),
+        "1/6 倍频程": ("octave", {"fraction": 6}),
+        "1/12 倍频程": ("octave", {"fraction": 12}),
+        "Bark": ("bark", {}),
+        "等宽": ("equal_width", {}),
+        "自定义": ("custom", {}),
+    }
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.result = {}
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_fba(self):
+        """执行频段能量分析、阈值判定并绘制结果。"""
+        config = self.analysis_config or {}
+        self.data_struct.analysis_result_dict.pop(self.title_name, None)
+        try:
+            recorded_signal = resolve_analysis_channel_signal(
+                self.data_struct,
+                config,
+                self.title_name,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "提示", str(exc))
+            return False
+
+        sample_rate = self.data_struct.sample_rate
+        if sample_rate is None or int(sample_rate) <= 0:
+            QMessageBox.warning(self, "提示", "缺少采样率，无法执行频段能量分析。")
+            return False
+
+        v2pa_factor = self._valid_v2pa_factor()
+        if v2pa_factor is None:
+            return False
+
+        strategy_label = config.get("band_strategy", "1/3 倍频程")
+        strategy_name, strategy_kwargs = self.STRATEGY_LABELS.get(
+            strategy_label,
+            ("octave", {"fraction": 3}),
+        )
+        weighting = str(config.get("weighting", "A") or "A")
+        if weighting in ("None", "Z（None）"):
+            weighting = "Z"
+
+        f_min = float(config.get("f_min", 20))
+        f_max = float(config.get("f_max", 20000))
+        if (
+            not np.isfinite(f_min)
+            or not np.isfinite(f_max)
+            or f_min <= 0.0
+            or f_max <= f_min
+        ):
+            QMessageBox.warning(self, "提示", "FBA 分析频率范围配置无效。")
+            return False
+
+        custom_edges = None
+        if strategy_label == "自定义":
+            try:
+                custom_edges = self._parse_custom_bands_text(
+                    config.get("custom_bands_text", "")
+                )
+            except ValueError as exc:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"自定义频段解析失败: {str(exc)[:200]}",
+                )
+                return False
+
+        try:
+            analyzer = FrequencyBandAnalyzer(
+                strategy=strategy_name,
+                weighting=weighting,
+                f_min=f_min,
+                f_max=f_max,
+                fraction=strategy_kwargs.get("fraction", 3),
+                n_bands=int(config.get("n_bands", 40)),
+                bandwidth=float(config.get("bandwidth", 100)),
+                custom_edges=custom_edges,
+            )
+            analysis_result = analyzer.analyze(
+                recorded_signal,
+                fs=int(sample_rate),
+                v2pa_factor=v2pa_factor,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "提示",
+                f"频段能量分析失败: {str(exc)[:200]}",
+            )
+            return False
+
+        upper_limits = None
+        lower_limits = None
+        if bool(config.get("limit_checked", False)):
+            centers = np.asarray(
+                [band.f_center for band in analysis_result.bands],
+                dtype=np.float64,
+            )
+            try:
+                upper_limits, lower_limits = self._resolve_limits(
+                    config,
+                    centers,
+                )
+            except (ManualLimitValidationError, TypeError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"FBA 阈值配置无效: {str(exc)[:200]}",
+                )
+                return False
+
+            levels = np.asarray(
+                analysis_result.band_levels_weighted_db,
+                dtype=np.float64,
+            )
+            valid_mask = np.isfinite(levels) & (
+                np.isfinite(upper_limits) | np.isfinite(lower_limits)
+            )
+            if not np.any(valid_mask):
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "当前 FBA 结果没有可用于阈值判定的有效频段。",
+                )
+                return False
+            out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+                levels,
+                upper_limits,
+                lower_limits,
+                valid_mask=valid_mask,
+            )
+            analysis_result.exceeded_bands = (
+                np.where(out_mask)[0].astype(int).tolist()
+            )
+            self.data_struct.analysis_result_dict[self.title_name] = (
+                bool(is_ok),
+                float(deviation),
+            )
+
+        self._plot_bar_chart(
+            analysis_result,
+            weighting,
+            upper_limits=upper_limits,
+            lower_limits=lower_limits,
+        )
+        self.result = {
+            "bands": [band.label for band in analysis_result.bands],
+            "band_centers": [
+                band.f_center for band in analysis_result.bands
+            ],
+            "band_levels_db": analysis_result.band_levels_db.tolist(),
+            "band_levels_weighted_db": (
+                analysis_result.band_levels_weighted_db.tolist()
+            ),
+            "overall_db": analysis_result.overall_db,
+            "overall_weighted_db": analysis_result.overall_weighted_db,
+            "weighting": analysis_result.weighting,
+            "exceeded_bands": list(analysis_result.exceeded_bands),
+        }
+        return self.result
+
+    @classmethod
+    def _resolve_limits(cls, config, centers):
+        limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
+        if limit_mode == "manual":
+            _, upper_values, lower_values = limits_from_manual_segments(
+                config,
+                centers,
+            )
+            upper_limits = np.asarray(upper_values, dtype=np.float64)
+            lower_limits = np.asarray(lower_values, dtype=np.float64)
+        elif limit_mode == "csv":
+            limit_data = config.get("limit_data")
+            if not limit_data:
+                raise ValueError("已启用阈值，但未加载 CSV 配置文件")
+            try:
+                csv_x, csv_upper, csv_lower = limit_data
+            except (TypeError, ValueError) as exc:
+                raise ValueError("CSV 阈值数据格式不正确") from exc
+            upper_limits = cls._interpolate_limit_side(
+                centers,
+                csv_x,
+                csv_upper,
+            )
+            lower_limits = cls._interpolate_limit_side(
+                centers,
+                csv_x,
+                csv_lower,
+            )
+        else:
+            raise ValueError(f"不支持的阈值模式: {limit_mode}")
+
+        overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
+        if np.any(lower_limits[overlap] > upper_limits[overlap]):
+            raise ValueError("下限不能大于上限")
+        if not np.any(np.isfinite(upper_limits)) and not np.any(
+            np.isfinite(lower_limits)
+        ):
+            raise ValueError("当前频段范围内没有可用的上下限")
+        return upper_limits, lower_limits
+
+    @staticmethod
+    def _interpolate_limit_side(target_x, raw_x, raw_values):
+        x_values = np.asarray(list(raw_x), dtype=np.float64)
+        side_values = np.asarray(list(raw_values), dtype=np.float64)
+        if x_values.size != side_values.size:
+            raise ValueError("CSV 阈值数据长度不一致")
+
+        finite = np.isfinite(x_values) & np.isfinite(side_values)
+        if not np.any(finite):
+            return np.full(np.asarray(target_x).shape, np.nan, dtype=np.float64)
+
+        points = {}
+        for x_value, side_value in zip(
+            x_values[finite],
+            side_values[finite],
+        ):
+            points[float(x_value)] = float(side_value)
+        sorted_x = np.asarray(sorted(points), dtype=np.float64)
+        sorted_values = np.asarray(
+            [points[x_value] for x_value in sorted(points)],
+            dtype=np.float64,
+        )
+        return np.interp(
+            np.asarray(target_x, dtype=np.float64),
+            sorted_x,
+            sorted_values,
+            left=sorted_values[0],
+            right=sorted_values[-1],
+        )
+
+    @staticmethod
+    def _parse_custom_bands_text(text: str):
+        edges = []
+        for raw in (text or "").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            if "," in line:
+                parts = [part.strip() for part in line.split(",") if part.strip()]
+            else:
+                parts = [
+                    part.strip()
+                    for part in line.replace("\t", " ").split(" ")
+                    if part.strip()
+                ]
+
+            label = None
+            try:
+                if len(parts) == 1 and "-" in parts[0]:
+                    lower, upper = [
+                        part.strip() for part in parts[0].split("-", 1)
+                    ]
+                    f_low, f_high = float(lower), float(upper)
+                elif len(parts) >= 2:
+                    f_low, f_high = float(parts[0]), float(parts[1])
+                    if len(parts) >= 3:
+                        label = " ".join(parts[2:]).strip() or None
+                else:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"格式错误: {raw!r}") from exc
+
+            if f_low <= 0 or f_high <= 0:
+                raise ValueError(f"频率必须为正数: {raw!r}")
+            if f_high <= f_low:
+                raise ValueError(f"频段上限必须大于下限: {raw!r}")
+            edges.append((f_low, f_high, label))
+
+        edges.sort(key=lambda item: item[0])
+        if not edges:
+            raise ValueError("请至少输入一个频段")
+        for index in range(1, len(edges)):
+            if edges[index][0] < edges[index - 1][1]:
+                raise ValueError("自定义频段不允许重叠，请检查相邻频段边界")
+        return edges
+
+    def _plot_bar_chart(
+        self,
+        result: BandAnalysisResult,
+        weighting: str,
+        *,
+        upper_limits=None,
+        lower_limits=None,
+    ):
+        self.analysis_plot.clear()
+
+        levels = np.asarray(
+            result.band_levels_weighted_db,
+            dtype=np.float64,
+        )
+        labels = [band.label for band in result.bands]
+        if not labels:
+            return
+
+        x_values = np.arange(len(labels))
+        colors = resolve_curve_colors(self.analysis_config or {})
+        exceeded_color = "#F44336"
+        missing_color = "#BDBDBD"
+        finite_mask = np.isfinite(levels)
+        plot_levels = levels.copy()
+        plot_levels[~finite_mask] = 0.0
+
+        brushes = [
+            pg.mkBrush(colors[MAIN_CURVE_COLOR])
+            if finite
+            else pg.mkBrush(missing_color)
+            for finite in finite_mask
+        ]
+        for index in result.exceeded_bands:
+            if 0 <= int(index) < len(brushes) and finite_mask[int(index)]:
+                brushes[int(index)] = pg.mkBrush(exceeded_color)
+
+        self.analysis_plot.addItem(
+            pg.BarGraphItem(
+                x=x_values,
+                height=plot_levels,
+                width=0.7,
+                brushes=brushes,
+                pen=pg.mkPen("w", width=0.5),
+            )
+        )
+
+        self._plot_limit_curve(
+            x_values,
+            upper_limits,
+            colors[UPPER_LIMIT_COLOR],
+            "o",
+            "Upper Limit",
+        )
+        self._plot_limit_curve(
+            x_values,
+            lower_limits,
+            colors[LOWER_LIMIT_COLOR],
+            "t",
+            "Lower Limit",
+        )
+
+        for index in result.exceeded_bands:
+            index = int(index)
+            if 0 <= index < len(plot_levels) and finite_mask[index]:
+                text_item = pg.TextItem(
+                    "NG",
+                    color=exceeded_color,
+                    anchor=(0.5, 1.0),
+                )
+                text_item.setPos(index, plot_levels[index])
+                self.analysis_plot.addItem(text_item)
+
+        self.analysis_plot.getAxis("bottom").setTicks(
+            [[(index, label) for index, label in enumerate(labels)]]
+        )
+        weight_label = f"dB({weighting})" if weighting != "Z" else "dB"
+        self.analysis_plot.setLabel(
+            "left",
+            f"Sound Pressure Level [{weight_label}]",
+        )
+        self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
+        overall = (
+            result.overall_weighted_db
+            if weighting != "Z"
+            else result.overall_db
+        )
+        self.analysis_plot.setTitle(
+            f"Overall: {overall:.1f} {weight_label} [SPL]",
+            size="14px",
+            color="k",
+        )
+        self.analysis_plot.showGrid(x=False, y=True)
+        apply_plot_view_range(
+            self.analysis_plot,
+            self.analysis_config or {},
+            allow_x=False,
+            allow_y=True,
+        )
+
+    def _plot_limit_curve(
+        self,
+        x_values,
+        limits,
+        color,
+        symbol,
+        name,
+    ):
+        if limits is None:
+            return
+        values = np.asarray(limits, dtype=np.float64)
+        if values.size != len(x_values) or not np.any(np.isfinite(values)):
+            return
+        self.analysis_plot.plot(
+            x_values,
+            values,
+            pen=mkPen(color=color, width=2),
+            symbol=symbol,
+            symbolSize=5,
+            symbolBrush=color,
+            name=name,
         )
 
 
