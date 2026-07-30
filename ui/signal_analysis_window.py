@@ -50,6 +50,7 @@ from base.golden_sample_comparison import (
     build_golden_curve_comparison as _build_golden_curve_comparison,
     build_golden_envelope_limits as _build_golden_envelope_limits,
     build_interpolated_golden_envelope_plot as _build_interpolated_golden_envelope_plot,
+    build_manual_endpoint_golden_envelope_plot as _build_manual_endpoint_golden_envelope_plot,
     build_golden_offset_deviation_limits as _build_golden_offset_deviation_limits,
     golden_offset_comparison_mask as _golden_offset_comparison_mask,
     interpolate_relative_limits as _interpolate_relative_limits,
@@ -91,6 +92,7 @@ from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     limits_from_manual_segments,
+    manual_limit_plot_data,
 )
 
 
@@ -102,6 +104,46 @@ def _golden_limit_value_semantics(analysis_config) -> str:
     ):
         return LIMIT_VALUE_SEMANTICS_OFFSET
     return LIMIT_VALUE_SEMANTICS_BOUNDS
+
+
+def _resolve_manual_runtime_plot_data(
+    analysis_config,
+    measured_x,
+    display_mode,
+    *,
+    raw_y=None,
+    baseline_aligned=None,
+    log_x=False,
+    positive_x_support=None,
+):
+    """Resolve display-only manual geometry without changing judgment arrays."""
+    if log_x and positive_x_support is None:
+        positive_x_support = measured_x
+    plot_x, plot_upper, plot_lower = manual_limit_plot_data(
+        analysis_config,
+        value_semantics=_golden_limit_value_semantics(analysis_config),
+        positive_x_support=positive_x_support if log_x else None,
+    )
+    if (
+        display_mode == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+        and raw_y is not None
+        and baseline_aligned is not None
+    ):
+        return _build_manual_endpoint_golden_envelope_plot(
+            measured_x,
+            raw_y,
+            baseline_aligned,
+            plot_x,
+            plot_upper,
+            plot_lower,
+    )
+    return (
+        np.asarray(measured_x, dtype=float),
+        None if raw_y is None else np.asarray(raw_y, dtype=float),
+        np.asarray(plot_x, dtype=float),
+        np.asarray(plot_upper, dtype=float),
+        np.asarray(plot_lower, dtype=float),
+    )
 
 
 def _clear_golden_envelope_result(widget) -> None:
@@ -320,6 +362,11 @@ def _sorted_finite_positive_x_for_limits(x_values, y_values):
     if x_valid.size > 1:
         x_valid = x_valid[np.argsort(x_valid)]
     return x_valid
+
+
+def _finite_positive_x_support(x_values):
+    x_arr = np.asarray(x_values, dtype=float)
+    return x_arr[np.isfinite(x_arr) & (x_arr > 0)]
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -702,10 +749,24 @@ class Distortion(AnalysisGraphWidget):
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual" and valid_data:
                 try:
-                    csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                    judgment_x, judgment_upper, judgment_lower = limits_from_manual_segments(
                         analysis_config,
                         freq_value,
                         value_semantics=_golden_limit_value_semantics(analysis_config),
+                    )
+                    (
+                        plot_data_x,
+                        plot_data_y,
+                        plot_limit_x,
+                        plot_upper,
+                        plot_lower,
+                    ) = _resolve_manual_runtime_plot_data(
+                        analysis_config,
+                        freq_value,
+                        _normalize_golden_sample_display_mode(analysis_config),
+                        raw_y=display_y,
+                        baseline_aligned=baseline_aligned,
+                        log_x=True,
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -714,30 +775,36 @@ class Distortion(AnalysisGraphWidget):
                 result = analysis_config.get("limit_data")
                 if not result:
                     return
-                csv_freq_list, csv_upper_list, csv_lower_list = result
+                judgment_x, judgment_upper, judgment_lower = result
 
             if valid_data:
-                plot_limit_x = csv_freq_list
-                plot_upper = csv_upper_list
-                plot_lower = csv_lower_list
+                upper_offset = None
+                lower_offset = None
                 if envelope_mode:
                     upper_offset, lower_offset = _match_nearest_relative_limits(
                         freq_value,
-                        csv_freq_list,
-                        csv_upper_list,
-                        csv_lower_list,
+                        judgment_x,
+                        judgment_upper,
+                        judgment_lower,
                     )
-                    plot_upper, plot_lower = _build_golden_envelope_limits(
-                        baseline_aligned,
-                        upper_offset,
-                        lower_offset,
-                    )
-                    plot_limit_x = freq_value
+                if limit_mode != "manual":
+                    plot_data_x = freq_value
+                    plot_data_y = display_y
+                    plot_limit_x = judgment_x
+                    plot_upper = judgment_upper
+                    plot_lower = judgment_lower
+                    if envelope_mode:
+                        plot_upper, plot_lower = _build_golden_envelope_limits(
+                            baseline_aligned,
+                            upper_offset,
+                            lower_offset,
+                        )
+                        plot_limit_x = freq_value
                 # Use common function for plot setup
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
-                    freq_value,
-                    display_y,
+                    plot_data_x,
+                    plot_data_y,
                     plot_limit_x,
                     plot_upper,
                     plot_lower,
@@ -751,10 +818,10 @@ class Distortion(AnalysisGraphWidget):
                 if self.selected_label is not None:
                     self.analysis_plot.setTitle(f"The Distortion of {self.selected_label.text()} order")
                 # Highlight out-of-limit segments
-                judgment_upper, judgment_lower = (
-                    _build_golden_offset_deviation_limits(csv_upper_list, csv_lower_list)
+                comparison_upper, comparison_lower = (
+                    _build_golden_offset_deviation_limits(judgment_upper, judgment_lower)
                     if envelope_mode
-                    else (csv_upper_list, csv_lower_list)
+                    else (judgment_upper, judgment_lower)
                 )
                 if envelope_mode:
                     comparison_mask = _golden_offset_comparison_mask(
@@ -769,9 +836,9 @@ class Distortion(AnalysisGraphWidget):
                 self._highlight_out_of_range_curve(
                     freq_value,
                     thd,
-                    csv_freq_list,
-                    judgment_upper,
-                    judgment_lower,
+                    judgment_x,
+                    comparison_upper,
+                    comparison_lower,
                     covered_limit_margins_only=(
                         limit_mode == "manual" or envelope_mode
                     ),
@@ -1128,10 +1195,24 @@ class PerceptualRubAndBuzz(RubAndBuzz):
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
             if limit_mode == "manual" and valid_data:
                 try:
-                    csv_freq_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
+                    judgment_x, judgment_upper, judgment_lower = limits_from_manual_segments(
                         analysis_config,
                         freq_value,
                         value_semantics=_golden_limit_value_semantics(analysis_config),
+                    )
+                    (
+                        plot_data_x,
+                        plot_data_y,
+                        plot_limit_x,
+                        plot_upper,
+                        plot_lower,
+                    ) = _resolve_manual_runtime_plot_data(
+                        analysis_config,
+                        freq_value,
+                        _normalize_golden_sample_display_mode(analysis_config),
+                        raw_y=display_y,
+                        baseline_aligned=baseline_aligned,
+                        log_x=True,
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1140,31 +1221,37 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 result = analysis_config.get("limit_data")
                 if not result:
                     return
-                csv_freq_list, csv_upper_list, csv_lower_list = result
+                judgment_x, judgment_upper, judgment_lower = result
 
             if valid_data:
-                plot_limit_x = csv_freq_list
-                plot_upper = csv_upper_list
-                plot_lower = csv_lower_list
+                upper_offset = None
+                lower_offset = None
                 if envelope_mode:
                     upper_offset, lower_offset = _match_nearest_relative_limits(
                         freq_value,
-                        csv_freq_list,
-                        csv_upper_list,
-                        csv_lower_list,
+                        judgment_x,
+                        judgment_upper,
+                        judgment_lower,
                     )
-                    plot_upper, plot_lower = _build_golden_envelope_limits(
-                        baseline_aligned,
-                        upper_offset,
-                        lower_offset,
-                    )
-                    plot_limit_x = freq_value
+                if limit_mode != "manual":
+                    plot_data_x = freq_value
+                    plot_data_y = display_y
+                    plot_limit_x = judgment_x
+                    plot_upper = judgment_upper
+                    plot_lower = judgment_lower
+                    if envelope_mode:
+                        plot_upper, plot_lower = _build_golden_envelope_limits(
+                            baseline_aligned,
+                            upper_offset,
+                            lower_offset,
+                        )
+                        plot_limit_x = freq_value
 
                 # 1) Plot main curve + limit curves (same as THD)
                 LimitPlotUtils.setup_limit_plot(
                     self.analysis_plot,
-                    freq_value,
-                    display_y,
+                    plot_data_x,
+                    plot_data_y,
                     plot_limit_x,
                     plot_upper,
                     plot_lower,
@@ -1180,10 +1267,10 @@ class PerceptualRubAndBuzz(RubAndBuzz):
 
                 # 2) Use parent's _highlight_out_of_range_curve() for limit check + highlight
                 #    This uses nearest-neighbor matching and highlights on original data points
-                judgment_upper, judgment_lower = (
-                    _build_golden_offset_deviation_limits(csv_upper_list, csv_lower_list)
+                comparison_upper, comparison_lower = (
+                    _build_golden_offset_deviation_limits(judgment_upper, judgment_lower)
                     if envelope_mode
-                    else (csv_upper_list, csv_lower_list)
+                    else (judgment_upper, judgment_lower)
                 )
                 if envelope_mode:
                     comparison_mask = _golden_offset_comparison_mask(
@@ -1198,9 +1285,9 @@ class PerceptualRubAndBuzz(RubAndBuzz):
                 self._highlight_out_of_range_curve(
                     freq_value,
                     perceptual_loudness,
-                    csv_freq_list,
-                    judgment_upper,
-                    judgment_lower,
+                    judgment_x,
+                    comparison_upper,
+                    comparison_lower,
                     covered_limit_margins_only=(
                         limit_mode == "manual" or envelope_mode
                     ),
@@ -1316,10 +1403,21 @@ class Spl(AnalysisGraphWidget):
         limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
             limit_mode = str(self.analysis_config.get("limit_mode", "csv") or "csv").lower()
+            plot_time_list = None
+            plot_upper_list = None
+            plot_lower_list = None
             if limit_mode == "manual":
                 try:
                     csv_time_list, csv_upper_list, csv_lower_list = limits_from_manual_segments(
                         self.analysis_config, signal_duration
+                    )
+                    _, _, plot_time_list, plot_upper_list, plot_lower_list = (
+                        _resolve_manual_runtime_plot_data(
+                            self.analysis_config,
+                            signal_duration,
+                            GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+                            log_x=False,
+                        )
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1329,7 +1427,16 @@ class Spl(AnalysisGraphWidget):
                 if not result:
                     return False
                 csv_time_list, csv_upper_list, csv_lower_list = result
-            self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
+            self.plot_spl_with_limits(
+                signal_duration,
+                signal_spl,
+                csv_time_list,
+                csv_upper_list,
+                csv_lower_list,
+                plot_time_list=plot_time_list,
+                plot_upper_list=plot_upper_list,
+                plot_lower_list=plot_lower_list,
+            )
         else:
             self.plot_spl(signal_duration, signal_spl)
         self._set_overall_spl_title(overall_spl)
@@ -1342,7 +1449,18 @@ class Spl(AnalysisGraphWidget):
             self.result["overall_spl"] = overall_spl
         return self.result
 
-    def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
+    def plot_spl_with_limits(
+        self,
+        signal_duration,
+        signal_spl,
+        csv_time_list,
+        csv_upper_list,
+        csv_lower_list,
+        *,
+        plot_time_list=None,
+        plot_upper_list=None,
+        plot_lower_list=None,
+    ):
         """
         Plot SPL time-domain curve and highlight out-of-limit segments.
 
@@ -1358,16 +1476,23 @@ class Spl(AnalysisGraphWidget):
             csv_time_list: CSV time point list
             csv_upper_list: Upper limit list
             csv_lower_list: Lower limit list
+            plot_time_list: Optional plot-only time points
+            plot_upper_list: Optional plot-only upper-limit points
+            plot_lower_list: Optional plot-only lower-limit points
         """
+        plot_time_list = csv_time_list if plot_time_list is None else plot_time_list
+        plot_upper_list = csv_upper_list if plot_upper_list is None else plot_upper_list
+        plot_lower_list = csv_lower_list if plot_lower_list is None else plot_lower_list
+
         # === 1. Common plot setup (clear, draw main curve and limit curves, set axes) ===
         # Note: SPL time-domain uses linear scale (log_x=False), Y label is dynamic
         LimitPlotUtils.setup_limit_plot(
             self.analysis_plot,
             signal_duration,
             signal_spl,
-            csv_time_list,
-            csv_upper_list,
-            csv_lower_list,
+            plot_time_list,
+            plot_upper_list,
+            plot_lower_list,
             x_label="Time (s)",
             y_label=self._get_spl_label(),
             log_x=False,
@@ -1543,6 +1668,7 @@ class SplFrequency(AnalysisGraphWidget):
             self.plot_spl_frequency(frequency_list, spl_db_raw)
         elif limit_checked:
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
+            manual_plot_data = None
             if limit_mode == "manual":
                 try:
                     manual_limit_x = _sorted_finite_positive_x_for_limits(frequency_list, spl_db)
@@ -1550,6 +1676,15 @@ class SplFrequency(AnalysisGraphWidget):
                         analysis_config,
                         manual_limit_x,
                         value_semantics=_golden_limit_value_semantics(analysis_config),
+                    )
+                    manual_plot_data = _resolve_manual_runtime_plot_data(
+                        analysis_config,
+                        frequency_list,
+                        _normalize_golden_sample_display_mode(analysis_config),
+                        raw_y=spl_db_raw,
+                        baseline_aligned=baseline_aligned,
+                        log_x=True,
+                        positive_x_support=_finite_positive_x_support(frequency_list),
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1568,6 +1703,7 @@ class SplFrequency(AnalysisGraphWidget):
                 raw_y=spl_db_raw,
                 baseline_aligned=baseline_aligned,
                 display_mode=_normalize_golden_sample_display_mode(analysis_config),
+                manual_plot_data=manual_plot_data,
             )
         else:
             display_y = (
@@ -1596,6 +1732,7 @@ class SplFrequency(AnalysisGraphWidget):
         raw_y=None,
         baseline_aligned=None,
         display_mode=GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+        manual_plot_data=None,
     ):
         """
         Plot SPLF (SPL-Frequency) curve and highlight out-of-limit segments.
@@ -1633,19 +1770,25 @@ class SplFrequency(AnalysisGraphWidget):
         display_x = freq_valid
         display_y = display_valid
         if envelope_mode:
-            display_x, display_y, plot_upper, plot_lower = _build_interpolated_golden_envelope_plot(
-                freq_arr,
-                raw_y,
-                baseline_aligned,
-                csv_freq_list,
-                csv_upper_list,
-                csv_lower_list,
-            )
-            plot_limit_x = display_x
+            if manual_plot_data is not None:
+                display_x, display_y, plot_limit_x, plot_upper, plot_lower = manual_plot_data
+            else:
+                display_x, display_y, plot_upper, plot_lower = _build_interpolated_golden_envelope_plot(
+                    freq_arr,
+                    raw_y,
+                    baseline_aligned,
+                    csv_freq_list,
+                    csv_upper_list,
+                    csv_lower_list,
+                )
+                plot_limit_x = display_x
         else:
-            plot_limit_x = csv_freq_list
-            plot_upper = csv_upper_list
-            plot_lower = csv_lower_list
+            if manual_plot_data is not None:
+                _, _, plot_limit_x, plot_upper, plot_lower = manual_plot_data
+            else:
+                plot_limit_x = csv_freq_list
+                plot_upper = csv_upper_list
+                plot_lower = csv_lower_list
 
         # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(
@@ -1836,6 +1979,7 @@ class Frequency(AnalysisGraphWidget):
             self.plot_fr(frequency_list, fr_raw)
         elif limit_checked:
             limit_mode = str(analysis_config.get("limit_mode", "csv") or "csv").lower()
+            manual_plot_data = None
             if limit_mode == "manual":
                 try:
                     manual_limit_x = _sorted_finite_positive_x_for_limits(frequency_list, fr)
@@ -1843,6 +1987,15 @@ class Frequency(AnalysisGraphWidget):
                         analysis_config,
                         manual_limit_x,
                         value_semantics=_golden_limit_value_semantics(analysis_config),
+                    )
+                    manual_plot_data = _resolve_manual_runtime_plot_data(
+                        analysis_config,
+                        frequency_list,
+                        _normalize_golden_sample_display_mode(analysis_config),
+                        raw_y=fr_raw,
+                        baseline_aligned=baseline_aligned,
+                        log_x=True,
+                        positive_x_support=_finite_positive_x_support(frequency_list),
                     )
                 except ManualLimitValidationError as exc:
                     MessageBox.warning(self, "提示", str(exc))
@@ -1861,6 +2014,7 @@ class Frequency(AnalysisGraphWidget):
                 raw_y=fr_raw,
                 baseline_aligned=baseline_aligned,
                 display_mode=_normalize_golden_sample_display_mode(analysis_config),
+                manual_plot_data=manual_plot_data,
             )
         else:
             display_y = (
@@ -1981,6 +2135,7 @@ class Frequency(AnalysisGraphWidget):
         raw_y=None,
         baseline_aligned=None,
         display_mode=GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+        manual_plot_data=None,
     ):
         """
         Plot Frequency Response (FR) curve and highlight out-of-limit segments.
@@ -2021,19 +2176,25 @@ class Frequency(AnalysisGraphWidget):
         display_x = freq_valid
         display_y = display_valid
         if envelope_mode:
-            display_x, display_y, plot_upper, plot_lower = _build_interpolated_golden_envelope_plot(
-                freq_arr,
-                raw_y,
-                baseline_aligned,
-                csv_freq_list,
-                csv_upper_list,
-                csv_lower_list,
-            )
-            plot_limit_x = display_x
+            if manual_plot_data is not None:
+                display_x, display_y, plot_limit_x, plot_upper, plot_lower = manual_plot_data
+            else:
+                display_x, display_y, plot_upper, plot_lower = _build_interpolated_golden_envelope_plot(
+                    freq_arr,
+                    raw_y,
+                    baseline_aligned,
+                    csv_freq_list,
+                    csv_upper_list,
+                    csv_lower_list,
+                )
+                plot_limit_x = display_x
         else:
-            plot_limit_x = csv_freq_list
-            plot_upper = csv_upper_list
-            plot_lower = csv_lower_list
+            if manual_plot_data is not None:
+                _, _, plot_limit_x, plot_upper, plot_lower = manual_plot_data
+            else:
+                plot_limit_x = csv_freq_list
+                plot_upper = csv_upper_list
+                plot_lower = csv_lower_list
 
         # === 2. Common plot setup (use sorted data for both green and red curves) ===
         LimitPlotUtils.setup_limit_plot(

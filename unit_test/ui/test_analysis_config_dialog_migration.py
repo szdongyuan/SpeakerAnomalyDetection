@@ -704,7 +704,37 @@ def test_threshold_widget_manual_mode_recomputes_scroll_height_after_being_enabl
     window.close()
 
 
-def test_threshold_widget_manual_preview_inserts_gap_between_disconnected_segments(qapp):
+def test_manual_limit_preview_exact_endpoints(qapp):
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": False,
+            "manual_upper_segments": [
+                {"start_x": 50.0, "start_y": 4.0, "end_x": 100.0, "end_y": 4.0},
+                {"start_x": 100.1, "start_y": 3.0, "end_x": 1000.0, "end_y": 3.0},
+            ],
+        },
+    )
+    dialog = create_manual_dialog(widget)
+
+    x_values, upper_values, lower_values = dialog.editor.manual_limit_preview_data()
+
+    assert x_values == [50.0, 100.0, 100.1, 1000.0]
+    assert upper_values == [4.0, 4.0, 3.0, 3.0]
+    assert np.all(np.isnan(lower_values))
+
+    set_table_cell(dialog.editor.manual_upper_table, 0, 1, "100.0")
+    x_values, upper_values, lower_values = dialog.editor.manual_limit_preview_data()
+
+    assert x_values == [50.0, 100.0, 100.0, 1000.0]
+    assert upper_values == [4.0, 4.0, 3.0, 3.0]
+    assert np.all(np.isnan(lower_values))
+
+
+def test_manual_limit_preview_partial_columns_are_omitted(qapp):
     widget = create_threshold_widget(
         qapp,
         {
@@ -715,17 +745,18 @@ def test_threshold_widget_manual_preview_inserts_gap_between_disconnected_segmen
         },
     )
     dialog = create_manual_dialog(widget)
-    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 1, 20])
-    set_segment_column(dialog.editor.manual_upper_table, 1, [2, 30, 3, 40])
+    table = dialog.editor.manual_upper_table
+    set_segment_column(table, 0, [50, 4, 100, 4])
+    table.setColumnCount(5)
+    dialog.editor._ensure_manual_table_items(table)
+    set_table_cell(table, 0, 1, "100.1")
+    set_segment_column(table, 2, [100.1, 3, 1000, "nan"])
+    set_segment_column(table, 3, [100.1, "not-a-number", 1000, 3])
 
     x_values, upper_values, lower_values = dialog.editor.manual_limit_preview_data()
 
-    assert x_values[:2] == [0.0, 1.0]
-    assert np.isnan(x_values[2])
-    assert x_values[3:] == [2.0, 3.0]
-    assert upper_values[:2] == [10.0, 20.0]
-    assert np.isnan(upper_values[2])
-    assert upper_values[3:] == [30.0, 40.0]
+    assert x_values == [50.0, 100.0]
+    assert upper_values == [4.0, 4.0]
     assert np.all(np.isnan(lower_values))
 
 
@@ -747,7 +778,7 @@ def test_manual_limit_preview_highlight_current_upper_column_only(qapp):
     items = plot_data_snapshot(dialog.limit_graph)
     np.testing.assert_equal(
         items[0],
-        ([0.0, 1.0, np.nan, 1.0, 2.0, np.nan, 2.0, 3.0], [10.0, 20.0, np.nan, 20.0, 30.0, np.nan, 30.0, 40.0]),
+        ([0.0, 1.0, 1.0, 2.0, 2.0, 3.0], [10.0, 20.0, 20.0, 30.0, 30.0, 40.0]),
     )
     assert items[1:] == [([2.0, 3.0], [30.0, 40.0])]
 
@@ -1172,12 +1203,8 @@ def test_threshold_widget_initial_manual_mode_seeds_loaded_limit_data_and_previe
     x_data, y_data = widget.limit_graph.listDataItems()[0].getData()
     x_values = np.asarray(x_data).tolist()
     y_values = np.asarray(y_data).tolist()
-    assert x_values[:2] == [0.0, 1.0]
-    assert np.isnan(x_values[2])
-    assert x_values[3:] == [1.0, 2.0]
-    assert y_values[:2] == [10.0, 20.0]
-    assert np.isnan(y_values[2])
-    assert y_values[3:] == [20.0, 30.0]
+    assert x_values == [0.0, 1.0, 1.0, 2.0]
+    assert y_values == [10.0, 20.0, 20.0, 30.0]
 
 
 def test_manual_limit_dialog_reject_keeps_parent_config_unchanged(qapp, monkeypatch):
@@ -1980,6 +2007,40 @@ def test_manual_limit_dialog_invalid_warning_is_chinese_and_dialog_stays_open(qa
     dialog = create_manual_dialog(widget)
     set_segment_column(dialog.editor.manual_upper_table, 0, [0, 0, 1, 0])
     set_segment_column(dialog.editor.manual_lower_table, 0, [0, 1, 1, 0])
+    confirm_dialog(dialog)
+
+    assert warnings
+    assert "下限不能大于上限" in warnings[-1][2]
+    assert dialog.result() != dialog.Accepted
+    assert dialog.isVisible() is True
+
+
+def test_manual_limit_dialog_rejects_effective_connector_inversion_on_confirm(
+    qapp,
+    monkeypatch,
+):
+    from ui.ui_analysis_config import threshold_config_widget
+
+    warnings = []
+    monkeypatch.setattr(
+        threshold_config_widget.MessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    widget = create_threshold_widget(
+        qapp,
+        {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+        },
+    )
+    dialog = create_manual_dialog(widget)
+    set_segment_column(dialog.editor.manual_upper_table, 0, [0, 10, 10, 10])
+    set_segment_column(dialog.editor.manual_upper_table, 1, [30, 0, 40, 0])
+    set_segment_column(dialog.editor.manual_lower_table, 0, [15, 8, 25, 8])
+
     confirm_dialog(dialog)
 
     assert warnings

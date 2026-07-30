@@ -10,10 +10,262 @@ from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_OFFSET
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     limits_from_manual_segments,
+    manual_limit_plot_data,
     normalize_segments,
     validate_manual_limit_config,
     validate_manual_segments,
 )
+
+
+def test_manual_plot_geometry_uses_exact_gap_endpoints():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 50.0, "start_y": 4.0, "end_x": 100.0, "end_y": 4.0},
+            {"start_x": 100.1, "start_y": 3.0, "end_x": 1000.0, "end_y": 3.0},
+        ],
+    }
+
+    x_values, upper, lower = manual_limit_plot_data(config)
+
+    assert x_values == [50.0, 100.0, 100.1, 1000.0]
+    assert upper == [4.0, 4.0, 3.0, 3.0]
+    assert np.isnan(lower).all()
+
+
+def test_manual_plot_geometry_keeps_duplicate_shared_boundary():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 50.0, "start_y": 4.0, "end_x": 100.0, "end_y": 4.0},
+            {"start_x": 100.0, "start_y": 3.0, "end_x": 1000.0, "end_y": 3.0},
+        ],
+    }
+
+    x_values, upper, lower = manual_limit_plot_data(config)
+
+    assert x_values == [50.0, 100.0, 100.0, 1000.0]
+    assert upper == [4.0, 4.0, 3.0, 3.0]
+    assert np.isnan(lower).all()
+
+
+def test_manual_plot_geometry_preserves_sloped_segment_endpoints():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 1.0, "start_y": 2.0, "end_x": 3.0, "end_y": 4.0},
+        ],
+    }
+
+    x_values, upper, lower = manual_limit_plot_data(config)
+
+    assert x_values == [1.0, 3.0]
+    assert upper == [2.0, 4.0]
+    assert np.isnan(lower).all()
+
+
+def test_manual_plot_geometry_keeps_sides_independent():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 1.0, "start_y": 2.0, "end_x": 3.0, "end_y": 4.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 1.0, "start_y": -2.0, "end_x": 3.0, "end_y": -4.0},
+        ],
+    }
+
+    x_values, upper, lower = manual_limit_plot_data(config)
+
+    np.testing.assert_allclose(
+        x_values, [1.0, 3.0, np.nan, 1.0, 3.0], equal_nan=True
+    )
+    np.testing.assert_allclose(
+        upper, [2.0, 4.0, np.nan, np.nan, np.nan], equal_nan=True
+    )
+    np.testing.assert_allclose(
+        lower, [np.nan, np.nan, np.nan, -2.0, -4.0], equal_nan=True
+    )
+
+
+def test_manual_plot_geometry_omits_explicitly_disabled_side():
+    config = {
+        "manual_upper_enabled": False,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 1.0, "start_y": 20.0, "end_x": 3.0, "end_y": 40.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 1.0, "start_y": -2.0, "end_x": 3.0, "end_y": -4.0},
+        ],
+    }
+
+    x_values, upper, lower = manual_limit_plot_data(config)
+
+    assert x_values == [1.0, 3.0]
+    assert np.isnan(upper).all()
+    assert lower == [-2.0, -4.0]
+
+
+def test_manual_plot_geometry_clips_zero_start_to_positive_support():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 0.0, "end_x": 20.0, "end_y": 20.0},
+        ],
+    }
+
+    x_values, upper, _ = manual_limit_plot_data(
+        config,
+        positive_x_support=[10.0, 50.0, 100.0],
+    )
+
+    assert x_values == [10.0, 20.0]
+    assert upper == pytest.approx([10.0, 20.0])
+
+
+def test_manual_plot_geometry_omits_zero_start_segment_without_positive_support():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 0.0, "end_x": 20.0, "end_y": 20.0},
+        ],
+    }
+
+    x_values, upper, lower = manual_limit_plot_data(
+        config,
+        positive_x_support=[50.0, 100.0],
+    )
+
+    assert x_values == []
+    assert upper == []
+    assert lower == []
+
+
+def test_manual_plot_geometry_does_not_bridge_across_omitted_segment():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 0.0, "end_x": 20.0, "end_y": 20.0},
+            {"start_x": 30.0, "start_y": 3.0, "end_x": 40.0, "end_y": 3.0},
+        ],
+    }
+
+    x_values, upper, _ = manual_limit_plot_data(
+        config,
+        positive_x_support=[30.0, 40.0],
+    )
+
+    assert x_values == [30.0, 40.0]
+    assert upper == [3.0, 3.0]
+
+
+def test_manual_plot_geometry_connects_clipped_segment_to_next_segment():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 0.0, "end_x": 20.0, "end_y": 20.0},
+            {"start_x": 20.0, "start_y": 5.0, "end_x": 40.0, "end_y": 5.0},
+        ],
+    }
+
+    x_values, upper, _ = manual_limit_plot_data(
+        config,
+        positive_x_support=[10.0, 20.0, 30.0, 40.0],
+    )
+
+    assert x_values == [10.0, 20.0, 20.0, 40.0]
+    assert upper == pytest.approx([10.0, 20.0, 5.0, 5.0])
+
+
+def test_manual_limit_gap_connector_uses_left_open_right_closed_linear_threshold():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 50.0, "start_y": 4.0, "end_x": 100.0, "end_y": 4.0},
+            {"start_x": 100.1, "start_y": 3.0, "end_x": 1000.0, "end_y": 3.0},
+        ],
+    }
+
+    x_values, upper, lower = limits_from_manual_segments(
+        config,
+        [50.0, 100.0, 100.025, 100.05, 100.1, 100.101, 1000.0, 1000.1],
+    )
+
+    assert x_values == [
+        50.0,
+        100.0,
+        100.025,
+        100.05,
+        100.1,
+        100.101,
+        1000.0,
+        1000.1,
+    ]
+    np.testing.assert_allclose(
+        upper,
+        [np.nan, 4.0, 3.75, 3.5, 3.0, 3.0, 3.0, np.nan],
+        equal_nan=True,
+    )
+    assert np.isnan(lower).all()
+
+
+def test_manual_limit_shared_x_boundary_uses_previous_then_next_segment():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 4.0, "end_x": 1.0, "end_y": 4.0},
+            {"start_x": 1.0, "start_y": 3.0, "end_x": 2.0, "end_y": 3.0},
+        ],
+    }
+
+    _, upper, _ = limits_from_manual_segments(config, [1.0, 1.001])
+
+    assert upper == [4.0, 3.0]
+
+
+def test_manual_limit_lower_only_gap_connector_uses_same_semantics():
+    config = {
+        "manual_upper_enabled": False,
+        "manual_lower_enabled": True,
+        "manual_lower_segments": [
+            {"start_x": 0.0, "start_y": -4.0, "end_x": 1.0, "end_y": -4.0},
+            {"start_x": 2.0, "start_y": -2.0, "end_x": 3.0, "end_y": -2.0},
+        ],
+    }
+
+    _, upper, lower = limits_from_manual_segments(config, [1.0, 1.5, 2.0, 2.5])
+
+    assert np.isnan(upper).all()
+    assert lower == pytest.approx([-4.0, -3.0, -2.0, -2.0])
+
+
+def test_manual_limit_single_segment_has_no_outside_synthetic_coverage():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {"start_x": 1.0, "start_y": 2.0, "end_x": 2.0, "end_y": 4.0},
+        ],
+    }
+
+    _, upper, _ = limits_from_manual_segments(config, [0.5, 1.0, 1.5, 2.0, 2.5])
+
+    np.testing.assert_allclose(
+        upper,
+        [np.nan, np.nan, 3.0, 4.0, np.nan],
+        equal_nan=True,
+    )
 
 
 def test_manual_limit_validation_messages_are_chinese():
@@ -95,6 +347,89 @@ def test_lower_above_upper_detects_left_open_interval_violation():
 
     with pytest.raises(ManualLimitValidationError):
         limits_from_manual_segments(config, np.array([0.5, 1.0]))
+
+
+def test_manual_limit_validation_rejects_lower_above_upper_on_implicit_connector():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 10.0, "end_x": 10.0, "end_y": 10.0},
+            {"start_x": 30.0, "start_y": 0.0, "end_x": 40.0, "end_y": 0.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 15.0, "start_y": 8.0, "end_x": 25.0, "end_y": 8.0},
+        ],
+    }
+
+    with pytest.raises(ManualLimitValidationError, match="下限不能大于上限"):
+        validate_manual_limit_config(config)
+
+
+def test_manual_limit_validation_rejects_connector_to_connector_crossing():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 10.0, "end_x": 10.0, "end_y": 10.0},
+            {"start_x": 30.0, "start_y": 0.0, "end_x": 40.0, "end_y": 0.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 11.0, "start_y": 1.0, "end_x": 15.0, "end_y": 1.0},
+            {"start_x": 25.0, "start_y": 9.0, "end_x": 29.0, "end_y": 9.0},
+        ],
+    }
+
+    with pytest.raises(ManualLimitValidationError, match="下限不能大于上限"):
+        validate_manual_limit_config(config)
+
+
+def test_manual_limit_validation_allows_equality_on_effective_connector():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 10.0, "end_x": 10.0, "end_y": 10.0},
+            {"start_x": 30.0, "start_y": 0.0, "end_x": 40.0, "end_y": 0.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 15.0, "start_y": 7.5, "end_x": 25.0, "end_y": 2.5},
+        ],
+    }
+
+    validate_manual_limit_config(config)
+
+
+def test_manual_limit_validation_ignores_segments_on_disabled_side():
+    config = {
+        "manual_upper_enabled": False,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": -10.0, "end_x": 10.0, "end_y": -10.0},
+            {"start_x": 30.0, "start_y": -10.0, "end_x": 40.0, "end_y": -10.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 15.0, "start_y": 8.0, "end_x": 25.0, "end_y": 8.0},
+        ],
+    }
+
+    validate_manual_limit_config(config)
+
+
+def test_manual_limit_validation_allows_non_overlapping_effective_coverage():
+    config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": True,
+        "manual_upper_segments": [
+            {"start_x": 0.0, "start_y": 10.0, "end_x": 10.0, "end_y": 10.0},
+            {"start_x": 20.0, "start_y": 0.0, "end_x": 30.0, "end_y": 0.0},
+        ],
+        "manual_lower_segments": [
+            {"start_x": 40.0, "start_y": 100.0, "end_x": 50.0, "end_y": 100.0},
+        ],
+    }
+
+    validate_manual_limit_config(config)
 
 
 def test_negative_first_start_empty_enabled_table_disabled_limits_and_nonfinite_values_fail():
