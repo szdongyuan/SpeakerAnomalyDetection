@@ -904,6 +904,74 @@ recent_session_table_style = _style("""
             }
 """)
 
+product_test_program_dialog_style = _style("""
+            QDialog#productTestProgramDialog {
+                background-color: $COLOR_PAGE_BG;
+            }
+            QLabel#productProgramFieldLabel,
+            QLabel#productProgramSectionTitle {
+                color: $COLOR_TEXT;
+                font-family: $UI_FONT_FAMILY;
+                font-size: 20px;
+                font-weight: bold;
+            }
+            QLabel#productProgramStatus {
+                min-height: 24px;
+                border: 1px solid $COLOR_BORDER;
+                border-radius: 5px;
+                padding: 6px 10px;
+                font-family: $UI_FONT_FAMILY;
+                font-size: 18px;
+            }
+            QLabel#productProgramStatus[statusTone="ok"] {
+                color: $COLOR_OK;
+                background-color: #F0FDF4;
+                border-color: #86EFAC;
+            }
+            QLabel#productProgramStatus[statusTone="warning"] {
+                color: #B45309;
+                background-color: #FFF7ED;
+                border-color: #FDBA74;
+            }
+            QLabel#productProgramStatus[statusTone="error"] {
+                color: $COLOR_NG;
+                background-color: #FEF2F2;
+                border-color: #FCA5A5;
+            }
+            QPushButton#productProgramPrimaryButton {
+                color: #FFFFFF;
+                background-color: $COLOR_PRIMARY;
+                border-color: $COLOR_PRIMARY;
+                font-weight: bold;
+            }
+            QPushButton#productProgramPrimaryButton:hover {
+                background-color: $COLOR_PRIMARY_HOVER;
+                border-color: $COLOR_PRIMARY_HOVER;
+            }
+            QFrame#productProgramFooterSeparator {
+                color: $COLOR_BORDER;
+            }
+""")
+
+product_test_program_config_selector_style = _style("""
+            QComboBox,
+            QComboBox QLineEdit {
+                font-family: $UI_FONT_FAMILY;
+                font-size: 20px;
+            }
+""")
+
+product_test_program_table_style = recent_session_table_style + _style("""
+            QTableWidget#productProgramTable {
+                font-size: 17px;
+            }
+            QTableWidget#productProgramTable QHeaderView::section {
+                font-size: 17px;
+                font-weight: bold;
+                padding: 5px 6px;
+            }
+""")
+
 recent_session_action_button_style = """
             QToolButton {
                 border: 1px solid rgba(75, 85, 99, 0.24);

@@ -185,12 +185,23 @@ class LoadUiConfig(object):
     @staticmethod
     def save_sequence_config_to_json(config_data, json_file_path):
         """Save ``config_data`` (the inner analysis_list dict) back to json file using the new format."""
-        os.makedirs(os.path.dirname(json_file_path), exist_ok=True)
+        return LoadUiConfig.save_data_to_json(config_data, json_file_path, 6)
+
+    @staticmethod
+    def save_data_to_json(config_data, json_file_path, indent=2):
+        """Atomically save JSON data using the project's UTF-8 format."""
+        target_path = os.path.abspath(json_file_path)
+        target_dir = os.path.dirname(target_path)
+        temp_path = target_path + ".tmp"
+        os.makedirs(target_dir, exist_ok=True)
         try:
-            with open(json_file_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=6, ensure_ascii=False)
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=indent, ensure_ascii=False)
+            os.replace(temp_path, target_path)
             return True
-        except Exception as e:
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
             return False
 
     @staticmethod
