@@ -18,6 +18,7 @@ from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
+from ui.product_test_program_config_dialog import ProductTestProgramConfigDialog
 from ui.sequence.sequence_widget import SequenceWindow
 
 
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self.mouseMoveEvent = self.mousemoveevent
 
         # set the menubar action
+        self.function_action_product_test_program = QAction("产品测试程序配置", self)
         self.function_action_test_sequence = QAction("测试队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_audio_manager = QAction("音频数据管理", self)
@@ -69,6 +71,7 @@ class MainWindow(QMainWindow):
         # set the operator and engineer and admin power
         self.widget_list_operator = [self.user_action_change_pwd]
         self.widget_list_engineer = self.widget_list_operator + [
+            self.function_action_product_test_program,
             self.function_action_test_sequence,
             self.function_action_ai_training,
             self.hardware_action_selection,
@@ -227,6 +230,11 @@ class MainWindow(QMainWindow):
         user_menu = menu_bar.addMenu("用户")
         help_menu = menu_bar.addMenu("帮助")
 
+        function_menu.addAction(self.function_action_product_test_program)
+        self.function_action_product_test_program.triggered.disconnect()
+        self.function_action_product_test_program.triggered.connect(
+            self.on_product_test_program_config
+        )
         function_menu.addAction(self.function_action_test_sequence)
         self.function_action_test_sequence.triggered.disconnect()
         self.function_action_test_sequence.triggered.connect(self.analysis_model_select)
@@ -263,8 +271,11 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
+        self._open_analysis_model_select(self.sequence_window.using_config_path)
+
+    def _open_analysis_model_select(self, using_config_path):
         analysis_model_select_dialog = AnalysisModelSelect(
-            self.sequence_window.using_config_path,
+            using_config_path,
             mic=self.mic,
             speaker=self.speaker,
             mic_channels=self.mic_channels,
@@ -273,6 +284,14 @@ class MainWindow(QMainWindow):
         analysis_model_select_dialog.exec()
         # Refresh active sequence config without forcing mode switch
         self.sequence_window.on_sequence_config_updated()
+
+    def on_product_test_program_config(self):
+        dialog = ProductTestProgramConfigDialog(
+            None,
+            self._open_analysis_model_select,
+            self,
+        )
+        dialog.exec()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size

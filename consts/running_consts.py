@@ -15,6 +15,8 @@ LOG_DIR = DEFAULT_DIR + "log/"
 DEFAULT_LOG_FORMATTER = "[%(asctime)s][%(name)s] - [%(levelname)s] - [%(message)s] [%(filename)s:%(lineno)d]"
 
 SEQUENCE_CONFIG_REGISTRY_PATH = DEFAULT_DIR + "ui/ui_config/analysis_sequence_config/sequence_config_registry.json"
+PRODUCT_TEST_PROGRAM_DIR = DEFAULT_DIR + "ui/ui_config/product_test_programs"
+PRODUCT_TEST_PROGRAM_REGISTRY_PATH = PRODUCT_TEST_PROGRAM_DIR + "/program_registry.json"
 
 DEFAULT_LOG = {
     "log_name": LOG_DIR + "main.log",
