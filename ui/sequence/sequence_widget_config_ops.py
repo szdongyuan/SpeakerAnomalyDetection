@@ -401,6 +401,9 @@ class SequenceWidgetConfigOpsMixin:
                     "如无可选项，请到【功能-测试队列】中保存或导入配置。",
                 )
                 self._missing_config_prompted = True
+        sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
+        if callable(sync_product_conditions):
+            sync_product_conditions()
 
     def _set_sequence_config_available_state(self, available: bool):
         """

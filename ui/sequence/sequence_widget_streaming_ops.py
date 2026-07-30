@@ -17,6 +17,8 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.file_ops import FileOps
+from base.load_config import LoadUiConfig
+from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
 from base.save_data import ensure_test_result_file, save_audio_simple
 from base.soundcard_calibration_manager import get_mic_v2pa_factor
@@ -27,11 +29,7 @@ from ui.sequence.recent_session_panel import RecentSessionPanel
 
 
 class SequenceWidgetStreamingOpsMixin:
-    _DIRECTION_WAVEFORM_ORDER = ("forward", "reverse")
-    _DIRECTION_WAVEFORM_TITLES = {
-        "forward": "正转波形",
-        "reverse": "反转波形",
-    }
+    _DIRECTION_WAVEFORM_ORDER = tuple()
 
     @staticmethod
     def _normalize_audio_label(label: str) -> str:
@@ -53,6 +51,137 @@ class SequenceWidgetStreamingOpsMixin:
         if not os.path.isabs(normalized):
             normalized = os.path.join(DEFAULT_DIR, normalized).replace("\\", "/")
         return os.path.abspath(normalized)
+
+    def _cache_condition_record(self, condition_key: str) -> None:
+        key = str(condition_key or "").strip()
+        if not key:
+            return
+        if not isinstance(getattr(self, "_condition_record_cache", None), dict):
+            self._condition_record_cache = {}
+
+        recorded_signal_info = dict(getattr(self, "recorded_signal_info", {}) or {})
+        recorded_path = getattr(self, "recorded_path", None) or recorded_signal_info.get("file_path")
+        if not recorded_path and not recorded_signal_info:
+            return
+
+        self._condition_record_cache[key] = {
+            "recorded_path": recorded_path,
+            "recorded_signal_info": recorded_signal_info,
+        }
+        channel_workspace = getattr(self, "channel_workspace", None)
+        if channel_workspace is not None:
+            if hasattr(channel_workspace, "set_condition_audio_path"):
+                channel_workspace.set_condition_audio_path(key, recorded_path)
+            label = self._normalize_audio_label(recorded_signal_info.get("labels"))
+            if label in ("OK", "NG") and hasattr(channel_workspace, "set_condition_result"):
+                channel_workspace.set_condition_result(key, label)
+
+    def _resolve_condition_record(self, condition_key: str):
+        key = str(condition_key or "").strip()
+        record_cache = getattr(self, "_condition_record_cache", {}) or {}
+        record = record_cache.get(key)
+        if record:
+            return dict(record)
+
+        current_key = self._resolve_waveform_direction(fallback="")
+        active_key = self._resolve_active_recording_waveform_direction(fallback="")
+        keys = [str(k or "") for k in self._waveform_condition_keys()]
+        if key in (current_key, active_key) or (len(keys) == 1 and key == keys[0]):
+            return {
+                "recorded_path": getattr(self, "recorded_path", None),
+                "recorded_signal_info": dict(getattr(self, "recorded_signal_info", {}) or {}),
+            }
+        return None
+
+    def _resolve_condition_playback_path(self, condition_key: str):
+        record = self._resolve_condition_record(condition_key)
+        if not isinstance(record, dict):
+            return None
+        recorded_signal_info = record.get("recorded_signal_info", {}) or {}
+        for candidate in (record.get("recorded_path"), recorded_signal_info.get("file_path")):
+            abs_path = self._resolve_audio_path_to_abs(candidate)
+            if abs_path and os.path.isfile(abs_path):
+                return abs_path
+        return None
+
+    def on_waveform_condition_play_clicked(self, condition_key: str) -> None:
+        playback_path = self._resolve_condition_playback_path(condition_key)
+        if not playback_path:
+            QMessageBox.information(self, "提示", "当前工况暂无可播放录音")
+            return
+
+        controller = getattr(self, "_condition_playback_controller", None)
+        if controller is None:
+            controller = PlaybackController()
+            self._condition_playback_controller = controller
+
+        current_file = controller.get_current_playing_file()
+        if controller.is_audio_playing() and current_file:
+            if os.path.abspath(current_file) == os.path.abspath(playback_path):
+                controller.stop_audio_playback()
+                return
+            controller.stop_audio_playback()
+
+        code, msg = controller.start_audio_playback(playback_path)
+        if code != error_code.OK:
+            QMessageBox.warning(self, "提示", f"播放失败: {msg}")
+
+    def on_waveform_condition_mark_clicked(self, condition_key: str, label: str) -> None:
+        normalized_label = self._normalize_audio_label(label)
+        if normalized_label not in ("OK", "NG"):
+            return
+        if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
+            return
+
+        key = str(condition_key or "").strip()
+        record = self._resolve_condition_record(key)
+        previous_label = "not_labeled"
+        old_abs_path = None
+        if isinstance(record, dict):
+            recorded_signal_info = dict(record.get("recorded_signal_info", {}) or {})
+            previous_label = self._normalize_audio_label(recorded_signal_info.get("labels")) or "not_labeled"
+            recorded_path = record.get("recorded_path") or recorded_signal_info.get("file_path")
+            old_abs_path = self._resolve_audio_path_to_abs(recorded_path)
+
+            if old_abs_path and os.path.isfile(old_abs_path) and previous_label != normalized_label:
+                save_code, msg, new_path, updated_info = self._relabel_stored_audio_record(
+                    old_abs_path,
+                    recorded_signal_info,
+                    normalized_label,
+                )
+                if save_code != error_code.OK:
+                    QMessageBox.warning(self, "提示", f"标记失败: {msg}")
+                    return
+                self._condition_record_cache[key] = {
+                    "recorded_path": new_path,
+                    "recorded_signal_info": updated_info,
+                }
+                current_path = self._resolve_audio_path_to_abs(getattr(self, "recorded_path", None))
+                if current_path and os.path.abspath(current_path) == os.path.abspath(old_abs_path):
+                    self.recorded_path = new_path
+                    self.recorded_signal_info = dict(updated_info or {})
+                    try:
+                        self._update_current_recent_session_result(normalized_label)
+                    except Exception:
+                        pass
+                update_count = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
+                if callable(update_count):
+                    update_count(previous_label, normalized_label)
+                    self.count_board.set_mark_text()
+            else:
+                recorded_signal_info["labels"] = normalized_label
+                self._condition_record_cache[key] = {
+                    "recorded_path": recorded_path,
+                    "recorded_signal_info": recorded_signal_info,
+                }
+
+        channel_workspace = getattr(self, "channel_workspace", None)
+        if channel_workspace is not None:
+            if hasattr(channel_workspace, "set_condition_result"):
+                channel_workspace.set_condition_result(key, normalized_label)
+            cached = (getattr(self, "_condition_record_cache", {}) or {}).get(key, {})
+            if hasattr(channel_workspace, "set_condition_audio_path"):
+                channel_workspace.set_condition_audio_path(key, cached.get("recorded_path") or old_abs_path)
 
     @staticmethod
     def _normalize_db_audio_path(file_path: str):
@@ -147,6 +276,45 @@ class SequenceWidgetStreamingOpsMixin:
     def update_v2pa_factor(self):
         self.v2pa_factor = get_mic_v2pa_factor()
 
+    def _sync_product_test_conditions(self):
+        # Choose product test program config by current "使用配置" key or product model (if exists),
+        # otherwise fallback to built-in default_config.json.
+        config_path = None
+        try:
+            import os
+
+            base_dir = os.path.join(DEFAULT_DIR, "ui", "ui_config", "product_test_programs")
+            candidates = []
+            try:
+                key = str(self.using_file_combobox.currentText() or "").strip()
+                if key and key not in ("无配置",):
+                    candidates.append(key)
+            except Exception:
+                pass
+            try:
+                model = str(self.lineedit_type.text() or "").strip()
+                if model:
+                    candidates.append(model)
+            except Exception:
+                pass
+
+            for name in candidates:
+                p = os.path.join(base_dir, f"{name}.json").replace("\\", "/")
+                if os.path.exists(p):
+                    config_path = p
+                    break
+        except Exception:
+            config_path = None
+
+        self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
+        if getattr(self, "left_panel", None) is not None:
+            self.left_panel.set_condition_configs(self.product_test_condition_configs)
+        if getattr(self, "channel_workspace", None) is not None:
+            self.channel_workspace.set_conditions(self.product_test_condition_configs)
+            apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
+            if callable(apply_mode):
+                apply_mode()
+
     def _summarize_ok_ng(self):
         """
         Summarize DataDealStruct.analysis_result_dict into overall OK/NG.
@@ -218,8 +386,8 @@ class SequenceWidgetStreamingOpsMixin:
         self.data_struct.stimulus_info = None
 
     def _normalize_waveform_direction(self, direction: str) -> str:
-        value = str(direction or "").strip().lower()
-        return value if value in self._DIRECTION_WAVEFORM_ORDER else ""
+        value = str(direction or "").strip()
+        return value
 
     def _resolve_waveform_direction(self, fallback: str = "forward") -> str:
         override_direction = self._normalize_waveform_direction(
@@ -231,6 +399,15 @@ class SequenceWidgetStreamingOpsMixin:
         if current_direction:
             return current_direction
         return self._normalize_waveform_direction(fallback)
+
+    def _waveform_condition_keys(self):
+        if self.channel_workspace is not None and hasattr(self.channel_workspace, "condition_keys"):
+            return self.channel_workspace.condition_keys()
+        return [
+            str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or "")
+            for item in (getattr(self, "product_test_condition_configs", []) or [])
+            if isinstance(item, dict)
+        ]
 
     def _resolve_active_recording_waveform_direction(self, fallback: str = "forward") -> str:
         get_active_recording_direction = getattr(self, "_get_active_recording_direction", None)
@@ -255,21 +432,18 @@ class SequenceWidgetStreamingOpsMixin:
     def _configure_direction_waveform_workspace(self):
         if self.channel_workspace is None:
             return
-        self.channel_workspace.set_direction_titles(
-            {key: self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER}
-        )
+        self.channel_workspace.set_conditions(getattr(self, "product_test_condition_configs", []) or [])
+        apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
+        if callable(apply_mode):
+            apply_mode()
         self._refresh_direction_waveform_workspace()
 
     def _refresh_direction_waveform_workspace(self):
         if self.channel_workspace is None:
             return
-        self.channel_workspace.set_direction_titles(
-            {key: self._DIRECTION_WAVEFORM_TITLES[key] for key in self._DIRECTION_WAVEFORM_ORDER}
-        )
-        for direction in self._DIRECTION_WAVEFORM_ORDER:
+        for direction in self._waveform_condition_keys():
             waveform_entry = (getattr(self, "_direction_waveform_cache", {}) or {}).get(direction)
             if not waveform_entry:
-                self.channel_workspace.clear_direction(direction)
                 continue
             waveform, sample_rate = waveform_entry
             waveform = self._normalize_waveform_signal(waveform)
@@ -278,6 +452,12 @@ class SequenceWidgetStreamingOpsMixin:
                 continue
             time_axis = np.arange(waveform.shape[0]) / float(sample_rate or 1.0)
             self.channel_workspace.set_direction_data(direction, time_axis, waveform)
+            record = (getattr(self, "_condition_record_cache", {}) or {}).get(direction, {})
+            if record and hasattr(self.channel_workspace, "set_condition_audio_path"):
+                self.channel_workspace.set_condition_audio_path(direction, record.get("recorded_path"))
+            label = self._normalize_audio_label((record.get("recorded_signal_info", {}) or {}).get("labels"))
+            if label in ("OK", "NG") and hasattr(self.channel_workspace, "set_condition_result"):
+                self.channel_workspace.set_condition_result(direction, label)
 
     def create_waveform_layout(self):
         """
@@ -291,7 +471,12 @@ class SequenceWidgetStreamingOpsMixin:
                 QVBoxLayout: The configured layout object.
         """
         layout = QVBoxLayout()
-        self.channel_workspace = DirectionWaveformPanel(self)
+        self.channel_workspace = DirectionWaveformPanel(
+            self,
+            condition_configs=getattr(self, "product_test_condition_configs", []) or [],
+            on_play_condition=self.on_waveform_condition_play_clicked,
+            on_mark_condition=self.on_waveform_condition_mark_clicked,
+        )
         self.recent_session_panel = RecentSessionPanel(
             on_play_session=self._resolve_recent_session,
             on_view_session=self._show_recent_session_analysis_by_id,
@@ -657,6 +842,7 @@ class SequenceWidgetStreamingOpsMixin:
         if save_code == error_code.OK:
             self.recorded_path = new_file_path
             self.recorded_signal_info = updated_signal_info
+            self._cache_condition_record(self._resolve_waveform_direction(fallback=""))
             self.default_logger.info("Recorded signal successfully updated.")
         else:
             self.default_logger.error(f"Failed to update recorded signal: {msg}")
@@ -673,6 +859,12 @@ class SequenceWidgetStreamingOpsMixin:
             self._reset_statistics_for_mode(mode)
         self._last_recent_session_mode = mode
         self.recent_session_panel.set_result_editable(mode == "mark")
+        apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
+        if callable(apply_mode):
+            apply_mode(mode)
+        sync_mode_combo = getattr(self, "_sync_condition_mode_combobox_from_count_board", None)
+        if callable(sync_mode_combo):
+            sync_mode_combo()
         persist_sequence_page_state = getattr(self, "_persist_sequence_page_state", None)
         if callable(persist_sequence_page_state):
             persist_sequence_page_state(mode)
@@ -726,18 +918,24 @@ class SequenceWidgetStreamingOpsMixin:
 
     def _clear_plot_area(self) -> None:
         direction = self._resolve_waveform_direction(fallback="")
-        if direction in self._DIRECTION_WAVEFORM_ORDER:
+        if direction in self._waveform_condition_keys():
             self._direction_waveform_cache[direction] = None
+            if isinstance(getattr(self, "_condition_record_cache", None), dict):
+                self._condition_record_cache.pop(direction, None)
             self._refresh_direction_waveform_workspace()
             return
-        for key in self._DIRECTION_WAVEFORM_ORDER:
+        for key in self._waveform_condition_keys():
             self._direction_waveform_cache[key] = None
+        if isinstance(getattr(self, "_condition_record_cache", None), dict):
+            self._condition_record_cache = {}
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
 
     def clear_all_direction_waveforms(self) -> None:
-        for key in self._DIRECTION_WAVEFORM_ORDER:
+        for key in self._waveform_condition_keys():
             self._direction_waveform_cache[key] = None
+        if isinstance(getattr(self, "_condition_record_cache", None), dict):
+            self._condition_record_cache = {}
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
 
@@ -757,8 +955,12 @@ class SequenceWidgetStreamingOpsMixin:
             self._clear_plot_area()
             return
 
-        target_direction = self._normalize_waveform_direction(direction) or self._resolve_waveform_direction() or "forward"
+        keys = self._waveform_condition_keys()
+        target_direction = self._normalize_waveform_direction(direction) or self._resolve_waveform_direction("")
+        if target_direction not in keys and keys:
+            target_direction = keys[0]
         self._direction_waveform_cache[target_direction] = (waveform, float(sample_rate or 1.0))
+        self._cache_condition_record(target_direction)
         self._refresh_direction_waveform_workspace()
 
     def on_audio_chunk_received(self, chunk):

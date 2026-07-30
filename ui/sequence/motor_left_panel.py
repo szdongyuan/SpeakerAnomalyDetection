@@ -3,7 +3,6 @@ from PyQt5.QtWidgets import QFrame, QScrollArea, QSizePolicy, QVBoxLayout, QWidg
 
 from consts import ui_style_const
 from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
-from ui.sequence.motor_mode_switch_panel import MotorModeSwitchPanel
 from ui.sequence.motor_summary_panel import MotorSummaryPanel
 
 
@@ -15,10 +14,11 @@ class MotorDetectionLeftPanel(QWidget):
     dedicated sub-widgets so later business wiring can evolve independently.
     """
 
-    def __init__(self, summary_widget: QWidget, parent=None):
+    def __init__(self, summary_widget: QWidget, parent=None, condition_configs=None):
         super().__init__(parent)
-        self.mode_switch_panel = MotorModeSwitchPanel(summary_widget, self)
-        self.ai_result_panel = MotorAiResultPanel(self)
+        # Mode switch panel removed from UI (no "测试/标记" toggle buttons).
+        self.mode_switch_panel = None
+        self.ai_result_panel = MotorAiResultPanel(self, condition_configs=condition_configs)
         self.summary_panel = MotorSummaryPanel(summary_widget, self.mode_switch_panel, self)
         self._init_ui()
 
@@ -102,3 +102,12 @@ class MotorDetectionLeftPanel(QWidget):
 
     def set_reverse_scores(self, ok_score=None, ng_score=None):
         self.ai_result_panel.set_reverse_scores(ok_score, ng_score)
+
+    def set_condition_result(self, condition, result_text: str, tone: str = None):
+        return self.ai_result_panel.set_condition_result(condition, result_text, tone=tone)
+
+    def set_condition_scores(self, condition, ok_score=None, ng_score=None):
+        return self.ai_result_panel.set_condition_scores(condition, ok_score, ng_score)
+
+    def set_condition_configs(self, condition_configs):
+        self.ai_result_panel.set_condition_configs(condition_configs)

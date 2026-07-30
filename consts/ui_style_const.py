@@ -831,9 +831,9 @@ recent_session_card_title_style = _style("""
                 background-color: $COLOR_PRIMARY;
                 color: white;
                 font-family: $UI_FONT_FAMILY;
-                font-size: 17px;
+                font-size: 18px;
                 font-weight: bold;
-                padding: 4px 10px;
+                padding: 7px 10px;
                 border-top-left-radius: 4px;
                 border-top-right-radius: 4px;
             }
@@ -906,6 +906,15 @@ waveform_frame_style = _style("""
 waveform_title_bar_style = _style("""
             QWidget {
                 background-color: $COLOR_PRIMARY;
+                border: none;
+            }
+            QWidget#directionWaveformHeader {
+                border-top-left-radius: 2px;
+                border-top-right-radius: 2px;
+            }
+            QWidget#directionWaveformBody {
+                background-color: #FFFFFF;
+                border: none;
             }
             QLabel {
                 color: white;
@@ -922,6 +931,67 @@ waveform_title_label_style = _style("""
                 font-family: $UI_FONT_FAMILY;
                 font-weight: 600;
                 padding-left: 8px;
+            }
+""")
+
+waveform_action_button_style = _style("""
+            QPushButton {
+                min-width: 34px;
+                min-height: 20px;
+                border: 1px solid $COLOR_BORDER_STRONG;
+                border-radius: 3px;
+                background-color: #F8FBFF;
+                color: $COLOR_PRIMARY_HOVER;
+                font-family: $UI_FONT_FAMILY;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 1px 6px;
+            }
+            QPushButton:hover {
+                background-color: #EAF2FC;
+                border-color: $COLOR_PRIMARY;
+            }
+            QPushButton:pressed {
+                background-color: #DDE9F8;
+            }
+            QPushButton#conditionOkButton {
+                color: #166534;
+                border-color: $COLOR_OK;
+                background-color: #E8F7EE;
+            }
+            QPushButton#conditionNgButton {
+                color: #991B1B;
+                border-color: $COLOR_NG;
+                background-color: #FCE8E8;
+            }
+""")
+
+waveform_mark_button_style = _style("""
+            QPushButton {
+                border: 1px solid $COLOR_BORDER_STRONG;
+                border-radius: 4px;
+                background-color: #F8FBFF;
+                color: $COLOR_PRIMARY_HOVER;
+                font-family: $UI_FONT_FAMILY;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: #EAF2FC;
+                border-color: $COLOR_PRIMARY;
+            }
+            QPushButton:pressed {
+                background-color: #DDE9F8;
+            }
+            QPushButton#conditionOkButton {
+                color: #166534;
+                border-color: $COLOR_OK;
+                background-color: #E8F7EE;
+            }
+            QPushButton#conditionNgButton {
+                color: #991B1B;
+                border-color: $COLOR_NG;
+                background-color: #FCE8E8;
             }
 """)
 
