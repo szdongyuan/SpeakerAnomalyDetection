@@ -923,6 +923,10 @@ class Spl(AnalysisGraphWidget):
             self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
+        apply_plot_view_range(
+            self.analysis_plot,
+            self.analysis_config or {},
+        )
         self.result = {
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": recorded_signal.tolist(),
@@ -956,6 +960,9 @@ class Spl(AnalysisGraphWidget):
             x_label="Time (s)",
             y_label=self._get_spl_label(),
             log_x=False,
+            curve_colors=resolve_curve_colors(
+                self.analysis_config or {}
+            ),
         )
 
         # === 2. Matching: nearest neighbor + time threshold filter (SPL specific) ===
@@ -993,8 +1000,15 @@ class Spl(AnalysisGraphWidget):
 
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(signal_duration, signal_spl, pen=mkPen(color=(51, 196, 77), width=2))
-        self.analysis_plot.setLabel("left", "SPL (dB)")
+        main_color = resolve_curve_colors(
+            self.analysis_config or {}
+        )["main_curve_color"]
+        self.analysis_plot.plot(
+            signal_duration,
+            signal_spl,
+            pen=mkPen(color=main_color, width=2),
+        )
+        self.analysis_plot.setLabel("left", self._get_spl_label())
         self.analysis_plot.setLabel("bottom", "Time (s)")
         self.analysis_plot.showGrid(x=True, y=True)
 
@@ -1122,6 +1136,10 @@ class SplFrequency(AnalysisGraphWidget):
         else:
             self.plot_spl_frequency(frequency_list, spl_db)
 
+        apply_plot_view_range(
+            self.analysis_plot,
+            self.analysis_config or {},
+        )
         self.result = {
             "frequency_list": frequency_list.tolist(),
             "spl_db": spl_db.tolist(),
@@ -1164,6 +1182,9 @@ class SplFrequency(AnalysisGraphWidget):
             x_label="Frequency (Hz)",
             y_label="SPL (dB)",
             log_x=True,
+            curve_colors=resolve_curve_colors(
+                self.analysis_config or {}
+            ),
         )
 
         # === 3. Limit check using LimitPlotUtils ===
@@ -1186,7 +1207,14 @@ class SplFrequency(AnalysisGraphWidget):
 
     def plot_spl_frequency(self, frequency_list, spl_db):
         self.analysis_plot.clear()
-        self.analysis_plot.plot(frequency_list, spl_db, pen=mkPen(color=(51, 196, 77), width=2))
+        main_color = resolve_curve_colors(
+            self.analysis_config or {}
+        )["main_curve_color"]
+        self.analysis_plot.plot(
+            frequency_list,
+            spl_db,
+            pen=mkPen(color=main_color, width=2),
+        )
         self.analysis_plot.setLabel("left", "SPL (dB)")
         self.analysis_plot.setLabel("bottom", "Frequency (Hz)")
         self.analysis_plot.setLogMode(x=True, y=False)

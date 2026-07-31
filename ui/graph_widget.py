@@ -408,6 +408,7 @@ class LimitPlotUtils:
         curve_color: tuple = (51, 196, 77),
         curve_width: int = 2,
         curve_name: str = None,
+        curve_colors: dict = None,
     ):
         """
         Common plot setup function (used by all 4 functions).
@@ -427,16 +428,44 @@ class LimitPlotUtils:
             curve_color: Main curve color, default green (51, 196, 77)
             curve_width: Main curve width
             curve_name: Main curve name (optional, THD uses "THD")
+            curve_colors: Optional main/upper/lower curve color mapping
         """
         plot_widget.clear()
+        configured_colors = curve_colors or {}
+        main_curve_color = configured_colors.get(
+            "main_curve_color",
+            curve_color,
+        )
+        upper_limit_color = configured_colors.get(
+            "upper_limit_color",
+            (128, 0, 128),
+        )
+        lower_limit_color = configured_colors.get(
+            "lower_limit_color",
+            (128, 0, 128),
+        )
 
         # 1. Draw main curve (supports name parameter for legend)
-        plot_widget.plot(data_x, data_y, pen=mkPen(color=curve_color, width=curve_width), name=curve_name)
+        plot_widget.plot(
+            data_x,
+            data_y,
+            pen=mkPen(color=main_curve_color, width=curve_width),
+            name=curve_name,
+        )
 
-        # 2. Draw limit curves (purple dashed)
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
-        plot_widget.plot(csv_x, csv_upper, pen=dashed_pen)
-        plot_widget.plot(csv_x, csv_lower, pen=dashed_pen)
+        # 2. Draw limit curves
+        upper_pen = mkPen(
+            color=upper_limit_color,
+            width=2,
+            style=Qt.DashLine,
+        )
+        lower_pen = mkPen(
+            color=lower_limit_color,
+            width=2,
+            style=Qt.DashLine,
+        )
+        plot_widget.plot(csv_x, csv_upper, pen=upper_pen)
+        plot_widget.plot(csv_x, csv_lower, pen=lower_pen)
 
         # 3. Set axis labels
         plot_widget.setLabel("left", y_label)
