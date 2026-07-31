@@ -110,6 +110,11 @@ class RecordConfigWindow(BaseConfigWindow):
         label_monitor = QLabel("实时监听播放:")
         self.monitor_checkbox = QCheckBox("启用")
         self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
+        label_streaming_recording = QLabel("流式录制:")
+        self.streaming_recording_checkbox = QCheckBox("启用")
+        self.streaming_recording_checkbox.setChecked(
+            bool(self.input_data.get("use_streaming_recording", False))
+        )
         label_monitor_gain = QLabel("监听增益:")
         self.monitor_gain_db_input = QDoubleSpinBox()
         self.monitor_gain_db_input.setRange(-60.0, 50.0)
@@ -141,6 +146,8 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.monitor_checkbox, 3, 1)
         grid_layout.addWidget(label_monitor_gain, 4, 0)
         grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
+        grid_layout.addWidget(label_streaming_recording, 5, 0)
+        grid_layout.addWidget(self.streaming_recording_checkbox, 5, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -151,6 +158,7 @@ class RecordConfigWindow(BaseConfigWindow):
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
+            "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
         }
         self.accept()
 
