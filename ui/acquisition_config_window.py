@@ -2,15 +2,15 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QGridLayout
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
 from base.sound_device_manager import SoundDeviceManager
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 
-class BaseConfigWindow(QDialog):
+class BaseConfigWindow(ConfigDialogBase):
     def __init__(self, mic=None):
         super().__init__()
         self.final_data = None
@@ -28,16 +28,7 @@ class BaseConfigWindow(QDialog):
         self.resize(350, 350)
         self.main_layout = QVBoxLayout(self)
 
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcheckbox_style
-        )
+        self.apply_config_dialog_theme()
 
     def create_cancel_ok_buttons(self):
         btn_layout = QHBoxLayout()

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from functools import partial
+from string import Template
 from typing import Any, Callable
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
-    QDialog,
     QHBoxLayout,
     QLayout,
     QScrollArea,
@@ -26,13 +26,16 @@ from consts.acoustic_analysis.common_consts import (
     LIMIT_VALUE_SEMANTICS_BOUNDS,
     LIMIT_VALUE_SEMANTICS_OFFSET,
 )
+from consts import ui_style_const
 from consts.acoustic_analysis.curve_style_consts import PLOT_VIEW_DIALOG_WIDTH
+from consts.running_consts import DEFAULT_DIR
 from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_KEY,
     HARMONIC_DETECTION_METHOD_LABELS,
     normalize_harmonic_detection_method,
 )
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.config_dialog_base import ConfigDialogBase
 from ui.custom_ui_widget.widgets import (
     CheckBox,
     ComboBox,
@@ -80,14 +83,14 @@ VERTICAL_GOLDEN_DIALOG_WIDTH = 630
 VERTICAL_GOLDEN_DIALOG_HEIGHT = 840
 
 
-class AnalysisConfigDialogBase(QDialog):
+class AnalysisConfigDialogBase(ConfigDialogBase):
     """Base dialog helpers for analysis configuration windows."""
 
     DEFAULT_DIALOG_WIDTH = VERTICAL_GOLDEN_DIALOG_WIDTH
     DEFAULT_DIALOG_HEIGHT = VERTICAL_GOLDEN_DIALOG_HEIGHT
 
-    def __init__(self, *args, disable_close_button: bool = False, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, parent=None, disable_close_button: bool = False):
+        super().__init__(parent)
         self.apply_standard_window_flags(disable_close_button=disable_close_button)
 
     def apply_standard_window_flags(self, disable_close_button: bool = True) -> None:
@@ -126,12 +129,14 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
 
     def __init__(
         self,
-        *args,
+        parent=None,
         nav_width: int = 150,
         disable_close_button: bool = True,
-        **kwargs,
     ):
-        super().__init__(*args, disable_close_button=disable_close_button, **kwargs)
+        super().__init__(
+            parent=parent,
+            disable_close_button=disable_close_button,
+        )
         self._semantic_nav_buttons: dict[str, PushButton] = {}
         self._semantic_sections: dict[str, QWidget] = {}
         self._semantic_section_contents: dict[str, QWidget] = {}
@@ -146,7 +151,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self.curve_color_widget = None
         self.plot_view_config_widget = None
         self.setObjectName("semanticAnalysisConfigDialog")
-        self.setStyleSheet(self._semantic_dialog_stylesheet())
+        self.apply_config_dialog_theme(self._semantic_dialog_stylesheet())
 
         self._root_layout = QVBoxLayout(self)
         self._root_layout.setContentsMargins(12, 12, 12, 12)
@@ -195,17 +200,17 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self.apply_vertical_golden_dialog_size(width, height)
 
     def _semantic_dialog_stylesheet(self) -> str:
-        return """
+        return Template("""
         QDialog#semanticAnalysisConfigDialog {
-            background: #f5f7fa;
+            background: $PAGE_BG;
         }
         QWidget#semanticNav {
-            background: #f2f5f9;
-            border: 1px solid #d9e0ea;
+            background: $PANEL_BG;
+            border: 1px solid $BORDER;
             border-radius: 8px;
         }
         Label#semanticNavTitle {
-            color: #667085;
+            color: $TEXT_MUTED;
             font-size: 13px;
             font-weight: 600;
             padding: 0 4px 6px 4px;
@@ -217,80 +222,80 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
             border: 1px solid transparent;
             border-radius: 7px;
             background: transparent;
-            color: #344054;
+            color: $TEXT;
         }
         PushButton#semanticNavButton:hover {
-            background: #edf2f7;
-            border-color: #d9e0ea;
+            background: $CONTROL_HOVER;
+            border-color: $BORDER;
         }
         PushButton#semanticNavButton[active="true"] {
-            background: #e8f0ff;
-            border-color: #bad0ff;
-            color: #123d93;
+            background: $CONTROL_PRESSED;
+            border-color: $BORDER_STRONG;
+            color: $PRIMARY_HOVER;
             font-weight: 600;
         }
         QScrollArea#semanticSectionScrollArea {
-            background: #f8fafc;
-            border: 1px solid #d9e0ea;
+            background: $FIELD_BG;
+            border: 1px solid $BORDER;
             border-radius: 8px;
         }
         QWidget#semanticSectionContainer {
-            background: #f8fafc;
+            background: $FIELD_BG;
         }
         QWidget#semanticSectionCard {
-            background: #ffffff;
-            border: 1px solid #d9e0ea;
+            background: $CARD_BG;
+            border: 1px solid $BORDER;
             border-radius: 8px;
         }
         QWidget#semanticSectionHeader {
-            background: #fbfcfe;
-            border-bottom: 1px solid #d9e0ea;
+            background: $FIELD_BG;
+            border-bottom: 1px solid $BORDER;
             border-top-left-radius: 8px;
             border-top-right-radius: 8px;
         }
         Label#semanticSectionTitle {
-            color: #1f2937;
+            color: $TEXT;
             font-size: 16px;
             font-weight: 600;
         }
         Label#semanticSectionDescription {
-            color: #667085;
+            color: $TEXT_MUTED;
             font-size: 12px;
         }
         Label#semanticSectionIndicator {
-            color: #667085;
+            color: $TEXT_MUTED;
             font-size: 16px;
             font-weight: 600;
         }
         QWidget#semanticSectionContent {
-            background: #ffffff;
+            background: $CARD_BG;
             border-bottom-left-radius: 8px;
             border-bottom-right-radius: 8px;
         }
         PushButton {
             min-height: 30px;
-            border: 1px solid #b9c4d2;
+            border: 1px solid $BORDER_STRONG;
             border-radius: 6px;
-            background: #ffffff;
+            background: $CARD_BG;
             padding: 0 12px;
-            color: #344054;
+            color: $TEXT;
         }
         PushButton:hover {
-            border-color: #8fa4c0;
-            background: #f8fafc;
+            border-color: $PRIMARY;
+            background: $CONTROL_HOVER;
         }
         PushButton#semanticPrimaryButton {
-            background: #2563eb;
-            border-color: #1d4ed8;
-            color: #ffffff;
+            background: $PRIMARY;
+            border-color: $PRIMARY;
+            color: $CARD_BG;
         }
         PushButton#semanticPrimaryButton:hover {
-            background: #1d4ed8;
-            border-color: #1e40af;
+            background: $PRIMARY_HOVER;
+            border-color: $PRIMARY_HOVER;
         }
         QGroupBox {
-            background: #f8fafc;
-            border: 1px solid #d9e0ea;
+            background: $FIELD_BG;
+            border: 1px solid $BORDER;
             border-radius: 6px;
             margin-top: 12px;
             padding: 10px;
@@ -299,20 +304,60 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
             subcontrol-origin: margin;
             left: 10px;
             padding: 0 4px;
-            color: #344054;
+            color: $TEXT;
         }
-        QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
+        QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
             min-height: 28px;
-            border: 1px solid #b9c4d2;
+            border: 1px solid $BORDER_STRONG;
             border-radius: 6px;
-            background: #ffffff;
+            background: $CARD_BG;
             padding: 2px 8px;
-            color: #1f2937;
+            color: $TEXT;
+        }
+        QComboBox {
+            min-height: 28px;
+            border: 1px solid $BORDER_STRONG;
+            border-radius: 4px;
+            background: $CARD_BG;
+            padding: 2px 8px;
+            color: $TEXT;
+        }
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 18px;
+            border: none;
+            border-left: 1px solid $BORDER;
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+            background: $CARD_BG;
+        }
+        QComboBox::down-arrow {
+            image: url("$COMBO_DOWN_ARROW");
+            width: 10px;
+            height: 6px;
         }
         QComboBox:hover, QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {
-            border-color: #8fa4c0;
+            border-color: $PRIMARY;
         }
-        """
+        """).substitute(
+            PAGE_BG=ui_style_const.COLOR_PAGE_BG,
+            PANEL_BG=ui_style_const.COLOR_TOOLBAR_BG,
+            BORDER=ui_style_const.COLOR_BORDER,
+            BORDER_STRONG=ui_style_const.COLOR_BORDER_STRONG,
+            TEXT=ui_style_const.COLOR_TEXT,
+            TEXT_MUTED=ui_style_const.COLOR_TEXT_MUTED,
+            CONTROL_HOVER=ui_style_const.COLOR_CONTROL_HOVER,
+            CONTROL_PRESSED=ui_style_const.COLOR_CONTROL_PRESSED,
+            PRIMARY=ui_style_const.COLOR_PRIMARY,
+            PRIMARY_HOVER=ui_style_const.COLOR_PRIMARY_HOVER,
+            FIELD_BG=ui_style_const.COLOR_FIELD_DISABLED_BG,
+            CARD_BG=ui_style_const.COLOR_CARD_BG,
+            COMBO_DOWN_ARROW=(
+                DEFAULT_DIR
+                + "ui/ui_analysis_config/assets/combobox_down_arrow.svg"
+            ),
+        )
 
     def _create_semantic_footer_layout(self) -> QHBoxLayout:
         footer_layout = QHBoxLayout()
@@ -428,10 +473,16 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._semantic_section_collapsed[group_key] = False
         self.section_layout.insertWidget(max(self.section_layout.count() - 1, 0), section_widget)
         self._refresh_section_container_minimum_height()
+        self.refresh_semantic_theme()
+        QTimer.singleShot(0, self.refresh_semantic_theme)
 
         if self._active_semantic_group_key is None:
             self._set_active_semantic_group(group_key)
         return content_layout
+
+    def refresh_semantic_theme(self) -> None:
+        """Repolish semantic children after their object names are assigned."""
+        self.apply_config_dialog_theme(self._semantic_dialog_stylesheet())
 
     def _refresh_section_container_minimum_height(self) -> None:
         for content in self._semantic_section_contents.values():

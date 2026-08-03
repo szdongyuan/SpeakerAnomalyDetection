@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from consts import ui_style_const
 from consts.acoustic_analysis.curve_style_consts import (
     CURVE_COLOR_FIELDS,
     LOWER_LIMIT_COLOR,
@@ -22,6 +23,7 @@ from consts.acoustic_analysis.curve_style_consts import (
     PRESET_CURVE_COLORS,
     UPPER_LIMIT_COLOR,
 )
+from ui.config_dialog_base import ConfigDialogBase
 from ui.curve_style import (
     build_curve_color_config,
     normalize_curve_color,
@@ -30,7 +32,7 @@ from ui.curve_style import (
 from ui.custom_ui_widget.widgets import Label, PushButton
 
 
-class PresetColorDialog(QDialog):
+class PresetColorDialog(ConfigDialogBase):
     """Small preset-only palette dialog."""
 
     def __init__(self, current_color, parent=None):
@@ -85,7 +87,11 @@ class PresetColorDialog(QDialog):
 
     @staticmethod
     def _color_button_stylesheet(color, is_selected):
-        border = "4px solid #FFD400" if is_selected else "1px solid #667085"
+        border = (
+            "4px solid #FFD400"
+            if is_selected
+            else f"1px solid {ui_style_const.COLOR_TEXT_MUTED}"
+        )
         text_color = PresetColorDialog._checkmark_color(color)
         return (
             f"background-color: {color}; border: {border}; border-radius: 6px; "
@@ -98,7 +104,11 @@ class PresetColorDialog(QDialog):
         green = int(color[3:5], 16)
         blue = int(color[5:7], 16)
         luminance = red * 0.299 + green * 0.587 + blue * 0.114
-        return "#111827" if luminance > 150 else "#FFFFFF"
+        return (
+            ui_style_const.COLOR_TEXT
+            if luminance > 150
+            else ui_style_const.COLOR_CARD_BG
+        )
 
     def _select_color(self, color):
         previous_color = self.selected_color
@@ -128,8 +138,8 @@ class CurveColorPreviewWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         canvas = self.rect().adjusted(1, 1, -1, -1)
-        painter.fillRect(canvas, QColor("#FFFFFF"))
-        painter.setPen(QPen(QColor("#D9E0EA"), 1))
+        painter.fillRect(canvas, QColor(ui_style_const.COLOR_CARD_BG))
+        painter.setPen(QPen(QColor(ui_style_const.COLOR_BORDER), 1))
         painter.drawRoundedRect(canvas, 6, 6)
         self._draw_limit_lines(painter, canvas)
         self._draw_main_curve(painter, canvas)
@@ -189,7 +199,10 @@ class CurveColorConfigWidget(QWidget):
         button.setCheckable(True)
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         button.setCursor(Qt.PointingHandCursor)
-        button.setStyleSheet("color: #344054; font-size: 16px; font-weight: 600; border: none;")
+        button.setStyleSheet(
+            f"color: {ui_style_const.COLOR_TEXT}; "
+            "font-size: 16px; font-weight: 600; border: none;"
+        )
         button.toggled.connect(self.set_expanded)
         return button
 
@@ -225,10 +238,16 @@ class CurveColorConfigWidget(QWidget):
         label = Label(text, self)
         if preview:
             label.setObjectName("curveColorPreviewLabel")
-            label.setStyleSheet("color: #344054; font-size: 15px; font-weight: 500;")
+            label.setStyleSheet(
+                f"color: {ui_style_const.COLOR_TEXT}; "
+                "font-size: 15px; font-weight: 500;"
+            )
         else:
             label.setObjectName("curveColorFieldLabel")
-            label.setStyleSheet("color: #344054; font-size: 15px; font-weight: 400;")
+            label.setStyleSheet(
+                f"color: {ui_style_const.COLOR_TEXT}; "
+                "font-size: 15px; font-weight: 400;"
+            )
         return label
 
     def _create_color_row(self, key, label):
@@ -269,14 +288,14 @@ class CurveColorConfigWidget(QWidget):
             f"""
             QPushButton {{
                 background-color: {color};
-                border: 1px solid #667085;
+                border: 1px solid {ui_style_const.COLOR_TEXT_MUTED};
                 border-radius: 5px;
             }}
             QPushButton:hover {{
-                border: 2px solid #2563EB;
+                border: 2px solid {ui_style_const.COLOR_PRIMARY};
             }}
             QPushButton:pressed {{
-                border: 2px solid #1D4ED8;
+                border: 2px solid {ui_style_const.COLOR_PRIMARY_HOVER};
             }}
             """
         )

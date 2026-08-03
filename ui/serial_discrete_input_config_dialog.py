@@ -3,7 +3,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -13,8 +12,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 try:
     from serial.tools import list_ports
@@ -22,7 +21,7 @@ except Exception:  # pragma: no cover - optional until pyserial is installed
     list_ports = None
 
 
-class SerialDiscreteInputConfigDialog(QDialog):
+class SerialDiscreteInputConfigDialog(ConfigDialogBase):
     COMMON_BAUDRATES = ["1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"]
     NO_PORTS_TEXT = "未检测到可用串口"
 
@@ -90,15 +89,7 @@ class SerialDiscreteInputConfigDialog(QDialog):
         layout.addLayout(self._create_btn_layout())
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qdialog_style
-        )
+        self.apply_config_dialog_theme()
 
     def _set_member_connect(self):
         self.cancel_btn.clicked.connect(self.close)

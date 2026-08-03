@@ -167,6 +167,10 @@ def test_config_selector_font_is_not_overridden_by_parent_style(tmp_path):
     assert dialog.config_combobox.font().pixelSize() == 20
     assert dialog.config_combobox.lineEdit().font().family() == "SimSun"
     assert dialog.config_combobox.lineEdit().font().pixelSize() == 20
+    assert (
+        dialog.save_btn.palette().button().color().name()
+        == ui_style_const.COLOR_PRIMARY.lower()
+    )
     dialog.close()
 
 

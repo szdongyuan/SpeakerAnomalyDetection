@@ -5,7 +5,7 @@ import sys
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QStandardItemModel, QIcon
-from PyQt5.QtWidgets import QApplication, QFileDialog, QDialog, QGroupBox, QLabel, QLineEdit, QMessageBox
+from PyQt5.QtWidgets import QApplication, QFileDialog, QGroupBox, QLabel, QLineEdit, QMessageBox
 from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QHBoxLayout, QComboBox, QSizePolicy
 
 from base.file_ops import FileOps
@@ -14,6 +14,7 @@ from base.log_manager import LogManager
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from machine_learning.model_builder import build_and_save_model_from_config
+from ui.config_dialog_base import ConfigDialogBase
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
@@ -348,7 +349,7 @@ class ModelInfoList(DataManageDialog):
             QMessageBox.warning(self, "警告", "模型文件不存在: %s" % model_path)
 
 
-class SetModelConfig(QDialog):
+class SetModelConfig(ConfigDialogBase):
     def __init__(self, model_info: list, model_name: str = None, dim: dict = None, is_new_model: bool = False):
         super().__init__()
         self.config = {
@@ -411,13 +412,7 @@ class SetModelConfig(QDialog):
 
         layout.addLayout(btn_layout)
         self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
-        )
+        self.apply_config_dialog_theme()
 
     def check_model_name(self, model_name: str):
         input_str = model_name

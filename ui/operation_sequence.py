@@ -23,6 +23,7 @@ from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 from ui.acquisition_config_window import (
     RecordConfigWindow,
     ImportAudioConfigWindow,
@@ -53,7 +54,7 @@ SUPPORTED_ANALYSIS_ITEMS = [
 SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "RSC", "AI", "LP", "FBA", "FFT", "Excel"}
 
 
-class AnalysisModelSelect(QDialog):
+class AnalysisModelSelect(ConfigDialogBase):
 
     def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None):
         super().__init__()
@@ -177,14 +178,7 @@ class AnalysisModelSelect(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qlistview_style
-            + ui_style_const.qtreeview_style
-        )
+        self.apply_config_dialog_theme()
         self._update_current_config_label()
         self.resize(740, 540)
 
