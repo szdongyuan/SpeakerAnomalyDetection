@@ -37,6 +37,7 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
             "SPL": {
                 "analysis_channel": 1,
                 "weighting": "A",
+                "show_overall_spl": True,
                 "smooth_checked": True,
                 "limit_checked": False,
                 "limit_data": None,
@@ -58,6 +59,12 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert dialog.channel_selector.current_channel() == 1
     assert dialog.threshold_widget.allow_manual_limits is False
     assert dialog.curve_color_widget is not None
+    assert dialog.show_overall_spl_box.text() == "显示总体声压级"
+    assert dialog.show_overall_spl_box.isChecked() is True
+    compute_layout = dialog.smooth_checkbox.parentWidget().layout()
+    assert compute_layout.indexOf(dialog.show_overall_spl_box) == (
+        compute_layout.indexOf(dialog.smooth_checkbox) + 1
+    )
 
     plot_view = dialog.plot_view_config_widget
     plot_view.x_enabled_checkbox.setChecked(True)
@@ -67,6 +74,7 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
 
     assert config["analysis_channel"] == 1
     assert config["weighting"] == "A"
+    assert config["show_overall_spl"] is True
     assert config["smooth_checked"] is True
     assert config["limit_checked"] is False
     assert "limit_mode" not in config
@@ -103,10 +111,12 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
         "display",
         "judgment",
     ]
+    assert dialog.show_overall_spl_box is None
     config = dialog.get_default_config()
     assert config["splf_calc_mode"] == "total"
     assert config["octave_smoothing"] == 3
     assert config["golden_sample_checked"] is True
+    assert "show_overall_spl" not in config
     dialog.close()
 
 

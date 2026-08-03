@@ -73,6 +73,21 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         )
         compute_layout.addWidget(self.weighting_selector)
 
+        self.show_overall_spl_box = None
+        if self.model_type != "SPLF":
+            self.show_overall_spl_box = CheckBox(
+                "显示总体声压级",
+                self,
+            )
+            self.show_overall_spl_box.setChecked(
+                bool(
+                    self.load_config.get(
+                        "show_overall_spl",
+                        False,
+                    )
+                )
+            )
+
         self.smooth_checkbox = None
         self.splf_mode_group = None
         self.smoothing_selector = None
@@ -114,6 +129,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
                 bool(self.load_config.get("smooth_checked", False))
             )
             compute_layout.addWidget(self.smooth_checkbox)
+            compute_layout.addWidget(self.show_overall_spl_box)
 
         self.add_semantic_section("compute", widget=compute_widget)
 
@@ -159,6 +175,9 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             config.update(self.golden_sample_widget.get_config())
         else:
             config["smooth_checked"] = self.smooth_checkbox.isChecked()
+            config["show_overall_spl"] = (
+                self.show_overall_spl_box.isChecked()
+            )
 
         config.update(self.weighting_selector.get_config())
         config.update(self.threshold_widget.get_config())

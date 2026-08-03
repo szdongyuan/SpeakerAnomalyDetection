@@ -36,6 +36,10 @@ def config_file_name(config_name):
     return normalize_config_name(config_name) + ".json"
 
 
+def normalize_trigger_state(value):
+    return " ".join(str(value or "").strip().upper().split())
+
+
 class ProductTestProgramValidator(object):
     @staticmethod
     def validate_for_save(program_data, registry, current_file):
@@ -73,7 +77,9 @@ class ProductTestProgramValidator(object):
             else:
                 condition_names.add(condition_name)
 
-            trigger_state = str(sub_config.get("trigger_state", "") or "").strip()
+            trigger_state = normalize_trigger_state(
+                sub_config.get("trigger_state", "")
+            )
             if trigger_state:
                 if trigger_state in trigger_states:
                     errors.append(f"触发状态重复：{trigger_state}")
@@ -101,7 +107,9 @@ class ProductTestProgramValidator(object):
 
         for index, sub_config in enumerate(sub_configs, 1):
             condition_name = str(sub_config.get("condition_name", "") or "").strip()
-            trigger_state = str(sub_config.get("trigger_state", "") or "").strip()
+            trigger_state = normalize_trigger_state(
+                sub_config.get("trigger_state", "")
+            )
             test_queue = str(sub_config.get("test_queue", "") or "").strip()
             row_name = condition_name or f"第 {index} 个子配置"
 
@@ -203,17 +211,17 @@ class ProductTestProgramConfigManager(object):
         if current_file and not self._is_safe_file_name(current_file):
             return False, "产品测试程序文件名不合法"
 
-        normalized_program = self._normalize_program(program_data)
-        target_file = config_file_name(normalized_program["name"])
         registry = self.load_registry()
         errors = ProductTestProgramValidator.validate_for_save(
-            normalized_program,
+            program_data,
             registry,
             current_file,
         )
         if errors:
             return False, "\n".join(errors)
 
+        normalized_program = self._normalize_program(program_data)
+        target_file = config_file_name(normalized_program["name"])
         current_path = (
             os.path.join(self.program_dir, current_file)
             if current_file
@@ -226,23 +234,10 @@ class ProductTestProgramConfigManager(object):
         if not LoadUiConfig.save_data_to_json(normalized_program, target_path):
             return False, "产品测试程序保存失败"
 
-        if (
-            current_path
-            and current_path != target_path
-            and os.path.isfile(current_path)
-        ):
-            try:
-                os.remove(current_path)
-            except OSError as error:
-                try:
-                    os.remove(target_path)
-                except OSError as cleanup_error:
-                    return False, (
-                        "产品测试程序文件重命名失败，且新文件无法清理："
-                        f"{cleanup_error}"
-                    )
-                return False, f"产品测试程序文件重命名失败：{error}"
-
+        original_registry = {
+            "active_file": registry.get("active_file"),
+            "configs": [dict(item) for item in registry.get("configs", [])],
+        }
         self._replace_registry_entry(
             registry,
             current_file,
@@ -251,11 +246,43 @@ class ProductTestProgramConfigManager(object):
         )
         registry["active_file"] = target_file
         if not self.save_registry(registry):
+            if current_path and current_path != target_path:
+                try:
+                    os.remove(target_path)
+                except OSError as cleanup_error:
+                    return False, (
+                        "产品测试程序注册表更新失败，且新文件无法清理："
+                        f"{cleanup_error}"
+                    )
             return False, "产品测试程序已保存，但注册表更新失败"
+
+        if (
+            current_path
+            and current_path != target_path
+            and os.path.isfile(current_path)
+        ):
+            try:
+                os.remove(current_path)
+            except OSError as error:
+                if not self.save_registry(original_registry):
+                    return False, (
+                        "产品测试程序文件重命名失败，且注册表无法恢复："
+                        f"{error}"
+                    )
+                try:
+                    os.remove(target_path)
+                except OSError as cleanup_error:
+                    return False, (
+                        "产品测试程序文件重命名失败，且新文件无法清理："
+                        f"{cleanup_error}"
+                    )
+                return False, f"产品测试程序文件重命名失败：{error}"
         return True, target_file
 
     def save_as(self, program_data, new_name):
-        copied_program = self._normalize_program(program_data)
+        if not isinstance(program_data, dict):
+            return False, "产品测试程序必须是 JSON 对象"
+        copied_program = dict(program_data)
         copied_program["name"] = normalize_config_name(new_name)
         return self.save_program(None, copied_program)
 
@@ -283,11 +310,36 @@ class ProductTestProgramConfigManager(object):
                     queue_catalog,
                 )
             )
+        use_warnings = []
+        if not save_errors:
+            for index, sub_config in enumerate(
+                program_data.get("sub_configs", []),
+                1,
+            ):
+                condition_name = str(
+                    sub_config.get("condition_name", "") or ""
+                ).strip()
+                test_queue = str(
+                    sub_config.get("test_queue", "") or ""
+                ).strip()
+                queue_info = queue_catalog.get(test_queue)
+                if (
+                    queue_info
+                    and queue_info.get("available", False)
+                    and not queue_info.get("can_auto_judge", False)
+                ):
+                    row_name = condition_name or f"第 {index} 个子配置"
+                    reason = queue_info.get("judgment_reason", "")
+                    use_warnings.append(
+                        f"{row_name} 的测试队列不能自动输出 OK/NG："
+                        f"{test_queue}（{reason}）"
+                    )
         return {
             "can_save": not save_errors,
             "is_usable": not use_errors,
             "save_errors": save_errors,
             "use_errors": use_errors,
+            "use_warnings": use_warnings,
         }
 
     def load_queue_catalog(self):
@@ -341,7 +393,9 @@ class ProductTestProgramConfigManager(object):
             normalized_sub_configs.append(
                 {
                     "condition_name": str(sub_config.get("condition_name", "") or "").strip(),
-                    "trigger_state": str(sub_config.get("trigger_state", "") or "").strip(),
+                    "trigger_state": normalize_trigger_state(
+                        sub_config.get("trigger_state", "")
+                    ),
                     "test_queue": str(sub_config.get("test_queue", "") or "").strip(),
                 }
             )
@@ -369,6 +423,8 @@ class ProductTestProgramConfigManager(object):
             "duration": None,
             "analysis_items": [],
             "reason": "",
+            "can_auto_judge": False,
+            "judgment_reason": "",
         }
         load_code, queue_data = LoadUiConfig.load_data_from_json(file_path)
         if load_code != error_code.OK or not isinstance(queue_data, list) or not queue_data:
@@ -404,14 +460,14 @@ class ProductTestProgramConfigManager(object):
             if not isinstance(analysis_list.get(item_name), dict):
                 info["reason"] = f"分析项不存在：{item_name}"
                 return info
-        if not ProductTestProgramConfigManager._has_rule_judgment(
+        info["available"] = True
+        if ProductTestProgramConfigManager._has_rule_judgment(
             analysis_list,
             display_sequence,
         ):
-            info["reason"] = "未配置可输出 OK/NG 的规则阈值"
-            return info
-
-        info["available"] = True
+            info["can_auto_judge"] = True
+        else:
+            info["judgment_reason"] = "未配置可输出 OK/NG 的规则阈值"
         return info
 
     @staticmethod

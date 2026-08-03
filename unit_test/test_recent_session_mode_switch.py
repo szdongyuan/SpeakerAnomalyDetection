@@ -214,6 +214,5 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
         self.assertEqual(widget.recent_session_panel.reset_count, 1)
         self.assertEqual(widget.recent_session_panel.conditions, condition_configs)
 
-
 if __name__ == "__main__":
     unittest.main()
