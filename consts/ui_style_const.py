@@ -2,8 +2,11 @@ from string import Template
 
 from PyQt5.QtWidgets import QApplication
 
+from consts.running_consts import DEFAULT_DIR
+
 
 UI_FONT_FAMILY = "'SimSun'"
+COMBO_DOWN_ARROW_ICON = DEFAULT_DIR + "ui/ui_pic/select_analysis_model/down.svg"
 
 _BASE_SCREEN_HEIGHT = 1080
 _MIN_FONT_SCALE = 0.70
@@ -719,11 +722,19 @@ toolbar_combobox_style = _style("""
                 border-radius: 4px;
                 font-family: $UI_FONT_FAMILY;
                 font-size: 18px;
-                padding: 3px 8px;
+                padding: 3px 30px 3px 8px;
             }
             QComboBox::drop-down {
                 border-left: 1px solid $COLOR_BORDER;
                 width: 24px;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                background: transparent;
+            }
+            QComboBox::down-arrow {
+                image: url($COMBO_DOWN_ARROW_ICON);
+                width: 10px;
+                height: 10px;
             }
             QComboBox QAbstractItemView {
                 background-color: #FFFFFF;

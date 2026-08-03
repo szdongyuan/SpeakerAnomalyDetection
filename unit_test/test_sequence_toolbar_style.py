@@ -48,6 +48,24 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         self.assertEqual(toolbar.condition_mode_combobox.itemText(1), "标记")
         self.assertIn(ui_style_const.COLOR_BORDER_STRONG, toolbar.condition_mode_combobox.styleSheet())
 
+    def test_toolbar_comboboxes_show_dropdown_arrow(self):
+        toolbar = SequenceToolsBar()
+
+        self.assertIn("QComboBox::down-arrow", toolbar.using_file_combobox.styleSheet())
+        self.assertIn("QComboBox::down-arrow", toolbar.condition_mode_combobox.styleSheet())
+        self.assertIn(ui_style_const.COMBO_DOWN_ARROW_ICON, toolbar.using_file_combobox.styleSheet())
+
+    def test_using_config_combobox_refreshes_before_popup(self):
+        toolbar = SequenceToolsBar()
+        calls = []
+        toolbar.using_file_combobox.before_show_popup = lambda: calls.append("refresh")
+
+        toolbar.using_file_combobox.showPopup()
+        self.app.processEvents()
+        toolbar.using_file_combobox.hidePopup()
+
+        self.assertEqual(calls, ["refresh"])
+
     def test_serial_status_badge_updates_style_with_connection_state(self):
         widget = _DummySerialStatusWidget()
 

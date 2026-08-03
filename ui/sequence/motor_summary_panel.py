@@ -18,7 +18,7 @@ class MotorSummaryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        card = MotorSectionCard("操作面板")
+        card = MotorSectionCard("信息汇总")
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         card.content_layout.setContentsMargins(0, 0, 0, 0)
         card.content_layout.setSpacing(0)
@@ -37,7 +37,6 @@ class MotorSummaryPanel(QWidget):
             content_layout.addWidget(self._create_divider())
 
         if self.summary_widget is not None:
-            content_layout.addWidget(self._create_caption("汇总信息"))
             if hasattr(self.summary_widget, "set_mode_switch_visible"):
                 self.summary_widget.set_mode_switch_visible(False)
             self.summary_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)

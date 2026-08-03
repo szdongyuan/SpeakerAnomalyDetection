@@ -69,7 +69,7 @@ class SequenceWindow(
 
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
-        self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs()
+        self.product_test_condition_configs = self.load_active_product_test_condition_configs()
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
             condition_configs=self.product_test_condition_configs,

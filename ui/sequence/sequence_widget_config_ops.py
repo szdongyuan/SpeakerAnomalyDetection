@@ -6,10 +6,49 @@ from PyQt5.QtCore import QEvent, QSignalBlocker
 from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
 from base.load_config import LoadUiConfig
+from base.product_test_program_config import ProductTestProgramConfigManager
 from consts import error_code
 
 
 class SequenceWidgetConfigOpsMixin:
+
+    def _is_sequence_config_path(self, path) -> bool:
+        if not path or not isinstance(path, (str, bytes, os.PathLike)):
+            return False
+        load_code, data = LoadUiConfig.load_data_from_json(path)
+        if load_code != error_code.OK or not isinstance(data, list) or not data:
+            return False
+        first = data[0]
+        return isinstance(first, dict) and isinstance(first.get("seq1"), dict)
+
+    def _get_product_program_manager(self):
+        manager = getattr(self, "product_program_manager", None)
+        if manager is None:
+            manager = ProductTestProgramConfigManager()
+            self.product_program_manager = manager
+        return manager
+
+    def _get_product_program_registry(self):
+        manager = self._get_product_program_manager()
+        registry = manager.load_registry()
+        self.product_program_registry = registry
+        self.active_product_program_file = registry.get("active_file")
+        return registry
+
+    def _get_active_product_program_path(self):
+        manager = self._get_product_program_manager()
+        active_file = str(getattr(self, "active_product_program_file", "") or "").strip()
+        if not active_file:
+            active_file = str((manager.load_registry() or {}).get("active_file") or "").strip()
+            self.active_product_program_file = active_file
+        if not active_file:
+            return None
+        return os.path.join(manager.program_dir, active_file)
+
+    def load_active_product_test_condition_configs(self):
+        return LoadUiConfig.load_product_test_program_condition_configs(
+            self._get_active_product_program_path()
+        )
 
     def eventFilter(self, obj, event):
         """
@@ -238,8 +277,13 @@ class SequenceWidgetConfigOpsMixin:
         # IMPORTANT: Do not auto-add "默认配置" into registry.
         # The combobox should either never show it, or always show it if it already exists in registry.
         user_keys = [k for k in (registry or {}).keys() if k not in ("using_config_path", "默认配置")]
+        user_keys = [k for k in user_keys if self._is_sequence_config_path(registry.get(k))]
         using_config_path = registry.get("using_config_path", None)
         default_path = registry.get("默认配置")
+        if not self._is_sequence_config_path(using_config_path):
+            using_config_path = None
+        if not self._is_sequence_config_path(default_path):
+            default_path = None
         # Fallback when using_config_path missing or points to a non-existent file.
         if (not using_config_path) or (isinstance(using_config_path, str) and not os.path.exists(using_config_path)):
             fallback_path = None
@@ -247,7 +291,7 @@ class SequenceWidgetConfigOpsMixin:
             if user_keys:
                 for k in sorted(user_keys):
                     p = registry.get(k)
-                    if isinstance(p, str) and os.path.exists(p):
+                    if isinstance(p, str) and os.path.exists(p) and self._is_sequence_config_path(p):
                         fallback_path = p
                         break
             if not fallback_path and isinstance(default_path, str) and os.path.exists(default_path):
@@ -262,7 +306,7 @@ class SequenceWidgetConfigOpsMixin:
         """
         Updates the using file combobox.
         """
-        self.using_config_path, self.registry = self.get_sequence_config_from_registry()
+        self._get_product_program_registry()
         # Updating items will trigger currentTextChanged multiple times (clear/add/setIndex).
         # Block signals to avoid re-entrant loads and transient empty-text callbacks.
         self.using_file_combobox.blockSignals(True)
@@ -276,35 +320,27 @@ class SequenceWidgetConfigOpsMixin:
         """
         Adds file to the using file combobox.
         """
+        registry = self._get_product_program_registry()
+        active_file = str((registry or {}).get("active_file") or "")
         selected_key = None
-        using_path = self.registry.get("using_config_path")
-
-        keys = [k for k in (self.registry or {}).keys() if k != "using_config_path"]
-        # Do NOT filter "默认配置" by business logic here:
-        # - If registry contains "默认配置", it must appear in combobox (always pinned on top).
-        # - If registry does not contain it, it won't appear.
-        ordered_keys = []
-        if "默认配置" in keys:
-            ordered_keys.append("默认配置")
-            keys.remove("默认配置")
-        ordered_keys.extend(sorted(keys))
-
-        # Only show entries whose file path exists. If none exist, show "无配置".
         visible_count = 0
-        for key in ordered_keys:
-            value = self.registry.get(key)
-            if not isinstance(value, str) or (value and not os.path.exists(value)):
+
+        for item in (registry or {}).get("configs", []):
+            if not isinstance(item, dict):
                 continue
-            self.using_file_combobox.addItem(key, value)
+            file_name = str(item.get("file") or "").strip()
+            name = str(item.get("name") or "").strip()
+            if not file_name or not name:
+                continue
+            self.using_file_combobox.addItem(name, file_name)
             visible_count += 1
-            if using_path and value == using_path:
-                selected_key = key
+            if active_file and file_name == active_file:
+                selected_key = name
 
         if visible_count == 0:
             self.using_file_combobox.addItem("无配置", None)
             selected_key = "无配置"
 
-        # Select the item matching the current using_config_path (if any)
         if selected_key:
             idx = self.using_file_combobox.findText(selected_key)
             if idx >= 0:
@@ -319,6 +355,36 @@ class SequenceWidgetConfigOpsMixin:
         if self.player_status_flag:
             self.restore_previous_configuration()
             QMessageBox.warning(self, "警告", "正在录音，请稍后...")
+            return
+
+        product_file = None
+        try:
+            product_file = self.using_file_combobox.currentData()
+        except Exception:
+            product_file = None
+        if product_file:
+            manager = self._get_product_program_manager()
+            registry = manager.load_registry()
+            registry["active_file"] = str(product_file)
+            manager.save_registry(registry)
+            self.product_program_registry = registry
+            self.active_product_program_file = str(product_file)
+            sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
+            if callable(sync_product_conditions):
+                sync_product_conditions(clear_recent_history=True)
+            self.replayer_btn.setDisabled(True)
+            self.data_btn.setDisabled(True)
+            self.data_struct.store_wave_data = None
+            self.data_struct.store_wave_data_multi = None
+            self.using_file_combobox.clearFocus()
+            if self.lineedit_s_or_n.isEnabled():
+                try:
+                    self.lineedit_s_or_n.setFocus()
+                    self.lineedit_s_or_n.selectAll()
+                except Exception:
+                    pass
+            else:
+                self.setFocus()
             return
 
         path = None
@@ -353,7 +419,8 @@ class SequenceWidgetConfigOpsMixin:
 
     def restore_previous_configuration(self):
         """恢复到之前的配置选项"""
-        index = self.using_file_combobox.findData(self.using_config_path)
+        active_file = getattr(self, "active_product_program_file", None) or getattr(self, "using_config_path", None)
+        index = self.using_file_combobox.findData(active_file)
         if index >= 0:
             self.using_file_combobox.blockSignals(True)
             self.using_file_combobox.setCurrentIndex(index)
@@ -374,6 +441,11 @@ class SequenceWidgetConfigOpsMixin:
         # self.default_logger.debug(f"Loading sequence config: {self.using_config_path}")
         load_code, result = LoadUiConfig().load_sequence_config_from_json(self.using_config_path)
         if load_code == error_code.OK and result:
+            if not isinstance(result, list) or not result or not isinstance(result[0], dict) or "seq1" not in result[0]:
+                self.sequence_config = []
+                self.analysis_config = dict()
+                self._set_sequence_config_available_state(False)
+                return
             self.sequence_config = result
             seq = self.sequence_config[0]["seq1"]
             self.analysis_config = seq.get("analysis_list", {})

@@ -69,6 +69,26 @@ def test_save_data_to_json_is_atomic(tmp_path):
         assert json.load(stream) == {"name": "测试"}
 
 
+def test_load_condition_configs_makes_duplicate_test_queue_keys_unique(tmp_path):
+    program_path = tmp_path / "program.json"
+    assert LoadUiConfig.save_data_to_json(
+        {
+            "name": "duplicate queue",
+            "sub_configs": [
+                {"condition_name": "6000", "trigger_state": "", "test_queue": "queue"},
+                {"condition_name": "7000", "trigger_state": "", "test_queue": "3"},
+                {"condition_name": "8000", "trigger_state": "", "test_queue": "3"},
+            ],
+        },
+        str(program_path),
+    )
+
+    configs = LoadUiConfig.load_product_test_program_condition_configs(str(program_path))
+
+    assert [item["condition_name"] for item in configs] == ["6000", "7000", "8000"]
+    assert len({item["key"] for item in configs}) == 3
+
+
 def test_save_and_load_product_program(tmp_path):
     manager = make_manager(tmp_path)
 

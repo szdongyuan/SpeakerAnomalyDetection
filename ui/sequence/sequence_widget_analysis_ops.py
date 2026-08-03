@@ -168,14 +168,46 @@ class SequenceWidgetAnalysisOpsMixin:
             self._clear_plot_area()
         self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
 
-    @staticmethod
-    def _get_recent_session_mode_text(direction: str) -> str:
+    def _resolve_recent_session_condition(self, direction: str):
+        normalized = str(direction or "").strip().lower()
+        conditions = [
+            item
+            for item in (getattr(self, "product_test_condition_configs", []) or [])
+            if isinstance(item, dict)
+        ]
+        for item in conditions:
+            candidates = {
+                str(item.get("key") or "").strip().lower(),
+                str(item.get("trigger_state") or "").strip().lower(),
+                str(item.get("test_queue") or "").strip().lower(),
+                str(item.get("condition_name") or "").strip().lower(),
+            }
+            if normalized and normalized in candidates:
+                return item
+        if normalized == "forward" and len(conditions) >= 1:
+            return conditions[0]
+        if normalized == "reverse" and len(conditions) >= 2:
+            return conditions[1]
+        if not normalized and conditions:
+            return conditions[0]
+        return None
+
+    def _get_recent_session_mode_text(self, direction: str) -> str:
+        condition = self._resolve_recent_session_condition(direction)
+        if isinstance(condition, dict):
+            return str(condition.get("condition_name") or condition.get("name") or "-")
         normalized = str(direction or "").strip().lower()
         if normalized == "forward":
             return "正转"
         if normalized == "reverse":
             return "反转"
         return "-"
+
+    def _get_recent_session_mode_key(self, direction: str) -> str:
+        condition = self._resolve_recent_session_condition(direction)
+        if isinstance(condition, dict):
+            return str(condition.get("key") or condition.get("trigger_state") or direction or "")
+        return str(direction or "")
 
     def _resolve_recent_session_path(self, session_record: dict | None):
         if not isinstance(session_record, dict):
@@ -208,15 +240,27 @@ class SequenceWidgetAnalysisOpsMixin:
         barcode = recorded_signal_info.get("barcode") or self.lineedit_s_or_n.text().strip() or "-"
         product_model = self.lineedit_type.text().strip() or recorded_signal_info.get("product_model") or "-"
         current_direction = str(getattr(self, "_current_trigger_direction", "") or "")
+        if not current_direction:
+            get_active_recording_direction = getattr(self, "_get_active_recording_direction", None)
+            if callable(get_active_recording_direction):
+                current_direction = str(get_active_recording_direction("") or "")
         mode_text = self._get_recent_session_mode_text(current_direction)
+        mode_key = self._get_recent_session_mode_key(current_direction)
+        group_id = str(getattr(self, "_current_cycle_recorded_count", "") or "").strip()
+        if not group_id:
+            group_id = str(getattr(self, "_current_run_recording_token", "") or "").strip()
+        if not group_id:
+            group_id = session_id
 
         return {
             "session_id": session_id,
+            "group_id": group_id,
             "created_at": now_dt.isoformat(timespec="seconds"),
             "time_text": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "barcode": barcode,
             "product_model": product_model,
-            "mode": current_direction,
+            "mode": mode_key,
+            "condition_key": mode_key,
             "mode_text": mode_text,
             "result_label": self._format_recent_session_result_label(result_label),
             "recorded_path": recorded_path,
@@ -267,13 +311,15 @@ class SequenceWidgetAnalysisOpsMixin:
             sample_rate=self.data_struct.sample_rate,
         )
 
-    def _clear_recent_session_history(self):
+    def _clear_recent_session_history(self, reset_panel=True):
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
         self._current_recent_session_id = None
         self._pending_recent_session_append = False
-        if self.recent_session_panel is not None:
-            self.recent_session_panel.reset_sessions()
+        self._current_run_recording_token = ""
+        recent_session_panel = getattr(self, "recent_session_panel", None)
+        if reset_panel and recent_session_panel is not None:
+            recent_session_panel.reset_sessions()
 
     def _discard_current_recent_session(self) -> None:
         """Drop the placeholder recent-session row inserted at recording start.
