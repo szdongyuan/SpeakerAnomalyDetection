@@ -39,6 +39,10 @@ from base.predict_model import predict_from_audio
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
+from base.pre_processing.spl_runtime_config import (
+    calculate_overall_spl,
+    resolve_spl_unit,
+)
 from base.core_algorithm.response import (
     BandAnalysisResult,
     FftAnalyzer,
@@ -875,18 +879,27 @@ class Spl(AnalysisGraphWidget):
 
     def _get_spl_label(self):
         """Get SPL y-axis label based on weighting type."""
+        return f"SPL ({self._get_spl_unit()})"
+
+    def _get_spl_unit(self):
+        """Get the display unit for the configured frequency weighting."""
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
-        weighting = weighting.upper()
-        if weighting == "A":
-            return "SPL (dBA)"
-        elif weighting == "B":
-            return "SPL (dBB)"
-        elif weighting == "C":
-            return "SPL (dBC)"
-        elif weighting == "D":
-            return "SPL (dBD)"
-        else:  # Z or None
-            return "SPL (dB)"
+        return resolve_spl_unit(weighting)
+
+    def _set_overall_spl_title(self, overall_spl):
+        if overall_spl is None:
+            self.analysis_plot.setTitle("")
+            return
+        value_text = (
+            "--"
+            if not np.isfinite(overall_spl)
+            else f"{float(overall_spl):.2f}"
+        )
+        self.analysis_plot.setTitle(
+            f"总体声压级：{value_text} {self._get_spl_unit()}",
+            size="14px",
+            color="k",
+        )
 
     def calculate_spl(self):
         # calculate Sound Pressure Level according to recorded_signal
@@ -901,6 +914,19 @@ class Spl(AnalysisGraphWidget):
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
         if weighting and weighting.upper() not in ["NONE", "Z"]:
             recorded_signal = apply_weighting_filter(recorded_signal, sample_rate, weighting=weighting, zero_phase=False)
+        show_overall_spl = bool(
+            (self.analysis_config or {}).get(
+                "show_overall_spl",
+                False,
+            )
+        )
+        overall_spl = None
+        if show_overall_spl:
+            overall_spl = calculate_overall_spl(
+                recorded_signal,
+                reference_pressure,
+                v2pa_factor=self.v2pa_factor,
+            )
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             recorded_signal,
             reference_pressure,
@@ -927,11 +953,14 @@ class Spl(AnalysisGraphWidget):
             self.analysis_plot,
             self.analysis_config or {},
         )
+        self._set_overall_spl_title(overall_spl)
         self.result = {
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": recorded_signal.tolist(),
             "signal_spl": signal_spl.tolist(),
         }
+        if show_overall_spl:
+            self.result["overall_spl"] = overall_spl
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
