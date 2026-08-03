@@ -72,8 +72,6 @@ class MotorAiResultPanel(QWidget):
         # Detail frame is injected under the selected RPM row (not fixed position).
         self.detail_frame.setVisible(False)
 
-        layout.addStretch(1)
-
         title = QLabel("最终结果")
         title.setStyleSheet(self._small_text_style("#64748B"))
         layout.addWidget(title)
@@ -83,6 +81,7 @@ class MotorAiResultPanel(QWidget):
         self.final_value.setMinimumHeight(78)
         self.final_value.setStyleSheet(self._final_style("pending"))
         layout.addWidget(self.final_value)
+        layout.addStretch(1)
 
         scroll = QScrollArea(card)
         scroll.setWidgetResizable(True)
@@ -270,18 +269,13 @@ class MotorAiResultPanel(QWidget):
     @staticmethod
     def _normalize_conditions(condition_configs):
         rows = []
-        used_keys = set()
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
             name = str(item.get("condition_name") or item.get("name") or item.get("test_queue") or "").strip()
             if not name:
                 continue
-            base_key = str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or index).strip()
-            key = base_key
-            if key in used_keys:
-                key = f"{base_key}#{index + 1}"
-            used_keys.add(key)
+            key = str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or index).strip()
             rows.append({"key": key, "name": name})
         return rows
 

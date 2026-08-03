@@ -211,7 +211,6 @@ class LoadUiConfig(object):
             return []
 
         result = []
-        used_keys = set()
         for index, item in enumerate(sub_configs):
             if not isinstance(item, dict):
                 continue
@@ -220,14 +219,9 @@ class LoadUiConfig(object):
                 continue
             trigger_state = str(item.get("trigger_state") or "").strip()
             test_queue = str(item.get("test_queue") or "").strip()
-            base_key = trigger_state or test_queue or f"condition_{index + 1}"
-            key = base_key
-            if key in used_keys:
-                key = f"{base_key}#{index + 1}"
-            used_keys.add(key)
             result.append(
                 {
-                    "key": key,
+                    "key": trigger_state or test_queue or f"condition_{index + 1}",
                     "condition_name": condition_name,
                     "trigger_state": trigger_state,
                     "test_queue": test_queue,

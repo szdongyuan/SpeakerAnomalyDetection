@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from consts import ui_style_const
 from consts.acoustic_analysis.specific_consts.fft_consts import (
     FFT_SIZE_PRESETS,
     MAX_FFT_SIZE,
@@ -173,7 +174,8 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         )
         self.spectrum_expand_button.setCursor(Qt.PointingHandCursor)
         self.spectrum_expand_button.setStyleSheet(
-            "color: #344054; font-size: 16px; font-weight: 600; border: none;"
+            f"color: {ui_style_const.COLOR_TEXT}; "
+            "font-size: 16px; font-weight: 600; border: none;"
         )
         display_layout.addWidget(self.spectrum_expand_button)
 

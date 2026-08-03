@@ -75,14 +75,13 @@
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QHeaderView, QTableView, QMessageBox, QLabel
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QHeaderView, QTableView, QMessageBox, QLabel
 
-from base.log_manager import LogManager
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 
-class DataManageDialog(QDialog):
+class DataManageDialog(ConfigDialogBase):
 
     def __init__(self):
         super(DataManageDialog, self).__init__()
@@ -111,15 +110,7 @@ class DataManageDialog(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qtableview_style
-            + ui_style_const.qlineedit_style
-        )
+        self.apply_config_dialog_theme()
 
     def set_select_data_num_text(self, text: str, list_num: tuple[int]):
         status_text = text % list_num

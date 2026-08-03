@@ -17,6 +17,8 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.load_config import LoadUiConfig
+from base.recording_management import RecordingManager
+from base.recording_settings import merge_audio_validation_thresholds, validate_recorded_audio
 
 from base.play_and_record import (
     get_recorded_info,
@@ -24,6 +26,8 @@ from base.play_and_record import (
     resolve_startup_trim_samples,
     stream_record_without_play,
 )
+from base.save_data import save_audio_simple
+from base.soundcard_audio_processor import SoundcardAudioProcessor
 
 from base.streaming_file_writer import StreamingWavWriter
 from base.temp_tcp_client import TempTcpClient
@@ -635,6 +639,125 @@ class SequenceWidgetAnalysisOpsMixin:
 
         return recorded_dict, sample_rate
 
+    def _should_use_streaming_recording(self):
+        try:
+            detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
+        except (IndexError, KeyError, TypeError):
+            detail = {}
+        return bool(detail.get("use_streaming_recording", False))
+
+    @staticmethod
+    def _normalize_blocking_recorded_data(recorded_data, recorded_dict):
+        recorded_multi = np.asarray(recorded_dict.get("_recorded_multi", recorded_data), dtype=np.float32)
+        if recorded_multi.size == 0:
+            raise ValueError("empty recorded data")
+        if recorded_multi.ndim == 1:
+            recorded_multi = recorded_multi.reshape(-1, 1)
+        if recorded_multi.ndim != 2:
+            raise ValueError(f"unsupported recorded data shape: {recorded_multi.shape}")
+        return recorded_multi
+
+    def _finish_blocking_recording_success(self, recorded_multi, sample_rate):
+        acq_detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
+        trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
+        if 0 < trim_samples < recorded_multi.shape[0]:
+            recorded_multi = recorded_multi[trim_samples:]
+        elif trim_samples >= recorded_multi.shape[0]:
+            self.default_logger.warning(
+                f"startup_trim_skipped_too_large samples={trim_samples} "
+                f"recording_samples={recorded_multi.shape[0]}"
+            )
+
+        quality_ok, quality_reason, quality_detail = validate_recorded_audio(
+            recorded_multi, merge_audio_validation_thresholds(acq_detail)
+        )
+        if not quality_ok:
+            if quality_detail:
+                self.default_logger.warning(f"audio_validation_failed {quality_detail}")
+            self._handle_invalid_recording(quality_reason)
+            return False
+
+        save_audio_simple(self.recorded_path, recorded_multi, sample_rate)
+        self.data_struct.store_wave_data_multi = recorded_multi
+        self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(np.float32, copy=False)
+        self.data_struct.sample_rate = sample_rate
+
+        active_direction = self._resolve_active_recording_waveform_direction(fallback="")
+        self.plot_waveform_to_workspace(recorded_multi, sample_rate, direction=active_direction or None)
+
+        self.recorded_signal_info["sample_rate"] = sample_rate
+        save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+        if save_code == error_code.OK:
+            self.default_logger.info(f"Database save successful: {save_msg}")
+        else:
+            self.default_logger.error(f"Database save failed: {save_msg}")
+
+        self.player_status_flag = False
+        self.data_btn.setEnabled(True)
+        self.replayer_btn.setEnabled(True)
+        self._awaiting_ok_ng = True
+        self._sn_clear_on_next_scan = True
+        self._pending_recent_session_append = True
+
+        unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+        if callable(unlock_sn_after_recording):
+            unlock_sn_after_recording()
+        current_label = (self.recorded_signal_info or {}).get("labels", "not_labeled")
+        self._update_current_recent_session_result(current_label)
+        if str(getattr(self.count_board, "mode", "") or "") == "mark":
+            on_mark_cycle_direction_recorded = getattr(self, "_on_mark_cycle_direction_recorded", None)
+            if callable(on_mark_cycle_direction_recorded):
+                on_mark_cycle_direction_recorded(current_label)
+            else:
+                append_mark_result_file = getattr(self.count_board, "append_mark_result_file", None)
+                if callable(append_mark_result_file):
+                    append_mark_result_file(current_label)
+                    self.count_board.set_mark_text()
+
+        on_directional_recording_completed = getattr(self, "_on_directional_recording_completed", None)
+        if callable(on_directional_recording_completed):
+            on_directional_recording_completed()
+        if self._should_run_silent_analysis_after_recording():
+            self.run(show_windows=False)
+
+        clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
+        if callable(clear_active_recording_direction):
+            clear_active_recording_direction()
+        self._record_workflow_busy = False
+        self.update_player_btn_is_paused()
+        try:
+            self._reset_barcode_commit_dedup()
+        except Exception:
+            self._last_committed_barcode = None
+            self._last_committed_barcode_time = 0.0
+        drain = getattr(self, "_drain_queued_directional_trigger", None)
+        if callable(drain):
+            drain()
+        return True
+
+    def _start_blocking_recording(self, recorded_dict, sample_rate):
+        try:
+            record_code, recorded_data = SoundcardAudioProcessor.sd_rec(recorded_dict)
+            if record_code != error_code.OK or recorded_data is None:
+                raise RuntimeError(recorded_data if recorded_data is not None else record_code)
+            recorded_multi = self._normalize_blocking_recorded_data(recorded_data, recorded_dict)
+            if self._finish_blocking_recording_success(recorded_multi, sample_rate):
+                self.default_logger.info("Blocking recording completed successfully")
+        except Exception as e:
+            self.default_logger.error(f"blocking_recording_error: {e}")
+            self._discard_current_recent_session()
+            self.player_status_flag = False
+            self._record_workflow_busy = False
+            self.data_btn.setEnabled(True)
+            self.replayer_btn.setEnabled(True)
+            self._awaiting_ok_ng = False
+            self._sn_clear_on_next_scan = False
+            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn_after_recording):
+                unlock_sn_after_recording()
+            self.update_player_btn_is_paused()
+            QMessageBox.warning(self, "提示", f"录音失败: {e}")
+
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if getattr(self, "_record_workflow_busy", False):
             return
@@ -707,6 +830,11 @@ class SequenceWidgetAnalysisOpsMixin:
             QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
 
+        if not self._should_use_streaming_recording():
+            self._begin_recent_session_for_current_run()
+            self._start_blocking_recording(recorded_dict, sample_rate)
+            return
+
         # Start streaming record-only (non-blocking)
         try:
             # Create WAV file writer for streaming saves (useful for long recordings)
@@ -719,7 +847,6 @@ class SequenceWidgetAnalysisOpsMixin:
             self.streaming_mode = "record_only"
             self.streaming_stimulus_data = None
             self._begin_recent_session_for_current_run()
-
             # Start polling timer to process queue and detect completion
             self.streaming_poll_timer.start(50)  # Poll every 50ms
         except Exception as e:

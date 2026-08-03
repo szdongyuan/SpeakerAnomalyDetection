@@ -2,15 +2,15 @@ import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QGridLayout
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
 from base.sound_device_manager import SoundDeviceManager
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 
-class BaseConfigWindow(QDialog):
+class BaseConfigWindow(ConfigDialogBase):
     def __init__(self, mic=None):
         super().__init__()
         self.final_data = None
@@ -28,16 +28,7 @@ class BaseConfigWindow(QDialog):
         self.resize(350, 350)
         self.main_layout = QVBoxLayout(self)
 
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcheckbox_style
-        )
+        self.apply_config_dialog_theme()
 
     def create_cancel_ok_buttons(self):
         btn_layout = QHBoxLayout()
@@ -110,6 +101,11 @@ class RecordConfigWindow(BaseConfigWindow):
         label_monitor = QLabel("实时监听播放:")
         self.monitor_checkbox = QCheckBox("启用")
         self.monitor_checkbox.setChecked(bool(self.input_data.get("monitor_playback", False)))
+        label_streaming_recording = QLabel("流式录制:")
+        self.streaming_recording_checkbox = QCheckBox("启用")
+        self.streaming_recording_checkbox.setChecked(
+            bool(self.input_data.get("use_streaming_recording", False))
+        )
         label_monitor_gain = QLabel("监听增益:")
         self.monitor_gain_db_input = QDoubleSpinBox()
         self.monitor_gain_db_input.setRange(-60.0, 50.0)
@@ -141,6 +137,8 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.monitor_checkbox, 3, 1)
         grid_layout.addWidget(label_monitor_gain, 4, 0)
         grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
+        grid_layout.addWidget(label_streaming_recording, 5, 0)
+        grid_layout.addWidget(self.streaming_recording_checkbox, 5, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
@@ -151,6 +149,7 @@ class RecordConfigWindow(BaseConfigWindow):
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
+            "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
         }
         self.accept()
 

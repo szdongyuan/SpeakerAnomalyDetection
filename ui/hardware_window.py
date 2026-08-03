@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
 from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 
 class SingleCheckTableView(QTableView):
@@ -257,7 +258,7 @@ class HardwareSelectionModel:
         return list(range(0, n))
 
 
-class HardwareSelectionView(QDialog):
+class HardwareSelectionView(ConfigDialogBase):
     """
     View：只负责界面与基本控件，不负责设备枚举/选择逻辑。
     """
@@ -322,14 +323,7 @@ class HardwareSelectionView(QDialog):
         self.setLayout(layout)
 
         self.resize(980, 560)
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qtableview_style
-            + ui_style_const.qlabel_style
-        )
+        self.apply_config_dialog_theme()
 
     @staticmethod
     def _wrap_table_group(title: str, table: QTableView) -> QGroupBox:

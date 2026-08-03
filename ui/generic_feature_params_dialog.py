@@ -1,10 +1,10 @@
 from PyQt5.QtGui import QIntValidator, QDoubleValidator
-from PyQt5.QtWidgets import QLineEdit, QFormLayout, QVBoxLayout, QDialog, QPushButton, QHBoxLayout
+from PyQt5.QtWidgets import QLineEdit, QFormLayout, QVBoxLayout, QPushButton, QHBoxLayout
 
-from consts import ui_style_const
+from ui.config_dialog_base import ConfigDialogBase
 
 
-class GenericFeatureParamsDialog(QDialog):
+class GenericFeatureParamsDialog(ConfigDialogBase):
     def __init__(self, param_definitions, current_values):
         super().__init__()
         self.setWindowTitle("特征参数配置")
@@ -37,14 +37,7 @@ class GenericFeatureParamsDialog(QDialog):
         self.main_layout.addLayout(form_layout)
         self.main_layout.addLayout(button_layout)
         self.setLayout(self.main_layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qdialog_style
-            + ui_style_const.qtextedit_style
-        )
+        self.apply_config_dialog_theme()
 
 
     def create_button(self):

@@ -32,6 +32,7 @@ from consts.acoustic_analysis.curve_style_consts import (
     LOWER_LIMIT_COLOR,
     UPPER_LIMIT_COLOR,
 )
+from ui.config_dialog_base import ConfigDialogBase
 from ui.curve_style import (
     normalize_curve_color,
     resolve_curve_colors,
@@ -608,7 +609,7 @@ class _ManualLimitEditorWidget(QWidget):
         return segments
 
 
-class _ManualLimitEditorDialog(QDialog):
+class _ManualLimitEditorDialog(ConfigDialogBase):
     def __init__(
         self,
         parent,

@@ -1,87 +1,62 @@
 import os
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton
-from PyQt5.QtWidgets import QLabel, QMessageBox, QComboBox, QSizePolicy
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QHBoxLayout, QSizePolicy
 from typing import List, Optional
 
 from base.load_config import load_config
 from base.model_runtime_validation import resolve_effective_signal_length
 from base.training_model_management import TrainingModelManagement
-from consts import ui_style_const, error_code
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import ComboBox, GroupBox, Label, MessageBox
+from ui.ui_analysis_config.common_widgets import (
+    ChannelSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
+)
 
 
-class AIConfigWindow(QDialog):
+class AIConfigWindow(SemanticAnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, signal_len=None, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.signal_len = signal_len
         self.config_manager = config_manager
+        self.config_key = model_type
         self.model_list = self.load_model_name_from_db()
-        self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.available_channels = self._normalize_available_channels(available_channels)
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.show_channel_selector = available_channels is not None
+        self.available_channels = available_channels
         self.init_ui()
 
-    @staticmethod
-    def _normalize_available_channels(available_channels):
-        channels = []
-        try:
-            channels = sorted({int(ch) for ch in (available_channels or [])})
-        except Exception:
-            channels = []
-        if not channels:
-            channels = [0]
-        return channels
-
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(350, 350)
-        self.resize(350, 350)
-        layout = QVBoxLayout()
-        layout.addLayout(self.create_channel_layout())
-        model_box = self.create_model_layout()
-        btn_layout = self.create_btn()
-        layout.addWidget(model_box)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qcombobox_style
+        self.setWindowTitle("AI 分析配置")
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
         )
+        self._build_semantic_sections()
 
-    def create_channel_layout(self):
-        channel_label = QLabel("通道:")
-        self.channel_combo_box = QComboBox(self)
-        for ch in self.available_channels:
-            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
-
-        saved_channel = self.load_config.get("analysis_channel", None)
-        if saved_channel is None or int(saved_channel) not in self.available_channels:
-            saved_channel = int(self.available_channels[0])
-        idx = self.channel_combo_box.findData(int(saved_channel))
-        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
-
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(channel_label)
-        channel_layout.addWidget(self.channel_combo_box)
-        channel_layout.setSpacing(10)
-        return channel_layout
+    def _build_semantic_sections(self):
+        if self.show_channel_selector:
+            self.channel_selector = ChannelSelectorWidget(
+                self.load_config,
+                self.available_channels,
+                self,
+            )
+            self.add_semantic_section("input", widget=self.channel_selector)
+        self.add_semantic_section("compute", widget=self.create_model_layout())
 
     def cheack_model_list(self):
         if self.analyse_model_combo_box.count() == 0:
-            QMessageBox.warning(self, "设置警告", "没有可用的AI模型选型,请检查配置!")
+            MessageBox.warning(self, "设置警告", "没有可用的AI模型选型,请检查配置!")
 
     def create_model_layout(self):
-        model_box = QGroupBox("模型")
+        model_box = GroupBox("模型")
         model_box.setMinimumSize(150, 150)
-        analyse_model_label = QLabel("分析模型:")
-        self.analyse_model_combo_box = QComboBox(self)
+        analyse_model_label = Label("分析模型:")
+        self.analyse_model_combo_box = ComboBox(self)
         self.analyse_model_combo_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.analyse_model_combo_box.setFixedHeight(30)
         for model_name in self.model_list:
@@ -152,20 +127,19 @@ class AIConfigWindow(QDialog):
         return input_length == effective_length
 
     def create_btn(self):
-        btn_layout = QHBoxLayout()
-        default_btn = QPushButton(" 设为默认 ")
-        default_btn.clicked.connect(self.on_default_btn_clicked)
-        ok_btn = QPushButton(" 确  认 ")
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-        return btn_layout
+        return self.create_standard_button_layout(
+            self.on_default_btn_clicked,
+            self.on_click_ok_btn,
+        )
 
     def get_default_config(self):
         default_config = {
             "analyse_model_name": self.analyse_model_combo_box.currentText(),
-            "analysis_channel": int(self.channel_combo_box.currentData()),
+            "analysis_channel": (
+                self.channel_selector.current_channel()
+                if self.show_channel_selector
+                else int(self.load_config.get("analysis_channel", 0) or 0)
+            ),
         }
         return default_config
 
@@ -173,6 +147,14 @@ class AIConfigWindow(QDialog):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("AI", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(
+            self.config_key,
+            {},
+        )
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

@@ -29,7 +29,7 @@ class SequenceToolsBar(QWidget):
         self.tcp_btn = QPushButton()
         self.serial_trigger_btn = QPushButton()
         self.data_btn = QPushButton()
-        self.using_file_combobox = RefreshBeforePopupComboBox()
+        self.using_file_combobox = QComboBox()
         self.condition_mode_combobox = QComboBox()
         self.lineedit_type = QLineEdit()
         self.lineedit_count = QLineEdit()
