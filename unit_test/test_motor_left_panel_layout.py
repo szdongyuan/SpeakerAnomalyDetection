@@ -32,15 +32,15 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIsInstance(card, MotorSectionCard)
 
         labels = [lbl.text() for lbl in second_widget.findChildren(QLabel)]
-        self.assertIn("操作面板", labels)
-        self.assertIn("汇总信息", labels)
+        self.assertIn("信息汇总", labels)
+        self.assertNotIn("汇总信息", labels)
 
         content_scroll_area = card.content_layout.itemAt(0).widget()
         self.assertIn(ui_style_const.COLOR_PANEL_BG, content_scroll_area.styleSheet())
         content_widget = content_scroll_area.widget()
         self.assertEqual(content_widget.objectName(), "motorSectionContent")
         self.assertIn(ui_style_const.COLOR_PANEL_BG, content_widget.styleSheet())
-        self.assertIs(content_widget.layout().itemAt(1).widget(), summary_widget)
+        self.assertIs(content_widget.layout().itemAt(0).widget(), summary_widget)
 
     def test_ai_result_panel_uses_condition_names(self):
         summary_widget = QWidget()
@@ -51,6 +51,35 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.ai_result_panel.condition_names, expected_names)
         if condition_configs:
             self.assertTrue(panel.set_condition_result(condition_configs[-1]["key"], "NG"))
+
+    def test_ai_result_panel_keeps_rows_when_condition_keys_repeat(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "6000", "trigger_state": "", "test_queue": "默认配置"},
+                {"condition_name": "7000", "trigger_state": "", "test_queue": "3"},
+                {"condition_name": "8000", "trigger_state": "", "test_queue": "3"},
+            ]
+        )
+
+        self.assertEqual(panel.condition_names, ["6000", "7000", "8000"])
+        self.assertEqual(len(panel.rows), 3)
+        self.assertEqual(len({item["key"] for item in panel.conditions}), 3)
+
+    def test_ai_final_result_stays_near_panel_bottom(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "6000", "trigger_state": "01"},
+                {"condition_name": "7000", "trigger_state": "02"},
+            ]
+        )
+        panel.resize(400, 360)
+        panel.show()
+        self.app.processEvents()
+
+        content = panel.final_value.parentWidget()
+        bottom_gap = content.height() - panel.final_value.geometry().bottom()
+
+        self.assertLessEqual(bottom_gap, 14)
 
     def test_ai_result_detail_toggles_on_same_condition_click(self):
         condition_configs = LoadUiConfig.load_product_test_program_condition_configs()

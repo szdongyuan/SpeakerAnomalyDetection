@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QApplication, QComboBox
+from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QToolButton
 
 if "base.playback_controller" not in sys.modules:
     playback_controller = types.ModuleType("base.playback_controller")
@@ -28,6 +28,32 @@ from ui.sequence.recent_session_panel import RecentSessionPanel
 
 class TestRecentSessionPanelStyle(unittest.TestCase):
     @staticmethod
+    def _condition_configs():
+        return [
+            {"key": "01", "trigger_state": "01", "condition_name": "6000 rpm"},
+            {"key": "02", "trigger_state": "02", "condition_name": "7000 rpm"},
+        ]
+
+    def _panel(self, **kwargs):
+        kwargs.setdefault("condition_configs", self._condition_configs())
+        return RecentSessionPanel(**kwargs)
+
+    @staticmethod
+    def _session(session_id, condition_key, result_label="ok"):
+        return {
+            "session_id": session_id,
+            "group_id": "group_1",
+            "time_text": "2026-04-16 10:00:00",
+            "barcode": "SN001",
+            "product_model": "MODEL",
+            "mode": condition_key,
+            "condition_key": condition_key,
+            "mode_text": f"{condition_key} rpm",
+            "result_label": result_label,
+            "recorded_signal_info": {"labels": result_label},
+        }
+
+    @staticmethod
     def _build_left_click_event():
         return QMouseEvent(
             QEvent.MouseButtonPress,
@@ -39,119 +65,170 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
             Qt.NoModifier,
         )
 
+    @staticmethod
+    def _summary_value(panel, row=0):
+        item = panel.session_table.item(row, 3 + len(panel.conditions))
+        return item.data(Qt.UserRole) if item is not None else None
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_recent_session_table_declares_selected_row_colors(self):
-        panel = RecentSessionPanel()
+        panel = self._panel()
         style = panel.session_table.styleSheet()
 
         self.assertIn("selection-background-color", style)
         self.assertIn("selection-color", style)
         self.assertIn("QTableWidget::item:selected", style)
 
-    def test_missing_playback_file_shows_information_dialog(self):
-        panel = RecentSessionPanel()
-        panel.upsert_session(
-            {
-                "session_id": "recent_1",
-                "time_text": "2026-04-16 10:00:00",
-                "barcode": "SN001",
-                "product_model": "MODEL",
-                "mode_text": "正转",
-                "result_label": "ok",
-                "recorded_signal_info": {},
-            }
+    def test_recent_session_table_uses_dynamic_condition_columns(self):
+        panel = self._panel()
+        panel.upsert_session(self._session("recent_1", "01", "ok"))
+
+        self.assertEqual(panel.session_table.columnCount(), 6)
+        self.assertEqual(panel.session_table.horizontalHeaderItem(3).text(), "6000 rpm")
+        self.assertEqual(panel.session_table.horizontalHeaderItem(4).text(), "7000 rpm")
+        self.assertEqual(panel.session_table.horizontalHeaderItem(5).text(), "汇总结果")
+        self.assertIsNone(panel._get_cell_center_widget(panel.session_table, 0, 6))
+
+    def test_condition_headers_append_rpm_when_missing(self):
+        panel = self._panel(
+            condition_configs=[
+                {"key": "01", "trigger_state": "01", "condition_name": "6000"},
+                {"key": "02", "trigger_state": "02", "condition_name": "7000"},
+            ]
         )
 
-        panel._refresh_play_button_for_session("recent_1")
-        play_btn = panel._get_cell_center_widget(panel.session_table, 0, 5)
+        self.assertEqual(panel.session_table.horizontalHeaderItem(3).text(), "6000 rpm")
+        self.assertEqual(panel.session_table.horizontalHeaderItem(4).text(), "7000 rpm")
 
-        self.assertIsNotNone(play_btn)
-        self.assertTrue(play_btn.isEnabled())
-        self.assertEqual(play_btn.toolTip(), "当前记录暂无可播放音频")
-
-        with patch("ui.sequence.recent_session_panel.QMessageBox.information") as mock_information:
-            panel._on_play_button_clicked("recent_1")
-
-        mock_information.assert_called_once_with(panel, "提示", "当前记录音频文件不可用，无法播放音频。")
-
-    def test_result_column_switches_between_text_and_combo_by_mode(self):
-        session_record = {
-            "session_id": "recent_1",
-            "time_text": "2026-04-16 10:00:00",
-            "barcode": "SN001",
-            "product_model": "MODEL",
-            "mode_text": "正转",
-            "result_label": "ok",
-            "recorded_signal_info": {"labels": "OK"},
-        }
+    def test_result_cells_are_dropdowns(self):
+        session_record = self._session("recent_1", "01", "OK")
         session_store = {"recent_1": session_record}
-        panel = RecentSessionPanel(on_play_session=lambda session_id: session_store.get(session_id))
+        panel = self._panel(on_play_session=lambda session_id: session_store.get(session_id))
         panel.upsert_session(session_record)
 
-        self.assertEqual(panel.session_table.item(0, 4).text(), "ok")
-        self.assertIsNone(panel.session_table.cellWidget(0, 4))
-
-        panel.set_result_editable(True)
-        combo = panel._get_cell_center_widget(panel.session_table, 0, 4)
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 3)
 
         self.assertIsInstance(combo, QComboBox)
         self.assertEqual(combo.currentText(), "OK")
 
-        panel.set_result_editable(False)
-        self.assertEqual(panel.session_table.item(0, 4).text(), "ok")
-        self.assertIsNone(panel.session_table.cellWidget(0, 4))
-
-    def test_waiting_result_keeps_text_item_in_edit_mode(self):
-        session_record = {
-            "session_id": "recent_1",
-            "time_text": "2026-04-16 10:00:00",
-            "barcode": "SN001",
-            "product_model": "MODEL",
-            "mode_text": "正转",
-            "result_label": "等待测试完成",
-            "recorded_signal_info": {"labels": "not_labeled"},
-        }
-        session_store = {"recent_1": session_record}
-        panel = RecentSessionPanel(on_play_session=lambda session_id: session_store.get(session_id))
-        panel.set_result_editable(True)
+    def test_condition_cells_include_analysis_button(self):
+        clicked_sessions = []
+        session_record = self._session("recent_1", "01", "OK")
+        panel = self._panel(on_view_session=lambda session_id: clicked_sessions.append(session_id))
         panel.upsert_session(session_record)
 
-        self.assertIsNone(panel.session_table.cellWidget(0, 4))
-        self.assertEqual(panel.session_table.item(0, 4).text(), "等待测试完成")
-        self.assertEqual(panel.session_table.item(0, 4).toolTip(), "等待测试完成")
+        cell_widget = panel.session_table.cellWidget(0, 3)
+        view_btn = cell_widget.layout().itemAt(1).widget()
+
+        self.assertIsInstance(view_btn, QToolButton)
+        self.assertTrue(view_btn.isEnabled())
+        view_btn.click()
+        self.assertEqual(clicked_sessions, ["recent_1"])
+
+    def test_condition_analysis_button_disabled_without_record(self):
+        panel = self._panel()
+        panel.upsert_session(self._session("recent_1", "01", "OK"))
+
+        cell_widget = panel.session_table.cellWidget(0, 4)
+        view_btn = cell_widget.layout().itemAt(1).widget()
+
+        self.assertIsInstance(view_btn, QToolButton)
+        self.assertFalse(view_btn.isEnabled())
+
+    def test_summary_result_is_ng_when_any_condition_is_ng(self):
+        panel = self._panel()
+
+        panel.upsert_session(self._session("recent_1", "01", "OK"))
+        panel.upsert_session(self._session("recent_2", "02", "NG"))
+
+        self.assertEqual(panel.session_table.rowCount(), 1)
+        self.assertEqual(panel._get_cell_center_widget(panel.session_table, 0, 3).currentText(), "OK")
+        self.assertEqual(panel._get_cell_center_widget(panel.session_table, 0, 4).currentText(), "NG")
+        self.assertEqual(self._summary_value(panel), "NG")
+        summary_widget = panel.session_table.cellWidget(0, 5).layout().itemAt(0).widget()
+        self.assertIsInstance(summary_widget, QLabel)
+        self.assertEqual(summary_widget.text(), "NG")
+        self.assertEqual(panel.session_table.item(0, 5).text(), "")
+        self.assertIn("#c80000", summary_widget.styleSheet())
+
+    def test_summary_result_is_ok_only_when_all_conditions_are_ok(self):
+        panel = self._panel()
+
+        panel.upsert_session(self._session("recent_1", "01", "OK"))
+        self.assertEqual(self._summary_value(panel), "not_labeled")
+
+        panel.upsert_session(self._session("recent_2", "02", "OK"))
+        self.assertEqual(self._summary_value(panel), "OK")
+        summary_widget = panel.session_table.cellWidget(0, 5).layout().itemAt(0).widget()
+        self.assertEqual(summary_widget.text(), "OK")
+        self.assertIn("#008c00", summary_widget.styleSheet())
+
+    def test_sessions_without_group_id_create_separate_rows(self):
+        panel = self._panel()
+        first = self._session("recent_1", "01", "OK")
+        second = self._session("recent_2", "02", "NG")
+        first.pop("group_id", None)
+        second.pop("group_id", None)
+
+        panel.upsert_session(first)
+        panel.upsert_session(second)
+
+        self.assertEqual(panel.session_table.rowCount(), 2)
+
+    def test_reset_sessions_ignores_removed_play_column(self):
+        conditions = [
+            {"key": "01", "trigger_state": "01", "condition_name": "6000"},
+            {"key": "02", "trigger_state": "02", "condition_name": "7000"},
+            {"key": "03", "trigger_state": "03", "condition_name": "8000"},
+            {"key": "04", "trigger_state": "04", "condition_name": "9000"},
+        ]
+        panel = self._panel(condition_configs=conditions)
+        for index, condition in enumerate(conditions, start=1):
+            panel.upsert_session(self._session(f"recent_{index}", condition["key"], "OK"))
+
+        panel.reset_sessions()
+
+        self.assertEqual(panel.session_table.rowCount(), 0)
+
+    def test_selecting_condition_dropdown_updates_summary(self):
+        panel = self._panel()
+        panel.upsert_session(self._session("recent_1", "01", "OK"))
+        panel.upsert_session(self._session("recent_2", "02", "OK"))
+
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 4)
+        combo.setCurrentText("NG")
+
+        self.assertEqual(self._summary_value(panel), "NG")
 
     def test_recent_session_column_widths_match_updated_layout(self):
         from PyQt5.QtWidgets import QHeaderView
 
-        panel = RecentSessionPanel()
+        panel = self._panel()
         header = panel.session_table.horizontalHeader()
 
-        self.assertEqual(header.sectionResizeMode(1), QHeaderView.Stretch)
-        self.assertEqual(panel.session_table.columnWidth(0), 168)
-        self.assertEqual(panel.session_table.columnWidth(2), 112)
-        self.assertEqual(panel.session_table.columnWidth(3), 72)
-        self.assertEqual(panel.session_table.columnWidth(4), 136)
-        self.assertEqual(panel.session_table.columnWidth(5), 78)
-        self.assertEqual(panel.session_table.columnWidth(6), 100)
+        panel.resize(1400, 420)
+        panel.show()
+        self.addCleanup(panel.close)
+        self.app.processEvents()
+
+        self.assertEqual(panel.session_table.columnCount(), 6)
+        for col in range(panel.session_table.columnCount()):
+            self.assertEqual(header.sectionResizeMode(col), QHeaderView.Stretch)
+        total_width = sum(panel.session_table.columnWidth(col) for col in range(panel.session_table.columnCount()))
+        self.assertGreaterEqual(total_width, panel.session_table.viewport().width() - 2)
+        self.assertLessEqual(total_width, panel.session_table.viewport().width() + panel.session_table.columnCount())
+        self.assertGreater(panel.session_table.columnWidth(3), 150)
 
     def test_clicking_result_cell_opens_dropdown(self):
-        session_record = {
-            "session_id": "recent_1",
-            "time_text": "2026-04-16 10:00:00",
-            "barcode": "SN001",
-            "product_model": "MODEL",
-            "mode_text": "正转",
-            "result_label": "ok",
-            "recorded_signal_info": {"labels": "OK"},
-        }
+        session_record = self._session("recent_1", "01", "OK")
         session_store = {"recent_1": session_record}
-        panel = RecentSessionPanel(on_play_session=lambda session_id: session_store.get(session_id))
+        panel = self._panel(on_play_session=lambda session_id: session_store.get(session_id))
         panel.set_result_editable(True)
         panel.upsert_session(session_record)
-        combo = panel._get_cell_center_widget(panel.session_table, 0, 4)
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 3)
 
         with patch.object(combo, "showPopup") as mock_show_popup:
             combo.mousePressEvent(self._build_left_click_event())
@@ -159,20 +236,12 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         mock_show_popup.assert_called_once()
 
     def test_clicking_result_text_area_opens_dropdown(self):
-        session_record = {
-            "session_id": "recent_1",
-            "time_text": "2026-04-16 10:00:00",
-            "barcode": "SN001",
-            "product_model": "MODEL",
-            "mode_text": "正转",
-            "result_label": "ok",
-            "recorded_signal_info": {"labels": "OK"},
-        }
+        session_record = self._session("recent_1", "01", "OK")
         session_store = {"recent_1": session_record}
-        panel = RecentSessionPanel(on_play_session=lambda session_id: session_store.get(session_id))
+        panel = self._panel(on_play_session=lambda session_id: session_store.get(session_id))
         panel.set_result_editable(True)
         panel.upsert_session(session_record)
-        combo = panel._get_cell_center_widget(panel.session_table, 0, 4)
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 3)
 
         with patch.object(combo, "showPopup") as mock_show_popup:
             combo.eventFilter(combo.lineEdit(), self._build_left_click_event())
@@ -180,20 +249,12 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         mock_show_popup.assert_called_once()
 
     def test_clicking_result_text_area_does_not_trigger_popup_twice(self):
-        session_record = {
-            "session_id": "recent_1",
-            "time_text": "2026-04-16 10:00:00",
-            "barcode": "SN001",
-            "product_model": "MODEL",
-            "mode_text": "正转",
-            "result_label": "ok",
-            "recorded_signal_info": {"labels": "OK"},
-        }
+        session_record = self._session("recent_1", "01", "OK")
         session_store = {"recent_1": session_record}
-        panel = RecentSessionPanel(on_play_session=lambda session_id: session_store.get(session_id))
+        panel = self._panel(on_play_session=lambda session_id: session_store.get(session_id))
         panel.set_result_editable(True)
         panel.upsert_session(session_record)
-        combo = panel._get_cell_center_widget(panel.session_table, 0, 4)
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 3)
 
         with patch.object(combo, "showPopup") as mock_show_popup:
             combo.eventFilter(combo.lineEdit(), self._build_left_click_event())

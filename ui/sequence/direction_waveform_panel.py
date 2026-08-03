@@ -197,6 +197,8 @@ class DirectionWaveformPanel(QWidget):
         self._audio_paths = {}
         self._result_labels = {}
         self._mode = "test"
+        self._grid_cols = 0
+        self._grid_rows = 0
         self.on_play_condition = on_play_condition
         self.on_mark_condition = on_mark_condition
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -209,6 +211,7 @@ class DirectionWaveformPanel(QWidget):
 
     def set_conditions(self, condition_configs) -> None:
         self._clear_grid()
+        self._reset_grid_stretches()
         self._cards = {}
         conditions = self._normalize_conditions(condition_configs)
 
@@ -216,8 +219,13 @@ class DirectionWaveformPanel(QWidget):
         # (No heavy responsive math; just a stable grid.)
         n = len(conditions)
         cols = 2 if n <= 4 else (3 if n <= 9 else 4)
+        rows = max(1, math.ceil(n / cols)) if n else 1
         for c in range(cols):
             self.grid.setColumnStretch(c, 1)
+        for r in range(rows):
+            self.grid.setRowStretch(r, 1)
+        self._grid_cols = cols
+        self._grid_rows = rows
 
         for index, item in enumerate(conditions):
             name = str(item["name"] or "")
@@ -241,6 +249,8 @@ class DirectionWaveformPanel(QWidget):
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet(ui_style_const.motor_final_result_title_style)
             self.grid.addWidget(empty, 0, 0)
+        self.grid.invalidate()
+        self.updateGeometry()
 
     def set_direction_titles(self, titles) -> None:
         for key, title in (titles or {}).items():
@@ -311,13 +321,18 @@ class DirectionWaveformPanel(QWidget):
     @staticmethod
     def _normalize_conditions(condition_configs):
         result = []
+        used_keys = set()
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
             name = str(item.get("condition_name") or item.get("name") or item.get("test_queue") or "").strip()
             if not name:
                 continue
-            key = str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or index).strip()
+            base_key = str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or index).strip()
+            key = base_key
+            if key in used_keys:
+                key = f"{base_key}#{index + 1}"
+            used_keys.add(key)
             result.append({"key": key, "name": name})
         return result
 
@@ -338,3 +353,11 @@ class DirectionWaveformPanel(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+
+    def _reset_grid_stretches(self):
+        for c in range(self._grid_cols):
+            self.grid.setColumnStretch(c, 0)
+            self.grid.setColumnMinimumWidth(c, 0)
+        for r in range(self._grid_rows):
+            self.grid.setRowStretch(r, 0)
+            self.grid.setRowMinimumHeight(r, 0)
