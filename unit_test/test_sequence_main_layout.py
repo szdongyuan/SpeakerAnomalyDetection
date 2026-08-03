@@ -24,6 +24,7 @@ from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from consts import error_code
 from base.product_test_program_config import ProductTestProgramConfigManager
 
 
@@ -42,6 +43,9 @@ class _DummyChannelWorkspace:
         self._keys = list(keys)
         self.results = []
         self.audio_paths = []
+        self.cleared_directions = []
+        self.clear_all_count = 0
+        self.direction_data = []
 
     def condition_keys(self):
         return list(self._keys)
@@ -51,6 +55,15 @@ class _DummyChannelWorkspace:
 
     def set_condition_audio_path(self, key, path):
         self.audio_paths.append((key, path))
+
+    def clear_direction(self, key):
+        self.cleared_directions.append(key)
+
+    def clear_plots(self):
+        self.clear_all_count += 1
+
+    def set_direction_data(self, key, x, y):
+        self.direction_data.append((key, list(x), list(y)))
 
 
 class _SpyLeftPanel:
@@ -75,6 +88,7 @@ class _DummySequenceWidget(QWidget, SequenceWidgetStreamingOpsMixin):
         self.left_panel = MotorDetectionLeftPanel(self.count_board)
         self.channel_workspace = None
         self.recent_session_panel = None
+        self.recent_test_session_by_id = {}
         self._last_recent_session_mode = ""
 
     def _resolve_recent_session(self, session_id: str):
@@ -91,6 +105,14 @@ class _DummySequenceWidget(QWidget, SequenceWidgetStreamingOpsMixin):
 
     def _on_recent_session_mode_changed(self, mode: str):
         self._last_recent_session_mode = mode
+
+    @staticmethod
+    def _format_recent_session_result_label(result_label):
+        normalized = str(result_label or "").strip()
+        return normalized.lower() if normalized.lower() in ("ok", "ng") else "not labeled"
+
+    def _update_recent_session(self, session_id: str, **fields):
+        self.recent_test_session_by_id[session_id].update(fields)
 
 
 class _RealisticSequenceWidget(_DummySequenceWidget):
@@ -296,6 +318,33 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(panel.grid.columnStretch(2), 0)
         self.assertEqual(panel.grid.rowStretch(1), 0)
 
+    def test_clear_plot_area_only_clears_active_condition_card(self):
+        widget = _DummySequenceWidget()
+        widget.channel_workspace = _DummyChannelWorkspace(["01", "02", "03"])
+        widget._waveform_display_override_direction = "03"
+        widget._current_trigger_direction = ""
+        widget._direction_waveform_cache = {
+            "01": ("wave_6000", 1.0),
+            "02": ("wave_7000", 1.0),
+            "03": ("wave_8000", 1.0),
+        }
+        widget._condition_record_cache = {
+            "01": {"recorded_path": "6000.wav"},
+            "02": {"recorded_path": "7000.wav"},
+            "03": {"recorded_path": "8000.wav"},
+        }
+
+        widget._clear_plot_area()
+
+        self.assertEqual(widget._direction_waveform_cache["01"], ("wave_6000", 1.0))
+        self.assertEqual(widget._direction_waveform_cache["02"], ("wave_7000", 1.0))
+        self.assertIsNone(widget._direction_waveform_cache["03"])
+        self.assertIn("01", widget._condition_record_cache)
+        self.assertIn("02", widget._condition_record_cache)
+        self.assertNotIn("03", widget._condition_record_cache)
+        self.assertEqual(widget.channel_workspace.cleared_directions, ["03"])
+        self.assertEqual(widget.channel_workspace.clear_all_count, 0)
+
     def test_waveform_mark_does_not_update_left_condition_judgement(self):
         widget = _DummySequenceWidget()
         widget.count_board.mode = "mark"
@@ -309,6 +358,47 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
         self.assertEqual(widget.left_panel.results, [])
+
+    def test_waveform_mark_updates_bound_recent_session_result(self):
+        widget = _DummySequenceWidget()
+        widget.count_board.mode = "mark"
+        widget.channel_workspace = _DummyChannelWorkspace(["01"])
+
+        with tempfile.TemporaryDirectory() as folder:
+            old_path = os.path.join(folder, "old.wav")
+            new_path = os.path.join(folder, "ok.wav")
+            with open(old_path, "wb") as f:
+                f.write(b"RIFF")
+            widget._condition_record_cache = {
+                "01": {
+                    "recorded_path": old_path,
+                    "recorded_signal_info": {"file_path": old_path, "labels": "not_labeled"},
+                    "session_id": "recent_1",
+                }
+            }
+            widget.recent_test_session_by_id = {
+                "recent_1": {
+                    "session_id": "recent_1",
+                    "condition_key": "01",
+                    "result_label": "not labeled",
+                    "recorded_path": old_path,
+                    "recorded_signal_info": {"file_path": old_path, "labels": "not_labeled"},
+                }
+            }
+            widget._relabel_stored_audio_record = lambda _path, _info, label: (
+                error_code.OK,
+                "ok",
+                new_path,
+                {"file_path": new_path, "labels": label},
+            )
+
+            widget.on_waveform_condition_mark_clicked("01", "OK")
+
+        session_record = widget.recent_test_session_by_id["recent_1"]
+        self.assertEqual(session_record["result_label"], "ok")
+        self.assertEqual(session_record["recorded_path"], new_path)
+        self.assertEqual(session_record["recorded_signal_info"]["labels"], "OK")
+        self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
 
 
 if __name__ == "__main__":

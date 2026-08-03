@@ -43,6 +43,11 @@ class SequenceWidgetStreamingOpsMixin:
             return "not_labeled"
         return ""
 
+    def _is_recording_in_progress_for_labeling(self) -> bool:
+        streaming_processor = getattr(self, "streaming_processor", None)
+        processor_recording = bool(getattr(streaming_processor, "is_recording", False))
+        return bool(getattr(self, "player_status_flag", False)) or processor_recording
+
     @staticmethod
     def _resolve_audio_path_to_abs(file_path: str | None):
         normalized = str(file_path or "").strip()
@@ -67,6 +72,7 @@ class SequenceWidgetStreamingOpsMixin:
         self._condition_record_cache[key] = {
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
+            "session_id": str(getattr(self, "_current_recent_session_id", "") or ""),
         }
         channel_workspace = getattr(self, "channel_workspace", None)
         if channel_workspace is not None:
@@ -90,6 +96,7 @@ class SequenceWidgetStreamingOpsMixin:
             return {
                 "recorded_path": getattr(self, "recorded_path", None),
                 "recorded_signal_info": dict(getattr(self, "recorded_signal_info", {}) or {}),
+                "session_id": str(getattr(self, "_current_recent_session_id", "") or ""),
             }
         return None
 
@@ -127,6 +134,10 @@ class SequenceWidgetStreamingOpsMixin:
             QMessageBox.warning(self, "提示", f"播放失败: {msg}")
 
     def on_waveform_condition_mark_clicked(self, condition_key: str, label: str) -> None:
+        if self._is_recording_in_progress_for_labeling():
+            QMessageBox.warning(self, "提示", "正在录音，请等待录音完成后再标记 OK/NG。")
+            return
+
         normalized_label = self._normalize_audio_label(label)
         if normalized_label not in ("OK", "NG"):
             return
@@ -137,7 +148,9 @@ class SequenceWidgetStreamingOpsMixin:
         record = self._resolve_condition_record(key)
         previous_label = "not_labeled"
         old_abs_path = None
+        session_id = ""
         if isinstance(record, dict):
+            session_id = str(record.get("session_id") or getattr(self, "_current_recent_session_id", "") or "")
             recorded_signal_info = dict(record.get("recorded_signal_info", {}) or {})
             previous_label = self._normalize_audio_label(recorded_signal_info.get("labels")) or "not_labeled"
             recorded_path = record.get("recorded_path") or recorded_signal_info.get("file_path")
@@ -155,25 +168,49 @@ class SequenceWidgetStreamingOpsMixin:
                 self._condition_record_cache[key] = {
                     "recorded_path": new_path,
                     "recorded_signal_info": updated_info,
+                    "session_id": session_id,
                 }
+                if session_id:
+                    update_recent_session = getattr(self, "_update_recent_session", None)
+                    if callable(update_recent_session):
+                        update_recent_session(
+                            session_id,
+                            result_label=self._format_recent_session_result_label(normalized_label),
+                            recorded_path=new_path,
+                            recorded_signal_info=dict(updated_info or {}),
+                        )
                 current_path = self._resolve_audio_path_to_abs(getattr(self, "recorded_path", None))
                 if current_path and os.path.abspath(current_path) == os.path.abspath(old_abs_path):
                     self.recorded_path = new_path
                     self.recorded_signal_info = dict(updated_info or {})
-                    try:
-                        self._update_current_recent_session_result(normalized_label)
-                    except Exception:
-                        pass
-                update_count = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
-                if callable(update_count):
-                    update_count(previous_label, normalized_label)
-                    self.count_board.set_mark_text()
+                    if not session_id:
+                        try:
+                            self._update_current_recent_session_result(normalized_label)
+                        except Exception:
+                            pass
+                update_group_count = getattr(self, "_update_manual_product_mark_group_count_for_session", None)
+                group_count_handled = callable(update_group_count) and update_group_count(session_id)
+                if not group_count_handled:
+                    update_count = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
+                    if callable(update_count):
+                        update_count(previous_label, normalized_label)
+                        self.count_board.set_mark_text()
             else:
                 recorded_signal_info["labels"] = normalized_label
                 self._condition_record_cache[key] = {
                     "recorded_path": recorded_path,
                     "recorded_signal_info": recorded_signal_info,
+                    "session_id": session_id,
                 }
+                if session_id:
+                    update_recent_session = getattr(self, "_update_recent_session", None)
+                    if callable(update_recent_session):
+                        update_recent_session(
+                            session_id,
+                            result_label=self._format_recent_session_result_label(normalized_label),
+                            recorded_path=recorded_path,
+                            recorded_signal_info=dict(recorded_signal_info or {}),
+                        )
 
         channel_workspace = getattr(self, "channel_workspace", None)
         if channel_workspace is not None:
@@ -182,6 +219,13 @@ class SequenceWidgetStreamingOpsMixin:
             cached = (getattr(self, "_condition_record_cache", {}) or {}).get(key, {})
             if hasattr(channel_workspace, "set_condition_audio_path"):
                 channel_workspace.set_condition_audio_path(key, cached.get("recorded_path") or old_abs_path)
+
+        pending_mark_records = getattr(self, "_pending_mark_result_records", None)
+        if callable(pending_mark_records) and not pending_mark_records():
+            try:
+                self._awaiting_ok_ng = False
+            except Exception:
+                pass
 
     @staticmethod
     def _normalize_db_audio_path(file_path: str):
@@ -238,6 +282,9 @@ class SequenceWidgetStreamingOpsMixin:
 
     def _should_run_silent_analysis_after_recording(self) -> bool:
         if bool((getattr(self, "analysis_config", {}) or {}).get("auto_analysis", False)):
+            return True
+        is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
+        if callable(is_manual_product_cycle_active) and is_manual_product_cycle_active():
             return True
         is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
         return callable(is_directional_cycle_active) and is_directional_cycle_active()
@@ -309,8 +356,15 @@ class SequenceWidgetStreamingOpsMixin:
         clear_recent_history_func = getattr(self, "_clear_recent_session_history", None)
         if should_clear_history and callable(clear_recent_history_func):
             clear_recent_history_func(reset_panel=False)
+        if should_clear_history:
+            reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
+            if callable(reset_manual_product_cycle):
+                reset_manual_product_cycle(clear_waveforms=False)
         if getattr(self, "left_panel", None) is not None:
             self.left_panel.set_condition_configs(self.product_test_condition_configs)
+            reset_display_state = getattr(self, "_reset_product_condition_display_state", None)
+            if callable(reset_display_state):
+                reset_display_state()
         if getattr(self, "channel_workspace", None) is not None:
             self.channel_workspace.set_conditions(self.product_test_condition_configs)
             apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
@@ -415,6 +469,11 @@ class SequenceWidgetStreamingOpsMixin:
         ]
 
     def _resolve_active_recording_waveform_direction(self, fallback: str = "forward") -> str:
+        get_active_product_condition_key = getattr(self, "_get_active_product_condition_key", None)
+        if callable(get_active_product_condition_key):
+            active_condition_key = self._normalize_waveform_direction(get_active_product_condition_key())
+            if active_condition_key:
+                return active_condition_key
         get_active_recording_direction = getattr(self, "_get_active_recording_direction", None)
         if callable(get_active_recording_direction):
             active_direction = self._normalize_waveform_direction(get_active_recording_direction(""))
@@ -443,26 +502,31 @@ class SequenceWidgetStreamingOpsMixin:
             apply_mode()
         self._refresh_direction_waveform_workspace()
 
-    def _refresh_direction_waveform_workspace(self):
+    def _refresh_direction_waveform_workspace(self, direction: str = None):
         if self.channel_workspace is None:
             return
-        for direction in self._waveform_condition_keys():
-            waveform_entry = (getattr(self, "_direction_waveform_cache", {}) or {}).get(direction)
+        keys = self._waveform_condition_keys()
+        target_direction = self._normalize_waveform_direction(direction)
+        directions = [target_direction] if target_direction else keys
+        for direction_key in directions:
+            if direction_key not in keys:
+                continue
+            waveform_entry = (getattr(self, "_direction_waveform_cache", {}) or {}).get(direction_key)
             if not waveform_entry:
                 continue
             waveform, sample_rate = waveform_entry
             waveform = self._normalize_waveform_signal(waveform)
             if waveform is None:
-                self.channel_workspace.clear_direction(direction)
+                self.channel_workspace.clear_direction(direction_key)
                 continue
             time_axis = np.arange(waveform.shape[0]) / float(sample_rate or 1.0)
-            self.channel_workspace.set_direction_data(direction, time_axis, waveform)
-            record = (getattr(self, "_condition_record_cache", {}) or {}).get(direction, {})
+            self.channel_workspace.set_direction_data(direction_key, time_axis, waveform)
+            record = (getattr(self, "_condition_record_cache", {}) or {}).get(direction_key, {})
             if record and hasattr(self.channel_workspace, "set_condition_audio_path"):
-                self.channel_workspace.set_condition_audio_path(direction, record.get("recorded_path"))
+                self.channel_workspace.set_condition_audio_path(direction_key, record.get("recorded_path"))
             label = self._normalize_audio_label((record.get("recorded_signal_info", {}) or {}).get("labels"))
             if label in ("OK", "NG") and hasattr(self.channel_workspace, "set_condition_result"):
-                self.channel_workspace.set_condition_result(direction, label)
+                self.channel_workspace.set_condition_result(direction_key, label)
 
     def create_waveform_layout(self):
         """
@@ -564,6 +628,9 @@ class SequenceWidgetStreamingOpsMixin:
         return 1600, 900
 
     def init_fft_and_stft_flag(self):
+        clear_fft_and_stft_flag = getattr(self.data_struct, "clear_fft_and_stft_flag", None)
+        if callable(clear_fft_and_stft_flag):
+            clear_fft_and_stft_flag()
         model_item_list = self.analysis_config.get("display_sequence", "")
         for item_name in model_item_list:
             self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"])
@@ -578,7 +645,14 @@ class SequenceWidgetStreamingOpsMixin:
             if not os.path.exists(test_result_path):
                 os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
                 with open(test_result_path, "w") as f:
-                    f.write(f"total: 0\n" f"ok: 0\n" f"ng: 0\n" f"ok_percent: 0%\n" f"datatime: {current_time}\n")
+                    f.write(
+                        f"total: 0\n"
+                        f"ok: 0\n"
+                        f"ng: 0\n"
+                        f"not_labels: 0\n"
+                        f"ok_percent: 0%\n"
+                        f"datatime: {current_time}\n"
+                    )
 
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
         mark_result_template = {"total": 0, "ok": 0, "ng": 0, "not_labels": 0, "datatime": current_time}
@@ -736,7 +810,7 @@ class SequenceWidgetStreamingOpsMixin:
 
     def reset_test_reord(self):
         """
-        Reset today's test counters (total/ok/ng/ok_percent) and refresh UI texts.
+        Reset today's test counters (total/ok/ng/not_labels/ok_percent) and refresh UI texts.
         """
         current_time = datetime.now().strftime("%Y-%m-%d")
         ensure_test_result_file(self.analysis_config)
@@ -745,6 +819,7 @@ class SequenceWidgetStreamingOpsMixin:
             "total: 0\n",
             "ok: 0\n",
             "ng: 0\n",
+            "not_labels: 0\n",
             "ok_percent: 0%\n",
             f"datatime: {current_time}\n",
         ]
@@ -794,6 +869,9 @@ class SequenceWidgetStreamingOpsMixin:
             self._sn_clear_on_next_scan = False
         except Exception:
             pass
+        reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
+        if callable(reset_manual_product_cycle):
+            reset_manual_product_cycle(clear_waveforms=True)
         try:
             # Clear cached wave so “分析”不会对旧数据误操作
             if hasattr(self.data_struct, "store_wave_data"):
@@ -817,23 +895,25 @@ class SequenceWidgetStreamingOpsMixin:
 
     def reset_statistics_on_startup(self):
         """
-        Clear both test/mark summary counters at startup.
+        Keep same-day summary counters at startup.
 
-        Recent-session history is in-memory and starts empty on each launch, so
-        we reset both summary panels as well to keep startup state consistent.
+        Statistics are daily: launching the app again on the same date must read
+        existing counters, while a new date gets a fresh result file from
+        init_result_files().
         """
         try:
-            self.reset_test_reord()
+            self.init_result_files()
         except Exception as e:
             try:
-                self.default_logger.error(f"reset_test_statistics_on_startup_error: {e}")
+                self.default_logger.error(f"init_statistics_on_startup_error: {e}")
             except Exception:
                 pass
         try:
-            self._reset_mark_record()
+            self.count_board.set_test_text()
+            self.count_board.set_mark_text()
         except Exception as e:
             try:
-                self.default_logger.error(f"reset_mark_statistics_on_startup_error: {e}")
+                self.default_logger.error(f"refresh_statistics_on_startup_error: {e}")
             except Exception:
                 pass
 
@@ -862,7 +942,6 @@ class SequenceWidgetStreamingOpsMixin:
         if mode and previous_mode and mode != previous_mode:
             self._clear_recent_session_history()
             self._reset_runtime_state_for_mode_switch()
-            self._reset_statistics_for_mode(mode)
         self._last_recent_session_mode = mode
         self.recent_session_panel.set_result_editable(mode == "mark")
         apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
@@ -886,6 +965,9 @@ class SequenceWidgetStreamingOpsMixin:
             self._sn_clear_on_next_scan = False
         except Exception:
             pass
+        reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
+        if callable(reset_manual_product_cycle):
+            reset_manual_product_cycle(clear_waveforms=True)
 
     def _reset_statistics_for_mode(self, mode: str):
         try:
@@ -928,7 +1010,8 @@ class SequenceWidgetStreamingOpsMixin:
             self._direction_waveform_cache[direction] = None
             if isinstance(getattr(self, "_condition_record_cache", None), dict):
                 self._condition_record_cache.pop(direction, None)
-            self._refresh_direction_waveform_workspace()
+            if self.channel_workspace is not None:
+                self.channel_workspace.clear_direction(direction)
             return
         for key in self._waveform_condition_keys():
             self._direction_waveform_cache[key] = None
@@ -967,7 +1050,7 @@ class SequenceWidgetStreamingOpsMixin:
             target_direction = keys[0]
         self._direction_waveform_cache[target_direction] = (waveform, float(sample_rate or 1.0))
         self._cache_condition_record(target_direction)
-        self._refresh_direction_waveform_workspace()
+        self._refresh_direction_waveform_workspace(target_direction)
 
     def on_audio_chunk_received(self, chunk):
         """
@@ -1010,7 +1093,7 @@ class SequenceWidgetStreamingOpsMixin:
         sample_rate = float(self.data_struct.sample_rate or 1.0)
         direction = self._resolve_active_recording_waveform_direction() or "forward"
         self._direction_waveform_cache[direction] = (accumulated.mean(axis=1).astype(np.float32, copy=False), sample_rate)
-        self._refresh_direction_waveform_workspace()
+        self._refresh_direction_waveform_workspace(direction)
 
         if self.streaming_wav_writer:
             try:
@@ -1174,7 +1257,12 @@ class SequenceWidgetStreamingOpsMixin:
             except Exception:
                 current_label = "not_labeled"
             self._update_current_recent_session_result(current_label)
-            if str(getattr(self.count_board, "mode", "") or "") == "mark":
+
+            is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
+            manual_product_cycle_was_active = (
+                callable(is_manual_product_cycle_active) and is_manual_product_cycle_active()
+            )
+            if str(getattr(self.count_board, "mode", "") or "") == "mark" and not manual_product_cycle_was_active:
                 on_mark_cycle_direction_recorded = getattr(self, "_on_mark_cycle_direction_recorded", None)
                 if callable(on_mark_cycle_direction_recorded):
                     on_mark_cycle_direction_recorded(current_label)
@@ -1200,10 +1288,33 @@ class SequenceWidgetStreamingOpsMixin:
             if callable(on_directional_recording_completed):
                 on_directional_recording_completed()
 
+            if manual_product_cycle_was_active:
+                mark_manual_product_complete = getattr(
+                    self,
+                    "_mark_manual_product_condition_recording_completed",
+                    None,
+                )
+                if callable(mark_manual_product_complete):
+                    mark_manual_product_complete()
+                update_group_count = getattr(self, "_update_manual_product_mark_group_count", None)
+                if callable(update_group_count):
+                    update_group_count(getattr(self, "_manual_product_condition_group_id", ""))
+
             # Motor directional workflow needs left-panel AI results even when the
             # legacy auto-analysis checkbox is off, so run silently in that case too.
             if self._should_run_silent_analysis_after_recording():
                 self.run(show_windows=False)
+
+            advance_manual_product_cycle = getattr(
+                self,
+                "_advance_manual_product_condition_cycle_after_recording",
+                None,
+            )
+            if callable(advance_manual_product_cycle):
+                advance_manual_product_cycle()
+            if manual_product_cycle_was_active:
+                self.data_btn.setEnabled(False)
+                self.replayer_btn.setDisabled(True)
 
             # Update player button state
             self._record_workflow_busy = False
@@ -1322,6 +1433,15 @@ class SequenceWidgetStreamingOpsMixin:
             except Exception as e:
                 self.default_logger.warning(
                     f"clear_waveforms_after_invalid_recording_failed: {e}"
+                )
+
+        reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
+        if callable(reset_manual_product_cycle):
+            try:
+                reset_manual_product_cycle(clear_waveforms=False)
+            except Exception as e:
+                self.default_logger.warning(
+                    f"reset_manual_product_cycle_after_invalid_recording_failed: {e}"
                 )
 
         left_panel = getattr(self, "left_panel", None)

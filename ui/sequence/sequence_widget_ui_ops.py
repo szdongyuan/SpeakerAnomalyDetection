@@ -192,11 +192,29 @@ class SequenceWidgetUiOpsMixin:
             self._apply_condition_mode_to_waveforms(target_mode)
             return
 
+        current_mode = self._current_condition_mode()
+        if target_mode != current_mode and not self._confirm_mode_switch_if_round_incomplete():
+            self._sync_condition_mode_combobox_from_count_board()
+            return
+
         if target_mode == "mark":
             self.count_board.on_mark_btn_clicked()
         else:
             self.count_board.on_test_btn_clicked()
         self._sync_condition_mode_combobox_from_count_board()
+
+    def _confirm_mode_switch_if_round_incomplete(self):
+        has_incomplete_round = getattr(self, "_has_incomplete_manual_product_condition_round", None)
+        if not callable(has_incomplete_round) or not has_incomplete_round():
+            return True
+        reply = QMessageBox.question(
+            self,
+            "切换模式",
+            "本轮还未结束，是否切换模式？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
 
     def on_mark_btn_clicked(self):
         self.data_struct.store_wave_data = None

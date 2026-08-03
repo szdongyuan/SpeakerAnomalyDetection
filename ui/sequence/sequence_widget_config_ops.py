@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 from base.load_config import LoadUiConfig
 from base.product_test_program_config import ProductTestProgramConfigManager
 from consts import error_code
+from consts.running_consts import DEFAULT_DIR
 
 
 class SequenceWidgetConfigOpsMixin:
@@ -49,6 +50,75 @@ class SequenceWidgetConfigOpsMixin:
         return LoadUiConfig.load_product_test_program_condition_configs(
             self._get_active_product_program_path()
         )
+
+    def _resolve_sequence_queue_path(self, queue_name):
+        queue_name = str(queue_name or "").strip()
+        if not queue_name:
+            return None
+        if self._is_sequence_config_path(queue_name):
+            return os.path.abspath(queue_name)
+
+        manager = self._get_product_program_manager()
+        try:
+            queue_info = (manager.load_queue_catalog() or {}).get(queue_name)
+            queue_path = queue_info.get("path") if isinstance(queue_info, dict) else None
+            if self._is_sequence_config_path(queue_path):
+                return os.path.abspath(queue_path)
+        except Exception:
+            pass
+
+        try:
+            registry = LoadUiConfig._load_sequence_config_registry(manager.queue_registry_path)
+        except Exception:
+            registry = {}
+        registered_path = registry.get(queue_name) if isinstance(registry, dict) else None
+        if self._is_sequence_config_path(registered_path):
+            return os.path.abspath(registered_path)
+
+        file_name = queue_name if queue_name.lower().endswith(".json") else f"{queue_name}.json"
+        queue_dir = os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
+        candidate = os.path.join(queue_dir, file_name)
+        if self._is_sequence_config_path(candidate):
+            return os.path.abspath(candidate)
+        return None
+
+    def _apply_sequence_config_from_path(self, queue_path, update_registry=False):
+        if not self._is_sequence_config_path(queue_path):
+            return False, "测试队列配置文件不可用"
+
+        load_code, result = LoadUiConfig().load_sequence_config_from_json(queue_path)
+        if load_code != error_code.OK or not isinstance(result, list) or not result:
+            return False, "测试队列配置读取失败"
+        if not isinstance(result[0], dict) or "seq1" not in result[0]:
+            return False, "测试队列配置格式错误"
+
+        self.using_config_path = queue_path
+        if update_registry:
+            LoadUiConfig.update_using_config_path(self.using_config_path)
+        self.sequence_config = result
+        seq = self.sequence_config[0]["seq1"]
+        self.analysis_config = seq.get("analysis_list", {})
+        if self.count_board:
+            self.count_board.analysis_config = self.analysis_config
+            self._refresh_test_mode_availability()
+        self._set_sequence_config_available_state(True)
+        self.init_data_struct_stimulus_config()
+        self.init_fft_and_stft_flag()
+        return True, ""
+
+    def _load_sequence_config_for_product_condition(self, condition_config):
+        if not isinstance(condition_config, dict):
+            return False, "工况配置格式错误"
+        condition_name = str(
+            condition_config.get("condition_name") or condition_config.get("name") or ""
+        ).strip()
+        queue_name = str(condition_config.get("test_queue") or "").strip()
+        if not queue_name:
+            return False, f"{condition_name or '当前工况'} 未绑定测试队列"
+        queue_path = self._resolve_sequence_queue_path(queue_name)
+        if not queue_path:
+            return False, f"{condition_name or '当前工况'} 绑定的测试队列不存在: {queue_name}"
+        return self._apply_sequence_config_from_path(queue_path, update_registry=False)
 
     def eventFilter(self, obj, event):
         """
@@ -372,6 +442,9 @@ class SequenceWidgetConfigOpsMixin:
             sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
             if callable(sync_product_conditions):
                 sync_product_conditions(clear_recent_history=True)
+            reset_manual_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
+            if callable(reset_manual_cycle):
+                reset_manual_cycle(clear_waveforms=True)
             self.replayer_btn.setDisabled(True)
             self.data_btn.setDisabled(True)
             self.data_struct.store_wave_data = None

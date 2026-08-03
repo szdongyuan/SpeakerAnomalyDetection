@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QToolButton
+from PyQt5.QtWidgets import QApplication, QComboBox, QGraphicsOpacityEffect, QLabel, QToolButton
 
 if "base.playback_controller" not in sys.modules:
     playback_controller = types.ModuleType("base.playback_controller")
@@ -137,6 +137,8 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
 
         self.assertIsInstance(view_btn, QToolButton)
         self.assertFalse(view_btn.isEnabled())
+        self.assertIsInstance(view_btn.graphicsEffect(), QGraphicsOpacityEffect)
+        self.assertLessEqual(view_btn.graphicsEffect().opacity(), 0.35)
 
     def test_summary_result_is_ng_when_any_condition_is_ng(self):
         panel = self._panel()

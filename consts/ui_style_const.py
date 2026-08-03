@@ -803,10 +803,13 @@ count_board_ok_button_style = _style("""
                 padding: 5px 12px;
             }
             QPushButton:hover {
-                background-color: #DCF3E6;
+                background-color: #D6F4E2;
+                border-color: #15803D;
             }
             QPushButton:pressed {
-                background-color: #CDEBDD;
+                background-color: #BCE8CF;
+                border-color: #166534;
+                padding: 7px 10px 3px 14px;
             }
 """)
 
@@ -822,10 +825,13 @@ count_board_ng_button_style = _style("""
                 padding: 5px 12px;
             }
             QPushButton:hover {
-                background-color: #FADADA;
+                background-color: #FBD0D0;
+                border-color: #B91C1C;
             }
             QPushButton:pressed {
-                background-color: #F5CACA;
+                background-color: #F4B7B7;
+                border-color: #991B1B;
+                padding: 7px 10px 3px 14px;
             }
 """)
 
@@ -996,9 +1002,9 @@ recent_session_action_button_style = """
                 background-color: rgba(212, 225, 242, 0.95);
             }
             QToolButton:disabled {
-                color: rgb(148, 163, 184);
-                border-color: rgba(148, 163, 184, 0.24);
-                background-color: rgba(226, 232, 240, 0.55);
+                color: rgba(148, 163, 184, 0.42);
+                border-color: rgba(148, 163, 184, 0.14);
+                background-color: rgba(248, 250, 252, 0.42);
             }
 """
 
@@ -1089,16 +1095,38 @@ waveform_mark_button_style = _style("""
             }
             QPushButton:pressed {
                 background-color: #DDE9F8;
+                padding-top: 2px;
+                padding-left: 1px;
             }
             QPushButton#conditionOkButton {
                 color: #166534;
                 border-color: $COLOR_OK;
                 background-color: #E8F7EE;
             }
+            QPushButton#conditionOkButton:hover {
+                background-color: #D6F4E2;
+                border-color: #15803D;
+            }
+            QPushButton#conditionOkButton:pressed {
+                background-color: #BCE8CF;
+                border-color: #166534;
+                padding-top: 2px;
+                padding-left: 1px;
+            }
             QPushButton#conditionNgButton {
                 color: #991B1B;
                 border-color: $COLOR_NG;
                 background-color: #FCE8E8;
+            }
+            QPushButton#conditionNgButton:hover {
+                background-color: #FBD0D0;
+                border-color: #B91C1C;
+            }
+            QPushButton#conditionNgButton:pressed {
+                background-color: #F4B7B7;
+                border-color: #991B1B;
+                padding-top: 2px;
+                padding-left: 1px;
             }
 """)
 

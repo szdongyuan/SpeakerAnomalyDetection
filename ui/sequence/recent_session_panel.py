@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QMessageBox,
+    QGraphicsOpacityEffect,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -456,6 +457,16 @@ class RecentSessionPanel(QWidget):
         )
         return combo
 
+    @staticmethod
+    def _set_action_button_enabled(button: QToolButton, enabled: bool) -> None:
+        button.setEnabled(bool(enabled))
+        if enabled:
+            button.setGraphicsEffect(None)
+            return
+        opacity_effect = QGraphicsOpacityEffect(button)
+        opacity_effect.setOpacity(0.32)
+        button.setGraphicsEffect(opacity_effect)
+
     def _create_condition_view_button(self, session_id: str):
         view_btn = QToolButton()
         view_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/data.png"))
@@ -467,7 +478,7 @@ class RecentSessionPanel(QWidget):
             view_btn.setToolTip("查看该工况分析结果")
             view_btn.clicked.connect(lambda _checked=False, sid=session_id: self._on_view_button_clicked(sid))
         else:
-            view_btn.setEnabled(False)
+            self._set_action_button_enabled(view_btn, False)
             view_btn.setToolTip("当前工况暂无分析结果")
         return view_btn
 

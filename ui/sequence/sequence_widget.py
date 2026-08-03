@@ -89,6 +89,13 @@ class SequenceWindow(
         self.last_play_count = None  # Cache last run token for replay overwrite
         self._current_cycle_recorded_count = None
         self._current_run_recording_token = ""
+        self._manual_product_condition_index = 0
+        self._manual_product_condition_group_id = ""
+        self._manual_product_condition_results = {}
+        self._manual_product_condition_completed_keys = set()
+        self._manual_product_condition_counted_group_labels = {}
+        self._active_product_condition_key = ""
+        self._active_product_condition_config = None
 
         self.default_logger = LogManager.set_log_handler("core")
         self._missing_config_prompted = False
@@ -179,7 +186,7 @@ class SequenceWindow(
         self.streaming_poll_timer = QTimer(self)
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
 
-        # Startup baseline: history is empty after relaunch, so clear both summaries too.
+        # Startup statistics are daily; keep same-day counters and only roll over on a new date.
         self.reset_statistics_on_startup()
 
         # Restore persisted mode before UI callbacks are registered to avoid startup side effects.

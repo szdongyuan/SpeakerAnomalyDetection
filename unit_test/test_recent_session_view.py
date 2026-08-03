@@ -2,6 +2,7 @@ import logging
 import sys
 import types
 import unittest
+import copy
 from types import SimpleNamespace
 
 import numpy as np
@@ -40,19 +41,37 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
         self._session_record = {"recorded_signal_info": {}, "sample_rate": 48000}
         self.recorded_path = "current.wav"
         self.recorded_signal_info = {"file_path": "current.wav"}
+        self.sequence_config = [
+            {
+                "seq1": {
+                    "acq": {"mode": "RECORD_ONLY", "detail": {"sample_rate": 48000}},
+                    "analysis_list": {
+                        "display_sequence": ["fft_current"],
+                        "fft_current": {"type": "FFT"},
+                    },
+                }
+            }
+        ]
+        self.using_config_path = "current_queue.json"
         self.data_struct = SimpleNamespace(
             store_wave_data=np.array([1.0, 2.0], dtype=np.float32),
             store_wave_data_multi=np.array([[1.0], [2.0]], dtype=np.float32),
             sample_rate=48000,
             audio_lenth=2,
             analysis_result_dict={"legacy": (True, 0.0)},
+            fft_flag=0,
+            stft_flag=0,
         )
         self.count_board = SimpleNamespace(mode="test")
         self._excel_export_cache = {"cached": True}
         self._excel_exported_record_id = "current.wav"
-        self.analysis_config = {"auto_analysis": True}
+        self.analysis_config = self.sequence_config[0]["seq1"]["analysis_list"]
+        self.count_board.analysis_config = self.analysis_config
+        self._active_input_channels = [0]
         self.data_btn = _DummyButton()
         self.run_calls = []
+        self.run_analysis_configs = []
+        self.run_sequence_configs = []
         self.closed_windows = 0
         self.loaded_audio = []
         self.plot_calls = []
@@ -77,6 +96,8 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
 
     def run(self, show_windows=True):
         self.run_calls.append(show_windows)
+        self.run_analysis_configs.append(copy.deepcopy(self.analysis_config))
+        self.run_sequence_configs.append(copy.deepcopy(self.sequence_config))
 
     def plot_waveform_to_workspace(self, data, sample_rate):
         self.plot_calls.append((np.asarray(data).copy(), sample_rate))
@@ -92,6 +113,45 @@ class TestRecentSessionView(unittest.TestCase):
         widget._show_recent_session_analysis_by_id("recent_1")
 
         self.assertEqual(widget.run_calls, [True])
+
+    def test_view_recent_session_uses_recorded_condition_config_snapshot(self):
+        widget = _DummySequenceWidget()
+        original_analysis_config = copy.deepcopy(widget.analysis_config)
+        original_sequence_config = copy.deepcopy(widget.sequence_config)
+        original_using_config_path = widget.using_config_path
+        recorded_sequence_config = [
+            {
+                "seq1": {
+                    "acq": {"mode": "RECORD_ONLY", "detail": {"sample_rate": 48000}},
+                    "analysis_list": {
+                        "display_sequence": ["ai_6000"],
+                        "ai_6000": {"type": "AI", "config_name": "6000_ai"},
+                    },
+                }
+            }
+        ]
+        widget._session_record = {
+            "recorded_signal_info": {},
+            "recorded_path": "history.wav",
+            "sample_rate": 48000,
+            "condition_key": "q6000",
+            "config_snapshot": {
+                "sequence_config": recorded_sequence_config,
+                "analysis_config": recorded_sequence_config[0]["seq1"]["analysis_list"],
+                "using_config_path": "queue_6000.json",
+                "active_input_channels": [1],
+            },
+        }
+
+        widget._show_recent_session_analysis_by_id("recent_1")
+
+        self.assertEqual(widget.run_analysis_configs[0]["display_sequence"], ["ai_6000"])
+        self.assertEqual(widget.run_analysis_configs[0]["ai_6000"]["type"], "AI")
+        self.assertEqual(widget.run_sequence_configs[0], recorded_sequence_config)
+        self.assertEqual(widget._active_input_channels, [0])
+        self.assertEqual(widget.analysis_config, original_analysis_config)
+        self.assertEqual(widget.sequence_config, original_sequence_config)
+        self.assertEqual(widget.using_config_path, original_using_config_path)
 
 
 if __name__ == "__main__":

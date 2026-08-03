@@ -39,6 +39,7 @@ class SequenceCountBoard(QWidget):
         self.total_line_edit = QLineEdit()
         self.ok_line_edit = QLineEdit()
         self.ng_line_edit = QLineEdit()
+        self.not_labeled_line_edit = QLineEdit()
         self.yield_line_edit = QLineEdit()
         self.datatime_line_edit = QLineEdit()
         self.mark_total_edit = QLineEdit("0")
@@ -108,6 +109,7 @@ class SequenceCountBoard(QWidget):
         self.total_line_edit.setAlignment(Qt.AlignCenter)
         self.ok_line_edit.setAlignment(Qt.AlignCenter)
         self.ng_line_edit.setAlignment(Qt.AlignCenter)
+        self.not_labeled_line_edit.setAlignment(Qt.AlignCenter)
         self.yield_line_edit.setAlignment(Qt.AlignCenter)
         self.datatime_line_edit.setAlignment(Qt.AlignCenter)
         self.mark_total_edit.setAlignment(Qt.AlignCenter)
@@ -120,6 +122,7 @@ class SequenceCountBoard(QWidget):
         self.total_line_edit.setDisabled(True)
         self.ok_line_edit.setDisabled(True)
         self.ng_line_edit.setDisabled(True)
+        self.not_labeled_line_edit.setDisabled(True)
         self.yield_line_edit.setDisabled(True)
         self.datatime_line_edit.setDisabled(True)
         self.mark_total_edit.setDisabled(True)
@@ -136,6 +139,7 @@ class SequenceCountBoard(QWidget):
             self.total_line_edit,
             self.ok_line_edit,
             self.ng_line_edit,
+            self.not_labeled_line_edit,
             self.yield_line_edit,
             self.datatime_line_edit,
             self.mark_total_edit,
@@ -190,6 +194,7 @@ class SequenceCountBoard(QWidget):
         total_layout = self.create_horizontal_layout("总    数：", self.total_line_edit)
         ok_layout = self.create_horizontal_layout("OK    数：", self.ok_line_edit)
         ng_layout = self.create_horizontal_layout("NG    数：", self.ng_line_edit)
+        not_labeled_layout = self.create_horizontal_layout("未标记数：", self.not_labeled_line_edit)
         yield_layout = self.create_horizontal_layout("合 格 率：", self.yield_line_edit)
         datatime_layout = self.create_horizontal_layout("录制日期：", self.datatime_line_edit)
         test_layout = QVBoxLayout()
@@ -198,6 +203,7 @@ class SequenceCountBoard(QWidget):
         test_layout.addLayout(total_layout)
         test_layout.addLayout(ok_layout)
         test_layout.addLayout(ng_layout)
+        test_layout.addLayout(not_labeled_layout)
         test_layout.addLayout(yield_layout)
         test_layout.addLayout(datatime_layout)
 
@@ -248,6 +254,7 @@ class SequenceCountBoard(QWidget):
         self.mark_btn.setEnabled(True)
         self.stacked_widget.setCurrentIndex(0)
         self.mode = "test"
+        self.set_test_text()
         self._notify_mode_state_changed()
 
     def on_mark_btn_clicked(self):
@@ -259,6 +266,7 @@ class SequenceCountBoard(QWidget):
         self.mark_btn.setStyleSheet(ui_style_const.count_board_mode_active_style)
         self.mark_btn.setEnabled(False)
         self.test_btn.setEnabled(bool(self._test_available))
+        self.set_mark_text()
         self._notify_mode_state_changed()
 
     def set_test_available(self, available: bool, reason: str = ""):
@@ -312,6 +320,14 @@ class SequenceCountBoard(QWidget):
             kv[k.strip().lower()] = v.strip()
         return kv
 
+    def _set_visible_summary_text(self, total, ok, ng, not_labeled, yield_percent, datatime):
+        self.total_line_edit.setText(str(total))
+        self.ok_line_edit.setText(str(ok))
+        self.ng_line_edit.setText(str(ng))
+        self.not_labeled_line_edit.setText(str(not_labeled))
+        self.yield_line_edit.setText(str(yield_percent))
+        self.datatime_line_edit.setText(str(datatime))
+
     def set_test_text(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
         ensure_test_result_file(self.analysis_config)
@@ -322,52 +338,93 @@ class SequenceCountBoard(QWidget):
             total = kv.get("total", "0")
             ok = kv.get("ok", "0")
             ng = kv.get("ng", "0")
+            not_labels = kv.get("not_labels", kv.get("not_labeled", "0"))
             ok_percent = kv.get("ok_percent", "0%")
             if ok_percent and (not ok_percent.endswith("%")):
                 ok_percent = f"{ok_percent}%"
             datatime = kv.get("datatime", current_time)
-            self.total_line_edit.setText(str(total))
-            self.ok_line_edit.setText(str(ok))
-            self.ng_line_edit.setText(str(ng))
-            self.yield_line_edit.setText(str(ok_percent))
-            self.datatime_line_edit.setText(str(datatime))
+            self._set_visible_summary_text(total, ok, ng, not_labels, ok_percent, datatime)
 
     def set_mark_text(self):
         mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
         with open(mark_result_path, "r") as f:
             data = json.load(f)
-            self.mark_total_edit.setText(str(int(data.get("total", 0) or 0)))
-            self.mark_ok_edit.setText(str(int(data.get("ok", 0) or 0)))
-            self.mark_ng_edit.setText(str(int(data.get("ng", 0) or 0)))
-            self.mark_not_labeled_edit.setText(str(int(data.get("not_labels", 0) or 0)))
+            total = int(data.get("total", 0) or 0)
+            ok = int(data.get("ok", 0) or 0)
+            ng = int(data.get("ng", 0) or 0)
+            not_labels = int(data.get("not_labels", 0) or 0)
+            self.mark_total_edit.setText(str(total))
+            self.mark_ok_edit.setText(str(ok))
+            self.mark_ng_edit.setText(str(ng))
+            self.mark_not_labeled_edit.setText(str(not_labels))
             total = int(data.get("total", 0) or 0)
             ok = int(data.get("ok", 0) or 0)
             yield_percent = round(ok / total * 100, 2) if total > 0 else 0
             self.mark_yield_edit.setText(f"{yield_percent}%")
-            self.mark_datatime_edit.setText(str(data.get("datatime", datetime.now().strftime("%Y-%m-%d"))))
+            datatime = str(data.get("datatime", datetime.now().strftime("%Y-%m-%d")))
+            self.mark_datatime_edit.setText(datatime)
+        self.set_test_text()
 
-    def set_test_result_file(self, params):
+    def _read_shared_result_counts(self):
         current_time = datetime.now().strftime("%Y-%m-%d")
         ensure_test_result_file(self.analysis_config)
         test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        lines = list()
-        total = int(self.total_line_edit.text())
-        ok = int(self.ok_line_edit.text())
-        ng = int(self.ng_line_edit.text())
+        with open(test_result_path, "r") as f:
+            kv = self._parse_test_log(f.readlines())
+        try:
+            total = int(kv.get("total", "0") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        try:
+            ok = int(kv.get("ok", "0") or 0)
+        except (TypeError, ValueError):
+            ok = 0
+        try:
+            ng = int(kv.get("ng", "0") or 0)
+        except (TypeError, ValueError):
+            ng = 0
+        try:
+            not_labels = int(kv.get("not_labels", kv.get("not_labeled", "0")) or 0)
+        except (TypeError, ValueError):
+            not_labels = 0
+        return max(0, total), max(0, ok), max(0, ng), max(0, not_labels)
 
-        if params == "OK":
-            ok += 1
-        elif params == "NG":
-            ng += 1
-        total += 1
-        lines.append(f"total: {total}\n")
-        lines.append(f"ok: {ok}\n")
-        lines.append(f"ng: {ng}\n")
+    def _write_shared_result_counts(self, total: int, ok: int, ng: int, not_labels: int = 0):
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        total = max(0, int(total or 0))
+        ok = max(0, int(ok or 0))
+        ng = max(0, int(ng or 0))
+        not_labels = max(0, int(not_labels or 0))
+        total = max(total, ok + ng + not_labels)
         ok_percent = round(ok / total * 100, 2) if total > 0 else 0
-        lines.append(f"ok_percent: {ok_percent}%\n")
-        lines.append(f"datatime: {current_time}\n")
+        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
         with open(test_result_path, "w") as f:
-            f.writelines(lines)
+            f.writelines(
+                [
+                    f"total: {total}\n",
+                    f"ok: {ok}\n",
+                    f"ng: {ng}\n",
+                    f"not_labels: {not_labels}\n",
+                    f"ok_percent: {ok_percent}%\n",
+                    f"datatime: {current_time}\n",
+                ]
+            )
+
+    def set_test_result_file(self, params):
+        normalized = self._normalize_mark_label(params)
+        if normalized not in ("OK", "NG", "not_labeled"):
+            self.set_test_text()
+            return
+
+        total, ok, ng, not_labels = self._read_shared_result_counts()
+        if normalized == "OK":
+            ok += 1
+        elif normalized == "NG":
+            ng += 1
+        elif normalized == "not_labeled":
+            not_labels += 1
+        total += 1
+        self._write_shared_result_counts(total, ok, ng, not_labels)
 
     def set_mark_result_file(self, params):
         # Backward-compatible alias for historical callers.
@@ -400,6 +457,10 @@ class SequenceCountBoard(QWidget):
         data["datatime"] = datatime
         with open(mark_result_path, "w") as f:
             json.dump(data, f, indent=4)
+        if normalized in ("OK", "NG", "not_labeled"):
+            self.set_test_result_file(normalized)
+        else:
+            self.set_test_text()
 
     @staticmethod
     def _normalize_mark_label(label: str) -> str:
@@ -451,5 +512,38 @@ class SequenceCountBoard(QWidget):
         data["datatime"] = datetime.now().strftime("%Y-%m-%d")
         with open(mark_result_path, "w") as f:
             json.dump(data, f, indent=4)
+        self.update_shared_result_file_on_relabel(old_normalized, new_normalized)
         self.set_mark_text()
+
+    def update_shared_result_file_on_relabel(self, old_label: str, new_label: str):
+        old_normalized = self._normalize_mark_label(old_label)
+        new_normalized = self._normalize_mark_label(new_label)
+        if old_normalized == new_normalized:
+            self.set_test_text()
+            return
+
+        total, ok, ng, not_labels = self._read_shared_result_counts()
+        old_tracked = old_normalized in ("OK", "NG", "not_labeled")
+        new_tracked = new_normalized in ("OK", "NG", "not_labeled")
+        if old_normalized == "OK":
+            ok = max(0, ok - 1)
+        elif old_normalized == "NG":
+            ng = max(0, ng - 1)
+        elif old_normalized == "not_labeled":
+            not_labels = max(0, not_labels - 1)
+
+        if new_normalized == "OK":
+            ok += 1
+        elif new_normalized == "NG":
+            ng += 1
+        elif new_normalized == "not_labeled":
+            not_labels += 1
+
+        if not old_tracked and new_tracked:
+            total += 1
+        elif old_tracked and not new_tracked:
+            total = max(0, total - 1)
+
+        self._write_shared_result_counts(total, ok, ng, not_labels)
+        self.set_test_text()
 

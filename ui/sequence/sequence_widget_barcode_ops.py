@@ -807,6 +807,11 @@ class SequenceWidgetBarcodeOpsMixin:
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(100, lambda d=direction: self.on_directional_triggered(d))
 
+    def _is_recording_in_progress_for_labeling(self) -> bool:
+        streaming_processor = getattr(self, "streaming_processor", None)
+        processor_recording = bool(getattr(streaming_processor, "is_recording", False))
+        return bool(getattr(self, "player_status_flag", False)) or processor_recording
+
     def clicked_ok_or_ng(self, manual=True):
         """
         Handles the logic when the OK or NG button is clicked.
@@ -824,6 +829,9 @@ class SequenceWidgetBarcodeOpsMixin:
             manual: If True (default), this is a manual user click; if False, this is an auto-triggered call.
                     Only manual calls will disable the replay and data buttons.
         """
+        if self._is_recording_in_progress_for_labeling():
+            QMessageBox.warning(self, "提示", "正在录音，请等待录音完成后再标记 OK/NG。")
+            return
         if (
             not hasattr(self.data_struct, "store_wave_data")
             or self.data_struct.store_wave_data is None

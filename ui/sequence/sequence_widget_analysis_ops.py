@@ -1,3 +1,4 @@
+import copy
 import os
 import threading
 from datetime import datetime
@@ -62,6 +63,28 @@ class SequenceWidgetAnalysisOpsMixin:
             return "not_labeled"
         return ""
 
+    def _pending_mark_result_records(self):
+        if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
+            return []
+
+        pending_records = []
+        session_ids = list(getattr(self, "recent_test_sessions", []) or [])
+        records_by_id = getattr(self, "recent_test_session_by_id", {}) or {}
+        if not session_ids:
+            session_ids = list(records_by_id.keys())
+
+        for session_id in session_ids:
+            record = records_by_id.get(session_id)
+            if not isinstance(record, dict):
+                continue
+            recorded_signal_info = record.get("recorded_signal_info", {}) or {}
+            label = self._normalize_recent_session_storage_label(
+                recorded_signal_info.get("labels") or record.get("result_label")
+            )
+            if label not in ("OK", "NG"):
+                pending_records.append(record)
+        return pending_records
+
     def _get_recording_direction(self) -> str:
         normalize_direction = getattr(self, "_normalize_trigger_direction", None)
         if callable(normalize_direction):
@@ -73,7 +96,396 @@ class SequenceWidgetAnalysisOpsMixin:
         # Keep token human-readable and non-count-based.
         return datetime.now().strftime("%H%M%S%f")
 
+    @staticmethod
+    def _safe_record_name_suffix(value: str) -> str:
+        text = str(value or "").strip()
+        safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in text).strip("_")
+        return safe[:40]
+
+    @staticmethod
+    def _product_condition_base_key(condition_config: dict, index: int = 0) -> str:
+        if not isinstance(condition_config, dict):
+            return str(index)
+        return str(
+            condition_config.get("trigger_state")
+            or condition_config.get("key")
+            or condition_config.get("test_queue")
+            or index
+        ).strip()
+
+    @classmethod
+    def _product_condition_runtime_key(cls, condition_config: dict, index: int = 0) -> str:
+        if isinstance(condition_config, dict):
+            runtime_key = str(condition_config.get("_runtime_key") or "").strip()
+            if runtime_key:
+                return runtime_key
+        return cls._product_condition_base_key(condition_config, index)
+
+    def _product_condition_sequence(self):
+        result = []
+        used_keys = set()
+        for index, item in enumerate(getattr(self, "product_test_condition_configs", []) or []):
+            if not isinstance(item, dict):
+                continue
+            if not str(
+                item.get("trigger_state")
+                or item.get("key")
+                or item.get("test_queue")
+                or item.get("condition_name")
+                or item.get("name")
+                or ""
+            ).strip():
+                continue
+            condition = dict(item)
+            key = self._product_condition_base_key(condition, index)
+            if key in used_keys:
+                key = f"{key}#{index + 1}"
+            used_keys.add(key)
+            condition["_runtime_key"] = key
+            result.append(condition)
+        return result
+
+    def _get_active_product_condition_key(self) -> str:
+        return str(getattr(self, "_active_product_condition_key", "") or "").strip()
+
+    def _is_manual_product_condition_cycle_active(self) -> bool:
+        return bool(self._get_active_product_condition_key())
+
+    def _has_incomplete_manual_product_condition_round(self) -> bool:
+        condition_keys = self._manual_product_condition_keys()
+        if len(condition_keys) < 2:
+            return False
+
+        if self._get_active_product_condition_key():
+            return True
+        if str(getattr(self, "_manual_product_condition_group_id", "") or "").strip():
+            return True
+        try:
+            if int(getattr(self, "_manual_product_condition_index", 0) or 0) != 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+
+        groups = {}
+        for record in (getattr(self, "recent_test_session_by_id", {}) or {}).values():
+            if not isinstance(record, dict):
+                continue
+            group_id = str(record.get("group_id") or "").strip()
+            if not group_id:
+                continue
+            condition_key = str(record.get("condition_key") or record.get("mode") or "").strip()
+            if condition_key not in condition_keys:
+                continue
+            groups.setdefault(group_id, set()).add(condition_key)
+
+        expected_keys = set(condition_keys)
+        for recorded_keys in groups.values():
+            if not recorded_keys:
+                continue
+            if not expected_keys.issubset(recorded_keys):
+                return True
+        return False
+
+    def _active_product_condition_suffix(self) -> str:
+        condition = getattr(self, "_active_product_condition_config", None)
+        if not isinstance(condition, dict):
+            return ""
+        name = str(condition.get("condition_name") or condition.get("name") or condition.get("key") or "").strip()
+        safe_name = self._safe_record_name_suffix(name)
+        return f"_{safe_name}" if safe_name else ""
+
+    def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
+        self._manual_product_condition_index = 0
+        self._manual_product_condition_group_id = ""
+        self._manual_product_condition_results = {}
+        self._manual_product_condition_completed_keys = set()
+        self._manual_product_condition_counted_group_labels = {}
+        self._active_product_condition_key = ""
+        self._active_product_condition_config = None
+        self._waveform_display_override_direction = ""
+        self._current_cycle_recorded_count = None
+        if clear_waveforms:
+            clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+            if callable(clear_all_direction_waveforms):
+                clear_all_direction_waveforms()
+        self._reset_product_condition_display_state()
+
+    def _reset_product_condition_display_state(self) -> None:
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is None:
+            return
+        set_current_stage = getattr(left_panel, "set_current_stage", None)
+        if callable(set_current_stage):
+            set_current_stage("", tone="pending")
+        for index, item in enumerate(self._product_condition_sequence()):
+            left_panel.set_condition_result(
+                self._product_condition_runtime_key(item, index),
+                "待检测",
+                tone="pending",
+            )
+        left_panel.set_final_result("待判定", tone="pending")
+
+    def _set_product_condition_round_pending(self) -> None:
+        self._reset_product_condition_display_state()
+
+    def _mark_manual_product_condition_recording_completed(self) -> None:
+        key = self._get_active_product_condition_key()
+        if not key:
+            return
+
+        completed_keys = set(getattr(self, "_manual_product_condition_completed_keys", set()) or set())
+        completed_keys.add(key)
+        self._manual_product_condition_completed_keys = completed_keys
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is None:
+            return
+        left_panel.set_condition_result(key, "完成", tone="ok")
+
+        condition_keys = [
+            self._product_condition_runtime_key(item, index)
+            for index, item in enumerate(self._product_condition_sequence())
+            if self._product_condition_runtime_key(item, index)
+        ]
+        if condition_keys and all(condition_key in completed_keys for condition_key in condition_keys):
+            left_panel.set_final_result("完成", tone="ok")
+            left_panel.set_current_stage("本轮采集完成", tone="ok")
+        else:
+            left_panel.set_final_result("检测中", tone="running")
+
+    def _update_manual_product_condition_result_after_analysis(self, label: str):
+        key = self._get_active_product_condition_key()
+        if not key or label not in ("OK", "NG"):
+            return None
+
+        results = dict(getattr(self, "_manual_product_condition_results", {}) or {})
+        results[key] = label
+        self._manual_product_condition_results = results
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is not None:
+            left_panel.set_condition_result(key, label, tone=("ok" if label == "OK" else "ng"))
+
+        channel_workspace = getattr(self, "channel_workspace", None)
+        if channel_workspace is not None and hasattr(channel_workspace, "set_condition_result"):
+            channel_workspace.set_condition_result(key, label)
+
+        condition_keys = [
+            self._product_condition_runtime_key(item, index)
+            for index, item in enumerate(self._product_condition_sequence())
+            if self._product_condition_runtime_key(item, index)
+        ]
+        complete = bool(condition_keys) and all(results.get(condition_key) in ("OK", "NG") for condition_key in condition_keys)
+        if not complete:
+            if left_panel is not None:
+                left_panel.set_final_result("检测中", tone="running")
+            return None
+
+        final_label = "OK" if all(results.get(condition_key) == "OK" for condition_key in condition_keys) else "NG"
+        if left_panel is not None:
+            left_panel.set_final_result(final_label, tone=("ok" if final_label == "OK" else "ng"))
+            left_panel.set_current_stage("本轮完成", tone=("ok" if final_label == "OK" else "ng"))
+        return final_label
+
+    def _manual_product_condition_keys(self):
+        return [
+            self._product_condition_runtime_key(item, index)
+            for index, item in enumerate(self._product_condition_sequence())
+            if self._product_condition_runtime_key(item, index)
+        ]
+
+    def _manual_product_group_result_state(self, group_id: str):
+        condition_keys = self._manual_product_condition_keys()
+        if len(condition_keys) < 2:
+            return False, None
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return False, None
+
+        results = {}
+        recent_session_panel = getattr(self, "recent_session_panel", None)
+        group_records = getattr(recent_session_panel, "group_records", None)
+        if isinstance(group_records, dict):
+            group = group_records.get(group_id)
+            if isinstance(group, dict) and isinstance(group.get("results"), dict):
+                results.update(group.get("results") or {})
+
+        for record in (getattr(self, "recent_test_session_by_id", {}) or {}).values():
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("group_id") or "").strip() != group_id:
+                continue
+            condition_key = str(record.get("condition_key") or record.get("mode") or "").strip()
+            if not condition_key:
+                continue
+            recorded_signal_info = record.get("recorded_signal_info", {}) or {}
+            label = recorded_signal_info.get("labels") or record.get("result_label")
+            results[condition_key] = label
+
+        if group_id == str(getattr(self, "_manual_product_condition_group_id", "") or "").strip():
+            results.update(getattr(self, "_manual_product_condition_results", {}) or {})
+
+        normalized_values = []
+        for condition_key in condition_keys:
+            if condition_key not in results:
+                return False, None
+            normalized = self._normalize_recent_session_storage_label(results.get(condition_key))
+            if normalized == "not_labeled":
+                normalized_values.append(normalized)
+                continue
+            if normalized not in ("OK", "NG"):
+                return False, None
+            normalized_values.append(normalized)
+
+        if any(value == "not_labeled" for value in normalized_values):
+            return True, "not_labeled"
+        return True, "OK" if all(value == "OK" for value in normalized_values) else "NG"
+
+    def _manual_product_group_summary_label(self, group_id: str):
+        complete, label = self._manual_product_group_result_state(group_id)
+        if complete and label in ("OK", "NG"):
+            return label
+        return None
+
+    def _manual_product_group_count_label(self, group_id: str):
+        complete, label = self._manual_product_group_result_state(group_id)
+        if complete and label in ("OK", "NG", "not_labeled"):
+            return label
+        return None
+
+    def _update_manual_product_mark_group_count(self, group_id: str) -> bool:
+        if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
+            return False
+        if len(self._manual_product_condition_keys()) < 2:
+            return False
+
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return False
+
+        final_label = self._manual_product_group_count_label(group_id)
+        counted_groups = dict(getattr(self, "_manual_product_condition_counted_group_labels", {}) or {})
+        previous_label = counted_groups.get(group_id)
+        if final_label not in ("OK", "NG", "not_labeled"):
+            return True
+
+        if previous_label == final_label:
+            try:
+                self.count_board.set_mark_text()
+            except Exception:
+                pass
+            return True
+
+        count_board = getattr(self, "count_board", None)
+        if count_board is None:
+            return True
+        try:
+            if previous_label in ("OK", "NG", "not_labeled"):
+                update_count = getattr(count_board, "update_mark_result_file_on_relabel", None)
+                if callable(update_count):
+                    update_count(previous_label, final_label)
+            else:
+                append_count = getattr(count_board, "append_mark_result_file", None)
+                if callable(append_count):
+                    append_count(final_label)
+            count_board.set_mark_text()
+        except Exception as e:
+            logger = getattr(self, "default_logger", None)
+            if logger is not None:
+                logger.warning(f"count_manual_product_mark_group_failed[{group_id}]: {e}")
+            return True
+
+        counted_groups[group_id] = final_label
+        self._manual_product_condition_counted_group_labels = counted_groups
+        return True
+
+    def _update_manual_product_mark_group_count_for_session(self, session_id: str) -> bool:
+        session_record = self._resolve_recent_session(session_id)
+        if not isinstance(session_record, dict):
+            return False
+        return self._update_manual_product_mark_group_count(session_record.get("group_id"))
+
+    def _prepare_next_manual_product_condition_recording(self):
+        conditions = self._product_condition_sequence()
+        if not conditions:
+            return False
+
+        try:
+            index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
+        except (TypeError, ValueError):
+            index = 0
+        if index < 0 or index >= len(conditions):
+            index = 0
+
+        condition = conditions[index]
+        load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
+        if not callable(load_condition_config):
+            QMessageBox.warning(self, "提示", "当前工况无法加载测试队列配置。")
+            return None
+        ok, message = load_condition_config(condition)
+        if not ok:
+            QMessageBox.warning(self, "提示", message or "当前工况测试队列配置不可用。")
+            return None
+
+        group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
+        if index == 0 or not group_id:
+            group_id = self._generate_recording_token()
+            self._manual_product_condition_group_id = group_id
+            self._current_cycle_recorded_count = group_id
+            self._manual_product_condition_results = {}
+            self._manual_product_condition_completed_keys = set()
+            clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+            if callable(clear_all_direction_waveforms):
+                clear_all_direction_waveforms()
+            self._set_product_condition_round_pending()
+        else:
+            self._current_cycle_recorded_count = group_id
+
+        key = self._product_condition_runtime_key(condition, index)
+        self._active_product_condition_key = key
+        self._active_product_condition_config = dict(condition)
+        self._waveform_display_override_direction = key
+        self._current_trigger_direction = key
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is not None:
+            condition_name = str(condition.get("condition_name") or condition.get("name") or key)
+            left_panel.set_current_stage(f"{condition_name} 检测中", tone="running")
+            left_panel.set_condition_result(key, "采集中", tone="running")
+            left_panel.set_final_result("检测中", tone="running")
+        return True
+
+    def _advance_manual_product_condition_cycle_after_recording(self) -> None:
+        if not self._get_active_product_condition_key():
+            return
+        conditions = self._product_condition_sequence()
+        if not conditions:
+            self._reset_manual_product_condition_cycle(clear_waveforms=False)
+            return
+        try:
+            index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
+        except (TypeError, ValueError):
+            index = 0
+        next_index = (index + 1) % len(conditions)
+        self._manual_product_condition_index = next_index
+        if next_index == 0:
+            self._manual_product_condition_group_id = ""
+            self._current_cycle_recorded_count = None
+        self._active_product_condition_key = ""
+        self._active_product_condition_config = None
+        self._waveform_display_override_direction = ""
+        self._current_trigger_direction = ""
+
     def _reserve_recorded_count_for_run(self) -> str:
+        if self._is_manual_product_condition_cycle_active():
+            cycle_token = str(getattr(self, "_manual_product_condition_group_id", "") or "")
+            if not cycle_token:
+                cycle_token = self._generate_recording_token()
+                self._manual_product_condition_group_id = cycle_token
+            self._current_cycle_recorded_count = cycle_token
+            self.last_play_count = cycle_token
+            return cycle_token
+
         direction = self._get_recording_direction()
         if direction in ("forward", "reverse"):
             cycle_token = str(getattr(self, "_current_cycle_recorded_count", "") or "")
@@ -88,12 +500,23 @@ class SequenceWidgetAnalysisOpsMixin:
         return run_token
 
     def _resolve_recording_name_suffix(self) -> str:
+        product_suffix = self._active_product_condition_suffix()
+        if product_suffix:
+            return product_suffix
         direction = self._get_recording_direction()
         if direction in ("forward", "reverse"):
             return f"_{direction}"
         return ""
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        prepared_product_condition = self._prepare_next_manual_product_condition_recording()
+        if prepared_product_condition is None:
+            return
+        if prepared_product_condition:
+            self.clicked_player_flag = True
+            self.start_this_play(label)
+            return
+
         if not self.sequence_config:
             QMessageBox.warning(
                 self,
@@ -170,13 +593,10 @@ class SequenceWidgetAnalysisOpsMixin:
 
     def _resolve_recent_session_condition(self, direction: str):
         normalized = str(direction or "").strip().lower()
-        conditions = [
-            item
-            for item in (getattr(self, "product_test_condition_configs", []) or [])
-            if isinstance(item, dict)
-        ]
-        for item in conditions:
+        conditions = self._product_condition_sequence()
+        for index, item in enumerate(conditions):
             candidates = {
+                self._product_condition_runtime_key(item, index).lower(),
                 str(item.get("key") or "").strip().lower(),
                 str(item.get("trigger_state") or "").strip().lower(),
                 str(item.get("test_queue") or "").strip().lower(),
@@ -206,7 +626,7 @@ class SequenceWidgetAnalysisOpsMixin:
     def _get_recent_session_mode_key(self, direction: str) -> str:
         condition = self._resolve_recent_session_condition(direction)
         if isinstance(condition, dict):
-            return str(condition.get("key") or condition.get("trigger_state") or direction or "")
+            return self._product_condition_runtime_key(condition)
         return str(direction or "")
 
     def _resolve_recent_session_path(self, session_record: dict | None):
@@ -226,6 +646,87 @@ class SequenceWidgetAnalysisOpsMixin:
                 return normalized_candidate
         return None
 
+    @staticmethod
+    def _is_sequence_config_payload(sequence_config) -> bool:
+        if not isinstance(sequence_config, list) or not sequence_config:
+            return False
+        first = sequence_config[0]
+        return isinstance(first, dict) and isinstance(first.get("seq1"), dict)
+
+    def _build_recent_session_config_snapshot(self):
+        sequence_config = getattr(self, "sequence_config", None)
+        if not self._is_sequence_config_payload(sequence_config):
+            return {}
+
+        analysis_config = getattr(self, "analysis_config", {}) or {}
+        condition_config = getattr(self, "_active_product_condition_config", None)
+        try:
+            active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", []) or [])]
+        except Exception:
+            active_input_channels = []
+
+        return {
+            "sequence_config": copy.deepcopy(sequence_config),
+            "analysis_config": copy.deepcopy(analysis_config) if isinstance(analysis_config, dict) else {},
+            "using_config_path": str(getattr(self, "using_config_path", "") or ""),
+            "condition_config": copy.deepcopy(condition_config) if isinstance(condition_config, dict) else {},
+            "active_input_channels": active_input_channels,
+        }
+
+    def _apply_recent_session_config_for_view(self, session_record: dict):
+        snapshot = session_record.get("config_snapshot") if isinstance(session_record, dict) else None
+        if isinstance(snapshot, dict):
+            sequence_snapshot = snapshot.get("sequence_config")
+            if self._is_sequence_config_payload(sequence_snapshot):
+                self.sequence_config = copy.deepcopy(sequence_snapshot)
+                analysis_snapshot = snapshot.get("analysis_config")
+                if isinstance(analysis_snapshot, dict) and analysis_snapshot:
+                    self.analysis_config = copy.deepcopy(analysis_snapshot)
+                else:
+                    seq = self.sequence_config[0].get("seq1", {})
+                    self.analysis_config = copy.deepcopy(seq.get("analysis_list", {}) or {})
+                using_config_path = snapshot.get("using_config_path")
+                if using_config_path:
+                    self.using_config_path = str(using_config_path)
+                active_channels = snapshot.get("active_input_channels")
+                if isinstance(active_channels, list) and active_channels:
+                    try:
+                        self._active_input_channels = [int(ch) for ch in active_channels]
+                    except Exception:
+                        pass
+                if getattr(self, "count_board", None) is not None:
+                    self.count_board.analysis_config = self.analysis_config
+                init_fft_and_stft_flag = getattr(self, "init_fft_and_stft_flag", None)
+                if callable(init_fft_and_stft_flag):
+                    init_fft_and_stft_flag()
+                return True, ""
+
+        condition_config = {}
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("condition_config"), dict):
+            condition_config = snapshot.get("condition_config") or {}
+        if not condition_config:
+            condition_key = str(
+                session_record.get("condition_key")
+                or session_record.get("mode")
+                or session_record.get("mode_text")
+                or ""
+            )
+            condition_config = self._resolve_recent_session_condition(condition_key)
+        else:
+            condition_key = str(
+                condition_config.get("key")
+                or condition_config.get("trigger_state")
+                or condition_config.get("condition_name")
+                or ""
+            )
+
+        load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
+        if isinstance(condition_config, dict) and callable(load_condition_config):
+            return load_condition_config(condition_config)
+        if not condition_key and self._is_sequence_config_payload(getattr(self, "sequence_config", None)):
+            return True, ""
+        return False, "当前历史记录缺少对应工况的测试队列配置"
+
     def _build_recent_session_record(self, result_label: str):
         recorded_path = self.recorded_path
         if not recorded_path and isinstance(self.recorded_signal_info, dict):
@@ -239,7 +740,14 @@ class SequenceWidgetAnalysisOpsMixin:
         recorded_signal_info = dict(self.recorded_signal_info or {})
         barcode = recorded_signal_info.get("barcode") or self.lineedit_s_or_n.text().strip() or "-"
         product_model = self.lineedit_type.text().strip() or recorded_signal_info.get("product_model") or "-"
-        current_direction = str(getattr(self, "_current_trigger_direction", "") or "")
+        get_active_product_condition_key = getattr(self, "_get_active_product_condition_key", None)
+        current_direction = (
+            str(get_active_product_condition_key() or "")
+            if callable(get_active_product_condition_key)
+            else ""
+        )
+        if not current_direction:
+            current_direction = str(getattr(self, "_current_trigger_direction", "") or "")
         if not current_direction:
             get_active_recording_direction = getattr(self, "_get_active_recording_direction", None)
             if callable(get_active_recording_direction):
@@ -267,6 +775,7 @@ class SequenceWidgetAnalysisOpsMixin:
             "recorded_signal_info": recorded_signal_info,
             "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
             "sample_rate": self.data_struct.sample_rate,
+            "config_snapshot": self._build_recent_session_config_snapshot(),
         }
 
     def _append_recent_session_from_current_run(self, result_label: str):
@@ -302,14 +811,17 @@ class SequenceWidgetAnalysisOpsMixin:
         session_id = getattr(self, "_current_recent_session_id", None)
         if not session_id:
             return
-        self._update_recent_session(
-            session_id,
-            result_label=self._format_recent_session_result_label(result_label),
-            recorded_path=self.recorded_path,
-            recorded_signal_info=dict(self.recorded_signal_info or {}),
-            analysis_result_dict=dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
-            sample_rate=self.data_struct.sample_rate,
-        )
+        update_fields = {
+            "result_label": self._format_recent_session_result_label(result_label),
+            "recorded_path": self.recorded_path,
+            "recorded_signal_info": dict(self.recorded_signal_info or {}),
+            "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+            "sample_rate": self.data_struct.sample_rate,
+        }
+        config_snapshot = self._build_recent_session_config_snapshot()
+        if config_snapshot:
+            update_fields["config_snapshot"] = config_snapshot
+        self._update_recent_session(session_id, **update_fields)
 
     def _clear_recent_session_history(self, reset_panel=True):
         self.recent_test_sessions = []
@@ -387,16 +899,19 @@ class SequenceWidgetAnalysisOpsMixin:
             QMessageBox.warning(self, "提示", f"修改近期历史结果失败: {msg}")
             return False
 
-        update_mark_result_file_on_relabel = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
-        if callable(update_mark_result_file_on_relabel):
-            update_mark_result_file_on_relabel(current_label, normalized_label)
-
         self._update_recent_session(
             session_id,
             result_label=self._format_recent_session_result_label(normalized_label),
             recorded_path=new_recorded_path,
             recorded_signal_info=updated_signal_info,
         )
+
+        update_group_count = getattr(self, "_update_manual_product_mark_group_count_for_session", None)
+        group_count_handled = callable(update_group_count) and update_group_count(session_id)
+        if not group_count_handled:
+            update_mark_result_file_on_relabel = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
+            if callable(update_mark_result_file_on_relabel):
+                update_mark_result_file_on_relabel(current_label, normalized_label)
 
         current_recorded_path = str(getattr(self, "recorded_path", "") or "")
         if current_recorded_path and os.path.abspath(current_recorded_path) == os.path.abspath(recorded_path):
@@ -416,6 +931,18 @@ class SequenceWidgetAnalysisOpsMixin:
 
         previous_recorded_path = self.recorded_path
         previous_recorded_signal_info = dict(self.recorded_signal_info or {})
+        previous_sequence_config = copy.deepcopy(getattr(self, "sequence_config", []) or [])
+        previous_analysis_config = copy.deepcopy(getattr(self, "analysis_config", {}) or {})
+        previous_using_config_path = str(getattr(self, "using_config_path", "") or "")
+        previous_count_board_analysis_config = (
+            copy.deepcopy(getattr(self.count_board, "analysis_config", None))
+            if getattr(self, "count_board", None) is not None
+            else None
+        )
+        try:
+            previous_active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", []) or [])]
+        except Exception:
+            previous_active_input_channels = [0]
         previous_store_wave_data = (
             None if self.data_struct.store_wave_data is None else np.asarray(self.data_struct.store_wave_data).copy()
         )
@@ -437,6 +964,9 @@ class SequenceWidgetAnalysisOpsMixin:
 
         try:
             self._close_analysis_windows()
+            applied_config, config_message = self._apply_recent_session_config_for_view(session_record)
+            if not applied_config:
+                raise RuntimeError(config_message or "无法加载该工况对应的测试队列配置")
             self.recorded_path = playback_path
             self.recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
             if not self.recorded_signal_info.get("file_path"):
@@ -454,6 +984,16 @@ class SequenceWidgetAnalysisOpsMixin:
             self.count_board.mode = previous_mode
             self.recorded_path = previous_recorded_path
             self.recorded_signal_info = previous_recorded_signal_info
+            self.sequence_config = previous_sequence_config
+            self.analysis_config = previous_analysis_config
+            self.using_config_path = previous_using_config_path
+            self._active_input_channels = previous_active_input_channels
+            if getattr(self, "count_board", None) is not None:
+                self.count_board.analysis_config = (
+                    previous_count_board_analysis_config
+                    if previous_count_board_analysis_config is not None
+                    else self.analysis_config
+                )
             self.data_struct.store_wave_data = previous_store_wave_data
             self.data_struct.store_wave_data_multi = previous_store_wave_data_multi
             self.data_struct.sample_rate = previous_sample_rate
@@ -890,6 +1430,10 @@ class SequenceWidgetAnalysisOpsMixin:
                     directional_cycle_active = (
                         callable(is_directional_cycle_active) and is_directional_cycle_active()
                     )
+                    is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
+                    manual_product_cycle_active = (
+                        callable(is_manual_product_cycle_active) and is_manual_product_cycle_active()
+                    )
                     if has_ai_analysis and auto_label not in ("OK", "NG"):
                         if judged_count == 0 and not ai_block_message:
                             QMessageBox.warning(
@@ -908,6 +1452,23 @@ class SequenceWidgetAnalysisOpsMixin:
                             self._update_current_recent_session_result(auto_label)
                     if directional_cycle_active:
                         auto_label = cycle_final_label
+                    if manual_product_cycle_active and auto_label in ("OK", "NG"):
+                        persist_current_test_audio_label = getattr(self, "_persist_current_test_audio_label", None)
+                        if callable(persist_current_test_audio_label):
+                            persist_current_test_audio_label(auto_label, show_error=True)
+                        else:
+                            self._update_current_recent_session_result(auto_label)
+                        update_product_condition = getattr(
+                            self,
+                            "_update_manual_product_condition_result_after_analysis",
+                            None,
+                        )
+                        product_cycle_final_label = (
+                            update_product_condition(auto_label)
+                            if callable(update_product_condition)
+                            else None
+                        )
+                        auto_label = product_cycle_final_label
                     if auto_label not in ("OK", "NG"):
                         auto_label = None
                     if auto_label is None:
@@ -920,10 +1481,17 @@ class SequenceWidgetAnalysisOpsMixin:
                             self.count_board.set_test_text()
                         except Exception:
                             pass
-                        self._finalize_test_run(
-                            auto_label,
-                            update_recent_session=not directional_cycle_active,
-                        )
+                        if manual_product_cycle_active:
+                            self._awaiting_ok_ng = False
+                            self._sn_clear_on_next_scan = False
+                            self.data_btn.setEnabled(False)
+                            self.replayer_btn.setDisabled(True)
+                            self.update_player_btn_is_paused()
+                        else:
+                            self._finalize_test_run(
+                                auto_label,
+                                update_recent_session=not directional_cycle_active,
+                            )
                         if directional_cycle_active:
                             clear_ai_cycle_runtime_state = getattr(self, "_clear_ai_cycle_runtime_state", None)
                             if callable(clear_ai_cycle_runtime_state):

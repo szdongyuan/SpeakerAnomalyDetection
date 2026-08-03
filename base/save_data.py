@@ -85,6 +85,7 @@ def ensure_test_result_file(analysis_config):
                 f"total: 0\n"
                 f"ok: 0\n"
                 f"ng: 0\n"
+                f"not_labels: 0\n"
                 f"ok_percent: 0%\n"
                 f"datatime: {current_time}\n"
             )
