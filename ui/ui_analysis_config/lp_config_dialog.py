@@ -1,67 +1,51 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSpinBox, QComboBox
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout
 from typing import List, Optional
 
-from consts import ui_style_const
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.custom_ui_widget.widgets import GroupBox, Label, SpinBox
+from ui.ui_analysis_config.common_widgets import (
+    ChannelSelectorWidget,
+    SemanticAnalysisConfigDialogBase,
+)
 
 
-class LPConfigWindow(QDialog):
+class LPConfigWindow(SemanticAnalysisConfigDialogBase):
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
-        self.load_config = self.config_manager.load_config().get(model_type, {})
-        self.available_channels = self._normalize_available_channels(available_channels)
+        self.config_key = model_type
+        self.load_config = self.config_manager.load_config().get(self.config_key, {})
+        self.show_channel_selector = available_channels is not None
+        self.available_channels = available_channels
 
         self.init_ui()
 
-    @staticmethod
-    def _normalize_available_channels(available_channels):
-        channels = []
-        try:
-            channels = sorted({int(ch) for ch in (available_channels or [])})
-        except Exception:
-            channels = []
-        if not channels:
-            channels = [0]
-        return channels
-
-    def _create_channel_layout(self):
-        channel_layout = QHBoxLayout()
-        channel_layout.addWidget(QLabel("通道:"))
-        self.channel_combo_box = QComboBox()
-        for ch in self.available_channels:
-            self.channel_combo_box.addItem(f"In{int(ch) + 1}", int(ch))
-        saved_channel = self.load_config.get("analysis_channel", None)
-        if saved_channel is None or int(saved_channel) not in self.available_channels:
-            saved_channel = int(self.available_channels[0])
-        idx = self.channel_combo_box.findData(int(saved_channel))
-        self.channel_combo_box.setCurrentIndex(idx if idx >= 0 else 0)
-        channel_layout.addWidget(self.channel_combo_box)
-        return channel_layout
-
     def init_ui(self):
-        self.setMinimumSize(350, 350)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        layout = QVBoxLayout()
-        layout.addLayout(self._create_channel_layout())
-        lp_config_box = self.create_lp_config_box()
-        btn_layout = self.create_btn_layout()
-        layout.addWidget(lp_config_box)
-        layout.addStretch()
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qgroupbox_style
+        self.setWindowTitle("LP 分析配置")
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_click_default_btn,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self._build_semantic_sections()
+
+    def _build_semantic_sections(self):
+        if self.show_channel_selector:
+            self.channel_selector = ChannelSelectorWidget(
+                self.load_config,
+                self.available_channels,
+                self,
+            )
+            self.add_semantic_section("input", widget=self.channel_selector)
+        self.add_semantic_section(
+            "detection",
+            widget=self.create_lp_config_box(),
         )
 
     def create_lp_config_box(self):
-        lp_config_box = QGroupBox("松散颗粒参数配置")
+        lp_config_box = GroupBox("松散颗粒参数配置")
         lp_config_box_layout = QVBoxLayout()
         trigger_threshold_layout = self.create_trigger_threshold_layout()
         comfirm_threshold_layout = self.create_confirm_threshold_layout()
@@ -87,8 +71,8 @@ class LPConfigWindow(QDialog):
         return lp_config_box
 
     def create_trigger_threshold_layout(self):
-        trigger_threshold_label = QLabel("触发阈值:")
-        self.trigger_threshold_spinbox = QSpinBox()
+        trigger_threshold_label = Label("触发阈值:")
+        self.trigger_threshold_spinbox = SpinBox()
         self.trigger_threshold_spinbox.setSuffix(" dB")
         self.trigger_threshold_spinbox.setValue(self.load_config.get("trigger_threshold", 0))
         self.trigger_threshold_spinbox.setAlignment(Qt.AlignRight)
@@ -99,8 +83,8 @@ class LPConfigWindow(QDialog):
         return trigger_threshold_layout
 
     def create_confirm_threshold_layout(self):
-        confirm_threshold_label = QLabel("确认区间:")
-        self.hysterests_threshold_spinbox = QSpinBox()
+        confirm_threshold_label = Label("确认区间:")
+        self.hysterests_threshold_spinbox = SpinBox()
         self.hysterests_threshold_spinbox.setSuffix(" dB")
         self.hysterests_threshold_spinbox.setValue(self.load_config.get("hysterests_threshold", 0))
         self.hysterests_threshold_spinbox.setAlignment(Qt.AlignRight)
@@ -111,8 +95,8 @@ class LPConfigWindow(QDialog):
         return confirm_threshold_layout
 
     def create_min_check_duration_layout(self):
-        min_check_duration_label = QLabel("最小检测时长:")
-        self.min_check_duration_spinbox = QSpinBox()
+        min_check_duration_label = Label("最小检测时长:")
+        self.min_check_duration_spinbox = SpinBox()
         self.min_check_duration_spinbox.setSuffix(" ms")
         self.min_check_duration_spinbox.setValue(self.load_config.get("min_check_duration", 0))
         self.min_check_duration_spinbox.setRange(0, 1000)
@@ -124,8 +108,8 @@ class LPConfigWindow(QDialog):
         return min_check_duration_layout
 
     def create_max_check_duration_layout(self):
-        max_check_duration_label = QLabel("最大检测时长:")
-        self.max_check_duration_spinbox = QSpinBox()
+        max_check_duration_label = Label("最大检测时长:")
+        self.max_check_duration_spinbox = SpinBox()
         self.max_check_duration_spinbox.setSuffix(" ms")
         self.max_check_duration_spinbox.setValue(self.load_config.get("max_check_duration", 0))
         self.max_check_duration_spinbox.setRange(0, 1000)
@@ -137,8 +121,8 @@ class LPConfigWindow(QDialog):
         return max_check_duration_layout
 
     def create_loose_particle_num_layout(self):
-        loose_particle_num_label = QLabel("允许松散颗粒数量:")
-        self.loose_particle_num_spinbox = QSpinBox()
+        loose_particle_num_label = Label("允许松散颗粒数量:")
+        self.loose_particle_num_spinbox = SpinBox()
         self.loose_particle_num_spinbox.setValue(self.load_config.get("loose_particle_num", 0))
         self.loose_particle_num_spinbox.setAlignment(Qt.AlignRight)
         loose_particle_num_layout = QHBoxLayout()
@@ -148,8 +132,8 @@ class LPConfigWindow(QDialog):
         return loose_particle_num_layout
 
     def create_stimulus_max_frequency_layout(self):
-        stimulus_max_frequency_label = QLabel("信号最大频率:")
-        self.stimulus_max_frequency_spinbox = QSpinBox()
+        stimulus_max_frequency_label = Label("信号最大频率:")
+        self.stimulus_max_frequency_spinbox = SpinBox()
         self.stimulus_max_frequency_spinbox.setSuffix(" Hz")
         self.stimulus_max_frequency_spinbox.setRange(10, 24000)
         self.stimulus_max_frequency_spinbox.setValue(self.load_config.get("cutoff_freq", 0))
@@ -162,16 +146,10 @@ class LPConfigWindow(QDialog):
         return stimulus_max_frequency_layout
 
     def create_btn_layout(self):
-        btn_layout = QHBoxLayout()
-        default_btn = QPushButton("设为默认")
-        ok_btn = QPushButton(" 确  定 ")
-        default_btn.clicked.connect(self.on_click_default_btn)
-        ok_btn.clicked.connect(self.on_click_ok_btn)
-        btn_layout.addWidget(default_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-
-        return btn_layout
+        return self.create_standard_button_layout(
+            self.on_click_default_btn,
+            self.on_click_ok_btn,
+        )
 
     def get_default_config(self):
         default_config = {
@@ -181,7 +159,11 @@ class LPConfigWindow(QDialog):
             "max_check_duration": self.max_check_duration_spinbox.value(),
             "loose_particle_num": self.loose_particle_num_spinbox.value(),
             "cutoff_freq": self.stimulus_max_frequency_spinbox.value(),
-            "analysis_channel": int(self.channel_combo_box.currentData()),
+            "analysis_channel": (
+                self.channel_selector.current_channel()
+                if self.show_channel_selector
+                else int(self.load_config.get("analysis_channel", 0) or 0)
+            ),
         }
         return default_config
 
@@ -189,6 +171,14 @@ class LPConfigWindow(QDialog):
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config("LP", config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
+
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(
+            self.config_key,
+            {},
+        )
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
 
     def on_click_ok_btn(self):
         config_data = self.get_default_config()

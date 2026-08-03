@@ -13,6 +13,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QWidget
 from pyqtgraph import PlotWidget
 
+from consts import ui_style_const
 from consts.acoustic_analysis.curve_style_consts import (
     DEFAULT_CURVE_COLORS,
     LOWER_LIMIT_COLOR,
@@ -129,19 +130,30 @@ def test_curve_color_widget_updates_preview_and_nested_config(qapp):
     ]
     preview_label = widget.content_widget.findChild(QLabel, "curveColorPreviewLabel")
     assert len(field_labels) == 3
-    assert all("color: #344054" in label.styleSheet() for label in field_labels)
+    assert all(
+        f"color: {ui_style_const.COLOR_TEXT}" in label.styleSheet()
+        for label in field_labels
+    )
     assert all("font-size: 15px" in label.styleSheet() for label in field_labels)
     assert all("font-weight: 400" in label.styleSheet() for label in field_labels)
     assert preview_label is not None
-    assert "color: #344054" in preview_label.styleSheet()
+    assert f"color: {ui_style_const.COLOR_TEXT}" in preview_label.styleSheet()
     assert "font-size: 15px" in preview_label.styleSheet()
     assert "font-weight: 500" in preview_label.styleSheet()
     color_buttons = list(widget._color_buttons.values())
     assert all(button.cursor().shape() == Qt.PointingHandCursor for button in color_buttons)
     assert all("QPushButton:hover" in button.styleSheet() for button in color_buttons)
-    assert all("border: 2px solid #2563EB" in button.styleSheet() for button in color_buttons)
+    assert all(
+        f"border: 2px solid {ui_style_const.COLOR_PRIMARY}"
+        in button.styleSheet()
+        for button in color_buttons
+    )
     assert all("QPushButton:pressed" in button.styleSheet() for button in color_buttons)
-    assert all("border: 2px solid #1D4ED8" in button.styleSheet() for button in color_buttons)
+    assert all(
+        f"border: 2px solid {ui_style_const.COLOR_PRIMARY_HOVER}"
+        in button.styleSheet()
+        for button in color_buttons
+    )
     assert emitted[-1][MAIN_CURVE_COLOR] == "#2563EB"
     assert config["display"][MAIN_CURVE_COLOR] == "#2563EB"
     assert config["display"]["grid_visible"] is True
@@ -169,7 +181,10 @@ def test_preset_palette_is_expanded_and_marks_current_color(qapp):
     assert dialog.palette_layout.columnCount() == 8
     assert dialog.palette_layout.rowCount() == 8
     assert "4px solid #FFD400" in selected_button.styleSheet()
-    assert "color: #111827" in selected_button.styleSheet()
+    assert (
+        f"color: {ui_style_const.COLOR_TEXT}"
+        in selected_button.styleSheet()
+    )
 
 
 def test_preset_palette_uses_consistent_hue_rows_and_perceptual_lightness():

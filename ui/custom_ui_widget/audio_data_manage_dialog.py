@@ -33,12 +33,13 @@ from re import fullmatch
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
+from PyQt5.QtWidgets import QMessageBox, QCheckBox, QGroupBox, QComboBox, QVBoxLayout, QHBoxLayout, QPushButton
 
 from base.log_manager import LogManager
 from base.recording_management import RecordingManager
-from consts import error_code, ui_style_const
+from consts import error_code
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
@@ -238,7 +239,7 @@ class AudioDataManageDialog(DataManageDialog):
         self.packaging_progress.setValue(progress)
 
 
-class FilterAudioDialog(QDialog):
+class FilterAudioDialog(ConfigDialogBase):
 
     def __init__(self, product_model_set, record_date_set, filter_config: dict = None, parent=None):
         super(FilterAudioDialog, self).__init__(parent)
@@ -280,13 +281,7 @@ class FilterAudioDialog(QDialog):
 
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qcheckbox_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qgroupbox_style
-        )
+        self.apply_config_dialog_theme()
 
     def set_date_filter_groupbox(self):
         date_groupbox = QGroupBox("日期")

@@ -3,7 +3,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -24,13 +23,14 @@ from base.product_test_program_config import (
 )
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 
 NO_TRIGGER_TEXT = "未绑定"
 NO_QUEUE_TEXT = "暂无可用测试队列"
 
 
-class ProductTestProgramConfigDialog(QDialog):
+class ProductTestProgramConfigDialog(ConfigDialogBase):
     programs_changed = pyqtSignal()
 
     def __init__(self, manager=None, queue_editor_callback=None, parent=None):
@@ -179,13 +179,8 @@ class ProductTestProgramConfigDialog(QDialog):
         layout.addLayout(bottom_button_layout)
         self.setLayout(layout)
 
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qdialog_style
-            + ui_style_const.product_test_program_dialog_style
+        self.apply_config_dialog_theme(
+            ui_style_const.product_test_program_dialog_style
         )
         self.config_combobox.setStyleSheet(
             ui_style_const.product_test_program_config_selector_style

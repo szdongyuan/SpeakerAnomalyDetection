@@ -7,6 +7,7 @@ import math
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QToolButton, QVBoxLayout, QWidget
 
+from consts import ui_style_const
 from consts.acoustic_analysis.curve_style_consts import (
     PLOT_VIEW_DECIMALS,
     PLOT_VIEW_DEFAULT_SINGLE_STEP,
@@ -147,7 +148,10 @@ class PlotViewConfigWidget(QWidget):
         button.setCheckable(True)
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         button.setCursor(Qt.PointingHandCursor)
-        button.setStyleSheet("color: #344054; font-size: 16px; font-weight: 600; border: none;")
+        button.setStyleSheet(
+            f"color: {ui_style_const.COLOR_TEXT}; "
+            "font-size: 16px; font-weight: 600; border: none;"
+        )
         button.toggled.connect(self.set_expanded)
         return button
 

@@ -2,13 +2,13 @@ import re
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QLineEdit, QPushButton, QGroupBox, QCheckBox, QVBoxLayout, QHBoxLayout, QDialog, QMessageBox
+from PyQt5.QtWidgets import QLineEdit, QPushButton, QGroupBox, QCheckBox, QVBoxLayout, QHBoxLayout, QMessageBox
 
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.config_dialog_base import ConfigDialogBase
 
 
-class TcpConfigDialog(QDialog):
+class TcpConfigDialog(ConfigDialogBase):
 
     def __init__(self, is_tcp_flag, ip, port, parent=None):
         super(TcpConfigDialog, self).__init__(parent)
@@ -42,12 +42,7 @@ class TcpConfigDialog(QDialog):
         self.set_main_layout()
         self.swap_able_status()
 
-        self.setStyleSheet(
-            ui_style_const.qpushbutton_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qcheckbox_style
-            + ui_style_const.qgroupbox_style
-        )
+        self.apply_config_dialog_theme()
 
     def set_member_connect(self):
         self.cancel_btn.clicked.connect(self.close)

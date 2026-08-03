@@ -10,12 +10,10 @@ from datetime import datetime
 from typing import List, Optional
 
 import numpy as np
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
@@ -38,12 +36,14 @@ from base.reference_spectrum_cache import (
     get_reference_data_state,
     save_reference_data,
 )
-from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
+from ui.ui_analysis_config.common_widgets import (
+    SemanticAnalysisConfigDialogBase,
+)
 
 
-class ReferenceSpectrumConfigWindow(QDialog):
+class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
     WINDOW_OPTIONS = ["hann", "hamming", "blackman"]
     NPERSEG_OPTIONS = ["128", "256", "512", "1024", "2048", "4096", "8192"]
     OVERLAP_OPTIONS = [("25%", 0.25), ("50%", 0.5), ("75%", 0.75)]
@@ -54,7 +54,7 @@ class ReferenceSpectrumConfigWindow(QDialog):
     ]
 
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
-        super().__init__()
+        super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
         self.available_channels = list(available_channels or [])
@@ -69,31 +69,37 @@ class ReferenceSpectrumConfigWindow(QDialog):
         self._bind_initial_values()
 
     def init_ui(self):
-        self.setWindowFlag(Qt.WindowCloseButtonHint, False)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-        self.setMinimumSize(520, 680)
-        self.resize(560, 720)
+        self.setWindowTitle("参考频谱分析配置")
+        self.apply_semantic_dialog_size()
+        self.set_semantic_button_callbacks(
+            default_callback=self.on_default_btn_clicked,
+            restore_callback=self.on_restore_default_btn_clicked,
+            ok_callback=self.on_click_ok_btn,
+        )
+        self.default_btn = self.semantic_default_btn
+        self.ok_btn = self.semantic_ok_btn
+        self._build_semantic_sections()
 
-        layout = QVBoxLayout()
-        layout.addWidget(self._create_reference_group())
-        layout.addWidget(self._create_band_group())
-        layout.addWidget(self._create_threshold_group())
-        layout.addWidget(self._create_channel_name_group())
-        layout.addWidget(self._create_advanced_group())
-        layout.addStretch()
-        layout.addLayout(self.create_btn())
-        self.setLayout(layout)
+    def _build_semantic_sections(self):
+        compute_widget = QWidget(self)
+        compute_layout = QVBoxLayout(compute_widget)
+        compute_layout.setContentsMargins(0, 0, 0, 0)
+        compute_layout.setSpacing(12)
+        compute_layout.addWidget(self._create_band_group())
+        compute_layout.addWidget(self._create_advanced_group())
 
-        self.setStyleSheet(
-            ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-            + ui_style_const.qlineedit_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qcombobox_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qcheckbox_style
+        self.add_semantic_section(
+            "reference",
+            widget=self._create_reference_group(),
+        )
+        self.add_semantic_section("compute", widget=compute_widget)
+        self.add_semantic_section(
+            "judgment",
+            widget=self._create_threshold_group(),
+        )
+        self.add_semantic_section(
+            "display",
+            widget=self._create_channel_name_group(),
         )
 
     def _create_reference_group(self):
@@ -272,6 +278,21 @@ class ReferenceSpectrumConfigWindow(QDialog):
         btn_layout.addWidget(self.ok_btn)
         return btn_layout
 
+    def on_restore_default_btn_clicked(self):
+        self.load_config = self.config_manager.load_config().get(
+            self.model_type,
+            {},
+        )
+        self._reference_audio_meta = None
+        self._reference_data_path = ""
+        self._reference_data_last_generated_at = self.load_config.get(
+            "reference_data_last_generated_at"
+        )
+        self._channel_name_inputs = {}
+        self.clear_semantic_sections()
+        self._build_semantic_sections()
+        self._bind_initial_values()
+
     def _bind_initial_values(self):
         cfg = self.load_config or {}
         source_path = str(cfg.get("reference_source_path") or "")
@@ -421,6 +442,11 @@ class ReferenceSpectrumConfigWindow(QDialog):
             row_widget.setLayout(row_layout)
             self.channel_name_layout.addWidget(row_widget)
             self._channel_name_inputs[channel_index] = line_edit
+        self._refresh_section_container_minimum_height()
+        QTimer.singleShot(
+            0,
+            self._refresh_section_container_minimum_height,
+        )
 
     def _collect_channel_labels(self) -> dict:
         if not getattr(self, "custom_channel_name_checkbox", None) or not self.custom_channel_name_checkbox.isChecked():
@@ -478,15 +504,19 @@ class ReferenceSpectrumConfigWindow(QDialog):
 
     def _on_advanced_visibility_changed(self, state):
         self.advanced_container.setVisible(state == Qt.Checked)
+        self._refresh_section_container_minimum_height()
 
     def _on_band_visibility_changed(self, state):
         self.band_container.setVisible(state == Qt.Checked)
+        self._refresh_section_container_minimum_height()
 
     def _on_threshold_visibility_changed(self, state):
         self.threshold_container.setVisible(state == Qt.Checked)
+        self._refresh_section_container_minimum_height()
 
     def _on_channel_name_visibility_changed(self, state):
         self.channel_name_container.setVisible(state == Qt.Checked)
+        self._refresh_section_container_minimum_height()
 
     def _generate_reference_data(self):
         source_path = self.reference_source_path_edit.text().strip()
