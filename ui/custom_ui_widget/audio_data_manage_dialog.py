@@ -18,6 +18,7 @@
         Provide multi-dimensional filtering options
             Filter by product model
             Filter by recording date
+            Filter by rotation speed encoded in the WAV filename
             Filter by sampling rate (44100Hz, 48000Hz)
             Filter by label (OK, NG, unmarked)
         Support combined filtering conditions
@@ -29,6 +30,8 @@
 """
 
 import copy
+import os
+import re
 from re import fullmatch
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -43,6 +46,42 @@ from ui.config_dialog_base import ConfigDialogBase
 from ui.custom_ui_widget.custom_table_widget import DataManageDialog
 
 
+_ROTATION_SPEED_PATTERN = re.compile(
+    r"(?<![0-9A-Za-z])(\d{3,6})[\s_-]*rpm(?![0-9A-Za-z])",
+    re.IGNORECASE,
+)
+_ROTATION_SPEED_FILTER_PATTERN = re.compile(r"(\d{3,6})\s*(?:rpm)?", re.IGNORECASE)
+
+
+def extract_rotation_speed(file_path):
+    """Return the RPM encoded in a WAV filename, or None when absent."""
+    file_name = os.path.basename(str(file_path or "").replace("\\", "/"))
+    stem, _extension = os.path.splitext(file_name)
+    matches = _ROTATION_SPEED_PATTERN.findall(stem)
+    if not matches:
+        return None
+    return int(matches[-1])
+
+
+def collect_rotation_speeds(audio_data):
+    rotation_speeds = set()
+    for item in audio_data:
+        speed = extract_rotation_speed(item[1])
+        if speed is not None:
+            rotation_speeds.add(speed)
+    return rotation_speeds
+
+
+def parse_rotation_speed_filter(text):
+    normalized_text = str(text).strip()
+    if normalized_text.upper() == "ALL":
+        return None
+    match = _ROTATION_SPEED_FILTER_PATTERN.fullmatch(normalized_text)
+    if match is None:
+        raise ValueError("invalid rotation speed")
+    return int(match.group(1))
+
+
 class AudioDataManageDialog(DataManageDialog):
     filter_signal = pyqtSignal()
     def __init__(self, logger: LogManager, hide_select_not_label = False):
@@ -53,6 +92,7 @@ class AudioDataManageDialog(DataManageDialog):
         self.all_audio_data = list()
         self.product_model_set = set()
         self.record_date_set = set()
+        self.rotation_speed_set = set()
         self.filter_audio_data = list()
         self.is_filter_flag = False
         self.all_select_flag = False
@@ -102,7 +142,12 @@ class AudioDataManageDialog(DataManageDialog):
 
     def on_click_filter_btn(self):
         filter_config = copy.deepcopy(self.filter_config)
-        dlg = FilterAudioDialog(self.product_model_set, self.record_date_set, filter_config)
+        dlg = FilterAudioDialog(
+            self.product_model_set,
+            self.record_date_set,
+            filter_config,
+            rotation_speed_set=self.rotation_speed_set,
+        )
         dlg.hide_select_not_label_check_box(self.is_hide_select_not_label)
         flag, filter_config = dlg.exec()
         if flag == 1:
@@ -136,6 +181,7 @@ class AudioDataManageDialog(DataManageDialog):
             self.record_date_set.clear()
             self.filter_audio_data.clear()
             self.product_model_set.clear()
+            self.rotation_speed_set.clear()
             self.filter_config.clear()
         elif len(self.filter_config) == 1:
             if "select_record_date" in self.filter_config:
@@ -149,6 +195,7 @@ class AudioDataManageDialog(DataManageDialog):
         query_code, result = self.recording_manager.get_record_audio_data()
         if query_code == error_code.OK:
             self.all_audio_data = result
+            self.rotation_speed_set = collect_rotation_speeds(result)
             self.logger.info("finish loading audio data")
         else:
             self.logger.error(result)
@@ -191,9 +238,11 @@ class AudioDataManageDialog(DataManageDialog):
     def filter_audio_data_at_filter_config(self, filter_config: dict):
         result = self.all_audio_data[:]
         for key, value in filter_config.items():
-            if key in ["select_sample_rate", "select_labels"] and value:
+            if key == "select_rotation_speed" and value is not None:
+                result = [i for i in result if extract_rotation_speed(i[1]) == value]
+            elif key in ["select_sample_rate", "select_labels"] and value:
                 result = [i for i in result if any(v in i for v in value)]
-            elif key not in ["select_sample_rate", "select_labels"]:
+            elif key not in ["select_rotation_speed", "select_sample_rate", "select_labels"]:
                 result = [i for i in result if value in i]
         self.filter_audio_data = result
 
@@ -231,6 +280,7 @@ class AudioDataManageDialog(DataManageDialog):
         if not id_list:
             return
         self.all_audio_data = [item for item in self.all_audio_data if item[0] not in id_list]
+        self.rotation_speed_set = collect_rotation_speeds(self.all_audio_data)
 
         if self.is_filter_flag is True:
             self.filter_audio_data = [item for item in self.filter_audio_data if item[0] not in id_list]
@@ -241,16 +291,27 @@ class AudioDataManageDialog(DataManageDialog):
 
 class FilterAudioDialog(ConfigDialogBase):
 
-    def __init__(self, product_model_set, record_date_set, filter_config: dict = None, parent=None):
+    def __init__(
+        self,
+        product_model_set,
+        record_date_set,
+        filter_config: dict = None,
+        parent=None,
+        rotation_speed_set=None,
+    ):
         super(FilterAudioDialog, self).__init__(parent)
 
         self.product_model_set = product_model_set
         self.record_date_set = record_date_set
+        self.rotation_speed_set = rotation_speed_set or set()
         self.select_sample_rate = list()
         self.select_labels = list()
         self.select_record_date = None
         self.select_product_model = None
-        self.filter_config = filter_config
+        self.select_rotation_speed = None
+        self.date_filter_combobox = None
+        self.rotation_speed_combobox = None
+        self.filter_config = filter_config or {}
         self.filter_sample_rate_num = 0
         self.filter_label_num = 0
         self.sample_rate_filter_layout = QHBoxLayout()
@@ -266,6 +327,7 @@ class FilterAudioDialog(ConfigDialogBase):
         self.resize(300, 300)
 
         date_filter_groupbox = self.set_date_filter_groupbox()
+        rotation_speed_filter_groupbox = self.create_rotation_speed_filter_groupbox()
         sample_rate_filter_groupbox = self.set_sample_rate_filter_groupbox()
         label_filter_groupbox = self.set_label_filter_groupbox()
         product_model_filter_groupbox = self.create_product_model_filter_groupbox()
@@ -274,6 +336,7 @@ class FilterAudioDialog(ConfigDialogBase):
         layout = QVBoxLayout()
         layout.addWidget(product_model_filter_groupbox)
         layout.addWidget(date_filter_groupbox)
+        layout.addWidget(rotation_speed_filter_groupbox)
         layout.addWidget(sample_rate_filter_groupbox)
         layout.addWidget(label_filter_groupbox)
         layout.addSpacing(10)
@@ -283,23 +346,27 @@ class FilterAudioDialog(ConfigDialogBase):
 
         self.apply_config_dialog_theme()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.rotation_speed_combobox.setFixedWidth(self.date_filter_combobox.width())
+
     def set_date_filter_groupbox(self):
         date_groupbox = QGroupBox("日期")
-        data_filter_combobox = QComboBox()
-        data_filter_combobox.setEditable(True)
-        data_filter_combobox.addItem("ALL")
-        data_filter_combobox.setMinimumWidth(100)
+        self.date_filter_combobox = QComboBox()
+        self.date_filter_combobox.setEditable(True)
+        self.date_filter_combobox.addItem("ALL")
+        self.date_filter_combobox.setMinimumWidth(100)
         if self.record_date_set:
-            data_filter_combobox.addItems(sorted(self.record_date_set))
-        data_filter_combobox.lineEdit().selectAll()
-        data_filter_combobox.textActivated.connect(self.update_date_filter_config)
+            self.date_filter_combobox.addItems(sorted(self.record_date_set))
+        self.date_filter_combobox.lineEdit().selectAll()
+        self.date_filter_combobox.textActivated.connect(self.update_date_filter_config)
 
         if self.filter_config.get("select_record_date"):
-            data_filter_combobox.setCurrentText(self.filter_config.get("select_record_date"))
+            self.date_filter_combobox.setCurrentText(self.filter_config.get("select_record_date"))
             self.select_record_date = self.filter_config.get("select_record_date")
 
         data_filter_layout = QHBoxLayout()
-        data_filter_layout.addWidget(data_filter_combobox, alignment=Qt.AlignLeft)
+        data_filter_layout.addWidget(self.date_filter_combobox, alignment=Qt.AlignLeft)
         date_groupbox.setLayout(data_filter_layout)
 
         return date_groupbox
@@ -382,6 +449,27 @@ class FilterAudioDialog(ConfigDialogBase):
         product_model_filter_groupbox.setLayout(product_model_layout)
 
         return product_model_filter_groupbox
+
+    def create_rotation_speed_filter_groupbox(self):
+        rotation_speed_filter_groupbox = QGroupBox("转速")
+        self.rotation_speed_combobox = QComboBox()
+        self.rotation_speed_combobox.setEditable(True)
+        self.rotation_speed_combobox.addItem("ALL")
+        self.rotation_speed_combobox.setMinimumWidth(100)
+        for speed in sorted(self.rotation_speed_set):
+            self.rotation_speed_combobox.addItem(str(speed))
+
+        selected_speed = self.filter_config.get("select_rotation_speed")
+        if selected_speed is not None:
+            self.rotation_speed_combobox.setCurrentText(str(selected_speed))
+
+        rotation_speed_layout = QHBoxLayout()
+        rotation_speed_layout.addWidget(
+            self.rotation_speed_combobox,
+            alignment=Qt.AlignLeft,
+        )
+        rotation_speed_filter_groupbox.setLayout(rotation_speed_layout)
+        return rotation_speed_filter_groupbox
 
     def create_btn_layout(self):
         ok_btn = QPushButton(" 确  认 ")
@@ -506,6 +594,18 @@ class FilterAudioDialog(ConfigDialogBase):
         self.close()
 
     def on_click_ok_btn(self):
+        try:
+            self.select_rotation_speed = parse_rotation_speed_filter(
+                self.rotation_speed_combobox.currentText()
+            )
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "提示",
+                "转速格式错误，请输入整数，例如 7500。",
+            )
+            return
+
         self.filter_config = dict()
 
         ok_flag = False
@@ -518,12 +618,15 @@ class FilterAudioDialog(ConfigDialogBase):
             self.filter_config["select_record_date"] = self.select_record_date
         if self.select_product_model:
             self.filter_config["select_product_model"] = self.select_product_model
+        if self.select_rotation_speed is not None:
+            self.filter_config["select_rotation_speed"] = self.select_rotation_speed
 
         if (
             self.filter_sample_rate_num == 2
             and self.filter_label_num == 3
             and not self.select_product_model
             and not self.select_record_date
+            and self.select_rotation_speed is None
         ):
             ok_flag = True
 
