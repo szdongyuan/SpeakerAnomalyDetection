@@ -1,9 +1,12 @@
 import os
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
+    QInputDialog,
     QMainWindow,
     QMessageBox,
 )
@@ -113,6 +116,7 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     app.processEvents()
 
     assert dialog.program_table.columnWidth(1) < dialog.program_table.columnWidth(3)
+    assert dialog.program_table.columnWidth(2) >= 200
     assert not dialog.program_table.wordWrap()
     assert dialog.objectName() == "productTestProgramDialog"
     assert dialog.program_table.objectName() == "productProgramTable"
@@ -127,25 +131,11 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     assert button_layout.itemAt(1).spacerItem() is not None
     assert button_layout.itemAt(2).widget() is dialog.add_btn
     assert button_layout.itemAt(3).widget() is dialog.delete_btn
+    assert dialog.add_btn.text() == "+ 添加配置"
     assert dialog.save_btn.objectName() == "productProgramPrimaryButton"
     assert dialog.delete_btn.text() == "删除配置"
     assert dialog.delete_btn.objectName() == ""
-    assert dialog.status_label.property("statusTone") == "ok"
-    dialog.close()
-
-
-def test_dialog_status_strip_distinguishes_warning_and_error(tmp_path):
-    app = QApplication.instance() or QApplication([])
-    manager = make_manager(tmp_path)
-    dialog = ProductTestProgramConfigDialog(manager)
-
-    assert dialog.status_label.property("statusTone") == "warning"
-
-    dialog.config_combobox.setEditText("")
-    app.processEvents()
-
-    assert dialog.status_label.property("statusTone") == "error"
-    dialog._dirty = False
+    assert not hasattr(dialog, "status_label")
     dialog.close()
 
 
@@ -184,7 +174,12 @@ def test_save_renamed_config_updates_file_and_active_registry(
     dialog = ProductTestProgramConfigDialog(manager)
     old_file = dialog.current_file
     dialog.config_combobox.setEditText("S004-1四转速测试")
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, _title, message: messages.append(message),
+    )
 
     dialog._save_program()
     app.processEvents()
@@ -198,7 +193,8 @@ def test_save_renamed_config_updates_file_and_active_registry(
             "name": "S004-1四转速测试",
         }
     ]
-    dialog.close()
+    assert messages == ["配置已保存，可以用于测试。"]
+    assert dialog.result() == QDialog.Accepted
 
 
 def test_dialog_adds_and_deletes_selected_sub_config(tmp_path):
@@ -237,6 +233,210 @@ def test_dialog_uses_comboboxes_for_trigger_and_test_queue(tmp_path):
     assert queue_widget.findData("queue_6000") >= 0
     assert queue_cell.edit_button.text() == "编辑"
     app.processEvents()
+    dialog.close()
+
+
+def test_manually_edited_trigger_state_is_collected(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    dialog = ProductTestProgramConfigDialog(manager)
+    trigger_widget = dialog.program_table.cellWidget(0, 2)
+
+    trigger_widget.lineEdit().setText("fe  02 01 02 10 5d")
+    app.processEvents()
+
+    assert dialog.collect_program()["sub_configs"][0]["trigger_state"] == (
+        "FE 02 01 02 10 5D"
+    )
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_switching_clean_config_does_not_prompt_to_discard(
+    tmp_path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    first_file = manager.load_registry()["active_file"]
+    success, second_file = manager.save_as(
+        {
+            "name": "默认配置",
+            "sub_configs": [
+                {
+                    "condition_name": "7000 rpm",
+                    "trigger_state": "02",
+                    "test_queue": "queue_6000",
+                }
+            ],
+        },
+        "第二配置",
+    )
+    assert success
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog._load_program(first_file)
+    target_index = dialog.config_combobox.findData(second_file)
+
+    def fail_if_prompted(*_args, **_kwargs):
+        raise AssertionError("切换未修改的配置不应提示放弃修改")
+
+    monkeypatch.setattr(QMessageBox, "question", fail_if_prompted)
+    dialog.config_combobox.setCurrentIndex(target_index)
+    app.processEvents()
+    dialog.config_combobox.activated.emit(target_index)
+    app.processEvents()
+
+    assert dialog.current_file == second_file
+    assert not dialog._dirty
+    dialog.close()
+
+
+def test_clear_preserves_current_config_name(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    dialog = ProductTestProgramConfigDialog(manager)
+    current_file = dialog.current_file
+    current_name = dialog.config_combobox.currentText()
+
+    dialog._clear_program()
+    app.processEvents()
+
+    assert dialog.current_file == current_file
+    assert dialog.config_combobox.currentText() == current_name
+    assert dialog.program_table.rowCount() == 0
+    assert dialog._dirty
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_save_as_reports_incomplete_configuration(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog._add_empty_row()
+    dialog.program_table.item(0, 1).setText("6000 rpm")
+    messages = []
+    monkeypatch.setattr(
+        QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: ("草稿配置", True),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, _title, message: messages.append(message),
+    )
+
+    dialog._save_program_as()
+    app.processEvents()
+
+    assert len(messages) == 1
+    assert messages[0] == (
+        "配置已另存，但暂不能用于测试。\n"
+        "请完善触发状态和测试队列配置。"
+    )
+    assert dialog.result() != QDialog.Accepted
+    dialog.close()
+
+
+def test_save_closes_after_saving_incomplete_configuration(
+    tmp_path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog._add_empty_row()
+    dialog.program_table.item(0, 1).setText("6000 rpm")
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, _title, message: messages.append(message),
+    )
+
+    dialog._save_program()
+    app.processEvents()
+
+    assert dialog.result() == QDialog.Accepted
+    assert len(messages) == 1
+    assert messages[0] == (
+        "配置已保存，但暂不能用于测试。\n"
+        "请完善触发状态和测试队列配置。"
+    )
+
+
+def test_save_hides_automatic_judgment_details_from_customer(
+    tmp_path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    queue_dir = os.path.dirname(manager.queue_registry_path)
+    queue_path = os.path.join(queue_dir, "manual_judgment.json")
+    queue_data = make_queue_config()
+    analysis_list = queue_data[0]["seq1"]["analysis_list"]
+    analysis_list["声压级 (SPL) 1"]["limit_checked"] = False
+    assert LoadUiConfig.save_data_to_json(queue_data, queue_path)
+    assert LoadUiConfig.save_data_to_json(
+        {"manual_judgment": queue_path},
+        manager.queue_registry_path,
+    )
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog._show_program(
+        {
+            "name": "人工判定配置",
+            "sub_configs": [
+                {
+                    "condition_name": "6000 rpm",
+                    "trigger_state": "01",
+                    "test_queue": "manual_judgment",
+                }
+            ],
+        },
+        None,
+    )
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, _title, message: messages.append(message),
+    )
+
+    dialog._save_program()
+    app.processEvents()
+
+    assert dialog.result() == QDialog.Accepted
+    assert messages == [
+        "配置已保存，可以用于测试。\n部分工况需要人工判定结果。"
+    ]
+    assert "manual_judgment" not in messages[0]
+    assert "规则阈值" not in messages[0]
+
+
+def test_save_error_keeps_dialog_open(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog.show()
+    dialog.config_combobox.setEditText("")
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, _title, message: messages.append(message),
+    )
+
+    dialog._save_program()
+    app.processEvents()
+
+    assert dialog.isVisible()
+    assert len(messages) == 1
+    assert "配置名称不能为空" in messages[0]
+    dialog._dirty = False
     dialog.close()
 
 
@@ -309,7 +509,6 @@ def test_missing_queue_reference_is_not_shown(tmp_path):
     assert dialog._queue_combobox(0).currentData() == ""
     assert dialog._queue_combobox(0).currentText() == "请选择"
     assert queue_cell.edit_button.text() == "新建"
-    assert "尚未选择测试队列" in dialog.status_label.text()
     dialog.close()
 
 

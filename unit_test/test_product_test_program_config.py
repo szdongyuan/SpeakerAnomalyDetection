@@ -141,6 +141,20 @@ def test_import_program_copies_external_file_to_program_directory(tmp_path):
     }
 
 
+def test_import_program_rejects_invalid_sub_config_structure(tmp_path):
+    manager = make_manager(tmp_path)
+    source_path = tmp_path / "invalid.json"
+    assert LoadUiConfig.save_data_to_json(
+        {"name": "无效配置", "sub_configs": None},
+        str(source_path),
+    )
+
+    success, message = manager.import_program(str(source_path))
+
+    assert not success
+    assert "sub_configs 必须是列表" in message
+
+
 def test_rebuild_registry_from_program_files(tmp_path):
     manager = make_manager(tmp_path)
     program_path = os.path.join(manager.program_dir, "默认配置.json")
@@ -346,6 +360,54 @@ def test_save_renames_file_and_updates_active_registry(tmp_path):
     }
 
 
+def test_rename_registry_failure_preserves_original_file(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    success, current_file = manager.save_program(None, make_program())
+    assert success
+    original_path = os.path.join(manager.program_dir, current_file)
+    renamed_program = make_program("S004-1四转速测试")
+    renamed_path = os.path.join(
+        manager.program_dir,
+        "S004-1四转速测试.json",
+    )
+    monkeypatch.setattr(manager, "save_registry", lambda _registry: False)
+
+    success, message = manager.save_program(current_file, renamed_program)
+
+    assert not success
+    assert "注册表更新失败" in message
+    assert os.path.isfile(original_path)
+    assert not os.path.exists(renamed_path)
+
+
+def test_rename_cleanup_failure_restores_registry(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    success, current_file = manager.save_program(None, make_program())
+    assert success
+    original_path = os.path.join(manager.program_dir, current_file)
+    renamed_program = make_program("S004-1四转速测试")
+    renamed_path = os.path.join(
+        manager.program_dir,
+        "S004-1四转速测试.json",
+    )
+    real_remove = os.remove
+
+    def fail_for_original(path):
+        if os.path.abspath(path) == os.path.abspath(original_path):
+            raise PermissionError("file is in use")
+        real_remove(path)
+
+    monkeypatch.setattr(os, "remove", fail_for_original)
+
+    success, message = manager.save_program(current_file, renamed_program)
+
+    assert not success
+    assert "文件重命名失败" in message
+    assert os.path.isfile(original_path)
+    assert not os.path.exists(renamed_path)
+    assert manager.load_registry()["active_file"] == current_file
+
+
 def test_save_as_strips_json_extension_from_config_name(tmp_path):
     manager = make_manager(tmp_path)
 
@@ -374,7 +436,7 @@ def test_save_rejects_invalid_file_name_character(tmp_path):
     assert os.listdir(manager.program_dir) == ["program_registry.json"]
 
 
-def test_ai_only_queue_is_not_available_for_rule_judgment(tmp_path):
+def test_ai_only_queue_is_available_without_automatic_judgment(tmp_path):
     manager = make_manager(tmp_path)
     queue_path = os.path.join(
         os.path.dirname(manager.queue_registry_path),
@@ -392,10 +454,25 @@ def test_ai_only_queue_is_not_available_for_rule_judgment(tmp_path):
 
     catalog = manager.load_queue_catalog()
 
-    assert not catalog["ai_only"]["available"]
-    assert catalog["ai_only"]["reason"] == "未配置可输出 OK/NG 的规则阈值"
+    assert catalog["ai_only"]["available"]
+    assert not catalog["ai_only"]["can_auto_judge"]
+    assert catalog["ai_only"]["reason"] == ""
+    assert (
+        catalog["ai_only"]["judgment_reason"]
+        == "未配置可输出 OK/NG 的规则阈值"
+    )
     assert catalog["ai_only"]["duration"] == 5.0
     assert catalog["ai_only"]["analysis_items"] == ["AI 分析 1"]
+
+    program = make_program()
+    program["sub_configs"][0]["test_queue"] = "ai_only"
+    validation = manager.validate_program(
+        program,
+        None,
+        catalog,
+    )
+    assert validation["is_usable"]
+    assert "不能自动输出 OK/NG" in validation["use_warnings"][0]
 
 
 def test_trigger_states_include_non_idle_hardware_states(tmp_path, monkeypatch):

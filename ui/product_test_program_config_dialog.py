@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 from base.product_test_program_config import (
     DEFAULT_PROGRAM_NAME,
     ProductTestProgramConfigManager,
+    normalize_trigger_state,
 )
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -48,9 +49,8 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.config_label = QLabel("配置名称：")
         self.section_title_label = QLabel("工况配置")
         self.program_table = QTableWidget(0, 6)
-        self.add_btn = QPushButton("+ 添加子配置")
+        self.add_btn = QPushButton("+ 添加配置")
         self.delete_btn = QPushButton("删除配置")
-        self.status_label = QLabel()
         self.clear_btn = QPushButton("清空")
         self.import_btn = QPushButton("导入")
         self.save_as_btn = QPushButton("另存为")
@@ -116,13 +116,9 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         header.setSectionResizeMode(5, QHeaderView.Stretch)
         self.program_table.setColumnWidth(0, 55)
         self.program_table.setColumnWidth(1, 125)
-        self.program_table.setColumnWidth(2, 125)
+        self.program_table.setColumnWidth(2, 210)
         self.program_table.setColumnWidth(3, 250)
         self.program_table.setColumnWidth(4, 85)
-
-        self.status_label.setObjectName("productProgramStatus")
-        self.status_label.setWordWrap(True)
-        self.status_label.setProperty("statusTone", "warning")
 
         self.save_btn.setObjectName("productProgramPrimaryButton")
         for button in (
@@ -174,7 +170,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         layout.addLayout(config_layout)
         layout.addLayout(table_button_layout)
         layout.addWidget(self.program_table, 1)
-        layout.addWidget(self.status_label)
         layout.addWidget(footer_separator)
         layout.addLayout(bottom_button_layout)
         self.setLayout(layout)
@@ -188,7 +183,10 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
 
     def _set_member_connect(self):
         self.config_combobox.activated.connect(self._on_config_activated)
-        self.config_combobox.editTextChanged.connect(self._on_program_changed)
+        if self.config_combobox.lineEdit() is not None:
+            self.config_combobox.lineEdit().textEdited.connect(
+                self._on_program_changed
+            )
         self.program_table.itemChanged.connect(self._on_table_item_changed)
         self.add_btn.clicked.connect(self._add_empty_row)
         self.delete_btn.clicked.connect(self._delete_selected_row)
@@ -230,7 +228,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self._renumber_rows()
         self._loading = False
         self._dirty = False
-        self._update_program_status()
 
     def _refresh_config_selector(self, current_name):
         registry = self.manager.load_registry()
@@ -455,8 +452,9 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self._on_program_changed()
 
     def _clear_program(self):
+        current_name = self.config_combobox.currentText()
         self._show_program(
-            {"name": DEFAULT_PROGRAM_NAME, "sub_configs": []},
+            {"name": current_name, "sub_configs": []},
             self.current_file,
         )
         self._dirty = True
@@ -488,6 +486,20 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         )
         if not accepted:
             return
+        copied_program = dict(program_data)
+        copied_program["name"] = new_name
+        validation = self.manager.validate_program(
+            copied_program,
+            None,
+            self.queue_catalog,
+        )
+        if not validation["can_save"]:
+            QMessageBox.warning(
+                self,
+                "无法另存为",
+                "\n".join(validation["save_errors"]),
+            )
+            return
         success, message = self.manager.save_as(program_data, new_name)
         if not success:
             QMessageBox.warning(self, "另存为失败", message)
@@ -495,7 +507,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.current_file = message
         self._load_program(message)
         self.programs_changed.emit()
-        QMessageBox.information(self, "另存为", "产品测试程序已另存")
+        self._show_save_result("另存为", "另存", validation)
 
     def _save_program(self):
         program_data = self.collect_program()
@@ -527,17 +539,25 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             return
 
         self.current_file = message
-        self._load_program(message)
         self.programs_changed.emit()
-        if validation["is_usable"]:
-            QMessageBox.information(self, "保存成功", "配置已保存，可以用于测试")
-        else:
-            QMessageBox.information(
-                self,
-                "保存成功",
-                "配置已保存，但尚不能用于测试：\n"
-                + "\n".join(validation["use_errors"]),
+        self._show_save_result("保存成功", "保存", validation)
+        self._dirty = False
+        self.accept()
+
+    def _show_save_result(self, title, action_text, validation):
+        if not validation["is_usable"]:
+            message = (
+                f"配置已{action_text}，但暂不能用于测试。\n"
+                "请完善触发状态和测试队列配置。"
             )
+        elif validation["use_warnings"]:
+            message = (
+                f"配置已{action_text}，可以用于测试。\n"
+                "部分工况需要人工判定结果。"
+            )
+        else:
+            message = f"配置已{action_text}，可以用于测试。"
+        QMessageBox.information(self, title, message)
 
     def collect_program(self):
         sub_configs = []
@@ -550,7 +570,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
                         if condition_item is not None
                         else ""
                     ),
-                    "trigger_state": self._combobox_value(
+                    "trigger_state": self._trigger_combobox_value(
                         self.program_table.cellWidget(row, 2)
                     ),
                     "test_queue": self._combobox_value(
@@ -572,6 +592,21 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             value = combobox.currentText()
         return str(value or "").strip()
 
+    @staticmethod
+    def _trigger_combobox_value(combobox):
+        if combobox is None:
+            return ""
+        current_index = combobox.currentIndex()
+        current_text = combobox.currentText()
+        if (
+            current_index >= 0
+            and current_text == combobox.itemText(current_index)
+        ):
+            return normalize_trigger_state(
+                combobox.itemData(current_index)
+            )
+        return normalize_trigger_state(current_text)
+
     def _update_row_summary(self, row):
         if row < 0 or row >= self.program_table.rowCount():
             return
@@ -592,35 +627,10 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.program_table.item(row, 5).setText(analysis_text)
         self.program_table.item(row, 5).setToolTip(analysis_text)
 
-    def _update_program_status(self):
-        if self._loading:
-            return
-        validation = self.manager.validate_program(
-            self.collect_program(),
-            self.current_file,
-            self.queue_catalog,
-        )
-        if not validation["can_save"]:
-            status_text = "配置检查：无法保存；" + validation["save_errors"][0]
-            status_tone = "error"
-        elif not validation["is_usable"]:
-            status_text = "配置检查：可保存，但暂不可用于测试；" + validation[
-                "use_errors"
-            ][0]
-            status_tone = "warning"
-        else:
-            status_text = "配置检查：可以正常用于测试"
-            status_tone = "ok"
-        self.status_label.setText(status_text)
-        self.status_label.setProperty("statusTone", status_tone)
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
-
     def _on_program_changed(self):
         if self._loading:
             return
         self._dirty = True
-        self._update_program_status()
 
     def _confirm_discard_changes(self):
         if not self._dirty:

@@ -925,29 +925,6 @@ product_test_program_dialog_style = _style("""
                 font-size: 20px;
                 font-weight: bold;
             }
-            QLabel#productProgramStatus {
-                min-height: 24px;
-                border: 1px solid $COLOR_BORDER;
-                border-radius: 5px;
-                padding: 6px 10px;
-                font-family: $UI_FONT_FAMILY;
-                font-size: 18px;
-            }
-            QLabel#productProgramStatus[statusTone="ok"] {
-                color: $COLOR_OK;
-                background-color: #F0FDF4;
-                border-color: #86EFAC;
-            }
-            QLabel#productProgramStatus[statusTone="warning"] {
-                color: #B45309;
-                background-color: #FFF7ED;
-                border-color: #FDBA74;
-            }
-            QLabel#productProgramStatus[statusTone="error"] {
-                color: $COLOR_NG;
-                background-color: #FEF2F2;
-                border-color: #FCA5A5;
-            }
             QPushButton#productProgramPrimaryButton {
                 color: #FFFFFF;
                 background-color: $COLOR_PRIMARY;
