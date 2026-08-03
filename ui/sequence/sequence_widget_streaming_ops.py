@@ -276,10 +276,29 @@ class SequenceWidgetStreamingOpsMixin:
     def update_v2pa_factor(self):
         self.v2pa_factor = get_mic_v2pa_factor()
 
-    def _sync_product_test_conditions(self):
+    @staticmethod
+    def _product_condition_signature(condition_configs):
+        signature = []
+        for item in condition_configs or []:
+            if not isinstance(item, dict):
+                continue
+            signature.append(
+                (
+                    str(item.get("key") or "").strip(),
+                    str(item.get("trigger_state") or "").strip(),
+                    str(item.get("test_queue") or "").strip(),
+                    str(item.get("condition_name") or item.get("name") or "").strip(),
+                )
+            )
+        return tuple(signature)
+
+    def _sync_product_test_conditions(self, clear_recent_history=False):
         # Choose product test program config by current "使用配置" key or product model (if exists),
         # otherwise fallback to built-in default_config.json.
         config_path = None
+        old_signature = self._product_condition_signature(
+            getattr(self, "product_test_condition_configs", []) or []
+        )
         try:
             import os
 
@@ -307,6 +326,13 @@ class SequenceWidgetStreamingOpsMixin:
             config_path = None
 
         self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
+        new_signature = self._product_condition_signature(self.product_test_condition_configs)
+        should_clear_history = bool(clear_recent_history) or (
+            bool(old_signature) and old_signature != new_signature
+        )
+        clear_recent_history_func = getattr(self, "_clear_recent_session_history", None)
+        if should_clear_history and callable(clear_recent_history_func):
+            clear_recent_history_func(reset_panel=False)
         if getattr(self, "left_panel", None) is not None:
             self.left_panel.set_condition_configs(self.product_test_condition_configs)
         if getattr(self, "channel_workspace", None) is not None:
@@ -314,6 +340,9 @@ class SequenceWidgetStreamingOpsMixin:
             apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
             if callable(apply_mode):
                 apply_mode()
+        if getattr(self, "recent_session_panel", None) is not None:
+            if should_clear_history and hasattr(self.recent_session_panel, "set_conditions"):
+                self.recent_session_panel.set_conditions(self.product_test_condition_configs)
 
     def _summarize_ok_ng(self):
         """
