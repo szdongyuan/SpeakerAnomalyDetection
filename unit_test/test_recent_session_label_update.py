@@ -26,6 +26,14 @@ from consts import error_code
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 
 
+class _LineEdit:
+    def __init__(self, text=""):
+        self._text = text
+
+    def text(self):
+        return self._text
+
+
 class _DummyRecentSessionPanel:
     def __init__(self):
         self.upserted_records = []
@@ -40,6 +48,21 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
         self.count_board_relabel_updates = []
         self.count_board.update_mark_result_file_on_relabel = self._record_mark_result_update
         self.recent_session_panel = _DummyRecentSessionPanel()
+        self.recent_test_sessions = []
+        self._recent_session_seq = 0
+        self._recent_session_max_items = 20
+        self._current_recent_session_id = None
+        self._pending_recent_session_append = False
+        self._current_trigger_direction = "01"
+        self._current_cycle_recorded_count = ""
+        self._current_run_recording_token = "run_001"
+        self.lineedit_s_or_n = _LineEdit("SN001")
+        self.lineedit_type = _LineEdit("MODEL")
+        self.product_test_condition_configs = [
+            {"key": "01", "trigger_state": "01", "condition_name": "6000 rpm"},
+            {"key": "02", "trigger_state": "02", "condition_name": "7000 rpm"},
+        ]
+        self.data_struct = SimpleNamespace(sample_rate=44100, analysis_result_dict={})
         self.recent_test_session_by_id = {
             "recent_1": {
                 "session_id": "recent_1",
@@ -78,6 +101,19 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
 
 
 class TestRecentSessionLabelUpdate(unittest.TestCase):
+    def test_recent_session_mode_text_uses_condition_names(self):
+        widget = _DummySequenceWidget()
+        widget.product_test_condition_configs = [
+            {"key": "01", "trigger_state": "01", "condition_name": "6000 rpm"},
+            {"key": "02", "trigger_state": "02", "condition_name": "7000 rpm"},
+        ]
+
+        self.assertEqual(widget._get_recent_session_mode_text("01"), "6000 rpm")
+        self.assertEqual(widget._get_recent_session_mode_text("02"), "7000 rpm")
+        self.assertEqual(widget._get_recent_session_mode_text("forward"), "6000 rpm")
+        self.assertEqual(widget._get_recent_session_mode_text("reverse"), "7000 rpm")
+        self.assertEqual(widget._get_recent_session_mode_key("reverse"), "02")
+
     def test_change_recent_session_result_updates_session_and_runtime_paths(self):
         widget = _DummySequenceWidget()
 
@@ -119,6 +155,28 @@ class TestRecentSessionLabelUpdate(unittest.TestCase):
             "D:/audio_data/stored_data/OK/test.wav",
         )
         self.assertEqual(widget.count_board_relabel_updates, [("not_labeled", "OK")])
+
+    def test_recent_session_group_id_uses_current_run_token(self):
+        widget = _DummySequenceWidget()
+        widget._current_cycle_recorded_count = ""
+
+        widget._current_run_recording_token = "run_a"
+        first = widget._build_recent_session_record("OK")
+        widget._current_run_recording_token = "run_b"
+        second = widget._build_recent_session_record("OK")
+
+        self.assertEqual(first["group_id"], "run_a")
+        self.assertEqual(second["group_id"], "run_b")
+        self.assertNotEqual(first["group_id"], second["group_id"])
+
+    def test_recent_session_group_id_prefers_cycle_token(self):
+        widget = _DummySequenceWidget()
+        widget._current_cycle_recorded_count = "cycle_1"
+        widget._current_run_recording_token = "run_a"
+
+        session_record = widget._build_recent_session_record("OK")
+
+        self.assertEqual(session_record["group_id"], "cycle_1")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,17 @@ from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 
 
+class RefreshBeforePopupComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.before_show_popup = None
+
+    def showPopup(self):
+        if callable(self.before_show_popup):
+            self.before_show_popup()
+        super().showPopup()
+
+
 class SequenceToolsBar(QWidget):
 
     def __init__(self, parent=None):
@@ -18,7 +29,7 @@ class SequenceToolsBar(QWidget):
         self.tcp_btn = QPushButton()
         self.serial_trigger_btn = QPushButton()
         self.data_btn = QPushButton()
-        self.using_file_combobox = QComboBox()
+        self.using_file_combobox = RefreshBeforePopupComboBox()
         self.condition_mode_combobox = QComboBox()
         self.lineedit_type = QLineEdit()
         self.lineedit_count = QLineEdit()

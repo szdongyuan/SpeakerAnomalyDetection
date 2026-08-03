@@ -1,10 +1,12 @@
 import logging
+import os
 import sys
+import tempfile
 import types
 import unittest
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QSplitter, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QSplitter, QVBoxLayout, QWidget
 
 if "concurrent_log_handler" not in sys.modules:
     concurrent_log_handler = types.ModuleType("concurrent_log_handler")
@@ -20,7 +22,9 @@ from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_panel_common import MotorSectionCard
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.sequencement_count_board import SequenceCountBoard
+from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from base.product_test_program_config import ProductTestProgramConfigManager
 
 
 class _DummyCountBoard(QWidget):
@@ -55,6 +59,13 @@ class _SpyLeftPanel:
 
     def set_condition_result(self, key, label, tone=None):
         self.results.append((key, label, tone))
+
+
+class _DummyProductProgramWidget(QWidget, SequenceWidgetConfigOpsMixin):
+    def __init__(self, manager):
+        super().__init__()
+        self.product_program_manager = manager
+        self.using_file_combobox = QComboBox()
 
 
 class _DummySequenceWidget(QWidget, SequenceWidgetStreamingOpsMixin):
@@ -194,6 +205,40 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(board.mode, "test")
         self.assertEqual(board.stacked_widget.currentIndex(), 0)
 
+    def test_using_config_combobox_reads_product_program_registry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            program_dir = os.path.join(folder, "product_test_programs")
+            queue_dir = os.path.join(folder, "analysis_sequence_config")
+            os.makedirs(program_dir)
+            os.makedirs(queue_dir)
+            manager = ProductTestProgramConfigManager(
+                program_dir,
+                os.path.join(program_dir, "program_registry.json"),
+                os.path.join(queue_dir, "sequence_config_registry.json"),
+            )
+            manager.save_program(
+                None,
+                {
+                    "name": "2条波形",
+                    "sub_configs": [{"condition_name": "6000 rpm", "trigger_state": "01"}],
+                },
+            )
+            manager.save_program(
+                None,
+                {
+                    "name": "4条波形",
+                    "sub_configs": [{"condition_name": "9000 rpm", "trigger_state": "08"}],
+                },
+            )
+            widget = _DummyProductProgramWidget(manager)
+
+            widget.add_file_to_using_file_combobox()
+
+            texts = [widget.using_file_combobox.itemText(i) for i in range(widget.using_file_combobox.count())]
+            self.assertEqual(texts, ["2条波形", "4条波形"])
+            self.assertEqual(widget.using_file_combobox.currentText(), "4条波形")
+            self.assertEqual(widget.using_file_combobox.currentData(), "4条波形.json")
+
     def test_waveform_condition_actions_follow_mode(self):
         played = []
         marked = []
@@ -217,6 +262,39 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertEqual(played, ["01"])
         self.assertEqual(marked, [("01", "OK")])
+
+    def test_waveform_panel_keeps_cards_when_condition_keys_repeat(self):
+        panel = DirectionWaveformPanel(
+            condition_configs=[
+                {"condition_name": "6000", "trigger_state": "", "test_queue": "默认配置"},
+                {"condition_name": "7000", "trigger_state": "", "test_queue": "3"},
+                {"condition_name": "8000", "trigger_state": "", "test_queue": "3"},
+            ]
+        )
+
+        self.assertEqual(len(panel._cards), 3)
+        self.assertEqual(len(set(panel.condition_keys())), 3)
+
+    def test_waveform_panel_resets_old_grid_columns_after_config_switch(self):
+        panel = DirectionWaveformPanel(
+            condition_configs=[
+                {"condition_name": str(i), "trigger_state": str(i)}
+                for i in range(5)
+            ]
+        )
+        self.assertEqual(panel.grid.columnStretch(2), 1)
+
+        panel.set_conditions(
+            [
+                {"condition_name": "6000", "trigger_state": "01"},
+                {"condition_name": "7000", "trigger_state": "02"},
+            ]
+        )
+
+        self.assertEqual(panel.grid.columnStretch(0), 1)
+        self.assertEqual(panel.grid.columnStretch(1), 1)
+        self.assertEqual(panel.grid.columnStretch(2), 0)
+        self.assertEqual(panel.grid.rowStretch(1), 0)
 
     def test_waveform_mark_does_not_update_left_condition_judgement(self):
         widget = _DummySequenceWidget()
