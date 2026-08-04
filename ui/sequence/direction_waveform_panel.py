@@ -6,7 +6,6 @@ import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
-    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -18,24 +17,6 @@ from PyQt5.QtWidgets import (
 )
 
 from consts import ui_style_const
-
-
-class _WaveformPreviewDialog(QDialog):
-    def __init__(self, title: str, x, y, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(str(title or "波形预览"))
-        self.setMinimumSize(760, 420)
-
-        plot = pg.PlotWidget()
-        DirectionWaveformCard._setup_plot_style(plot)
-        try:
-            plot.plot(x, y, pen=pg.mkPen("#3B82F6", width=1.8))
-        except Exception:
-            pass
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.addWidget(plot)
 
 
 class DirectionWaveformCard(QFrame):
@@ -52,7 +33,6 @@ class DirectionWaveformCard(QFrame):
         self.setObjectName("directionWaveformCard")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet(ui_style_const.waveform_frame_style)
-        self.setCursor(Qt.PointingHandCursor)
 
         header = QWidget(self)
         header.setObjectName("directionWaveformHeader")
@@ -180,16 +160,6 @@ class DirectionWaveformCard(QFrame):
         else:
             self.plot_item.setData(x, y)
 
-    def mousePressEvent(self, event):
-        try:
-            if self._last_x is not None and self._last_y is not None:
-                dlg = _WaveformPreviewDialog(self.title_label.text(), self._last_x, self._last_y, parent=self)
-                dlg.exec_()
-        except Exception:
-            pass
-        super().mousePressEvent(event)
-
-
 class DirectionWaveformPanel(QWidget):
     def __init__(self, parent=None, condition_configs=None, on_play_condition=None, on_mark_condition=None):
         super().__init__(parent)
@@ -241,8 +211,6 @@ class DirectionWaveformPanel(QWidget):
             card.set_result_label(self._result_labels.get(item["key"], ""))
             self._cards[item["key"]] = card
             self.grid.addWidget(card, index // cols, index % cols)
-            x, y = self._fake_wave(index)
-            card.set_data(x, y)
 
         if not conditions:
             empty = QLabel("暂无工况配置")
@@ -335,16 +303,6 @@ class DirectionWaveformPanel(QWidget):
             used_keys.add(key)
             result.append({"key": key, "name": name})
         return result
-
-    @staticmethod
-    def _fake_wave(index):
-        x = [i / 100.0 for i in range(220)]
-        y = [
-            math.sin(i * 0.45 + index) * 0.26
-            + math.sin(i * 0.12 + index * 0.7) * 0.12
-            for i in range(220)
-        ]
-        return x, y
 
     def _clear_grid(self):
         while self.grid.count():

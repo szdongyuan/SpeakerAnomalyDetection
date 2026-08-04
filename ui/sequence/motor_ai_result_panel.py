@@ -1,16 +1,24 @@
+import os
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
+from base.load_config import LoadUiConfig
+from base.product_test_program_config import ProductTestProgramConfigManager
+from consts import error_code
 from consts import ui_style_const
 from ui.sequence.motor_panel_common import MotorSectionCard
 
 
 class MotorAiResultPanel(QWidget):
+    DETAIL_LABEL_ORDER = ("SPL", "响度", "FBA")
+
     def __init__(self, parent=None, condition_configs=None):
         super().__init__(parent)
         self.conditions = []
         self.rows = {}
         self.detail_labels = {}
+        self.detail_layout = None
         self.selected_key = ""
         self.stage_text = ""
         self._detail_owner_key = ""
@@ -51,24 +59,9 @@ class MotorAiResultPanel(QWidget):
         self.detail_frame.setStyleSheet(
             "QFrame { background: transparent; border-top: 1px solid #C9D6E8; border-bottom: 1px solid #C9D6E8; }"
         )
-        detail_layout = QVBoxLayout(self.detail_frame)
-        detail_layout.setContentsMargins(8, 8, 8, 8)
-        detail_layout.setSpacing(4)
-        for name in ("SPL", "响度", "FBA"):
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(10)
-            name_label = QLabel(name)
-            name_label.setFixedWidth(44)
-            name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            name_label.setStyleSheet(self._small_text_style("#1F2937"))
-            value_label = QLabel("--")
-            value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            value_label.setStyleSheet(self._small_text_style("#1F2937"))
-            row.addWidget(name_label)
-            row.addWidget(value_label, stretch=1)
-            detail_layout.addLayout(row)
-            self.detail_labels[name] = value_label
+        self.detail_layout = QVBoxLayout(self.detail_frame)
+        self.detail_layout.setContentsMargins(8, 8, 8, 8)
+        self.detail_layout.setSpacing(4)
         # Detail frame is injected under the selected RPM row (not fixed position).
         self.detail_frame.setVisible(False)
 
@@ -123,10 +116,16 @@ class MotorAiResultPanel(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda checked=False, key=item["key"]: self.select_condition(key, show_detail=True))
             self.rows_layout.addWidget(button)
-            self.rows[item["key"]] = {"button": button, "result": "OK", "tone": "ok", "index": index}
+            self.rows[item["key"]] = {
+                "button": button,
+                "result": "待检测",
+                "tone": "pending",
+                "index": index,
+                "details": item.get("analysis_details", []),
+            }
 
         self.count_label.setText(f"{len(self.conditions)}个检测")
-        self._put_fake_data()
+        self._set_default_condition_results()
         if self.conditions:
             # Keep a default selection for UI consistency, but do not auto-expand details.
             self.select_condition(self.conditions[0]["key"], show_detail=False)
@@ -134,9 +133,11 @@ class MotorAiResultPanel(QWidget):
             self._show_empty_detail()
 
     def reset(self):
-        self._put_fake_data()
+        self._set_default_condition_results()
         if self.conditions:
             self.select_condition(self.conditions[0]["key"], show_detail=False)
+        else:
+            self._show_empty_detail()
 
     def select_condition(self, key, *, show_detail: bool = False):
         if key not in self.rows:
@@ -144,9 +145,7 @@ class MotorAiResultPanel(QWidget):
         self.selected_key = key
         for row_key, row in self.rows.items():
             row["button"].setStyleSheet(self._row_style(row["tone"], selected=(row_key == key)))
-        data = self._fake_detail(self.rows[key]["index"])
-        for name, label in self.detail_labels.items():
-            label.setText(data[name])
+        self._set_detail_items(self.rows[key].get("details", []))
         if show_detail:
             self._attach_detail_under_row(key)
         else:
@@ -224,33 +223,50 @@ class MotorAiResultPanel(QWidget):
             return False
         return self.set_condition_result(self.conditions[index]["key"], result_text, tone=tone)
 
-    def _put_fake_data(self):
+    def _set_default_condition_results(self):
         if not self.conditions:
             self.set_final_result("待判定", "pending")
             return
-        for index, item in enumerate(self.conditions):
-            if index == len(self.conditions) - 1:
-                self.set_condition_result(item["key"], "采集中", "running")
-            elif index == len(self.conditions) - 2:
-                self.set_condition_result(item["key"], "NG", "ng")
-            else:
-                self.set_condition_result(item["key"], "OK", "ok")
-        self.set_final_result("检测中", "running")
+        for item in self.conditions:
+            self.set_condition_result(item["key"], "待检测", "pending")
+        self.set_final_result("待判定", "pending")
 
-    def _fake_detail(self, index):
-        spl = 71.6 + index
-        loudness = 13.8 + index * 0.4
-        fba = 41.3 + index * 0.2
-        spl_result = "NG" if spl > 72 else "OK"
-        return {
-            "SPL": f"{spl:.1f} / <72 dB {spl_result}",
-            "响度": f"{loudness:.1f} / 8-15 sone OK",
-            "FBA": f"{fba:.1f} / <45 dB OK",
-        }
+    def _set_detail_items(self, details):
+        if self.detail_layout is None:
+            return
+        self._clear_layout(self.detail_layout)
+        self.detail_labels = {}
+        normalized_details = []
+        for item in details or []:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()
+            value = str(item.get("value") or "").strip()
+            if label or value:
+                normalized_details.append({"label": label or "配置", "value": value or "--"})
+        if not normalized_details:
+            normalized_details = self._empty_fixed_details()
+
+        for item in normalized_details:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
+            name_label = QLabel(item["label"])
+            name_label.setFixedWidth(54)
+            name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            name_label.setStyleSheet(self._small_text_style("#1F2937", bold=True))
+            value_label = QLabel(item["value"])
+            value_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            value_label.setWordWrap(True)
+            value_label.setToolTip(item["value"])
+            value_label.setStyleSheet(self._small_text_style("#1F2937"))
+            row.addWidget(name_label)
+            row.addWidget(value_label, stretch=1)
+            self.detail_layout.addLayout(row)
+            self.detail_labels[item["label"]] = value_label
 
     def _show_empty_detail(self):
-        for label in self.detail_labels.values():
-            label.setText("--")
+        self._set_detail_items([])
 
     def _resolve_key(self, condition):
         if isinstance(condition, int):
@@ -267,10 +283,11 @@ class MotorAiResultPanel(QWidget):
                 return item["name"]
         return key
 
-    @staticmethod
-    def _normalize_conditions(condition_configs):
+    @classmethod
+    def _normalize_conditions(cls, condition_configs):
         rows = []
         used_keys = set()
+        queue_catalog = cls._load_queue_catalog_safely()
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
@@ -282,12 +299,210 @@ class MotorAiResultPanel(QWidget):
             if key in used_keys:
                 key = f"{base_key}#{index + 1}"
             used_keys.add(key)
-            rows.append({"key": key, "name": name})
+            rows.append(
+                {
+                    "key": key,
+                    "name": name,
+                    "analysis_details": cls._build_condition_analysis_details(item, queue_catalog),
+                }
+            )
         return rows
 
     @staticmethod
+    def _load_queue_catalog_safely():
+        try:
+            return ProductTestProgramConfigManager().load_queue_catalog() or {}
+        except Exception:
+            return {}
+
+    @classmethod
+    def _build_condition_analysis_details(cls, condition_config, queue_catalog=None):
+        if not isinstance(condition_config, dict):
+            return cls._empty_fixed_details()
+
+        embedded_analysis = condition_config.get("analysis_list")
+        if isinstance(embedded_analysis, dict):
+            return cls._analysis_details_from_analysis_list(embedded_analysis)
+
+        queue_name = str(condition_config.get("test_queue") or "").strip()
+        if not queue_name:
+            return cls._empty_fixed_details("未绑定测试队列")
+
+        queue_catalog = queue_catalog or {}
+        queue_info = queue_catalog.get(queue_name)
+        queue_path = queue_info.get("path") if isinstance(queue_info, dict) else None
+        if not queue_path:
+            return cls._empty_fixed_details(f"测试队列不存在：{queue_name}")
+
+        load_code, queue_data = LoadUiConfig.load_data_from_json(queue_path)
+        if load_code != error_code.OK:
+            return cls._empty_fixed_details(f"测试队列读取失败：{queue_name}")
+
+        analysis_list = cls._extract_analysis_list(queue_data)
+        if not isinstance(analysis_list, dict):
+            return cls._empty_fixed_details(f"测试队列格式错误：{queue_name}")
+        return cls._analysis_details_from_analysis_list(analysis_list)
+
+    @staticmethod
+    def _extract_analysis_list(queue_data):
+        if not isinstance(queue_data, list) or not queue_data:
+            return {}
+        first_group = queue_data[0]
+        if not isinstance(first_group, dict) or not first_group:
+            return {}
+        if isinstance(first_group.get("seq1"), dict):
+            sequence_data = first_group.get("seq1")
+        else:
+            sequence_data = next(iter(first_group.values()))
+        if not isinstance(sequence_data, dict):
+            return {}
+        return sequence_data.get("analysis_list", {}) or {}
+
+    @classmethod
+    def _analysis_details_from_analysis_list(cls, analysis_list):
+        if not isinstance(analysis_list, dict):
+            return cls._empty_fixed_details()
+        display_sequence = analysis_list.get("display_sequence", [])
+        if not isinstance(display_sequence, list) or not display_sequence:
+            return cls._empty_fixed_details()
+
+        details = {label: "未配置" for label in cls.DETAIL_LABEL_ORDER}
+        for item_name in display_sequence:
+            item_name = str(item_name or "").strip()
+            item_config = analysis_list.get(item_name)
+            if not item_name or not isinstance(item_config, dict):
+                continue
+            analysis_type = str(item_config.get("type") or "").strip()
+            detail_label = cls._fixed_detail_label_for_analysis(analysis_type, item_name)
+            if detail_label not in details:
+                continue
+            details[detail_label] = cls._analysis_summary_text(item_name, analysis_type, item_config)
+        return [{"label": label, "value": details[label]} for label in cls.DETAIL_LABEL_ORDER]
+
+    @classmethod
+    def _empty_fixed_details(cls, value="未配置"):
+        return [{"label": label, "value": value} for label in cls.DETAIL_LABEL_ORDER]
+
+    @staticmethod
+    def _fixed_detail_label_for_analysis(analysis_type, item_name):
+        normalized_type = str(analysis_type or "").strip()
+        name = str(item_name or "").strip()
+        lowered_name = name.lower()
+        if normalized_type in ("SPL", "SPLF"):
+            return "SPL"
+        if normalized_type in ("FBA",):
+            return "FBA"
+        if normalized_type in ("Loudness", "PRB") or "响度" in name or "loud" in lowered_name:
+            return "响度"
+        return ""
+
+    @staticmethod
+    def _analysis_type_label(analysis_type, item_name):
+        normalized_type = str(analysis_type or "").strip()
+        if normalized_type:
+            return {
+                "SPL": "SPL",
+                "SPLF": "SPLF",
+                "FR": "FR",
+                "HD": "HD",
+                "RB": "RB",
+                "PRB": "PRB",
+                "FFT": "FFT",
+                "FBA": "FBA",
+                "AI": "AI",
+                "Spec": "Spec",
+                "LP": "LP",
+                "PM": "PM",
+                "RSC": "RSC",
+            }.get(normalized_type, normalized_type)
+        name = str(item_name or "")
+        if "(" in name and ")" in name:
+            return name.split("(", 1)[1].split(")", 1)[0].strip() or "分析"
+        return "分析"
+
+    @classmethod
+    def _analysis_summary_text(cls, item_name, analysis_type, item_config):
+        analysis_type = str(analysis_type or "").strip()
+        item_name = str(item_name or "").strip()
+
+        if analysis_type == "AI":
+            model_name = str(
+                item_config.get("analyse_model_name")
+                or item_config.get("model_name")
+                or item_config.get("base_model")
+                or ""
+            ).strip()
+            return f"{item_name}  模型：{model_name}" if model_name else f"{item_name}  已配置"
+
+        if analysis_type == "LP":
+            max_count = item_config.get("loose_particle_num")
+            return f"{item_name}  允许数量：{max_count}" if max_count is not None else f"{item_name}  已配置"
+
+        if analysis_type == "RSC":
+            if not bool(item_config.get("enable_threshold_judgment", True)):
+                return f"{item_name}  仅对比，未启用判定"
+            lower = cls._clean_config_value(item_config.get("lower_offset_db"))
+            upper = cls._clean_config_value(item_config.get("upper_offset_db"))
+            if lower and upper:
+                return f"{item_name}  偏差阈值 {lower} ~ {upper} dB"
+            return f"{item_name}  阈值已配置"
+
+        limit_summary = cls._limit_summary_text(item_config, analysis_type)
+        if limit_summary:
+            return f"{item_name}  {limit_summary}"
+        return f"{item_name}  已配置"
+
+    @classmethod
+    def _limit_summary_text(cls, item_config, analysis_type):
+        if not bool(item_config.get("limit_checked", False)):
+            return "未启用阈值判定"
+
+        if bool(item_config.get("import_config", False)):
+            config_dir = str(item_config.get("config_dir") or "").strip()
+            if config_dir:
+                return f"阈值文件：{os.path.basename(config_dir)}"
+            return "阈值文件已配置"
+
+        if item_config.get("limit_data"):
+            return "阈值曲线已配置"
+        if item_config.get("manual_upper_segments") or item_config.get("manual_lower_segments"):
+            return "手动阈值已配置"
+
+        upper = cls._clean_config_value(item_config.get("upper_limit"))
+        lower = cls._clean_config_value(item_config.get("lower_limit"))
+        unit = cls._analysis_unit(analysis_type)
+        suffix = f" {unit}" if unit else ""
+        if lower and upper:
+            return f"阈值 {lower} ~ {upper}{suffix}"
+        if upper:
+            return f"上限 {upper}{suffix}"
+        if lower:
+            return f"下限 {lower}{suffix}"
+        return "阈值已配置"
+
+    @staticmethod
+    def _clean_config_value(value):
+        text = str(value if value is not None else "").strip()
+        if text.lower() in ("none", "null"):
+            return ""
+        return text
+
+    @staticmethod
+    def _analysis_unit(analysis_type):
+        return {
+            "SPL": "dB",
+            "SPLF": "dB",
+            "FR": "dB",
+            "FFT": "dB",
+            "FBA": "dB",
+            "RB": "dB",
+            "PRB": "phon",
+            "Loudness": "sone",
+        }.get(str(analysis_type or "").strip(), "")
+
+    @staticmethod
     def _row_text(name, result):
-        return f"  {name}        {result}"
+        return f"  {str(name or ''):<12}  {result}"
 
     @staticmethod
     def _guess_tone(text):

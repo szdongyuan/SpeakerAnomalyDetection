@@ -59,6 +59,8 @@ class SequenceWidgetAnalysisOpsMixin:
             return "OK"
         if lowered == "ng":
             return "NG"
+        if normalized in ("未标记", "未标注"):
+            return "not_labeled"
         if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
             return "not_labeled"
         return ""
@@ -197,6 +199,7 @@ class SequenceWidgetAnalysisOpsMixin:
     def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
         self._manual_product_condition_index = 0
         self._manual_product_condition_group_id = ""
+        self._displayed_manual_product_condition_group_id = ""
         self._manual_product_condition_results = {}
         self._manual_product_condition_completed_keys = set()
         self._manual_product_condition_counted_group_labels = {}
@@ -248,10 +251,66 @@ class SequenceWidgetAnalysisOpsMixin:
             if self._product_condition_runtime_key(item, index)
         ]
         if condition_keys and all(condition_key in completed_keys for condition_key in condition_keys):
-            left_panel.set_final_result("完成", tone="ok")
+            self._refresh_current_manual_product_final_from_group(
+                getattr(self, "_manual_product_condition_group_id", ""),
+            )
             left_panel.set_current_stage("本轮采集完成", tone="ok")
         else:
             left_panel.set_final_result("检测中", tone="running")
+
+    @staticmethod
+    def _manual_product_final_text(label: str) -> str:
+        normalized = str(label or "").strip()
+        if normalized == "not_labeled":
+            return "未标记"
+        return normalized
+
+    @staticmethod
+    def _manual_product_final_tone(label: str) -> str:
+        normalized = str(label or "").strip()
+        if normalized == "OK":
+            return "ok"
+        if normalized == "NG":
+            return "ng"
+        return "pending"
+
+    def _current_manual_product_display_group_id(self) -> str:
+        current_group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
+        if current_group_id:
+            return current_group_id
+
+        displayed_group_id = str(getattr(self, "_displayed_manual_product_condition_group_id", "") or "").strip()
+        if displayed_group_id:
+            return displayed_group_id
+
+        current_session_id = str(getattr(self, "_current_recent_session_id", "") or "").strip()
+        current_session = (getattr(self, "recent_test_session_by_id", {}) or {}).get(current_session_id)
+        if isinstance(current_session, dict):
+            return str(current_session.get("group_id") or "").strip()
+        return ""
+
+    def _refresh_current_manual_product_final_from_group(self, group_id: str = "", stage_text: str | None = None):
+        target_group_id = str(group_id or self._current_manual_product_display_group_id()).strip()
+        display_group_id = self._current_manual_product_display_group_id()
+        if target_group_id and not display_group_id:
+            self._displayed_manual_product_condition_group_id = target_group_id
+            display_group_id = target_group_id
+        if not target_group_id or target_group_id != display_group_id:
+            return None
+
+        complete, label = self._manual_product_group_result_state(target_group_id)
+        if not complete or label not in ("OK", "NG", "not_labeled"):
+            return None
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is None:
+            return label
+
+        tone = self._manual_product_final_tone(label)
+        left_panel.set_final_result(self._manual_product_final_text(label), tone=tone)
+        if stage_text:
+            left_panel.set_current_stage(stage_text, tone=tone)
+        return label
 
     def _update_manual_product_condition_result_after_analysis(self, label: str):
         key = self._get_active_product_condition_key()
@@ -281,11 +340,7 @@ class SequenceWidgetAnalysisOpsMixin:
                 left_panel.set_final_result("检测中", tone="running")
             return None
 
-        final_label = "OK" if all(results.get(condition_key) == "OK" for condition_key in condition_keys) else "NG"
-        if left_panel is not None:
-            left_panel.set_final_result(final_label, tone=("ok" if final_label == "OK" else "ng"))
-            left_panel.set_current_stage("本轮完成", tone=("ok" if final_label == "OK" else "ng"))
-        return final_label
+        return self._refresh_current_manual_product_final_from_group(stage_text="本轮完成")
 
     def _manual_product_condition_keys(self):
         return [
@@ -323,6 +378,10 @@ class SequenceWidgetAnalysisOpsMixin:
             results[condition_key] = label
 
         if group_id == str(getattr(self, "_manual_product_condition_group_id", "") or "").strip():
+            completed_keys = set(getattr(self, "_manual_product_condition_completed_keys", set()) or set())
+            for condition_key in completed_keys:
+                if condition_key in condition_keys:
+                    results.setdefault(condition_key, "not_labeled")
             results.update(getattr(self, "_manual_product_condition_results", {}) or {})
 
         normalized_values = []
@@ -337,9 +396,11 @@ class SequenceWidgetAnalysisOpsMixin:
                 return False, None
             normalized_values.append(normalized)
 
+        if any(value == "NG" for value in normalized_values):
+            return True, "NG"
         if any(value == "not_labeled" for value in normalized_values):
             return True, "not_labeled"
-        return True, "OK" if all(value == "OK" for value in normalized_values) else "NG"
+        return True, "OK" if all(value == "OK" for value in normalized_values) else None
 
     def _manual_product_group_summary_label(self, group_id: str):
         complete, label = self._manual_product_group_result_state(group_id)
@@ -431,6 +492,7 @@ class SequenceWidgetAnalysisOpsMixin:
         if index == 0 or not group_id:
             group_id = self._generate_recording_token()
             self._manual_product_condition_group_id = group_id
+            self._displayed_manual_product_condition_group_id = group_id
             self._current_cycle_recorded_count = group_id
             self._manual_product_condition_results = {}
             self._manual_product_condition_completed_keys = set()
@@ -806,6 +868,7 @@ class SequenceWidgetAnalysisOpsMixin:
         session_record.update(fields)
         if self.recent_session_panel is not None:
             self.recent_session_panel.upsert_session(session_record)
+        self._refresh_current_manual_product_final_from_group(session_record.get("group_id"))
 
     def _update_current_recent_session_result(self, result_label: str):
         session_id = getattr(self, "_current_recent_session_id", None)

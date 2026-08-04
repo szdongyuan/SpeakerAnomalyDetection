@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QComboBox, QSplitter, QVBoxLayout, QWidget
@@ -46,9 +47,17 @@ class _DummyChannelWorkspace:
         self.cleared_directions = []
         self.clear_all_count = 0
         self.direction_data = []
+        self.set_condition_calls = []
 
     def condition_keys(self):
         return list(self._keys)
+
+    def set_conditions(self, condition_configs):
+        self.set_condition_calls.append(list(condition_configs or []))
+        self._keys = [
+            str(item.get("key") or "")
+            for item in DirectionWaveformPanel._normalize_conditions(condition_configs)
+        ]
 
     def set_condition_result(self, key, label):
         self.results.append((key, label))
@@ -123,6 +132,31 @@ class _RealisticSequenceWidget(_DummySequenceWidget):
         self.channel_workspace = None
         self.recent_session_panel = None
         self._last_recent_session_mode = ""
+
+
+class _WaveformRefreshWidget(SequenceWidgetStreamingOpsMixin):
+    def __init__(self):
+        self.product_test_condition_configs = [
+            {"condition_name": "6000", "trigger_state": "01"},
+            {"condition_name": "7000", "trigger_state": "02"},
+            {"condition_name": "8000", "trigger_state": "03"},
+        ]
+        self.channel_workspace = _DummyChannelWorkspace(["01", "02", "03"])
+        self._direction_waveform_condition_signature = self._product_condition_signature(
+            self.product_test_condition_configs
+        )
+        self._direction_waveform_cache = {}
+        self._condition_record_cache = {}
+        self._waveform_display_override_direction = ""
+        self._current_trigger_direction = ""
+        self._active_product_condition_key = ""
+        self._active_input_channels = [0]
+        self.recorded_path = None
+        self.recorded_signal_info = {}
+        self._current_recent_session_id = ""
+
+    def _apply_condition_mode_to_waveforms(self):
+        return None
 
 
 class TestSequenceMainLayout(unittest.TestCase):
@@ -285,6 +319,15 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(played, ["01"])
         self.assertEqual(marked, [("01", "OK")])
 
+    def test_waveform_card_click_preview_is_removed(self):
+        panel = DirectionWaveformPanel(
+            condition_configs=[{"condition_name": "6000 rpm", "trigger_state": "01"}],
+        )
+        card = panel._cards["01"]
+        panel.set_direction_data("01", [0, 1], [0.0, 0.5])
+
+        self.assertNotIn("mousePressEvent", type(card).__dict__)
+
     def test_waveform_panel_keeps_cards_when_condition_keys_repeat(self):
         panel = DirectionWaveformPanel(
             condition_configs=[
@@ -296,6 +339,39 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertEqual(len(panel._cards), 3)
         self.assertEqual(len(set(panel.condition_keys())), 3)
+
+    def test_waveform_panel_does_not_seed_fake_waveforms(self):
+        panel = DirectionWaveformPanel(
+            condition_configs=[
+                {"condition_name": "6000", "trigger_state": "01"},
+                {"condition_name": "7000", "trigger_state": "02"},
+            ]
+        )
+
+        self.assertIsNone(panel._cards["01"].plot_item)
+        self.assertIsNone(panel._cards["02"].plot_item)
+
+        panel.set_direction_data("01", [0, 1], [0.0, 0.5])
+
+        self.assertIsNotNone(panel._cards["01"].plot_item)
+        self.assertIsNone(panel._cards["02"].plot_item)
+
+    def test_waveform_workspace_reconfigure_does_not_redraw_unchanged_conditions(self):
+        widget = _WaveformRefreshWidget()
+        widget._direction_waveform_cache = {
+            "01": ([0.0, 0.1], 1.0),
+            "02": ([0.0, 0.2], 1.0),
+            "03": ([0.0, 0.3], 1.0),
+        }
+
+        widget._configure_direction_waveform_workspace()
+
+        self.assertEqual(widget.channel_workspace.set_condition_calls, [])
+        self.assertEqual(widget.channel_workspace.direction_data, [])
+
+        widget.plot_waveform_to_workspace([0.0, 0.4], 1.0, direction="01")
+
+        self.assertEqual([entry[0] for entry in widget.channel_workspace.direction_data], ["01"])
 
     def test_waveform_panel_resets_old_grid_columns_after_config_switch(self):
         panel = DirectionWaveformPanel(
@@ -354,9 +430,11 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.recorded_path = None
         widget.recorded_signal_info = {}
 
-        widget.on_waveform_condition_mark_clicked("01", "OK")
+        with patch("ui.sequence.sequence_widget_streaming_ops.QMessageBox.warning") as warning:
+            widget.on_waveform_condition_mark_clicked("01", "OK")
 
-        self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
+        warning.assert_called_once()
+        self.assertEqual(widget.channel_workspace.results, [])
         self.assertEqual(widget.left_panel.results, [])
 
     def test_waveform_mark_updates_bound_recent_session_result(self):

@@ -149,12 +149,15 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         self.assertEqual(panel.session_table.rowCount(), 1)
         self.assertEqual(panel._get_cell_center_widget(panel.session_table, 0, 3).currentText(), "OK")
         self.assertEqual(panel._get_cell_center_widget(panel.session_table, 0, 4).currentText(), "NG")
+        self.assertIn("#166534", panel._get_cell_center_widget(panel.session_table, 0, 3).styleSheet())
+        self.assertIn("#991B1B", panel._get_cell_center_widget(panel.session_table, 0, 4).styleSheet())
         self.assertEqual(self._summary_value(panel), "NG")
         summary_widget = panel.session_table.cellWidget(0, 5).layout().itemAt(0).widget()
         self.assertIsInstance(summary_widget, QLabel)
         self.assertEqual(summary_widget.text(), "NG")
         self.assertEqual(panel.session_table.item(0, 5).text(), "")
-        self.assertIn("#c80000", summary_widget.styleSheet())
+        self.assertIn("#991B1B", summary_widget.styleSheet())
+        self.assertIn("border: none", summary_widget.styleSheet())
 
     def test_summary_result_is_ok_only_when_all_conditions_are_ok(self):
         panel = self._panel()
@@ -166,7 +169,40 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         self.assertEqual(self._summary_value(panel), "OK")
         summary_widget = panel.session_table.cellWidget(0, 5).layout().itemAt(0).widget()
         self.assertEqual(summary_widget.text(), "OK")
-        self.assertIn("#008c00", summary_widget.styleSheet())
+        self.assertIn("#166534", summary_widget.styleSheet())
+        self.assertIn("background: transparent", summary_widget.styleSheet())
+
+    def test_not_labeled_results_display_as_chinese_text(self):
+        panel = self._panel()
+        panel.upsert_session(self._session("recent_1", "01", "not_labeled"))
+
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 3)
+        summary_widget = panel.session_table.cellWidget(0, 5).layout().itemAt(0).widget()
+        option_texts = [combo.itemText(index) for index in range(combo.count())]
+
+        self.assertEqual(combo.currentText(), "未标记")
+        self.assertIn("未标记", option_texts)
+        self.assertNotIn("not_labeled", option_texts)
+        self.assertEqual(combo.itemData(option_texts.index("OK"), Qt.ForegroundRole).name().upper(), "#166534")
+        self.assertEqual(combo.itemData(option_texts.index("NG"), Qt.ForegroundRole).name().upper(), "#991B1B")
+        self.assertEqual(combo.itemData(option_texts.index("未标记"), Qt.ForegroundRole).name().upper(), "#26364A")
+        self.assertEqual(self._summary_value(panel), "not_labeled")
+        self.assertEqual(summary_widget.text(), "未标记")
+        self.assertIn("#475569", summary_widget.styleSheet())
+        self.assertEqual(panel.session_table.item(0, 5).toolTip(), "未标记")
+
+    def test_selecting_chinese_not_labeled_passes_internal_label_to_callback(self):
+        changed_labels = []
+        panel = self._panel(
+            on_change_session_result=lambda session_id, label: changed_labels.append((session_id, label)) or True
+        )
+        panel.set_result_editable(True)
+        panel.upsert_session(self._session("recent_1", "01", "OK"))
+
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 3)
+        combo.setCurrentText("未标记")
+
+        self.assertEqual(changed_labels[-1], ("recent_1", "not_labeled"))
 
     def test_sessions_without_group_id_create_separate_rows(self):
         panel = self._panel()
@@ -204,6 +240,26 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         combo.setCurrentText("NG")
 
         self.assertEqual(self._summary_value(panel), "NG")
+
+    def test_unrecorded_condition_result_dropdown_is_blocked(self):
+        changed_labels = []
+        panel = self._panel(
+            on_change_session_result=lambda session_id, label: changed_labels.append((session_id, label)) or True
+        )
+        panel.set_result_editable(True)
+        panel.upsert_session(self._session("recent_1", "01", "OK"))
+
+        combo = panel._get_cell_center_widget(panel.session_table, 0, 4)
+        self.assertEqual(combo.currentText(), "未标记")
+
+        with patch("ui.sequence.recent_session_panel.QMessageBox.warning") as warning:
+            combo.setCurrentText("NG")
+
+        warning.assert_called_once()
+        self.assertIn("录音尚未完成", warning.call_args[0][2])
+        self.assertEqual(combo.currentText(), "未标记")
+        self.assertEqual(self._summary_value(panel), "not_labeled")
+        self.assertEqual(changed_labels, [])
 
     def test_recent_session_column_widths_match_updated_layout(self):
         from PyQt5.QtWidgets import QHeaderView

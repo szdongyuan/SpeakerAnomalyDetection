@@ -111,6 +111,16 @@ class SequenceWidgetStreamingOpsMixin:
                 return abs_path
         return None
 
+    def _resolve_labelable_condition_record_path(self, record: dict | None):
+        if not isinstance(record, dict):
+            return None
+        recorded_signal_info = record.get("recorded_signal_info", {}) or {}
+        for candidate in (record.get("recorded_path"), recorded_signal_info.get("file_path")):
+            abs_path = self._resolve_audio_path_to_abs(candidate)
+            if abs_path and os.path.isfile(abs_path):
+                return abs_path
+        return None
+
     def on_waveform_condition_play_clicked(self, condition_key: str) -> None:
         playback_path = self._resolve_condition_playback_path(condition_key)
         if not playback_path:
@@ -146,15 +156,18 @@ class SequenceWidgetStreamingOpsMixin:
 
         key = str(condition_key or "").strip()
         record = self._resolve_condition_record(key)
+        labelable_path = self._resolve_labelable_condition_record_path(record)
+        if not labelable_path:
+            QMessageBox.warning(self, "提示", "当前工况录音尚未完成，请等待播放/录音完成后再判定。")
+            return
         previous_label = "not_labeled"
-        old_abs_path = None
+        old_abs_path = labelable_path
         session_id = ""
         if isinstance(record, dict):
             session_id = str(record.get("session_id") or getattr(self, "_current_recent_session_id", "") or "")
             recorded_signal_info = dict(record.get("recorded_signal_info", {}) or {})
             previous_label = self._normalize_audio_label(recorded_signal_info.get("labels")) or "not_labeled"
             recorded_path = record.get("recorded_path") or recorded_signal_info.get("file_path")
-            old_abs_path = self._resolve_audio_path_to_abs(recorded_path)
 
             if old_abs_path and os.path.isfile(old_abs_path) and previous_label != normalized_label:
                 save_code, msg, new_path, updated_info = self._relabel_stored_audio_record(
@@ -496,11 +509,31 @@ class SequenceWidgetStreamingOpsMixin:
     def _configure_direction_waveform_workspace(self):
         if self.channel_workspace is None:
             return
-        self.channel_workspace.set_conditions(getattr(self, "product_test_condition_configs", []) or [])
+        condition_configs = getattr(self, "product_test_condition_configs", []) or []
+        signature = self._product_condition_signature(condition_configs)
+        previous_signature = getattr(self, "_direction_waveform_condition_signature", None)
+        current_keys = []
+        if hasattr(self.channel_workspace, "condition_keys"):
+            try:
+                current_keys = list(self.channel_workspace.condition_keys() or [])
+            except Exception:
+                current_keys = []
+        expected_keys = [
+            str(item.get("key") or "")
+            for item in DirectionWaveformPanel._normalize_conditions(condition_configs)
+        ]
+        needs_rebuild = (
+            previous_signature != signature
+            or current_keys != expected_keys
+        )
+        if needs_rebuild:
+            self.channel_workspace.set_conditions(condition_configs)
+            self._direction_waveform_condition_signature = signature
         apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
         if callable(apply_mode):
             apply_mode()
-        self._refresh_direction_waveform_workspace()
+        if needs_rebuild:
+            self._refresh_direction_waveform_workspace()
 
     def _refresh_direction_waveform_workspace(self, direction: str = None):
         if self.channel_workspace is None:
