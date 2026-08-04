@@ -36,6 +36,7 @@ from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
+from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
 
@@ -49,9 +50,20 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "松散颗粒 (LP) ",
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
+    "响度 (LOUD) ",
     "结果导出 (Excel) ",
 ]
-SUPPORTED_ANALYSIS_TYPES = {"SPL", "Spec", "RSC", "AI", "LP", "FBA", "FFT", "Excel"}
+SUPPORTED_ANALYSIS_TYPES = {
+    "SPL",
+    "Spec",
+    "RSC",
+    "AI",
+    "LP",
+    "FBA",
+    "FFT",
+    "LOUD",
+    "Excel",
+}
 
 
 class AnalysisModelSelect(ConfigDialogBase):
@@ -753,6 +765,12 @@ class OptionList(QListView):
                 name,
                 available_channels=available_channels,
             )
+        if type == "LOUD":
+            return LoudnessConfigWindow(
+                config_manager,
+                name,
+                available_channels=available_channels,
+            )
         if type == "Excel":
             return ExcelConfigWindow(config_manager, name)
         return None
@@ -1300,7 +1318,7 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            if analysis_type not in {"FBA", "FFT"}:
+            if analysis_type not in {"FBA", "FFT", "LOUD"}:
                 return
             data = {}
 
@@ -1315,6 +1333,10 @@ class OptionList(QListView):
                 **FftConfigWindow.DEFAULT_CONFIG,
                 **default_of_type,
             }
+        elif analysis_type == "LOUD":
+            default_of_type = LoudnessConfigWindow.merge_with_defaults(
+                default_of_type
+            )
         default_of_type.pop("golden_sample_checked", None)
         default_of_type.pop("golden_sample_result_path", None)
         self.config[0].analysis_list[list_item_text] = default_of_type
