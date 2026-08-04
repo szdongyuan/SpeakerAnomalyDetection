@@ -58,6 +58,21 @@ class _ClickableResultComboBox(QComboBox):
 
 class RecentSessionPanel(QWidget):
     _RESULT_OPTIONS = ("OK", "NG", "not_labeled")
+    _RESULT_DISPLAY_TEXT = {
+        "OK": "OK",
+        "NG": "NG",
+        "not_labeled": "未标记",
+    }
+    _RESULT_TEXT_COLOR = {
+        "OK": "#166534",
+        "NG": "#991B1B",
+        "not_labeled": "#26364A",
+    }
+    _SUMMARY_RESULT_STYLE = {
+        "OK": "#166534",
+        "NG": "#991B1B",
+        "not_labeled": "#475569",
+    }
     _RESULT_WAITING_TEXT = "等待测试完成"
 
     def __init__(
@@ -301,18 +316,29 @@ class RecentSessionPanel(QWidget):
             if row is not None:
                 self.row_by_session_id[session_id] = row
 
-    def _normalize_result_value(self, value: str | None) -> str:
+    @classmethod
+    def _normalize_result_text(cls, value: str | None) -> str:
         normalized = str(value or "").strip()
         lowered = normalized.lower()
         if lowered == "ok":
             return "OK"
         if lowered == "ng":
             return "NG"
-        if normalized == self._RESULT_WAITING_TEXT:
-            return self._RESULT_WAITING_TEXT
+        if normalized == cls._RESULT_WAITING_TEXT:
+            return cls._RESULT_WAITING_TEXT
+        if normalized in ("未标记", "未标注"):
+            return "not_labeled"
         if lowered in ("not_labeled", "not labeled", "none", "-", "null", ""):
             return "not_labeled"
         return normalized
+
+    def _normalize_result_value(self, value: str | None) -> str:
+        return self._normalize_result_text(value)
+
+    @classmethod
+    def _display_result_value(cls, value: str | None) -> str:
+        normalized = cls._normalize_result_text(value)
+        return cls._RESULT_DISPLAY_TEXT.get(normalized, str(value or "").strip())
 
     def _normalize_result_value_from_record(self, session_record: dict[str, Any]) -> str:
         recorded_signal_info = session_record.get("recorded_signal_info", {}) or {}
@@ -352,12 +378,8 @@ class RecentSessionPanel(QWidget):
 
     @staticmethod
     def _result_text_color(value: str) -> str:
-        result_text = str(value or "").strip().lower()
-        if result_text == "ok":
-            return "#008c00"
-        if result_text == "ng":
-            return "#c80000"
-        return "#323232"
+        normalized = RecentSessionPanel._normalize_result_text(value)
+        return RecentSessionPanel._RESULT_TEXT_COLOR.get(normalized, "#26364A")
 
     @classmethod
     def _apply_result_item_style(cls, item: QTableWidgetItem, value: str):
@@ -370,21 +392,16 @@ class RecentSessionPanel(QWidget):
         recorded_signal_info = session_record.get("recorded_signal_info", {}) or {}
         candidate_values = [recorded_signal_info.get("labels"), session_record.get("result_label")]
         for value in candidate_values:
-            normalized = str(value or "").strip()
-            lowered = normalized.lower()
-            if lowered == "ok":
-                return "OK"
-            if lowered == "ng":
-                return "NG"
-            if normalized == cls._RESULT_WAITING_TEXT:
-                return cls._RESULT_WAITING_TEXT
-            if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
-                return "not_labeled"
+            if not str(value or "").strip():
+                continue
+            normalized = cls._normalize_result_text(value)
+            if normalized in cls._RESULT_OPTIONS or normalized == cls._RESULT_WAITING_TEXT:
+                return normalized
         return ""
 
     def _create_result_item(self, session_record: dict[str, Any]):
         value = str(session_record.get("result_label") or "-")
-        item = self.make_table_item(value)
+        item = self.make_table_item(self._display_result_value(value))
         self._apply_result_item_style(item, value)
         if value == self._RESULT_WAITING_TEXT:
             item.setToolTip(value)
@@ -417,6 +434,7 @@ class RecentSessionPanel(QWidget):
             }}
             QComboBox QAbstractItemView {{
                 padding: 2px;
+                color: #26364A;
             }}
             QComboBox QLineEdit {{
                 background: transparent;
@@ -426,6 +444,11 @@ class RecentSessionPanel(QWidget):
             """
         )
 
+    def _add_result_combo_item(self, combo: QComboBox, option: str) -> None:
+        combo.addItem(self._display_result_value(option), option)
+        index = combo.count() - 1
+        combo.setItemData(index, QColor(self._result_text_color(option)), Qt.ForegroundRole)
+
     def _create_result_combo(self, session_id: str, session_record: dict[str, Any]):
         combo = _ClickableResultComboBox()
         combo.lineEdit().setReadOnly(True)
@@ -434,9 +457,9 @@ class RecentSessionPanel(QWidget):
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         combo.setFixedHeight(24)
         for option in self._RESULT_OPTIONS:
-            combo.addItem(option)
+            self._add_result_combo_item(combo, option)
         current_value = self._normalize_result_label_for_edit(session_record) or "not_labeled"
-        combo.setCurrentText(current_value)
+        combo.setCurrentText(self._display_result_value(current_value))
         self._apply_result_combo_style(combo, current_value)
         combo.currentTextChanged.connect(lambda value, sid=session_id: self._on_result_combo_changed(sid, value))
         return combo
@@ -449,9 +472,10 @@ class RecentSessionPanel(QWidget):
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         combo.setFixedHeight(24)
         for option in self._RESULT_OPTIONS:
-            combo.addItem(option)
-        combo.setCurrentText(self._normalize_result_value(value) or "not_labeled")
-        self._apply_result_combo_style(combo, combo.currentText())
+            self._add_result_combo_item(combo, option)
+        normalized_value = self._normalize_result_value(value) or "not_labeled"
+        combo.setCurrentText(self._display_result_value(normalized_value))
+        self._apply_result_combo_style(combo, normalized_value)
         combo.currentTextChanged.connect(
             lambda new_value, gid=group_id, key=condition_key: self._on_condition_combo_changed(gid, key, new_value)
         )
@@ -483,15 +507,22 @@ class RecentSessionPanel(QWidget):
         return view_btn
 
     def _create_summary_result_widget(self, value: str):
-        label = QLabel(str(value or "not_labeled"))
+        normalized_value = self._normalize_result_value(value)
+        text_color = self._SUMMARY_RESULT_STYLE.get(
+            normalized_value,
+            self._SUMMARY_RESULT_STYLE["not_labeled"],
+        )
+        label = QLabel(self._display_result_value(value or "not_labeled"))
         label.setAlignment(Qt.AlignCenter)
         label.setStyleSheet(
             f"""
             QLabel {{
-                color: {self._result_text_color(value)};
-                background: #FFFFFF;
+                color: {text_color};
+                background: transparent;
+                border: none;
                 font-family: {ui_style_const.UI_FONT_FAMILY};
                 font-size: 13px;
+                font-weight: 600;
             }}
             """
         )
@@ -555,7 +586,7 @@ class RecentSessionPanel(QWidget):
         value = self._summary_result_for_group(group)
         item = self.make_table_item("")
         item.setData(Qt.UserRole, value)
-        item.setToolTip(value)
+        item.setToolTip(self._display_result_value(value))
         self._apply_result_item_style(item, value)
         self.session_table.removeCellWidget(row, col)
         self.session_table.setItem(row, col, item)
@@ -606,13 +637,14 @@ class RecentSessionPanel(QWidget):
             return
         session_record = self._resolve_session_record(session_id)
         current_label = self._normalize_result_label_for_edit(session_record)
-        if current_label == str(new_label or "").strip():
+        normalized_label = self._normalize_result_value(new_label)
+        if current_label == normalized_label:
             combo = self._get_cell_center_widget(self.session_table, self.row_by_session_id.get(session_id), 4)
             if isinstance(combo, QComboBox):
                 self._apply_result_combo_style(combo, current_label)
             return
         try:
-            changed = self.on_change_session_result(session_id, str(new_label or "").strip())
+            changed = self.on_change_session_result(session_id, normalized_label)
         except Exception:
             changed = False
         if changed is False:
@@ -632,8 +664,18 @@ class RecentSessionPanel(QWidget):
                 self._apply_result_combo_style(combo, normalized_label)
             return
 
-        group.setdefault("results", {})[condition_key] = normalized_label
         session_id = (group.get("session_ids", {}) or {}).get(condition_key)
+        if not session_id:
+            combo = self._get_cell_center_widget(self.session_table, row, self.condition_column_by_key.get(condition_key))
+            if isinstance(combo, QComboBox):
+                combo.blockSignals(True)
+                combo.setCurrentText(self._display_result_value(previous_label))
+                combo.blockSignals(False)
+                self._apply_result_combo_style(combo, previous_label)
+            QMessageBox.warning(self, "提示", "当前工况录音尚未完成，请等待播放/录音完成后再修改结果。")
+            return
+
+        group.setdefault("results", {})[condition_key] = normalized_label
         if self._result_editable and session_id and callable(self.on_change_session_result):
             try:
                 changed = self.on_change_session_result(session_id, normalized_label)

@@ -65,6 +65,13 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(len(panel.rows), 3)
         self.assertEqual(len({item["key"] for item in panel.conditions}), 3)
 
+    def test_ai_result_row_status_text_starts_aligned(self):
+        short_text = MotorAiResultPanel._row_text("6000", "待检测")
+        long_text = MotorAiResultPanel._row_text("10000", "待检测")
+
+        self.assertEqual(short_text.index("待检测"), long_text.index("待检测"))
+        self.assertGreater(short_text.index("待检测"), len("  6000        "))
+
     def test_ai_final_result_stays_near_panel_bottom(self):
         panel = MotorAiResultPanel(
             condition_configs=[
@@ -93,6 +100,59 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
 
         panel.select_condition(key, show_detail=True)
         self.assertTrue(panel.detail_frame.isHidden())
+
+    def test_ai_result_detail_uses_condition_analysis_config(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {
+                    "condition_name": "6000",
+                    "key": "6000",
+                    "analysis_list": {
+                        "display_sequence": [
+                            "声压级 (SPL) 1",
+                            "AI 分析 1",
+                            "响度分析 1",
+                            "频段能量 (FBA) 1",
+                        ],
+                        "声压级 (SPL) 1": {
+                            "type": "SPL",
+                            "limit_checked": True,
+                            "upper_limit": "100",
+                            "lower_limit": "90",
+                        },
+                        "AI 分析 1": {
+                            "type": "AI",
+                            "analyse_model_name": "model-a",
+                        },
+                        "响度分析 1": {
+                            "type": "Loudness",
+                            "limit_checked": True,
+                            "upper_limit": "15",
+                            "lower_limit": "8",
+                        },
+                        "频段能量 (FBA) 1": {
+                            "type": "FBA",
+                            "limit_checked": True,
+                            "upper_limit": "45",
+                        },
+                    },
+                }
+            ]
+        )
+
+        panel.select_condition("6000", show_detail=True)
+        detail_text = "\n".join(label.text() for label in panel.detail_frame.findChildren(QLabel))
+
+        self.assertEqual(list(panel.detail_labels.keys()), ["SPL", "响度", "FBA"])
+        self.assertIn("SPL", detail_text)
+        self.assertIn("阈值 90 ~ 100 dB", detail_text)
+        self.assertIn("响度", detail_text)
+        self.assertIn("阈值 8 ~ 15 sone", detail_text)
+        self.assertIn("FBA", detail_text)
+        self.assertIn("上限 45 dB", detail_text)
+        self.assertNotIn("AI", detail_text)
+        self.assertNotIn("model-a", detail_text)
+        self.assertNotIn("71.6", detail_text)
 
 
 if __name__ == "__main__":

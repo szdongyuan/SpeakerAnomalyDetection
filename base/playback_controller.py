@@ -48,6 +48,57 @@ class PlaybackController:
                 raise RuntimeError("Unsupported audio shape")
             return audio_data, int(sample_rate)
 
+    @staticmethod
+    def _get_output_max_channels(device=None):
+        try:
+            if device is None:
+                device_info = sd.query_devices(kind="output")
+            else:
+                device_info = sd.query_devices(device, "output")
+            return int(device_info.get("max_output_channels") or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _normalize_playback_audio_shape(audio_data):
+        audio_data = np.asarray(audio_data, dtype=np.float32)
+        if audio_data.ndim == 1:
+            return audio_data.reshape(-1, 1)
+        if audio_data.ndim == 2:
+            return audio_data
+        raise RuntimeError("Unsupported audio shape")
+
+    @classmethod
+    def _downmix_playback_audio(cls, audio_data, target_channels):
+        audio_data = cls._normalize_playback_audio_shape(audio_data)
+        target_channels = max(1, int(target_channels or 1))
+
+        mono_data = np.mean(audio_data, axis=1, dtype=np.float32).astype(np.float32).reshape(-1, 1)
+        if target_channels >= 2:
+            return np.repeat(mono_data, 2, axis=1)
+        return mono_data
+
+    @classmethod
+    def _prepare_playback_audio(cls, audio_data, output_max_channels=None):
+        audio_data = cls._normalize_playback_audio_shape(audio_data)
+        source_channels = int(audio_data.shape[1])
+        if source_channels <= 0:
+            raise RuntimeError("Unsupported audio shape")
+
+        try:
+            max_channels = int(output_max_channels or 0)
+        except Exception:
+            max_channels = 0
+
+        # Recording may be multi-channel for analysis, while normal speakers usually accept only
+        # mono/stereo playback. Keep the saved file unchanged and adapt only the playback buffer.
+        playback_channel_limit = min(max_channels, 2) if max_channels > 0 else 2
+        target_channels = max(1, playback_channel_limit)
+        if source_channels <= target_channels and source_channels <= 2:
+            return audio_data
+
+        return cls._downmix_playback_audio(audio_data, target_channels)
+
     def _reset_playback_state_if_session(self, session_id):
         with self._playback_lock:
             if session_id != self._playback_session_id:
@@ -94,6 +145,12 @@ class PlaybackController:
         if audio_data.size == 0:
             return error_code.INVALID_FILE, "Audio file is empty."
 
+        output_max_channels = self._get_output_max_channels(device)
+        try:
+            playback_data = self._prepare_playback_audio(audio_data, output_max_channels=output_max_channels)
+        except Exception as e:
+            return error_code.INVALID_FILE, f"Failed to prepare playback audio: {str(e)[:80]}"
+
         with self._playback_lock:
             self._playback_session_id += 1
             session_id = self._playback_session_id
@@ -104,15 +161,29 @@ class PlaybackController:
         stream = None
         try:
             sd.play(
-                audio_data,
+                playback_data,
                 samplerate=sample_rate,
                 device=device,
                 blocking=False,
             )
             stream = sd.get_stream()
         except Exception as e:
-            self._reset_playback_state_if_session(session_id)
-            return error_code.INVALID_PLAY, f"Failed to start playback: {str(e)[:80]}"
+            if playback_data.ndim == 2 and playback_data.shape[1] > 1:
+                try:
+                    playback_data = self._downmix_playback_audio(playback_data, 1)
+                    sd.play(
+                        playback_data,
+                        samplerate=sample_rate,
+                        device=device,
+                        blocking=False,
+                    )
+                    stream = sd.get_stream()
+                except Exception as fallback_e:
+                    self._reset_playback_state_if_session(session_id)
+                    return error_code.INVALID_PLAY, f"Failed to start playback: {str(fallback_e)[:80]}"
+            else:
+                self._reset_playback_state_if_session(session_id)
+                return error_code.INVALID_PLAY, f"Failed to start playback: {str(e)[:80]}"
 
         with self._playback_lock:
             if session_id != self._playback_session_id:
