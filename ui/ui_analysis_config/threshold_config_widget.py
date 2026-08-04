@@ -2,9 +2,7 @@
 通用阈值曲线配置组件
 
 该组件可以嵌入到任意分析配置对话框中，提供阈值曲线配置功能。
-支持两种模式:
-1. 自定义上下限 (水平线阈值)
-2. 导入 CSV 配置文件 (曲线阈值)
+支持 CSV 阈值曲线和手动设置；启用固定值能力时，手动方式可在编辑曲线与固定值之间切换。
 """
 
 import os
@@ -37,9 +35,22 @@ from ui.curve_style import (
     normalize_curve_color,
     resolve_curve_colors,
 )
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, LineEdit, MessageBox, PushButton, RadioButton, TableWidget, Menu
+from ui.custom_ui_widget.widgets import (
+    CheckBox,
+    ComboBox,
+    DoubleSpinBox,
+    GroupBox,
+    Label,
+    LineEdit,
+    Menu,
+    MessageBox,
+    PushButton,
+    RadioButton,
+    TableWidget,
+)
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
+    validate_constant_limit_config,
     validate_manual_limit_config,
 )
 from ui.ui_analysis_config.threshold_csv_manual import (
@@ -55,9 +66,29 @@ class _ManualTableValidationError(ValueError):
     pass
 
 
+def _configure_limit_graph_style(plot_widget: PlotWidget) -> None:
+    plot_widget.setBackground("#FBFCFE")
+    plot_widget.getViewBox().setBorder(mkPen("#D6DEE8", width=1))
+    supports_tick_pen = True
+    for axis_name in ("left", "bottom"):
+        axis = plot_widget.getAxis(axis_name)
+        axis.setPen("#8A96A3")
+        set_tick_pen = getattr(axis, "setTickPen", None)
+        if callable(set_tick_pen):
+            set_tick_pen("#D8DEE6")
+        else:
+            supports_tick_pen = False
+        axis.setTextPen("#263445")
+    plot_widget.showGrid(True, True, 1.0 if supports_tick_pen else 0.25)
+
+
 def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
     model_type = model_type or ""
-    if "SPLF" in model_type:
+    if "LOUD" in model_type:
+        loudness_unit = "phon" if "PHON" in model_type.upper() else "sone"
+        plot_widget.setLabel("left", f"Loudness ({loudness_unit})")
+        plot_widget.setLabel("bottom", "Time (s)")
+    elif "SPLF" in model_type:
         plot_widget.setLabel("left", "SPLF (dB)")
         plot_widget.setLabel("bottom", "Frequency (Hz)")
     elif "SPL" in model_type:
@@ -627,7 +658,7 @@ class _ManualLimitEditorDialog(ConfigDialogBase):
         self.editor.load_manual_config(manual_config)
 
         self.limit_graph = PlotWidget()
-        self.limit_graph.showGrid(True, True, 0.7)
+        _configure_limit_graph_style(self.limit_graph)
         self.limit_graph.setMinimumSize(180, 180)
         _set_graph_label_until(self.limit_graph, model_type)
 
@@ -724,6 +755,8 @@ class ThresholdConfigWidget(QWidget):
         csv_validator=None,
         model_type: str = None,
         allow_manual_limits: bool = False,
+        allow_constant_limits: bool = False,
+        constant_limit_unit: str = "dB",
         limit_value_semantics_provider=None,
     ):
         """
@@ -741,6 +774,10 @@ class ThresholdConfigWidget(QWidget):
         self.limit_data = self.load_config.get("limit_data", None)
         self.model_type = model_type
         self.allow_manual_limits = bool(allow_manual_limits)
+        self.allow_constant_limits = bool(
+            allow_manual_limits and allow_constant_limits
+        )
+        self.constant_limit_unit = str(constant_limit_unit or "").strip()
         self.limit_value_semantics_provider = limit_value_semantics_provider
         self._curve_color_widget = None
 
@@ -762,7 +799,7 @@ class ThresholdConfigWidget(QWidget):
 
         # 配置数据展示
         self.limit_graph = PlotWidget()
-        self.limit_graph.showGrid(True, True, 0.7)
+        _configure_limit_graph_style(self.limit_graph)
         self.set_graph_label_until(self.model_type)
         self.draw_limit_curve(self.limit_data)
         self.limit_graph.setMinimumSize(180, 180)
@@ -790,6 +827,7 @@ class ThresholdConfigWidget(QWidget):
         group_layout.addWidget(self.config_dir_box)
         if self.manual_widget is not None:
             group_layout.addWidget(self.manual_widget)
+        group_layout.addSpacing(10)
         group_layout.addWidget(self.limit_graph)
         self.limit_group_box.setLayout(group_layout)
 
@@ -819,7 +857,7 @@ class ThresholdConfigWidget(QWidget):
     def _create_manual_limit_controls(self) -> None:
         limit_mode = str(self.load_config.get("limit_mode", "csv") or "csv").lower()
         self.csv_mode_radio = RadioButton("CSV阈值曲线")
-        self.manual_mode_radio = RadioButton("手动上下限")
+        self.manual_mode_radio = RadioButton("手动设置")
         if limit_mode == "manual":
             self.manual_mode_radio.setChecked(True)
         else:
@@ -833,12 +871,143 @@ class ThresholdConfigWidget(QWidget):
 
         self.manual_widget = QWidget(self)
         self.manual_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        manual_layout = QHBoxLayout(self.manual_widget)
+        manual_layout = QVBoxLayout(self.manual_widget)
         manual_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.manual_input_label = None
+        self.manual_input_combo = None
+        self.constant_widget = None
         self.manual_edit_button = PushButton("编辑上下限", self.manual_widget)
         self.manual_edit_button.clicked.connect(self._on_manual_edit_clicked)
-        manual_layout.addWidget(self.manual_edit_button)
-        manual_layout.addStretch()
+        if self.allow_constant_limits:
+            input_mode = str(
+                self.load_config.get("manual_input_mode", "segments")
+                or "segments"
+            ).lower()
+            self.manual_input_label = Label("手动方式：", self.manual_widget)
+            self.manual_input_combo = ComboBox(self.manual_widget)
+            self.manual_input_combo.addItem("编辑曲线", "segments")
+            self.manual_input_combo.addItem("固定值", "constant")
+            input_mode_index = self.manual_input_combo.findData(input_mode)
+            if input_mode_index < 0:
+                input_mode_index = self.manual_input_combo.findData("segments")
+            self.manual_input_combo.setCurrentIndex(input_mode_index)
+            self.manual_input_combo.setMinimumWidth(140)
+            self.manual_input_combo.currentIndexChanged.connect(
+                self._on_manual_input_mode_changed
+            )
+
+            input_mode_layout = QHBoxLayout()
+            input_mode_layout.addWidget(self.manual_input_label)
+            input_mode_layout.addWidget(self.manual_input_combo)
+            input_mode_layout.addWidget(self.manual_edit_button)
+            input_mode_layout.addStretch()
+            manual_layout.addLayout(input_mode_layout)
+
+            self.constant_widget = self._create_constant_limit_widget()
+            manual_layout.addWidget(self.constant_widget)
+        else:
+            edit_layout = QHBoxLayout()
+            edit_layout.addWidget(self.manual_edit_button)
+            edit_layout.addStretch()
+            manual_layout.addLayout(edit_layout)
+
+    def _create_constant_limit_widget(self) -> QWidget:
+        widget = QWidget(self.manual_widget)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.constant_upper_check = CheckBox("上限", widget)
+        self.constant_upper_check.setChecked(
+            bool(self.load_config.get("constant_upper_enabled", True))
+        )
+        self.constant_upper_spin = self._create_constant_limit_spinbox(
+            self.load_config.get("constant_upper_value", 100.0),
+            widget,
+        )
+        upper_layout = QHBoxLayout()
+        upper_layout.addWidget(self.constant_upper_check)
+        upper_layout.addWidget(Label("固定值：", widget))
+        upper_layout.addWidget(self.constant_upper_spin)
+        upper_layout.addStretch()
+        layout.addLayout(upper_layout)
+
+        self.constant_lower_check = CheckBox("下限", widget)
+        self.constant_lower_check.setChecked(
+            bool(self.load_config.get("constant_lower_enabled", False))
+        )
+        self.constant_lower_spin = self._create_constant_limit_spinbox(
+            self.load_config.get("constant_lower_value", 0.0),
+            widget,
+        )
+        lower_layout = QHBoxLayout()
+        lower_layout.addWidget(self.constant_lower_check)
+        lower_layout.addWidget(Label("固定值：", widget))
+        lower_layout.addWidget(self.constant_lower_spin)
+        lower_layout.addStretch()
+        layout.addLayout(lower_layout)
+
+        self.constant_upper_check.stateChanged.connect(
+            self._on_constant_limit_changed
+        )
+        self.constant_lower_check.stateChanged.connect(
+            self._on_constant_limit_changed
+        )
+        self.constant_upper_spin.valueChanged.connect(
+            self._on_constant_limit_changed
+        )
+        self.constant_lower_spin.valueChanged.connect(
+            self._on_constant_limit_changed
+        )
+        self._sync_constant_limit_controls()
+        return widget
+
+    def _create_constant_limit_spinbox(self, value, parent) -> DoubleSpinBox:
+        spinbox = DoubleSpinBox(parent)
+        spinbox.setRange(-10000.0, 10000.0)
+        spinbox.setDecimals(3)
+        spinbox.setSuffix(
+            f" {self.constant_limit_unit}"
+            if self.constant_limit_unit
+            else ""
+        )
+        spinbox.setMinimumWidth(160)
+        spinbox.setValue(float(value))
+        return spinbox
+
+    def set_constant_limit_unit(self, unit: str) -> None:
+        self.constant_limit_unit = str(unit or "").strip()
+        suffix = (
+            f" {self.constant_limit_unit}"
+            if self.constant_limit_unit
+            else ""
+        )
+        if getattr(self, "constant_upper_spin", None) is not None:
+            self.constant_upper_spin.setSuffix(suffix)
+            self.constant_lower_spin.setSuffix(suffix)
+        if "LOUD" in str(self.model_type or ""):
+            self.model_type = f"LOUD_{(self.constant_limit_unit or 'sone').upper()}"
+            self.limit_graph.setLabel(
+                "left",
+                f"Loudness ({self.constant_limit_unit or 'sone'})",
+            )
+
+    def _on_manual_input_mode_changed(self, _index=None) -> None:
+        self._sync_limit_mode_controls()
+        self.config_changed.emit()
+
+    def _on_constant_limit_changed(self, *args) -> None:
+        self._sync_constant_limit_controls()
+        self._refresh_current_limit_preview()
+        self.config_changed.emit()
+
+    def _sync_constant_limit_controls(self) -> None:
+        self.constant_upper_spin.setEnabled(
+            self.constant_upper_check.isChecked()
+        )
+        self.constant_lower_spin.setEnabled(
+            self.constant_lower_check.isChecked()
+        )
 
     def _on_limit_checkbox_changed(self, state):
         """阈值复选框状态变更处理"""
@@ -882,6 +1051,15 @@ class ThresholdConfigWidget(QWidget):
             return "manual"
         return "csv"
 
+    def current_manual_input_mode(self) -> str:
+        if self.allow_constant_limits and self.manual_input_combo is not None:
+            input_mode = str(
+                self.manual_input_combo.currentData() or "segments"
+            ).lower()
+            if input_mode in {"constant", "segments"}:
+                return input_mode
+        return "segments"
+
     def _sync_limit_mode_controls(self) -> None:
         enabled = self.limit_checkbox.isChecked()
         self.limit_group_box.setEnabled(True)
@@ -901,6 +1079,12 @@ class ThresholdConfigWidget(QWidget):
         if self.manual_widget is not None:
             self.manual_widget.setEnabled(True)
             self.manual_widget.setVisible(manual)
+        if self.allow_constant_limits:
+            constant = manual and self.current_manual_input_mode() == "constant"
+            self.constant_widget.setVisible(constant)
+            self.manual_edit_button.setVisible(manual and not constant)
+        else:
+            self.manual_edit_button.setVisible(manual)
         self._refresh_current_limit_preview()
         self._refresh_parent_scroll_layout()
 
@@ -917,6 +1101,29 @@ class ThresholdConfigWidget(QWidget):
 
     def _manual_limit_preview_data(self):
         return self._manual_state_editor.manual_limit_preview_data()
+
+    def _constant_limit_config(self) -> dict:
+        return {
+            "constant_upper_enabled": self.constant_upper_check.isChecked(),
+            "constant_lower_enabled": self.constant_lower_check.isChecked(),
+            "constant_upper_value": self.constant_upper_spin.value(),
+            "constant_lower_value": self.constant_lower_spin.value(),
+        }
+
+    def _constant_limit_preview_data(self):
+        config = self._constant_limit_config()
+        x_values = [0.0, 1.0]
+        upper_values = (
+            [config["constant_upper_value"]] * 2
+            if config["constant_upper_enabled"]
+            else [np.nan, np.nan]
+        )
+        lower_values = (
+            [config["constant_lower_value"]] * 2
+            if config["constant_lower_enabled"]
+            else [np.nan, np.nan]
+        )
+        return x_values, upper_values, lower_values
 
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
@@ -954,6 +1161,9 @@ class ThresholdConfigWidget(QWidget):
             MessageBox.warning(self, "提示", f"CSV阈值无法自动转换为手动分段：{exc}")
             return
         self._manual_state_editor.load_manual_config(manual_config)
+        if self.allow_constant_limits:
+            segments_index = self.manual_input_combo.findData("segments")
+            self.manual_input_combo.setCurrentIndex(segments_index)
         self._pending_manual_seed_data = None
 
     def set_graph_label_until(self, model_type: str):
@@ -968,7 +1178,13 @@ class ThresholdConfigWidget(QWidget):
 
     def _refresh_current_limit_preview(self) -> None:
         if self.allow_manual_limits and self.current_limit_mode() == "manual":
-            self.draw_limit_curve(self._manual_limit_preview_data())
+            if (
+                self.allow_constant_limits
+                and self.current_manual_input_mode() == "constant"
+            ):
+                self.draw_limit_curve(self._constant_limit_preview_data())
+            else:
+                self.draw_limit_curve(self._manual_limit_preview_data())
             return
         self.draw_limit_curve(self.limit_data)
 
@@ -1014,10 +1230,18 @@ class ThresholdConfigWidget(QWidget):
     def _manual_limit_config(self) -> dict:
         if not self.allow_manual_limits:
             return {}
-        return {
+        config = {
             "limit_mode": self.current_limit_mode(),
             **self._manual_state_editor.manual_config(),
         }
+        if self.allow_constant_limits:
+            config.update(
+                {
+                    "manual_input_mode": self.current_manual_input_mode(),
+                    **self._constant_limit_config(),
+                }
+            )
+        return config
 
     def _manual_limit_config_for_validation(self) -> dict:
         return self._manual_state_editor.manual_config_for_validation()
@@ -1032,10 +1256,18 @@ class ThresholdConfigWidget(QWidget):
         if self.limit_checkbox.isChecked():
             if self.allow_manual_limits and self.current_limit_mode() == "manual":
                 try:
-                    validate_manual_limit_config(
-                        self._manual_limit_config_for_validation(),
-                        value_semantics=self.current_limit_value_semantics(),
-                    )
+                    if (
+                        self.allow_constant_limits
+                        and self.current_manual_input_mode() == "constant"
+                    ):
+                        validate_constant_limit_config(
+                            self._constant_limit_config()
+                        )
+                    else:
+                        validate_manual_limit_config(
+                            self._manual_limit_config_for_validation(),
+                            value_semantics=self.current_limit_value_semantics(),
+                        )
                 except (_ManualTableValidationError, ManualLimitValidationError) as exc:
                     MessageBox.warning(self, "提示", str(exc))
                     return False

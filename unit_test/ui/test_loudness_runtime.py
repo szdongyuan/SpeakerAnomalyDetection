@@ -273,3 +273,122 @@ def test_loudness_curve_limit_uses_configured_phon_unit(signal_module, qapp):
         pytest.approx(10.0),
     )
     widget.close()
+
+
+def test_loudness_curve_limit_interpolates_csv_threshold(signal_module, qapp):
+    widget = signal_module.LoudnessAnalysis("响度 CSV 曲线阈值")
+    widget.data_struct.analysis_result_dict.clear()
+    raw_result = SimpleNamespace(
+        time_s=np.asarray([0.0, 1.0, 2.0]),
+        loudness_sone=np.asarray([1.0, 2.0, 3.0]),
+        loudness_level_phon=np.asarray([40.0, 50.0, 60.0]),
+        metadata={},
+    )
+
+    widget._apply_loudness_curve_limit(
+        raw_result,
+        {
+            "limit_mode": "csv",
+            "limit_data": (
+                [0.0, 2.0],
+                [1.5, 2.5],
+                [np.nan, np.nan],
+            ),
+            "curve_limit_unit": "sone",
+        },
+        {"curve_y_unit": "sone"},
+    )
+
+    assert widget.data_struct.analysis_result_dict["响度 CSV 曲线阈值"] == (
+        False,
+        pytest.approx(0.5),
+    )
+    widget.close()
+
+
+def test_loudness_curve_limit_uses_edited_segments(signal_module, qapp):
+    widget = signal_module.LoudnessAnalysis("响度编辑曲线阈值")
+    widget.data_struct.analysis_result_dict.clear()
+    raw_result = SimpleNamespace(
+        time_s=np.asarray([0.0, 1.0, 2.0]),
+        loudness_sone=np.asarray([1.0, 1.7, 2.5]),
+        loudness_level_phon=np.asarray([40.0, 45.0, 50.0]),
+        metadata={},
+    )
+
+    widget._apply_loudness_curve_limit(
+        raw_result,
+        {
+            "limit_mode": "manual",
+            "manual_input_mode": "segments",
+            "manual_upper_enabled": True,
+            "manual_upper_segments": [
+                {
+                    "start_x": 0.0,
+                    "start_y": 1.2,
+                    "end_x": 2.0,
+                    "end_y": 2.2,
+                }
+            ],
+            "manual_lower_enabled": False,
+            "manual_lower_segments": [],
+            "curve_limit_unit": "sone",
+        },
+        {"curve_y_unit": "sone"},
+    )
+
+    assert widget.data_struct.analysis_result_dict["响度编辑曲线阈值"] == (
+        False,
+        pytest.approx(0.3),
+    )
+    widget.close()
+
+
+def test_loudness_scalar_limit_uses_scalar_threshold_fields(signal_module, qapp):
+    widget = signal_module.LoudnessAnalysis("响度标量阈值")
+    widget.data_struct.analysis_result_dict.clear()
+    loudness_result = SimpleNamespace(
+        summary={"steady_state_average_sone": 3.0}
+    )
+
+    widget._apply_loudness_scalar_limit(
+        loudness_result,
+        {
+            "curve_limit_unit": "sone",
+            "scalar_upper_enabled": True,
+            "scalar_upper_value": 2.5,
+            "scalar_lower_enabled": False,
+            "curve_upper_enabled": True,
+            "curve_upper_value": 100.0,
+        },
+        metric="steady_state_average",
+    )
+
+    assert widget.data_struct.analysis_result_dict["响度标量阈值"] == (
+        False,
+        pytest.approx(0.5),
+    )
+    widget.close()
+
+
+def test_loudness_scalar_metric_does_not_draw_curve_limits(signal_module):
+    class _PlotRecorder:
+        def __init__(self):
+            self.calls = []
+
+        def plot(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    plot = _PlotRecorder()
+    signal_module.LoudnessAnalysis._draw_loudness_limit_lines(
+        plot,
+        {
+            "limit_checked": True,
+            "limit_metric": "steady_state_average",
+            "scalar_upper_enabled": True,
+            "scalar_upper_value": 2.0,
+        },
+        np.asarray([0.0, 1.0]),
+    )
+
+    assert plot.calls == []

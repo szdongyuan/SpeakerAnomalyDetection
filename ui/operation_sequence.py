@@ -1318,12 +1318,16 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            if analysis_type not in {"FBA", "FFT", "LOUD"}:
+            if analysis_type not in {"SPL", "FBA", "FFT", "LOUD"}:
                 return
             data = {}
 
         default_of_type = dict(data.get(analysis_type, {}))
-        if analysis_type == "FBA":
+        if analysis_type == "SPL":
+            default_of_type = SplConfigWindow.new_item_default_config(
+                default_of_type
+            )
+        elif analysis_type == "FBA":
             default_of_type = {
                 **FbaConfigWindow.DEFAULT_CONFIG,
                 **default_of_type,

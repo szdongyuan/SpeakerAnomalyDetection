@@ -26,12 +26,25 @@ _DEFAULT_HOP_S = LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S
 _DEFAULT_OVERLAP = LOUDNESS_DEFAULT_STATIONARY_OVERLAP_PERCENT
 _DEFAULT_OUTPUT_TIME_RESOLUTION_MS = LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import CheckBox, ComboBox, DoubleSpinBox, GroupBox, Label, LineEdit
+from ui.custom_ui_widget.widgets import (
+    CheckBox,
+    ComboBox,
+    DoubleSpinBox,
+    GroupBox,
+    Label,
+    LineEdit,
+    MessageBox,
+)
 from ui.ui_analysis_config.common_widgets import (
     AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
     SemanticAnalysisConfigDialogBase,
 )
+from ui.ui_analysis_config.manual_limit_segments import (
+    ManualLimitValidationError,
+    validate_constant_limit_config,
+)
+from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
 
 class LoudnessConfigPanel(QWidget):
@@ -417,22 +430,18 @@ class LoudnessConfigPanel(QWidget):
 
     def _create_limit_group(self):
         group = QWidget()
-        group.setMinimumHeight(220)
         layout = QVBoxLayout()
         layout.setSpacing(12)
         layout.setContentsMargins(12, 24, 12, 14)
 
-        upper_enabled_key = "curve_upper_enabled"
-        upper_value_key = "curve_upper_value"
-        lower_enabled_key = "curve_lower_enabled"
-        lower_value_key = "curve_lower_value"
-
-        self.limit_checked_box = CheckBox("启用响度 OK/NG 判定")
+        self.limit_checked_box = CheckBox("阈值")
         self.limit_checked_box.setToolTip("启用后，根据选定的判定指标对响度结果进行 OK/NG 判定。")
         self.limit_checked_box.setChecked(bool(self.load_config.get("limit_checked", False)))
         layout.addWidget(self.limit_checked_box)
 
-        metric_layout = QHBoxLayout()
+        self.limit_metric_widget = QWidget(group)
+        metric_layout = QHBoxLayout(self.limit_metric_widget)
+        metric_layout.setContentsMargins(0, 0, 0, 0)
         metric_layout.addWidget(Label("判定指标:"))
         self.limit_metric_combo = ComboBox()
         for value, label in (
@@ -456,15 +465,49 @@ class LoudnessConfigPanel(QWidget):
         self.limit_metric_combo.setMinimumHeight(30)
         metric_layout.addWidget(self.limit_metric_combo)
         metric_layout.addStretch(1)
-        layout.addLayout(metric_layout)
+        layout.addWidget(self.limit_metric_widget)
+
+        curve_threshold_config = copy.deepcopy(self.load_config)
+        if "limit_mode" not in curve_threshold_config:
+            curve_threshold_config["limit_mode"] = "manual"
+        if "manual_input_mode" not in curve_threshold_config:
+            curve_threshold_config["manual_input_mode"] = "constant"
+        for target_key, legacy_key, default in (
+            ("constant_upper_enabled", "curve_upper_enabled", True),
+            ("constant_upper_value", "curve_upper_value", 20.0),
+            ("constant_lower_enabled", "curve_lower_enabled", False),
+            ("constant_lower_value", "curve_lower_value", 0.0),
+        ):
+            if target_key not in curve_threshold_config:
+                curve_threshold_config[target_key] = curve_threshold_config.get(
+                    legacy_key,
+                    default,
+                )
+        curve_threshold_config["limit_checked"] = True
+        self.curve_threshold_widget = ThresholdConfigWidget(
+            parent=group,
+            load_config=curve_threshold_config,
+            model_type=f"LOUD_{self._curve_limit_unit().upper()}",
+            allow_manual_limits=True,
+            allow_constant_limits=True,
+            constant_limit_unit=self._curve_limit_unit(),
+        )
+        self.curve_threshold_widget.limit_checkbox.hide()
+        self.curve_threshold_widget.limit_checkbox.setChecked(True)
+        layout.addWidget(self.curve_threshold_widget)
+
+        self.scalar_limit_widget = QWidget(group)
+        scalar_layout = QVBoxLayout(self.scalar_limit_widget)
+        scalar_layout.setContentsMargins(0, 0, 0, 0)
+        scalar_layout.setSpacing(12)
 
         upper_layout = QHBoxLayout()
         self.upper_enabled_box = CheckBox("上限")
         self.upper_enabled_box.setChecked(
             bool(
                 self.load_config.get(
-                    upper_enabled_key,
-                    self.load_config.get("mean_upper_enabled", self.load_config.get("nmax_upper_enabled", True)),
+                    "scalar_upper_enabled",
+                    self.load_config.get("curve_upper_enabled", True),
                 )
             )
         )
@@ -474,8 +517,8 @@ class LoudnessConfigPanel(QWidget):
         self.upper_spin.setValue(
             float(
                 self.load_config.get(
-                    upper_value_key,
-                    self.load_config.get("mean_upper_sone", self.load_config.get("nmax_upper_sone", 20.0)),
+                    "scalar_upper_value",
+                    self.load_config.get("curve_upper_value", 20.0),
                 )
             )
         )
@@ -485,15 +528,15 @@ class LoudnessConfigPanel(QWidget):
         upper_layout.addWidget(self.upper_enabled_box)
         upper_layout.addWidget(self.upper_spin)
         upper_layout.addStretch(1)
-        layout.addLayout(upper_layout)
+        scalar_layout.addLayout(upper_layout)
 
         lower_layout = QHBoxLayout()
         self.lower_enabled_box = CheckBox("下限")
         self.lower_enabled_box.setChecked(
             bool(
                 self.load_config.get(
-                    lower_enabled_key,
-                    self.load_config.get("mean_lower_enabled", self.load_config.get("nmax_lower_enabled", False)),
+                    "scalar_lower_enabled",
+                    self.load_config.get("curve_lower_enabled", False),
                 )
             )
         )
@@ -503,8 +546,8 @@ class LoudnessConfigPanel(QWidget):
         self.lower_spin.setValue(
             float(
                 self.load_config.get(
-                    lower_value_key,
-                    self.load_config.get("mean_lower_sone", self.load_config.get("nmax_lower_sone", 0.0)),
+                    "scalar_lower_value",
+                    self.load_config.get("curve_lower_value", 0.0),
                 )
             )
         )
@@ -514,10 +557,14 @@ class LoudnessConfigPanel(QWidget):
         lower_layout.addWidget(self.lower_enabled_box)
         lower_layout.addWidget(self.lower_spin)
         lower_layout.addStretch(1)
-        layout.addLayout(lower_layout)
+        scalar_layout.addLayout(lower_layout)
+        layout.addWidget(self.scalar_limit_widget)
 
         self.curve_y_unit_combo.currentTextChanged.connect(self._refresh_limit_unit_suffix)
+        self.limit_checked_box.stateChanged.connect(self._sync_limit_metric_controls)
+        self.limit_metric_combo.currentIndexChanged.connect(self._sync_limit_metric_controls)
         group.setLayout(layout)
+        self._sync_limit_metric_controls()
         return group
 
     def _curve_limit_unit(self):
@@ -527,6 +574,39 @@ class LoudnessConfigPanel(QWidget):
         suffix = f" {self._curve_limit_unit()}"
         self.upper_spin.setSuffix(suffix)
         self.lower_spin.setSuffix(suffix)
+        self.curve_threshold_widget.set_constant_limit_unit(
+            self._curve_limit_unit()
+        )
+
+    def _sync_limit_metric_controls(self, _value=None):
+        enabled = self.limit_checked_box.isChecked()
+        is_curve = str(
+            self.limit_metric_combo.currentData() or "curve_y"
+        ) == "curve_y"
+        self.limit_metric_widget.setVisible(enabled)
+        self.curve_threshold_widget.setVisible(enabled and is_curve)
+        self.scalar_limit_widget.setVisible(enabled and not is_curve)
+        self._refresh_parent_semantic_layout()
+
+    def _scalar_limit_config(self):
+        return {
+            "constant_upper_enabled": self.upper_enabled_box.isChecked(),
+            "constant_upper_value": self.upper_spin.value(),
+            "constant_lower_enabled": self.lower_enabled_box.isChecked(),
+            "constant_lower_value": self.lower_spin.value(),
+        }
+
+    def validate_limits(self):
+        if not self.limit_checked_box.isChecked():
+            return True
+        if str(self.limit_metric_combo.currentData() or "curve_y") == "curve_y":
+            return self.curve_threshold_widget.validate()
+        try:
+            validate_constant_limit_config(self._scalar_limit_config())
+        except ManualLimitValidationError as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return False
+        return True
 
     def _refresh_exceedance_mode(self):
         mode = self.EXCEEDANCE_MODE_LABEL_TO_VALUE.get(
@@ -609,6 +689,8 @@ class LoudnessConfigPanel(QWidget):
             curves.append("specific_loudness_profile")
         heatmaps = ["specific_loudness"] if self.show_specific_box.isChecked() else []
         advanced_cfg = self.load_config.get("advanced", {}) or {}
+        curve_threshold_config = self.curve_threshold_widget.get_config()
+        scalar_limit_config = self._scalar_limit_config()
 
         return {
             "enabled": True,
@@ -692,13 +774,18 @@ class LoudnessConfigPanel(QWidget):
                     or DEFAULT_SPECTRAL_SUBTRACTION_GAIN_SMOOTHING
                 ),
             },
+            **curve_threshold_config,
             "limit_checked": self.limit_checked_box.isChecked(),
             "limit_metric": str(self.limit_metric_combo.currentData() or "curve_y"),
             "curve_limit_unit": self._curve_limit_unit(),
-            "curve_upper_enabled": self.upper_enabled_box.isChecked(),
-            "curve_upper_value": self.upper_spin.value(),
-            "curve_lower_enabled": self.lower_enabled_box.isChecked(),
-            "curve_lower_value": self.lower_spin.value(),
+            "scalar_upper_enabled": scalar_limit_config["constant_upper_enabled"],
+            "scalar_upper_value": scalar_limit_config["constant_upper_value"],
+            "scalar_lower_enabled": scalar_limit_config["constant_lower_enabled"],
+            "scalar_lower_value": scalar_limit_config["constant_lower_value"],
+            "curve_upper_enabled": curve_threshold_config["constant_upper_enabled"],
+            "curve_upper_value": curve_threshold_config["constant_upper_value"],
+            "curve_lower_enabled": curve_threshold_config["constant_lower_enabled"],
+            "curve_lower_value": curve_threshold_config["constant_lower_value"],
             "nmax_upper_enabled": False,
             "nmax_upper_sone": 0.0,
             "nmax_lower_enabled": False,
@@ -765,6 +852,21 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
         "limit_checked": False,
         "limit_metric": "curve_y",
         "curve_limit_unit": "sone",
+        "limit_data": None,
+        "limit_mode": "manual",
+        "manual_input_mode": "constant",
+        "manual_upper_enabled": True,
+        "manual_upper_segments": [],
+        "manual_lower_enabled": False,
+        "manual_lower_segments": [],
+        "constant_upper_enabled": True,
+        "constant_upper_value": 20.0,
+        "constant_lower_enabled": False,
+        "constant_lower_value": 0.0,
+        "scalar_upper_enabled": True,
+        "scalar_upper_value": 20.0,
+        "scalar_lower_enabled": False,
+        "scalar_lower_value": 0.0,
         "curve_upper_enabled": True,
         "curve_upper_value": 20.0,
         "curve_lower_enabled": False,
@@ -788,6 +890,44 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
                 merged[key].update(value)
             else:
                 merged[key] = copy.deepcopy(value)
+
+        legacy_upper_enabled = source.get(
+            "curve_upper_enabled",
+            source.get("mean_upper_enabled", source.get("nmax_upper_enabled", True)),
+        )
+        legacy_upper_value = source.get(
+            "curve_upper_value",
+            source.get("mean_upper_sone", source.get("nmax_upper_sone", 20.0)),
+        )
+        legacy_lower_enabled = source.get(
+            "curve_lower_enabled",
+            source.get("mean_lower_enabled", source.get("nmax_lower_enabled", False)),
+        )
+        legacy_lower_value = source.get(
+            "curve_lower_value",
+            source.get("mean_lower_sone", source.get("nmax_lower_sone", 0.0)),
+        )
+        if "limit_mode" not in source:
+            merged["limit_mode"] = "manual"
+        if "manual_input_mode" not in source:
+            merged["manual_input_mode"] = "constant"
+        for target_key, legacy_value in (
+            ("constant_upper_enabled", legacy_upper_enabled),
+            ("constant_upper_value", legacy_upper_value),
+            ("constant_lower_enabled", legacy_lower_enabled),
+            ("constant_lower_value", legacy_lower_value),
+            ("scalar_upper_enabled", legacy_upper_enabled),
+            ("scalar_upper_value", legacy_upper_value),
+            ("scalar_lower_enabled", legacy_lower_enabled),
+            ("scalar_lower_value", legacy_lower_value),
+        ):
+            if target_key not in source:
+                merged[target_key] = copy.deepcopy(legacy_value)
+        if "curve_limit_unit" not in source:
+            merged["curve_limit_unit"] = str(
+                (merged.get("advanced", {}) or {}).get("curve_y_unit", "sone")
+                or "sone"
+            )
         return merged
 
     def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
@@ -831,6 +971,8 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
         return config
 
     def on_default_btn_clicked(self):
+        if not self.panel.validate_limits():
+            return
         config_data = self.get_default_config()
         save_flag = self.config_manager.save_default_config(self.model_type, config_data)
         PopupUtils().save_popup(self, success_flag=save_flag)
@@ -843,6 +985,8 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
         self._build_semantic_sections()
 
     def on_click_ok_btn(self):
+        if not self.panel.validate_limits():
+            return
         self._accepted_config = self.get_default_config()
         self.accept()
         return self._accepted_config
