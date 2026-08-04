@@ -106,11 +106,17 @@ def test_dual_golden_plot_titles_match_existing_layout_contract(qapp):
         first_size, second_size = widget.plot_splitter.sizes()
         assert first_size == second_size
         assert first_size > 0
-        assert (
-            deviation_plot.getViewBox().linkedView(ViewBox.XAxis)
-            is envelope_plot.getViewBox()
-        )
-        assert deviation_plot.getViewBox().linkedView(ViewBox.YAxis) is None
+        envelope_view = envelope_plot.getViewBox()
+        deviation_view = deviation_plot.getViewBox()
+        assert deviation_view.linkedView(ViewBox.XAxis) is None
+        assert envelope_view.linkedView(ViewBox.YAxis) is None
+        assert deviation_view.linkedView(ViewBox.YAxis) is None
+
+        widget._finalize_plot_view_ranges_after_render()
+
+        assert deviation_view.linkedView(ViewBox.XAxis) is envelope_view
+        assert envelope_view.linkedView(ViewBox.YAxis) is None
+        assert deviation_view.linkedView(ViewBox.YAxis) is None
         _assert_title(envelope_plot, ENVELOPE_TITLE)
         _assert_title(deviation_plot, DEVIATION_TITLE)
     finally:

@@ -81,8 +81,17 @@ def test_dual_mode_orders_equal_height_linked_x_only_plots(qapp):
         assert len(sizes) == 2
         assert min(sizes) > 0
         assert abs(sizes[0] - sizes[1]) <= 1
-        assert deviation.getViewBox().linkedView(ViewBox.XAxis) is envelope.getViewBox()
-        assert deviation.getViewBox().linkedView(ViewBox.YAxis) is None
+        envelope_view = envelope.getViewBox()
+        deviation_view = deviation.getViewBox()
+        assert deviation_view.linkedView(ViewBox.XAxis) is None
+        assert envelope_view.linkedView(ViewBox.YAxis) is None
+        assert deviation_view.linkedView(ViewBox.YAxis) is None
+
+        widget._finalize_plot_view_ranges_after_render()
+
+        assert deviation_view.linkedView(ViewBox.XAxis) is envelope_view
+        assert envelope_view.linkedView(ViewBox.YAxis) is None
+        assert deviation_view.linkedView(ViewBox.YAxis) is None
     finally:
         _close(widget)
 
