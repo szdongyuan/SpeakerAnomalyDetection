@@ -160,10 +160,13 @@ class LoginWindow(QDialog):
         original_pixmap = QPixmap(DEFAULT_DIR + "ui/ui_pic/login_ui_pic/ui_login_icon.png")
         scaled_pixmap = original_pixmap.scaledToHeight(200, Qt.SmoothTransformation)
         pixmap = QPixmap(event.size().width(), 200)
-        pixmap.fill(QColor(174, 171, 162))
+        pixmap.fill(original_pixmap.toImage().pixelColor(0, 0))
 
         painter = QPainter(pixmap)
         painter.drawPixmap((event.size().width() - scaled_pixmap.width()) // 2, 0, scaled_pixmap)
+        hero_tint = QColor(ui_style_const.COLOR_CONTROL_PRESSED)
+        hero_tint.setAlpha(120)
+        painter.fillRect(pixmap.rect(), hero_tint)
         painter.end()
 
         self.label_background_image.setPixmap(pixmap)
@@ -173,9 +176,9 @@ class LoginWindow(QDialog):
         width = self.width()
         height = self.height()
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(174, 171, 162))
+        painter.setBrush(QColor(ui_style_const.COLOR_TITLE_BAR_BG))
         painter.drawRect(0, 0, width, 200)
-        painter.setBrush(QColor(174, 171, 162, 123))
+        painter.setBrush(QColor(ui_style_const.COLOR_PAGE_BG))
         painter.drawRect(0, 200, width, height - 200)
         painter.end()
 
