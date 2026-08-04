@@ -59,3 +59,15 @@ def test_extract_curve_xy_supports_fft_display_curve():
     assert y == [-2.0, 3.0]
     assert _export_unit("FFT", {}) == "dB"
 
+
+def test_extract_curve_xy_supports_loudness_curve():
+    result = {
+        "time_s": [0.05, 0.15],
+        "loudness_sone": [1.0, 1.5],
+    }
+
+    x, y = _extract_curve_xy(result)
+
+    assert x == [0.05, 0.15]
+    assert y == [1.0, 1.5]
+    assert _export_unit("LOUD", {}) == "sone"

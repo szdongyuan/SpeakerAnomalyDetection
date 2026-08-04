@@ -654,6 +654,7 @@ def _extract_curve_xy(result: dict[str, Any]) -> tuple[list[Any], list[Any]] | N
         ("band_centers", "band_levels_weighted_db"),
         ("frequency_bins", "plot_db"),
         ("frequency_bins", "fft_db"),
+        ("time_s", "loudness_sone"),
     ]
     for xk, yk in candidates:
         if xk in result and yk in result:
@@ -763,6 +764,8 @@ def _export_unit(item_type: Any, cfg: dict[str, Any] | None) -> str:
         return "dB"
     if t == "PRB":
         return "phon"
+    if t == "LOUD":
+        return "sone"
     return ""
 
 

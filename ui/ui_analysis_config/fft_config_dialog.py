@@ -58,6 +58,11 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
+        "manual_input_mode": "segments",
+        "constant_upper_enabled": True,
+        "constant_lower_enabled": False,
+        "constant_upper_value": 100.0,
+        "constant_lower_value": 0.0,
         "manual_upper_enabled": True,
         "manual_lower_enabled": False,
         "manual_upper_segments": [],
@@ -290,6 +295,7 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
             load_config=self.load_config,
             model_type="FFT",
             allow_manual_limits=True,
+            allow_constant_limits=True,
         )
         self.add_threshold_curve_sections(
             self.threshold_widget,

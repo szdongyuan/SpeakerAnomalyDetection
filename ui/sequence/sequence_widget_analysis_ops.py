@@ -1145,8 +1145,14 @@ class SequenceWidgetAnalysisOpsMixin:
             self._current_run_recording_token = recording_token
 
         name_suffix = self._resolve_recording_name_suffix()
+        use_product_model_dir = bool(self._get_active_product_condition_key())
         self.recorded_path, self.recorded_signal_info = get_recorded_info(
-            self.lineedit_type.text(), recording_token, self.lineedit_s_or_n.text(), label, name_suffix=name_suffix
+            self.lineedit_type.text(),
+            recording_token,
+            self.lineedit_s_or_n.text(),
+            label,
+            name_suffix=name_suffix,
+            use_product_model_dir=use_product_model_dir,
         )
         if name_suffix:
             self.recorded_signal_info["record_name_suffix"] = name_suffix
@@ -1428,6 +1434,12 @@ class SequenceWidgetAnalysisOpsMixin:
                             instance.show()
                     elif hasattr(instance, "calculate_fba"):
                         result = instance.calculate_fba()
+                        if not result:
+                            continue
+                        if show_windows:
+                            instance.show()
+                    elif hasattr(instance, "calculate_loudness"):
+                        result = instance.calculate_loudness()
                         if not result:
                             continue
                         if show_windows:

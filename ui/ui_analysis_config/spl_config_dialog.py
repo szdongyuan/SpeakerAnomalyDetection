@@ -20,6 +20,76 @@ from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 class SplConfigWindow(SemanticAnalysisConfigDialogBase):
     """SPL and SPLF analysis configuration window."""
 
+    DEFAULT_CONFIG = {
+        "analysis_channel": 0,
+        "weighting": "Z",
+        "smooth_checked": False,
+        "limit_checked": False,
+        "limit_data": None,
+        "limit_mode": "csv",
+        "manual_input_mode": "constant",
+        "constant_upper_enabled": True,
+        "constant_lower_enabled": False,
+        "constant_upper_value": 100.0,
+        "constant_lower_value": 0.0,
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [],
+        "manual_lower_segments": [],
+    }
+    _MODERN_THRESHOLD_KEYS = {
+        "limit_data",
+        "limit_mode",
+        "manual_input_mode",
+        "constant_upper_enabled",
+        "constant_lower_enabled",
+        "constant_upper_value",
+        "constant_lower_value",
+        "manual_upper_enabled",
+        "manual_lower_enabled",
+        "manual_upper_segments",
+        "manual_lower_segments",
+    }
+    _LEGACY_THRESHOLD_KEYS = {
+        "self_defined",
+        "import_config",
+        "upper_limit",
+        "lower_limit",
+        "config_dir",
+    }
+
+    @classmethod
+    def _merge_config_defaults(cls, raw_config=None):
+        raw = dict(raw_config or {})
+        config = {**cls.DEFAULT_CONFIG, **raw}
+        if (
+            "manual_input_mode" not in raw
+            and str(raw.get("limit_mode", "csv") or "csv").lower()
+            == "manual"
+            and (
+                raw.get("manual_upper_segments")
+                or raw.get("manual_lower_segments")
+            )
+        ):
+            config["manual_input_mode"] = "segments"
+        return config
+
+    @classmethod
+    def new_item_default_config(cls, raw_config=None):
+        """Merge code defaults and discard unsupported legacy-only limits."""
+        raw = dict(raw_config or {})
+        has_modern_threshold = any(
+            key in raw for key in cls._MODERN_THRESHOLD_KEYS
+        )
+        clean = {
+            key: value
+            for key, value in raw.items()
+            if key not in cls._LEGACY_THRESHOLD_KEYS
+        }
+        if not has_modern_threshold:
+            clean.pop("limit_checked", None)
+        return cls._merge_config_defaults(clean)
+
     def __init__(
         self,
         config_manager,
@@ -34,10 +104,11 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         ) or "SPL"
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
-        self.load_config = self.config_manager.load_config().get(
+        saved_config = self.config_manager.load_config().get(
             self.config_key,
             {},
         )
+        self.load_config = self._merge_config_defaults(saved_config)
         self.init_ui()
 
     def init_ui(self):
@@ -143,6 +214,8 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             parent=self,
             load_config=self.load_config,
             model_type=self.model_type,
+            allow_manual_limits=True,
+            allow_constant_limits=True,
             limit_value_semantics_provider=(
                 self.golden_sample_widget.limit_value_semantics
                 if self.golden_sample_widget is not None
@@ -204,10 +277,11 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         PopupUtils().save_popup(self, success_flag=save_flag)
 
     def on_restore_default_btn_clicked(self):
-        self.load_config = self.config_manager.load_config().get(
+        saved_config = self.config_manager.load_config().get(
             self.config_key,
             {},
         )
+        self.load_config = self._merge_config_defaults(saved_config)
         self.clear_semantic_sections()
         self._build_semantic_sections()
 

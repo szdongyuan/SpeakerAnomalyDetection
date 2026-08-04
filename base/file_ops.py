@@ -10,6 +10,73 @@ from consts.running_consts import DEFAULT_DIR
 class FileOps(object):
 
     @staticmethod
+    def sanitize_file_name_component(value, fallback=""):
+        """Return a Windows-safe component for recording folders and filenames."""
+        text = str(value or "").strip()
+        invalid_chars = '<>:"/\\|?*'
+        safe_text = "".join(
+            "_" if char in invalid_chars or char.isspace() or ord(char) < 32 else char
+            for char in text
+        ).strip(" .")
+        return safe_text or fallback
+
+    @staticmethod
+    def resolve_recording_product_model(product_model, use_product_model_dir):
+        """Resolve the model name used by product-condition recordings."""
+        normalized_model = str(product_model or "").strip()
+        if use_product_model_dir and not normalized_model:
+            return model_consts.UNSPECIFIED_PRODUCT_MODEL_FOLDER
+        return normalized_model
+
+    @staticmethod
+    def get_recording_store_dir(product_model, label, use_product_model_dir):
+        """Keep legacy folders flat and group product-condition audio by model."""
+        if not use_product_model_dir:
+            return model_consts.STORED_RECORDED_PATH + "/" + label
+
+        normalized_model = FileOps.resolve_recording_product_model(product_model, True)
+        model_folder = FileOps.sanitize_file_name_component(
+            normalized_model,
+            model_consts.UNSPECIFIED_PRODUCT_MODEL_FOLDER,
+        )
+        return os.path.join(model_consts.STORED_RECORDED_PATH, model_folder, label)
+
+    @staticmethod
+    def build_recorded_file_name(
+        product_model,
+        recording_time,
+        mac_address,
+        barcode,
+        name_suffix,
+        use_product_model_dir,
+    ):
+        """Build product-condition names without changing the legacy order."""
+        if not use_product_model_dir:
+            recorded_name = product_model + "_" + recording_time + "_" + mac_address
+            if barcode:
+                recorded_name = recorded_name + "_BC" + barcode
+            if name_suffix:
+                recorded_name = recorded_name + str(name_suffix)
+            return recorded_name + ".wav"
+
+        name_parts = [recording_time]
+        if barcode:
+            name_parts.append("BC" + FileOps.sanitize_file_name_component(barcode))
+        name_parts.append(
+            FileOps.sanitize_file_name_component(
+                product_model,
+                model_consts.UNSPECIFIED_PRODUCT_MODEL_FOLDER,
+            )
+        )
+        condition_name = FileOps.sanitize_file_name_component(
+            str(name_suffix or "").strip("_")
+        )
+        if condition_name:
+            name_parts.append(condition_name)
+        name_parts.append(FileOps.sanitize_file_name_component(mac_address))
+        return "_".join(name_parts) + ".wav"
+
+    @staticmethod
     def create_empty_okng(dest_dir):
         """
         Create an empty directory with 'OK' and 'NG' subdirectories.

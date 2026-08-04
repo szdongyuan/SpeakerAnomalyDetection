@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 from scipy.signal import find_peaks
 
 from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_filter
+from base.core_algorithm.sound_quality import run_sound_quality
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
@@ -66,7 +67,7 @@ from ui.plot_view import apply_plot_view_range
 from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
-    limits_from_manual_segments,
+    limits_from_manual_config,
 )
 
 
@@ -96,6 +97,7 @@ def get_class_mapping():
         "ED": PipelinePdPm,
         "FBA": FrequencyBandAnalysis,
         "FFT": FftAnalysis,
+        "LOUD": LoudnessAnalysis,
     }
     return class_mapping
 
@@ -205,6 +207,32 @@ def _abs_deviation_curve(x_current, y_current, x_base, y_base):
     in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
     interp = np.where(in_range, interp, np.nan)
     return (y_c - interp)
+
+
+def _sorted_finite_positive_x_for_limits(x_values, y_values):
+    x_arr = np.asarray(x_values, dtype=float)
+    y_arr = np.asarray(y_values, dtype=float)
+    mask = np.isfinite(x_arr) & np.isfinite(y_arr) & (x_arr > 0)
+    x_valid = x_arr[mask]
+    if x_valid.size > 1:
+        x_valid = x_valid[np.argsort(x_valid)]
+    return x_valid
+
+
+def _resolve_spl_limit_data(config, target_x):
+    limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
+    if limit_mode == "manual":
+        return limits_from_manual_config(config, target_x)
+    if limit_mode == "csv":
+        limit_data = config.get("limit_data")
+        if not limit_data:
+            raise ValueError("已启用阈值，但未加载 CSV 配置文件")
+        try:
+            limit_x, upper_limit, lower_limit = limit_data
+        except (TypeError, ValueError) as exc:
+            raise ValueError("CSV 阈值数据格式不正确") from exc
+        return limit_x, upper_limit, lower_limit
+    raise ValueError(f"不支持的阈值模式: {limit_mode}")
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -350,6 +378,20 @@ class AnalysisGraphWidget(QWidget):
         l_axis.setTextPen("black")
         b_axis.setLabel(b_axis.labelText, **{"font-size": f"{font_size}px"})
         l_axis.setLabel(l_axis.labelText, **{"font-size": f"{font_size}px"})
+
+    @staticmethod
+    def apply_plot_font_style(plot_widget, font_size: int = 20):
+        font_size = ui_style_const.scale_size_px(font_size)
+        font = QFont()
+        font.setPixelSize(font_size)
+        for axis_name in ("bottom", "left"):
+            axis = plot_widget.getAxis(axis_name)
+            axis.setTickFont(font)
+            axis.setTextPen("black")
+            axis.setLabel(
+                axis.labelText,
+                **{"font-size": f"{font_size}px"},
+            )
 
     def _valid_v2pa_factor(self):
         try:
@@ -942,10 +984,20 @@ class Spl(AnalysisGraphWidget):
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
         limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
-            result = self.analysis_config.get("limit_data")
-            if not result:
+            try:
+                csv_time_list, csv_upper_list, csv_lower_list = (
+                    _resolve_spl_limit_data(
+                        self.analysis_config,
+                        signal_duration,
+                    )
+                )
+            except (ManualLimitValidationError, TypeError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"SPL 阈值配置无效: {str(exc)[:200]}",
+                )
                 return False
-            csv_time_list, csv_upper_list, csv_lower_list = result
             self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
@@ -1157,10 +1209,29 @@ class SplFrequency(AnalysisGraphWidget):
 
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
-            result = analysis_config.get("limit_data")
-            if not result:
+            limit_mode = str(
+                analysis_config.get("limit_mode", "csv") or "csv"
+            ).lower()
+            limit_x = frequency_list
+            if limit_mode == "manual":
+                limit_x = _sorted_finite_positive_x_for_limits(
+                    frequency_list,
+                    spl_db,
+                )
+            try:
+                csv_freq_list, csv_upper_list, csv_lower_list = (
+                    _resolve_spl_limit_data(
+                        analysis_config,
+                        limit_x,
+                    )
+                )
+            except (ManualLimitValidationError, TypeError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"SPLF 阈值配置无效: {str(exc)[:200]}",
+                )
                 return False
-            csv_freq_list, csv_upper_list, csv_lower_list = result
             self.plot_spl_frequency_with_limits(frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl_frequency(frequency_list, spl_db)
@@ -2874,7 +2945,7 @@ class FftAnalysis(AnalysisGraphWidget):
             config.get("limit_mode", "csv") or "csv"
         ).lower()
         if limit_mode == "manual":
-            _, upper_values, lower_values = limits_from_manual_segments(
+            _, upper_values, lower_values = limits_from_manual_config(
                 config,
                 target_x,
             )
@@ -3217,7 +3288,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
     def _resolve_limits(cls, config, centers):
         limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
         if limit_mode == "manual":
-            _, upper_values, lower_values = limits_from_manual_segments(
+            _, upper_values, lower_values = limits_from_manual_config(
                 config,
                 centers,
             )
@@ -3451,6 +3522,763 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             symbolBrush=color,
             name=name,
         )
+
+
+class LoudnessAnalysis(AnalysisGraphWidget):
+    """LOUD analysis window backed by the sound-quality loudness service."""
+
+    def __init__(self, title_name):
+        super().__init__()
+        self.data_struct = DataDealStruct()
+        self.v2pa_factor = None
+        self.analysis_config = None
+        self.recorded_path = None
+        self.result = {}
+        self.export_detail = {}
+        self.specific_loudness_widget = None
+        self.specific_loudness_colorbar = None
+        self.specific_loudness_profile_widget = None
+        self.sharpness_plot = None
+        self.roughness_plot = None
+        self.title_name = title_name
+        self.setWindowTitle(title_name)
+
+    def calculate_loudness(self):
+        config = self.analysis_config or {}
+        try:
+            recorded_signal = resolve_analysis_channel_signal(self.data_struct, config, self.title_name)
+        except ValueError as exc:
+            QMessageBox.warning(self, "提示", f"响度分析失败：{exc}")
+            return False
+        sample_rate = self.data_struct.sample_rate
+
+        if recorded_signal is None or sample_rate is None:
+            QMessageBox.warning(self, "提示", "响度分析失败：没有可用录音数据。")
+            return False
+
+        v2pa_factor = self._valid_v2pa_factor()
+        if v2pa_factor is None:
+            return False
+
+        sq_config = self._build_sq_config(config)
+        run_result = run_sound_quality(
+            np.asarray(recorded_signal, dtype=np.float64),
+            int(sample_rate),
+            project_v2pa_factor=v2pa_factor,
+            sq_config=sq_config,
+        )
+        loud_result = run_result.loudness
+        if loud_result is None or not loud_result.enabled or loud_result.raw_result is None:
+            reason = getattr(loud_result, "skipped_reason", None) or run_result.skipped_reason or "unknown"
+            QMessageBox.warning(self, "提示", f"响度分析跳过：{reason}")
+            return False
+
+        summary = loud_result.summary or {}
+        self._plot_loudness_curve(loud_result, config)
+        self._apply_loudness_limits(loud_result, config)
+
+        raw = loud_result.raw_result
+        self.result = {
+            "summary": summary,
+            "time_s": self._loudness_display_time_axis(raw).tolist(),
+            "loudness_sone": np.asarray(raw.loudness_sone, dtype=np.float64).tolist(),
+            "loudness_level_phon": np.asarray(raw.loudness_level_phon, dtype=np.float64).tolist(),
+            "metadata": dict(raw.metadata or {}),
+        }
+        self.export_detail = {
+            "specific_loudness_sum_sone": summary.get("specific_loudness_sum_sone"),
+            "specific_loudness_summed_exceedance": summary.get("specific_loudness_summed_exceedance"),
+            "steady_state_average_sone": summary.get("steady_state_average_sone"),
+            "steady_state_average_phon": summary.get("steady_state_average_phon"),
+            "max_transient_sone": summary.get("max_transient_sone"),
+            "max_transient_phon": summary.get("max_transient_phon"),
+            "nmax_sone": summary.get("nmax_sone"),
+            "lnmax_phon": summary.get("lnmax_phon"),
+            "mean_sone": summary.get("mean_sone"),
+            "mean_phon": summary.get("mean_phon"),
+        }
+        return self.result
+
+    @staticmethod
+    def _build_sq_config(config: dict) -> dict:
+        display_cfg = config.get("display", {}) or {}
+        save_cfg = config.get("save", {}) or {}
+        advanced_cfg = config.get("advanced", {}) or {}
+        required_summary_metrics = []
+        if bool(config.get("limit_checked", False)):
+            limit_metric = str(config.get("limit_metric", "curve_y") or "curve_y").lower()
+            limit_unit = str(
+                config.get("curve_limit_unit")
+                or advanced_cfg.get("curve_y_unit", "sone")
+                or "sone"
+            ).lower()
+            if limit_metric == "steady_state_average":
+                required_metric = (
+                    "steady_state_average_phon"
+                    if limit_unit == "phon"
+                    else "steady_state_average_sone"
+                )
+            elif limit_metric == "max_transient":
+                required_metric = (
+                    "max_transient_phon"
+                    if limit_unit == "phon"
+                    else "max_transient_sone"
+                )
+            elif limit_metric == "specific_loudness_summed_exceedance":
+                required_metric = "specific_loudness_summed_exceedance"
+            else:
+                required_metric = None
+            if required_metric:
+                required_summary_metrics.append(required_metric)
+        return {
+            "enabled": True,
+            "shared": {"field_type": config.get("field_type", "free")},
+            "items": {
+                "LOUD": {
+                    "enabled": bool(config.get("enabled", True)),
+                    "method": config.get("method", "time_varying_iso532_1"),
+                    "display": display_cfg,
+                    "save": save_cfg,
+                    "advanced": advanced_cfg,
+                    "required_summary_metrics": required_summary_metrics,
+                },
+                "SHRP": {"enabled": False},
+                "ROUGH": {"enabled": False},
+                "FLUC": {"enabled": False},
+                "TON": {"enabled": False},
+                "PR": {"enabled": False},
+                "TNR": {"enabled": False},
+            },
+        }
+
+    @staticmethod
+    def _loudness_display_time_axis(raw) -> np.ndarray:
+        time_s = np.asarray(raw.time_s, dtype=np.float64)
+        metadata = dict(getattr(raw, "metadata", None) or {})
+        if not metadata.get("analysis_time_range_enabled", False):
+            return time_s
+        try:
+            source_start_s = float(metadata.get("analysis_source_start_s", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return time_s
+        if not np.isfinite(source_start_s) or source_start_s <= 0.0:
+            return time_s
+        return time_s + source_start_s
+
+    def _plot_loudness_curve(self, loud_result, config=None):
+        raw = loud_result.raw_result
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        metadata = dict(getattr(raw, "metadata", None) or {})
+        plot_start_s = 0.0
+        if metadata.get("analysis_time_range_enabled", False):
+            try:
+                plot_start_s = max(0.0, float(metadata.get("analysis_source_start_s", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                plot_start_s = 0.0
+        time_s = self._loudness_display_time_axis(raw)
+        curve_y_unit = str(advanced_cfg.get("curve_y_unit", "sone") or "sone").lower()
+        if curve_y_unit == "phon":
+            loudness = np.asarray(raw.loudness_level_phon, dtype=np.float64)
+            y_label = "响度级 (phon)"
+        else:
+            loudness = np.asarray(raw.loudness_sone, dtype=np.float64)
+            y_label = "响度 (sone)"
+
+        plot_time_s = time_s
+        plot_loudness = loudness
+        method = str((config or {}).get("method", "") or "").lower()
+        if (
+            method == "per_segment"
+            and time_s.size
+            and loudness.size
+            and np.isfinite(time_s[0])
+            and np.isfinite(loudness[0])
+            and time_s[0] > 0.0
+        ):
+            if time_s.size > 1 and loudness.size > 1 and np.isfinite(loudness[1]):
+                plot_time_s = np.insert(time_s[1:], 0, plot_start_s)
+                plot_loudness = np.insert(loudness[1:], 0, loudness[1])
+            else:
+                plot_time_s = np.insert(time_s, 0, plot_start_s)
+                plot_loudness = np.insert(loudness, 0, loudness[0])
+            end_time_s = None
+            if metadata.get("analysis_time_range_enabled", False):
+                try:
+                    end_time_s = float(metadata.get("analysis_source_end_s"))
+                except (TypeError, ValueError):
+                    end_time_s = None
+            sample_rate = getattr(self.data_struct, "sample_rate", None)
+            recorded_signal = getattr(self.data_struct, "store_wave_data", None)
+            try:
+                if end_time_s is None and sample_rate and recorded_signal is not None:
+                    end_time_s = len(recorded_signal) / float(sample_rate)
+            except (TypeError, ValueError, ZeroDivisionError):
+                end_time_s = None
+            if end_time_s is None:
+                try:
+                    frame_duration_s = float(metadata.get("frame_duration_s"))
+                    end_time_s = float(time_s[-1]) + frame_duration_s / 2.0
+                except (TypeError, ValueError):
+                    end_time_s = None
+            if (
+                end_time_s is not None
+                and np.isfinite(end_time_s)
+                and plot_time_s.size
+                and end_time_s > float(plot_time_s[-1])
+            ):
+                plot_time_s = np.append(plot_time_s, float(end_time_s))
+                plot_loudness = np.append(plot_loudness, float(plot_loudness[-1]))
+
+        self.analysis_plot.clear()
+        if plot_time_s.size and plot_loudness.size:
+            self.analysis_plot.plot(
+                plot_time_s,
+                plot_loudness,
+                pen=mkPen(color=(51, 196, 77), width=2),
+                name="Loudness",
+            )
+            self._apply_loudness_y_axis(loudness, advanced_cfg, curve_y_unit)
+        self.analysis_plot.setLabel("left", y_label)
+        self.analysis_plot.setLabel("bottom", "时间 (s)")
+        self.analysis_plot.showGrid(x=True, y=True)
+
+        payload = loud_result.display_payload or {}
+        title_parts = []
+        for card in payload.get("summary_cards", []) or []:
+            # The summed exceedance is shown on the N'(z) profile plot (in cSones),
+            # so keep it off the loudness-time curve title to avoid duplication.
+            if card.get("key") == "specific_loudness_summed_exceedance":
+                continue
+            value = card.get("value")
+            try:
+                finite_value = value is not None and np.isfinite(float(value))
+            except (TypeError, ValueError):
+                finite_value = False
+            if finite_value:
+                title_parts.append(f"{card.get('label', card.get('key'))}: {float(value):.3g} {card.get('unit', '')}")
+        if title_parts:
+            self.analysis_plot.setTitle(" | ".join(title_parts), size="14px", color="k")
+
+        if config:
+            self._draw_loudness_limit_lines(
+                self.analysis_plot,
+                config,
+                plot_time_s,
+            )
+
+        self._plot_specific_loudness_profile(loud_result, config or {})
+        self._plot_specific_loudness_heatmap(loud_result, config or {})
+
+    def _apply_loudness_y_axis(self, loudness: np.ndarray, advanced_cfg: dict, curve_y_unit: str):
+        finite = np.asarray(loudness, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return
+        y_max = float(np.max(finite))
+        if y_max <= 0.0:
+            return
+        unit = str(curve_y_unit or "sone").lower()
+        min_y_range = max(5.0, y_max * 0.08) if unit == "phon" else max(2.0, y_max * 0.12)
+        self.analysis_plot.getViewBox().setLimits(minYRange=min_y_range)
+        if not bool(advanced_cfg.get("curve_y_axis_zero_based", True)):
+            return
+        upper = y_max * 1.03
+        if upper <= y_max:
+            upper = y_max + 1.0
+        self.analysis_plot.getViewBox().setYRange(0.0, upper, padding=0.0)
+
+    def _apply_sharpness_y_axis(self, plot_widget, sharpness: np.ndarray):
+        finite = np.asarray(sharpness, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return
+        y_max = float(np.max(finite))
+        upper = max(2.0, y_max * 1.3)
+        view_box = plot_widget.getViewBox()
+        view_box.setYRange(0.0, upper, padding=0.0)
+
+    def _apply_roughness_y_axis(self, plot_widget, roughness: np.ndarray):
+        finite = np.asarray(roughness, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return
+        y_max = float(np.max(finite))
+        upper = max(0.5, y_max * 1.3)
+        view_box = plot_widget.getViewBox()
+        view_box.setYRange(0.0, upper, padding=0.0)
+
+    def _plot_specific_loudness_profile(self, loud_result, config=None):
+        self._remove_specific_loudness_profile()
+
+        curves = (loud_result.display_payload or {}).get("curves", []) or []
+        curve = next((item for item in curves if item.get("key") == "specific_loudness_profile"), None)
+        if not curve:
+            return
+
+        bark_axis = np.asarray(curve.get("x"), dtype=np.float64)
+        profile = np.asarray(curve.get("y"), dtype=np.float64)
+        if bark_axis.size == 0 or profile.size == 0:
+            return
+
+        plot_widget = pg.PlotWidget(background="white")
+        legend = plot_widget.addLegend(offset=(-10, 10))
+        legend.setParentItem(plot_widget.getPlotItem().getViewBox())
+        legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, 10))
+        plot_widget.plot(
+            bark_axis,
+            profile,
+            pen=mkPen(color=(238, 126, 33), width=2),
+            name="N'(z) measured",
+        )
+        ref_curve = self._draw_specific_loudness_ref_line(plot_widget, bark_axis, profile, config or {})
+        mode = str(curve.get("profile_mode", "steady_average") or "steady_average")
+        title = "特征响度曲线 N'(z)"
+        if mode == "max_loudness":
+            title += " - 最大响度时刻"
+        else:
+            title += " - 稳态平均"
+        exceedance_csones = self._specific_loudness_exceedance_csones(loud_result)
+        if exceedance_csones is not None:
+            title += f"  |  超限总量: {exceedance_csones:.2f} cSones"
+        plot_widget.setTitle(title, size="14px", color="k")
+        plot_widget.setLabel("left", "N' (sone/Bark)")
+        plot_widget.setLabel("bottom", "Bark")
+        self.apply_plot_font_style(plot_widget, 20)
+        plot_widget.showGrid(x=True, y=True)
+        finite = profile[np.isfinite(profile)]
+        candidates = [float(np.max(finite))] if finite.size else []
+        if ref_curve is not None and ref_curve.size:
+            ref_finite = ref_curve[np.isfinite(ref_curve)]
+            if ref_finite.size:
+                candidates.append(float(np.max(ref_finite)))
+        if candidates:
+            y_max = max(candidates)
+            plot_widget.getViewBox().setYRange(0.0, max(0.1, y_max * 1.15), padding=0.0)
+        self.specific_loudness_profile_widget = plot_widget
+        self.layout().addWidget(plot_widget)
+
+    @staticmethod
+    def _specific_loudness_exceedance_csones(loud_result):
+        """Return the summed specific-loudness exceedance in cSones (0.01 sone), or None.
+
+        The value is computed by the service layer in sone; centi-sones makes the
+        small exceedance numbers easier to read on the plot title.
+        """
+        payload = loud_result.display_payload or {}
+        for card in payload.get("summary_cards", []) or []:
+            if card.get("key") != "specific_loudness_summed_exceedance":
+                continue
+            value = card.get("value")
+            try:
+                value_sone = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(value_sone):
+                return None
+            return value_sone * 100.0
+        return None
+
+    @staticmethod
+    def _draw_specific_loudness_ref_line(plot_widget, bark_axis, profile, config):
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        ref_key = str(advanced_cfg.get("specific_loudness_exceedance_ref_line", "") or "").lower()
+        try:
+            from base.core_algorithm.sound_quality.psychoacoustic_constants import (
+                SSTS_SPECIFIC_LOUDNESS_REF_LINES,
+            )
+            from base.core_algorithm.sound_quality.service import interpolate_ref_line
+        except ImportError:
+            return None
+        if ref_key not in SSTS_SPECIFIC_LOUDNESS_REF_LINES:
+            return None
+        ref_curve = interpolate_ref_line(bark_axis, SSTS_SPECIFIC_LOUDNESS_REF_LINES[ref_key])
+        ref_label = f"Ref {ref_key[-1]} limit"
+        plot_widget.plot(
+            bark_axis,
+            ref_curve,
+            pen=mkPen(color=(214, 39, 40), width=2, style=Qt.DashLine),
+            name=ref_label,
+        )
+        excess = np.maximum(profile - ref_curve, 0.0)
+        if np.any(excess > 0.0):
+            fill_top = pg.PlotDataItem(bark_axis, np.maximum(profile, ref_curve))
+            fill_bottom = pg.PlotDataItem(bark_axis, ref_curve)
+            fill = pg.FillBetweenItem(fill_top, fill_bottom, brush=(214, 39, 40, 70))
+            plot_widget.addItem(fill)
+        return ref_curve
+
+    def _remove_specific_loudness_profile(self):
+        if self.specific_loudness_profile_widget is None:
+            return
+        try:
+            self.layout().removeWidget(self.specific_loudness_profile_widget)
+            self.specific_loudness_profile_widget.deleteLater()
+        finally:
+            self.specific_loudness_profile_widget = None
+
+    def _plot_specific_loudness_heatmap(self, loud_result, config: dict):
+        self._remove_specific_loudness_heatmap()
+
+        heatmaps = (loud_result.display_payload or {}).get("heatmaps", []) or []
+        heatmap = next((item for item in heatmaps if item.get("key") == "specific_loudness"), None)
+        if not heatmap:
+            return
+
+        time_s = np.asarray(heatmap.get("x"), dtype=np.float64)
+        bark_axis = np.asarray(heatmap.get("y"), dtype=np.float64)
+        specific = np.asarray(heatmap.get("z"), dtype=np.float64)
+        if time_s.size < 2 or bark_axis.size < 2 or specific.size == 0:
+            return
+
+        advanced_cfg = config.get("advanced", {}) or {}
+        colormap = str(advanced_cfg.get("specific_loudness_colormap", "viridis") or "viridis")
+        z = specific.T if specific.shape[0] == bark_axis.size else specific
+        self.specific_loudness_widget, self.specific_loudness_colorbar = plot_2d_image(
+            x=time_s,
+            y=bark_axis,
+            z=z,
+            title="特征响度 N'(z, t) [sone/Bark]",
+            xlabel="时间 (s)",
+            ylabel="Bark",
+            colormap=colormap,
+            x_range=(float(time_s.min()), float(time_s.max())),
+            y_range=(float(bark_axis.min()), float(bark_axis.max())),
+            background_color="white",
+        )
+        heatmap_plot = self.specific_loudness_widget.findChild(pg.PlotWidget)
+        if heatmap_plot is not None:
+            heatmap_plot.setTitle("特征响度 N'(z, t) [sone/Bark]", size="14px", color="k")
+            self.apply_plot_font_style(heatmap_plot, 20)
+        self.layout().addWidget(self.specific_loudness_widget)
+
+    def _remove_specific_loudness_heatmap(self):
+        if self.specific_loudness_widget is None:
+            return
+        try:
+            self.layout().removeWidget(self.specific_loudness_widget)
+            self.specific_loudness_widget.deleteLater()
+        finally:
+            self.specific_loudness_widget = None
+            self.specific_loudness_colorbar = None
+
+    def _apply_loudness_limits(self, loud_result, config: dict):
+        if not bool(config.get("limit_checked", False)):
+            return
+
+        raw = getattr(loud_result, "raw_result", None)
+        if raw is None:
+            self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
+            return
+
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        limit_metric = str(config.get("limit_metric", "curve_y") or "curve_y").lower()
+
+        if limit_metric == "steady_state_average":
+            self._apply_loudness_scalar_limit(loud_result, config, metric="steady_state_average")
+        elif limit_metric == "max_transient":
+            self._apply_loudness_scalar_limit(loud_result, config, metric="max_transient")
+        elif limit_metric == "specific_loudness_summed_exceedance":
+            self._apply_loudness_scalar_limit(loud_result, config, metric="specific_loudness_summed_exceedance")
+        else:
+            self._apply_loudness_curve_limit(raw, config, advanced_cfg)
+
+    def _apply_loudness_scalar_limit(self, loud_result, config: dict, metric: str):
+        """Apply limit check on a single scalar metric value."""
+        summary = getattr(loud_result, "summary", None) or {}
+        advanced_cfg = (config or {}).get("advanced", {}) or {}
+        curve_unit = str(
+            config.get("curve_limit_unit")
+            or advanced_cfg.get("curve_y_unit", "sone")
+            or "sone"
+        ).lower()
+        if metric == "steady_state_average":
+            if curve_unit == "phon":
+                value = summary.get("steady_state_average_phon", summary.get("mean_phon"))
+            else:
+                value = summary.get("steady_state_average_sone", summary.get("mean_sone"))
+        elif metric == "max_transient":
+            if curve_unit == "phon":
+                value = summary.get("max_transient_phon", summary.get("lnmax_phon"))
+            else:
+                value = summary.get("max_transient_sone", summary.get("nmax_sone"))
+        elif metric == "specific_loudness_summed_exceedance":
+            value = summary.get("specific_loudness_summed_exceedance")
+        else:
+            value = None
+
+        if value is None or not np.isfinite(float(value)):
+            self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
+            return
+
+        value = float(value)
+        upper_enabled = bool(
+            config.get(
+                "scalar_upper_enabled",
+                config.get("curve_upper_enabled", False),
+            )
+        )
+        upper_limit = float(
+            config.get(
+                "scalar_upper_value",
+                config.get("curve_upper_value", 0.0),
+            )
+            or 0.0
+        )
+        lower_enabled = bool(
+            config.get(
+                "scalar_lower_enabled",
+                config.get("curve_lower_enabled", False),
+            )
+        )
+        lower_limit = float(
+            config.get(
+                "scalar_lower_value",
+                config.get("curve_lower_value", 0.0),
+            )
+            or 0.0
+        )
+
+        deviations = []
+        if upper_enabled and value > upper_limit:
+            deviations.append(value - upper_limit)
+        if lower_enabled and value < lower_limit:
+            deviations.append(lower_limit - value)
+
+        deviation = float(max(deviations)) if deviations else 0.0
+        self._merge_analysis_limit_result(deviation == 0.0, deviation)
+
+    def _apply_loudness_curve_limit(self, raw, config: dict, advanced_cfg: dict):
+        """Apply per-point limit check on the loudness time curve."""
+        curve_y_unit = str(
+            config.get("curve_limit_unit")
+            or advanced_cfg.get("curve_y_unit", "sone")
+            or "sone"
+        ).lower()
+        if curve_y_unit == "phon":
+            values = np.asarray(raw.loudness_level_phon, dtype=np.float64)
+        else:
+            values = np.asarray(raw.loudness_sone, dtype=np.float64)
+        raw_time = getattr(raw, "time_s", None)
+        if raw_time is None:
+            target_x = np.arange(values.size, dtype=np.float64)
+        else:
+            target_x = self._loudness_display_time_axis(raw)
+        point_count = min(values.size, target_x.size)
+        values = values[:point_count]
+        target_x = target_x[:point_count]
+        finite = np.isfinite(values) & np.isfinite(target_x)
+        values = values[finite]
+        target_x = target_x[finite]
+        if values.size == 0:
+            self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
+            return
+
+        try:
+            upper_limits, lower_limits = self._resolve_loudness_curve_limits(
+                config,
+                target_x,
+            )
+        except (ManualLimitValidationError, TypeError, ValueError):
+            self.data_struct.analysis_result_dict[self.title_name] = (
+                False,
+                float("nan"),
+            )
+            return
+        valid_mask = np.isfinite(values) & (
+            np.isfinite(upper_limits) | np.isfinite(lower_limits)
+        )
+        _out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+            values,
+            upper_limits,
+            lower_limits,
+            valid_mask,
+        )
+        self._merge_analysis_limit_result(is_ok, deviation)
+
+    @classmethod
+    def _resolve_loudness_curve_limits(cls, config: dict, target_x):
+        resolved_config = cls._loudness_curve_limit_config(config)
+        limit_mode = str(
+            resolved_config.get("limit_mode", "manual") or "manual"
+        ).lower()
+        if limit_mode == "manual":
+            _, upper_values, lower_values = limits_from_manual_config(
+                resolved_config,
+                target_x,
+            )
+            upper_limits = np.asarray(upper_values, dtype=np.float64)
+            lower_limits = np.asarray(lower_values, dtype=np.float64)
+        elif limit_mode == "csv":
+            limit_data = resolved_config.get("limit_data")
+            if not limit_data:
+                raise ValueError("已启用阈值，但未加载 CSV 配置文件")
+            try:
+                csv_x, csv_upper, csv_lower = limit_data
+            except (TypeError, ValueError) as exc:
+                raise ValueError("CSV 阈值数据格式不正确") from exc
+            upper_limits = cls._interpolate_loudness_limit_side(
+                target_x,
+                csv_x,
+                csv_upper,
+            )
+            lower_limits = cls._interpolate_loudness_limit_side(
+                target_x,
+                csv_x,
+                csv_lower,
+            )
+        else:
+            raise ValueError(f"不支持的阈值模式: {limit_mode}")
+
+        overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
+        if np.any(lower_limits[overlap] > upper_limits[overlap]):
+            raise ValueError("下限不能大于上限")
+        if not np.any(np.isfinite(upper_limits)) and not np.any(
+            np.isfinite(lower_limits)
+        ):
+            raise ValueError("当前时间范围内没有可用的上下限")
+        return upper_limits, lower_limits
+
+    @staticmethod
+    def _loudness_curve_limit_config(config: dict) -> dict:
+        if "limit_mode" in config:
+            return config
+        adapted = dict(config)
+        adapted.update(
+            {
+                "limit_mode": "manual",
+                "manual_input_mode": "constant",
+                "constant_upper_enabled": bool(
+                    config.get(
+                        "curve_upper_enabled",
+                        config.get(
+                            "mean_upper_enabled",
+                            config.get("nmax_upper_enabled", False),
+                        ),
+                    )
+                ),
+                "constant_upper_value": config.get(
+                    "curve_upper_value",
+                    config.get("mean_upper_sone", config.get("nmax_upper_sone", 0.0)),
+                ),
+                "constant_lower_enabled": bool(
+                    config.get(
+                        "curve_lower_enabled",
+                        config.get(
+                            "mean_lower_enabled",
+                            config.get("nmax_lower_enabled", False),
+                        ),
+                    )
+                ),
+                "constant_lower_value": config.get(
+                    "curve_lower_value",
+                    config.get("mean_lower_sone", config.get("nmax_lower_sone", 0.0)),
+                ),
+            }
+        )
+        return adapted
+
+    @staticmethod
+    def _interpolate_loudness_limit_side(target_x, raw_x, raw_values):
+        x_values = np.asarray(list(raw_x), dtype=np.float64)
+        side_values = np.asarray(list(raw_values), dtype=np.float64)
+        if x_values.size != side_values.size:
+            raise ValueError("CSV 阈值数据长度不一致")
+
+        finite = np.isfinite(x_values) & np.isfinite(side_values)
+        output = np.full(
+            np.asarray(target_x).shape,
+            np.nan,
+            dtype=np.float64,
+        )
+        if not np.any(finite):
+            return output
+
+        points = {
+            float(x_value): float(side_value)
+            for x_value, side_value in zip(
+                x_values[finite],
+                side_values[finite],
+            )
+        }
+        sorted_x = np.asarray(sorted(points), dtype=np.float64)
+        sorted_values = np.asarray(
+            [points[x_value] for x_value in sorted_x],
+            dtype=np.float64,
+        )
+        target_values = np.asarray(target_x, dtype=np.float64)
+        in_range = (
+            (target_values >= sorted_x[0])
+            & (target_values <= sorted_x[-1])
+        )
+        if np.any(in_range):
+            output[in_range] = np.interp(
+                target_values[in_range],
+                sorted_x,
+                sorted_values,
+            )
+        return output
+
+    @classmethod
+    def _draw_loudness_limit_lines(cls, plot_widget, config: dict, target_x):
+        """Draw configured curve limits for per-point loudness judgment."""
+        if not bool(config.get("limit_checked", False)):
+            return
+        if str(config.get("limit_metric", "curve_y") or "curve_y").lower() != "curve_y":
+            return
+        target_x = np.asarray(target_x, dtype=np.float64)
+        if target_x.size == 0:
+            return
+        try:
+            upper_limits, lower_limits = cls._resolve_loudness_curve_limits(
+                config,
+                target_x,
+            )
+        except (ManualLimitValidationError, TypeError, ValueError):
+            return
+
+        colors = resolve_curve_colors(config)
+        if np.any(np.isfinite(upper_limits)):
+            plot_widget.plot(
+                target_x,
+                upper_limits,
+                pen=mkPen(
+                    color=colors[UPPER_LIMIT_COLOR],
+                    width=2,
+                    style=Qt.DashLine,
+                ),
+                name="Upper Limit",
+            )
+        if np.any(np.isfinite(lower_limits)):
+            plot_widget.plot(
+                target_x,
+                lower_limits,
+                pen=mkPen(
+                    color=colors[LOWER_LIMIT_COLOR],
+                    width=2,
+                    style=Qt.DashLine,
+                ),
+                name="Lower Limit",
+            )
+
+    def _merge_analysis_limit_result(self, is_ok: bool, deviation: float):
+        existing = self.data_struct.analysis_result_dict.get(self.title_name)
+        if not isinstance(existing, (tuple, list)) or len(existing) < 2:
+            self.data_struct.analysis_result_dict[self.title_name] = (bool(is_ok), float(deviation))
+            return
+
+        existing_ok = bool(existing[0])
+        try:
+            existing_deviation = float(existing[1])
+        except (TypeError, ValueError):
+            existing_deviation = float("nan")
+
+        if np.isfinite(existing_deviation) and np.isfinite(float(deviation)):
+            merged_deviation = max(existing_deviation, float(deviation))
+        elif np.isfinite(existing_deviation):
+            merged_deviation = existing_deviation
+        else:
+            merged_deviation = float(deviation)
+        self.data_struct.analysis_result_dict[self.title_name] = (existing_ok and bool(is_ok), merged_deviation)
 
 
 if __name__ == "__main__":

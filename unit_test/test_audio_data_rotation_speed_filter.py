@@ -40,6 +40,9 @@ def _find_rotation_speed_combobox(dialog):
 def test_extract_rotation_speed_requires_explicit_rpm_marker():
     assert extract_rotation_speed("S004-1_2026-07-31_6000rpm.wav") == 6000
     assert extract_rotation_speed(r"C:\audio\S004-1_7000_RPM.wav") == 7000
+    assert extract_rotation_speed(
+        "2026-08-04-14-32-15_BCSN240727018_S004-1_6000_rpm_107C610BB999.wav"
+    ) == 6000
     assert extract_rotation_speed("S004-1_2026-07-31_107c610bb999.wav") is None
     assert extract_rotation_speed("S004-1_2026-07-31_6000.wav") is None
 
