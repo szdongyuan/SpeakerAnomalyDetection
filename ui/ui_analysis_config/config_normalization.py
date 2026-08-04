@@ -12,6 +12,7 @@ from typing import Any
 from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_CHECKED_KEY,
     GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+    GOLDEN_SAMPLE_DISPLAY_MODES_KEY,
     GOLDEN_SAMPLE_RESULT_PATH_KEY,
 )
 from consts.harmonic_detection_consts import HARMONIC_DETECTION_METHOD_KEY
@@ -66,6 +67,7 @@ CONFIG_CONCEPTS = {
             GOLDEN_SAMPLE_CHECKED_KEY,
             GOLDEN_SAMPLE_RESULT_PATH_KEY,
             GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+            GOLDEN_SAMPLE_DISPLAY_MODES_KEY,
         ),
     },
     "harmonic_selection": {

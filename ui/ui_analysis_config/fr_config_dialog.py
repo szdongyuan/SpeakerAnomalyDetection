@@ -63,6 +63,8 @@ class FrConfigWindow(SemanticAnalysisConfigDialogBase):
     def on_default_btn_clicked(self):
         if not self.validate_plot_view_config():
             return
+        if not self.golden_chk_box.validate():
+            return
         if not self.threshold_widget.validate():
             return
         config_data = self.get_default_config()
@@ -76,6 +78,8 @@ class FrConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def on_click_ok_btn(self):
         if not self.validate_plot_view_config():
+            return
+        if not self.golden_chk_box.validate():
             return
         if not self.threshold_widget.validate():
             return

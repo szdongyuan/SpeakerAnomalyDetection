@@ -766,12 +766,18 @@ def test_analysis_graph_show_event_applies_plot_view_only_once():
     show_event = next(
         node for node in source_class.body if isinstance(node, ast.FunctionDef) and node.name == "showEvent"
     )
+    apply_policy = next(
+        node
+        for node in source_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_apply_plot_view_range_policy"
+    )
 
     test_class = ast.ClassDef(
         name="TestAnalysisGraphWidget",
         bases=[ast.Name(id="FakeBase", ctx=ast.Load())],
         keywords=[],
-        body=[show_event],
+        body=[apply_policy, show_event],
         decorator_list=[],
     )
     module = ast.Module(body=[test_class], type_ignores=[])
@@ -784,12 +790,16 @@ def test_analysis_graph_show_event_applies_plot_view_only_once():
             self._plot_view_initial_checked = False
             self.analysis_config = {"display": {"plot_view": {"x_enabled": True}}}
             self.analysis_plot = object()
+            self.golden_plot_widgets = {}
             self.plot_view_allow_x = True
             self.plot_view_allow_y = True
             self.super_events = []
 
         def showEvent(self, event):
             self.super_events.append(event)
+
+        def iter_analysis_plots(self):
+            return (self.analysis_plot,)
 
     def fake_apply_plot_view_range(plot_widget, config, allow_x, allow_y):
         applied.append((plot_widget, config, allow_x, allow_y))

@@ -94,7 +94,7 @@ def test_curve_and_distortion_defaults_keep_legacy_threshold_and_golden_keys():
 
     for analysis_type in ("SPLF", "FR", "HD", "RB", "PRB"):
         assert defaults[analysis_type]["golden_sample_checked"] is False
-        assert defaults[analysis_type]["golden_sample_display_mode"] == "deviation"
+        assert defaults[analysis_type]["golden_sample_display_modes"] == ["deviation"]
 
 
 def test_manual_segment_enabled_defaults_have_stable_schema_without_scalar_keys():

@@ -9,25 +9,47 @@ import numpy as np
 
 from consts.acoustic_analysis.common_consts import (
     DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE,
+    DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODES,
     GOLDEN_SAMPLE_CHECKED_KEY,
     GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
     GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+    GOLDEN_SAMPLE_DISPLAY_MODES,
+    GOLDEN_SAMPLE_DISPLAY_MODES_KEY,
 )
 
 
-def normalize_golden_sample_display_mode(analysis_config: Mapping[str, Any] | None) -> str:
+def normalize_golden_sample_display_modes(
+    analysis_config: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
     if not isinstance(analysis_config, Mapping):
-        return DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE
-    mode = str(
-        analysis_config.get(
-            GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
-            DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE,
-        )
-        or DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE
-    ).lower()
-    if mode == GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
-        return mode
-    return DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE
+        return DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODES
+
+    raw_modes = analysis_config.get(GOLDEN_SAMPLE_DISPLAY_MODES_KEY)
+    if isinstance(raw_modes, list):
+        selected = {
+            value
+            for value in raw_modes
+            if isinstance(value, str) and value in GOLDEN_SAMPLE_DISPLAY_MODES
+        }
+        if selected:
+            return tuple(
+                mode for mode in GOLDEN_SAMPLE_DISPLAY_MODES if mode in selected
+            )
+
+    legacy_mode = analysis_config.get(
+        GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+        DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODE,
+    )
+    if legacy_mode == GOLDEN_SAMPLE_DISPLAY_ENVELOPE:
+        return (GOLDEN_SAMPLE_DISPLAY_ENVELOPE,)
+    return DEFAULT_GOLDEN_SAMPLE_DISPLAY_MODES
+
+
+def normalize_golden_sample_display_mode(
+    analysis_config: Mapping[str, Any] | None,
+) -> str:
+    modes = normalize_golden_sample_display_modes(analysis_config)
+    return modes[0]
 
 
 def has_valid_golden_overlap(baseline_aligned, current_y=None) -> bool:
@@ -63,7 +85,8 @@ def is_invalid_golden_envelope_limit_comparison(
     envelope_limit_enabled = (
         bool(analysis_config.get(GOLDEN_SAMPLE_CHECKED_KEY))
         and bool(analysis_config.get("limit_checked"))
-        and normalize_golden_sample_display_mode(analysis_config) == GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+        and GOLDEN_SAMPLE_DISPLAY_ENVELOPE
+        in normalize_golden_sample_display_modes(analysis_config)
     )
     return envelope_limit_enabled and not has_valid_golden_overlap(baseline_aligned, current_y)
 
