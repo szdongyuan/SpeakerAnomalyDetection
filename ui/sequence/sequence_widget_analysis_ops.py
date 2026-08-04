@@ -1369,6 +1369,12 @@ class SequenceWidgetAnalysisOpsMixin:
                             continue
                         if show_windows:
                             instance.show()
+                    elif hasattr(instance, "calculate_loudness"):
+                        result = instance.calculate_loudness()
+                        if not result:
+                            continue
+                        if show_windows:
+                            instance.show()
                     elif hasattr(instance, "calculate_fft"):
                         result = instance.calculate_fft()
                         if not result:
