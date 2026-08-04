@@ -1,4 +1,4 @@
-"""Pure helpers for manual upper/lower limit line segments."""
+"""Pure helpers for manual upper/lower limit values and line segments."""
 
 from __future__ import annotations
 
@@ -67,6 +67,29 @@ def validate_manual_limit_config(
     _normalized_enabled_segments(config, value_semantics=value_semantics)
 
 
+def validate_constant_limit_config(config: dict) -> None:
+    _normalized_constant_limits(config)
+
+
+def limits_from_constant_values(
+    config: dict,
+    target_x,
+) -> tuple[list[float], list[float], list[float]]:
+    upper_enabled, lower_enabled, upper_value, lower_value = _normalized_constant_limits(config)
+    x_values = np.asarray(target_x, dtype=float)
+    upper_values = np.full(
+        x_values.shape,
+        upper_value if upper_enabled else np.nan,
+        dtype=float,
+    )
+    lower_values = np.full(
+        x_values.shape,
+        lower_value if lower_enabled else np.nan,
+        dtype=float,
+    )
+    return x_values.tolist(), upper_values.tolist(), lower_values.tolist()
+
+
 def limits_from_manual_segments(
     config: dict,
     target_x,
@@ -87,6 +110,64 @@ def limits_from_manual_segments(
         _apply_segments(lower_values, x_values, lower_segments)
 
     return x_values.tolist(), upper_values.tolist(), lower_values.tolist()
+
+
+def limits_from_manual_config(
+    config: dict,
+    target_x,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> tuple[list[float], list[float], list[float]]:
+    input_mode = str(
+        config.get("manual_input_mode", "segments") or "segments"
+    ).lower()
+    if input_mode == "constant":
+        return limits_from_constant_values(config, target_x)
+    if input_mode == "segments":
+        return limits_from_manual_segments(
+            config,
+            target_x,
+            value_semantics=value_semantics,
+        )
+    raise ManualLimitValidationError(
+        f"不支持的手动阈值输入方式: {input_mode}"
+    )
+
+
+def _normalized_constant_limits(config: dict | None):
+    config = config or {}
+    upper_enabled = bool(config.get("constant_upper_enabled", True))
+    lower_enabled = bool(config.get("constant_lower_enabled", False))
+    if not upper_enabled and not lower_enabled:
+        raise ManualLimitValidationError("固定上下限至少需要启用一个")
+
+    upper_value = None
+    lower_value = None
+    if upper_enabled:
+        upper_value = _finite_constant_value(
+            config.get("constant_upper_value"),
+            label="上限",
+        )
+    if lower_enabled:
+        lower_value = _finite_constant_value(
+            config.get("constant_lower_value"),
+            label="下限",
+        )
+    if upper_enabled and lower_enabled and lower_value > upper_value:
+        raise ManualLimitValidationError("固定上下限配置错误：下限不能大于上限")
+    return upper_enabled, lower_enabled, upper_value, lower_value
+
+
+def _finite_constant_value(raw_value, *, label: str) -> float:
+    if isinstance(raw_value, (bool, np.bool_)):
+        raise ManualLimitValidationError(f"{label}必须是有限数字")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ManualLimitValidationError(f"{label}必须是有限数字") from exc
+    if not math.isfinite(value):
+        raise ManualLimitValidationError(f"{label}必须是有限数字")
+    return value
 
 
 def _normalized_enabled_segments(

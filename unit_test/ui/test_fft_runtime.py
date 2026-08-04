@@ -268,3 +268,22 @@ def test_fft_csv_limits_only_apply_inside_defined_frequency_range(
     assert np.allclose(lower[1:4], [0.0, 2.5, 5.0])
     assert np.isnan(lower[4])
     assert signal_module.get_class_mapping()["FFT"] is signal_module.FftAnalysis
+
+
+def test_fft_resolves_constant_manual_limits(signal_module):
+    target_x = np.asarray([100.0, 1000.0, 2000.0])
+
+    upper, lower = signal_module.FftAnalysis._resolve_limits(
+        {
+            "limit_mode": "manual",
+            "manual_input_mode": "constant",
+            "constant_upper_enabled": True,
+            "constant_lower_enabled": True,
+            "constant_upper_value": 90.0,
+            "constant_lower_value": 20.0,
+        },
+        target_x,
+    )
+
+    assert np.allclose(upper, [90.0, 90.0, 90.0])
+    assert np.allclose(lower, [20.0, 20.0, 20.0])

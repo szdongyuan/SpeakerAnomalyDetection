@@ -104,6 +104,9 @@ def test_fba_config_uses_manual_limits_curve_colors_and_y_plot_range(qapp):
         "judgment",
     ]
     assert dialog.threshold_widget.allow_manual_limits is True
+    assert dialog.threshold_widget.allow_constant_limits is True
+    assert dialog.threshold_widget.manual_input_combo.itemText(0) == "编辑曲线"
+    assert dialog.threshold_widget.manual_input_combo.itemText(1) == "固定值"
     assert dialog.curve_color_widget is not None
 
     dialog.plot_view_config_widget.y_enabled_checkbox.setChecked(True)
@@ -113,6 +116,7 @@ def test_fba_config_uses_manual_limits_curve_colors_and_y_plot_range(qapp):
 
     assert config["analysis_channel"] == 1
     assert config["limit_mode"] == "csv"
+    assert config["manual_input_mode"] == "segments"
     assert config["manual_upper_segments"] == []
     assert config["display"]["main_curve_color"].startswith("#")
     assert config["display"]["plot_view"] == {
@@ -121,6 +125,29 @@ def test_fba_config_uses_manual_limits_curve_colors_and_y_plot_range(qapp):
         "y_min": -20.0,
         "y_max": 120.0,
     }
+    dialog.close()
+
+
+def test_fba_fixed_value_threshold_layout_is_not_clipped(qapp):
+    dialog = FbaConfigWindow(
+        _manager(),
+        "频段能量 (FBA) 1",
+        available_channels=[0, 1],
+    )
+    threshold = dialog.threshold_widget
+    threshold.limit_checkbox.setChecked(True)
+    threshold.manual_mode_radio.setChecked(True)
+    threshold.manual_input_combo.setCurrentIndex(
+        threshold.manual_input_combo.findData("constant")
+    )
+    dialog.resize(700, 860)
+    dialog.show()
+    qapp.processEvents()
+
+    assert threshold.current_manual_input_mode() == "constant"
+    assert threshold.constant_widget.isVisible() is True
+    assert threshold.maximumHeight() >= threshold.sizeHint().height()
+    assert threshold.limit_group_box.geometry().bottom() < threshold.height()
     dialog.close()
 
 

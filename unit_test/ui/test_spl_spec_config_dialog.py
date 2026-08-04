@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -10,6 +11,7 @@ from PyQt5.QtWidgets import QApplication
 import pyqtgraph as pg
 
 from ui.graph_widget import LimitPlotUtils
+from ui.operation_sequence import OptionList
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 
@@ -57,7 +59,8 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
         "judgment",
     ]
     assert dialog.channel_selector.current_channel() == 1
-    assert dialog.threshold_widget.allow_manual_limits is False
+    assert dialog.threshold_widget.allow_manual_limits is True
+    assert dialog.threshold_widget.allow_constant_limits is True
     assert dialog.curve_color_widget is not None
     assert dialog.show_overall_spl_box.text() == "显示总体声压级"
     assert dialog.show_overall_spl_box.isChecked() is True
@@ -77,7 +80,12 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert config["show_overall_spl"] is True
     assert config["smooth_checked"] is True
     assert config["limit_checked"] is False
-    assert "limit_mode" not in config
+    assert config["limit_mode"] == "csv"
+    assert config["manual_input_mode"] == "constant"
+    assert config["constant_upper_enabled"] is True
+    assert config["constant_lower_enabled"] is False
+    assert config["manual_upper_segments"] == []
+    assert config["manual_lower_segments"] == []
     assert config["display"]["main_curve_color"].startswith("#")
     assert config["display"]["plot_view"]["x_enabled"] is True
     assert config["display"]["plot_view"]["x_min"] == 0.1
@@ -117,7 +125,231 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     assert config["octave_smoothing"] == 3
     assert config["golden_sample_checked"] is True
     assert "show_overall_spl" not in config
+    assert config["limit_mode"] == "csv"
+    assert dialog.threshold_widget.allow_manual_limits is True
+    assert dialog.threshold_widget.allow_constant_limits is True
     dialog.close()
+
+
+def test_spl_manual_setting_exposes_constant_and_segment_submodes(qapp):
+    dialog = SplConfigWindow(
+        _ConfigManager({"SPL": {"limit_checked": False}}),
+        "SPL",
+        available_channels=[0],
+    )
+    threshold = dialog.threshold_widget
+
+    threshold.limit_checkbox.setChecked(True)
+    threshold.manual_mode_radio.setChecked(True)
+    dialog.show()
+    qapp.processEvents()
+
+    assert threshold.manual_mode_radio.text() == "手动设置"
+    assert threshold.manual_input_label.text() == "手动方式："
+    assert threshold.manual_input_combo.count() == 2
+    assert threshold.manual_input_combo.itemText(0) == "编辑曲线"
+    assert threshold.manual_input_combo.itemData(0) == "segments"
+    assert threshold.manual_input_combo.itemText(1) == "固定值"
+    assert threshold.manual_input_combo.itemData(1) == "constant"
+    assert threshold.manual_input_combo.currentData() == "constant"
+    input_layout = threshold.manual_widget.layout().itemAt(0).layout()
+    assert input_layout.indexOf(threshold.manual_input_label) == 0
+    assert input_layout.indexOf(threshold.manual_input_combo) == 1
+    assert input_layout.indexOf(threshold.manual_edit_button) == 2
+    assert threshold.constant_widget.isHidden() is False
+    assert threshold.manual_edit_button.isHidden() is True
+
+    threshold.manual_input_combo.setCurrentIndex(
+        threshold.manual_input_combo.findData("segments")
+    )
+    qapp.processEvents()
+    assert threshold.constant_widget.isVisible() is False
+    assert threshold.manual_edit_button.isVisible() is True
+
+    threshold.manual_input_combo.setCurrentIndex(
+        threshold.manual_input_combo.findData("constant")
+    )
+    qapp.processEvents()
+    assert threshold.constant_widget.isVisible() is True
+    assert threshold.manual_edit_button.isVisible() is False
+
+    threshold.constant_upper_spin.setValue(88.5)
+    threshold.constant_lower_check.setChecked(True)
+    threshold.constant_lower_spin.setValue(35.0)
+    config = threshold.get_config()
+
+    assert config["limit_mode"] == "manual"
+    assert config["manual_input_mode"] == "constant"
+    assert config["constant_upper_enabled"] is True
+    assert config["constant_upper_value"] == pytest.approx(88.5)
+    assert config["constant_lower_enabled"] is True
+    assert config["constant_lower_value"] == pytest.approx(35.0)
+    assert threshold.validate() is True
+    dialog.close()
+
+
+def test_spl_legacy_manual_config_without_submode_keeps_segments(qapp):
+    segment = {
+        "start_x": 0.0,
+        "start_y": 80.0,
+        "end_x": 1.0,
+        "end_y": 80.0,
+    }
+    dialog = SplConfigWindow(
+        _ConfigManager(
+            {
+                "SPL": {
+                    "limit_checked": True,
+                    "limit_mode": "manual",
+                    "manual_upper_enabled": True,
+                    "manual_lower_enabled": False,
+                    "manual_upper_segments": [segment],
+                    "manual_lower_segments": [],
+                }
+            }
+        ),
+        "SPL",
+        available_channels=[0],
+    )
+    threshold = dialog.threshold_widget
+
+    assert threshold.manual_input_combo.currentData() == "segments"
+    assert threshold.get_config()["manual_input_mode"] == "segments"
+    assert threshold.get_config()["manual_upper_segments"] == [segment]
+    dialog.close()
+
+
+def test_spl_restore_default_keeps_legacy_manual_segments(qapp):
+    segment = {
+        "start_x": 0.0,
+        "start_y": 80.0,
+        "end_x": 1.0,
+        "end_y": 80.0,
+    }
+    manager = _ConfigManager(
+        {
+            "SPL": {
+                "limit_checked": True,
+                "limit_mode": "manual",
+                "manual_upper_enabled": True,
+                "manual_lower_enabled": False,
+                "manual_upper_segments": [segment],
+                "manual_lower_segments": [],
+            }
+        }
+    )
+    dialog = SplConfigWindow(manager, "SPL", available_channels=[0])
+
+    dialog.on_restore_default_btn_clicked()
+
+    assert dialog.threshold_widget.manual_input_combo.currentData() == "segments"
+    assert dialog.get_default_config()["manual_input_mode"] == "segments"
+    dialog.close()
+
+
+def test_spl_new_item_replaces_legacy_threshold_defaults(monkeypatch):
+    monkeypatch.setattr(
+        "ui.operation_sequence.LoadUiConfig.load_data_from_json",
+        lambda *_args, **_kwargs: (
+            0,
+            {
+                "SPL": {
+                    "smooth_checked": True,
+                    "limit_checked": True,
+                    "self_defined": True,
+                    "import_config": False,
+                    "upper_limit": "100",
+                    "lower_limit": "90",
+                    "config_dir": None,
+                }
+            },
+        ),
+    )
+    sequence_config = SimpleNamespace(analysis_list={})
+    fake_option_list = SimpleNamespace(
+        config=[sequence_config],
+        default_logger=SimpleNamespace(error=lambda *_args, **_kwargs: None),
+    )
+
+    OptionList.get_item_default_config(
+        fake_option_list,
+        "声压级 (SPL) ",
+        "声压级 (SPL) 1",
+    )
+
+    config = sequence_config.analysis_list["声压级 (SPL) 1"]
+    assert config["type"] == "SPL"
+    assert config["limit_checked"] is False
+    assert config["limit_mode"] == "csv"
+    assert config["limit_data"] is None
+    assert config["manual_upper_segments"] == []
+    assert config["manual_lower_segments"] == []
+    assert "upper_limit" not in config
+    assert "lower_limit" not in config
+
+
+def test_spl_new_item_uses_code_defaults_when_config_file_fails(monkeypatch):
+    monkeypatch.setattr(
+        "ui.operation_sequence.LoadUiConfig.load_data_from_json",
+        lambda *_args, **_kwargs: (1, "missing"),
+    )
+    sequence_config = SimpleNamespace(analysis_list={})
+    fake_option_list = SimpleNamespace(
+        config=[sequence_config],
+        default_logger=SimpleNamespace(error=lambda *_args, **_kwargs: None),
+    )
+
+    OptionList.get_item_default_config(
+        fake_option_list,
+        "声压级 (SPL) ",
+        "声压级 (SPL) 1",
+    )
+
+    config = sequence_config.analysis_list["声压级 (SPL) 1"]
+    assert config["type"] == "SPL"
+    assert config["limit_checked"] is False
+    assert config["limit_mode"] == "csv"
+    assert config["limit_data"] is None
+
+
+def test_spl_new_item_keeps_legacy_modern_manual_segments(monkeypatch):
+    segment = {
+        "start_x": 0.0,
+        "start_y": 80.0,
+        "end_x": 1.0,
+        "end_y": 80.0,
+    }
+    monkeypatch.setattr(
+        "ui.operation_sequence.LoadUiConfig.load_data_from_json",
+        lambda *_args, **_kwargs: (
+            0,
+            {
+                "SPL": {
+                    "limit_checked": True,
+                    "limit_mode": "manual",
+                    "manual_upper_enabled": True,
+                    "manual_lower_enabled": False,
+                    "manual_upper_segments": [segment],
+                    "manual_lower_segments": [],
+                }
+            },
+        ),
+    )
+    sequence_config = SimpleNamespace(analysis_list={})
+    fake_option_list = SimpleNamespace(
+        config=[sequence_config],
+        default_logger=SimpleNamespace(error=lambda *_args, **_kwargs: None),
+    )
+
+    OptionList.get_item_default_config(
+        fake_option_list,
+        "声压级 (SPL) ",
+        "声压级 (SPL) 1",
+    )
+
+    config = sequence_config.analysis_list["声压级 (SPL) 1"]
+    assert config["manual_input_mode"] == "segments"
+    assert config["manual_upper_segments"] == [segment]
 
 
 def test_spec_uses_semantic_sections_without_changing_analysis_contract(

@@ -104,6 +104,9 @@ def test_fft_config_uses_manual_limits_colors_and_plot_ranges(qapp):
         "judgment",
     ]
     assert dialog.threshold_widget.allow_manual_limits is True
+    assert dialog.threshold_widget.allow_constant_limits is True
+    assert dialog.threshold_widget.manual_input_combo.itemText(0) == "编辑曲线"
+    assert dialog.threshold_widget.manual_input_combo.itemText(1) == "固定值"
     assert dialog.curve_color_widget is not None
     assert dialog.baseline_path_edit.actions()[0].icon().isNull() is False
 
@@ -119,6 +122,7 @@ def test_fft_config_uses_manual_limits_colors_and_plot_ranges(qapp):
     assert config["analysis_channel"] == 1
     assert config["n_fft"] == 4096
     assert config["limit_mode"] == "csv"
+    assert config["manual_input_mode"] == "segments"
     assert config["manual_upper_segments"] == []
     assert config["display"]["main_curve_color"].startswith("#")
     assert config["display"]["plot_view"] == {

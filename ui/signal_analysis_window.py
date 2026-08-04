@@ -67,7 +67,7 @@ from ui.plot_view import apply_plot_view_range
 from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
-    limits_from_manual_segments,
+    limits_from_manual_config,
 )
 
 
@@ -207,6 +207,32 @@ def _abs_deviation_curve(x_current, y_current, x_base, y_base):
     in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
     interp = np.where(in_range, interp, np.nan)
     return (y_c - interp)
+
+
+def _sorted_finite_positive_x_for_limits(x_values, y_values):
+    x_arr = np.asarray(x_values, dtype=float)
+    y_arr = np.asarray(y_values, dtype=float)
+    mask = np.isfinite(x_arr) & np.isfinite(y_arr) & (x_arr > 0)
+    x_valid = x_arr[mask]
+    if x_valid.size > 1:
+        x_valid = x_valid[np.argsort(x_valid)]
+    return x_valid
+
+
+def _resolve_spl_limit_data(config, target_x):
+    limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
+    if limit_mode == "manual":
+        return limits_from_manual_config(config, target_x)
+    if limit_mode == "csv":
+        limit_data = config.get("limit_data")
+        if not limit_data:
+            raise ValueError("已启用阈值，但未加载 CSV 配置文件")
+        try:
+            limit_x, upper_limit, lower_limit = limit_data
+        except (TypeError, ValueError) as exc:
+            raise ValueError("CSV 阈值数据格式不正确") from exc
+        return limit_x, upper_limit, lower_limit
+    raise ValueError(f"不支持的阈值模式: {limit_mode}")
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -958,10 +984,20 @@ class Spl(AnalysisGraphWidget):
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
         limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
-            result = self.analysis_config.get("limit_data")
-            if not result:
+            try:
+                csv_time_list, csv_upper_list, csv_lower_list = (
+                    _resolve_spl_limit_data(
+                        self.analysis_config,
+                        signal_duration,
+                    )
+                )
+            except (ManualLimitValidationError, TypeError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"SPL 阈值配置无效: {str(exc)[:200]}",
+                )
                 return False
-            csv_time_list, csv_upper_list, csv_lower_list = result
             self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
@@ -1173,10 +1209,29 @@ class SplFrequency(AnalysisGraphWidget):
 
         limit_checked = analysis_config.get("limit_checked")
         if limit_checked:
-            result = analysis_config.get("limit_data")
-            if not result:
+            limit_mode = str(
+                analysis_config.get("limit_mode", "csv") or "csv"
+            ).lower()
+            limit_x = frequency_list
+            if limit_mode == "manual":
+                limit_x = _sorted_finite_positive_x_for_limits(
+                    frequency_list,
+                    spl_db,
+                )
+            try:
+                csv_freq_list, csv_upper_list, csv_lower_list = (
+                    _resolve_spl_limit_data(
+                        analysis_config,
+                        limit_x,
+                    )
+                )
+            except (ManualLimitValidationError, TypeError, ValueError) as exc:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"SPLF 阈值配置无效: {str(exc)[:200]}",
+                )
                 return False
-            csv_freq_list, csv_upper_list, csv_lower_list = result
             self.plot_spl_frequency_with_limits(frequency_list, spl_db, csv_freq_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl_frequency(frequency_list, spl_db)
@@ -2890,7 +2945,7 @@ class FftAnalysis(AnalysisGraphWidget):
             config.get("limit_mode", "csv") or "csv"
         ).lower()
         if limit_mode == "manual":
-            _, upper_values, lower_values = limits_from_manual_segments(
+            _, upper_values, lower_values = limits_from_manual_config(
                 config,
                 target_x,
             )
@@ -3233,7 +3288,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
     def _resolve_limits(cls, config, centers):
         limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
         if limit_mode == "manual":
-            _, upper_values, lower_values = limits_from_manual_segments(
+            _, upper_values, lower_values = limits_from_manual_config(
                 config,
                 centers,
             )
@@ -3705,7 +3760,11 @@ class LoudnessAnalysis(AnalysisGraphWidget):
             self.analysis_plot.setTitle(" | ".join(title_parts), size="14px", color="k")
 
         if config:
-            self._draw_loudness_limit_lines(self.analysis_plot, config)
+            self._draw_loudness_limit_lines(
+                self.analysis_plot,
+                config,
+                plot_time_s,
+            )
 
         self._plot_specific_loudness_profile(loud_result, config or {})
         self._plot_specific_loudness_heatmap(loud_result, config or {})
@@ -3952,10 +4011,32 @@ class LoudnessAnalysis(AnalysisGraphWidget):
             return
 
         value = float(value)
-        upper_enabled = bool(config.get("curve_upper_enabled", False))
-        upper_limit = float(config.get("curve_upper_value", 0.0) or 0.0)
-        lower_enabled = bool(config.get("curve_lower_enabled", False))
-        lower_limit = float(config.get("curve_lower_value", 0.0) or 0.0)
+        upper_enabled = bool(
+            config.get(
+                "scalar_upper_enabled",
+                config.get("curve_upper_enabled", False),
+            )
+        )
+        upper_limit = float(
+            config.get(
+                "scalar_upper_value",
+                config.get("curve_upper_value", 0.0),
+            )
+            or 0.0
+        )
+        lower_enabled = bool(
+            config.get(
+                "scalar_lower_enabled",
+                config.get("curve_lower_enabled", False),
+            )
+        )
+        lower_limit = float(
+            config.get(
+                "scalar_lower_value",
+                config.get("curve_lower_value", 0.0),
+            )
+            or 0.0
+        )
 
         deviations = []
         if upper_enabled and value > upper_limit:
@@ -3977,77 +4058,207 @@ class LoudnessAnalysis(AnalysisGraphWidget):
             values = np.asarray(raw.loudness_level_phon, dtype=np.float64)
         else:
             values = np.asarray(raw.loudness_sone, dtype=np.float64)
-        values = values[np.isfinite(values)]
+        raw_time = getattr(raw, "time_s", None)
+        if raw_time is None:
+            target_x = np.arange(values.size, dtype=np.float64)
+        else:
+            target_x = self._loudness_display_time_axis(raw)
+        point_count = min(values.size, target_x.size)
+        values = values[:point_count]
+        target_x = target_x[:point_count]
+        finite = np.isfinite(values) & np.isfinite(target_x)
+        values = values[finite]
+        target_x = target_x[finite]
         if values.size == 0:
             self.data_struct.analysis_result_dict[self.title_name] = (False, float("nan"))
             return
 
-        upper_enabled = bool(
-            config.get(
-                "curve_upper_enabled",
-                config.get("mean_upper_enabled", config.get("nmax_upper_enabled", False)),
+        try:
+            upper_limits, lower_limits = self._resolve_loudness_curve_limits(
+                config,
+                target_x,
             )
-        )
-        upper_limit = float(
-            config.get(
-                "curve_upper_value",
-                config.get("mean_upper_sone", config.get("nmax_upper_sone", 0.0)),
+        except (ManualLimitValidationError, TypeError, ValueError):
+            self.data_struct.analysis_result_dict[self.title_name] = (
+                False,
+                float("nan"),
             )
-            or 0.0
+            return
+        valid_mask = np.isfinite(values) & (
+            np.isfinite(upper_limits) | np.isfinite(lower_limits)
         )
-        lower_enabled = bool(
-            config.get(
-                "curve_lower_enabled",
-                config.get("mean_lower_enabled", config.get("nmax_lower_enabled", False)),
-            )
+        _out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+            values,
+            upper_limits,
+            lower_limits,
+            valid_mask,
         )
-        lower_limit = float(
-            config.get(
-                "curve_lower_value",
-                config.get("mean_lower_sone", config.get("nmax_lower_sone", 0.0)),
-            )
-            or 0.0
-        )
+        self._merge_analysis_limit_result(is_ok, deviation)
 
-        deviations = []
-        if upper_enabled:
-            upper_deviation = float(np.max(values - upper_limit))
-            if upper_deviation > 0.0:
-                deviations.append(upper_deviation)
-        if lower_enabled:
-            lower_deviation = float(np.max(lower_limit - values))
-            if lower_deviation > 0.0:
-                deviations.append(lower_deviation)
+    @classmethod
+    def _resolve_loudness_curve_limits(cls, config: dict, target_x):
+        resolved_config = cls._loudness_curve_limit_config(config)
+        limit_mode = str(
+            resolved_config.get("limit_mode", "manual") or "manual"
+        ).lower()
+        if limit_mode == "manual":
+            _, upper_values, lower_values = limits_from_manual_config(
+                resolved_config,
+                target_x,
+            )
+            upper_limits = np.asarray(upper_values, dtype=np.float64)
+            lower_limits = np.asarray(lower_values, dtype=np.float64)
+        elif limit_mode == "csv":
+            limit_data = resolved_config.get("limit_data")
+            if not limit_data:
+                raise ValueError("已启用阈值，但未加载 CSV 配置文件")
+            try:
+                csv_x, csv_upper, csv_lower = limit_data
+            except (TypeError, ValueError) as exc:
+                raise ValueError("CSV 阈值数据格式不正确") from exc
+            upper_limits = cls._interpolate_loudness_limit_side(
+                target_x,
+                csv_x,
+                csv_upper,
+            )
+            lower_limits = cls._interpolate_loudness_limit_side(
+                target_x,
+                csv_x,
+                csv_lower,
+            )
+        else:
+            raise ValueError(f"不支持的阈值模式: {limit_mode}")
 
-        deviation = float(max(deviations)) if deviations else 0.0
-        self._merge_analysis_limit_result(deviation == 0.0, deviation)
+        overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
+        if np.any(lower_limits[overlap] > upper_limits[overlap]):
+            raise ValueError("下限不能大于上限")
+        if not np.any(np.isfinite(upper_limits)) and not np.any(
+            np.isfinite(lower_limits)
+        ):
+            raise ValueError("当前时间范围内没有可用的上下限")
+        return upper_limits, lower_limits
 
     @staticmethod
-    def _draw_loudness_limit_lines(plot_widget, config: dict):
-        """Draw horizontal limit lines for loudness plot."""
+    def _loudness_curve_limit_config(config: dict) -> dict:
+        if "limit_mode" in config:
+            return config
+        adapted = dict(config)
+        adapted.update(
+            {
+                "limit_mode": "manual",
+                "manual_input_mode": "constant",
+                "constant_upper_enabled": bool(
+                    config.get(
+                        "curve_upper_enabled",
+                        config.get(
+                            "mean_upper_enabled",
+                            config.get("nmax_upper_enabled", False),
+                        ),
+                    )
+                ),
+                "constant_upper_value": config.get(
+                    "curve_upper_value",
+                    config.get("mean_upper_sone", config.get("nmax_upper_sone", 0.0)),
+                ),
+                "constant_lower_enabled": bool(
+                    config.get(
+                        "curve_lower_enabled",
+                        config.get(
+                            "mean_lower_enabled",
+                            config.get("nmax_lower_enabled", False),
+                        ),
+                    )
+                ),
+                "constant_lower_value": config.get(
+                    "curve_lower_value",
+                    config.get("mean_lower_sone", config.get("nmax_lower_sone", 0.0)),
+                ),
+            }
+        )
+        return adapted
+
+    @staticmethod
+    def _interpolate_loudness_limit_side(target_x, raw_x, raw_values):
+        x_values = np.asarray(list(raw_x), dtype=np.float64)
+        side_values = np.asarray(list(raw_values), dtype=np.float64)
+        if x_values.size != side_values.size:
+            raise ValueError("CSV 阈值数据长度不一致")
+
+        finite = np.isfinite(x_values) & np.isfinite(side_values)
+        output = np.full(
+            np.asarray(target_x).shape,
+            np.nan,
+            dtype=np.float64,
+        )
+        if not np.any(finite):
+            return output
+
+        points = {
+            float(x_value): float(side_value)
+            for x_value, side_value in zip(
+                x_values[finite],
+                side_values[finite],
+            )
+        }
+        sorted_x = np.asarray(sorted(points), dtype=np.float64)
+        sorted_values = np.asarray(
+            [points[x_value] for x_value in sorted_x],
+            dtype=np.float64,
+        )
+        target_values = np.asarray(target_x, dtype=np.float64)
+        in_range = (
+            (target_values >= sorted_x[0])
+            & (target_values <= sorted_x[-1])
+        )
+        if np.any(in_range):
+            output[in_range] = np.interp(
+                target_values[in_range],
+                sorted_x,
+                sorted_values,
+            )
+        return output
+
+    @classmethod
+    def _draw_loudness_limit_lines(cls, plot_widget, config: dict, target_x):
+        """Draw configured curve limits for per-point loudness judgment."""
         if not bool(config.get("limit_checked", False)):
             return
-        upper_enabled = bool(
-            config.get("curve_upper_enabled",
-                        config.get("mean_upper_enabled", config.get("nmax_upper_enabled", False)))
-        )
-        lower_enabled = bool(
-            config.get("curve_lower_enabled",
-                        config.get("mean_lower_enabled", config.get("nmax_lower_enabled", False)))
-        )
-        dashed_pen = mkPen(color=(128, 0, 128), width=2, style=Qt.DashLine)
-        if upper_enabled:
-            val = float(
-                config.get("curve_upper_value",
-                            config.get("mean_upper_sone", config.get("nmax_upper_sone", 0.0))) or 0.0
+        if str(config.get("limit_metric", "curve_y") or "curve_y").lower() != "curve_y":
+            return
+        target_x = np.asarray(target_x, dtype=np.float64)
+        if target_x.size == 0:
+            return
+        try:
+            upper_limits, lower_limits = cls._resolve_loudness_curve_limits(
+                config,
+                target_x,
             )
-            plot_widget.addLine(y=val, pen=dashed_pen)
-        if lower_enabled:
-            val = float(
-                config.get("curve_lower_value",
-                            config.get("mean_lower_sone", config.get("nmax_lower_sone", 0.0))) or 0.0
+        except (ManualLimitValidationError, TypeError, ValueError):
+            return
+
+        colors = resolve_curve_colors(config)
+        if np.any(np.isfinite(upper_limits)):
+            plot_widget.plot(
+                target_x,
+                upper_limits,
+                pen=mkPen(
+                    color=colors[UPPER_LIMIT_COLOR],
+                    width=2,
+                    style=Qt.DashLine,
+                ),
+                name="Upper Limit",
             )
-            plot_widget.addLine(y=val, pen=dashed_pen)
+        if np.any(np.isfinite(lower_limits)):
+            plot_widget.plot(
+                target_x,
+                lower_limits,
+                pen=mkPen(
+                    color=colors[LOWER_LIMIT_COLOR],
+                    width=2,
+                    style=Qt.DashLine,
+                ),
+                name="Lower Limit",
+            )
 
     def _merge_analysis_limit_result(self, is_ok: bool, deviation: float):
         existing = self.data_struct.analysis_result_dict.get(self.title_name)

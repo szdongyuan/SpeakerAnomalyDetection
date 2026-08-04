@@ -173,3 +173,22 @@ def test_fba_runtime_interpolates_csv_limits_and_maps_class(signal_module):
         signal_module.get_class_mapping()["FBA"]
         is signal_module.FrequencyBandAnalysis
     )
+
+
+def test_fba_resolves_constant_manual_limits(signal_module):
+    centers = np.asarray([100.0, 1000.0, 2000.0])
+
+    upper, lower = signal_module.FrequencyBandAnalysis._resolve_limits(
+        {
+            "limit_mode": "manual",
+            "manual_input_mode": "constant",
+            "constant_upper_enabled": True,
+            "constant_lower_enabled": True,
+            "constant_upper_value": 85.0,
+            "constant_lower_value": 25.0,
+        },
+        centers,
+    )
+
+    assert np.allclose(upper, [85.0, 85.0, 85.0])
+    assert np.allclose(lower, [25.0, 25.0, 25.0])

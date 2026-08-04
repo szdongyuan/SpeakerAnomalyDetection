@@ -9,8 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_OFFSET
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
+    limits_from_constant_values,
+    limits_from_manual_config,
     limits_from_manual_segments,
     normalize_segments,
+    validate_constant_limit_config,
     validate_manual_limit_config,
     validate_manual_segments,
 )
@@ -212,6 +215,103 @@ def test_offset_semantics_reject_lower_above_upper():
         validate_manual_limit_config(
             config,
             value_semantics=LIMIT_VALUE_SEMANTICS_OFFSET,
+        )
+
+
+def test_constant_limits_cover_all_target_points():
+    config = {
+        "constant_upper_enabled": True,
+        "constant_lower_enabled": True,
+        "constant_upper_value": 10,
+        "constant_lower_value": "2.5",
+    }
+
+    x_values, upper, lower = limits_from_constant_values(
+        config,
+        np.array([0.0, 0.5, 1.0]),
+    )
+
+    assert x_values == [0.0, 0.5, 1.0]
+    assert upper == [10.0, 10.0, 10.0]
+    assert lower == [2.5, 2.5, 2.5]
+
+
+def test_constant_limits_require_enabled_ordered_finite_values():
+    with pytest.raises(ManualLimitValidationError, match="至少需要启用一个"):
+        validate_constant_limit_config(
+            {
+                "constant_upper_enabled": False,
+                "constant_lower_enabled": False,
+            }
+        )
+
+    with pytest.raises(ManualLimitValidationError, match="下限不能大于上限"):
+        validate_constant_limit_config(
+            {
+                "constant_upper_enabled": True,
+                "constant_lower_enabled": True,
+                "constant_upper_value": 5,
+                "constant_lower_value": 6,
+            }
+        )
+
+    with pytest.raises(ManualLimitValidationError, match="上限必须是有限数字"):
+        validate_constant_limit_config(
+            {
+                "constant_upper_enabled": True,
+                "constant_lower_enabled": False,
+                "constant_upper_value": float("nan"),
+            }
+        )
+
+
+def test_manual_limit_config_dispatches_by_input_mode():
+    target_x = np.array([100.0, 200.0])
+    constant_config = {
+        "manual_input_mode": "constant",
+        "constant_upper_enabled": True,
+        "constant_lower_enabled": False,
+        "constant_upper_value": 80.0,
+    }
+
+    x_values, upper, lower = limits_from_manual_config(
+        constant_config,
+        target_x,
+    )
+
+    assert x_values == [100.0, 200.0]
+    assert upper == [80.0, 80.0]
+    assert np.all(np.isnan(lower))
+
+    segment_config = {
+        "manual_upper_enabled": True,
+        "manual_lower_enabled": False,
+        "manual_upper_segments": [
+            {
+                "start_x": 0.0,
+                "start_y": 10.0,
+                "end_x": 200.0,
+                "end_y": 20.0,
+            }
+        ],
+        "manual_lower_segments": [],
+    }
+    _x_values, upper, _lower = limits_from_manual_config(
+        segment_config,
+        target_x,
+    )
+
+    assert upper == [15.0, 20.0]
+
+
+def test_manual_limit_config_rejects_unknown_input_mode():
+    with pytest.raises(
+        ManualLimitValidationError,
+        match="不支持的手动阈值输入方式",
+    ):
+        limits_from_manual_config(
+            {"manual_input_mode": "unknown"},
+            np.array([1.0]),
         )
 
 
