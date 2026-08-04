@@ -15,6 +15,11 @@ if str(REPO_ROOT) not in sys.path:
 from PyQt5.QtWidgets import QApplication
 
 from ui import signal_analysis_window as saw
+from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_CURVE_EXPORTS_KEY,
+    GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+    GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+)
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +45,7 @@ def captured_limit_utils(monkeypatch):
     ):
         captured["setup"].append(
             {
+                "plot_widget": plot_widget,
                 "data_x": np.asarray(data_x, dtype=float),
                 "data_y": np.asarray(data_y, dtype=float),
                 "csv_x": np.asarray(csv_x, dtype=float),
@@ -79,6 +85,7 @@ def captured_limit_utils(monkeypatch):
     def plot_out_segments(plot_widget, x_data, y_data, out_mask, *args, **kwargs):
         captured["out"].append(
             {
+                "plot_widget": plot_widget,
                 "x_data": np.asarray(x_data, dtype=float),
                 "y_data": np.asarray(y_data, dtype=float),
                 "out_mask": np.asarray(out_mask, dtype=bool),
@@ -90,6 +97,20 @@ def captured_limit_utils(monkeypatch):
     monkeypatch.setattr(saw.LimitPlotUtils, "compare_with_limits", staticmethod(compare_with_limits))
     monkeypatch.setattr(saw.LimitPlotUtils, "plot_out_segments", staticmethod(plot_out_segments))
     return captured
+
+
+def _dual_golden_distortion_config():
+    return {
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation", "envelope"],
+        "limit_checked": True,
+        "limit_mode": "csv",
+        "limit_data": (
+            np.array([100.0, 200.0]),
+            np.array([2.0, 2.0]),
+            np.array([-2.0, -2.0]),
+        ),
+    }
 
 
 def _manual_upper_config(segments, *, scalar_upper=999.0):
@@ -1429,7 +1450,7 @@ def test_hd_rb_manual_envelope_uses_endpoint_geometry_but_measured_judgment(
     measured_x = np.array([50.0, 100.0, 100.05, 110.0, 1000.0])
     baseline = np.array([10.0, 12.0, 12.5, 13.0, 14.0])
 
-    widget.plot_graph(
+    payload = widget.plot_graph(
         measured_x,
         np.array([0.0, 0.0, 100.0, 0.0, 0.0]),
         config,
@@ -1460,6 +1481,9 @@ def test_hd_rb_manual_envelope_uses_endpoint_geometry_but_measured_judgment(
         False,
     ]
     assert widget.data_struct.analysis_result_dict[title] == pytest.approx((False, 96.5))
+    envelope_series = payload["series"]["envelope"]
+    np.testing.assert_allclose(envelope_series["x"], setup["data_x"])
+    np.testing.assert_allclose(envelope_series["y"], setup["data_y"])
 
 
 @pytest.mark.parametrize(
@@ -1573,6 +1597,1088 @@ def test_perceptual_rub_and_buzz_passing_margin_ignores_uncovered_manual_points(
     out = captured_limit_utils["out"][-1]
     assert out["out_mask"].tolist() == [False, False]
     assert widget.data_struct.analysis_result_dict["PRB"] == (True, 2.0)
+
+
+@pytest.mark.parametrize(
+    ("widget_class", "title"),
+    [
+        (saw.Distortion, "HD"),
+        (saw.RubAndBuzz, "RB"),
+        (saw.PerceptualRubAndBuzz, "PRB"),
+    ],
+)
+def test_distortion_family_dual_views_share_one_judgment_and_exact_canonical_series(
+    qapp,
+    monkeypatch,
+    captured_limit_utils,
+    widget_class,
+    title,
+):
+    widget = widget_class(title)
+    config = _dual_golden_distortion_config()
+    result_writes = []
+
+    class CountingResults(dict):
+        def __setitem__(self, key, value):
+            result_writes.append((key, value))
+            super().__setitem__(key, value)
+
+    monkeypatch.setattr(
+        widget.data_struct,
+        "analysis_result_dict",
+        CountingResults(),
+    )
+    evaluation_calls = []
+    original_evaluate = widget._evaluate_distortion_limits
+
+    def capture_evaluation(*args, **kwargs):
+        evaluation_calls.append((args, kwargs))
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(widget, "_evaluate_distortion_limits", capture_evaluation)
+    freq = np.array([100.0, 200.0])
+    deviation = np.array([-1.0, 3.0])
+    baseline = np.array([10.0, 10.0])
+    measured = baseline + deviation
+
+    payload = widget.plot_graph(
+        freq,
+        deviation,
+        config,
+        raw_y=measured,
+        baseline_aligned=baseline,
+    )
+
+    assert len(evaluation_calls) == 1
+    assert widget.data_struct.analysis_result_dict[title] == (False, 1.0)
+    assert result_writes == [(title, (False, 1.0))]
+    assert payload == {
+        "schema_version": 1,
+        "selected_modes": ["deviation", "envelope"],
+        "series": {
+            "deviation": {
+                "available": True,
+                "x": [100.0, 200.0],
+                "y": [-1.0, 3.0],
+            },
+            "envelope": {
+                "available": True,
+                "x": [100.0, 200.0],
+                "y": [9.0, 13.0],
+            },
+        },
+    }
+    assert widget._last_golden_curve_exports == payload
+
+    envelope_plot = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_ENVELOPE)
+    deviation_plot = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+    setup_by_plot = {
+        call["plot_widget"]: call for call in captured_limit_utils["setup"]
+    }
+    np.testing.assert_allclose(setup_by_plot[envelope_plot]["data_y"], measured)
+    np.testing.assert_allclose(setup_by_plot[envelope_plot]["csv_upper"], [12.0, 12.0])
+    np.testing.assert_allclose(setup_by_plot[deviation_plot]["data_y"], deviation)
+    np.testing.assert_allclose(setup_by_plot[deviation_plot]["csv_upper"], [2.0, 2.0])
+
+    out_by_plot = {
+        call["plot_widget"]: call for call in captured_limit_utils["out"]
+    }
+    assert out_by_plot[envelope_plot]["out_mask"].tolist() == [False, True]
+    assert out_by_plot[deviation_plot]["out_mask"].tolist() == [False, True]
+    np.testing.assert_allclose(out_by_plot[envelope_plot]["y_data"], measured)
+    np.testing.assert_allclose(out_by_plot[deviation_plot]["y_data"], deviation)
+
+
+@pytest.mark.parametrize(
+    ("selected_modes", "expected_mode", "expected_y"),
+    [
+        (["deviation"], GOLDEN_SAMPLE_DISPLAY_DEVIATION, [-1.0, 3.0]),
+        (["envelope"], GOLDEN_SAMPLE_DISPLAY_ENVELOPE, [9.0, 13.0]),
+    ],
+)
+def test_distortion_selected_single_view_is_the_only_canonical_series(
+    qapp,
+    captured_limit_utils,
+    selected_modes,
+    expected_mode,
+    expected_y,
+):
+    widget = saw.Distortion("HD")
+    config = _dual_golden_distortion_config()
+    config["golden_sample_display_modes"] = selected_modes
+
+    payload = widget.plot_graph(
+        np.array([100.0, 200.0]),
+        np.array([-1.0, 3.0]),
+        config,
+        raw_y=np.array([9.0, 13.0]),
+        baseline_aligned=np.array([10.0, 10.0]),
+    )
+
+    assert payload["selected_modes"] == selected_modes
+    assert list(payload["series"]) == selected_modes
+    np.testing.assert_allclose(payload["series"][expected_mode]["y"], expected_y)
+    assert tuple(widget.golden_plot_widgets) == (expected_mode,)
+    assert len(captured_limit_utils["setup"]) == 1
+
+
+def test_distortion_partial_golden_overlap_filters_main_plot_and_payload_identically(
+    qapp,
+):
+    widget = saw.Distortion("HD")
+
+    payload = widget.plot_graph(
+        np.array([100.0, 200.0, 300.0]),
+        np.array([np.nan, -1.0, 3.0]),
+        {
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation"],
+            "limit_checked": False,
+        },
+        raw_y=np.array([9.0, 9.0, 13.0]),
+        baseline_aligned=np.array([np.nan, 10.0, 10.0]),
+    )
+
+    deviation_plot = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+    main_item = deviation_plot.listDataItems()[0]
+    plotted_x, plotted_y = main_item.xData, main_item.yData
+    np.testing.assert_allclose(plotted_x, [200.0, 300.0])
+    np.testing.assert_allclose(plotted_y, [-1.0, 3.0])
+    assert payload["series"]["deviation"] == {
+        "available": True,
+        "x": [200.0, 300.0],
+        "y": [-1.0, 3.0],
+    }
+
+
+def test_distortion_internal_nonfinite_points_keep_plot_payload_and_highlight_indices_aligned(
+    qapp,
+    captured_limit_utils,
+):
+    widget = saw.Distortion("HD")
+    config = _dual_golden_distortion_config()
+    freq = np.array([100.0, 200.0, 300.0])
+    deviation = np.array([-1.0, np.nan, 3.0])
+    measured = np.array([9.0, np.nan, 13.0])
+    baseline = np.array([10.0, 10.0, 10.0])
+    config["limit_data"] = (
+        freq,
+        np.array([2.0, 2.0, 2.0]),
+        np.array([-2.0, -2.0, -2.0]),
+    )
+
+    payload = widget.plot_graph(
+        freq,
+        deviation,
+        config,
+        raw_y=measured,
+        baseline_aligned=baseline,
+    )
+
+    for mode in (GOLDEN_SAMPLE_DISPLAY_DEVIATION, GOLDEN_SAMPLE_DISPLAY_ENVELOPE):
+        plot_widget = widget.plot_for_golden_mode(mode)
+        setup = next(
+            call
+            for call in captured_limit_utils["setup"]
+            if call["plot_widget"] is plot_widget
+        )
+        series = payload["series"][mode]
+        np.testing.assert_allclose(setup["data_x"], [100.0, 300.0])
+        np.testing.assert_allclose(setup["data_x"], series["x"])
+        np.testing.assert_allclose(setup["data_y"], series["y"])
+
+        highlight = next(
+            call
+            for call in captured_limit_utils["out"]
+            if call["plot_widget"] is plot_widget
+        )
+        np.testing.assert_allclose(highlight["x_data"], freq)
+        assert highlight["out_mask"].tolist() == [False, False, True]
+        assert np.isnan(highlight["y_data"][1])
+
+
+@pytest.mark.parametrize("invalid_limit_kind", ["csv-missing", "manual-invalid"])
+def test_distortion_invalid_limit_run_clears_stale_selected_golden_plots(
+    qapp,
+    monkeypatch,
+    invalid_limit_kind,
+):
+    widget = saw.Distortion("HD")
+    valid_config = {
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation", "envelope"],
+        "limit_checked": False,
+    }
+    widget.plot_graph(
+        np.array([100.0, 200.0]),
+        np.array([-1.0, 3.0]),
+        valid_config,
+        raw_y=np.array([9.0, 13.0]),
+        baseline_aligned=np.array([10.0, 10.0]),
+    )
+    assert all(
+        plot.listDataItems()
+        for plot in widget.golden_plot_widgets.values()
+    )
+
+    if invalid_limit_kind == "csv-missing":
+        invalid_config = {
+            **valid_config,
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": None,
+        }
+    else:
+        invalid_config = {
+            **valid_config,
+            **_manual_upper_config([]),
+        }
+    warnings = []
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    payload = widget.plot_graph(
+        np.array([100.0, 200.0]),
+        np.array([-1.0, 3.0]),
+        invalid_config,
+        raw_y=np.array([9.0, 13.0]),
+        baseline_aligned=np.array([10.0, 10.0]),
+    )
+
+    assert payload["series"] == {
+        "deviation": {"available": False},
+        "envelope": {"available": False},
+    }
+    assert len(widget.golden_plot_widgets) == 2
+    assert all(
+        plot.listDataItems() == []
+        for plot in widget.golden_plot_widgets.values()
+    )
+    assert bool(warnings) is (invalid_limit_kind == "manual-invalid")
+
+
+@pytest.mark.parametrize("invalid_limit_kind", ["csv-missing", "manual-invalid"])
+def test_distortion_dual_to_non_golden_invalid_limit_clears_all_stale_plots(
+    qapp,
+    monkeypatch,
+    invalid_limit_kind,
+):
+    widget = saw.Distortion("HD")
+    widget.plot_graph(
+        np.array([100.0, 200.0]),
+        np.array([-1.0, 3.0]),
+        {
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation", "envelope"],
+            "limit_checked": False,
+        },
+        raw_y=np.array([9.0, 13.0]),
+        baseline_aligned=np.array([10.0, 10.0]),
+    )
+    secondary = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+    assert widget._primary_analysis_plot.listDataItems()
+    assert secondary.listDataItems()
+
+    if invalid_limit_kind == "csv-missing":
+        invalid_config = {
+            "golden_sample_checked": False,
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": None,
+        }
+    else:
+        invalid_config = {
+            "golden_sample_checked": False,
+            **_manual_upper_config([]),
+        }
+    monkeypatch.setattr(saw.MessageBox, "warning", lambda *args: None)
+
+    result = widget.plot_graph(
+        np.array([100.0, 200.0]),
+        np.array([1.0, 2.0]),
+        invalid_config,
+    )
+
+    assert result is None
+    assert widget.golden_plot_widgets == {}
+    assert widget.analysis_plot is widget._primary_analysis_plot
+    assert widget.plot_splitter.count() == 1
+    assert widget._primary_analysis_plot.listDataItems() == []
+    assert secondary.listDataItems() == []
+    assert not secondary.isVisible()
+
+
+def test_non_golden_distortion_preserves_internal_nonfinite_break_points(qapp):
+    widget = saw.Distortion("HD")
+
+    result = widget.plot_graph(
+        np.array([100.0, 200.0, 300.0]),
+        np.array([1.0, np.nan, 3.0]),
+        {
+            "golden_sample_checked": False,
+            "limit_checked": False,
+        },
+    )
+
+    main_item = widget.analysis_plot.listDataItems()[0]
+    np.testing.assert_allclose(main_item.xData, [100.0, 200.0, 300.0])
+    np.testing.assert_allclose(
+        main_item.yData,
+        [1.0, np.nan, 3.0],
+        equal_nan=True,
+    )
+    assert result is None
+
+
+def test_dual_golden_limit_semantics_are_offsets_for_manual_and_csv():
+    config = _dual_golden_distortion_config()
+    assert saw._golden_limit_value_semantics(config) == "offset"
+    config["limit_mode"] = "manual"
+    assert saw._golden_limit_value_semantics(config) == "offset"
+
+
+@pytest.mark.parametrize(
+    ("widget_class", "title", "algorithm_name"),
+    [
+        (saw.Distortion, "HD", "calculate_thd_three_phase"),
+        (
+            saw.PerceptualRubAndBuzz,
+            "PRB",
+            "calculate_perceptual_thd_three_phase",
+        ),
+    ],
+)
+def test_distortion_calculation_retains_legacy_fields_and_stores_curve_exports(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    widget_class,
+    title,
+    algorithm_name,
+):
+    freq = np.array([100.0, 200.0])
+    measured = np.array([9.0, 13.0])
+    baseline = np.array([10.0, 10.0])
+    golden_path = tmp_path / f"{title.lower()}_golden.json"
+    golden_path.write_text(
+        json.dumps(
+            {
+                "items": {
+                    title: {
+                        "result": {
+                            "freq_value": freq.tolist(),
+                            "thd": baseline.tolist(),
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = {
+        "analysis_channel": 0,
+        "selected_labels": [2],
+        "stimulus_method": "steps",
+        "stimulus_type": "linear",
+        "start_freq": 100,
+        "stop_freq": 200,
+        "num_steps": 2,
+        "total_time": 0.2,
+        "repeat_times": 1,
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation", "envelope"],
+        "golden_sample_result_path": str(golden_path),
+        "limit_checked": False,
+    }
+    widget = _recording_widget(widget_class(title), config)
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.stimulus_info = dict(config)
+    widget.v2pa_factor = 1.0
+    monkeypatch.setattr(widget, "_resolve_v2pa_factor_for_analysis", lambda: True)
+
+    def calculate_curve(*args, **kwargs):
+        return freq.copy(), np.array([[2.0], [2.0]]), measured.copy()
+
+    monkeypatch.setattr(
+        saw.AudioThdFrequencyResponseAnalysis,
+        algorithm_name,
+        calculate_curve,
+    )
+
+    result = widget.calculate_thd()
+
+    assert result["freq_value"] == [100.0, 200.0]
+    assert result["thd"] == [-1.0, 3.0]
+    assert result["thd_raw"] == [9.0, 13.0]
+    assert result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY] == (
+        widget._last_golden_curve_exports
+    )
+    assert result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]["series"]["deviation"]["y"] == [
+        -1.0,
+        3.0,
+    ]
+    assert result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]["series"]["envelope"]["y"] == [
+        9.0,
+        13.0,
+    ]
+
+
+def test_distortion_dual_missing_golden_composes_raw_fallbacks(
+    qapp,
+    monkeypatch,
+    tmp_path,
+):
+    widget = saw.Distortion("HD")
+    warnings = []
+    config = {
+        "analysis_channel": 0,
+        "selected_labels": [2],
+        "stimulus_method": "steps",
+        "stimulus_type": "linear",
+        "start_freq": 100,
+        "stop_freq": 200,
+        "num_steps": 2,
+        "total_time": 0.2,
+        "repeat_times": 1,
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation", "envelope"],
+        "golden_sample_result_path": str(tmp_path / "missing.json"),
+        "limit_checked": True,
+        "limit_mode": "csv",
+        "limit_data": (
+            np.array([100.0, 200.0]),
+            np.array([2.0, 2.0]),
+            np.array([-2.0, -2.0]),
+        ),
+    }
+    widget = _recording_widget(widget, config)
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.stimulus_info = dict(config)
+    widget.data_struct.analysis_result_dict["HD"] = (False, 99.0)
+    monkeypatch.setattr(
+        saw.AudioThdFrequencyResponseAnalysis,
+        "calculate_thd_three_phase",
+        lambda *args, **kwargs: (
+            np.array([100.0, 200.0]),
+            np.array([[2.0], [2.0]]),
+            np.array([9.0, 13.0]),
+        ),
+    )
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    result = widget.calculate_thd()
+
+    payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    assert payload["series"]["deviation"]["available"] is True
+    assert payload["series"]["envelope"]["available"] is True
+    assert payload["series"]["deviation"]["y"] == [9.0, 13.0]
+    assert payload["series"]["envelope"]["y"] == [9.0, 13.0]
+    assert len(widget.golden_plot_widgets) == 2
+    assert "HD" not in widget.data_struct.analysis_result_dict
+    assert warnings == [
+        "未找到黄金样本基准文件或基准数据，已按原始曲线分析",
+        "黄金样本无效或与测试曲线没有有效频率重叠，已仅显示测试曲线，本次未进行上下框线判定。",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("golden_result", "deviation_available"),
+    [
+        (
+            {"freq_value": [100.0, 200.0], "thd": ["invalid", "invalid"]},
+            True,
+        ),
+        (
+            {"freq_value": [1000.0, 2000.0], "thd": [10.0, 10.0]},
+            False,
+        ),
+    ],
+    ids=["invalid", "no-overlap"],
+)
+def test_distortion_dual_invalid_golden_composes_existing_raw_fallbacks(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    golden_result,
+    deviation_available,
+):
+    golden_path = tmp_path / "bad_golden.json"
+    golden_path.write_text(
+        json.dumps({"items": {"HD": {"result": golden_result}}}),
+        encoding="utf-8",
+    )
+    config = {
+        "analysis_channel": 0,
+        "selected_labels": [2],
+        "stimulus_method": "steps",
+        "stimulus_type": "linear",
+        "start_freq": 100,
+        "stop_freq": 200,
+        "num_steps": 2,
+        "total_time": 0.2,
+        "repeat_times": 1,
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation", "envelope"],
+        "golden_sample_result_path": str(golden_path),
+        "limit_checked": True,
+        "limit_mode": "csv",
+        "limit_data": (
+            np.array([100.0, 200.0]),
+            np.array([2.0, 2.0]),
+            np.array([-2.0, -2.0]),
+        ),
+    }
+    widget = _recording_widget(saw.Distortion("HD"), config)
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.stimulus_info = dict(config)
+    warnings = []
+    monkeypatch.setattr(
+        saw.AudioThdFrequencyResponseAnalysis,
+        "calculate_thd_three_phase",
+        lambda *args, **kwargs: (
+            np.array([100.0, 200.0]),
+            np.array([[2.0], [2.0]]),
+            np.array([9.0, 13.0]),
+        ),
+    )
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    result = widget.calculate_thd()
+
+    payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    assert payload["series"]["deviation"]["available"] is deviation_available
+    if deviation_available:
+        assert payload["series"]["deviation"]["y"] == [9.0, 13.0]
+    assert payload["series"]["envelope"]["y"] == [9.0, 13.0]
+    assert len(widget.golden_plot_widgets) == 2
+    assert warnings == [
+        "黄金样本无效或与测试曲线没有有效频率重叠，已仅显示测试曲线，本次未进行上下框线判定。",
+    ]
+
+
+def test_distortion_dual_with_no_plottable_curve_marks_both_modes_unavailable(
+    qapp,
+):
+    widget = saw.Distortion("HD")
+
+    payload = widget.plot_graph(
+        [],
+        [],
+        {
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation", "envelope"],
+            "limit_checked": False,
+        },
+        raw_y=[],
+        baseline_aligned=None,
+    )
+
+    assert len(widget.golden_plot_widgets) == 2
+    assert payload["series"] == {
+        "deviation": {"available": False},
+        "envelope": {"available": False},
+    }
+
+
+def test_distortion_calculation_with_no_selected_harmonics_marks_views_unavailable(
+    qapp,
+):
+    widget = saw.Distortion("HD")
+    widget.analysis_config = {
+        "selected_labels": [],
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation", "envelope"],
+    }
+
+    result = widget.calculate_thd()
+
+    assert result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]["series"] == {
+        "deviation": {"available": False},
+        "envelope": {"available": False},
+    }
+    assert len(widget.golden_plot_widgets) == 2
+
+
+def _write_response_golden(tmp_path, analysis_kind, x_values, y_values):
+    title = "SPLF" if analysis_kind == "splf" else "FR"
+    result_key = "spl_db" if analysis_kind == "splf" else "fr"
+    path = tmp_path / f"{analysis_kind}-golden.json"
+    path.write_text(
+        json.dumps(
+            {
+                "items": {
+                    title: {
+                        "result": {
+                            "frequency_list": list(x_values),
+                            result_key: list(y_values),
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _dual_response_config(golden_path, *, limit_data=None):
+    if limit_data is None:
+        limit_data = (
+            np.array([100.0, 200.0, 300.0]),
+            np.array([2.0, 2.0, 2.0]),
+            np.array([-2.0, -2.0, -2.0]),
+        )
+    return _frequency_analysis_config(
+        {
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation", "envelope"],
+            "golden_sample_result_path": str(golden_path),
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": limit_data,
+        }
+    )
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+def test_splf_fr_dual_views_share_one_judgment_and_exact_canonical_series(
+    qapp,
+    monkeypatch,
+    captured_limit_utils,
+    tmp_path,
+    analysis_kind,
+):
+    measured_x = np.array([300.0, 100.0, 200.0])
+    measured_y = np.array([13.0, 9.0, 10.0])
+    golden_path = _write_response_golden(
+        tmp_path,
+        analysis_kind,
+        measured_x,
+        [10.0, 10.0, 10.0],
+    )
+    config = _dual_response_config(golden_path)
+    widget, calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        config,
+        measured_x,
+        measured_y,
+    )
+    result_writes = []
+
+    class CountingResults(dict):
+        def __setitem__(self, key, value):
+            result_writes.append((key, value))
+            super().__setitem__(key, value)
+
+    widget.data_struct.analysis_result_dict = CountingResults()
+
+    result = calculate()
+
+    title = "SPLF" if analysis_kind == "splf" else "FR"
+    value_key = "spl_db" if analysis_kind == "splf" else "fr"
+    raw_key = f"{value_key}_raw"
+    assert result["frequency_list"] == [300.0, 100.0, 200.0]
+    assert result[value_key] == [3.0, -1.0, 0.0]
+    assert result[raw_key] == [13.0, 9.0, 10.0]
+    payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    assert payload == {
+        "schema_version": 1,
+        "selected_modes": ["deviation", "envelope"],
+        "series": {
+            "deviation": {
+                "available": True,
+                "x": [100.0, 200.0, 300.0],
+                "y": [-1.0, 0.0, 3.0],
+            },
+            "envelope": {
+                "available": True,
+                "x": [100.0, 200.0, 300.0],
+                "y": [9.0, 10.0, 13.0],
+            },
+        },
+    }
+    assert len(captured_limit_utils["compare"]) == 1
+    assert result_writes == [(title, (False, 1.0))]
+
+    setup_by_plot = {
+        call["plot_widget"]: call for call in captured_limit_utils["setup"]
+    }
+    envelope_plot = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_ENVELOPE)
+    deviation_plot = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+    np.testing.assert_allclose(
+        setup_by_plot[envelope_plot]["data_y"],
+        payload["series"]["envelope"]["y"],
+    )
+    np.testing.assert_allclose(
+        setup_by_plot[deviation_plot]["data_y"],
+        payload["series"]["deviation"]["y"],
+    )
+    np.testing.assert_allclose(
+        setup_by_plot[envelope_plot]["csv_upper"],
+        [12.0, 12.0, 12.0],
+    )
+    np.testing.assert_allclose(
+        setup_by_plot[deviation_plot]["csv_upper"],
+        [2.0, 2.0, 2.0],
+    )
+    out_by_plot = {
+        call["plot_widget"]: call for call in captured_limit_utils["out"]
+    }
+    assert out_by_plot[envelope_plot]["out_mask"].tolist() == [False, False, True]
+    assert out_by_plot[deviation_plot]["out_mask"].tolist() == [False, False, True]
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+@pytest.mark.parametrize(
+    ("selected_modes", "expected_mode", "expected_y"),
+    [
+        (["deviation"], GOLDEN_SAMPLE_DISPLAY_DEVIATION, [-1.0, 0.0, 3.0]),
+        (["envelope"], GOLDEN_SAMPLE_DISPLAY_ENVELOPE, [9.0, 10.0, 13.0]),
+    ],
+)
+def test_splf_fr_single_selected_view_is_the_only_canonical_series(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    analysis_kind,
+    selected_modes,
+    expected_mode,
+    expected_y,
+):
+    measured_x = np.array([300.0, 100.0, 200.0])
+    measured_y = np.array([13.0, 9.0, 10.0])
+    golden_path = _write_response_golden(
+        tmp_path,
+        analysis_kind,
+        measured_x,
+        [10.0, 10.0, 10.0],
+    )
+    config = _dual_response_config(golden_path)
+    config["golden_sample_display_modes"] = selected_modes
+    config["limit_checked"] = False
+    widget, calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        config,
+        measured_x,
+        measured_y,
+    )
+
+    result = calculate()
+
+    payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    assert payload["selected_modes"] == selected_modes
+    assert list(payload["series"]) == selected_modes
+    assert payload["series"][expected_mode] == {
+        "available": True,
+        "x": [100.0, 200.0, 300.0],
+        "y": expected_y,
+    }
+    assert tuple(widget.golden_plot_widgets) == (expected_mode,)
+    main_item = widget.plot_for_golden_mode(expected_mode).listDataItems()[0]
+    np.testing.assert_allclose(main_item.xData, payload["series"][expected_mode]["x"])
+    np.testing.assert_allclose(main_item.yData, payload["series"][expected_mode]["y"])
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+def test_splf_fr_manual_and_csv_dual_limits_are_mathematically_equivalent(
+    qapp,
+    monkeypatch,
+    captured_limit_utils,
+    tmp_path,
+    analysis_kind,
+):
+    measured_x = np.array([100.0, 200.0, 300.0])
+    measured_y = np.array([9.0, 10.0, 13.0])
+    golden_path = _write_response_golden(
+        tmp_path,
+        analysis_kind,
+        measured_x,
+        [10.0, 10.0, 10.0],
+    )
+    csv_config = _dual_response_config(golden_path)
+    manual_config = _dual_response_config(golden_path)
+    manual_config.update(
+        {
+            "limit_mode": "manual",
+            "limit_data": None,
+            "manual_upper_enabled": True,
+            "manual_lower_enabled": True,
+            "manual_upper_segments": [
+                {
+                    "start_x": 100.0,
+                    "start_y": 2.0,
+                    "end_x": 300.0,
+                    "end_y": 2.0,
+                }
+            ],
+            "manual_lower_segments": [
+                {
+                    "start_x": 100.0,
+                    "start_y": -2.0,
+                    "end_x": 300.0,
+                    "end_y": -2.0,
+                }
+            ],
+        }
+    )
+
+    csv_widget, csv_calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        csv_config,
+        measured_x,
+        measured_y,
+    )
+    csv_result = csv_calculate()
+    manual_widget, manual_calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        manual_config,
+        measured_x,
+        measured_y,
+    )
+    manual_result = manual_calculate()
+
+    title = "SPLF" if analysis_kind == "splf" else "FR"
+    assert csv_widget.data_struct.analysis_result_dict[title] == (
+        manual_widget.data_struct.analysis_result_dict[title]
+    )
+    assert csv_result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY] == (
+        manual_result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    )
+    manual_payload = manual_result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    setup_by_plot = {
+        call["plot_widget"]: call
+        for call in captured_limit_utils["setup"]
+        if call["plot_widget"] in manual_widget.golden_plot_widgets.values()
+    }
+    for mode in (GOLDEN_SAMPLE_DISPLAY_DEVIATION, GOLDEN_SAMPLE_DISPLAY_ENVELOPE):
+        setup = setup_by_plot[manual_widget.plot_for_golden_mode(mode)]
+        series = manual_payload["series"][mode]
+        np.testing.assert_allclose(setup["data_x"], series["x"])
+        np.testing.assert_allclose(setup["data_y"], series["y"])
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+@pytest.mark.parametrize(
+    ("golden_case", "expected_available", "expected_deviation"),
+    [
+        ("missing", (True, True), [9.0, 10.0, 13.0]),
+        ("invalid", (True, True), [9.0, 10.0, 13.0]),
+        ("no-overlap", (False, True), None),
+    ],
+)
+def test_splf_fr_dual_invalid_golden_composes_existing_fallbacks(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    analysis_kind,
+    golden_case,
+    expected_available,
+    expected_deviation,
+):
+    measured_x = np.array([100.0, 200.0, 300.0])
+    measured_y = np.array([9.0, 10.0, 13.0])
+    if golden_case == "missing":
+        golden_path = tmp_path / "missing.json"
+    elif golden_case == "invalid":
+        golden_path = _write_response_golden(
+            tmp_path,
+            analysis_kind,
+            measured_x,
+            ["invalid", "invalid", "invalid"],
+        )
+    else:
+        golden_path = _write_response_golden(
+            tmp_path,
+            analysis_kind,
+            [1000.0, 2000.0],
+            [10.0, 10.0],
+        )
+    config = _dual_response_config(golden_path)
+    widget, calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        config,
+        measured_x,
+        measured_y,
+    )
+    warnings = []
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    result = calculate()
+
+    payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    deviation = payload["series"]["deviation"]
+    envelope = payload["series"]["envelope"]
+    assert (deviation["available"], envelope["available"]) == expected_available
+    if expected_deviation is not None:
+        assert deviation["y"] == expected_deviation
+    assert envelope["y"] == [9.0, 10.0, 13.0]
+    for mode in (GOLDEN_SAMPLE_DISPLAY_DEVIATION, GOLDEN_SAMPLE_DISPLAY_ENVELOPE):
+        series = payload["series"][mode]
+        plot_items = widget.plot_for_golden_mode(mode).listDataItems()
+        if series["available"]:
+            np.testing.assert_allclose(plot_items[0].xData, series["x"])
+            np.testing.assert_allclose(plot_items[0].yData, series["y"])
+        else:
+            assert plot_items == []
+    title = "SPLF" if analysis_kind == "splf" else "FR"
+    assert title not in widget.data_struct.analysis_result_dict
+    assert warnings
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+def test_splf_fr_dual_no_common_limit_range_keeps_canonical_curves_and_no_result(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    analysis_kind,
+):
+    measured_x = np.array([100.0, 200.0, 300.0])
+    measured_y = np.array([9.0, 10.0, 13.0])
+    golden_path = _write_response_golden(
+        tmp_path,
+        analysis_kind,
+        measured_x,
+        [10.0, 10.0, 10.0],
+    )
+    config = _dual_response_config(
+        golden_path,
+        limit_data=(
+            np.array([1000.0, 2000.0]),
+            np.array([2.0, 2.0]),
+            np.array([-2.0, -2.0]),
+        ),
+    )
+    widget, calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        config,
+        measured_x,
+        measured_y,
+    )
+    warnings = []
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    result = calculate()
+
+    payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+    assert payload["series"]["deviation"]["y"] == [-1.0, 0.0, 3.0]
+    assert payload["series"]["envelope"]["y"] == [9.0, 10.0, 13.0]
+    for mode in (GOLDEN_SAMPLE_DISPLAY_DEVIATION, GOLDEN_SAMPLE_DISPLAY_ENVELOPE):
+        series = payload["series"][mode]
+        main_item = widget.plot_for_golden_mode(mode).listDataItems()[0]
+        np.testing.assert_allclose(main_item.xData, series["x"])
+        np.testing.assert_allclose(main_item.yData, series["y"])
+    title = "SPLF" if analysis_kind == "splf" else "FR"
+    assert title not in widget.data_struct.analysis_result_dict
+    assert warnings == [
+        "测试曲线、黄金样本与上下限没有共同的有效频率范围，已仅显示测试曲线，本次未进行上下框线判定。"
+    ]
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+def test_splf_fr_dual_no_plottable_curve_marks_both_modes_unavailable(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    analysis_kind,
+):
+    measured_x = np.array([100.0, 200.0])
+    golden_path = _write_response_golden(
+        tmp_path,
+        analysis_kind,
+        measured_x,
+        [10.0, 10.0],
+    )
+    config = _dual_response_config(golden_path)
+    config["limit_checked"] = False
+    widget, calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        config,
+        measured_x,
+        [np.nan, np.nan],
+    )
+
+    result = calculate()
+
+    assert result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]["series"] == {
+        "deviation": {"available": False},
+        "envelope": {"available": False},
+    }
+    assert all(
+        plot.listDataItems() == []
+        for plot in widget.golden_plot_widgets.values()
+    )
+
+
+@pytest.mark.parametrize("analysis_kind", ["splf", "fr"])
+def test_splf_fr_dual_to_non_golden_invalid_limit_clears_stale_plots(
+    qapp,
+    monkeypatch,
+    tmp_path,
+    analysis_kind,
+):
+    measured_x = np.array([100.0, 200.0])
+    measured_y = np.array([9.0, 13.0])
+    golden_path = _write_response_golden(
+        tmp_path,
+        analysis_kind,
+        measured_x,
+        [10.0, 10.0],
+    )
+    config = _dual_response_config(golden_path)
+    config["limit_checked"] = False
+    widget, calculate = _frequency_analysis_widget(
+        monkeypatch,
+        analysis_kind,
+        config,
+        measured_x,
+        measured_y,
+    )
+    calculate()
+    secondary = widget.plot_for_golden_mode(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+    assert secondary.listDataItems()
+
+    widget.analysis_config = _frequency_analysis_config(
+        {
+            "golden_sample_checked": False,
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": None,
+        }
+    )
+    result = calculate()
+
+    assert result is False
+    assert widget.golden_plot_widgets == {}
+    assert widget.analysis_plot is widget._primary_analysis_plot
+    assert widget._primary_analysis_plot.listDataItems() == []
+    assert secondary.listDataItems() == []
+    assert not secondary.isVisible()
 
 
 def test_scalar_only_manual_config_warns_and_returns_invalid_boundary(

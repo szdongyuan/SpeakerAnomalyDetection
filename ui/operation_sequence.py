@@ -16,7 +16,10 @@ from base.file_ops import FileOps
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
-from base.soundcard_calibration_manager import resolve_analysis_v2pa_factor_for_channel
+from base.soundcard_calibration_manager import (
+    AnalysisV2paBatch,
+    resolve_analysis_v2pa_factor_for_channel,
+)
 from base.acquisition_recording_defaults import (
     load_acquisition_defaults,
     normalize_play_record_detail,
@@ -539,9 +542,13 @@ class AnalysisModelSelect(QDialog):
                 MessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
                 return
 
-            # Collect only checked items
+            # Prepare only checked items and collect calibration warnings before calculation.
             items_out = {}
             class_mapping = get_class_mapping()
+            prepared_items = []
+            calibration_batch = AnalysisV2paBatch(
+                resolver=resolve_analysis_v2pa_factor_for_channel,
+            )
             for key in item_sort_list:
                 key_config = analysis_cfg.get(key)
                 if not isinstance(key_config, dict):
@@ -556,6 +563,31 @@ class AnalysisModelSelect(QDialog):
                 if cls_map is None:
                     continue
 
+                raw_channel = 0
+                try:
+                    raw_channel = int(key_config.get("analysis_channel", 0) or 0)
+                except (TypeError, ValueError, OverflowError):
+                    raw_channel = 0
+                if raw_channel < 0:
+                    raw_channel = 0
+
+                preparation = None
+                if (
+                    item_type in GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA
+                    and item_type not in {"HD", "RB"}
+                ):
+                    preparation = calibration_batch.resolve(raw_channel)
+                prepared_items.append(
+                    (key, item_type, key_config, cls_map, raw_channel, preparation)
+                )
+
+            calibration_warning = calibration_batch.warning_text()
+            if calibration_warning:
+                MessageBox.warning(self, "提示", calibration_warning)
+
+            for key, item_type, key_config, cls_map, raw_channel, preparation in prepared_items:
+                if preparation is not None and preparation.factor is None:
+                    continue
                 try:
                     params = copy.deepcopy(key_config)
                     # When generating baseline, always disable golden/threshold influence
@@ -566,22 +598,11 @@ class AnalysisModelSelect(QDialog):
 
                     instance = cls_map(key)
                     instance.analysis_config = params
-                    raw_channel = 0
-                    try:
-                        raw_channel = int(params.get("analysis_channel", 0) or 0)
-                    except (TypeError, ValueError):
-                        raw_channel = 0
-                    if raw_channel < 0:
-                        raw_channel = 0
-                    if item_type in GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA and item_type not in {"HD", "RB"}:
-                        try:
-                            instance.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
-                                raw_channel,
-                                warn_callback=lambda msg: MessageBox.warning(self, "提示", msg),
-                            )
-                        except ValueError as e:
-                            MessageBox.warning(self, "提示", str(e))
-                            continue
+                    if preparation is not None:
+                        instance.v2pa_factor = preparation.factor
+                        if hasattr(instance, "_resolve_v2pa_factor_for_analysis"):
+                            instance._v2pa_raw_analysis_channel = raw_channel
+                            instance._use_pre_resolved_v2pa_factor = True
 
                     result = None
                     if hasattr(instance, "calculate_spl"):

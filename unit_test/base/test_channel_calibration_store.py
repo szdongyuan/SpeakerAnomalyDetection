@@ -6,6 +6,8 @@ import pytest
 
 from base.hardware_management import HardwareManagementRepository
 from base.soundcard_calibration_manager import (
+    AnalysisV2paBatch,
+    AnalysisV2paPreparation,
     MicChannelCalibrationResult,
     clear_mic_channel_v2pa_factors,
     format_input_channel_label,
@@ -17,6 +19,88 @@ from base.soundcard_calibration_manager import (
 )
 from consts import model_consts
 from unit_test.base.test_hardware_management import create_system_db, runtime_device
+
+
+def test_analysis_v2pa_batch_caches_channels_and_combines_distinct_messages():
+    calls = []
+
+    def resolver(channel, warn_callback=None):
+        calls.append(channel)
+        warn_callback(f"In{channel + 1} 未校准")
+        return float(channel + 1)
+
+    batch = AnalysisV2paBatch(resolver=resolver)
+
+    assert batch.resolve(0).factor == 1.0
+    assert batch.resolve(0).factor == 1.0
+    assert batch.resolve(1).factor == 2.0
+    assert calls == [0, 1]
+    assert batch.messages == ("In1 未校准", "In2 未校准")
+    assert batch.warning_text() == "• In1 未校准\n• In2 未校准"
+
+
+def test_analysis_v2pa_batch_deduplicates_identical_messages_across_channels():
+    calls = []
+
+    def resolver(channel, warn_callback=None):
+        calls.append(channel)
+        warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
+
+    batch = AnalysisV2paBatch(resolver=resolver)
+
+    assert batch.resolve(0) == AnalysisV2paPreparation(factor=1.0)
+    assert batch.resolve(1) == AnalysisV2paPreparation(factor=1.0)
+    assert calls == [0, 1]
+    assert batch.messages == ("麦克风未进行校准，结果仅供参考。",)
+    assert batch.warning_text() == "麦克风未进行校准，结果仅供参考。"
+
+
+def test_analysis_v2pa_batch_ignores_empty_messages():
+    def resolver(channel, warn_callback=None):
+        warn_callback(None)
+        warn_callback("")
+        return 1.0
+
+    batch = AnalysisV2paBatch(resolver=resolver)
+
+    assert batch.resolve(0).factor == 1.0
+    assert batch.messages == ()
+    assert batch.warning_text() == ""
+
+
+def test_analysis_v2pa_batch_normalizes_channels_and_caches_value_error():
+    calls = []
+
+    def resolver(channel, warn_callback=None):
+        calls.append(channel)
+        raise ValueError("registered microphone hardware_id is required for calibration")
+
+    batch = AnalysisV2paBatch(resolver=resolver)
+    first = batch.resolve("bad")
+    second = batch.resolve(-3)
+    third = batch.resolve(None)
+    fourth = batch.resolve(float("inf"))
+
+    assert first.factor is None
+    assert first.error == "registered microphone hardware_id is required for calibration"
+    assert second == first
+    assert third == first
+    assert fourth == first
+    assert calls == [0]
+    assert batch.messages == (
+        "registered microphone hardware_id is required for calibration",
+    )
+
+
+def test_analysis_v2pa_batch_propagates_unexpected_resolver_error():
+    def resolver(channel, warn_callback=None):
+        raise RuntimeError("database unavailable")
+
+    batch = AnalysisV2paBatch(resolver=resolver)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        batch.resolve(None)
 
 
 def test_db_load_and_replace_channel_v2pa_factors(tmp_path):

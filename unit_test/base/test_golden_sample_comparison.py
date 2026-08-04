@@ -13,13 +13,51 @@ from base.golden_sample_comparison import (
     is_invalid_golden_envelope_limit_comparison,
     match_nearest_relative_limits,
     normalize_golden_sample_display_mode,
+    normalize_golden_sample_display_modes,
 )
 from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_CHECKED_KEY,
     GOLDEN_SAMPLE_DISPLAY_DEVIATION,
     GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
     GOLDEN_SAMPLE_DISPLAY_MODE_KEY,
+    GOLDEN_SAMPLE_DISPLAY_MODES_KEY,
 )
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (None, ("deviation",)),
+        ({}, ("deviation",)),
+        (
+            {GOLDEN_SAMPLE_DISPLAY_MODES_KEY: ["envelope", "deviation"]},
+            ("deviation", "envelope"),
+        ),
+        (
+            {
+                GOLDEN_SAMPLE_DISPLAY_MODES_KEY: [
+                    "deviation",
+                    "unsupported",
+                    1,
+                    "deviation",
+                ]
+            },
+            ("deviation",),
+        ),
+        (
+            {
+                GOLDEN_SAMPLE_DISPLAY_MODES_KEY: ["unsupported", 1],
+                GOLDEN_SAMPLE_DISPLAY_MODE_KEY: "envelope",
+            },
+            ("envelope",),
+        ),
+        ({GOLDEN_SAMPLE_DISPLAY_MODE_KEY: "deviation"}, ("deviation",)),
+        ({GOLDEN_SAMPLE_DISPLAY_MODE_KEY: "envelope"}, ("envelope",)),
+        ({GOLDEN_SAMPLE_DISPLAY_MODE_KEY: "unsupported"}, ("deviation",)),
+    ],
+)
+def test_normalize_golden_sample_display_modes(config, expected):
+    assert normalize_golden_sample_display_modes(config) == expected
 
 
 def test_display_mode_defaults_to_deviation_for_missing_or_invalid_values():
@@ -76,6 +114,25 @@ def test_invalid_envelope_limit_comparison_requires_all_three_feature_switches()
         config,
         [90.0],
         [np.nan],
+    )
+    assert is_invalid_golden_envelope_limit_comparison(
+        {
+            **config,
+            GOLDEN_SAMPLE_DISPLAY_MODES_KEY: [
+                GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+                GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+            ],
+            GOLDEN_SAMPLE_DISPLAY_MODE_KEY: GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+        },
+        None,
+    )
+    assert not is_invalid_golden_envelope_limit_comparison(
+        {
+            **config,
+            GOLDEN_SAMPLE_DISPLAY_MODES_KEY: [GOLDEN_SAMPLE_DISPLAY_DEVIATION],
+            GOLDEN_SAMPLE_DISPLAY_MODE_KEY: GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+        },
+        None,
     )
 
 

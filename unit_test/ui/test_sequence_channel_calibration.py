@@ -15,6 +15,10 @@ sys.path.insert(0, str(REPO_ROOT))
 from base.acquisition_recording_defaults import normalize_play_record_detail
 from base import soundcard_calibration_manager as calibration_manager
 from base.soundcard_calibration_manager import MicChannelCalibrationResult
+from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_CHECKED_KEY,
+    GOLDEN_SAMPLE_RESULT_PATH_KEY,
+)
 
 
 SEQUENCE_WIDGET_PATH = REPO_ROOT / "ui" / "sequence" / "sequence_widget.py"
@@ -55,6 +59,9 @@ def _load_class_method(
 
 def _load_record_golden_sample_method(namespace: dict):
     namespace.setdefault("build_recording_wav_calibration_metadata", lambda *args, **kwargs: {"recorded_channels": []})
+    namespace.setdefault("AnalysisV2paBatch", calibration_manager.AnalysisV2paBatch)
+    namespace.setdefault("GOLDEN_SAMPLE_CHECKED_KEY", GOLDEN_SAMPLE_CHECKED_KEY)
+    namespace.setdefault("GOLDEN_SAMPLE_RESULT_PATH_KEY", GOLDEN_SAMPLE_RESULT_PATH_KEY)
     return _load_class_method(
         OPERATION_SEQUENCE_PATH,
         "AnalysisModelSelect",
@@ -71,10 +78,12 @@ def _load_record_golden_sample_method(namespace: dict):
 
 class DummyMessageBox:
     warnings = []
+    events = None
 
     @classmethod
     def reset(cls):
         cls.warnings = []
+        cls.events = None
 
     @classmethod
     def warning(cls, *args, **kwargs):
@@ -84,6 +93,8 @@ class DummyMessageBox:
         elif args:
             message = args[-1]
         cls.warnings.append(str(message))
+        if cls.events is not None:
+            cls.events.append("warning")
 
 
 class FakeLogger:
@@ -96,6 +107,8 @@ class FakeLogger:
 
 class FakeAnalysis:
     instances = []
+    events = None
+    pre_resolved_markers = []
 
     def __init__(self, name):
         self.name = name
@@ -107,8 +120,15 @@ class FakeAnalysis:
     @classmethod
     def reset(cls):
         cls.instances = []
+        cls.events = None
+        cls.pre_resolved_markers = []
 
     def calculate_spl(self):
+        FakeAnalysis.pre_resolved_markers.append(
+            getattr(self, "_use_pre_resolved_v2pa_factor", False)
+        )
+        if FakeAnalysis.events is not None:
+            FakeAnalysis.events.append(f"{self.name}:calculate")
         return {"value": 1.0}
 
     def _resolve_v2pa_factor_for_analysis(self):
@@ -139,6 +159,78 @@ def _fake_get_rec_and_play_dict_base_sequence_dict(data_struct, recording_start_
     return {"stimulus": True}, recorded_dict
 
 
+def _run_golden_sample_operation(tmp_path, items, resolve_impl, events=None):
+    DummyMessageBox.reset()
+    FakeAnalysis.reset()
+    DummyMessageBox.events = events
+    FakeAnalysis.events = events
+    output_path = tmp_path / "golden.json"
+
+    class DummyFileDialog:
+        @staticmethod
+        def getSaveFileName(*args, **kwargs):
+            return str(output_path), "JSON Files (*.json)"
+
+    namespace = {
+        "copy": copy,
+        "datetime": datetime,
+        "json": json,
+        "os": os,
+        "DEFAULT_DIR": str(tmp_path).replace("\\", "/") + "/",
+        "LoadUiConfig": types.SimpleNamespace(
+            get_rec_and_play_dict_base_sequence_dict=_fake_get_rec_and_play_dict_base_sequence_dict
+        ),
+        "normalize_play_record_detail": normalize_play_record_detail,
+        "SoundcardAudioProcessor": lambda: types.SimpleNamespace(
+            sd_play_rec=lambda recorded_dict, stimulus_dict, recorded_wav_path, calibration_metadata=None: (
+                0,
+                [0.1, 0.2, 0.3],
+            )
+        ),
+        "get_class_mapping": lambda: {
+            "SPLF": FakeAnalysis,
+            "PRB": FakeAnalysis,
+        },
+        "MessageBox": DummyMessageBox,
+        "FileOps": types.SimpleNamespace(ensure_directory_exists=lambda path: None),
+        "QFileDialog": DummyFileDialog,
+        "resolve_analysis_v2pa_factor_for_channel": resolve_impl,
+        "AnalysisV2paBatch": calibration_manager.AnalysisV2paBatch,
+        "GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA": {"SPLF", "PRB"},
+        "_resolve_golden_sample_runtime_sample_rate": lambda dialog, data_struct: types.SimpleNamespace(
+            ok=True, sample_rate=48000, message=""
+        ),
+    }
+    method = _load_record_golden_sample_method(namespace)
+    analysis_cfg = {
+        "display_sequence": list(items),
+        **{
+            key: {
+                "golden_sample_checked": True,
+                **config,
+            }
+            for key, config in items.items()
+        },
+    }
+    sequence = types.SimpleNamespace(detail={"sample_rate": 48000}, analysis_list=analysis_cfg)
+    data_struct = types.SimpleNamespace(
+        stimulus_info={"type": "sine"},
+        sample_rate=48000,
+        store_wave_data=None,
+    )
+    dialog = types.SimpleNamespace(
+        select_list=types.SimpleNamespace(config=[sequence], data_struct=data_struct),
+        using_config_path="config.json",
+        default_logger=FakeLogger(),
+        set_data_struct_stimulus_signal=lambda *args, **kwargs: None,
+    )
+    dialog.record_golden_sample_btn_clicked = method.__get__(dialog, type(dialog))
+
+    dialog.record_golden_sample_btn_clicked()
+
+    return analysis_cfg, output_path
+
+
 def _build_sequence_window(
     resolve_impl,
     *,
@@ -148,6 +240,7 @@ def _build_sequence_window(
     class_mapping=None,
     active_input_channels=None,
     analysis_config=None,
+    analysis_v2pa_batch=None,
 ):
     DummyMessageBox.reset()
     FakeAnalysis.reset()
@@ -156,7 +249,20 @@ def _build_sequence_window(
         "get_class_mapping": lambda: class_mapping or {analysis_type: analysis_cls},
         "MessageBox": DummyMessageBox,
         "resolve_analysis_v2pa_factor_for_channel": resolve_impl,
-        "ANALYSIS_TYPES_REQUIRING_V2PA": {"SPL", "SPLF", "HD", "RB", "PRB", "LP", "PD", "ED", "FBA"},
+        "ANALYSIS_TYPES_REQUIRING_V2PA": {
+            "SPL",
+            "SPLF",
+            "FFT",
+            "HD",
+            "RB",
+            "PRB",
+            "LP",
+            "PD",
+            "ED",
+            "FBA",
+            "LOUD",
+        },
+        "GOLDEN_SAMPLE_RESULT_PATH_KEY": GOLDEN_SAMPLE_RESULT_PATH_KEY,
     }
     method = _load_class_method(SEQUENCE_WIDGET_PATH, "SequenceWindow", "instance_analysis_class", namespace)
 
@@ -168,6 +274,8 @@ def _build_sequence_window(
         _active_input_channels=list(active_input_channels or [0]),
         analysis_types_requiring_v2pa=namespace["ANALYSIS_TYPES_REQUIRING_V2PA"],
     )
+    if analysis_v2pa_batch is not None:
+        window._analysis_v2pa_batch = analysis_v2pa_batch
     window.instance_analysis_class = method.__get__(window, type(window))
     return window
 
@@ -261,21 +369,25 @@ def test_sequence_record_only_uses_raw_channel_for_calibration_and_mapped_channe
 
 def test_sequence_record_only_direct_pd_uses_pre_resolved_raw_channel_after_mapping():
     resolve_calls = []
+    batch_calls = []
 
     def resolve_impl(raw_channel, warn_callback=None):
         resolve_calls.append(raw_channel)
         return 5.5
 
+    batch = types.SimpleNamespace(resolve=lambda raw_channel: batch_calls.append(raw_channel))
     window = _build_sequence_window(
         resolve_impl,
         mode="RECORD_ONLY",
         analysis_type="PD",
         active_input_channels=[2, 5],
+        analysis_v2pa_batch=batch,
     )
 
     window.instance_analysis_class("PD1", "PD", {"analysis_channel": 5})
 
     assert resolve_calls == [5]
+    assert batch_calls == []
     assert len(window.analysis_window) == 1
     instance = window.analysis_window[0]
     assert instance.name == "PD1--通道6"
@@ -288,6 +400,7 @@ def test_sequence_record_only_direct_pd_uses_pre_resolved_raw_channel_after_mapp
 
 def test_sequence_record_only_channel_mismatch_skips_calibration_resolution_and_warning():
     resolve_calls = []
+    batch_calls = []
 
     def resolve_impl(raw_channel, warn_callback=None):
         resolve_calls.append(raw_channel)
@@ -298,11 +411,15 @@ def test_sequence_record_only_channel_mismatch_skips_calibration_resolution_and_
         mode="RECORD_ONLY",
         active_input_channels=[2, 5],
         analysis_config={"golden_sample_result_path": "golden.json"},
+        analysis_v2pa_batch=types.SimpleNamespace(
+            resolve=lambda raw_channel: batch_calls.append(raw_channel)
+        ),
     )
 
     window.instance_analysis_class("SPL1", "SPL", {"analysis_channel": 1})
 
     assert resolve_calls == []
+    assert batch_calls == []
     assert len(window.analysis_window) == 1
     instance = window.analysis_window[0]
     assert instance.name == "SPL1--通道2"
@@ -344,6 +461,34 @@ def test_sequence_record_only_invalid_analysis_channel_falls_back_without_crashi
     assert DummyMessageBox.warnings == []
 
 
+def test_sequence_record_only_active_batch_normalizes_non_finite_channel_to_zero():
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        return 4.2
+
+    batch = calibration_manager.AnalysisV2paBatch(resolver=resolve_impl)
+    window = _build_sequence_window(
+        lambda *_args, **_kwargs: pytest.fail("active batch must replace direct resolution"),
+        mode="RECORD_ONLY",
+        active_input_channels=[0, 5],
+        analysis_v2pa_batch=batch,
+    )
+
+    window.instance_analysis_class("SPL1", "SPL", {"analysis_channel": float("inf")})
+
+    assert resolve_calls == [0]
+    assert len(window.analysis_window) == 1
+    instance = window.analysis_window[0]
+    assert instance.name == "SPL1--通道1"
+    assert instance.v2pa_factor == 4.2
+    assert instance._v2pa_raw_analysis_channel == 0
+    assert instance.analysis_config["analysis_channel"] == 0
+    assert instance._channel_mismatch is False
+    assert DummyMessageBox.warnings == []
+
+
 def test_sequence_hd_standard_thd_skips_calibration_pre_resolution():
     resolve_calls = []
 
@@ -373,6 +518,7 @@ def test_sequence_hd_standard_thd_skips_calibration_pre_resolution():
 
 def test_sequence_ed_like_non_analysis_widget_does_not_receive_pre_resolved_marker():
     resolve_calls = []
+    batch_calls = []
 
     def resolve_impl(raw_channel, warn_callback=None):
         resolve_calls.append(raw_channel)
@@ -384,11 +530,15 @@ def test_sequence_ed_like_non_analysis_widget_does_not_receive_pre_resolved_mark
         analysis_type="ED",
         analysis_cls=FakeNonAnalysisWidget,
         active_input_channels=[4],
+        analysis_v2pa_batch=types.SimpleNamespace(
+            resolve=lambda raw_channel: batch_calls.append(raw_channel)
+        ),
     )
 
     window.instance_analysis_class("ED1", "ED", {"analysis_channel": 4})
 
     assert resolve_calls == [4]
+    assert batch_calls == []
     assert len(window.analysis_window) == 1
     instance = window.analysis_window[0]
     assert instance.name == "ED1--通道5"
@@ -396,6 +546,29 @@ def test_sequence_ed_like_non_analysis_widget_does_not_receive_pre_resolved_mark
     assert not hasattr(instance, "_use_pre_resolved_v2pa_factor")
     assert not hasattr(instance, "_v2pa_raw_analysis_channel")
     assert instance.analysis_config["analysis_channel"] == 0
+    assert DummyMessageBox.warnings == []
+
+
+def test_sequence_pm_excluded_from_active_batch_preserves_legacy_non_calibration_path():
+    resolve_calls = []
+    batch_calls = []
+    window = _build_sequence_window(
+        lambda raw_channel, warn_callback=None: resolve_calls.append(raw_channel),
+        mode="PLAY_AND_RECORD",
+        analysis_type="PM",
+        analysis_cls=FakeNonAnalysisWidget,
+        analysis_v2pa_batch=types.SimpleNamespace(
+            resolve=lambda raw_channel: batch_calls.append(raw_channel)
+        ),
+    )
+
+    window.instance_analysis_class("PM1", "PM", {"analysis_channel": 2})
+
+    assert batch_calls == []
+    assert resolve_calls == []
+    assert len(window.analysis_window) == 1
+    assert window.analysis_window[0].name == "PM1"
+    assert window.analysis_window[0].v2pa_factor is None
     assert DummyMessageBox.warnings == []
 
 
@@ -455,9 +628,35 @@ def test_sequence_non_record_only_uses_shared_helper_and_surfaces_fallback_warni
     assert DummyMessageBox.warnings == ["In4 未校准，本次使用 In1 的校准系数。"]
 
 
+def test_sequence_live_active_batch_normalizes_non_finite_channel_to_zero():
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        return 2.5
+
+    batch = calibration_manager.AnalysisV2paBatch(resolver=resolve_impl)
+    window = _build_sequence_window(
+        lambda *_args, **_kwargs: pytest.fail("active batch must replace direct resolution"),
+        mode="PLAY_AND_RECORD",
+        analysis_v2pa_batch=batch,
+    )
+
+    window.instance_analysis_class("SPL1", "SPL", {"analysis_channel": float("inf")})
+
+    assert resolve_calls == [0]
+    assert len(window.analysis_window) == 1
+    instance = window.analysis_window[0]
+    assert instance.v2pa_factor == 2.5
+    assert instance._v2pa_raw_analysis_channel == 0
+    assert instance._use_pre_resolved_v2pa_factor is True
+    assert DummyMessageBox.warnings == []
+
+
 @pytest.mark.parametrize("mode", ["IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"])
 def test_sequence_import_modes_do_not_pre_resolve_calibration_from_database(mode):
     resolve_calls = []
+    batch_calls = []
 
     def resolve_impl(raw_channel, warn_callback=None):
         resolve_calls.append(raw_channel)
@@ -467,12 +666,16 @@ def test_sequence_import_modes_do_not_pre_resolve_calibration_from_database(mode
         resolve_impl,
         mode=mode,
         analysis_config={"golden_sample_result_path": "golden.json"},
+        analysis_v2pa_batch=types.SimpleNamespace(
+            resolve=lambda raw_channel: batch_calls.append(raw_channel)
+        ),
     )
 
     params = {"analysis_channel": 3}
     window.instance_analysis_class("SPL2", "SPL", params)
 
     assert resolve_calls == []
+    assert batch_calls == []
     assert len(window.analysis_window) == 1
     instance = window.analysis_window[0]
     assert instance.name == "SPL2"
@@ -484,7 +687,55 @@ def test_sequence_import_modes_do_not_pre_resolve_calibration_from_database(mode
     assert DummyMessageBox.warnings == []
 
 
-def test_sequence_batch_coalesces_duplicate_uncalibrated_mic_warnings():
+@pytest.mark.parametrize("analysis_type", ["SPL", "SPLF", "FFT", "LP", "FBA", "LOUD"])
+def test_sequence_active_batch_prepares_in_scope_analysis_without_immediate_warning(analysis_type):
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        if warn_callback:
+            warn_callback("In4 未校准")
+        return 3.25
+
+    batch = calibration_manager.AnalysisV2paBatch(resolver=resolve_impl)
+    window = _build_sequence_window(
+        lambda *_args, **_kwargs: pytest.fail("active batch must replace direct resolution"),
+        mode="PLAY_AND_RECORD",
+        analysis_type=analysis_type,
+        analysis_v2pa_batch=batch,
+    )
+
+    window.instance_analysis_class("item", analysis_type, {"analysis_channel": 3})
+
+    assert resolve_calls == [3]
+    assert len(window.analysis_window) == 1
+    instance = window.analysis_window[0]
+    assert instance.v2pa_factor == 3.25
+    assert instance._v2pa_raw_analysis_channel == 3
+    assert instance._use_pre_resolved_v2pa_factor is True
+    assert batch.warning_text() == "In4 未校准"
+    assert DummyMessageBox.warnings == []
+
+
+def test_sequence_active_batch_omits_analysis_when_preparation_is_unavailable():
+    def resolve_impl(raw_channel, warn_callback=None):
+        raise ValueError("channel calibration unavailable")
+
+    batch = calibration_manager.AnalysisV2paBatch(resolver=resolve_impl)
+    window = _build_sequence_window(
+        lambda *_args, **_kwargs: pytest.fail("active batch must replace direct resolution"),
+        mode="PLAY_AND_RECORD",
+        analysis_v2pa_batch=batch,
+    )
+
+    window.instance_analysis_class("SPL1", "SPL", {"analysis_channel": 0})
+
+    assert window.analysis_window == []
+    assert batch.warning_text() == "channel calibration unavailable"
+    assert DummyMessageBox.warnings == []
+
+
+def test_golden_sample_batch_caches_same_channel_and_injects_prepared_factor(tmp_path):
     resolve_calls = []
 
     def resolve_impl(raw_channel, warn_callback=None):
@@ -493,35 +744,144 @@ def test_sequence_batch_coalesces_duplicate_uncalibrated_mic_warnings():
             warn_callback("麦克风未进行校准，结果仅供参考。")
         return 1.0
 
-    window = _build_sequence_window(
-        resolve_impl,
-        mode="PLAY_AND_RECORD",
-        class_mapping={
-            "SPL": FakeAnalysis,
-            "SPLF": FakeAnalysis,
-            "FBA": FakeAnalysis,
-            "PRB": FakeAnalysis,
+    _run_golden_sample_operation(
+        tmp_path,
+        {
+            "SPLF1": {"type": "SPLF", "analysis_channel": 0},
+            "PRB1": {"type": "PRB", "analysis_channel": 0},
         },
+        resolve_impl,
     )
-    shown_messages = set()
 
-    def show_once_warning(message):
-        if message in shown_messages:
-            return
-        shown_messages.add(message)
-        DummyMessageBox.warning(window, "提示", message)
-
-    window._analysis_v2pa_warning_callback = show_once_warning
-
-    window.instance_analysis_class("SPL1", "SPL", {"analysis_channel": 0})
-    window.instance_analysis_class("SPLF1", "SPLF", {"analysis_channel": 0})
-    window.instance_analysis_class("FBA1", "FBA", {"analysis_channel": 0})
-    window.instance_analysis_class("PRB1", "PRB", {"analysis_channel": 0})
-
-    assert resolve_calls == [0, 0, 0, 0]
-    assert len(window.analysis_window) == 4
-    assert [instance.v2pa_factor for instance in window.analysis_window] == [1.0, 1.0, 1.0, 1.0]
+    assert resolve_calls == [0]
     assert DummyMessageBox.warnings == ["麦克风未进行校准，结果仅供参考。"]
+    assert [instance.v2pa_factor for instance in FakeAnalysis.instances] == [1.0, 1.0]
+    assert FakeAnalysis.pre_resolved_markers == [True, True]
+    assert all(
+        instance._v2pa_raw_analysis_channel == 0
+        for instance in FakeAnalysis.instances
+    )
+
+
+def test_golden_sample_batch_combines_distinct_messages_in_channel_order(tmp_path):
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        if warn_callback:
+            warn_callback(f"In{raw_channel + 1} calibration unavailable.")
+        return float(raw_channel + 1)
+
+    _run_golden_sample_operation(
+        tmp_path,
+        {
+            "SPLF1": {"type": "SPLF", "analysis_channel": 2},
+            "PRB1": {"type": "PRB", "analysis_channel": 5},
+        },
+        resolve_impl,
+    )
+
+    assert resolve_calls == [2, 5]
+    assert DummyMessageBox.warnings == [
+        "• In3 calibration unavailable.\n• In6 calibration unavailable."
+    ]
+    assert [instance.v2pa_factor for instance in FakeAnalysis.instances] == [3.0, 6.0]
+
+
+def test_golden_sample_batch_deduplicates_same_message_from_distinct_channels(tmp_path):
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        if warn_callback:
+            warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
+
+    _run_golden_sample_operation(
+        tmp_path,
+        {
+            "SPLF1": {"type": "SPLF", "analysis_channel": 1},
+            "PRB1": {"type": "PRB", "analysis_channel": 4},
+        },
+        resolve_impl,
+    )
+
+    assert resolve_calls == [1, 4]
+    assert DummyMessageBox.warnings == ["麦克风未进行校准，结果仅供参考。"]
+
+
+def test_golden_sample_batch_calibrated_items_show_no_warning(tmp_path):
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        return 2.5
+
+    _run_golden_sample_operation(
+        tmp_path,
+        {
+            "SPLF1": {"type": "SPLF", "analysis_channel": 3},
+            "PRB1": {"type": "PRB", "analysis_channel": 3},
+        },
+        resolve_impl,
+    )
+
+    assert resolve_calls == [3]
+    assert DummyMessageBox.warnings == []
+    assert [instance.v2pa_factor for instance in FakeAnalysis.instances] == [2.5, 2.5]
+    assert FakeAnalysis.pre_resolved_markers == [True, True]
+
+
+def test_golden_sample_batch_value_error_skips_only_affected_item(tmp_path):
+    resolve_calls = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        if raw_channel == 1:
+            raise ValueError("In2 calibration payload is invalid.")
+        return 4.5
+
+    _, output_path = _run_golden_sample_operation(
+        tmp_path,
+        {
+            "SPLF1": {"type": "SPLF", "analysis_channel": 1},
+            "PRB1": {"type": "PRB", "analysis_channel": 2},
+        },
+        resolve_impl,
+    )
+
+    assert resolve_calls == [1, 2]
+    assert DummyMessageBox.warnings == ["In2 calibration payload is invalid."]
+    assert [instance.name for instance in FakeAnalysis.instances] == ["PRB1"]
+    assert FakeAnalysis.instances[0].v2pa_factor == 4.5
+    assert FakeAnalysis.pre_resolved_markers == [True]
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert list(payload["items"]) == ["PRB1"]
+
+
+def test_golden_sample_batch_warns_after_preparation_and_before_any_calculation(tmp_path):
+    events = []
+
+    def resolve_impl(raw_channel, warn_callback=None):
+        events.append(f"resolve:{raw_channel}")
+        if warn_callback:
+            warn_callback(f"In{raw_channel + 1} calibration unavailable.")
+        return 1.0
+
+    _run_golden_sample_operation(
+        tmp_path,
+        {
+            "SPLF1": {"type": "SPLF", "analysis_channel": 0},
+            "PRB1": {"type": "PRB", "analysis_channel": 1},
+        },
+        resolve_impl,
+        events=events,
+    )
+
+    assert events[:3] == ["resolve:0", "resolve:1", "warning"]
+    assert events.index("warning") < events.index("SPLF1:calculate")
+    assert events.index("warning") < events.index("PRB1:calculate")
+    assert events.count("warning") == 1
 
 
 def test_golden_sample_rb_standard_thd_skips_calibration_resolution(tmp_path):

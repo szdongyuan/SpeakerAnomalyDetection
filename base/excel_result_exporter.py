@@ -13,6 +13,11 @@ import numpy as np
 from openpyxl import Workbook, load_workbook
 import msvcrt  # Windows-only; used for runtime file locking
 
+from base.golden_sample_export_payload import parse_golden_sample_curve_exports
+from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+    GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+)
 from consts.running_consts import DEFAULT_DIR
 
 
@@ -446,11 +451,18 @@ class ExcelExportSession:
         analysis_config: dict[str, Any],
         analysis_result_dict: dict[str, tuple[bool, float]],
     ) -> ExportResult:
+        if not isinstance(save_items, list) or len(save_items) == 0:
+            return ExportResult(ok=False, message="未选择需要保存的分析项")
+        resolved_curves, error = _preflight_named_curve_exports(
+            save_items,
+            analysis_items_data,
+        )
+        if error:
+            return ExportResult(ok=False, message=error)
+
         ret = self._open_or_create()
         if not ret.ok:
             return ret
-        if not isinstance(save_items, list) or len(save_items) == 0:
-            return ExportResult(ok=False, message="未选择需要保存的分析项")
         wb = self._wb
         if wb is None:
             return ExportResult(ok=False, message="Excel workbook 未初始化")
@@ -488,37 +500,41 @@ class ExcelExportSession:
                 model_name = item_data.get("model_name") or item_data.get("model") or ""
                 _append_row(ws, [sn, date_text, label, ok_score, ng_score, model_name])
             else:
-                result = item_data.get("result")
-                xy = _extract_curve_xy(result) if isinstance(result, dict) else None
-                if xy is None:
-                    continue
-                x, y = xy
-                x, y = _downsample_xy(x, y, min(int(max_points), EXCEL_MAX_DATA_POINTS))
+                named_curves = resolved_curves.get(item_name, [])
+                for curve_name, curve_x, curve_y in named_curves:
+                    x, y = _downsample_xy(
+                        curve_x,
+                        curve_y,
+                        min(int(max_points), EXCEL_MAX_DATA_POINTS),
+                    )
 
-                ws_base = _sanitize_sheet_name(item_name)
-                if ws_base in wb.sheetnames:
-                    ws = wb[ws_base]
-                    existing = [c.value for c in ws[1][2:] if c.value is not None]
-                    expected = [_normalize_header_value(v) for v in x]
-                    if not _headers_match(existing, expected):
-                        v2_name = _sanitize_sheet_name(f"{item_name}_v2")
-                        if v2_name in wb.sheetnames:
-                            ws2 = wb[v2_name]
-                            existing2 = [c.value for c in ws2[1][2:] if c.value is not None]
-                            if _headers_match(existing2, expected):
-                                ws = ws2
+                    ws_base = _sanitize_sheet_name(curve_name)
+                    if ws_base in wb.sheetnames:
+                        ws = wb[ws_base]
+                        existing = [c.value for c in ws[1][2:] if c.value is not None]
+                        expected = [_normalize_header_value(v) for v in x]
+                        if not _headers_match(existing, expected):
+                            v2_name = _sanitize_sheet_name(f"{curve_name}_v2")
+                            if v2_name in wb.sheetnames:
+                                ws2 = wb[v2_name]
+                                existing2 = [c.value for c in ws2[1][2:] if c.value is not None]
+                                if _headers_match(existing2, expected):
+                                    ws = ws2
+                                else:
+                                    v2_name = _make_unique_sheet_name(
+                                        wb.sheetnames,
+                                        f"{curve_name}_v2",
+                                    )
+                                    ws = ensure_sheet(v2_name)
                             else:
-                                v2_name = _make_unique_sheet_name(wb.sheetnames, f"{item_name}_v2")
                                 ws = ensure_sheet(v2_name)
-                        else:
-                            ws = ensure_sheet(v2_name)
-                else:
-                    ws = ensure_sheet(ws_base)
+                    else:
+                        ws = ensure_sheet(ws_base)
 
-                header = CURVE_SHEET_HEADER_PREFIX + x
-                if ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
-                    _ensure_header(ws, header)
-                _append_row(ws, [sn, date_text] + y)
+                    header = CURVE_SHEET_HEADER_PREFIX + x
+                    if ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
+                        _ensure_header(ws, header)
+                    _append_row(ws, [sn, date_text] + y)
 
             result_tuple = analysis_result_dict.get(item_name)
             if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
@@ -676,6 +692,65 @@ def _extract_curve_xy(result: dict[str, Any]) -> tuple[list[Any], list[Any]] | N
             if isinstance(x, list) and isinstance(y, list) and len(x) > 0 and len(y) > 0:
                 return x, y
     return None
+
+
+def _resolve_named_curve_exports(
+    item_name: str,
+    result: dict[str, Any],
+) -> tuple[list[tuple[str, list[Any], list[Any]]], str | None]:
+    is_legacy, parsed, error = parse_golden_sample_curve_exports(result)
+    if error:
+        return [], f"当前黄金样本导出载荷不完整: {error}"
+    if is_legacy:
+        xy = _extract_curve_xy(result)
+        return ([] if xy is None else [(item_name, *xy)]), None
+
+    curves = [
+        (
+            _make_golden_curve_export_name(item_name, item.mode),
+            item.x,
+            item.y,
+        )
+        for item in parsed
+        if item.available and item.x is not None and item.y is not None
+    ]
+    return curves, None
+
+
+def _make_golden_curve_export_name(item_name: str, mode: str) -> str:
+    suffix = {
+        GOLDEN_SAMPLE_DISPLAY_DEVIATION: "_偏差曲线",
+        GOLDEN_SAMPLE_DISPLAY_ENVELOPE: "_测试曲线",
+    }[mode]
+    item_part = str(item_name or "").strip()
+    item_part = _INVALID_SHEET_CHARS_RE.sub("_", item_part)
+    item_part = _INVALID_FILENAME_CHARS_RE.sub("_", item_part)
+    if not item_part:
+        item_part = "Sheet"
+    return f"{item_part[: 31 - len(suffix)]}{suffix}"
+
+
+def _preflight_named_curve_exports(
+    save_items: list[str],
+    analysis_items_data: dict[str, dict[str, Any]],
+) -> tuple[dict[str, list[tuple[str, list[Any], list[Any]]]], str | None]:
+    resolved: dict[str, list[tuple[str, list[Any], list[Any]]]] = {}
+    for item_name in save_items:
+        item_data = analysis_items_data.get(item_name)
+        if not isinstance(item_data, dict):
+            continue
+        if item_data.get("type") in ("AI", "Spec"):
+            continue
+        result = item_data.get("result")
+        curves, error = (
+            _resolve_named_curve_exports(item_name, result)
+            if isinstance(result, dict)
+            else ([], None)
+        )
+        if error:
+            return {}, error
+        resolved[item_name] = curves
+    return resolved, None
 
 
 def _ensure_header(ws, header: list[Any]):
@@ -932,6 +1007,12 @@ def export_analysis_to_csv_spool(
     save_items = excel_cfg.get("save_items") or []
     if not isinstance(save_items, list) or len(save_items) == 0:
         return ExportResult(ok=False, message="未选择需要保存的分析项")
+    resolved_curves, error = _preflight_named_curve_exports(
+        save_items,
+        analysis_items_data,
+    )
+    if error:
+        return ExportResult(ok=False, message=error)
 
     try:
         file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
@@ -999,19 +1080,26 @@ def export_analysis_to_csv_spool(
             if not ret.ok:
                 return ret
         else:
-            result = item_data.get("result")
-            xy = _extract_curve_xy(result) if isinstance(result, dict) else None
-            if xy is None:
-                continue
-            x, y = xy
-            x, y = _downsample_xy(x, y, min(int(max_points), EXCEL_MAX_DATA_POINTS))
+            named_curves = resolved_curves.get(item_name, [])
+            for curve_name, curve_x, curve_y in named_curves:
+                x, y = _downsample_xy(
+                    curve_x,
+                    curve_y,
+                    min(int(max_points), EXCEL_MAX_DATA_POINTS),
+                )
 
-            _sheet_name, csv_path = _resolve_curve_spool_csv_path(spool_dir, item_name=item_name, expected_x=x)
-            header = CURVE_SHEET_HEADER_PREFIX + [_normalize_header_value(v) for v in x]
-            row = [sn, date_text] + list(y)
-            ret = append_csv(csv_path, header=header, row=row)
-            if not ret.ok:
-                return ret
+                _sheet_name, csv_path = _resolve_curve_spool_csv_path(
+                    spool_dir,
+                    item_name=curve_name,
+                    expected_x=x,
+                )
+                header = CURVE_SHEET_HEADER_PREFIX + [
+                    _normalize_header_value(v) for v in x
+                ]
+                row = [sn, date_text] + list(y)
+                ret = append_csv(csv_path, header=header, row=row)
+                if not ret.ok:
+                    return ret
 
         result_tuple = analysis_result_dict.get(item_name)
         if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
@@ -1206,6 +1294,12 @@ def export_analysis_to_excel(
     save_items = excel_cfg.get("save_items") or []
     if not isinstance(save_items, list) or len(save_items) == 0:
         return ExportResult(ok=False, message="未选择需要保存的分析项")
+    resolved_curves, error = _preflight_named_curve_exports(
+        save_items,
+        analysis_items_data,
+    )
+    if error:
+        return ExportResult(ok=False, message=error)
 
     try:
         file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
@@ -1273,37 +1367,41 @@ def export_analysis_to_excel(
             model_name = item_data.get("model_name") or item_data.get("model") or ""
             _append_row(ws, [sn, date_text, label, ok_score, ng_score, model_name])
         else:
-            result = item_data.get("result")
-            xy = _extract_curve_xy(result) if isinstance(result, dict) else None
-            if xy is None:
-                continue
-            x, y = xy
-            x, y = _downsample_xy(x, y, min(max_points, EXCEL_MAX_DATA_POINTS))
+            named_curves = resolved_curves.get(item_name, [])
+            for curve_name, curve_x, curve_y in named_curves:
+                x, y = _downsample_xy(
+                    curve_x,
+                    curve_y,
+                    min(max_points, EXCEL_MAX_DATA_POINTS),
+                )
 
-            ws_base = _sanitize_sheet_name(item_name)
-            if ws_base in wb.sheetnames:
-                ws = wb[ws_base]
-                existing = [c.value for c in ws[1][2:] if c.value is not None]
-                expected = [_normalize_header_value(v) for v in x]
-                if not _headers_match(existing, expected):
-                    v2_name = _sanitize_sheet_name(f"{item_name}_v2")
-                    if v2_name in wb.sheetnames:
-                        ws2 = wb[v2_name]
-                        existing2 = [c.value for c in ws2[1][2:] if c.value is not None]
-                        if _headers_match(existing2, expected):
-                            ws = ws2
+                ws_base = _sanitize_sheet_name(curve_name)
+                if ws_base in wb.sheetnames:
+                    ws = wb[ws_base]
+                    existing = [c.value for c in ws[1][2:] if c.value is not None]
+                    expected = [_normalize_header_value(v) for v in x]
+                    if not _headers_match(existing, expected):
+                        v2_name = _sanitize_sheet_name(f"{curve_name}_v2")
+                        if v2_name in wb.sheetnames:
+                            ws2 = wb[v2_name]
+                            existing2 = [c.value for c in ws2[1][2:] if c.value is not None]
+                            if _headers_match(existing2, expected):
+                                ws = ws2
+                            else:
+                                v2_name = _make_unique_sheet_name(
+                                    wb.sheetnames,
+                                    f"{curve_name}_v2",
+                                )
+                                ws = ensure_sheet(v2_name)
                         else:
-                            v2_name = _make_unique_sheet_name(wb.sheetnames, f"{item_name}_v2")
                             ws = ensure_sheet(v2_name)
-                    else:
-                        ws = ensure_sheet(v2_name)
-            else:
-                ws = ensure_sheet(ws_base)
+                else:
+                    ws = ensure_sheet(ws_base)
 
-            header = CURVE_SHEET_HEADER_PREFIX + x
-            if ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
-                _ensure_header(ws, header)
-            _append_row(ws, [sn, date_text] + y)
+                header = CURVE_SHEET_HEADER_PREFIX + x
+                if ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
+                    _ensure_header(ws, header)
+                _append_row(ws, [sn, date_text] + y)
 
         result_tuple = analysis_result_dict.get(item_name)
         if isinstance(result_tuple, tuple) and len(result_tuple) == 2:

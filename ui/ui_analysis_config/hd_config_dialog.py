@@ -75,6 +75,8 @@ class HdConfigWindow(SemanticAnalysisConfigDialogBase):
     def on_default_btn_clicked(self):
         if not self.validate_plot_view_config():
             return
+        if not self.golden_chk_box.validate():
+            return
         if not self.threshold_widget.validate():
             return
         config_data = self.get_default_config()
@@ -91,6 +93,8 @@ class HdConfigWindow(SemanticAnalysisConfigDialogBase):
             MessageBox.warning(self, "设置警告", "请选择谐波失真阶数")
         else:
             if not self.validate_plot_view_config():
+                return
+            if not self.golden_chk_box.validate():
                 return
             if not self.threshold_widget.validate():
                 return

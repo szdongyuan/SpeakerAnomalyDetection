@@ -82,6 +82,8 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
     def on_default_btn_clicked(self):
         if not self.validate_plot_view_config():
             return
+        if not self.golden_chk_box.validate():
+            return
         if not self.threshold_widget.validate():
             return
         config_data = self.get_default_config()
@@ -98,6 +100,8 @@ class RbConfigWindow(SemanticAnalysisConfigDialogBase):
             MessageBox.warning(self, "设置警告", "请选择Rub & Buzz阶数")
         else:
             if not self.validate_plot_view_config():
+                return
+            if not self.golden_chk_box.validate():
                 return
             if not self.threshold_widget.validate():
                 return

@@ -2389,7 +2389,7 @@ def test_splf_dialog_preserves_saved_keys_after_shared_control_migration(qapp):
         "splf_calc_mode": "total",
         "octave_smoothing": 3,
         "golden_sample_checked": True,
-        "golden_sample_display_mode": "envelope",
+        "golden_sample_display_modes": ["envelope"],
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2575,9 +2575,78 @@ def test_requested_dialogs_return_manual_segment_keys_from_threshold_widget(qapp
         assert "manual_lower" not in config
         assert window.threshold_widget.current_limit_value_semantics() == "bounds", analysis_type
         window.golden_chk_box.enabled_checkbox.setChecked(True)
-        envelope_index = window.golden_chk_box.display_mode_combo.findData("envelope")
-        window.golden_chk_box.display_mode_combo.setCurrentIndex(envelope_index)
+        window.golden_chk_box.deviation_checkbox.setChecked(False)
+        window.golden_chk_box.envelope_checkbox.setChecked(True)
         assert window.threshold_widget.current_limit_value_semantics() == "offset", analysis_type
+
+
+@pytest.mark.parametrize("analysis_type", ["HD", "RB", "PRB", "SPLF", "FR"])
+@pytest.mark.parametrize("action_name", ["on_click_ok_btn", "on_default_btn_clicked"])
+def test_golden_dialog_actions_reject_enabled_empty_display_selection(
+    qapp,
+    monkeypatch,
+    analysis_type,
+    action_name,
+):
+    from ui.ui_analysis_config import common_widgets
+    from ui.ui_analysis_config.fr_config_dialog import FrConfigWindow
+    from ui.ui_analysis_config.hd_config_dialog import HdConfigWindow
+    from ui.ui_analysis_config.perceptual_rb_config_dialog import PerceptualRbConfigWindow
+    from ui.ui_analysis_config.rb_config_dialog import RbConfigWindow
+    from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+
+    config = {
+        "golden_sample_checked": True,
+        "golden_sample_display_modes": ["deviation"],
+        "limit_checked": False,
+        "limit_data": None,
+    }
+    if analysis_type == "HD":
+        config.update({"selected_labels": [2], "all_checked": False})
+    elif analysis_type == "RB":
+        config.update({"selected_labels": [10], "all_checked": False})
+    elif analysis_type == "PRB":
+        config["masking_config"] = {"sc_metric": "totalnl_x_ehs"}
+    elif analysis_type == "SPLF":
+        config.update(
+            {
+                "splf_calc_mode": "fundamental",
+                "octave_smoothing": 0,
+                "weighting": "Z",
+                "analysis_channel": 0,
+            }
+        )
+    elif analysis_type == "FR":
+        config["octave_smoothing"] = 0
+
+    config_manager = FakeConfigManager({analysis_type: config})
+    constructors = {
+        "HD": lambda: HdConfigWindow(config_manager, "HD"),
+        "RB": lambda: RbConfigWindow(config_manager, "RB"),
+        "PRB": lambda: PerceptualRbConfigWindow(config_manager, "PRB"),
+        "SPLF": lambda: SplConfigWindow(
+            config_manager,
+            "SPLF",
+            available_channels=[0],
+        ),
+        "FR": lambda: FrConfigWindow(config_manager, "FR"),
+    }
+    window = constructors[analysis_type]()
+    warnings = []
+    monkeypatch.setattr(
+        common_widgets.MessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    window.golden_chk_box.deviation_checkbox.setChecked(False)
+    window.golden_chk_box.envelope_checkbox.setChecked(False)
+
+    result = getattr(window, action_name)()
+
+    assert result is None
+    assert window.result() != window.Accepted
+    assert config_manager.saved == []
+    assert warnings[-1][1:] == ("设置警告", "请至少选择一种黄金样本显示方式。")
 
 
 def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
@@ -2601,7 +2670,7 @@ def test_fr_dialog_uses_shared_octave_smoothing_legacy_fallback(qapp):
     assert window.get_default_config() == {
         "octave_smoothing": 6,
         "golden_sample_checked": True,
-        "golden_sample_display_mode": "deviation",
+        "golden_sample_display_modes": ["deviation"],
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2798,7 +2867,7 @@ def test_hd_dialog_uses_shared_harmonic_and_golden_widgets(qapp):
         "selected_labels": [2, 3],
         "all_checked": False,
         "golden_sample_checked": True,
-        "golden_sample_display_mode": "deviation",
+        "golden_sample_display_modes": ["deviation"],
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2834,7 +2903,7 @@ def test_rb_dialog_filters_harmonics_to_rub_buzz_range(qapp):
         "selected_labels": [10, 12],
         "all_checked": False,
         "golden_sample_checked": False,
-        "golden_sample_display_mode": "deviation",
+        "golden_sample_display_modes": ["deviation"],
         "limit_checked": False,
         "limit_data": None,
         "limit_mode": "csv",
@@ -2958,7 +3027,7 @@ def test_prb_dialog_preserves_metric_fallback_and_golden_sample(qapp):
     assert config["prb_method"] == "sc"
     assert config["masking_config"] == {"sc_metric": "totalnl_x_ehs", "keep": "value"}
     assert config["golden_sample_checked"] is True
-    assert config["golden_sample_display_mode"] == "deviation"
+    assert config["golden_sample_display_modes"] == ["deviation"]
     assert config["limit_checked"] is False
     assert config["limit_data"] is None
     assert config["limit_mode"] == "csv"

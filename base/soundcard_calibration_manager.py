@@ -20,6 +20,12 @@ class MicChannelCalibrationResult:
     has_any_calibration: bool
 
 
+@dataclass(frozen=True)
+class AnalysisV2paPreparation:
+    factor: Optional[float]
+    error: Optional[str] = None
+
+
 def _normalize_channel_index(channel_index):
     try:
         normalized = int(channel_index)
@@ -183,6 +189,54 @@ def resolve_analysis_v2pa_factor_for_channel(raw_channel, warn_callback=None, ha
             warn_callback("麦克风未进行校准，结果仅供参考。")
         return 1.0
     return float(result.factor)
+
+
+class AnalysisV2paBatch:
+    def __init__(self, resolver=None):
+        self._resolver = resolver or resolve_analysis_v2pa_factor_for_channel
+        self._preparations = {}
+        self._messages = []
+        self._message_set = set()
+
+    @staticmethod
+    def _normalize_channel(raw_channel):
+        try:
+            return max(0, int(raw_channel or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    def _capture_message(self, message):
+        if message is None:
+            return
+        text = str(message)
+        if text and text not in self._message_set:
+            self._message_set.add(text)
+            self._messages.append(text)
+
+    def resolve(self, raw_channel) -> AnalysisV2paPreparation:
+        channel = self._normalize_channel(raw_channel)
+        if channel in self._preparations:
+            return self._preparations[channel]
+
+        try:
+            factor = self._resolver(channel, warn_callback=self._capture_message)
+            preparation = AnalysisV2paPreparation(factor=factor)
+        except ValueError as exc:
+            error = str(exc)
+            self._capture_message(error)
+            preparation = AnalysisV2paPreparation(factor=None, error=error)
+
+        self._preparations[channel] = preparation
+        return preparation
+
+    @property
+    def messages(self):
+        return tuple(self._messages)
+
+    def warning_text(self):
+        if len(self._messages) == 1:
+            return self._messages[0]
+        return "\n".join(f"• {message}" for message in self._messages)
 
 
 

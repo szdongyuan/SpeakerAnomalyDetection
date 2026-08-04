@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.soundcard_calibration_manager import AnalysisV2paBatch
 from ui.sequence import sequence_widget
 
 
@@ -310,8 +311,10 @@ def test_import_mode_stimulus_config_init_preserves_imported_recording_sample_ra
 READINESS_WARNING = "分析参考激励尚未就绪或采样率与导入音频不一致，请检查激励配置后重试。"
 
 
-def _run_window():
+def _run_window(mode="IMPORT_STIMULUS_AUDIO"):
     window = _runtime_window()
+    window.mode = mode
+    window.sequence_config = _sequence({}, mode=mode)
     window.analysis_window = [SimpleNamespace(name="previous-analysis-window")]
     window._analysis_result_summary_window = SimpleNamespace(name="previous-summary")
     window.analysis_config = {
@@ -480,3 +483,422 @@ def test_run_skips_failed_spec_and_continues_later_analysis_and_exports():
     sequence_widget.SequenceWindow.run(window)
 
     assert events == ["spec_calculate", "fft_calculate", "fft_show", "export"]
+
+
+def _configure_live_batch_run(window, events, raw_channels=(0, 1)):
+    class SuccessfulSpl:
+        def __init__(self, key):
+            self._sequence_analysis_key = key
+
+        def calculate_spl(self):
+            events.append(f"{self._sequence_analysis_key}:calculate")
+            return True
+
+        def show(self):
+            events.append(f"{self._sequence_analysis_key}:show")
+
+        def setGeometry(self, *args):
+            pass
+
+        def setMinimumSize(self, *args):
+            pass
+
+        def installEventFilter(self, *args):
+            pass
+
+    raw_channels = tuple(raw_channels)
+    item_keys = (
+        ["first", "second"]
+        if raw_channels == (0, 1)
+        else [f"item-{index}" for index in range(len(raw_channels))]
+    )
+    window.analysis_config = {
+        "display_sequence": item_keys,
+        **{
+            key: {"type": "SPL", "analysis_channel": raw_channel}
+            for key, raw_channel in zip(item_keys, raw_channels)
+        },
+    }
+
+    def instance_analysis_class(key, item_type, config):
+        batch = window._analysis_v2pa_batch
+        preparation = batch.resolve(config["analysis_channel"])
+        assert preparation.factor is not None
+        window.analysis_window.append(SuccessfulSpl(key))
+
+    window.instance_analysis_class = instance_analysis_class
+    window._analysis_window_key_by_obj = {}
+    window._get_analysis_window_geometry = lambda _key: None
+    window._set_analysis_window_geometry = lambda *_args: None
+    window._handle_post_analysis_exports = lambda: events.append("export")
+
+
+def test_record_only_run_lists_uncalibrated_channels_in_first_seen_order_before_calculation(
+    monkeypatch,
+):
+    events = []
+    resolve_calls = []
+    warning_calls = []
+    window = _run_window(mode="RECORD_ONLY")
+    _configure_live_batch_run(window, events, raw_channels=(2, 0, 2))
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
+
+    def warning(*args):
+        warning_calls.append(args)
+        events.append("warning")
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "resolve_analysis_v2pa_factor_for_channel",
+        fake_resolver,
+    )
+
+    def batch_factory(resolver=None):
+        return AnalysisV2paBatch(resolver=resolver or fake_resolver)
+
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(sequence_widget.MessageBox, "warning", warning)
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == [
+        (
+            window,
+            "提示",
+            "麦克风未进行校准，结果仅供参考。\n"
+            "未校准通道：\n"
+            "• In3\n"
+            "• In1",
+        )
+    ]
+    assert resolve_calls == [2, 0]
+    assert events == [
+        "warning",
+        "item-0:calculate",
+        "item-0:show",
+        "item-1:calculate",
+        "item-1:show",
+        "item-2:calculate",
+        "item-2:show",
+        "export",
+    ]
+    assert not hasattr(window, "_analysis_v2pa_batch")
+    assert not hasattr(window, "_analysis_v2pa_warning_callback")
+
+
+def test_record_only_run_lists_one_uncalibrated_channel_once(monkeypatch):
+    events = []
+    resolve_calls = []
+    warning_calls = []
+    window = _run_window(mode="RECORD_ONLY")
+    _configure_live_batch_run(window, events, raw_channels=(4, 4))
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
+
+    def batch_factory(resolver=None):
+        return AnalysisV2paBatch(resolver=resolver or fake_resolver)
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "resolve_analysis_v2pa_factor_for_channel",
+        fake_resolver,
+    )
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == [
+        (
+            window,
+            "提示",
+            "麦克风未进行校准，结果仅供参考。\n"
+            "未校准通道：\n"
+            "• In5",
+        )
+    ]
+    assert resolve_calls == [4]
+
+
+def test_record_only_run_uses_fresh_uncalibrated_channel_collection_each_time(
+    monkeypatch,
+):
+    events = []
+    resolve_calls = []
+    warning_calls = []
+    window = _run_window(mode="RECORD_ONLY")
+    _configure_live_batch_run(window, events, raw_channels=(1,))
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
+
+    def batch_factory(resolver=None):
+        return AnalysisV2paBatch(resolver=resolver or fake_resolver)
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "resolve_analysis_v2pa_factor_for_channel",
+        fake_resolver,
+    )
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+    sequence_widget.SequenceWindow.run(window)
+
+    expected_warning = (
+        window,
+        "提示",
+        "麦克风未进行校准，结果仅供参考。\n"
+        "未校准通道：\n"
+        "• In2",
+    )
+    assert warning_calls == [expected_warning, expected_warning]
+    assert resolve_calls == [1, 1]
+    assert not hasattr(window, "_analysis_v2pa_batch")
+    assert not hasattr(window, "_analysis_v2pa_warning_callback")
+
+
+def test_record_only_calibrated_run_has_no_calibration_warning(monkeypatch):
+    events = []
+    resolve_calls = []
+    warning_calls = []
+    window = _run_window(mode="RECORD_ONLY")
+    _configure_live_batch_run(window, events, raw_channels=(3,))
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        return 2.5
+
+    def batch_factory(resolver=None):
+        return AnalysisV2paBatch(resolver=resolver or fake_resolver)
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "resolve_analysis_v2pa_factor_for_channel",
+        fake_resolver,
+    )
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == []
+    assert resolve_calls == [3]
+    assert events == ["item-0:calculate", "item-0:show", "export"]
+
+
+def test_record_only_run_preserves_extra_calibration_diagnostic_in_same_warning(
+    monkeypatch,
+):
+    events = []
+    warning_calls = []
+    window = _run_window(mode="RECORD_ONLY")
+    _configure_live_batch_run(window, events, raw_channels=(2,))
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        warn_callback("麦克风未进行校准，结果仅供参考。")
+        warn_callback("校准数据诊断")
+        return 1.0
+
+    def batch_factory(resolver=None):
+        return AnalysisV2paBatch(resolver=resolver or fake_resolver)
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "resolve_analysis_v2pa_factor_for_channel",
+        fake_resolver,
+    )
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == [
+        (
+            window,
+            "提示",
+            "麦克风未进行校准，结果仅供参考。\n"
+            "未校准通道：\n"
+            "• In3\n"
+            "校准数据诊断",
+        )
+    ]
+
+
+def test_record_only_run_preserves_generic_message_without_channel_association(
+    monkeypatch,
+):
+    events = []
+    warning_calls = []
+    window = _run_window(mode="RECORD_ONLY")
+    _configure_live_batch_run(window, events, raw_channels=(0,))
+    window.instance_analysis_class = (
+        lambda key, item_type, config: window._analysis_v2pa_batch.resolve(
+            config["analysis_channel"]
+        )
+    )
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        raise ValueError("麦克风未进行校准，结果仅供参考。")
+
+    def batch_factory(resolver=None):
+        return AnalysisV2paBatch(resolver=resolver or fake_resolver)
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "resolve_analysis_v2pa_factor_for_channel",
+        fake_resolver,
+    )
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == [
+        (window, "提示", "麦克风未进行校准，结果仅供参考。")
+    ]
+
+
+def test_play_and_record_run_keeps_generic_uncalibrated_warning(monkeypatch):
+    events = []
+    resolve_calls = []
+    warning_calls = []
+    window = _run_window(mode="PLAY_AND_RECORD")
+    _configure_live_batch_run(window, events, raw_channels=(2,))
+
+    def fake_resolver(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        warn_callback("麦克风未进行校准，结果仅供参考。")
+        return 1.0
+
+    def batch_factory():
+        return AnalysisV2paBatch(resolver=fake_resolver)
+
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == [
+        (window, "提示", "麦克风未进行校准，结果仅供参考。")
+    ]
+    assert resolve_calls == [2]
+
+
+def test_live_run_batches_warnings_before_calculation_and_repeats_on_second_operation(monkeypatch):
+    events = []
+    resolve_calls = []
+    window = _run_window(mode="PLAY_AND_RECORD")
+    _configure_live_batch_run(window, events)
+
+    def resolver(raw_channel, warn_callback=None):
+        resolve_calls.append(raw_channel)
+        warn_callback(f"In{raw_channel + 1} 未校准")
+        return 1.0
+
+    batches = []
+
+    def batch_factory():
+        batch = AnalysisV2paBatch(resolver=resolver)
+        batches.append(batch)
+        return batch
+
+    warning_calls = []
+
+    def warning(*args):
+        warning_calls.append(args)
+        events.append("warning")
+
+    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(sequence_widget.MessageBox, "warning", warning)
+
+    sequence_widget.SequenceWindow.run(window)
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == [
+        (window, "提示", "• In1 未校准\n• In2 未校准"),
+        (window, "提示", "• In1 未校准\n• In2 未校准"),
+    ]
+    expected_operation_events = [
+        "warning",
+        "first:calculate",
+        "first:show",
+        "second:calculate",
+        "second:show",
+        "export",
+    ]
+    assert events == expected_operation_events * 2
+    assert resolve_calls == [0, 1, 0, 1]
+    assert len(batches) == 2
+    assert batches[0] is not batches[1]
+    assert not hasattr(window, "_analysis_v2pa_batch")
+    assert not hasattr(window, "_analysis_v2pa_warning_callback")
+
+
+def test_calibrated_live_run_has_no_calibration_warning(monkeypatch):
+    events = []
+    window = _run_window(mode="PLAY_AND_RECORD")
+    _configure_live_batch_run(window, events)
+    warning_calls = []
+    previous_batch = object()
+    previous_callback = object()
+    window._analysis_v2pa_batch = previous_batch
+    window._analysis_v2pa_warning_callback = previous_callback
+
+    monkeypatch.setattr(
+        sequence_widget,
+        "AnalysisV2paBatch",
+        lambda: AnalysisV2paBatch(resolver=lambda raw_channel, warn_callback=None: raw_channel + 1.0),
+    )
+    monkeypatch.setattr(
+        sequence_widget.MessageBox,
+        "warning",
+        lambda *args: warning_calls.append(args),
+    )
+
+    sequence_widget.SequenceWindow.run(window)
+
+    assert warning_calls == []
+    assert events == [
+        "first:calculate",
+        "first:show",
+        "second:calculate",
+        "second:show",
+        "export",
+    ]
+    assert window._analysis_v2pa_batch is previous_batch
+    assert window._analysis_v2pa_warning_callback is previous_callback
