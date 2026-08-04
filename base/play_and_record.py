@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.file_ops import FileOps
 from base.recording_settings import (
     resolve_monitor_fade_in_ms,
     resolve_startup_trim_ms,
@@ -78,14 +79,21 @@ def resolve_monitor_fade_in_samples(acq_detail, sample_rate) -> int:
     return max(1, int(round(fade_ms * sr / 1000.0)))
 
 
-def get_recorded_info(product_model, product_number, barcode, label, name_suffix=""):
+def get_recorded_info(
+    product_model,
+    product_number,
+    barcode,
+    label,
+    name_suffix="",
+    use_product_model_dir=False,
+):
     """
         Generate recorded information.
 
         This function generates a recording file name based on the current date, MAC address, product model,
-    barcode, and direction suffix.
-        It also constructs the path for the recording file. Additionally, it creates a dictionary containing the
-    recording file path and product information.
+    barcode, and optional name suffix. Product-condition recordings can additionally be grouped by product model.
+        It also constructs the path for the recording file and creates a dictionary containing the recording path
+    and product information.
 
         Returns:
             tuple: A tuple containing the recording file path and a dictionary with recording information.
@@ -96,21 +104,29 @@ def get_recorded_info(product_model, product_number, barcode, label, name_suffix
     mac_address = get_mac_address()
     mac_address = mac_address.replace(":", "") if mac_address else None
 
-    recorded_name = product_model + "_" + recording_time_for_name + "_" + mac_address
-    if barcode:
-        recorded_name = recorded_name + "_BC" + barcode
-    else:
+    effective_product_model = FileOps.resolve_recording_product_model(product_model, use_product_model_dir)
+
+    if not barcode:
         barcode = None
-    if name_suffix:
-        recorded_name = recorded_name + str(name_suffix)
-    recorded_name = recorded_name + ".wav"
-    store_record_dir = model_consts.STORED_RECORDED_PATH + "/" + label
+    recorded_name = FileOps.build_recorded_file_name(
+        effective_product_model,
+        recording_time_for_name,
+        mac_address,
+        barcode,
+        name_suffix,
+        use_product_model_dir,
+    )
+    store_record_dir = FileOps.get_recording_store_dir(
+        effective_product_model,
+        label,
+        use_product_model_dir,
+    )
     if not os.path.exists(store_record_dir):
         os.makedirs(store_record_dir)
-    recorded_path = store_record_dir + "/" + recorded_name
+    recorded_path = os.path.join(store_record_dir, recorded_name)
     recorded_signal_info = {
         "file_path": recorded_path,
-        "product_model": product_model,
+        "product_model": effective_product_model,
         "record_date": recording_time,
         "barcode": barcode,
         "labels": label,
