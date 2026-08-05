@@ -86,6 +86,7 @@ def get_recorded_info(
     label,
     name_suffix="",
     use_product_model_dir=False,
+    recording_root="",
 ):
     """
         Generate recorded information.
@@ -120,6 +121,7 @@ def get_recorded_info(
         effective_product_model,
         label,
         use_product_model_dir,
+        recording_root,
     )
     if not os.path.exists(store_record_dir):
         os.makedirs(store_record_dir)
@@ -131,6 +133,9 @@ def get_recorded_info(
         "barcode": barcode,
         "labels": label,
         "record_name_suffix": str(name_suffix or ""),
+        model_consts.RECORDING_ROOT_CONFIG_KEY: FileOps.resolve_recording_root(
+            recording_root
+        ),
     }
 
     return recorded_path, recorded_signal_info

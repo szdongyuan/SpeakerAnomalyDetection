@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QGroupBox, QMessageBox
 from ui.custom_ui_widget.audio_data_manage_dialog import (
     AudioDataManageDialog,
     FilterAudioDialog,
+    extract_audio_file_name,
     extract_rotation_speed,
 )
 
@@ -37,11 +38,21 @@ def _find_rotation_speed_combobox(dialog):
     return speed_group.findChild(QComboBox)
 
 
-def test_extract_rotation_speed_requires_explicit_rpm_marker():
+def test_extract_audio_file_name_supports_windows_and_posix_paths():
+    file_name = "2026-08-05-09-39-18_S004-1_6000_107c610bb999.wav"
+
+    assert extract_audio_file_name(f"audio_data/stored_data/S004-1/not_labeled/{file_name}") == file_name
+    assert extract_audio_file_name(rf"audio_data\stored_data\S004-1\not_labeled\{file_name}") == file_name
+
+
+def test_extract_rotation_speed_supports_legacy_and_product_condition_names():
     assert extract_rotation_speed("S004-1_2026-07-31_6000rpm.wav") == 6000
     assert extract_rotation_speed(r"C:\audio\S004-1_7000_RPM.wav") == 7000
     assert extract_rotation_speed(
         "2026-08-04-14-32-15_BCSN240727018_S004-1_6000_rpm_107C610BB999.wav"
+    ) == 6000
+    assert extract_rotation_speed(
+        r"audio_data\stored_data\S004-1\not_labeled\2026-08-05-09-39-18_S004-1_6000_107c610bb999.wav"
     ) == 6000
     assert extract_rotation_speed("S004-1_2026-07-31_107c610bb999.wav") is None
     assert extract_rotation_speed("S004-1_2026-07-31_6000.wav") is None
@@ -61,6 +72,29 @@ def test_rotation_speed_filter_matches_only_corresponding_wav_files():
     )
 
     assert [item[0] for item in manager.filter_audio_data] == ["2"]
+
+
+def test_rotation_speed_filter_matches_new_product_condition_file_names():
+    manager = _AudioDataFilterState()
+    manager.all_audio_data = [
+        _audio_row(
+            "1",
+            r"audio_data\stored_data\S004-1\not_labeled\2026-08-05-09-39-18_S004-1_6000_107c610bb999.wav",
+            label="not_labeled",
+        ),
+        _audio_row(
+            "2",
+            r"audio_data\stored_data\S004-1\not_labeled\2026-08-05-09-41-49_S004-1_7000_107c610bb999.wav",
+            label="not_labeled",
+        ),
+    ]
+
+    AudioDataManageDialog.filter_audio_data_at_filter_config(
+        manager,
+        {"select_rotation_speed": 6000},
+    )
+
+    assert [item[0] for item in manager.filter_audio_data] == ["1"]
 
 
 def test_rotation_speed_filter_combines_with_existing_filters():

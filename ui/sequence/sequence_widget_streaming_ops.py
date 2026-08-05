@@ -22,7 +22,7 @@ from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
 from base.save_data import ensure_test_result_file, save_audio_simple
 from base.soundcard_calibration_manager import get_mic_v2pa_factor
-from consts import error_code
+from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.recent_session_panel import RecentSessionPanel
@@ -351,11 +351,7 @@ class SequenceWidgetStreamingOpsMixin:
 
     @staticmethod
     def _normalize_db_audio_path(file_path: str):
-        normalized = str(file_path or "").replace("\\", "/")
-        default_dir = DEFAULT_DIR.replace("\\", "/")
-        if normalized.startswith(default_dir):
-            return normalized.replace(default_dir, "", 1)
-        return normalized
+        return RecordingManager.normalize_audio_path_for_db(file_path)
 
     def _relabel_stored_audio_record(self, recorded_path, recorded_signal_info, label):
         target_label = self._normalize_audio_label(label)
@@ -372,12 +368,26 @@ class SequenceWidgetStreamingOpsMixin:
         previous_label = self._normalize_audio_label(updated_signal_info.get("labels"))
         old_file_path_candidates = []
         for candidate in (updated_signal_info.get("file_path"), source_path, recorded_path):
+            original_candidate = str(candidate or "").strip()
+            if original_candidate and original_candidate not in old_file_path_candidates:
+                old_file_path_candidates.append(original_candidate)
             normalized_candidate = self._normalize_db_audio_path(candidate)
             if normalized_candidate and normalized_candidate not in old_file_path_candidates:
                 old_file_path_candidates.append(normalized_candidate)
 
         try:
-            new_file_path = FileOps.move_wav_to_dir(source_path, target_label)
+            recording_root = str(
+                updated_signal_info.get(
+                    model_consts.RECORDING_ROOT_CONFIG_KEY,
+                    "",
+                )
+                or ""
+            ).strip()
+            new_file_path = FileOps.move_wav_to_dir(
+                source_path,
+                target_label,
+                recording_root,
+            )
         except Exception as exc:
             return error_code.INVALID_MOVE, f"移动音频文件失败: {exc}", None, None
 
@@ -392,15 +402,32 @@ class SequenceWidgetStreamingOpsMixin:
             save_code, msg = RecordingManager().update_audio_label(updated_signal_info, old_file_path)
             if save_code == error_code.OK:
                 break
-        if save_code != error_code.OK and os.path.abspath(new_file_path) != os.path.abspath(source_path):
-            try:
-                rollback_label = previous_label or "not_labeled"
-                rollback_path = FileOps.move_wav_to_dir(new_file_path, rollback_label)
-                if rollback_path:
-                    updated_signal_info["file_path"] = self._normalize_db_audio_path(rollback_path)
-            except Exception:
-                pass
-        return save_code, msg, new_file_path, updated_signal_info
+        final_file_path = new_file_path
+        if save_code != error_code.OK:
+            if os.path.abspath(new_file_path) != os.path.abspath(source_path):
+                try:
+                    rollback_label = previous_label or "not_labeled"
+                    rollback_path = FileOps.move_wav_to_dir(
+                        new_file_path,
+                        rollback_label,
+                        recording_root,
+                    )
+                    if rollback_path:
+                        final_file_path = rollback_path
+                        updated_signal_info["file_path"] = self._normalize_db_audio_path(
+                            rollback_path
+                        )
+                        updated_signal_info["labels"] = rollback_label
+                    else:
+                        msg = f"{msg}；文件回滚失败：未生成回滚路径。"
+                except Exception as exc:
+                    msg = f"{msg}；文件回滚失败：{exc}"
+            else:
+                updated_signal_info["file_path"] = self._normalize_db_audio_path(
+                    source_path
+                )
+                updated_signal_info["labels"] = previous_label or "not_labeled"
+        return save_code, msg, final_file_path, updated_signal_info
 
     def _should_run_silent_analysis_after_recording(self) -> bool:
         if bool((getattr(self, "analysis_config", {}) or {}).get("auto_analysis", False)):

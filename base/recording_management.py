@@ -29,7 +29,12 @@ class RecordingManager(object):
             if filename in os.listdir(dir_path):
                 return error_code.INVALID_PATH, "The file already exists."
             save_audio_simple(audio_info["file_path"], audio_info["recorded_signal"], audio_info["sample_rate"])
-            self.save_signal_info_to_db(audio_info, stimulus_parameter)
+            save_code, save_message = self.save_signal_info_to_db(
+                audio_info,
+                stimulus_parameter,
+            )
+            if save_code != error_code.OK:
+                return save_code, save_message
             return (
                 error_code.OK,
                 f"Recorded signal {filename} has been saved and its stimulus and recording information to database.",
@@ -51,11 +56,19 @@ class RecordingManager(object):
                 if flag:
                     name = stimulus_data[0][1] + "-" + stimulus_data[0][2] + "-" + stimulus_data[0][0].split("-")[0]
                     stimulus_data[0] += (name,)
-                    database.insert_data_into_db(
+                    insert_code, insert_message = database.insert_data_into_db(
                         "stimulus_signal_table", model_consts.DB_STIMULUS_COLUMNS, stimulus_data
                     )
+                    if insert_code != error_code.OK:
+                        return insert_code, insert_message
                     ret_msg = "Successfully saved the recording and stimulus signals to the database."
-                database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
+                insert_code, insert_message = database.insert_data_into_db(
+                    "audio_data_table",
+                    model_consts.DB_AUDIO_COLUMNS,
+                    [audio_data],
+                )
+                if insert_code != error_code.OK:
+                    return insert_code, insert_message
                 return error_code.OK, ret_msg
         except Exception as e:
             err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e)[:40])
@@ -85,9 +98,34 @@ class RecordingManager(object):
         return stimulus_data, flag
 
     @staticmethod
+    def normalize_audio_path_for_db(file_path):
+        """Store application files relatively and external files absolutely."""
+        raw_path = str(file_path or "").strip()
+        if not raw_path:
+            return ""
+
+        absolute_path = os.path.abspath(os.path.normpath(raw_path))
+        application_root = os.path.abspath(os.path.normpath(running_consts.DEFAULT_DIR))
+        try:
+            common_path = os.path.commonpath([absolute_path, application_root])
+        except ValueError:
+            common_path = ""
+
+        if os.path.normcase(common_path) == os.path.normcase(application_root):
+            return os.path.relpath(absolute_path, application_root).replace("\\", "/")
+        return absolute_path.replace("\\", "/")
+
+    @staticmethod
     def get_audio_info_to_db(audio_info: dict, stimulus_data: list[tuple], database):
-        audio_info["file_path"] = audio_info["file_path"].replace(running_consts.DEFAULT_DIR, "")
-        audio_data = tuple(audio_info[key] for key in model_consts.AUDIO_COLUMNS if key in audio_info)
+        normalized_audio_info = dict(audio_info)
+        normalized_audio_info["file_path"] = RecordingManager.normalize_audio_path_for_db(
+            normalized_audio_info.get("file_path")
+        )
+        audio_data = tuple(
+            normalized_audio_info[key]
+            for key in model_consts.AUDIO_COLUMNS
+            if key in normalized_audio_info
+        )
         if stimulus_data:
             audio_data = audio_data + (stimulus_data[0][0],)
         else:
@@ -104,11 +142,19 @@ class RecordingManager(object):
 
     def update_audio_label(self, recorded_signal_info, old_file_path):
         try:
-            update_data = {"file_path": recorded_signal_info["file_path"], "labels": recorded_signal_info["labels"]}
+            update_data = {
+                "file_path": self.normalize_audio_path_for_db(
+                    recorded_signal_info["file_path"]
+                ),
+                "labels": recorded_signal_info["labels"],
+            }
             condition_field = {"file_path": old_file_path}
             with DataSave(self.db_path) as database:
-                database.update_table_data("audio_data_table", update_data, condition_field)
-            return error_code.OK, "Database information updated."
+                return database.update_table_data(
+                    "audio_data_table",
+                    update_data,
+                    condition_field,
+                )
         except Exception as e:
             err_msg = "The update operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_RENAME, err_msg
