@@ -11,7 +11,7 @@ from ui.sequence.motor_panel_common import MotorSectionCard
 
 
 class MotorAiResultPanel(QWidget):
-    DETAIL_LABEL_ORDER = ("SPL", "响度", "FBA")
+    DETAIL_LABEL_ORDER = ("SPL", "响度", "AI分析", "FBA", "FFT")
 
     def __init__(self, parent=None, condition_configs=None):
         super().__init__(parent)
@@ -121,7 +121,8 @@ class MotorAiResultPanel(QWidget):
                 "result": "待检测",
                 "tone": "pending",
                 "index": index,
-                "details": item.get("analysis_details", []),
+                "config_details": item.get("analysis_details", []),
+                "runtime_details": {},
             }
 
         self.count_label.setText(f"{len(self.conditions)}个检测")
@@ -131,6 +132,29 @@ class MotorAiResultPanel(QWidget):
             self.select_condition(self.conditions[0]["key"], show_detail=False)
         else:
             self._show_empty_detail()
+
+    def refresh_condition_configs(self, condition_configs) -> bool:
+        """
+        Update per-condition configuration details without resetting current results.
+
+        This is used after the test-queue dialog is closed. The product conditions may still be
+        the same, while the queue analysis settings behind them were edited. In that case the
+        operator's in-progress result state and waveform data must stay visible.
+        """
+        updated_conditions = self._normalize_conditions(condition_configs)
+        current_keys = [item["key"] for item in self.conditions]
+        updated_keys = [item["key"] for item in updated_conditions]
+        if current_keys != updated_keys:
+            return False
+
+        self.conditions = updated_conditions
+        for item in updated_conditions:
+            row = self.rows.get(item["key"])
+            if row is not None:
+                row["config_details"] = item.get("analysis_details", [])
+        if self.selected_key in self.rows:
+            self._set_detail_items(self._condition_display_details(self.selected_key))
+        return True
 
     def reset(self):
         self._set_default_condition_results()
@@ -145,7 +169,7 @@ class MotorAiResultPanel(QWidget):
         self.selected_key = key
         for row_key, row in self.rows.items():
             row["button"].setStyleSheet(self._row_style(row["tone"], selected=(row_key == key)))
-        self._set_detail_items(self.rows[key].get("details", []))
+        self._set_detail_items(self._condition_display_details(key))
         if show_detail:
             self._attach_detail_under_row(key)
         else:
@@ -157,9 +181,16 @@ class MotorAiResultPanel(QWidget):
 
     def _attach_detail_under_row(self, key: str) -> None:
         """
-        Show the SPL/响度/FBA detail frame right under the selected RPM row.
+        Show the analysis detail frame right under the selected RPM row.
         """
         if not key or key not in self.rows:
+            return
+        if not self._condition_display_details(key):
+            try:
+                self.detail_frame.setVisible(False)
+                self._detail_owner_key = ""
+            except Exception:
+                pass
             return
         if self._detail_owner_key == key and not self.detail_frame.isHidden():
             self.detail_frame.setVisible(False)
@@ -198,7 +229,39 @@ class MotorAiResultPanel(QWidget):
         return True
 
     def set_condition_scores(self, condition, ok_score=None, ng_score=None):
-        return bool(self._resolve_key(condition))
+        key = self._resolve_key(condition)
+        if not key:
+            return False
+        if ok_score in (None, "") and ng_score in (None, ""):
+            self._clear_condition_runtime_detail(key, "AI分析")
+            return True
+        ai_text = (
+            f"OK Score：{self._format_percent(ok_score)}；"
+            f"NG Score：{self._format_percent(ng_score)}"
+        )
+        result = str(self.rows.get(key, {}).get("result") or "").strip().upper()
+        if result in ("OK", "NG"):
+            ai_text = f"{ai_text}；判定：{result}"
+        return self.set_condition_analysis_details(key, {"AI分析": ai_text})
+
+    def set_condition_analysis_details(self, condition, detail_values):
+        key = self._resolve_key(condition)
+        if not key:
+            return False
+        row = self.rows.get(key)
+        if row is None:
+            return False
+        runtime_details = dict(row.get("runtime_details") or {})
+        normalized_values = self._normalize_runtime_details(detail_values)
+        for label, value in normalized_values.items():
+            if value in (None, ""):
+                runtime_details.pop(label, None)
+            else:
+                runtime_details[label] = value
+        row["runtime_details"] = runtime_details
+        if key == self.selected_key:
+            self._set_detail_items(self._condition_display_details(key))
+        return True
 
     def set_final_result(self, result_text: str, tone: str = None):
         text = str(result_text or "待判定")
@@ -213,10 +276,14 @@ class MotorAiResultPanel(QWidget):
         return self._set_by_index(1, result_text, tone)
 
     def set_forward_scores(self, ok_score=None, ng_score=None):
-        return bool(self.conditions)
+        if not self.conditions:
+            return False
+        return self.set_condition_scores(self.conditions[0]["key"], ok_score, ng_score)
 
     def set_reverse_scores(self, ok_score=None, ng_score=None):
-        return len(self.conditions) > 1
+        if len(self.conditions) <= 1:
+            return False
+        return self.set_condition_scores(self.conditions[1]["key"], ok_score, ng_score)
 
     def _set_by_index(self, index, result_text, tone=None):
         if index >= len(self.conditions):
@@ -228,8 +295,45 @@ class MotorAiResultPanel(QWidget):
             self.set_final_result("待判定", "pending")
             return
         for item in self.conditions:
+            row = self.rows.get(item["key"])
+            if row is not None:
+                row["runtime_details"] = {}
             self.set_condition_result(item["key"], "待检测", "pending")
         self.set_final_result("待判定", "pending")
+        if self.selected_key in self.rows:
+            self._set_detail_items(self._condition_display_details(self.selected_key))
+
+    def _condition_display_details(self, key):
+        row = self.rows.get(key, {})
+        config_values = {
+            str(item.get("label") or "").strip(): str(item.get("value") or "").strip()
+            for item in row.get("config_details", []) or []
+            if isinstance(item, dict)
+        }
+        runtime_values = {
+            str(label or "").strip(): str(value or "").strip()
+            for label, value in (row.get("runtime_details", {}) or {}).items()
+        }
+        details = []
+        for label in self.DETAIL_LABEL_ORDER:
+            value = runtime_values.get(label) or config_values.get(label)
+            if value:
+                details.append({"label": label, "value": value})
+        return details
+
+    def _clear_condition_runtime_detail(self, condition, label):
+        key = self._resolve_key(condition)
+        if not key:
+            return False
+        row = self.rows.get(key)
+        if row is None:
+            return False
+        runtime_details = dict(row.get("runtime_details") or {})
+        runtime_details.pop(str(label or "").strip(), None)
+        row["runtime_details"] = runtime_details
+        if key == self.selected_key:
+            self._set_detail_items(self._condition_display_details(key))
+        return True
 
     def _set_detail_items(self, details):
         if self.detail_layout is None:
@@ -244,15 +348,12 @@ class MotorAiResultPanel(QWidget):
             value = str(item.get("value") or "").strip()
             if label or value:
                 normalized_details.append({"label": label or "配置", "value": value or "--"})
-        if not normalized_details:
-            normalized_details = self._empty_fixed_details()
-
         for item in normalized_details:
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(10)
             name_label = QLabel(item["label"])
-            name_label.setFixedWidth(54)
+            name_label.setFixedWidth(64)
             name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
             name_label.setStyleSheet(self._small_text_style("#1F2937", bold=True))
             value_label = QLabel(item["value"])
@@ -318,7 +419,7 @@ class MotorAiResultPanel(QWidget):
     @classmethod
     def _build_condition_analysis_details(cls, condition_config, queue_catalog=None):
         if not isinstance(condition_config, dict):
-            return cls._empty_fixed_details()
+            return []
 
         embedded_analysis = condition_config.get("analysis_list")
         if isinstance(embedded_analysis, dict):
@@ -326,21 +427,21 @@ class MotorAiResultPanel(QWidget):
 
         queue_name = str(condition_config.get("test_queue") or "").strip()
         if not queue_name:
-            return cls._empty_fixed_details("未绑定测试队列")
+            return []
 
         queue_catalog = queue_catalog or {}
         queue_info = queue_catalog.get(queue_name)
         queue_path = queue_info.get("path") if isinstance(queue_info, dict) else None
         if not queue_path:
-            return cls._empty_fixed_details(f"测试队列不存在：{queue_name}")
+            return []
 
         load_code, queue_data = LoadUiConfig.load_data_from_json(queue_path)
         if load_code != error_code.OK:
-            return cls._empty_fixed_details(f"测试队列读取失败：{queue_name}")
+            return []
 
         analysis_list = cls._extract_analysis_list(queue_data)
         if not isinstance(analysis_list, dict):
-            return cls._empty_fixed_details(f"测试队列格式错误：{queue_name}")
+            return []
         return cls._analysis_details_from_analysis_list(analysis_list)
 
     @staticmethod
@@ -361,12 +462,12 @@ class MotorAiResultPanel(QWidget):
     @classmethod
     def _analysis_details_from_analysis_list(cls, analysis_list):
         if not isinstance(analysis_list, dict):
-            return cls._empty_fixed_details()
+            return []
         display_sequence = analysis_list.get("display_sequence", [])
         if not isinstance(display_sequence, list) or not display_sequence:
-            return cls._empty_fixed_details()
+            return []
 
-        details = {label: "未配置" for label in cls.DETAIL_LABEL_ORDER}
+        details = {}
         for item_name in display_sequence:
             item_name = str(item_name or "").strip()
             item_config = analysis_list.get(item_name)
@@ -374,14 +475,19 @@ class MotorAiResultPanel(QWidget):
                 continue
             analysis_type = str(item_config.get("type") or "").strip()
             detail_label = cls._fixed_detail_label_for_analysis(analysis_type, item_name)
-            if detail_label not in details:
+            if detail_label not in cls.DETAIL_LABEL_ORDER:
                 continue
-            details[detail_label] = cls._analysis_summary_text(item_name, analysis_type, item_config)
-        return [{"label": label, "value": details[label]} for label in cls.DETAIL_LABEL_ORDER]
+            if detail_label not in details:
+                details[detail_label] = "待检测"
+        return [
+            {"label": label, "value": details[label]}
+            for label in cls.DETAIL_LABEL_ORDER
+            if label in details
+        ]
 
     @classmethod
     def _empty_fixed_details(cls, value="未配置"):
-        return [{"label": label, "value": value} for label in cls.DETAIL_LABEL_ORDER]
+        return []
 
     @staticmethod
     def _fixed_detail_label_for_analysis(analysis_type, item_name):
@@ -392,9 +498,49 @@ class MotorAiResultPanel(QWidget):
             return "SPL"
         if normalized_type in ("FBA",):
             return "FBA"
-        if normalized_type in ("Loudness", "PRB") or "响度" in name or "loud" in lowered_name:
+        if normalized_type in ("FFT",):
+            return "FFT"
+        if normalized_type in ("AI",):
+            return "AI分析"
+        if normalized_type in ("LOUD", "Loudness", "PRB") or "响度" in name or "loud" in lowered_name:
             return "响度"
         return ""
+
+    @classmethod
+    def _normalize_runtime_details(cls, detail_values):
+        if isinstance(detail_values, dict):
+            source = detail_values.items()
+        else:
+            source = []
+            for item in detail_values or []:
+                if not isinstance(item, dict):
+                    continue
+                source.append((item.get("label"), item.get("value")))
+
+        normalized = {}
+        label_lookup = {label.lower(): label for label in cls.DETAIL_LABEL_ORDER}
+        for raw_label, raw_value in source:
+            label = str(raw_label or "").strip()
+            canonical_label = label_lookup.get(label.lower())
+            if not canonical_label:
+                continue
+            normalized[canonical_label] = None if raw_value is None else str(raw_value).strip()
+        return normalized
+
+    @staticmethod
+    def _format_percent(value):
+        if value in (None, ""):
+            return "--"
+        text = str(value).strip()
+        if not text:
+            return "--"
+        if text.endswith("%"):
+            return text
+        try:
+            numeric = float(text)
+        except (TypeError, ValueError):
+            return text
+        return f"{numeric:.2f}%"
 
     @staticmethod
     def _analysis_type_label(analysis_type, item_name):
@@ -498,6 +644,7 @@ class MotorAiResultPanel(QWidget):
             "RB": "dB",
             "PRB": "phon",
             "Loudness": "sone",
+            "LOUD": "sone",
         }.get(str(analysis_type or "").strip(), "")
 
     @staticmethod

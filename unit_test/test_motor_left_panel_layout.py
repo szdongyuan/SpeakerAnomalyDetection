@@ -113,6 +113,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                             "AI 分析 1",
                             "响度分析 1",
                             "频段能量 (FBA) 1",
+                            "快速傅里叶变换 (FFT) 1",
                         ],
                         "声压级 (SPL) 1": {
                             "type": "SPL",
@@ -125,7 +126,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                             "analyse_model_name": "model-a",
                         },
                         "响度分析 1": {
-                            "type": "Loudness",
+                            "type": "LOUD",
                             "limit_checked": True,
                             "upper_limit": "15",
                             "lower_limit": "8",
@@ -135,6 +136,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                             "limit_checked": True,
                             "upper_limit": "45",
                         },
+                        "快速傅里叶变换 (FFT) 1": {
+                            "type": "FFT",
+                            "limit_checked": True,
+                            "upper_limit": "70",
+                        },
                     },
                 }
             ]
@@ -143,16 +149,86 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         panel.select_condition("6000", show_detail=True)
         detail_text = "\n".join(label.text() for label in panel.detail_frame.findChildren(QLabel))
 
-        self.assertEqual(list(panel.detail_labels.keys()), ["SPL", "响度", "FBA"])
+        self.assertEqual(list(panel.detail_labels.keys()), ["SPL", "响度", "AI分析", "FBA", "FFT"])
         self.assertIn("SPL", detail_text)
-        self.assertIn("阈值 90 ~ 100 dB", detail_text)
+        self.assertIn("待检测", detail_text)
         self.assertIn("响度", detail_text)
-        self.assertIn("阈值 8 ~ 15 sone", detail_text)
+        self.assertIn("AI分析", detail_text)
         self.assertIn("FBA", detail_text)
-        self.assertIn("上限 45 dB", detail_text)
-        self.assertNotIn("AI", detail_text)
+        self.assertIn("FFT", detail_text)
         self.assertNotIn("model-a", detail_text)
+        self.assertNotIn("阈值 90 ~ 100 dB", detail_text)
         self.assertNotIn("71.6", detail_text)
+
+    def test_ai_result_detail_hides_unconfigured_candidate_items(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {
+                    "condition_name": "6000",
+                    "key": "6000",
+                    "analysis_list": {
+                        "display_sequence": [
+                            "声压级 (SPL) 1",
+                            "响度分析 1",
+                            "AI 分析 1",
+                        ],
+                        "声压级 (SPL) 1": {"type": "SPL"},
+                        "响度分析 1": {"type": "LOUD"},
+                        "AI 分析 1": {"type": "AI"},
+                    },
+                }
+            ]
+        )
+
+        panel.select_condition("6000", show_detail=True)
+
+        self.assertEqual(list(panel.detail_labels.keys()), ["SPL", "响度", "AI分析"])
+        self.assertNotIn("FBA", panel.detail_labels)
+        self.assertNotIn("FFT", panel.detail_labels)
+
+    def test_ai_result_detail_shows_runtime_values(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {
+                    "condition_name": "6000",
+                    "key": "6000",
+                    "analysis_list": {
+                        "display_sequence": [
+                            "声压级 (SPL) 1",
+                            "AI 分析 1",
+                            "响度分析 1",
+                            "频段能量 (FBA) 1",
+                            "快速傅里叶变换 (FFT) 1",
+                        ],
+                        "声压级 (SPL) 1": {"type": "SPL"},
+                        "AI 分析 1": {"type": "AI"},
+                        "响度分析 1": {"type": "LOUD"},
+                        "频段能量 (FBA) 1": {"type": "FBA"},
+                        "快速傅里叶变换 (FFT) 1": {"type": "FFT"},
+                    },
+                }
+            ]
+        )
+
+        panel.select_condition("6000", show_detail=True)
+        panel.set_condition_result("6000", "OK")
+        panel.set_condition_analysis_details(
+            "6000",
+            {
+                "SPL": "总体声压：72.35 dB；判定：OK",
+                "响度": "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；判定：OK",
+                "FBA": "OK",
+                "FFT": "NG",
+            },
+        )
+        panel.set_condition_scores("6000", 71.6, 28.4)
+
+        detail_values = {label: widget.text() for label, widget in panel.detail_labels.items()}
+        self.assertEqual(detail_values["SPL"], "总体声压：72.35 dB；判定：OK")
+        self.assertEqual(detail_values["响度"], "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；判定：OK")
+        self.assertEqual(detail_values["AI分析"], "OK Score：71.60%；NG Score：28.40%；判定：OK")
+        self.assertEqual(detail_values["FBA"], "OK")
+        self.assertEqual(detail_values["FFT"], "NG")
 
 
 if __name__ == "__main__":
