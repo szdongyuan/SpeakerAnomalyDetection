@@ -86,6 +86,11 @@ class SoundcardAudioProcessor(object):
         channels = int(recorded_dict.get("channels", 1) or 1)
         blocking = recorded_dict.get("blocking", True)
         prolong_frames = recorded_dict.get("prolong_frames", 0)
+        device = recorded_dict.get("device")
+        if device is None:
+            device = recorded_dict.get("input_device")
+        if isinstance(device, dict):
+            device = device.get("index")
 
         in_sel = recorded_dict.get("input_channels")
         if in_sel is None:
@@ -98,7 +103,13 @@ class SoundcardAudioProcessor(object):
             in_sel = [0]
 
         in_num = max(in_sel) + 1
-        rec_raw = sd.rec(frames=num_frames, samplerate=sample_rate, channels=in_num, blocking=blocking)
+        rec_raw = sd.rec(
+            frames=num_frames,
+            samplerate=sample_rate,
+            channels=in_num,
+            device=device,
+            blocking=blocking,
+        )
         rec_raw = np.asarray(rec_raw, dtype=np.float32)
         if rec_raw.ndim == 1:
             rec_raw = rec_raw.reshape(-1, 1)

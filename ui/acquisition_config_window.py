@@ -114,6 +114,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.monitor_gain_db_input.setSuffix(" dB")
         self.monitor_gain_db_input.setValue(float(self.input_data.get("monitor_gain_db", 0.0)))
         self.monitor_checkbox.toggled.connect(self._on_monitor_toggled)
+        self.streaming_recording_checkbox.toggled.connect(self._on_streaming_recording_toggled)
 
         max_out = 0
         try:
@@ -122,10 +123,8 @@ class RecordConfigWindow(BaseConfigWindow):
         except Exception:
             max_out = 0
 
-        if max_out <= 0:
-            self.monitor_checkbox.setChecked(False)
-            self.monitor_checkbox.setEnabled(False)
-        self._on_monitor_toggled(self.monitor_checkbox.isChecked())
+        self._monitor_output_available = max_out > 0
+        self._on_streaming_recording_toggled(self.streaming_recording_checkbox.isChecked())
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -155,6 +154,13 @@ class RecordConfigWindow(BaseConfigWindow):
 
     def _on_monitor_toggled(self, checked: bool):
         self.monitor_gain_db_input.setEnabled(bool(checked))
+
+    def _on_streaming_recording_toggled(self, checked: bool):
+        monitor_enabled = bool(checked and self._monitor_output_available)
+        if not monitor_enabled:
+            self.monitor_checkbox.setChecked(False)
+        self.monitor_checkbox.setEnabled(monitor_enabled)
+        self._on_monitor_toggled(monitor_enabled and self.monitor_checkbox.isChecked())
 
 
 class ImportAudioConfigWindow(BaseConfigWindow):

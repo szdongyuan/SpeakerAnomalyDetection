@@ -1152,7 +1152,13 @@ class SequenceWidgetStreamingOpsMixin:
             self.streaming_poll_timer.stop()
             self._on_streaming_complete()
 
-    def _on_streaming_complete(self):
+    def _on_streaming_complete(
+        self,
+        recorded_mono=None,
+        recorded_multi=None,
+        sample_rate=None,
+        completion_source="streaming",
+    ):
         """
         Handle streaming completion: alignment, file save, and analysis.
 
@@ -1165,24 +1171,28 @@ class SequenceWidgetStreamingOpsMixin:
         - Enable buttons and optionally run analysis
         """
         try:
-            # Get the complete recorded data
-            recorded_mono = self.streaming_processor.get_recorded_data()
-            try:
-                recorded_multi = self.streaming_processor.get_recorded_data_multi()
-            except Exception:
-                recorded_multi = np.asarray(recorded_mono, dtype=np.float32).reshape(-1, 1)
-            sample_rate = self.data_struct.sample_rate
+            if recorded_mono is None:
+                recorded_mono = self.streaming_processor.get_recorded_data()
+                try:
+                    recorded_multi = self.streaming_processor.get_recorded_data_multi()
+                except Exception:
+                    recorded_multi = np.asarray(recorded_mono, dtype=np.float32).reshape(-1, 1)
+                sample_rate = self.data_struct.sample_rate
 
-            # VERIFICATION: Check if we captured the expected number of samples
-            expected_samples = self.streaming_processor.target_samples
-            actual_samples = len(recorded_mono)
-            if actual_samples != expected_samples:
-                self.default_logger.warning(
-                    f"Sample count mismatch! Expected: {expected_samples}, Got: {actual_samples}, "
-                    f"Missing: {expected_samples - actual_samples} samples ({(expected_samples - actual_samples) / sample_rate * 1000:.1f}ms)"
-                )
-            else:
-                self.default_logger.info(f"Recording complete: {actual_samples} samples captured (matches target)")
+                # VERIFICATION: Check if we captured the expected number of samples
+                expected_samples = self.streaming_processor.target_samples
+                actual_samples = len(recorded_mono)
+                if actual_samples != expected_samples:
+                    self.default_logger.warning(
+                        f"Sample count mismatch! Expected: {expected_samples}, Got: {actual_samples}, "
+                        f"Missing: {expected_samples - actual_samples} samples ({(expected_samples - actual_samples) / sample_rate * 1000:.1f}ms)"
+                    )
+                else:
+                    self.default_logger.info(
+                        f"Recording complete: {actual_samples} samples captured (matches target)"
+                    )
+            elif recorded_multi is None:
+                recorded_multi = np.asarray(recorded_mono, dtype=np.float32).reshape(-1, 1)
 
             # Record-only mode - no alignment needed
             # Store mono for analysis pipeline compatibility
@@ -1358,7 +1368,9 @@ class SequenceWidgetStreamingOpsMixin:
                 self._last_committed_barcode = None
                 self._last_committed_barcode_time = 0.0
 
-            self.default_logger.info("Streaming recording completed successfully")
+            self.default_logger.info(
+                f"{str(completion_source).capitalize()} recording completed successfully"
+            )
 
             drain = getattr(self, "_drain_queued_directional_trigger", None)
             if callable(drain):
