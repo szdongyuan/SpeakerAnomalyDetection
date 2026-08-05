@@ -44,6 +44,7 @@ class TestSoundcardProcessorSelection(unittest.TestCase):
             "sample_rate": 44100,
             "channels": 2,
             "input_channels": [0, 2],
+            "device": {"index": 7},
             "blocking": True,
             "prolong_frames": 0,
         }
@@ -63,12 +64,29 @@ class TestSoundcardProcessorSelection(unittest.TestCase):
             code, mono = SoundcardAudioProcessor.sd_rec(recorded_dict)
 
         self.assertEqual(code, 0)  # error_code.OK
+        self.assertEqual(sd_mock.rec.call_args.kwargs["device"], 7)
         self.assertTrue("_recorded_multi" in recorded_dict)
         multi = recorded_dict["_recorded_multi"]
         self.assertEqual(multi.shape, (4, 2))
         np.testing.assert_allclose(multi[:, 0], fake[:, 0])
         np.testing.assert_allclose(multi[:, 1], fake[:, 2])
         np.testing.assert_allclose(mono, (fake[:, 0] + fake[:, 2]) / 2.0)
+
+    def test_sd_rec_preserves_zero_device_index(self):
+        recorded_dict = {
+            "num_frames": 2,
+            "sample_rate": 44100,
+            "channels": 1,
+            "device": 0,
+            "blocking": True,
+        }
+
+        with mock.patch("base.soundcard_audio_processor.sd") as sd_mock:
+            sd_mock.rec.return_value = np.ones((2, 1), dtype=np.float32)
+            code, _ = SoundcardAudioProcessor.sd_rec(recorded_dict)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(sd_mock.rec.call_args.kwargs["device"], 0)
 
 
 if __name__ == "__main__":

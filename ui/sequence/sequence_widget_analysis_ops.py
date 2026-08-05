@@ -25,6 +25,8 @@ from base.play_and_record import (
     resolve_startup_trim_samples,
     stream_record_without_play,
 )
+from base.save_data import save_audio_simple
+from base.soundcard_audio_processor import SoundcardAudioProcessor
 
 from base.streaming_file_writer import StreamingWavWriter
 from base.temp_tcp_client import TempTcpClient
@@ -1244,6 +1246,50 @@ class SequenceWidgetAnalysisOpsMixin:
 
         return recorded_dict, sample_rate
 
+    def _should_use_streaming_recording(self):
+        try:
+            detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
+        except (IndexError, KeyError, TypeError):
+            detail = {}
+        return bool(
+            detail.get("use_streaming_recording", False)
+            or detail.get("monitor_playback", False)
+        )
+
+    @staticmethod
+    def _normalize_blocking_recorded_data(recorded_data, recorded_dict):
+        recorded_multi = np.asarray(
+            recorded_dict.get("_recorded_multi", recorded_data),
+            dtype=np.float32,
+        )
+        if recorded_multi.size == 0:
+            raise ValueError("empty recorded data")
+        if recorded_multi.ndim == 1:
+            recorded_multi = recorded_multi.reshape(-1, 1)
+        if recorded_multi.ndim != 2:
+            raise ValueError(f"unsupported recorded data shape: {recorded_multi.shape}")
+        return recorded_multi
+
+    def _start_blocking_recording(self, recorded_dict, sample_rate):
+        try:
+            recorded_dict["blocking"] = True
+            record_code, recorded_data = SoundcardAudioProcessor.sd_rec(recorded_dict)
+            if record_code != error_code.OK or recorded_data is None:
+                raise RuntimeError(recorded_data if recorded_data is not None else record_code)
+
+            recorded_multi = self._normalize_blocking_recorded_data(recorded_data, recorded_dict)
+            recorded_mono = recorded_multi.mean(axis=1).astype(np.float32, copy=False)
+            save_audio_simple(self.recorded_path, recorded_multi, sample_rate)
+            self._on_streaming_complete(
+                recorded_mono=recorded_mono,
+                recorded_multi=recorded_multi,
+                sample_rate=sample_rate,
+                completion_source="blocking",
+            )
+        except Exception as error:
+            self.default_logger.error(f"blocking_recording_error: {error}")
+            self._handle_invalid_recording(f"录音失败: {error}")
+
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if getattr(self, "_record_workflow_busy", False):
             return
@@ -1314,6 +1360,11 @@ class SequenceWidgetAnalysisOpsMixin:
             if callable(drain):
                 drain()
             QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
+            return
+
+        if not self._should_use_streaming_recording():
+            self._begin_recent_session_for_current_run()
+            self._start_blocking_recording(recorded_dict, sample_rate)
             return
 
         # Start streaming record-only (non-blocking)
