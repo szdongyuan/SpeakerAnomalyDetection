@@ -38,8 +38,10 @@ class _InsertDatabase:
 class _UpdateDatabase:
     def __init__(self, update_result):
         self.update_result = update_result
+        self.calls = []
 
-    def update_table_data(self, *_args, **_kwargs):
+    def update_table_data(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
         return self.update_result
 
 
@@ -141,6 +143,76 @@ def test_update_audio_label_propagates_no_match_failure(monkeypatch):
     )
 
     assert result == (error_code.INVALID_UPDATE, "No data has been updated")
+
+
+def test_rename_audio_normalizes_paths_written_to_database(tmp_path, monkeypatch):
+    application_root = tmp_path / "application"
+    source_path = (
+        application_root
+        / "audio_data"
+        / "stored_data"
+        / "S004-1"
+        / "not_labeled"
+        / "sample.wav"
+    )
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"RIFF")
+    database = _UpdateDatabase((error_code.OK, "updated"))
+    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(application_root))
+    monkeypatch.setattr(
+        recording_management,
+        "DataSave",
+        lambda _db_path: _DatabaseContext(database),
+    )
+
+    result = RecordingManager().rename_audio(str(source_path), "renamed.wav")
+
+    assert result[0] == error_code.OK
+    args, kwargs = database.calls[0]
+    assert kwargs == {}
+    assert args == (
+        "audio_data_table",
+        {"file_path": "audio_data/stored_data/S004-1/not_labeled/renamed.wav"},
+        {"file_path": "audio_data/stored_data/S004-1/not_labeled/sample.wav"},
+    )
+
+
+def test_move_audio_normalizes_paths_written_to_database(tmp_path, monkeypatch):
+    application_root = tmp_path / "application"
+    source_path = (
+        application_root
+        / "audio_data"
+        / "stored_data"
+        / "S004-1"
+        / "not_labeled"
+        / "sample.wav"
+    )
+    target_dir = (
+        application_root / "audio_data" / "stored_data" / "S004-1" / "OK"
+    )
+    source_path.parent.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+    source_path.write_bytes(b"RIFF")
+    database = _UpdateDatabase((error_code.OK, "updated"))
+    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(application_root))
+    monkeypatch.setattr(
+        recording_management,
+        "DataSave",
+        lambda _db_path: _DatabaseContext(database),
+    )
+
+    result = RecordingManager().move_audio(str(source_path), str(target_dir))
+
+    assert result[0] == error_code.OK
+    args, kwargs = database.calls[0]
+    assert kwargs == {}
+    assert args == (
+        "audio_data_table",
+        {
+            "new_data": {"file_path": "audio_data/stored_data/S004-1/OK/sample.wav"},
+            "old_data": {"file_path": "audio_data/stored_data/S004-1/not_labeled/sample.wav"},
+        },
+    )
 
 
 def test_external_audio_path_round_trips_through_sqlite(tmp_path):
