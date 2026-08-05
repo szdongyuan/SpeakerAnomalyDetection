@@ -291,6 +291,9 @@ class MainWindow(QMainWindow):
             self._open_analysis_model_select,
             self,
         )
+        dialog.programs_changed.connect(
+            self.sequence_window.on_product_test_program_updated
+        )
         dialog.exec()
 
     def show_statusbar_layout(self):
