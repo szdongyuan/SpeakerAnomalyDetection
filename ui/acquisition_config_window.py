@@ -2,7 +2,7 @@ import os
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap, QRegion
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
@@ -10,6 +10,26 @@ from base.sound_device_manager import SoundDeviceManager
 from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+
+
+RECORDING_ROOT_FOLDER_ICON_PATH = os.path.join(
+    DEFAULT_DIR,
+    "ui",
+    "ui_pic",
+    "folder",
+    "folder-yellow.png",
+)
+
+
+def _load_icon_without_transparent_margin(path):
+    pixmap = QPixmap(path)
+    if pixmap.isNull():
+        return QIcon(path)
+
+    visible_rect = QRegion(pixmap.mask()).boundingRect()
+    if visible_rect.isValid():
+        pixmap = pixmap.copy(visible_rect)
+    return QIcon(pixmap)
 
 
 class BaseConfigWindow(ConfigDialogBase):
@@ -116,14 +136,22 @@ class RecordConfigWindow(BaseConfigWindow):
             str(self.input_data.get(model_consts.RECORDING_ROOT_CONFIG_KEY, "") or "")
         )
         self.recording_root_input.setPlaceholderText("audio_data/stored_data")
-        self.select_recording_root_btn = QPushButton("选择")
-        self.select_recording_root_btn.clicked.connect(self._select_recording_root)
-        self.default_recording_root_btn = QPushButton("默认")
+        self.select_recording_root_action = self.recording_root_input.addAction(
+            _load_icon_without_transparent_margin(RECORDING_ROOT_FOLDER_ICON_PATH),
+            QLineEdit.TrailingPosition,
+        )
+        self.select_recording_root_action.setToolTip("选择音频保存根目录")
+        self.select_recording_root_action.triggered.connect(self._select_recording_root)
+        self.recording_root_input.textChanged.connect(
+            self._update_recording_root_tooltip
+        )
+        self._update_recording_root_tooltip(self.recording_root_input.text())
+        self.default_recording_root_btn = QPushButton("默认路径")
         self.default_recording_root_btn.clicked.connect(self.recording_root_input.clear)
         recording_root_layout = QHBoxLayout()
         recording_root_layout.setContentsMargins(0, 0, 0, 0)
+        recording_root_layout.setSpacing(8)
         recording_root_layout.addWidget(self.recording_root_input)
-        recording_root_layout.addWidget(self.select_recording_root_btn)
         recording_root_layout.addWidget(self.default_recording_root_btn)
         label_monitor_gain = QLabel("监听增益:")
         self.monitor_gain_db_input = QDoubleSpinBox()
@@ -194,6 +222,13 @@ class RecordConfigWindow(BaseConfigWindow):
         )
         if selected_root:
             self.recording_root_input.setText(os.path.normpath(selected_root))
+
+    def _update_recording_root_tooltip(self, recording_root):
+        selected_root = str(recording_root or "").strip()
+        effective_root = selected_root or model_consts.STORED_RECORDED_PATH
+        self.recording_root_input.setToolTip(
+            os.path.abspath(os.path.normpath(effective_root))
+        )
 
     def _on_monitor_toggled(self, checked: bool):
         self.monitor_gain_db_input.setEnabled(bool(checked))

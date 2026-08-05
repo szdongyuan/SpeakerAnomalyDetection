@@ -3,6 +3,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PyQt5.QtCore import QSize
+from PyQt5.QtGui import QRegion
 from PyQt5.QtWidgets import QApplication
 
 from consts import model_consts
@@ -31,6 +33,7 @@ def test_record_config_loads_and_persists_recording_root(qapp, tmp_path):
     window = _create_window(str(tmp_path))
 
     assert window.recording_root_input.text() == str(tmp_path)
+    assert window.recording_root_input.toolTip() == os.path.abspath(tmp_path)
 
     window.on_click_ok_btn()
 
@@ -42,6 +45,10 @@ def test_record_config_loads_and_persists_recording_root(qapp, tmp_path):
 def test_record_config_defaults_to_application_storage(qapp):
     window = _create_window()
 
+    assert window.recording_root_input.toolTip() == os.path.abspath(
+        os.path.normpath(model_consts.STORED_RECORDED_PATH)
+    )
+
     window.on_click_ok_btn()
 
     assert window.final_data[model_consts.RECORDING_ROOT_CONFIG_KEY] == ""
@@ -49,8 +56,20 @@ def test_record_config_defaults_to_application_storage(qapp):
 
 def test_record_config_uses_concise_default_path_placeholder(qapp):
     window = _create_window()
+    recording_root_layout = (
+        window.recording_root_input.parentWidget()
+        .layout()
+        .itemAtPosition(6, 1)
+        .layout()
+    )
 
     assert window.recording_root_input.placeholderText() == "audio_data/stored_data"
+    assert window.default_recording_root_btn.text() == "默认路径"
+    assert recording_root_layout.spacing() == 8
+    assert os.path.isfile(
+        acquisition_config_window.RECORDING_ROOT_FOLDER_ICON_PATH
+    )
+    assert not hasattr(window, "select_recording_root_btn")
     assert not hasattr(window, "recording_root_hint")
 
 
@@ -62,9 +81,42 @@ def test_record_config_selects_existing_directory(qapp, tmp_path, monkeypatch):
         lambda *args: str(tmp_path),
     )
 
-    window._select_recording_root()
+    assert window.select_recording_root_action in window.recording_root_input.actions()
+    assert not window.select_recording_root_action.icon().isNull()
+    assert window.select_recording_root_action.toolTip() == "选择音频保存根目录"
+
+    window.select_recording_root_action.trigger()
 
     assert window.recording_root_input.text() == os.path.normpath(tmp_path)
+
+
+def test_recording_root_folder_icon_fills_available_width(qapp):
+    window = _create_window()
+
+    pixmap = window.select_recording_root_action.icon().pixmap(QSize(64, 64))
+    visible_rect = QRegion(pixmap.mask()).boundingRect()
+
+    assert visible_rect.width() == pixmap.width()
+
+
+def test_record_config_default_path_button_clears_custom_root(qapp, tmp_path):
+    window = _create_window(str(tmp_path))
+
+    window.default_recording_root_btn.click()
+
+    assert window.recording_root_input.text() == ""
+    assert window.recording_root_input.toolTip() == os.path.abspath(
+        os.path.normpath(model_consts.STORED_RECORDED_PATH)
+    )
+
+
+def test_record_config_tooltip_tracks_manually_entered_root(qapp, tmp_path):
+    window = _create_window()
+    custom_root = tmp_path / "a-very-long-product-audio-storage-directory"
+
+    window.recording_root_input.setText(str(custom_root))
+
+    assert window.recording_root_input.toolTip() == os.path.abspath(custom_root)
 
 
 def test_record_config_rejects_missing_directory(qapp, tmp_path, monkeypatch):
