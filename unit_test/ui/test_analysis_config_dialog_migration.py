@@ -16,6 +16,12 @@ from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel, QSizePolicy, QTab
 from consts import error_code
 from consts.acoustic_analysis.curve_style_consts import DEFAULT_CURVE_COLORS
 from consts.acoustic_analysis.specific_consts import spec_consts
+from consts.excel_export_consts import (
+    EXCEL_OUTPUT_DEVIATION,
+    EXCEL_OUTPUT_MARGIN,
+    EXCEL_OUTPUT_TEST_CURVE,
+    SAVE_ITEM_OUTPUTS_KEY,
+)
 from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_FOURIER,
     HARMONIC_DETECTION_METHOD_KEY,
@@ -3227,10 +3233,176 @@ def test_excel_dialog_preserves_output_config_after_semantic_migration(qapp):
         "date_format": "%Y%m%d",
         "max_points": 500,
         "save_items": ["FBA", "SPL"],
+        "save_item_outputs": {
+            "FBA": ["test_curve"],
+            "SPL": ["test_curve"],
+        },
         "save_mes_enabled": True,
         "mes_file_base": "D:/dataMES",
         "mes_file_name": "MES_Result",
     }
+
+
+def _excel_output_config(*, excel_config):
+    return {
+        "Excel": excel_config,
+        "FR": {
+            "type": "FR",
+            "limit_checked": False,
+            "golden_sample_checked": False,
+        },
+        "RSC": {
+            "type": "RSC",
+            "enable_threshold_judgment": True,
+            "upper_offset_db": 3.0,
+            "lower_offset_db": -3.0,
+            "golden_sample_checked": False,
+        },
+        "SPLF": {
+            "type": "SPLF",
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": ([100.0], [80.0], [None]),
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation"],
+        },
+        "Spec": {"type": "Spec"},
+    }
+
+
+def test_excel_output_table_structure_and_initial_state(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    window = ExcelConfigWindow(
+        FakeConfigManager(
+            _excel_output_config(excel_config={SAVE_ITEM_OUTPUTS_KEY: {}})
+        ),
+        "Excel",
+    )
+
+    assert [
+        window.output_table.horizontalHeaderItem(column).text()
+        for column in range(window.output_table.columnCount())
+    ] == ["分析项", "测试曲线", "Margin", "偏差曲线"]
+    assert window.output_table.rowCount() == 3
+
+    row_by_name = {
+        window.output_table.item(row, 0).text(): row
+        for row in range(window.output_table.rowCount())
+    }
+    for row in row_by_name.values():
+        name_item = window.output_table.item(row, 0)
+        assert not bool(name_item.flags() & Qt.ItemIsUserCheckable)
+        assert not bool(name_item.flags() & Qt.ItemIsEditable)
+
+    checkboxes = window._output_checkbox_by_name
+    for name in ("FR", "SPLF"):
+        test_curve = checkboxes[name][EXCEL_OUTPUT_TEST_CURVE]
+        assert test_curve.isEnabled()
+        assert not test_curve.isChecked()
+
+    rsc_test_curve = checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE]
+    assert not rsc_test_curve.isEnabled()
+    assert not rsc_test_curve.isChecked()
+
+    assert not checkboxes["FR"][EXCEL_OUTPUT_MARGIN].isEnabled()
+    assert not checkboxes["FR"][EXCEL_OUTPUT_MARGIN].isChecked()
+    assert not checkboxes["FR"][EXCEL_OUTPUT_DEVIATION].isEnabled()
+    assert not checkboxes["FR"][EXCEL_OUTPUT_DEVIATION].isChecked()
+
+    assert checkboxes["RSC"][EXCEL_OUTPUT_MARGIN].isEnabled()
+    assert not checkboxes["RSC"][EXCEL_OUTPUT_MARGIN].isChecked()
+    assert not checkboxes["RSC"][EXCEL_OUTPUT_DEVIATION].isEnabled()
+    assert not checkboxes["RSC"][EXCEL_OUTPUT_DEVIATION].isChecked()
+
+    assert checkboxes["SPLF"][EXCEL_OUTPUT_MARGIN].isEnabled()
+    assert not checkboxes["SPLF"][EXCEL_OUTPUT_MARGIN].isChecked()
+    assert checkboxes["SPLF"][EXCEL_OUTPUT_DEVIATION].isEnabled()
+    assert not checkboxes["SPLF"][EXCEL_OUTPUT_DEVIATION].isChecked()
+    window.close()
+
+
+def test_excel_output_bulk_actions_and_persistence(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    window = ExcelConfigWindow(
+        FakeConfigManager(
+            _excel_output_config(
+                excel_config={
+                    "save_items": ["FR", "stale"],
+                    SAVE_ITEM_OUTPUTS_KEY: {
+                        "FR": ["deviation", "test_curve", "unknown"],
+                        "RSC": ["test_curve"],
+                        "stale": ["margin"],
+                    },
+                }
+            )
+        ),
+        "Excel",
+    )
+
+    checkboxes = window._output_checkbox_by_name
+    assert checkboxes["FR"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
+    assert not checkboxes["FR"][EXCEL_OUTPUT_DEVIATION].isChecked()
+    assert not checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE].isEnabled()
+    assert not checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
+    assert not checkboxes["SPLF"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
+
+    window.on_select_all()
+    for outputs in checkboxes.values():
+        for checkbox in outputs.values():
+            assert checkbox.isChecked() is checkbox.isEnabled()
+    assert not checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
+
+    config = window.get_default_config()
+    assert config[SAVE_ITEM_OUTPUTS_KEY] == {
+        "FR": ["test_curve"],
+        "RSC": ["margin"],
+        "SPLF": ["test_curve", "margin", "deviation"],
+    }
+    assert config["save_items"] == ["FR", "RSC", "SPLF"]
+    assert "stale" not in config[SAVE_ITEM_OUTPUTS_KEY]
+
+    window.on_clear_all()
+    assert all(
+        not checkbox.isChecked()
+        for outputs in checkboxes.values()
+        for checkbox in outputs.values()
+    )
+    assert window.get_default_config()[SAVE_ITEM_OUTPUTS_KEY] == {}
+    assert window.get_default_config()["save_items"] == []
+    window.close()
+
+
+def test_excel_output_legacy_migration_and_restore(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    config_manager = FakeConfigManager(
+        _excel_output_config(excel_config={"save_items": ["SPLF", "FR"]})
+    )
+    window = ExcelConfigWindow(config_manager, "Excel")
+
+    assert window.get_default_config()[SAVE_ITEM_OUTPUTS_KEY] == {
+        "FR": ["test_curve"],
+        "SPLF": ["test_curve", "margin", "deviation"],
+    }
+
+    config_manager.config["Excel"] = {
+        "save_items": ["SPLF"],
+        SAVE_ITEM_OUTPUTS_KEY: {"RSC": ["margin"]},
+    }
+    old_table = window.output_table
+    window.on_restore_default_btn_clicked()
+
+    assert window.output_table is not old_table
+    assert window.get_default_config()[SAVE_ITEM_OUTPUTS_KEY] == {
+        "RSC": ["margin"]
+    }
+    assert window.get_default_config()["save_items"] == ["RSC"]
+    assert not window._output_checkbox_by_name["SPLF"][
+        EXCEL_OUTPUT_TEST_CURVE
+    ].isChecked()
+    window.close()
 
 
 def test_pd_dialog_preserves_time_smoothing_keys_after_widget_migration(qapp):

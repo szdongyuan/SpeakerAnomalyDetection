@@ -5,6 +5,7 @@ import os
 import re
 import csv
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable
@@ -13,10 +14,21 @@ import numpy as np
 from openpyxl import Workbook, load_workbook
 import msvcrt  # Windows-only; used for runtime file locking
 
-from base.golden_sample_export_payload import parse_golden_sample_curve_exports
+from base.excel_export_selection import normalize_save_item_outputs
+from base.golden_sample_export_payload import (
+    parse_golden_sample_curve_exports,
+    parse_selected_golden_sample_curve_exports,
+)
 from consts.acoustic_analysis.common_consts import (
+    GOLDEN_SAMPLE_CURVE_EXPORTS_KEY,
     GOLDEN_SAMPLE_DISPLAY_DEVIATION,
     GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+)
+from consts.excel_export_consts import (
+    EXCEL_OUTPUT_DEVIATION,
+    EXCEL_OUTPUT_MARGIN,
+    EXCEL_OUTPUT_TEST_CURVE,
+    SAVE_ITEM_OUTPUTS_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
 
@@ -401,6 +413,31 @@ def resolve_excel_max_points(excel_cfg: dict[str, Any]) -> int:
     return max(10, min(max_points, EXCEL_MAX_DATA_POINTS))
 
 
+def _exportable_analysis_item_names(
+    analysis_config: object,
+) -> list[str]:
+    if not isinstance(analysis_config, Mapping):
+        return []
+    return [
+        name
+        for name, config in analysis_config.items()
+        if isinstance(name, str)
+        and isinstance(config, Mapping)
+        and config.get("type") not in ("Excel", "Spec")
+    ]
+
+
+def _normalize_runtime_output_selections(
+    excel_cfg: Mapping[str, Any],
+    analysis_config: object,
+) -> dict[str, tuple[str, ...]]:
+    return normalize_save_item_outputs(
+        excel_cfg,
+        analysis_config,
+        available_items=_exportable_analysis_item_names(analysis_config),
+    )
+
+
 class ExcelExportSession:
     """
     Keep an Excel workbook in memory for repeated appends, and save on demand.
@@ -444,6 +481,7 @@ class ExcelExportSession:
         self,
         *,
         save_items: list[str],
+        save_item_outputs: Mapping[str, Iterable[str]] | None = None,
         max_points: int,
         sn: str,
         date_text: str,
@@ -451,10 +489,17 @@ class ExcelExportSession:
         analysis_config: dict[str, Any],
         analysis_result_dict: dict[str, tuple[bool, float]],
     ) -> ExportResult:
-        if not isinstance(save_items, list) or len(save_items) == 0:
+        excel_cfg: dict[str, Any] = {"save_items": save_items}
+        if save_item_outputs is not None:
+            excel_cfg[SAVE_ITEM_OUTPUTS_KEY] = save_item_outputs
+        selections = _normalize_runtime_output_selections(
+            excel_cfg,
+            analysis_config,
+        )
+        if not selections:
             return ExportResult(ok=False, message="未选择需要保存的分析项")
-        resolved_curves, error = _preflight_named_curve_exports(
-            save_items,
+        resolved_curves, error = _preflight_selected_named_curve_exports(
+            selections,
             analysis_items_data,
         )
         if error:
@@ -479,7 +524,7 @@ class ExcelExportSession:
             created_any_sheet = True
             return wb.create_sheet(title=desired_name)
 
-        for item_name in save_items:
+        for item_name, selected_outputs in selections.items():
             item_data = analysis_items_data.get(item_name)
             if not isinstance(item_data, dict):
                 continue
@@ -488,7 +533,7 @@ class ExcelExportSession:
                 # user-invisible: never export
                 continue
 
-            if item_type == "AI":
+            if item_type == "AI" and EXCEL_OUTPUT_TEST_CURVE in selected_outputs:
                 ws_name = _sanitize_sheet_name(item_name)
                 ws = wb[ws_name] if ws_name in wb.sheetnames else ensure_sheet(ws_name)
                 header = AI_SHEET_HEADER
@@ -499,7 +544,7 @@ class ExcelExportSession:
                 ng_score = item_data.get("ng_score")
                 model_name = item_data.get("model_name") or item_data.get("model") or ""
                 _append_row(ws, [sn, date_text, label, ok_score, ng_score, model_name])
-            else:
+            elif item_type != "AI":
                 named_curves = resolved_curves.get(item_name, [])
                 for curve_name, curve_x, curve_y in named_curves:
                     x, y = _downsample_xy(
@@ -537,7 +582,11 @@ class ExcelExportSession:
                     _append_row(ws, [sn, date_text] + y)
 
             result_tuple = analysis_result_dict.get(item_name)
-            if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
+            if (
+                EXCEL_OUTPUT_MARGIN in selected_outputs
+                and isinstance(result_tuple, tuple)
+                and len(result_tuple) == 2
+            ):
                 ok_val, deviation = result_tuple
                 cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
                 result_sheet_name = _make_margin_sheet_title(item_name)
@@ -744,6 +793,118 @@ def _preflight_named_curve_exports(
         result = item_data.get("result")
         curves, error = (
             _resolve_named_curve_exports(item_name, result)
+            if isinstance(result, dict)
+            else ([], None)
+        )
+        if error:
+            return {}, error
+        resolved[item_name] = curves
+    return resolved, None
+
+
+def _resolve_selected_named_curve_exports(
+    item_name: str,
+    result: dict[str, Any],
+    selected_outputs: Iterable[str],
+) -> tuple[list[tuple[str, list[Any], list[Any]]], str | None]:
+    outputs = set(selected_outputs)
+    requested_modes: list[str] = []
+    if EXCEL_OUTPUT_DEVIATION in outputs:
+        requested_modes.append(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+    if EXCEL_OUTPUT_TEST_CURVE in outputs:
+        requested_modes.append(GOLDEN_SAMPLE_DISPLAY_ENVELOPE)
+    if not requested_modes:
+        return [], None
+
+    is_legacy, parsed, error = parse_selected_golden_sample_curve_exports(
+        result,
+        requested_modes,
+    )
+    if error:
+        return [], f"当前黄金样本导出载荷不完整: {error}"
+    if is_legacy:
+        if EXCEL_OUTPUT_TEST_CURVE not in outputs:
+            return [], None
+        xy = _extract_curve_xy(result)
+        return ([] if xy is None else [(item_name, *xy)]), None
+
+    parsed_by_mode = {series.mode: series for series in parsed}
+    curves: list[tuple[str, list[Any], list[Any]]] = []
+    if EXCEL_OUTPUT_DEVIATION in outputs:
+        deviation = parsed_by_mode.get(GOLDEN_SAMPLE_DISPLAY_DEVIATION)
+        if (
+            deviation is not None
+            and deviation.available
+            and deviation.x is not None
+            and deviation.y is not None
+        ):
+            curves.append(
+                (
+                    _make_golden_curve_export_name(
+                        item_name,
+                        GOLDEN_SAMPLE_DISPLAY_DEVIATION,
+                    ),
+                    deviation.x,
+                    deviation.y,
+                )
+            )
+
+    if EXCEL_OUTPUT_TEST_CURVE in outputs:
+        payload = result[GOLDEN_SAMPLE_CURVE_EXPORTS_KEY]
+        envelope_declared = (
+            GOLDEN_SAMPLE_DISPLAY_ENVELOPE in payload["selected_modes"]
+        )
+        envelope = parsed_by_mode.get(GOLDEN_SAMPLE_DISPLAY_ENVELOPE)
+        if envelope_declared:
+            if (
+                envelope is not None
+                and envelope.available
+                and envelope.x is not None
+                and envelope.y is not None
+            ):
+                curves.append(
+                    (
+                        _make_golden_curve_export_name(
+                            item_name,
+                            GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+                        ),
+                        envelope.x,
+                        envelope.y,
+                    )
+                )
+        else:
+            xy = _extract_curve_xy(result)
+            if xy is not None:
+                curves.append(
+                    (
+                        _make_golden_curve_export_name(
+                            item_name,
+                            GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
+                        ),
+                        *xy,
+                    )
+                )
+    return curves, None
+
+
+def _preflight_selected_named_curve_exports(
+    selections: Mapping[str, Iterable[str]],
+    analysis_items_data: Mapping[str, Any],
+) -> tuple[dict[str, list[tuple[str, list[Any], list[Any]]]], str | None]:
+    resolved: dict[str, list[tuple[str, list[Any], list[Any]]]] = {}
+    for item_name, selected_outputs in selections.items():
+        item_data = analysis_items_data.get(item_name)
+        if not isinstance(item_data, dict):
+            continue
+        if item_data.get("type") in ("AI", "Spec"):
+            continue
+        result = item_data.get("result")
+        curves, error = (
+            _resolve_selected_named_curve_exports(
+                item_name,
+                result,
+                selected_outputs,
+            )
             if isinstance(result, dict)
             else ([], None)
         )
@@ -1004,11 +1165,14 @@ def export_analysis_to_csv_spool(
     if not isinstance(excel_cfg, dict) or not excel_cfg.get("enabled", True):
         return ExportResult(ok=True, message="Excel导出未启用")
 
-    save_items = excel_cfg.get("save_items") or []
-    if not isinstance(save_items, list) or len(save_items) == 0:
+    selections = _normalize_runtime_output_selections(
+        excel_cfg,
+        analysis_config,
+    )
+    if not selections:
         return ExportResult(ok=False, message="未选择需要保存的分析项")
-    resolved_curves, error = _preflight_named_curve_exports(
-        save_items,
+    resolved_curves, error = _preflight_selected_named_curve_exports(
+        selections,
         analysis_items_data,
     )
     if error:
@@ -1058,7 +1222,7 @@ def export_analysis_to_csv_spool(
         except Exception as e:
             return ExportResult(ok=False, message=f"Excel加锁失败: {e}")
 
-    for item_name in save_items:
+    for item_name, selected_outputs in selections.items():
         item_data = analysis_items_data.get(item_name)
         if not isinstance(item_data, dict):
             continue
@@ -1066,7 +1230,7 @@ def export_analysis_to_csv_spool(
         if item_type == "Spec":
             continue
 
-        if item_type == "AI":
+        if item_type == "AI" and EXCEL_OUTPUT_TEST_CURVE in selected_outputs:
             sheet_name = _sanitize_sheet_name(item_name)
             csv_path = os.path.join(spool_dir, f"{_sanitize_filename(sheet_name)}.csv")
             header = AI_SHEET_HEADER
@@ -1102,7 +1266,11 @@ def export_analysis_to_csv_spool(
                     return ret
 
         result_tuple = analysis_result_dict.get(item_name)
-        if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
+        if (
+            EXCEL_OUTPUT_MARGIN in selected_outputs
+            and isinstance(result_tuple, tuple)
+            and len(result_tuple) == 2
+        ):
             ok_val, deviation = result_tuple
             cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
             sheet_name = _make_margin_sheet_title(item_name)
@@ -1291,11 +1459,14 @@ def export_analysis_to_excel(
     if not isinstance(excel_cfg, dict) or not excel_cfg.get("enabled", True):
         return ExportResult(ok=True, message="Excel导出未启用")
 
-    save_items = excel_cfg.get("save_items") or []
-    if not isinstance(save_items, list) or len(save_items) == 0:
+    selections = _normalize_runtime_output_selections(
+        excel_cfg,
+        analysis_config,
+    )
+    if not selections:
         return ExportResult(ok=False, message="未选择需要保存的分析项")
-    resolved_curves, error = _preflight_named_curve_exports(
-        save_items,
+    resolved_curves, error = _preflight_selected_named_curve_exports(
+        selections,
         analysis_items_data,
     )
     if error:
@@ -1346,7 +1517,7 @@ def export_analysis_to_excel(
         created_any_sheet = True
         return wb.create_sheet(title=desired_name)
 
-    for item_name in save_items:
+    for item_name, selected_outputs in selections.items():
         item_data = analysis_items_data.get(item_name)
         if not isinstance(item_data, dict):
             continue
@@ -1355,7 +1526,7 @@ def export_analysis_to_excel(
             # user-invisible: never export
             continue
 
-        if item_type == "AI":
+        if item_type == "AI" and EXCEL_OUTPUT_TEST_CURVE in selected_outputs:
             ws_name = _sanitize_sheet_name(item_name)
             ws = wb[ws_name] if ws_name in wb.sheetnames else ensure_sheet(ws_name)
             header = AI_SHEET_HEADER
@@ -1366,7 +1537,7 @@ def export_analysis_to_excel(
             ng_score = item_data.get("ng_score")
             model_name = item_data.get("model_name") or item_data.get("model") or ""
             _append_row(ws, [sn, date_text, label, ok_score, ng_score, model_name])
-        else:
+        elif item_type != "AI":
             named_curves = resolved_curves.get(item_name, [])
             for curve_name, curve_x, curve_y in named_curves:
                 x, y = _downsample_xy(
@@ -1404,7 +1575,11 @@ def export_analysis_to_excel(
                 _append_row(ws, [sn, date_text] + y)
 
         result_tuple = analysis_result_dict.get(item_name)
-        if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
+        if (
+            EXCEL_OUTPUT_MARGIN in selected_outputs
+            and isinstance(result_tuple, tuple)
+            and len(result_tuple) == 2
+        ):
             ok_val, deviation = result_tuple
             cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
             result_sheet_name = _make_margin_sheet_title(item_name)

@@ -3,6 +3,7 @@ import tempfile
 import csv
 
 import numpy as np
+import pytest
 from openpyxl import load_workbook
 
 from base.excel_result_exporter import (
@@ -95,7 +96,7 @@ def test_export_analysis_to_excel_creates_missing_explicit_parent(tmp_path):
                 "model_name": "demo",
             }
         },
-        analysis_config={},
+        analysis_config={"AI结果": {}},
         analysis_result_dict={},
         file_path=str(file_path),
     )
@@ -139,7 +140,16 @@ def _export_args(result, *, analysis_result_dict=None):
         "sn": "SN001",
         "date_text": "2026-07-30 14:30:45",
         "analysis_items_data": {"SPLF": {"type": "SPLF", "result": result}},
-        "analysis_config": {"SPLF": {}},
+        "analysis_config": {
+            "SPLF": {
+                "limit_checked": True,
+                "limit_mode": "manual",
+                "manual_upper_enabled": True,
+                "manual_upper": 1.0,
+                "golden_sample_checked": True,
+                "golden_sample_display_modes": ["deviation", "envelope"],
+            }
+        },
         "analysis_result_dict": analysis_result_dict or {},
     }
 
@@ -154,9 +164,392 @@ def _multi_export_args(items):
         "sn": "SN001",
         "date_text": "2026-07-30 14:30:45",
         "analysis_items_data": items,
-        "analysis_config": {item_name: {} for item_name in items},
+        "analysis_config": {
+            item_name: {
+                "limit_checked": True,
+                "limit_mode": "manual",
+                "manual_upper_enabled": True,
+                "manual_upper": 1.0,
+                "golden_sample_checked": True,
+                "golden_sample_display_modes": ["deviation", "envelope"],
+            }
+            for item_name in items
+        },
         "analysis_result_dict": {},
     }
+
+
+def _fully_available_analysis_config(item_name="SPLF"):
+    return {
+        item_name: {
+            "limit_checked": True,
+            "limit_mode": "manual",
+            "manual_upper_enabled": True,
+            "manual_upper": 1.0,
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation", "envelope"],
+        }
+    }
+
+
+def _selected_export_args(result, *, analysis_result_dict=None, item_name="SPLF"):
+    args = _export_args(result, analysis_result_dict=analysis_result_dict)
+    args["analysis_config"] = _fully_available_analysis_config(item_name)
+    return args
+
+
+@pytest.mark.parametrize(
+    ("outputs", "expected_sheets"),
+    [
+        (["margin"], {"SPLF margin"}),
+        (["deviation"], {"SPLF_偏差曲线"}),
+        (["test_curve"], {"SPLF_测试曲线"}),
+        (
+            ["test_curve", "margin", "deviation"],
+            {"SPLF margin", "SPLF_偏差曲线", "SPLF_测试曲线"},
+        ),
+    ],
+)
+def test_direct_excel_applies_independent_output_selections(
+    tmp_path,
+    outputs,
+    expected_sheets,
+):
+    file_path = tmp_path / f"{'-'.join(outputs)}.xlsx"
+    payload_result = _golden_item_result(
+        ("deviation", "envelope"),
+        {
+            "deviation": ([100.0, 200.0], [-1.0, 0.5]),
+            "envelope": ([100.0, 200.0], [31.0, 33.5]),
+        },
+        frequency_list=[100.0, 200.0],
+        spl_db_raw=[10.0, 20.0],
+    )
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_items": ["SPLF"],
+            "save_item_outputs": {"SPLF": outputs},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **_selected_export_args(
+            payload_result,
+            analysis_result_dict={"SPLF": (True, 0.5)},
+        ),
+    )
+
+    assert result.ok is True
+    assert set(load_workbook(file_path).sheetnames) == expected_sheets
+
+
+def test_direct_excel_explicit_empty_mapping_is_authoritative(tmp_path):
+    file_path = tmp_path / "empty.xlsx"
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_items": ["SPLF"],
+            "save_item_outputs": {},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **_selected_export_args(
+            {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+        ),
+    )
+
+    assert result.ok is False
+    assert "未选择需要保存的分析项" in result.message
+    assert not file_path.exists()
+
+
+@pytest.mark.parametrize("golden_checked", [False, True])
+def test_direct_excel_without_current_payload_keeps_legacy_raw_name(
+    tmp_path,
+    golden_checked,
+):
+    file_path = tmp_path / f"legacy-{golden_checked}.xlsx"
+    analysis_config = {"SPLF": {"golden_sample_checked": golden_checked}}
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **{
+            **_export_args(
+                {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+            ),
+            "analysis_config": analysis_config,
+        },
+    )
+
+    assert result.ok is True
+    assert load_workbook(file_path).sheetnames == ["SPLF"]
+
+
+def test_direct_excel_current_payload_without_envelope_uses_suffixed_raw_fallback(tmp_path):
+    file_path = tmp_path / "raw-fallback.xlsx"
+    payload_result = _golden_item_result(
+        ("deviation",),
+        {"deviation": ([100.0], [-1.0])},
+        frequency_list=[100.0],
+        spl_db_raw=[10.0],
+    )
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is True
+    workbook = load_workbook(file_path, data_only=True)
+    assert workbook.sheetnames == ["SPLF_测试曲线"]
+    assert [cell.value for cell in workbook["SPLF_测试曲线"][2][2:]] == [10.0]
+
+
+@pytest.mark.parametrize(
+    ("outputs", "broken_mode", "expected_sheet"),
+    [
+        (["test_curve"], "deviation", "SPLF_测试曲线"),
+        (["deviation"], "envelope", "SPLF_偏差曲线"),
+    ],
+)
+def test_direct_excel_ignores_malformed_unselected_structured_mode(
+    tmp_path,
+    outputs,
+    broken_mode,
+    expected_sheet,
+):
+    file_path = tmp_path / f"ignore-{broken_mode}.xlsx"
+    valid_entries = {
+        "deviation": {"available": True, "x": [100.0], "y": [-1.0]},
+        "envelope": {"available": True, "x": [100.0], "y": [31.0]},
+    }
+    valid_entries[broken_mode] = {"available": True, "x": "broken", "y": []}
+    payload_result = {
+        GOLDEN_SAMPLE_CURVE_EXPORTS_KEY: {
+            "schema_version": 1,
+            "selected_modes": ["deviation", "envelope"],
+            "series": valid_entries,
+        }
+    }
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": outputs},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is True
+    assert load_workbook(file_path).sheetnames == [expected_sheet]
+
+
+@pytest.mark.parametrize(
+    ("output", "mode"),
+    [("test_curve", "envelope"), ("deviation", "deviation")],
+)
+def test_direct_excel_rejects_malformed_selected_structured_mode(
+    tmp_path,
+    output,
+    mode,
+):
+    file_path = tmp_path / f"broken-{mode}.xlsx"
+    payload_result = {
+        "frequency_list": [100.0],
+        "spl_db_raw": [10.0],
+        GOLDEN_SAMPLE_CURVE_EXPORTS_KEY: {
+            "schema_version": 1,
+            "selected_modes": [mode],
+            "series": {mode: {"available": True, "x": [100.0], "y": []}},
+        },
+    }
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": [output]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is False
+    assert mode in result.message
+    assert not file_path.exists()
+
+
+def test_direct_excel_missing_selected_series_is_skipped(tmp_path):
+    file_path = tmp_path / "missing-series.xlsx"
+    payload_result = _golden_item_result(("envelope",), {"envelope": None})
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is True
+    assert load_workbook(file_path).sheetnames == ["Sheet"]
+
+
+@pytest.mark.parametrize("selected", [True, False])
+def test_direct_excel_gates_ai_main_result_on_test_curve(tmp_path, selected):
+    file_path = tmp_path / f"ai-{selected}.xlsx"
+    outputs = ["test_curve"] if selected else ["margin"]
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"AI结果": outputs},
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={"AI结果": {"type": "AI", "label": "OK"}},
+        analysis_config={
+            "AI结果": {
+                "limit_checked": True,
+                "limit_mode": "manual",
+                "manual_upper_enabled": True,
+                "manual_upper": 1.0,
+            }
+        },
+        analysis_result_dict={},
+        file_path=str(file_path),
+    )
+
+    assert result.ok is True
+    assert ("AI结果" in load_workbook(file_path).sheetnames) is selected
+
+
+def test_direct_excel_filters_stale_mapping_key_by_current_analysis_config(tmp_path):
+    file_path = tmp_path / "stale.xlsx"
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            "save_item_outputs": {"STALE": ["test_curve"]},
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={
+            "STALE": {
+                "type": "SPLF",
+                "result": {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+            }
+        },
+        analysis_config={"CURRENT": {}},
+        analysis_result_dict={"STALE": (True, 0.5)},
+        file_path=str(file_path),
+    )
+
+    assert result.ok is False
+    assert "未选择需要保存的分析项" in result.message
+    assert not file_path.exists()
+
+
+def test_session_supports_legacy_and_authoritative_successive_selections(tmp_path):
+    file_path = tmp_path / "session-selection.xlsx"
+    session = ExcelExportSession(file_path=str(file_path))
+    payload_result = _golden_item_result(
+        ("deviation", "envelope"),
+        {
+            "deviation": ([100.0], [-1.0]),
+            "envelope": ([100.0], [31.0]),
+        },
+    )
+    args = _selected_export_args(
+        payload_result,
+        analysis_result_dict={"SPLF": (True, 0.5)},
+    )
+
+    legacy = session.append(save_items=["SPLF"], max_points=2000, **args)
+    selected = session.append(
+        save_items=["SPLF"],
+        save_item_outputs={"SPLF": ["test_curve"]},
+        max_points=2000,
+        **args,
+    )
+    saved = session.save()
+
+    assert legacy.ok is True
+    assert selected.ok is True
+    assert saved.ok is True
+    workbook = load_workbook(file_path)
+    assert workbook["SPLF_测试曲线"].max_row == 3
+    assert workbook["SPLF_偏差曲线"].max_row == 2
+    assert workbook["SPLF margin"].max_row == 2
+
+
+def test_session_unselected_malformed_mode_does_not_poison_append(tmp_path):
+    file_path = tmp_path / "session-isolated.xlsx"
+    session = ExcelExportSession(file_path=str(file_path))
+    payload_result = {
+        GOLDEN_SAMPLE_CURVE_EXPORTS_KEY: {
+            "schema_version": 1,
+            "selected_modes": ["deviation", "envelope"],
+            "series": {
+                "deviation": {"available": True, "x": "broken", "y": []},
+                "envelope": {"available": True, "x": [100.0], "y": [31.0]},
+            },
+        }
+    }
+
+    appended = session.append(
+        save_items=["SPLF"],
+        save_item_outputs={"SPLF": ["test_curve"]},
+        max_points=2000,
+        **_selected_export_args(payload_result),
+    )
+    saved = session.save()
+
+    assert appended.ok is True
+    assert saved.ok is True
+    assert load_workbook(file_path).sheetnames == ["SPLF_测试曲线"]
+
+
+def test_session_filters_stale_selected_item(tmp_path):
+    file_path = tmp_path / "session-stale.xlsx"
+    session = ExcelExportSession(file_path=str(file_path))
+
+    appended = session.append(
+        save_items=["STALE"],
+        save_item_outputs={"STALE": ["test_curve"]},
+        max_points=2000,
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={
+            "STALE": {
+                "type": "SPLF",
+                "result": {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+            }
+        },
+        analysis_config={"CURRENT": {}},
+        analysis_result_dict={},
+    )
+
+    assert appended.ok is False
+    assert "未选择需要保存的分析项" in appended.message
+    assert session._wb is None
 
 
 def test_direct_excel_exports_dual_named_curves_with_exact_values_and_one_margin(tmp_path):
@@ -228,6 +621,332 @@ def test_csv_spool_exports_envelope_only_and_no_auxiliary_curves(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("outputs", "expected_files"),
+    [
+        (["margin"], {"SPLF margin.csv"}),
+        (["deviation"], {"SPLF_偏差曲线.csv"}),
+        (["test_curve"], {"SPLF_测试曲线.csv"}),
+        (
+            ["test_curve", "margin", "deviation"],
+            {"SPLF margin.csv", "SPLF_偏差曲线.csv", "SPLF_测试曲线.csv"},
+        ),
+    ],
+)
+def test_csv_spool_selection_applies_independent_outputs(
+    tmp_path,
+    outputs,
+    expected_files,
+):
+    spool_dir = tmp_path / "spool"
+    payload_result = _golden_item_result(
+        ("deviation", "envelope"),
+        {
+            "deviation": ([100.0], [-1.0]),
+            "envelope": ([100.0], [31.0]),
+        },
+    )
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_items": ["SPLF"],
+            "save_item_outputs": {"SPLF": outputs},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(
+            payload_result,
+            analysis_result_dict={"SPLF": (True, 0.5)},
+        ),
+    )
+
+    assert result.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == expected_files
+
+
+def test_csv_spool_selection_uses_generic_name_for_ordinary_test_curve(tmp_path):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(
+            {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+        ),
+    )
+
+    assert result.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == {"SPLF.csv"}
+
+
+@pytest.mark.parametrize("selected", [True, False])
+def test_csv_spool_selection_gates_ai_main_result_on_test_curve(tmp_path, selected):
+    spool_dir = tmp_path / "spool"
+    outputs = ["test_curve"] if selected else ["margin"]
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"AI结果": outputs},
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={"AI结果": {"type": "AI", "label": "OK"}},
+        analysis_config=_fully_available_analysis_config("AI结果"),
+        analysis_result_dict={},
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+    )
+
+    assert result.ok is True
+    assert ((spool_dir / "AI结果.csv").exists()) is selected
+
+
+def test_csv_spool_selection_explicit_empty_mapping_creates_no_spool(tmp_path):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_items": ["SPLF"],
+            "save_item_outputs": {},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(
+            {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+        ),
+    )
+
+    assert result.ok is False
+    assert "未选择需要保存的分析项" in result.message
+    assert not spool_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("outputs", "broken_mode", "expected_file"),
+    [
+        (["test_curve"], "deviation", "SPLF_测试曲线.csv"),
+        (["deviation"], "envelope", "SPLF_偏差曲线.csv"),
+    ],
+)
+def test_csv_spool_selected_output_ignores_malformed_unselected_mode(
+    tmp_path,
+    outputs,
+    broken_mode,
+    expected_file,
+):
+    spool_dir = tmp_path / "spool"
+    series = {
+        "deviation": {"available": True, "x": [100.0], "y": [-1.0]},
+        "envelope": {"available": True, "x": [100.0], "y": [31.0]},
+    }
+    series[broken_mode] = {"available": True, "x": "broken", "y": []}
+    payload_result = {
+        GOLDEN_SAMPLE_CURVE_EXPORTS_KEY: {
+            "schema_version": 1,
+            "selected_modes": ["deviation", "envelope"],
+            "series": series,
+        }
+    }
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": outputs},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == {expected_file}
+
+
+@pytest.mark.parametrize(
+    ("output", "mode"),
+    [("test_curve", "envelope"), ("deviation", "deviation")],
+)
+def test_csv_spool_selected_output_rejects_malformed_selected_mode(
+    tmp_path,
+    output,
+    mode,
+):
+    spool_dir = tmp_path / "spool"
+    payload_result = {
+        GOLDEN_SAMPLE_CURVE_EXPORTS_KEY: {
+            "schema_version": 1,
+            "selected_modes": [mode],
+            "series": {mode: {"available": True, "x": [100.0], "y": []}},
+        }
+    }
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": [output]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is False
+    assert mode in result.message
+    assert not spool_dir.exists()
+
+
+def test_csv_spool_selected_test_curve_uses_raw_fallback_without_declared_envelope(tmp_path):
+    spool_dir = tmp_path / "spool"
+    payload_result = _golden_item_result(
+        ("deviation",),
+        {"deviation": ([100.0], [-1.0])},
+        frequency_list=[100.0],
+        spl_db_raw=[10.0],
+    )
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(payload_result),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "SPLF_测试曲线.csv") == [
+        ["SN", "time", "100.0"],
+        ["SN001", "2026-07-30 14:30:45", "10.0"],
+    ]
+
+
+def test_csv_spool_selection_filters_stale_mapping_key(tmp_path):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"STALE": ["test_curve"]},
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={
+            "STALE": {
+                "type": "SPLF",
+                "result": {"frequency_list": [100.0], "spl_db_raw": [10.0]},
+            }
+        },
+        analysis_config={"CURRENT": {}},
+        analysis_result_dict={},
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+    )
+
+    assert result.ok is False
+    assert "未选择需要保存的分析项" in result.message
+    assert not spool_dir.exists()
+
+
+def test_csv_spool_historical_rebuild_keeps_existing_unselected_output(tmp_path):
+    spool_dir = tmp_path / "spool"
+    file_path = tmp_path / "result.xlsx"
+    payload_result = _golden_item_result(
+        ("envelope",),
+        {"envelope": ([100.0], [31.0])},
+    )
+    exported = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(payload_result),
+    )
+
+    rebuilt = build_excel_from_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["margin"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
+    )
+
+    assert exported.ok is True
+    assert rebuilt.ok is True
+    assert load_workbook(file_path).sheetnames == ["SPLF_测试曲线"]
+
+
+def test_csv_spool_selection_changes_only_later_appends_without_retroactive_deletion(tmp_path):
+    spool_dir = tmp_path / "spool"
+    payload_result = _golden_item_result(
+        ("deviation", "envelope"),
+        {
+            "deviation": ([100.0], [-1.0]),
+            "envelope": ([100.0], [31.0]),
+        },
+    )
+    first = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(payload_result),
+    )
+    second_args = _selected_export_args(
+        payload_result,
+        analysis_result_dict={"SPLF": (True, 0.5)},
+    )
+    second_args["sn"] = "SN002"
+    second = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            "save_item_outputs": {"SPLF": ["margin"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **second_args,
+    )
+
+    assert first.ok is True
+    assert second.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == {
+        "SPLF margin.csv",
+        "SPLF_测试曲线.csv",
+    }
+    assert [row[0] for row in _read_csv_rows(spool_dir / "SPLF_测试曲线.csv")] == [
+        "SN",
+        "SN001",
+    ]
+    assert [row[0] for row in _read_csv_rows(spool_dir / "SPLF margin.csv")] == [
+        "SN",
+        "SN002",
+    ]
+
+
 def test_explicitly_unavailable_current_series_is_skipped(tmp_path):
     file_path = tmp_path / "unavailable.xlsx"
     payload_result = _golden_item_result(
@@ -247,6 +966,7 @@ def test_explicitly_unavailable_current_series_is_skipped(tmp_path):
     workbook = load_workbook(file_path)
     assert "SPLF" not in workbook.sheetnames
     assert "SPLF_偏差曲线" not in workbook.sheetnames
+    assert "SPLF_测试曲线" in workbook.sheetnames
 
 
 def test_malformed_current_payload_fails_direct_excel_without_raw_fallback(tmp_path):

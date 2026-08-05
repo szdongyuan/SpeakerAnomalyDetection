@@ -5,6 +5,7 @@ from base.golden_sample_export_payload import (
     GoldenCurveSeries,
     build_golden_sample_curve_exports,
     parse_golden_sample_curve_exports,
+    parse_selected_golden_sample_curve_exports,
 )
 from consts.acoustic_analysis.common_consts import GOLDEN_SAMPLE_CURVE_EXPORTS_KEY
 
@@ -251,3 +252,103 @@ def test_parse_mixed_type_extra_series_keys_returns_error_without_raising():
         [],
         "series 包含未选择模式: ['1', \"'envelope'\"]",
     )
+
+
+def test_parse_selected_validates_only_requested_declared_modes():
+    result = _marked(
+        {
+            "schema_version": 1,
+            "selected_modes": ["deviation", "envelope"],
+            "series": {
+                "deviation": {"available": True, "x": "broken", "y": []},
+                "envelope": {
+                    "available": True,
+                    "x": [100.0, 200.0],
+                    "y": [31.0, 33.5],
+                },
+            },
+        }
+    )
+
+    assert parse_selected_golden_sample_curve_exports(result, ("envelope",)) == (
+        False,
+        [
+            GoldenCurveSeries(
+                mode="envelope",
+                available=True,
+                x=[100.0, 200.0],
+                y=[31.0, 33.5],
+            )
+        ],
+        None,
+    )
+    assert "deviation" in parse_golden_sample_curve_exports(result)[2]
+
+
+def test_parse_selected_returns_unavailable_for_requested_undeclared_mode():
+    result = _marked(
+        {
+            "schema_version": 1,
+            "selected_modes": ["deviation"],
+            "series": {"deviation": {"available": False}},
+        }
+    )
+
+    assert parse_selected_golden_sample_curve_exports(result, ("envelope",)) == (
+        False,
+        [GoldenCurveSeries(mode="envelope", available=False)],
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "diagnostic"),
+    [
+        (None, "对象"),
+        ({"schema_version": 2, "selected_modes": ["deviation"], "series": {}}, "schema_version"),
+        ({"schema_version": 1, "selected_modes": "deviation", "series": {}}, "selected_modes"),
+        ({"schema_version": 1, "selected_modes": ["deviation"], "series": []}, "series"),
+        (
+            {
+                "schema_version": 1,
+                "selected_modes": ["deviation"],
+                "series": {
+                    "deviation": {"available": False},
+                    "envelope": {"available": False},
+                },
+            },
+            "未选择",
+        ),
+    ],
+)
+def test_parse_selected_rejects_malformed_top_level_payload(payload, diagnostic):
+    is_legacy, parsed, error = parse_selected_golden_sample_curve_exports(
+        _marked(payload),
+        ("envelope",),
+    )
+
+    assert is_legacy is False
+    assert parsed == []
+    assert diagnostic in error
+
+
+def test_parse_selected_rejects_malformed_requested_declared_mode():
+    result = _marked(
+        {
+            "schema_version": 1,
+            "selected_modes": ["deviation", "envelope"],
+            "series": {
+                "deviation": {"available": False},
+                "envelope": {"available": True, "x": [100.0], "y": []},
+            },
+        }
+    )
+
+    is_legacy, parsed, error = parse_selected_golden_sample_curve_exports(
+        result,
+        ("envelope",),
+    )
+
+    assert is_legacy is False
+    assert parsed == []
+    assert "envelope" in error
