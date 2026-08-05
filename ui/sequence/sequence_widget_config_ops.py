@@ -386,6 +386,16 @@ class SequenceWidgetConfigOpsMixin:
         finally:
             self.using_file_combobox.blockSignals(False)
 
+    def on_product_test_program_updated(self, *_):
+        """Reload product-test programs after the configuration dialog saves."""
+        try:
+            self.update_using_file_combobox()
+            self._sync_product_test_conditions(clear_recent_history=True)
+        except Exception as error:
+            self.default_logger.warning(
+                f"Failed to refresh product test program after update: {error}"
+            )
+
     def add_file_to_using_file_combobox(self):
         """
         Adds file to the using file combobox.
