@@ -42,6 +42,18 @@ class _DummyRecentSessionPanel:
         self.upserted_records.append(dict(session_record))
 
 
+class _SpyLeftPanel:
+    def __init__(self):
+        self.condition_results = []
+        self.final_results = []
+
+    def set_condition_result(self, condition, result_text, tone=None):
+        self.condition_results.append((condition, result_text, tone))
+
+    def set_final_result(self, result_text, tone=None):
+        self.final_results.append((result_text, tone))
+
+
 class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
     def __init__(self):
         self.count_board = SimpleNamespace(mode="mark")
@@ -89,13 +101,14 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
 
     def _relabel_stored_audio_record(self, recorded_path, recorded_signal_info, label):
         self.relabel_calls.append((recorded_path, dict(recorded_signal_info), label))
+        folder = label if label in ("OK", "NG") else "not_labeled"
         return (
             error_code.OK,
             "ok",
-            "D:/audio_data/stored_data/OK/test.wav",
+            f"D:/audio_data/stored_data/{folder}/test.wav",
             {
-                "file_path": "audio_data/stored_data/OK/test.wav",
-                "labels": "OK",
+                "file_path": f"audio_data/stored_data/{folder}/test.wav",
+                "labels": label,
             },
         )
 
@@ -155,6 +168,51 @@ class TestRecentSessionLabelUpdate(unittest.TestCase):
             "D:/audio_data/stored_data/OK/test.wav",
         )
         self.assertEqual(widget.count_board_relabel_updates, [("not_labeled", "OK")])
+
+    def test_change_recent_session_result_refreshes_left_product_condition_state(self):
+        widget = _DummySequenceWidget()
+        widget.left_panel = _SpyLeftPanel()
+        widget._manual_product_condition_group_id = ""
+        widget._displayed_manual_product_condition_group_id = ""
+        widget._manual_product_condition_results = {}
+        widget._manual_product_condition_completed_keys = set()
+        widget.recent_test_session_by_id = {
+            "recent_1": {
+                "session_id": "recent_1",
+                "group_id": "group_1",
+                "condition_key": "01",
+                "result_label": "not labeled",
+                "recorded_path": "D:/audio_data/stored_data/not_labeled/test.wav",
+                "recorded_signal_info": {
+                    "file_path": "audio_data/stored_data/not_labeled/test.wav",
+                    "labels": "not_labeled",
+                },
+            },
+            "recent_2": {
+                "session_id": "recent_2",
+                "group_id": "group_1",
+                "condition_key": "02",
+                "result_label": "ok",
+                "recorded_path": "D:/audio_data/stored_data/OK/test_2.wav",
+                "recorded_signal_info": {
+                    "file_path": "audio_data/stored_data/OK/test_2.wav",
+                    "labels": "OK",
+                },
+            },
+        }
+
+        changed = widget._change_recent_session_result_by_id("recent_1", "OK")
+
+        self.assertTrue(changed)
+        self.assertIn(("01", "OK", "ok"), widget.left_panel.condition_results)
+        self.assertIn(("02", "OK", "ok"), widget.left_panel.condition_results)
+        self.assertEqual(widget.left_panel.final_results[-1], ("OK", "ok"))
+
+        changed = widget._change_recent_session_result_by_id("recent_1", "not_labeled")
+
+        self.assertTrue(changed)
+        self.assertIn(("01", "未标记", "pending"), widget.left_panel.condition_results)
+        self.assertEqual(widget.left_panel.final_results[-1], ("未标记", "pending"))
 
     def test_recent_session_group_id_uses_current_run_token(self):
         widget = _DummySequenceWidget()

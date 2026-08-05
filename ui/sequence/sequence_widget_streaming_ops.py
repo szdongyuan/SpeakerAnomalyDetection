@@ -82,10 +82,119 @@ class SequenceWidgetStreamingOpsMixin:
             if label in ("OK", "NG") and hasattr(channel_workspace, "set_condition_result"):
                 channel_workspace.set_condition_result(key, label)
 
+    def _condition_key_matches_record(self, condition_key: str, session_record: dict) -> bool:
+        key = str(condition_key or "").strip().lower()
+        if not key or not isinstance(session_record, dict):
+            return False
+        candidates = {
+            str(session_record.get("condition_key") or "").strip().lower(),
+            str(session_record.get("mode") or "").strip().lower(),
+            str(session_record.get("mode_text") or "").strip().lower(),
+        }
+        if key in candidates:
+            return True
+
+        resolve_condition = getattr(self, "_resolve_recent_session_condition", None)
+        if callable(resolve_condition):
+            try:
+                condition = resolve_condition(condition_key)
+            except Exception:
+                condition = None
+            if isinstance(condition, dict):
+                condition_candidates = {
+                    str(condition.get("key") or "").strip().lower(),
+                    str(condition.get("trigger_state") or "").strip().lower(),
+                    str(condition.get("test_queue") or "").strip().lower(),
+                    str(condition.get("condition_name") or "").strip().lower(),
+                    str(condition.get("name") or "").strip().lower(),
+                }
+                return bool(candidates & condition_candidates)
+        return False
+
+    def _recent_session_records_in_display_order(self):
+        records_by_id = getattr(self, "recent_test_session_by_id", {}) or {}
+        session_ids = [
+            str(session_id or "")
+            for session_id in (getattr(self, "recent_test_sessions", []) or [])
+            if str(session_id or "")
+        ]
+        for session_id in records_by_id.keys():
+            if session_id not in session_ids:
+                session_ids.append(session_id)
+        for session_id in session_ids:
+            record = records_by_id.get(session_id)
+            if isinstance(record, dict):
+                yield session_id, record
+
+    def _preferred_recent_session_group_ids(self):
+        group_ids = []
+
+        def add_group_id(value):
+            text = str(value or "").strip()
+            if text and text not in group_ids:
+                group_ids.append(text)
+
+        current_group = getattr(self, "_current_manual_product_display_group_id", None)
+        if callable(current_group):
+            try:
+                add_group_id(current_group())
+            except Exception:
+                pass
+        add_group_id(getattr(self, "_manual_product_condition_group_id", ""))
+        add_group_id(getattr(self, "_displayed_manual_product_condition_group_id", ""))
+        add_group_id(getattr(self, "_current_cycle_recorded_count", ""))
+
+        current_session_id = str(getattr(self, "_current_recent_session_id", "") or "").strip()
+        current_session = (getattr(self, "recent_test_session_by_id", {}) or {}).get(current_session_id)
+        if isinstance(current_session, dict):
+            add_group_id(current_session.get("group_id"))
+
+        return group_ids
+
+    def _condition_record_from_recent_sessions(self, condition_key: str):
+        matching_records = []
+        for session_id, record in self._recent_session_records_in_display_order():
+            if self._condition_key_matches_record(condition_key, record):
+                matching_records.append((session_id, record))
+        if not matching_records:
+            return None
+
+        preferred_groups = self._preferred_recent_session_group_ids()
+        if preferred_groups:
+            for group_id in preferred_groups:
+                for session_id, record in matching_records:
+                    if str(record.get("group_id") or "").strip() == group_id:
+                        return self._condition_record_from_recent_session_record(session_id, record)
+
+        session_id, record = matching_records[0]
+        return self._condition_record_from_recent_session_record(session_id, record)
+
+    @staticmethod
+    def _condition_record_from_recent_session_record(session_id: str, session_record: dict):
+        recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
+        recorded_path = session_record.get("recorded_path") or recorded_signal_info.get("file_path")
+        if not recorded_path and not recorded_signal_info:
+            return None
+        return {
+            "recorded_path": recorded_path,
+            "recorded_signal_info": recorded_signal_info,
+            "session_id": str(session_id or session_record.get("session_id") or ""),
+        }
+
     def _resolve_condition_record(self, condition_key: str):
         key = str(condition_key or "").strip()
         record_cache = getattr(self, "_condition_record_cache", {}) or {}
         record = record_cache.get(key)
+        if record and self._resolve_labelable_condition_record_path(record):
+            return dict(record)
+
+        recent_record = self._condition_record_from_recent_sessions(key)
+        if isinstance(recent_record, dict) and self._resolve_labelable_condition_record_path(recent_record):
+            if not isinstance(getattr(self, "_condition_record_cache", None), dict):
+                self._condition_record_cache = {}
+            self._condition_record_cache[key] = dict(recent_record)
+            return dict(recent_record)
+
         if record:
             return dict(record)
 
@@ -363,9 +472,11 @@ class SequenceWidgetStreamingOpsMixin:
         )
         self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
         new_signature = self._product_condition_signature(self.product_test_condition_configs)
+        conditions_changed = old_signature != new_signature
         should_clear_history = bool(clear_recent_history) or (
-            old_signature and old_signature != new_signature
+            old_signature and conditions_changed
         )
+        should_rebuild_condition_views = bool(clear_recent_history) or conditions_changed or not old_signature
         clear_recent_history_func = getattr(self, "_clear_recent_session_history", None)
         if should_clear_history and callable(clear_recent_history_func):
             clear_recent_history_func(reset_panel=False)
@@ -374,12 +485,18 @@ class SequenceWidgetStreamingOpsMixin:
             if callable(reset_manual_product_cycle):
                 reset_manual_product_cycle(clear_waveforms=False)
         if getattr(self, "left_panel", None) is not None:
-            self.left_panel.set_condition_configs(self.product_test_condition_configs)
-            reset_display_state = getattr(self, "_reset_product_condition_display_state", None)
-            if callable(reset_display_state):
-                reset_display_state()
+            if should_rebuild_condition_views:
+                self.left_panel.set_condition_configs(self.product_test_condition_configs)
+                reset_display_state = getattr(self, "_reset_product_condition_display_state", None)
+                if callable(reset_display_state):
+                    reset_display_state()
+            else:
+                refresh_condition_configs = getattr(self.left_panel, "refresh_condition_configs", None)
+                if callable(refresh_condition_configs):
+                    refresh_condition_configs(self.product_test_condition_configs)
         if getattr(self, "channel_workspace", None) is not None:
-            self.channel_workspace.set_conditions(self.product_test_condition_configs)
+            if should_rebuild_condition_views:
+                self.channel_workspace.set_conditions(self.product_test_condition_configs)
             apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
             if callable(apply_mode):
                 apply_mode()

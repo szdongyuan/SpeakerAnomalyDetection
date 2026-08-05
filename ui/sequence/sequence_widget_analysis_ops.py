@@ -27,6 +27,7 @@ from base.play_and_record import (
 )
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
+from base.pre_processing.spl_runtime_config import calculate_overall_spl, resolve_spl_unit
 
 from base.streaming_file_writer import StreamingWavWriter
 from base.temp_tcp_client import TempTcpClient
@@ -245,7 +246,16 @@ class SequenceWidgetAnalysisOpsMixin:
         left_panel = getattr(self, "left_panel", None)
         if left_panel is None:
             return
-        left_panel.set_condition_result(key, "完成", tone="ok")
+        if str(getattr(getattr(self, "count_board", None), "mode", "") or "") == "mark":
+            group_results = self._manual_product_group_raw_results(
+                getattr(self, "_manual_product_condition_group_id", "")
+            )
+            result_text, tone = self._manual_product_condition_display_state(
+                group_results.get(key) or (getattr(self, "recorded_signal_info", {}) or {}).get("labels")
+            )
+            left_panel.set_condition_result(key, result_text, tone=tone)
+        else:
+            left_panel.set_condition_result(key, "完成", tone="ok")
 
         condition_keys = [
             self._product_condition_runtime_key(item, index)
@@ -275,6 +285,83 @@ class SequenceWidgetAnalysisOpsMixin:
         if normalized == "NG":
             return "ng"
         return "pending"
+
+    def _manual_product_condition_display_state(self, label: str):
+        normalized = self._normalize_recent_session_storage_label(label)
+        if normalized == "OK":
+            return "OK", "ok"
+        if normalized == "NG":
+            return "NG", "ng"
+        if normalized == "not_labeled":
+            return "未标记", "pending"
+        return "待检测", "pending"
+
+    def _manual_product_group_raw_results(self, group_id: str):
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return {}
+
+        results = {}
+        recent_session_panel = getattr(self, "recent_session_panel", None)
+        group_records = getattr(recent_session_panel, "group_records", None)
+        if isinstance(group_records, dict):
+            group = group_records.get(group_id)
+            if isinstance(group, dict) and isinstance(group.get("results"), dict):
+                results.update(group.get("results") or {})
+
+        for record in (getattr(self, "recent_test_session_by_id", {}) or {}).values():
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("group_id") or "").strip() != group_id:
+                continue
+            condition_key = str(record.get("condition_key") or record.get("mode") or "").strip()
+            if not condition_key:
+                continue
+            recorded_signal_info = record.get("recorded_signal_info", {}) or {}
+            label = recorded_signal_info.get("labels") or record.get("result_label")
+            results[condition_key] = label
+
+        if group_id == str(getattr(self, "_manual_product_condition_group_id", "") or "").strip():
+            completed_keys = set(getattr(self, "_manual_product_condition_completed_keys", set()) or set())
+            for condition_key in completed_keys:
+                results.setdefault(condition_key, "not_labeled")
+            results.update(getattr(self, "_manual_product_condition_results", {}) or {})
+
+        return results
+
+    def _refresh_manual_product_condition_results_from_group(self, group_id: str, *, force_display: bool = False) -> bool:
+        if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
+            return False
+        condition_keys = self._manual_product_condition_keys()
+        if len(condition_keys) < 2:
+            return False
+
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return False
+
+        active_group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
+        if force_display and not active_group_id:
+            self._displayed_manual_product_condition_group_id = group_id
+
+        display_group_id = self._current_manual_product_display_group_id()
+        if group_id and not display_group_id:
+            self._displayed_manual_product_condition_group_id = group_id
+            display_group_id = group_id
+        if group_id != display_group_id:
+            return False
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is None:
+            return False
+
+        results = self._manual_product_group_raw_results(group_id)
+        for condition_key in condition_keys:
+            if condition_key not in results:
+                continue
+            result_text, tone = self._manual_product_condition_display_state(results.get(condition_key))
+            left_panel.set_condition_result(condition_key, result_text, tone=tone)
+        return True
 
     def _current_manual_product_display_group_id(self) -> str:
         current_group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
@@ -344,6 +431,258 @@ class SequenceWidgetAnalysisOpsMixin:
 
         return self._refresh_current_manual_product_final_from_group(stage_text="本轮完成")
 
+    def _current_analysis_detail_condition_key(self) -> str:
+        get_active_product_condition_key = getattr(self, "_get_active_product_condition_key", None)
+        if callable(get_active_product_condition_key):
+            key = str(get_active_product_condition_key() or "").strip()
+            if key:
+                return key
+
+        resolve_active_recording = getattr(self, "_resolve_active_recording_waveform_direction", None)
+        if callable(resolve_active_recording):
+            try:
+                key = str(resolve_active_recording(fallback="") or "").strip()
+                if key:
+                    return key
+            except TypeError:
+                key = str(resolve_active_recording("") or "").strip()
+                if key:
+                    return key
+
+        resolve_waveform_direction = getattr(self, "_resolve_waveform_direction", None)
+        if callable(resolve_waveform_direction):
+            try:
+                key = str(resolve_waveform_direction(fallback="") or "").strip()
+                if key:
+                    return key
+            except TypeError:
+                key = str(resolve_waveform_direction("") or "").strip()
+                if key:
+                    return key
+
+        return str(getattr(self, "_current_trigger_direction", "") or "").strip()
+
+    def _sync_left_panel_analysis_details(self, ai_runtime_state=None) -> bool:
+        left_panel = getattr(self, "left_panel", None)
+        set_details = getattr(left_panel, "set_condition_analysis_details", None)
+        if not callable(set_details):
+            return False
+
+        condition_key = self._current_analysis_detail_condition_key()
+        if not condition_key:
+            return False
+
+        detail_values = self._build_left_panel_analysis_details(ai_runtime_state)
+        if not detail_values:
+            return False
+        return bool(set_details(condition_key, detail_values))
+
+    def _build_left_panel_analysis_details(self, ai_runtime_state=None) -> dict:
+        detail_values = {}
+        analysis_config = getattr(self, "analysis_config", {}) or {}
+        result_dict = getattr(getattr(self, "data_struct", None), "analysis_result_dict", {}) or {}
+
+        for instance in getattr(self, "analysis_window", []) or []:
+            instance_key = getattr(instance, "_sequence_analysis_key", None)
+            item_config = analysis_config.get(instance_key, {}) if instance_key else {}
+            if not isinstance(item_config, dict):
+                item_config = {}
+            analysis_type = str(item_config.get("type") or "").strip()
+            title_name = str(getattr(instance, "title_name", "") or "")
+            judgement = self._analysis_judgement_text(result_dict.get(title_name))
+
+            if analysis_type in ("SPL", "SPLF"):
+                detail_values["SPL"] = self._format_spl_left_panel_detail(instance, item_config, judgement)
+            elif analysis_type in ("LOUD", "Loudness", "PRB"):
+                detail_values["响度"] = self._format_loudness_left_panel_detail(instance, item_config, judgement)
+            elif analysis_type == "AI":
+                detail_values["AI分析"] = self._format_ai_left_panel_detail(ai_runtime_state, instance)
+            elif analysis_type == "FBA":
+                detail_values["FBA"] = self._merge_ok_ng_detail(
+                    detail_values.get("FBA"),
+                    self._analysis_judgement_or_reason(item_config, result_dict.get(title_name)),
+                )
+            elif analysis_type == "FFT":
+                detail_values["FFT"] = self._merge_ok_ng_detail(
+                    detail_values.get("FFT"),
+                    self._analysis_judgement_or_reason(item_config, result_dict.get(title_name)),
+                )
+
+        if ai_runtime_state and "AI分析" not in detail_values and ai_runtime_state.get("has_ai_analysis"):
+            detail_values["AI分析"] = self._format_ai_left_panel_detail(ai_runtime_state, None)
+        return detail_values
+
+    @staticmethod
+    def _analysis_judgement_text(result_value) -> str:
+        if not isinstance(result_value, tuple) or len(result_value) < 1:
+            return ""
+        ok_value = result_value[0]
+        if ok_value is None:
+            return ""
+        try:
+            if isinstance(ok_value, (bool, np.bool_)):
+                return "OK" if bool(ok_value) else "NG"
+        except AttributeError:
+            if isinstance(ok_value, bool):
+                return "OK" if ok_value else "NG"
+        return ""
+
+    @classmethod
+    def _analysis_judgement_or_reason(cls, item_config, result_value) -> str:
+        judgement = cls._analysis_judgement_text(result_value)
+        if judgement:
+            return judgement
+        if isinstance(item_config, dict) and not bool(item_config.get("limit_checked", False)):
+            return "未启用阈值"
+        return "未判定"
+
+    @staticmethod
+    def _merge_ok_ng_detail(previous, current) -> str:
+        previous_text = str(previous or "").strip().upper()
+        current_text = str(current or "").strip().upper()
+        if "NG" in (previous_text, current_text):
+            return "NG"
+        if "OK" in (previous_text, current_text):
+            return "OK"
+        return str(current or previous or "未判定")
+
+    @staticmethod
+    def _format_left_panel_number(value, digits: int = 2) -> str:
+        if value in (None, ""):
+            return "--"
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if not np.isfinite(numeric):
+            return "--"
+        return f"{numeric:.{digits}f}"
+
+    @staticmethod
+    def _format_left_panel_percent(value) -> str:
+        if value in (None, ""):
+            return "--"
+        text = str(value).strip()
+        if not text:
+            return "--"
+        if text.endswith("%"):
+            return text
+        try:
+            numeric = float(text)
+        except (TypeError, ValueError):
+            return text
+        return f"{numeric:.2f}%"
+
+    @staticmethod
+    def _append_judgement_text(detail_text: str, judgement: str) -> str:
+        judgement = str(judgement or "").strip().upper()
+        if judgement not in ("OK", "NG"):
+            return detail_text
+        return f"{detail_text}；判定：{judgement}"
+
+    def _format_spl_left_panel_detail(self, instance, item_config: dict, judgement: str) -> str:
+        result = getattr(instance, "result", {}) or {}
+        overall_spl = result.get("overall_spl") if isinstance(result, dict) else None
+        if overall_spl in (None, "") and isinstance(result, dict):
+            recorded_signal = result.get("recorded_signal")
+            if recorded_signal is not None:
+                try:
+                    overall_spl = calculate_overall_spl(
+                        np.asarray(recorded_signal, dtype=float),
+                        v2pa_factor=getattr(instance, "v2pa_factor", None),
+                    )
+                except Exception:
+                    overall_spl = None
+
+        unit = ""
+        get_unit = getattr(instance, "_get_spl_unit", None)
+        if callable(get_unit):
+            try:
+                unit = str(get_unit() or "").strip()
+            except Exception:
+                unit = ""
+        if not unit:
+            unit = resolve_spl_unit((item_config or {}).get("weighting", "Z"))
+
+        text = f"总体声压：{self._format_left_panel_number(overall_spl)} {unit}".strip()
+        return self._append_judgement_text(text, judgement)
+
+    def _format_loudness_left_panel_detail(self, instance, item_config: dict, judgement: str) -> str:
+        detail = {}
+        result = getattr(instance, "result", {}) or {}
+        if isinstance(result, dict) and isinstance(result.get("summary"), dict):
+            detail.update(result.get("summary") or {})
+        export_detail = getattr(instance, "export_detail", None)
+        if isinstance(export_detail, dict):
+            detail.update({key: value for key, value in export_detail.items() if value not in (None, "")})
+
+        advanced_cfg = (item_config or {}).get("advanced", {}) or {}
+        unit = str(
+            (item_config or {}).get("curve_limit_unit")
+            or advanced_cfg.get("curve_y_unit", "sone")
+            or "sone"
+        ).lower()
+        if unit == "phon":
+            steady = detail.get("steady_state_average_phon", detail.get("mean_phon"))
+            transient = detail.get("max_transient_phon", detail.get("lnmax_phon"))
+            values = result.get("loudness_level_phon") if isinstance(result, dict) else None
+            unit_text = "phon"
+        else:
+            steady = detail.get("steady_state_average_sone", detail.get("mean_sone"))
+            transient = detail.get("max_transient_sone", detail.get("nmax_sone"))
+            values = result.get("loudness_sone") if isinstance(result, dict) else None
+            unit_text = "sone"
+
+        if (steady in (None, "") or transient in (None, "")) and values is not None:
+            try:
+                arr = np.asarray(values, dtype=float)
+                arr = arr[np.isfinite(arr)]
+                if arr.size:
+                    if steady in (None, ""):
+                        steady = float(np.mean(arr))
+                    if transient in (None, ""):
+                        transient = float(np.max(arr))
+            except Exception:
+                pass
+
+        text = (
+            f"稳态平均响度：{self._format_left_panel_number(steady)} {unit_text}；"
+            f"最大瞬态响度：{self._format_left_panel_number(transient)} {unit_text}"
+        )
+        return self._append_judgement_text(text, judgement)
+
+    def _format_ai_left_panel_detail(self, ai_runtime_state=None, instance=None) -> str:
+        state = dict(ai_runtime_state or {})
+        if instance is not None:
+            export_detail = getattr(instance, "export_detail", None)
+            if isinstance(export_detail, dict):
+                scores = dict(state.get("scores") or {})
+                if scores.get("ok_score") in (None, ""):
+                    scores["ok_score"] = export_detail.get("ok_score")
+                if scores.get("ng_score") in (None, ""):
+                    scores["ng_score"] = export_detail.get("ng_score")
+                state["scores"] = scores
+                if not state.get("label"):
+                    state["label"] = export_detail.get("label")
+                if not state.get("blocked_message"):
+                    state["blocked_message"] = export_detail.get("blocked_message")
+
+        scores = state.get("scores") or {}
+        label = str(state.get("label") or "").strip().upper()
+        if label not in ("OK", "NG"):
+            label = ""
+        blocked_message = str(state.get("blocked_message") or "").strip()
+
+        text = (
+            f"OK Score：{self._format_left_panel_percent(scores.get('ok_score'))}；"
+            f"NG Score：{self._format_left_panel_percent(scores.get('ng_score'))}"
+        )
+        if label:
+            return f"{text}；判定：{label}"
+        if blocked_message:
+            return f"{text}；判定：未判定（{blocked_message}）"
+        return f"{text}；判定：未判定"
+
     def _manual_product_condition_keys(self):
         return [
             self._product_condition_runtime_key(item, index)
@@ -359,32 +698,7 @@ class SequenceWidgetAnalysisOpsMixin:
         if not group_id:
             return False, None
 
-        results = {}
-        recent_session_panel = getattr(self, "recent_session_panel", None)
-        group_records = getattr(recent_session_panel, "group_records", None)
-        if isinstance(group_records, dict):
-            group = group_records.get(group_id)
-            if isinstance(group, dict) and isinstance(group.get("results"), dict):
-                results.update(group.get("results") or {})
-
-        for record in (getattr(self, "recent_test_session_by_id", {}) or {}).values():
-            if not isinstance(record, dict):
-                continue
-            if str(record.get("group_id") or "").strip() != group_id:
-                continue
-            condition_key = str(record.get("condition_key") or record.get("mode") or "").strip()
-            if not condition_key:
-                continue
-            recorded_signal_info = record.get("recorded_signal_info", {}) or {}
-            label = recorded_signal_info.get("labels") or record.get("result_label")
-            results[condition_key] = label
-
-        if group_id == str(getattr(self, "_manual_product_condition_group_id", "") or "").strip():
-            completed_keys = set(getattr(self, "_manual_product_condition_completed_keys", set()) or set())
-            for condition_key in completed_keys:
-                if condition_key in condition_keys:
-                    results.setdefault(condition_key, "not_labeled")
-            results.update(getattr(self, "_manual_product_condition_results", {}) or {})
+        results = self._manual_product_group_raw_results(group_id)
 
         normalized_values = []
         for condition_key in condition_keys:
@@ -870,6 +1184,7 @@ class SequenceWidgetAnalysisOpsMixin:
         session_record.update(fields)
         if self.recent_session_panel is not None:
             self.recent_session_panel.upsert_session(session_record)
+        self._refresh_manual_product_condition_results_from_group(session_record.get("group_id"))
         self._refresh_current_manual_product_final_from_group(session_record.get("group_id"))
 
     def _update_current_recent_session_result(self, result_label: str):
@@ -970,6 +1285,11 @@ class SequenceWidgetAnalysisOpsMixin:
             recorded_path=new_recorded_path,
             recorded_signal_info=updated_signal_info,
         )
+        updated_session_record = self._resolve_recent_session(session_id)
+        if isinstance(updated_session_record, dict):
+            group_id = updated_session_record.get("group_id")
+            self._refresh_manual_product_condition_results_from_group(group_id, force_display=True)
+            self._refresh_current_manual_product_final_from_group(group_id)
 
         update_group_count = getattr(self, "_update_manual_product_mark_group_count_for_session", None)
         group_count_handled = callable(update_group_count) and update_group_count(session_id)
@@ -1537,6 +1857,7 @@ class SequenceWidgetAnalysisOpsMixin:
             has_ai_analysis = bool(ai_runtime_state.get("has_ai_analysis", False))
             ai_label = ai_runtime_state.get("label")
             ai_scores = ai_runtime_state.get("scores") or {"ok_score": None, "ng_score": None}
+            self._sync_left_panel_analysis_details(ai_runtime_state)
             cycle_final_label = None
             label = None
             if can_output:

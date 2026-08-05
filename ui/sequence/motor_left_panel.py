@@ -109,5 +109,11 @@ class MotorDetectionLeftPanel(QWidget):
     def set_condition_scores(self, condition, ok_score=None, ng_score=None):
         return self.ai_result_panel.set_condition_scores(condition, ok_score, ng_score)
 
+    def set_condition_analysis_details(self, condition, detail_values):
+        return self.ai_result_panel.set_condition_analysis_details(condition, detail_values)
+
     def set_condition_configs(self, condition_configs):
         self.ai_result_panel.set_condition_configs(condition_configs)
+
+    def refresh_condition_configs(self, condition_configs):
+        return self.ai_result_panel.refresh_condition_configs(condition_configs)

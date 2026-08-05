@@ -159,6 +159,59 @@ class _WaveformRefreshWidget(SequenceWidgetStreamingOpsMixin):
         return None
 
 
+class _SyncLeftPanel:
+    def __init__(self):
+        self.set_calls = []
+        self.refresh_calls = []
+
+    def set_condition_configs(self, condition_configs):
+        self.set_calls.append(list(condition_configs or []))
+
+    def refresh_condition_configs(self, condition_configs):
+        self.refresh_calls.append(list(condition_configs or []))
+        return True
+
+
+class _SyncRecentPanel:
+    def __init__(self):
+        self.set_calls = []
+
+    def set_conditions(self, condition_configs):
+        self.set_calls.append(list(condition_configs or []))
+
+
+class _ProductConditionSyncWidget(SequenceWidgetStreamingOpsMixin):
+    def __init__(self, condition_configs):
+        self.product_test_condition_configs = list(condition_configs)
+        self.left_panel = _SyncLeftPanel()
+        self.channel_workspace = _DummyChannelWorkspace(
+            [
+                str(item.get("key") or "")
+                for item in DirectionWaveformPanel._normalize_conditions(condition_configs)
+            ]
+        )
+        self.recent_session_panel = _SyncRecentPanel()
+        self.cleared_history = 0
+        self.reset_cycles = []
+        self.reset_display_count = 0
+        self.apply_mode_count = 0
+
+    def _get_active_product_program_path(self):
+        return "active_program.json"
+
+    def _clear_recent_session_history(self, reset_panel=True):
+        self.cleared_history += 1
+
+    def _reset_manual_product_condition_cycle(self, clear_waveforms=False):
+        self.reset_cycles.append(bool(clear_waveforms))
+
+    def _reset_product_condition_display_state(self):
+        self.reset_display_count += 1
+
+    def _apply_condition_mode_to_waveforms(self):
+        self.apply_mode_count += 1
+
+
 class TestSequenceMainLayout(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -260,6 +313,49 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertEqual(board.mode, "test")
         self.assertEqual(board.stacked_widget.currentIndex(), 0)
+
+    def test_sync_product_conditions_preserves_state_when_signature_unchanged(self):
+        condition_configs = [
+            {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
+            {"key": "q7000", "condition_name": "7000", "test_queue": "queue_7000"},
+        ]
+        widget = _ProductConditionSyncWidget(condition_configs)
+
+        with patch(
+            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
+            return_value=[dict(item) for item in condition_configs],
+        ):
+            widget._sync_product_test_conditions(clear_recent_history=False)
+
+        self.assertEqual(widget.left_panel.set_calls, [])
+        self.assertEqual(len(widget.left_panel.refresh_calls), 1)
+        self.assertEqual(widget.channel_workspace.set_condition_calls, [])
+        self.assertEqual(widget.recent_session_panel.set_calls, [])
+        self.assertEqual(widget.cleared_history, 0)
+        self.assertEqual(widget.reset_display_count, 0)
+        self.assertEqual(widget.reset_cycles, [])
+        self.assertEqual(widget.apply_mode_count, 1)
+
+    def test_sync_product_conditions_rebuilds_when_forced_by_config_switch(self):
+        condition_configs = [
+            {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
+            {"key": "q7000", "condition_name": "7000", "test_queue": "queue_7000"},
+        ]
+        widget = _ProductConditionSyncWidget(condition_configs)
+
+        with patch(
+            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
+            return_value=[dict(item) for item in condition_configs],
+        ):
+            widget._sync_product_test_conditions(clear_recent_history=True)
+
+        self.assertEqual(len(widget.left_panel.set_calls), 1)
+        self.assertEqual(widget.left_panel.refresh_calls, [])
+        self.assertEqual(len(widget.channel_workspace.set_condition_calls), 1)
+        self.assertEqual(widget.cleared_history, 1)
+        self.assertEqual(widget.reset_display_count, 1)
+        self.assertEqual(widget.reset_cycles, [False])
+        self.assertEqual(widget.apply_mode_count, 1)
 
     def test_using_config_combobox_reads_product_program_registry(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -476,6 +572,49 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(session_record["result_label"], "ok")
         self.assertEqual(session_record["recorded_path"], new_path)
         self.assertEqual(session_record["recorded_signal_info"]["labels"], "OK")
+        self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
+
+    def test_waveform_mark_falls_back_to_recent_history_when_cache_missing(self):
+        widget = _DummySequenceWidget()
+        widget.count_board.mode = "mark"
+        widget.channel_workspace = _DummyChannelWorkspace(["01", "02"])
+        widget._condition_record_cache = {}
+        widget._waveform_display_override_direction = ""
+        widget._current_trigger_direction = ""
+        widget.recorded_path = None
+        widget.recorded_signal_info = {}
+
+        with tempfile.TemporaryDirectory() as folder:
+            old_path = os.path.join(folder, "history.wav")
+            new_path = os.path.join(folder, "ok.wav")
+            with open(old_path, "wb") as f:
+                f.write(b"RIFF")
+            widget.recent_test_sessions = ["recent_1"]
+            widget.recent_test_session_by_id = {
+                "recent_1": {
+                    "session_id": "recent_1",
+                    "group_id": "group_1",
+                    "condition_key": "01",
+                    "result_label": "not labeled",
+                    "recorded_path": old_path,
+                    "recorded_signal_info": {"file_path": old_path, "labels": "not_labeled"},
+                }
+            }
+            widget._relabel_stored_audio_record = lambda _path, _info, label: (
+                error_code.OK,
+                "ok",
+                new_path,
+                {"file_path": new_path, "labels": label},
+            )
+
+            with patch("ui.sequence.sequence_widget_streaming_ops.QMessageBox.warning") as warning:
+                widget.on_waveform_condition_mark_clicked("01", "OK")
+
+        warning.assert_not_called()
+        session_record = widget.recent_test_session_by_id["recent_1"]
+        self.assertEqual(session_record["recorded_path"], new_path)
+        self.assertEqual(session_record["recorded_signal_info"]["labels"], "OK")
+        self.assertEqual(widget._condition_record_cache["01"]["recorded_path"], new_path)
         self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
 
 

@@ -23,6 +23,7 @@ class _SpyLeftPanel:
         self.condition_results = []
         self.final_results = []
         self.stages = []
+        self.analysis_details = []
 
     def set_condition_result(self, condition, result_text, tone=None):
         self.condition_results.append((condition, result_text, tone))
@@ -32,6 +33,10 @@ class _SpyLeftPanel:
 
     def set_current_stage(self, stage_text, tone=None):
         self.stages.append((stage_text, tone))
+
+    def set_condition_analysis_details(self, condition, detail_values):
+        self.analysis_details.append((condition, dict(detail_values or {})))
+        return True
 
 
 class _SpyCountBoard:
@@ -201,6 +206,88 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertEqual(widget._update_manual_product_condition_result_after_analysis("OK"), "NG")
         self.assertEqual(widget.left_panel.final_results[-1], ("NG", "ng"))
 
+    def test_left_panel_analysis_details_syncs_runtime_metrics(self):
+        widget = _DummyManualCycleWidget()
+        widget._active_product_condition_key = "q6000"
+        widget.analysis_config = {
+            "spl": {"type": "SPL", "weighting": "Z"},
+            "loudness": {"type": "LOUD", "advanced": {"curve_y_unit": "sone"}},
+            "ai": {"type": "AI"},
+            "fba": {"type": "FBA"},
+            "fft": {"type": "FFT"},
+        }
+        widget.data_struct = SimpleNamespace(analysis_result_dict={})
+        widget.analysis_window = [
+            SimpleNamespace(
+                _sequence_analysis_key="spl",
+                title_name="SPL--通道1",
+                result={"overall_spl": 72.345},
+                _get_spl_unit=lambda: "dB",
+            ),
+            SimpleNamespace(
+                _sequence_analysis_key="loudness",
+                title_name="响度--通道1",
+                result={
+                    "summary": {
+                        "steady_state_average_sone": 4.2,
+                        "max_transient_sone": 8.1,
+                    }
+                },
+                export_detail={},
+            ),
+            SimpleNamespace(
+                _sequence_analysis_key="ai",
+                title_name="AI--通道1",
+                result="OK",
+                export_detail={"label": "OK", "ok_score": 71.6, "ng_score": 28.4},
+            ),
+            SimpleNamespace(_sequence_analysis_key="fba", title_name="FBA--通道1"),
+            SimpleNamespace(_sequence_analysis_key="fft", title_name="FFT--通道1"),
+        ]
+        widget.data_struct.analysis_result_dict = {
+            "SPL--通道1": (True, 0.0),
+            "响度--通道1": (True, 0.0),
+            "FBA--通道1": (True, 0.0),
+            "FFT--通道1": (False, 1.5),
+        }
+
+        synced = widget._sync_left_panel_analysis_details(
+            {
+                "has_ai_analysis": True,
+                "label": "OK",
+                "scores": {"ok_score": 71.6, "ng_score": 28.4},
+            }
+        )
+
+        self.assertTrue(synced)
+        condition, detail_values = widget.left_panel.analysis_details[-1]
+        self.assertEqual(condition, "q6000")
+        self.assertEqual(detail_values["SPL"], "总体声压：72.34 dB；判定：OK")
+        self.assertEqual(detail_values["响度"], "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；判定：OK")
+        self.assertEqual(detail_values["AI分析"], "OK Score：71.60%；NG Score：28.40%；判定：OK")
+        self.assertEqual(detail_values["FBA"], "OK")
+        self.assertEqual(detail_values["FFT"], "NG")
+
+    def test_left_panel_analysis_details_marks_fba_fft_without_threshold(self):
+        widget = _DummyManualCycleWidget()
+        widget._active_product_condition_key = "q6000"
+        widget.analysis_config = {
+            "fba": {"type": "FBA", "limit_checked": False},
+            "fft": {"type": "FFT", "limit_checked": False},
+        }
+        widget.data_struct = SimpleNamespace(analysis_result_dict={})
+        widget.analysis_window = [
+            SimpleNamespace(_sequence_analysis_key="fba", title_name="FBA--通道1"),
+            SimpleNamespace(_sequence_analysis_key="fft", title_name="FFT--通道1"),
+        ]
+
+        synced = widget._sync_left_panel_analysis_details()
+
+        self.assertTrue(synced)
+        _condition, detail_values = widget.left_panel.analysis_details[-1]
+        self.assertEqual(detail_values["FBA"], "未启用阈值")
+        self.assertEqual(detail_values["FFT"], "未启用阈值")
+
     def test_recording_completion_marks_condition_and_round_complete(self):
         widget = _DummyManualCycleWidget()
 
@@ -221,6 +308,17 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertIn(("q8000", "完成", "ok"), widget.left_panel.condition_results)
         self.assertEqual(widget.left_panel.final_results[-1], ("未标记", "pending"))
         self.assertEqual(widget.left_panel.stages[-1], ("本轮采集完成", "ok"))
+
+    def test_mark_mode_recording_completion_shows_unlabeled_instead_of_completed(self):
+        widget = _DummyManualCycleWidget()
+        widget.count_board.mode = "mark"
+        widget.recorded_signal_info = {"labels": "not_labeled"}
+
+        widget.on_clicked_player_btn()
+        widget._mark_manual_product_condition_recording_completed()
+
+        self.assertIn(("q6000", "未标记", "pending"), widget.left_panel.condition_results)
+        self.assertNotIn(("q6000", "完成", "ok"), widget.left_panel.condition_results)
 
     def test_left_final_result_uses_current_group_summary_only(self):
         widget = _DummyManualCycleWidget()
