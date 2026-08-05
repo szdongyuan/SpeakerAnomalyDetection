@@ -21,6 +21,7 @@ STORED_RECORDED_UNLABELED_PATH = DEFAULT_DIR + "audio_data/stored_data/not_label
 STORED_RECORDED_OK_PATH = DEFAULT_DIR + "audio_data/stored_data/OK"
 STORED_RECORDED_NG_PATH = DEFAULT_DIR + "audio_data/stored_data/NG"
 UNSPECIFIED_PRODUCT_MODEL_FOLDER = "unspecified_model"
+RECORDING_ROOT_CONFIG_KEY = "recording_root"
 STORED_PACKAGE_PATH = DEFAULT_DIR + "audio_data/stored_data/package"
 STORED_STIMULUS_PATH = DEFAULT_DIR + "audio_data/stimulus"
 JSON_DIR_PATH = DEFAULT_DIR + "ui/ui_config"
