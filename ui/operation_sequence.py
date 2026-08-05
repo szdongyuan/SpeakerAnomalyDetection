@@ -35,6 +35,7 @@ from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_CHECKED_KEY,
     GOLDEN_SAMPLE_RESULT_PATH_KEY,
 )
+from consts.excel_export_consts import SAVE_ITEM_OUTPUTS_KEY
 from consts.running_consts import DEFAULT_DIR
 from ui.acquisition_config_window import (
     RecordConfigWindow,
@@ -64,6 +65,37 @@ from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_src import ui_resources
 
 GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA = {"SPLF", "PRB"}
+
+
+def _delete_excel_selection_item(analysis_list, name):
+    if not isinstance(analysis_list, dict):
+        return
+    for config in analysis_list.values():
+        if not isinstance(config, dict) or config.get("type") != "Excel":
+            continue
+        save_items = config.get("save_items")
+        if isinstance(save_items, list):
+            config["save_items"] = [item for item in save_items if item != name]
+        save_item_outputs = config.get(SAVE_ITEM_OUTPUTS_KEY)
+        if isinstance(save_item_outputs, dict):
+            save_item_outputs.pop(name, None)
+
+
+def _rename_excel_selection_item(analysis_list, old_name, new_name):
+    if not isinstance(analysis_list, dict):
+        return
+    for config in analysis_list.values():
+        if not isinstance(config, dict) or config.get("type") != "Excel":
+            continue
+        save_items = config.get("save_items")
+        if isinstance(save_items, list):
+            config["save_items"] = [
+                new_name if item == old_name else item for item in save_items
+            ]
+        save_item_outputs = config.get(SAVE_ITEM_OUTPUTS_KEY)
+        if isinstance(save_item_outputs, dict) and old_name in save_item_outputs:
+            outputs = save_item_outputs.pop(old_name)
+            save_item_outputs[new_name] = outputs
 
 
 def _safe_dialog_attr(obj, name, default=None):
@@ -1117,17 +1149,7 @@ class OptionList(ListView):
         if not name:
             return
         # Remove deleted items from any Excel export selection list to avoid stale references
-        try:
-            for _, cfg in self.config[0].analysis_list.items():
-                if not isinstance(cfg, dict):
-                    continue
-                if cfg.get("type") != "Excel":
-                    continue
-                save_items = cfg.get("save_items")
-                if isinstance(save_items, list) and name in save_items:
-                    cfg["save_items"] = [x for x in save_items if x != name]
-        except Exception:
-            pass
+        _delete_excel_selection_item(self.config[0].analysis_list, name)
         if name in self.config[0].analysis_list:
             del self.config[0].analysis_list[name]
 
@@ -1177,18 +1199,11 @@ class OptionList(ListView):
             list[index] = new_name
 
         # Keep Excel export item's selection in sync when other items are renamed
-        try:
-            for _, cfg in self.config[0].analysis_list.items():
-                if not isinstance(cfg, dict):
-                    continue
-                if cfg.get("type") != "Excel":
-                    continue
-                save_items = cfg.get("save_items")
-                if isinstance(save_items, list) and old_name in save_items:
-                    cfg["save_items"] = [new_name if x == old_name else x for x in save_items]
-        except Exception:
-            # Never block rename flow
-            pass
+        _rename_excel_selection_item(
+            self.config[0].analysis_list,
+            old_name,
+            new_name,
+        )
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
         if Qt.EditRole in roles:

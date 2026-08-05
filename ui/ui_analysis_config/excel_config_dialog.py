@@ -1,10 +1,37 @@
 import os
 
-from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QFileDialog,
+    QHeaderView,
+    QHBoxLayout,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
+from base.excel_export_selection import (
+    available_excel_outputs,
+    normalize_save_item_outputs,
+    serialize_save_item_outputs,
+)
+from consts.excel_export_consts import (
+    EXCEL_OUTPUT_ORDER,
+    EXCEL_OUTPUT_TEST_CURVE,
+    SAVE_ITEM_OUTPUTS_KEY,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import PushButton, Label, GroupBox, CheckBox, LineEdit, SpinBox, MessageBox
+from ui.custom_ui_widget.widgets import (
+    CheckBox,
+    GroupBox,
+    Label,
+    LineEdit,
+    MessageBox,
+    PushButton,
+    SpinBox,
+    TableWidget,
+)
 from ui.ui_analysis_config.common_widgets import SemanticAnalysisConfigDialogBase
 
 
@@ -23,7 +50,7 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
         self.model_type = model_type
         self.load_config = self.config_manager.load_config().get(model_type, {})
 
-        self._item_checkbox_by_name: dict[str, CheckBox] = {}
+        self._output_checkbox_by_name: dict[str, dict[str, CheckBox]] = {}
 
         self.init_ui()
 
@@ -108,25 +135,56 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
         btn_row.addStretch()
         select_layout.addLayout(btn_row)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout()
+        available_items = self._get_available_analysis_items()
+        analysis_config = self.config_manager.load_config() or {}
+        selected_outputs = normalize_save_item_outputs(
+            self.load_config,
+            analysis_config,
+            available_items=available_items,
+        )
 
-        selected = self.load_config.get("save_items") or []
-        if not isinstance(selected, list):
-            selected = []
+        self.output_table = TableWidget(self)
+        self.output_table.setColumnCount(4)
+        self.output_table.setHorizontalHeaderLabels(
+            ["分析项", "测试曲线", "Margin", "偏差曲线"]
+        )
+        self.output_table.setRowCount(len(available_items))
+        self.output_table.verticalHeader().setVisible(False)
+        self.output_table.setSelectionMode(TableWidget.NoSelection)
+        header = self.output_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in range(1, 4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
 
-        for name in self._get_available_analysis_items():
-            cb = CheckBox(name)
-            cb.setChecked(name in selected)
-            self._item_checkbox_by_name[name] = cb
-            scroll_layout.addWidget(cb)
+        for row, name in enumerate(available_items):
+            name_item = QTableWidgetItem(name)
+            name_item.setFlags(Qt.ItemIsEnabled)
+            self.output_table.setItem(row, 0, name_item)
 
-        scroll_layout.addStretch()
-        scroll_content.setLayout(scroll_layout)
-        scroll.setWidget(scroll_content)
-        select_layout.addWidget(scroll)
+            item_config = analysis_config.get(name, {})
+            available_outputs = set(available_excel_outputs(item_config))
+            row_checkboxes: dict[str, CheckBox] = {}
+            for column, output in enumerate(EXCEL_OUTPUT_ORDER, start=1):
+                checkbox = CheckBox()
+                is_rsc_test_curve = (
+                    item_config.get("type") == "RSC"
+                    and output == EXCEL_OUTPUT_TEST_CURVE
+                )
+                enabled = output in available_outputs and not is_rsc_test_curve
+                checkbox.setEnabled(enabled)
+                checkbox.setChecked(
+                    enabled and output in selected_outputs.get(name, ())
+                )
+                cell_widget = QWidget(self.output_table)
+                cell_layout = QHBoxLayout(cell_widget)
+                cell_layout.setContentsMargins(0, 0, 0, 0)
+                cell_layout.setAlignment(Qt.AlignCenter)
+                cell_layout.addWidget(checkbox)
+                self.output_table.setCellWidget(row, column, cell_widget)
+                row_checkboxes[output] = checkbox
+            self._output_checkbox_by_name[name] = row_checkboxes
+
+        select_layout.addWidget(self.output_table)
         select_box.setLayout(select_layout)
         basic_layout.addWidget(select_box)
 
@@ -277,12 +335,15 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
         MessageBox.warning(self, "保存目录不可用", msg)
 
     def on_select_all(self):
-        for cb in self._item_checkbox_by_name.values():
-            cb.setChecked(True)
+        for output_checkboxes in self._output_checkbox_by_name.values():
+            for checkbox in output_checkboxes.values():
+                if checkbox.isEnabled():
+                    checkbox.setChecked(True)
 
     def on_clear_all(self):
-        for cb in self._item_checkbox_by_name.values():
-            cb.setChecked(False)
+        for output_checkboxes in self._output_checkbox_by_name.values():
+            for checkbox in output_checkboxes.values():
+                checkbox.setChecked(False)
 
     def create_btn(self):
         btn_layout = QHBoxLayout()
@@ -302,7 +363,18 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
         lock_files = self.lock_files_chk.isChecked()
         add_model_dir = self.add_model_dir_chk.isChecked()
         max_points = int(self.max_points_spin.value())
-        save_items = [name for name, cb in self._item_checkbox_by_name.items() if cb.isChecked()]
+        save_item_outputs = serialize_save_item_outputs(
+            {
+                name: [
+                    output
+                    for output in EXCEL_OUTPUT_ORDER
+                    if output_checkboxes[output].isEnabled()
+                    and output_checkboxes[output].isChecked()
+                ]
+                for name, output_checkboxes in self._output_checkbox_by_name.items()
+            }
+        )
+        save_items = sorted(save_item_outputs)
         return {
             "enabled": True,
             "save_dir": save_dir,
@@ -313,6 +385,7 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
             "date_format": "%Y%m%d",
             "max_points": max_points,
             "save_items": save_items,
+            SAVE_ITEM_OUTPUTS_KEY: save_item_outputs,
             "save_mes_enabled": self.mes_chk.isChecked(),
             "mes_file_base": self.mes_file_base_edit.text() or None,
             "mes_file_name": self.mes_file_name_edit.text(),
@@ -333,7 +406,7 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def on_restore_default_btn_clicked(self):
         self.load_config = self.config_manager.load_config().get(self.model_type, {})
-        self._item_checkbox_by_name = {}
+        self._output_checkbox_by_name = {}
         self.clear_semantic_sections()
         self._build_semantic_sections()
 
