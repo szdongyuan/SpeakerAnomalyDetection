@@ -756,38 +756,50 @@ toolbar_checkbox_style = _style("""
             QCheckBox:focus { outline: none; }
 """)
 
-serial_trigger_badge_base_style = _style("""
-            QLabel {
-                min-width: 66px;
+serial_trigger_button_base_style = _style("""
+            QPushButton {
+                background-color: $COLOR_TOOLBAR_BUTTON_BG;
+                border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
                 padding: 2px 10px;
                 font-family: $UI_FONT_FAMILY;
                 font-size: 14px;
                 font-weight: 600;
             }
-""")
-
-serial_trigger_badge_disconnected_style = _style("""
-            QLabel {
-                background-color: $COLOR_TOOLBAR_BUTTON_BG;
-                color: $COLOR_TEXT_MUTED;
+            QPushButton:focus {
+                outline: none;
+                border: 1px solid $COLOR_BORDER_STRONG;
+            }
+            QPushButton:hover {
+                background-color: $COLOR_CONTROL_HOVER;
+                border-color: $COLOR_PRIMARY;
+            }
+            QPushButton:pressed {
+                background-color: $COLOR_CONTROL_PRESSED;
+                border-color: $COLOR_PRIMARY_HOVER;
+            }
+            QPushButton:disabled {
+                background-color: $COLOR_DISABLED_BG;
+                color: $COLOR_DISABLED_TEXT;
                 border: 1px solid $COLOR_BORDER_STRONG;
             }
 """)
 
-serial_trigger_badge_open_style = _style("""
-            QLabel {
-                background-color: $COLOR_TOOLBAR_BUTTON_BG;
-                color: $COLOR_PRIMARY_HOVER;
-                border: 1px solid $COLOR_PRIMARY;
+serial_trigger_button_inactive_style = _style("""
+            QPushButton {
+                color: $COLOR_TEXT_MUTED;
             }
 """)
 
-serial_trigger_badge_connected_style = _style("""
-            QLabel {
-                background-color: $COLOR_TOOLBAR_BUTTON_BG;
-                color: #166534;
-                border: 1px solid $COLOR_OK;
+serial_trigger_button_open_style = _style("""
+            QPushButton {
+                color: $COLOR_PRIMARY_HOVER;
+            }
+""")
+
+serial_trigger_button_connected_style = _style("""
+            QPushButton {
+                color: $COLOR_OK;
             }
 """)
 

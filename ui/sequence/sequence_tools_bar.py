@@ -1,5 +1,5 @@
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QVBoxLayout, QWidget
 
 from consts import ui_style_const
@@ -35,7 +35,6 @@ class SequenceToolsBar(QWidget):
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = QLineEdit()
         self.barcode_scanner_box = QCheckBox("S/N：")
-        self.serial_trigger_status_label = QLabel("未启用")
         self.serial_trigger_code_label = QLabel("最近接收: -")
 
         self.init_ui()
@@ -89,7 +88,6 @@ class SequenceToolsBar(QWidget):
         layout.addWidget(self.tcp_btn)
         layout.addWidget(vertical_line_4)
         layout.addWidget(self.serial_trigger_btn)
-        layout.addLayout(self.create_serial_trigger_status_layout())
         layout.addWidget(vertical_line_5)
         layout.addLayout(using_file_combobox_layout)
         layout.addLayout(condition_mode_layout)
@@ -141,7 +139,14 @@ class SequenceToolsBar(QWidget):
             self.serial_trigger_btn,
             "串口离散输入触发配置",
             "ui/ui_pic/sequence_pic/new_com.png",
-            QSize(35, 35),
+            QSize(26, 26),
+        )
+        self._add_icon_trailing_space(self.serial_trigger_btn, QSize(26, 26), 6)
+        self.serial_trigger_btn.setFixedSize(124, 40)
+        self.serial_trigger_btn.setText("未连接")
+        self.serial_trigger_btn.setStyleSheet(
+            ui_style_const.serial_trigger_button_base_style
+            + ui_style_const.serial_trigger_button_inactive_style
         )
 
     def create_using_file_combobox(self):
@@ -176,20 +181,6 @@ class SequenceToolsBar(QWidget):
         condition_mode_layout.addWidget(vertical_line)
 
         return condition_mode_layout
-
-    def create_serial_trigger_status_layout(self):
-        self.serial_trigger_status_label.setAlignment(Qt.AlignCenter)
-        self.serial_trigger_status_label.setStyleSheet(
-            ui_style_const.serial_trigger_badge_base_style
-            + ui_style_const.serial_trigger_badge_disconnected_style
-        )
-        self.serial_trigger_status_label.setMinimumWidth(70)
-
-        layout = QHBoxLayout()
-        layout.setSpacing(0)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.addWidget(self.serial_trigger_status_label)
-        return layout
 
     def create_mode_type_layout(self):
         type_label = QLabel(" 型 号：")
@@ -269,6 +260,19 @@ class SequenceToolsBar(QWidget):
         button.setStyleSheet(ui_style_const.toolbar_button_style)
         button.setIcon(QIcon(DEFAULT_DIR + icon_path))
         button.setIconSize(icon_size)
+
+    @staticmethod
+    def _add_icon_trailing_space(button, icon_size, spacing):
+        source_pixmap = button.icon().pixmap(icon_size)
+        padded_pixmap = QPixmap(icon_size.width() + spacing, icon_size.height())
+        padded_pixmap.fill(Qt.transparent)
+
+        painter = QPainter(padded_pixmap)
+        painter.drawPixmap(0, 0, source_pixmap)
+        painter.end()
+
+        button.setIcon(QIcon(padded_pixmap))
+        button.setIconSize(padded_pixmap.size())
 
     def mouseMoveEvent(self, a0):
         self.setCursor(Qt.ArrowCursor)

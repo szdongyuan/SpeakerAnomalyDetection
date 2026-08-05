@@ -90,21 +90,22 @@ class SequenceWidgetSerialTriggerOpsMixin:
         connected = bool(status.get("connected", False))
         has_response = bool(status.get("has_response", False))
         message = str(status.get("message", "") or "")
+
         if connected and has_response:
             status_text = "已连接"
-            status_style = ui_style_const.serial_trigger_badge_connected_style
+            status_style = ui_style_const.serial_trigger_button_connected_style
         elif connected:
             status_text = "已打开"
-            status_style = ui_style_const.serial_trigger_badge_open_style
+            status_style = ui_style_const.serial_trigger_button_open_style
         else:
             status_text = "未连接"
-            status_style = ui_style_const.serial_trigger_badge_disconnected_style
+            status_style = ui_style_const.serial_trigger_button_inactive_style
 
-        try:
-            self.serial_trigger_status_label.setText(status_text)
-            self.serial_trigger_status_label.setToolTip(message)
-            self.serial_trigger_status_label.setStyleSheet(
-                ui_style_const.serial_trigger_badge_base_style + status_style
-            )
-        except Exception:
-            pass
+        detail = message or status_text
+        self.serial_trigger_btn.setText(status_text)
+        self.serial_trigger_btn.setToolTip(f"串口离散输入触发配置\n{detail}")
+        self.serial_trigger_btn.setAccessibleName(f"串口离散输入触发配置，{status_text}")
+        self.serial_trigger_btn.setAccessibleDescription(detail)
+        self.serial_trigger_btn.setStyleSheet(
+            ui_style_const.serial_trigger_button_base_style + status_style
+        )

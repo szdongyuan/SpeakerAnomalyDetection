@@ -1,6 +1,6 @@
 import unittest
 
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget
+from PyQt5.QtWidgets import QApplication, QPushButton, QWidget
 
 from consts import ui_style_const
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
@@ -10,7 +10,7 @@ from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialT
 class _DummySerialStatusWidget(QWidget, SequenceWidgetSerialTriggerOpsMixin):
     def __init__(self):
         super().__init__()
-        self.serial_trigger_status_label = QLabel()
+        self.serial_trigger_btn = QPushButton()
 
 
 class TestSequenceToolbarStyle(unittest.TestCase):
@@ -66,23 +66,49 @@ class TestSequenceToolbarStyle(unittest.TestCase):
 
         self.assertEqual(calls, ["refresh"])
 
-    def test_serial_status_badge_updates_style_with_connection_state(self):
+    def test_serial_status_is_combined_into_configuration_button(self):
+        toolbar = SequenceToolsBar()
+
+        self.assertFalse(hasattr(toolbar, "serial_trigger_status_label"))
+        self.assertEqual(toolbar.serial_trigger_btn.text(), "未连接")
+        self.assertEqual(toolbar.serial_trigger_btn.size().width(), 124)
+        self.assertEqual(toolbar.serial_trigger_btn.size().height(), 40)
+        self.assertEqual(toolbar.serial_trigger_btn.iconSize().width(), 32)
+        self.assertEqual(toolbar.serial_trigger_btn.iconSize().height(), 26)
+
+        SequenceWidgetSerialTriggerOpsMixin.on_serial_trigger_status_changed(
+            toolbar,
+            {"connected": True, "has_response": False, "message": "open"},
+        )
+        self.assertEqual(toolbar.serial_trigger_btn.text(), "已打开")
+        self.assertLessEqual(toolbar.serial_trigger_btn.sizeHint().width(), toolbar.serial_trigger_btn.width())
+
+    def test_serial_status_button_uses_original_connection_states(self):
         widget = _DummySerialStatusWidget()
 
-        widget.on_serial_trigger_status_changed({"connected": False, "has_response": False, "message": "off"})
-        self.assertEqual(widget.serial_trigger_status_label.text(), "未连接")
-        self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, widget.serial_trigger_status_label.styleSheet())
-        self.assertIn(ui_style_const.COLOR_TEXT_MUTED, widget.serial_trigger_status_label.styleSheet())
+        cases = [
+            (
+                {"enabled": False, "error": "denied", "connected": False, "message": "off"},
+                "未连接",
+                ui_style_const.COLOR_TEXT_MUTED,
+            ),
+            ({"connected": True, "has_response": False, "message": "open"}, "已打开", ui_style_const.COLOR_PRIMARY_HOVER),
+            (
+                {"connected": True, "has_response": True, "message": "ok"},
+                "已连接",
+                ui_style_const.COLOR_OK,
+            ),
+        ]
 
-        widget.on_serial_trigger_status_changed({"connected": True, "has_response": False, "message": "open"})
-        self.assertEqual(widget.serial_trigger_status_label.text(), "已打开")
-        self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, widget.serial_trigger_status_label.styleSheet())
-        self.assertIn(ui_style_const.COLOR_PRIMARY_HOVER, widget.serial_trigger_status_label.styleSheet())
-
-        widget.on_serial_trigger_status_changed({"connected": True, "has_response": True, "message": "ok"})
-        self.assertEqual(widget.serial_trigger_status_label.text(), "已连接")
-        self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, widget.serial_trigger_status_label.styleSheet())
-        self.assertIn(ui_style_const.COLOR_OK, widget.serial_trigger_status_label.styleSheet())
+        for status, expected_text, expected_color in cases:
+            with self.subTest(expected_text=expected_text):
+                widget.on_serial_trigger_status_changed(status)
+                self.assertEqual(widget.serial_trigger_btn.text(), expected_text)
+                self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, widget.serial_trigger_btn.styleSheet())
+                self.assertIn(ui_style_const.COLOR_BORDER_STRONG, widget.serial_trigger_btn.styleSheet())
+                self.assertIn(expected_color, widget.serial_trigger_btn.styleSheet())
+                self.assertIn("串口离散输入触发配置", widget.serial_trigger_btn.toolTip())
+                self.assertIn(expected_text, widget.serial_trigger_btn.accessibleName())
 
 
 if __name__ == "__main__":

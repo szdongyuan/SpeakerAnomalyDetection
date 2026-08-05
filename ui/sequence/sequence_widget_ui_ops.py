@@ -298,10 +298,6 @@ class SequenceWidgetUiOpsMixin:
         return self.toolsbar.serial_trigger_btn
 
     @property
-    def serial_trigger_status_label(self):
-        return self.toolsbar.serial_trigger_status_label
-
-    @property
     def serial_trigger_code_label(self):
         return self.toolsbar.serial_trigger_code_label
 
