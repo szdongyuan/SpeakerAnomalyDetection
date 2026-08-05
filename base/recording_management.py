@@ -170,8 +170,12 @@ class RecordingManager(object):
             if os.path.exists(new_path):
                 return error_code.INVALID_PATH, "The new file path already exists."
             os.rename(file_path, new_path)
-            update_data = {"file_path": new_path}
-            condition_field = {"file_path": file_path}
+            update_data = {
+                "file_path": self.normalize_audio_path_for_db(new_path),
+            }
+            condition_field = {
+                "file_path": self.normalize_audio_path_for_db(file_path),
+            }
             with DataSave(self.db_path) as database:
                 database.update_table_data("audio_data_table", update_data, condition_field)
             return error_code.OK, "The rename operation successful and the database information updated."
@@ -189,8 +193,12 @@ class RecordingManager(object):
             shutil.move(file_path, new_dir_path)
             new_file_path = new_dir_path + "/" + filename
             update_data = {
-                "new_data": {"file_path": new_file_path},
-                "old_data": {"file_path": file_path},
+                "new_data": {
+                    "file_path": self.normalize_audio_path_for_db(new_file_path),
+                },
+                "old_data": {
+                    "file_path": self.normalize_audio_path_for_db(file_path),
+                },
             }
             with DataSave(self.db_path) as database:
                 database.update_table_data("audio_data_table", update_data)
