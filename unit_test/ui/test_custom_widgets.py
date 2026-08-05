@@ -9,7 +9,8 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QWidget
 
-from ui.custom_ui_widget.widgets import TableWidget
+from consts.ui_style_const import scale_size_px
+from ui.custom_ui_widget.widgets import TableWidget, TreeWidget
 
 
 @pytest.fixture(scope="module")
@@ -40,3 +41,21 @@ def test_table_widget_set_font_size_updates_headers(qapp):
 
     assert QWidget.font(table).pixelSize() == table.font_size
     assert_table_fonts_match(table)
+
+
+def test_tree_widget_applies_project_font_on_construction(qapp):
+    tree = TreeWidget()
+    font = QWidget.font(tree)
+
+    assert font.family() == "SimSun"
+    assert font.pixelSize() == scale_size_px(20)
+
+
+def test_tree_widget_set_font_size_updates_project_font(qapp):
+    tree = TreeWidget()
+    tree.set_font_size(37)
+    font = QWidget.font(tree)
+
+    assert tree.font_size == scale_size_px(37)
+    assert font.family() == "SimSun"
+    assert font.pixelSize() == scale_size_px(37)

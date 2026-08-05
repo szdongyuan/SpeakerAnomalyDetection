@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt
 from PyQt5.QtGui import QStandardItemModel
-from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel, QSizePolicy, QTableView, QTableWidgetItem
+from PyQt5.QtWidgets import QApplication, QHeaderView, QLabel, QSizePolicy, QTableView, QTableWidgetItem, QWidget
 
 from consts import error_code
 from consts.acoustic_analysis.curve_style_consts import DEFAULT_CURVE_COLORS
@@ -19,6 +19,7 @@ from consts.acoustic_analysis.specific_consts import spec_consts
 from consts.excel_export_consts import (
     EXCEL_OUTPUT_DEVIATION,
     EXCEL_OUTPUT_MARGIN,
+    EXCEL_OUTPUT_ORDER,
     EXCEL_OUTPUT_TEST_CURVE,
     SAVE_ITEM_OUTPUTS_KEY,
 )
@@ -27,6 +28,8 @@ from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_KEY,
     HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
 )
+from consts.ui_style_const import scale_size_px
+from ui.custom_ui_widget.widgets import TreeWidget
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -3258,6 +3261,11 @@ def _excel_output_config(*, excel_config):
             "lower_offset_db": -3.0,
             "golden_sample_checked": False,
         },
+        "Empty RSC": {
+            "type": "RSC",
+            "enable_threshold_judgment": False,
+            "golden_sample_checked": False,
+        },
         "SPLF": {
             "type": "SPLF",
             "limit_checked": True,
@@ -3270,7 +3278,65 @@ def _excel_output_config(*, excel_config):
     }
 
 
-def test_excel_output_table_structure_and_initial_state(qapp):
+def test_excel_output_tree_structure_filtering_and_initial_state(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    window = ExcelConfigWindow(
+        FakeConfigManager(
+            _excel_output_config(
+                excel_config={
+                    SAVE_ITEM_OUTPUTS_KEY: {
+                        "FR": ["test_curve"],
+                        "RSC": [],
+                        "SPLF": ["test_curve", "deviation"],
+                    }
+                }
+            )
+        ),
+        "Excel",
+    )
+
+    assert isinstance(window.output_tree, TreeWidget)
+    output_tree_font = QWidget.font(window.output_tree)
+    assert output_tree_font.family() == "SimSun"
+    assert output_tree_font.pixelSize() == scale_size_px(20)
+    assert window.output_tree.columnCount() == 1
+    assert window.output_tree.isHeaderHidden()
+    assert [
+        window.output_tree.topLevelItem(index).text(0)
+        for index in range(window.output_tree.topLevelItemCount())
+    ] == ["FR", "RSC", "SPLF"]
+
+    roots = window._output_root_by_name
+    children = window._output_child_by_name
+    assert "Empty RSC" not in roots
+    assert not roots["FR"].isExpanded()
+    assert not roots["RSC"].isExpanded()
+    assert not roots["SPLF"].isExpanded()
+    assert list(children["FR"]) == [EXCEL_OUTPUT_TEST_CURVE]
+    assert list(children["RSC"]) == [EXCEL_OUTPUT_MARGIN]
+    assert list(children["SPLF"]) == list(EXCEL_OUTPUT_ORDER)
+    assert [
+        children["SPLF"][output].text(0) for output in EXCEL_OUTPUT_ORDER
+    ] == ["测试曲线", "Margin", "偏差曲线"]
+    assert EXCEL_OUTPUT_TEST_CURVE not in children["RSC"]
+    assert EXCEL_OUTPUT_MARGIN not in children["FR"]
+    assert EXCEL_OUTPUT_DEVIATION not in children["FR"]
+
+    for root in roots.values():
+        assert bool(root.flags() & Qt.ItemIsUserCheckable)
+        for index in range(root.childCount()):
+            child = root.child(index)
+            assert bool(child.flags() & Qt.ItemIsUserCheckable)
+            assert bool(child.flags() & Qt.ItemIsEnabled)
+
+    assert roots["FR"].checkState(0) == Qt.Checked
+    assert roots["RSC"].checkState(0) == Qt.Unchecked
+    assert roots["SPLF"].checkState(0) == Qt.PartiallyChecked
+    window.close()
+
+
+def test_excel_output_tree_root_and_child_states_stay_synchronized(qapp):
     from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
     window = ExcelConfigWindow(
@@ -3279,46 +3345,25 @@ def test_excel_output_table_structure_and_initial_state(qapp):
         ),
         "Excel",
     )
+    root = window._output_root_by_name["SPLF"]
+    children = window._output_child_by_name["SPLF"]
 
-    assert [
-        window.output_table.horizontalHeaderItem(column).text()
-        for column in range(window.output_table.columnCount())
-    ] == ["分析项", "测试曲线", "Margin", "偏差曲线"]
-    assert window.output_table.rowCount() == 3
+    children[EXCEL_OUTPUT_TEST_CURVE].setCheckState(0, Qt.Checked)
+    assert root.checkState(0) == Qt.PartiallyChecked
+    for child in children.values():
+        child.setCheckState(0, Qt.Checked)
+    assert root.checkState(0) == Qt.Checked
+    children[EXCEL_OUTPUT_MARGIN].setCheckState(0, Qt.Unchecked)
+    assert root.checkState(0) == Qt.PartiallyChecked
 
-    row_by_name = {
-        window.output_table.item(row, 0).text(): row
-        for row in range(window.output_table.rowCount())
-    }
-    for row in row_by_name.values():
-        name_item = window.output_table.item(row, 0)
-        assert not bool(name_item.flags() & Qt.ItemIsUserCheckable)
-        assert not bool(name_item.flags() & Qt.ItemIsEditable)
-
-    checkboxes = window._output_checkbox_by_name
-    for name in ("FR", "SPLF"):
-        test_curve = checkboxes[name][EXCEL_OUTPUT_TEST_CURVE]
-        assert test_curve.isEnabled()
-        assert not test_curve.isChecked()
-
-    rsc_test_curve = checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE]
-    assert not rsc_test_curve.isEnabled()
-    assert not rsc_test_curve.isChecked()
-
-    assert not checkboxes["FR"][EXCEL_OUTPUT_MARGIN].isEnabled()
-    assert not checkboxes["FR"][EXCEL_OUTPUT_MARGIN].isChecked()
-    assert not checkboxes["FR"][EXCEL_OUTPUT_DEVIATION].isEnabled()
-    assert not checkboxes["FR"][EXCEL_OUTPUT_DEVIATION].isChecked()
-
-    assert checkboxes["RSC"][EXCEL_OUTPUT_MARGIN].isEnabled()
-    assert not checkboxes["RSC"][EXCEL_OUTPUT_MARGIN].isChecked()
-    assert not checkboxes["RSC"][EXCEL_OUTPUT_DEVIATION].isEnabled()
-    assert not checkboxes["RSC"][EXCEL_OUTPUT_DEVIATION].isChecked()
-
-    assert checkboxes["SPLF"][EXCEL_OUTPUT_MARGIN].isEnabled()
-    assert not checkboxes["SPLF"][EXCEL_OUTPUT_MARGIN].isChecked()
-    assert checkboxes["SPLF"][EXCEL_OUTPUT_DEVIATION].isEnabled()
-    assert not checkboxes["SPLF"][EXCEL_OUTPUT_DEVIATION].isChecked()
+    root.setCheckState(0, Qt.Checked)
+    assert all(child.checkState(0) == Qt.Checked for child in children.values())
+    root.setCheckState(0, Qt.Unchecked)
+    assert all(child.checkState(0) == Qt.Unchecked for child in children.values())
+    root.setCheckState(0, Qt.PartiallyChecked)
+    root.setCheckState(0, Qt.Checked)
+    assert all(child.checkState(0) == Qt.Checked for child in children.values())
+    assert root.checkState(0) == Qt.Checked
     window.close()
 
 
@@ -3341,18 +3386,21 @@ def test_excel_output_bulk_actions_and_persistence(qapp):
         "Excel",
     )
 
-    checkboxes = window._output_checkbox_by_name
-    assert checkboxes["FR"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
-    assert not checkboxes["FR"][EXCEL_OUTPUT_DEVIATION].isChecked()
-    assert not checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE].isEnabled()
-    assert not checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
-    assert not checkboxes["SPLF"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
+    children = window._output_child_by_name
+    roots = window._output_root_by_name
+    assert children["FR"][EXCEL_OUTPUT_TEST_CURVE].checkState(0) == Qt.Checked
+    assert EXCEL_OUTPUT_DEVIATION not in children["FR"]
+    assert EXCEL_OUTPUT_TEST_CURVE not in children["RSC"]
+    assert children["SPLF"][EXCEL_OUTPUT_TEST_CURVE].checkState(0) == Qt.Unchecked
 
     window.on_select_all()
-    for outputs in checkboxes.values():
-        for checkbox in outputs.values():
-            assert checkbox.isChecked() is checkbox.isEnabled()
-    assert not checkboxes["RSC"][EXCEL_OUTPUT_TEST_CURVE].isChecked()
+    assert all(
+        child.checkState(0) == Qt.Checked
+        for outputs in children.values()
+        for child in outputs.values()
+    )
+    assert all(root.checkState(0) == Qt.Checked for root in roots.values())
+    assert EXCEL_OUTPUT_TEST_CURVE not in children["RSC"]
 
     config = window.get_default_config()
     assert config[SAVE_ITEM_OUTPUTS_KEY] == {
@@ -3365,10 +3413,11 @@ def test_excel_output_bulk_actions_and_persistence(qapp):
 
     window.on_clear_all()
     assert all(
-        not checkbox.isChecked()
-        for outputs in checkboxes.values()
-        for checkbox in outputs.values()
+        child.checkState(0) == Qt.Unchecked
+        for outputs in children.values()
+        for child in outputs.values()
     )
+    assert all(root.checkState(0) == Qt.Unchecked for root in roots.values())
     assert window.get_default_config()[SAVE_ITEM_OUTPUTS_KEY] == {}
     assert window.get_default_config()["save_items"] == []
     window.close()
@@ -3391,17 +3440,20 @@ def test_excel_output_legacy_migration_and_restore(qapp):
         "save_items": ["SPLF"],
         SAVE_ITEM_OUTPUTS_KEY: {"RSC": ["margin"]},
     }
-    old_table = window.output_table
+    old_tree = window.output_tree
     window.on_restore_default_btn_clicked()
 
-    assert window.output_table is not old_table
+    assert window.output_tree is not old_tree
     assert window.get_default_config()[SAVE_ITEM_OUTPUTS_KEY] == {
         "RSC": ["margin"]
     }
     assert window.get_default_config()["save_items"] == ["RSC"]
-    assert not window._output_checkbox_by_name["SPLF"][
-        EXCEL_OUTPUT_TEST_CURVE
-    ].isChecked()
+    assert (
+        window._output_child_by_name["SPLF"][
+            EXCEL_OUTPUT_TEST_CURVE
+        ].checkState(0)
+        == Qt.Unchecked
+    )
     window.close()
 
 

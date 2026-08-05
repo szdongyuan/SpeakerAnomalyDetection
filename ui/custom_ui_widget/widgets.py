@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QTableView,
     QTreeView,
+    QTreeWidget,
     QToolButton,
     QAction,
     QPlainTextEdit,
@@ -228,6 +229,21 @@ class TreeView(QTreeView):
         self.font_size = scale_size_px(20)
         self.font = QFont()
         self.font.setFamily("SimSun")
+        self.font.setPixelSize(self.font_size)
+        self.setFont(self.font)
+
+
+class TreeWidget(QTreeWidget):
+    def __init__(self, parent=None):
+        super(TreeWidget, self).__init__(parent)
+        self.font_size = scale_size_px(20)
+        self.font = QFont()
+        self.font.setFamily("SimSun")
+        self.font.setPixelSize(self.font_size)
+        self.setFont(self.font)
+
+    def set_font_size(self, font_size):
+        self.font_size = scale_size_px(font_size)
         self.font.setPixelSize(self.font_size)
         self.setFont(self.font)
 
