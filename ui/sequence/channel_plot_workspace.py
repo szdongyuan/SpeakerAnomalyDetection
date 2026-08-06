@@ -218,10 +218,11 @@ class ChannelPlotWorkspace(QWidget):
 
         for w in self._subwins:
             try:
-                w.setParent(None)
+                w.hide()
                 w.deleteLater()
             except Exception:
                 pass
+        self.canvas.set_windows([])
 
         self._channel_indices = list(channel_indices)
         self._subwins = [ChannelPlotSubWindow(self.canvas, ch) for ch in self._channel_indices]

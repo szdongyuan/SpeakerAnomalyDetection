@@ -223,12 +223,60 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
         panel.set_condition_scores("6000", 71.6, 28.4)
 
-        detail_values = {label: widget.text() for label, widget in panel.detail_labels.items()}
+        detail_values = {label: widget.toolTip() for label, widget in panel.detail_labels.items()}
         self.assertEqual(detail_values["SPL"], "总体声压：72.35 dB；判定：OK")
         self.assertEqual(detail_values["响度"], "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；判定：OK")
         self.assertEqual(detail_values["AI分析"], "OK Score：71.60%；NG Score：28.40%；判定：OK")
         self.assertEqual(detail_values["FBA"], "OK")
         self.assertEqual(detail_values["FFT"], "NG")
+        self.assertIn("#1F2937", panel.detail_labels["AI分析"].styleSheet())
+        self.assertIn("判定：<span style=\"color:#166534; font-weight:bold;\">OK</span>", panel.detail_labels["SPL"].text())
+        self.assertIn("判定：<span style=\"color:#166534; font-weight:bold;\">OK</span>", panel.detail_labels["响度"].text())
+        self.assertIn("判定：<span style=\"color:#166534; font-weight:bold;\">OK</span>", panel.detail_labels["AI分析"].text())
+        self.assertEqual(panel.detail_labels["AI分析"].text().count("<span"), 1)
+        self.assertEqual(panel.detail_labels["FBA"].text(), "<span style=\"color:#166534; font-weight:bold;\">OK</span>")
+        self.assertEqual(panel.detail_labels["FFT"].text(), "<span style=\"color:#991B1B; font-weight:bold;\">NG</span>")
+
+    def test_pending_condition_result_clears_runtime_detail_values(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {
+                    "condition_name": "6000",
+                    "key": "6000",
+                    "analysis_list": {
+                        "display_sequence": [
+                            "声压级 (SPL) 1",
+                            "AI 分析 1",
+                            "频段能量 (FBA) 1",
+                            "快速傅里叶变换 (FFT) 1",
+                        ],
+                        "声压级 (SPL) 1": {"type": "SPL"},
+                        "AI 分析 1": {"type": "AI"},
+                        "频段能量 (FBA) 1": {"type": "FBA"},
+                        "快速傅里叶变换 (FFT) 1": {"type": "FFT"},
+                    },
+                }
+            ]
+        )
+
+        panel.select_condition("6000", show_detail=True)
+        panel.set_condition_analysis_details(
+            "6000",
+            {
+                "SPL": "总体声压：72.35 dB；判定：OK",
+                "AI分析": "OK Score：71.60%；NG Score：28.40%；判定：OK",
+                "FBA": "NG",
+                "FFT": "NG",
+            },
+        )
+
+        panel.set_condition_result("6000", "待检测", tone="pending")
+
+        detail_values = {label: widget.toolTip() for label, widget in panel.detail_labels.items()}
+        self.assertEqual(detail_values, {"SPL": "待检测", "AI分析": "待检测", "FBA": "待检测", "FFT": "待检测"})
+        for widget in panel.detail_labels.values():
+            self.assertIn("#1F2937", widget.styleSheet())
+            self.assertNotIn("<span", widget.text())
 
 
 if __name__ == "__main__":

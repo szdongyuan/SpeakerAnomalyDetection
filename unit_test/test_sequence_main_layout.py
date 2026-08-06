@@ -21,6 +21,7 @@ if "concurrent_log_handler" not in sys.modules:
 
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_panel_common import MotorSectionCard
+from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
@@ -255,6 +256,49 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertGreaterEqual(widget.recent_session_panel.height(), 300)
         self.assertGreater(widget.channel_workspace.width(), widget.left_panel.ai_result_panel.width())
         self.assertGreater(widget.recent_session_panel.width(), widget.left_panel.summary_panel.width())
+
+    def test_threshold_analyses_can_output_ok_ng(self):
+        widget = _DummySequenceWidget()
+
+        for analysis_type in ("LOUD", "FBA", "FFT"):
+            widget.analysis_config = {
+                "display_sequence": ["item"],
+                "item": {"type": analysis_type, "limit_checked": True},
+            }
+
+            self.assertEqual(widget._can_output_ok_ng(), (True, ""))
+
+    def test_channel_workspace_hides_old_subwindows_before_rebuilding(self):
+        workspace = ChannelPlotWorkspace()
+        workspace.resize(800, 400)
+        workspace.show()
+        workspace.set_channels([0, 1])
+        self.app.processEvents()
+        old_windows = workspace.subwindows()
+        self.assertTrue(old_windows)
+
+        workspace.set_channels([0])
+
+        self.assertTrue(all(not window.isVisible() for window in old_windows))
+        workspace.close()
+
+    def test_direction_waveform_panel_hides_old_cards_before_rebuilding(self):
+        panel = DirectionWaveformPanel(
+            condition_configs=[
+                {"condition_name": "6000", "trigger_state": "01"},
+                {"condition_name": "7000", "trigger_state": "02"},
+            ]
+        )
+        panel.resize(800, 400)
+        panel.show()
+        self.app.processEvents()
+        old_cards = list(panel._cards.values())
+        self.assertTrue(old_cards)
+
+        panel.set_conditions([{"condition_name": "8000", "trigger_state": "03"}])
+
+        self.assertTrue(all(not card.isVisible() for card in old_cards))
+        panel.close()
 
     def test_real_operation_panel_keeps_minimum_height_within_window_budget(self):
         widget = _RealisticSequenceWidget()

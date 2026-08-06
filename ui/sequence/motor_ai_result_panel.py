@@ -1,4 +1,6 @@
 import os
+import re
+from html import escape
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
@@ -100,7 +102,9 @@ class MotorAiResultPanel(QWidget):
             if idx >= 0:
                 item = self.rows_layout.takeAt(idx)
                 if item is not None and item.widget() is not None:
-                    item.widget().setParent(None)
+                    widget = item.widget()
+                    widget.hide()
+                    widget.setParent(None)
         except Exception:
             pass
 
@@ -224,8 +228,12 @@ class MotorAiResultPanel(QWidget):
         row = self.rows[key]
         row["result"] = result
         row["tone"] = tone
+        if self._is_pending_result(result, tone):
+            row["runtime_details"] = {}
         row["button"].setText(self._row_text(self._condition_name(key), result))
         row["button"].setStyleSheet(self._row_style(tone, selected=(key == self.selected_key)))
+        if key == self.selected_key:
+            self._set_detail_items(self._condition_display_details(key))
         return True
 
     def set_condition_scores(self, condition, ok_score=None, ng_score=None):
@@ -356,8 +364,9 @@ class MotorAiResultPanel(QWidget):
             name_label.setFixedWidth(64)
             name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
             name_label.setStyleSheet(self._small_text_style("#1F2937", bold=True))
-            value_label = QLabel(item["value"])
+            value_label = QLabel(self._detail_value_text(item["value"]))
             value_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            value_label.setTextFormat(Qt.RichText)
             value_label.setWordWrap(True)
             value_label.setToolTip(item["value"])
             value_label.setStyleSheet(self._small_text_style("#1F2937"))
@@ -663,6 +672,10 @@ class MotorAiResultPanel(QWidget):
         return "pending"
 
     @staticmethod
+    def _is_pending_result(result, tone):
+        return str(tone or "").strip().lower() == "pending" and str(result or "").strip() == "待检测"
+
+    @staticmethod
     def _row_style(tone, selected=False):
         colors = {
             "ok": ("#E8F7EE", "#166534", "#16A34A"),
@@ -694,6 +707,42 @@ class MotorAiResultPanel(QWidget):
             "running": ui_style_const.motor_status_badge_running_style,
         }.get(tone, ui_style_const.motor_status_badge_pending_style)
 
+    @classmethod
+    def _detail_value_text(cls, value):
+        text = str(value or "").strip()
+        tone = cls._status_color(text)
+        if tone and text.upper().replace(" ", "") in ("OK", "NG"):
+            return cls._status_span(text.upper().replace(" ", ""), tone)
+
+        matches = list(re.finditer(r"(判定[:：]\s*|RESULT[:：]\s*)(OK|NG)\b", text, re.IGNORECASE))
+        if not matches:
+            return escape(text)
+
+        match = matches[-1]
+        status = match.group(2).upper()
+        return "".join(
+            (
+                escape(text[: match.start(2)]),
+                cls._status_span(status, cls._status_color(status)),
+                escape(text[match.end(2) :]),
+            )
+        )
+
+    @staticmethod
+    def _status_color(status):
+        value = str(status or "").strip().upper()
+        if value == "OK":
+            return "#166534"
+        if value == "NG":
+            return "#991B1B"
+        return ""
+
+    @staticmethod
+    def _status_span(text, color):
+        if not color:
+            return escape(str(text or ""))
+        return f"<span style=\"color:{color}; font-weight:bold;\">{escape(str(text or ''))}</span>"
+
     @staticmethod
     def _small_text_style(color, bold=False):
         weight = "font-weight:bold;" if bold else ""
@@ -706,6 +755,7 @@ class MotorAiResultPanel(QWidget):
             widget = item.widget()
             child_layout = item.layout()
             if widget is not None:
+                widget.hide()
                 widget.setParent(None)
                 widget.deleteLater()
             elif child_layout is not None:

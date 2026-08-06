@@ -6,6 +6,7 @@ import copy
 from types import SimpleNamespace
 
 import numpy as np
+from PyQt5.QtWidgets import QApplication, QWidget
 
 if "concurrent_log_handler" not in sys.modules:
     concurrent_log_handler = types.ModuleType("concurrent_log_handler")
@@ -34,6 +35,74 @@ class _DummyButton:
 
     def setEnabled(self, value):
         self.enabled = value
+
+
+class _SelfShowingAnalysis(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.calculate_count = 0
+        self.setWindowTitle("self showing analysis")
+
+    def calculate_spl(self):
+        self.calculate_count += 1
+        self.show()
+        QApplication.processEvents()
+        return {"overall_spl": 1.0}
+
+
+class _SilentRunWidget(QWidget, SequenceWidgetAnalysisOpsMixin):
+    def __init__(self):
+        QWidget.__init__(self)
+        self.analysis_instance = _SelfShowingAnalysis()
+        self.analysis_window = []
+        self._analysis_result_summary_window = None
+        self._analysis_window_key_by_obj = {}
+        self.analysis_config = {
+            "display_sequence": ["声压级 (SPL) 1"],
+            "声压级 (SPL) 1": {"type": "SPL"},
+        }
+        self.sequence_config = [
+            {
+                "seq1": {
+                    "acq": {"mode": "RECORD_ONLY"},
+                    "analysis_list": self.analysis_config,
+                }
+            }
+        ]
+        self.data_struct = SimpleNamespace(analysis_result_dict={})
+        self.count_board = SimpleNamespace(mode="view")
+        self.recorded_signal_info = {}
+        self.recorded_path = ""
+        self.persisted_geometry = []
+
+    def _close_analysis_windows(self):
+        for window in list(self.analysis_window):
+            window.close()
+        self.analysis_window = []
+        if self._analysis_result_summary_window is not None:
+            self._analysis_result_summary_window.close()
+            self._analysis_result_summary_window = None
+
+    def instance_analysis_class(self, *_args):
+        self.analysis_window.append(self.analysis_instance)
+
+    def _get_analysis_window_geometry(self, _key):
+        return None
+
+    def _set_analysis_window_geometry(self, key, geo):
+        self.persisted_geometry.append((key, dict(geo)))
+
+    def _capture_excel_export_cache(self):
+        return None
+
+    def _maybe_export_excel_results(self):
+        return None
+
+    def _can_output_ok_ng(self):
+        return False, ""
+
+    def _sync_left_panel_analysis_details(self, _ai_runtime_state=None):
+        return False
 
 
 class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
@@ -107,6 +176,18 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
 
 
 class TestRecentSessionView(unittest.TestCase):
+    def test_silent_run_hides_analysis_windows_even_if_analysis_shows_itself(self):
+        app = QApplication.instance() or QApplication([])
+        widget = _SilentRunWidget()
+
+        widget.run(show_windows=False)
+        app.processEvents()
+
+        self.assertEqual(widget.analysis_instance.calculate_count, 1)
+        self.assertFalse(widget.analysis_instance.isVisible())
+        widget.analysis_instance.close()
+        widget.close()
+
     def test_view_recent_session_does_not_trigger_second_silent_run(self):
         widget = _DummySequenceWidget()
 
