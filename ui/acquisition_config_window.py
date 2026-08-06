@@ -2,34 +2,14 @@ import os
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QPixmap, QRegion
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout
-from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QStyle, QVBoxLayout
 
 from base.sound_device_manager import SoundDeviceManager
 from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
-
-
-RECORDING_ROOT_FOLDER_ICON_PATH = os.path.join(
-    DEFAULT_DIR,
-    "ui",
-    "ui_pic",
-    "folder",
-    "folder-yellow.png",
-)
-
-
-def _load_icon_without_transparent_margin(path):
-    pixmap = QPixmap(path)
-    if pixmap.isNull():
-        return QIcon(path)
-
-    visible_rect = QRegion(pixmap.mask()).boundingRect()
-    if visible_rect.isValid():
-        pixmap = pixmap.copy(visible_rect)
-    return QIcon(pixmap)
 
 
 class BaseConfigWindow(ConfigDialogBase):
@@ -137,7 +117,7 @@ class RecordConfigWindow(BaseConfigWindow):
         )
         self.recording_root_input.setPlaceholderText("audio_data/stored_data")
         self.select_recording_root_action = self.recording_root_input.addAction(
-            _load_icon_without_transparent_margin(RECORDING_ROOT_FOLDER_ICON_PATH),
+            self.style().standardIcon(QStyle.SP_DirIcon),
             QLineEdit.TrailingPosition,
         )
         self.select_recording_root_action.setToolTip("选择音频保存根目录")
