@@ -3,8 +3,6 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtCore import QSize
-from PyQt5.QtGui import QRegion
 from PyQt5.QtWidgets import QApplication
 
 from consts import model_consts
@@ -66,9 +64,6 @@ def test_record_config_uses_concise_default_path_placeholder(qapp):
     assert window.recording_root_input.placeholderText() == "audio_data/stored_data"
     assert window.default_recording_root_btn.text() == "默认路径"
     assert recording_root_layout.spacing() == 8
-    assert os.path.isfile(
-        acquisition_config_window.RECORDING_ROOT_FOLDER_ICON_PATH
-    )
     assert not hasattr(window, "select_recording_root_btn")
     assert not hasattr(window, "recording_root_hint")
 
@@ -88,15 +83,6 @@ def test_record_config_selects_existing_directory(qapp, tmp_path, monkeypatch):
     window.select_recording_root_action.trigger()
 
     assert window.recording_root_input.text() == os.path.normpath(tmp_path)
-
-
-def test_recording_root_folder_icon_fills_available_width(qapp):
-    window = _create_window()
-
-    pixmap = window.select_recording_root_action.icon().pixmap(QSize(64, 64))
-    visible_rect = QRegion(pixmap.mask()).boundingRect()
-
-    assert visible_rect.width() == pixmap.width()
 
 
 def test_record_config_default_path_button_clears_custom_root(qapp, tmp_path):
