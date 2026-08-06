@@ -366,7 +366,14 @@ class SequenceWidgetUiOpsMixin:
     def update_player_btn_is_paused(self):
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
-        can_start = bool(getattr(self, "sequence_config", None))
+        workflow_enabled = callable(getattr(self, "_load_sequence_config_for_product_condition", None))
+        if workflow_enabled:
+            # Product-condition workflow loads per-rpm test-queue on demand when user clicks Play.
+            # Do NOT disable Play based on whether conditions exist; prompt will be shown on Play instead.
+            can_start = True
+        else:
+            can_start = bool(getattr(self, "sequence_config", None))
+
         can_start = can_start and not getattr(self, "player_status_flag", False)
         can_start = can_start and not getattr(self, "_record_workflow_busy", False)
         self.player_btn.setDisabled(not can_start)

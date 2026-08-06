@@ -452,6 +452,11 @@ class SequenceWidgetConfigOpsMixin:
             sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
             if callable(sync_product_conditions):
                 sync_product_conditions(clear_recent_history=True)
+            # Refresh Play button enable state immediately after program switch.
+            try:
+                self.update_player_btn_is_paused()
+            except Exception:
+                pass
             reset_manual_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
             if callable(reset_manual_cycle):
                 reset_manual_cycle(clear_waveforms=True)
