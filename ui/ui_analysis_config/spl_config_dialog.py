@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QVBoxLayout, QWidget
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import CheckBox, GroupBox, RadioButton
 from ui.ui_analysis_config.common_widgets import (
+    AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
     GoldenSampleWidget,
     OctaveSmoothingSelectorWidget,
@@ -22,6 +23,9 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
 
     DEFAULT_CONFIG = {
         "analysis_channel": 0,
+        "analysis_time_range_enabled": False,
+        "analysis_start_time_sec": 0.0,
+        "analysis_end_time_sec": 0.0,
         "weighting": "Z",
         "smooth_checked": False,
         "limit_checked": False,
@@ -131,6 +135,18 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             self.add_semantic_section(
                 "input",
                 widget=self.channel_selector,
+            )
+
+        self.analysis_time_range_widget = None
+        if self.model_type != "SPLF":
+            self.analysis_time_range_widget = AnalysisTimeRangeWidget(
+                self.load_config,
+                self,
+                show_checkbox=True,
+            )
+            self.add_semantic_section(
+                "preprocess",
+                widget=self.analysis_time_range_widget,
             )
 
         compute_widget = QWidget(self)
@@ -251,6 +267,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             config["show_overall_spl"] = (
                 self.show_overall_spl_box.isChecked()
             )
+            config.update(self.analysis_time_range_widget.get_config())
 
         config.update(self.weighting_selector.get_config())
         config.update(self.threshold_widget.get_config())

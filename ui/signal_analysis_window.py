@@ -41,6 +41,7 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.spl_runtime_config import (
+    apply_spl_analysis_time_range,
     calculate_overall_spl,
     resolve_spl_unit,
 )
@@ -956,6 +957,11 @@ class Spl(AnalysisGraphWidget):
         weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
         if weighting and weighting.upper() not in ["NONE", "Z"]:
             recorded_signal = apply_weighting_filter(recorded_signal, sample_rate, weighting=weighting, zero_phase=False)
+        analysis_signal, analysis_start_sample = apply_spl_analysis_time_range(
+            recorded_signal,
+            sample_rate,
+            self.analysis_config,
+        )
         show_overall_spl = bool(
             (self.analysis_config or {}).get(
                 "show_overall_spl",
@@ -965,19 +971,22 @@ class Spl(AnalysisGraphWidget):
         overall_spl = None
         if show_overall_spl:
             overall_spl = calculate_overall_spl(
-                recorded_signal,
+                analysis_signal,
                 reference_pressure,
                 v2pa_factor=self.v2pa_factor,
             )
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            recorded_signal,
+            analysis_signal,
             reference_pressure,
             window_size=window_size,
             v2pa_factor=self.v2pa_factor,
             trim_edges=True,
         )
-        start_index = 0 if len(signal_spl) == len(recorded_signal) else window_size // 2
+        start_index = 0 if len(signal_spl) == len(analysis_signal) else window_size // 2
         signal_duration = (np.arange(len(signal_spl), dtype=float) + float(start_index)) / float(sample_rate)
+        signal_duration = signal_duration + (
+            float(analysis_start_sample) / float(sample_rate)
+        )
 
         if self.analysis_config and self.analysis_config.get("smooth_checked"):
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
@@ -1008,7 +1017,7 @@ class Spl(AnalysisGraphWidget):
         self._set_overall_spl_title(overall_spl)
         self.result = {
             "signal_duration": signal_duration.tolist(),
-            "recorded_signal": recorded_signal.tolist(),
+            "recorded_signal": np.asarray(analysis_signal).tolist(),
             "signal_spl": signal_spl.tolist(),
         }
         if show_overall_spl:
