@@ -41,6 +41,9 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
                 "weighting": "A",
                 "show_overall_spl": True,
                 "smooth_checked": True,
+                "analysis_time_range_enabled": True,
+                "analysis_start_time_sec": 0.25,
+                "analysis_end_time_sec": 1.5,
                 "limit_checked": False,
                 "limit_data": None,
             }
@@ -54,6 +57,7 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
 
     assert dialog.semantic_group_keys() == [
         "input",
+        "preprocess",
         "compute",
         "display",
         "judgment",
@@ -64,6 +68,9 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert dialog.curve_color_widget is not None
     assert dialog.show_overall_spl_box.text() == "显示总体声压级"
     assert dialog.show_overall_spl_box.isChecked() is True
+    assert dialog.analysis_time_range_widget.enabled_checkbox.isChecked() is True
+    assert dialog.analysis_time_range_widget.start_spin.value() == pytest.approx(0.25)
+    assert dialog.analysis_time_range_widget.end_spin.value() == pytest.approx(1.5)
     compute_layout = dialog.smooth_checkbox.parentWidget().layout()
     assert compute_layout.indexOf(dialog.show_overall_spl_box) == (
         compute_layout.indexOf(dialog.smooth_checkbox) + 1
@@ -79,6 +86,9 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert config["weighting"] == "A"
     assert config["show_overall_spl"] is True
     assert config["smooth_checked"] is True
+    assert config["analysis_time_range_enabled"] is True
+    assert config["analysis_start_time_sec"] == pytest.approx(0.25)
+    assert config["analysis_end_time_sec"] == pytest.approx(1.5)
     assert config["limit_checked"] is False
     assert config["limit_mode"] == "csv"
     assert config["manual_input_mode"] == "constant"
@@ -120,6 +130,7 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
         "judgment",
     ]
     assert dialog.show_overall_spl_box is None
+    assert dialog.analysis_time_range_widget is None
     config = dialog.get_default_config()
     assert config["splf_calc_mode"] == "total"
     assert config["octave_smoothing"] == 3
@@ -282,6 +293,9 @@ def test_spl_new_item_replaces_legacy_threshold_defaults(monkeypatch):
     assert config["limit_checked"] is False
     assert config["limit_mode"] == "csv"
     assert config["limit_data"] is None
+    assert config["analysis_time_range_enabled"] is False
+    assert config["analysis_start_time_sec"] == 0.0
+    assert config["analysis_end_time_sec"] == 0.0
     assert config["manual_upper_segments"] == []
     assert config["manual_lower_segments"] == []
     assert "upper_limit" not in config

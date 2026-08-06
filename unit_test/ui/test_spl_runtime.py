@@ -129,6 +129,52 @@ def test_spl_constant_limit_covers_first_runtime_point(signal_module, qapp, monk
     widget.close()
 
 
+def test_spl_runtime_applies_analysis_time_range_and_preserves_source_time_axis(
+    signal_module,
+    qapp,
+    monkeypatch,
+):
+    widget = signal_module.Spl("SPL")
+    widget.data_struct.store_wave_data = np.arange(10, dtype=np.float32)
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 10
+    widget.v2pa_factor = 1.0
+    widget.analysis_config = {
+        "analysis_channel": 0,
+        "weighting": "Z",
+        "smooth_checked": False,
+        "limit_checked": False,
+        "analysis_time_range_enabled": True,
+        "analysis_start_time_sec": 0.2,
+        "analysis_end_time_sec": 0.6,
+    }
+    analyzed_signals = []
+    plotted = []
+    monkeypatch.setattr(
+        signal_module.AudioThdFrequencyResponseAnalysis,
+        "spl_calculation",
+        lambda self, signal, *args, **kwargs: (
+            analyzed_signals.append(np.asarray(signal).copy())
+            or np.asarray([40.0, 41.0, 42.0, 43.0])
+        ),
+    )
+    monkeypatch.setattr(
+        widget,
+        "plot_spl",
+        lambda time_axis, spl: plotted.append(
+            (np.asarray(time_axis), np.asarray(spl))
+        ),
+    )
+
+    result = widget.calculate_spl()
+
+    assert analyzed_signals[0].tolist() == [2.0, 3.0, 4.0, 5.0]
+    assert result["recorded_signal"] == [2.0, 3.0, 4.0, 5.0]
+    assert result["signal_duration"] == pytest.approx([0.2, 0.3, 0.4, 0.5])
+    assert plotted[0][0].tolist() == pytest.approx([0.2, 0.3, 0.4, 0.5])
+    widget.close()
+
+
 def test_splf_constant_limit_uses_sorted_valid_axis(signal_module):
     x_values = signal_module._sorted_finite_positive_x_for_limits(
         [300.0, 200.0, np.nan, 100.0],

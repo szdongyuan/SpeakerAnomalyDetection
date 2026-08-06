@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -33,3 +33,39 @@ def resolve_spl_unit(weighting: Any) -> str:
         "C": "dBC",
         "D": "dBD",
     }.get(normalized, "dB")
+
+
+def apply_spl_analysis_time_range(
+    recorded_signal,
+    sample_rate: float,
+    config: Mapping[str, Any] | None,
+):
+    """Slice SPL input to the configured time range and return its source offset."""
+    cfg = config or {}
+    if not cfg.get("analysis_time_range_enabled", False):
+        return recorded_signal, 0
+
+    signal = np.asarray(recorded_signal)
+    start_sec = max(
+        0.0,
+        float(cfg.get("analysis_start_time_sec", 0.0) or 0.0),
+    )
+    end_sec = max(
+        0.0,
+        float(cfg.get("analysis_end_time_sec", 0.0) or 0.0),
+    )
+    start_sample = min(
+        int(np.floor(start_sec * float(sample_rate))),
+        len(signal),
+    )
+    end_sample = (
+        len(signal)
+        if end_sec == 0.0
+        else min(
+            int(np.ceil(end_sec * float(sample_rate))),
+            len(signal),
+        )
+    )
+    if end_sample <= start_sample:
+        return recorded_signal, 0
+    return signal[start_sample:end_sample], start_sample
