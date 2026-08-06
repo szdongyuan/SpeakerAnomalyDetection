@@ -873,8 +873,16 @@ class SequenceWidgetAnalysisOpsMixin:
         return self._update_manual_product_mark_group_count(session_record.get("group_id"))
 
     def _prepare_next_manual_product_condition_recording(self):
+        load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
+        workflow_enabled = callable(load_condition_config)
+
         conditions = self._product_condition_sequence()
         if not conditions:
+            # In motor/product-condition workflow, empty config should block "播放"
+            # instead of falling back to legacy single-shot recording.
+            if workflow_enabled:
+                QMessageBox.information(self, "提示", "当前产品工况配置为空，请先配置工况后再开始测试。")
+                return None
             return False
 
         try:
@@ -885,8 +893,7 @@ class SequenceWidgetAnalysisOpsMixin:
             index = 0
 
         condition = conditions[index]
-        load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
-        if not callable(load_condition_config):
+        if not workflow_enabled:
             QMessageBox.warning(self, "提示", "当前工况无法加载测试队列配置。")
             return None
         ok, message = load_condition_config(condition)
