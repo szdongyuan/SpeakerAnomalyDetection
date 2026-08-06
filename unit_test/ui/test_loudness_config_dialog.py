@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QLabel
 
 from ui.operation_sequence import (
     SUPPORTED_ANALYSIS_ITEMS,
@@ -100,6 +100,62 @@ def test_loudness_default_merge_preserves_nested_defaults():
     assert "summary_metrics" in merged["display"]
     assert merged["advanced"]["curve_y_unit"] == "phon"
     assert merged["advanced"]["stationary_hop_duration_s"] == 0.05
+
+
+def test_loudness_hides_specific_contribution_metrics_but_preserves_legacy_settings(
+    qapp,
+):
+    config_name = "响度 (LOUD) 1"
+    manager = _ConfigManager(
+        {
+            config_name: {
+                "type": "LOUD",
+                "display": {
+                    "summary_metrics": [
+                        "steady_state_average_loudness",
+                        "max_transient_loudness",
+                        "specific_loudness_sum_sone",
+                        "specific_loudness_summed_exceedance",
+                    ]
+                },
+                "advanced": {
+                    "specific_loudness_exceedance_threshold_sone_per_bark": 1.25,
+                    "specific_loudness_exceedance_ref_line": "ref3",
+                },
+            }
+        }
+    )
+
+    dialog = LoudnessConfigWindow(manager, config_name)
+    checkbox_texts = {widget.text() for widget in dialog.findChildren(QCheckBox)}
+    label_texts = {widget.text() for widget in dialog.findChildren(QLabel)}
+    combo_items = {
+        widget.itemText(index)
+        for widget in dialog.findChildren(QComboBox)
+        for index in range(widget.count())
+    }
+
+    assert "特征响度总贡献" not in checkbox_texts
+    assert "特征响度超限总量" not in checkbox_texts
+    assert "判定方式:" not in label_texts
+    assert "参考曲线:" not in label_texts
+    assert "参考曲线 (SSTS)" not in combo_items
+
+    saved = dialog.get_default_config()
+    assert saved["display"]["summary_metrics"] == [
+        "steady_state_average_loudness",
+        "max_transient_loudness",
+    ]
+    assert saved["advanced"]["specific_loudness_exceedance_threshold_sone_per_bark"] == 1.25
+    assert saved["advanced"]["specific_loudness_exceedance_ref_line"] == "ref3"
+    dialog.close()
+
+
+def test_loudness_defaults_do_not_request_hidden_specific_contribution_metrics():
+    summary_metrics = LoudnessConfigWindow.DEFAULT_CONFIG["display"]["summary_metrics"]
+
+    assert "specific_loudness_sum_sone" not in summary_metrics
+    assert "specific_loudness_summed_exceedance" not in summary_metrics
 
 
 def test_loudness_threshold_ui_switches_between_curve_and_scalar(qapp):
