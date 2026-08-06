@@ -1,11 +1,13 @@
+import os
 import sys
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout
-from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout
+from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QStyle, QVBoxLayout
 
 from base.sound_device_manager import SoundDeviceManager
+from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 
@@ -57,6 +59,8 @@ class RecordConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None, speaker=None, speaker_channels=None):
         super().__init__(mic=mic)
         self.setWindowTitle("录制音频")
+        self.setMinimumWidth(560)
+        self.resize(560, 420)
         self.input_data = input_data or {}
         if speaker is not None:
             self.speaker = speaker
@@ -106,6 +110,29 @@ class RecordConfigWindow(BaseConfigWindow):
         self.streaming_recording_checkbox.setChecked(
             bool(self.input_data.get("use_streaming_recording", False))
         )
+        label_recording_root = QLabel("音频保存根目录:")
+        self.recording_root_input = QLineEdit()
+        self.recording_root_input.setText(
+            str(self.input_data.get(model_consts.RECORDING_ROOT_CONFIG_KEY, "") or "")
+        )
+        self.recording_root_input.setPlaceholderText("audio_data/stored_data")
+        self.select_recording_root_action = self.recording_root_input.addAction(
+            self.style().standardIcon(QStyle.SP_DirIcon),
+            QLineEdit.TrailingPosition,
+        )
+        self.select_recording_root_action.setToolTip("选择音频保存根目录")
+        self.select_recording_root_action.triggered.connect(self._select_recording_root)
+        self.recording_root_input.textChanged.connect(
+            self._update_recording_root_tooltip
+        )
+        self._update_recording_root_tooltip(self.recording_root_input.text())
+        self.default_recording_root_btn = QPushButton("默认路径")
+        self.default_recording_root_btn.clicked.connect(self.recording_root_input.clear)
+        recording_root_layout = QHBoxLayout()
+        recording_root_layout.setContentsMargins(0, 0, 0, 0)
+        recording_root_layout.setSpacing(8)
+        recording_root_layout.addWidget(self.recording_root_input)
+        recording_root_layout.addWidget(self.default_recording_root_btn)
         label_monitor_gain = QLabel("监听增益:")
         self.monitor_gain_db_input = QDoubleSpinBox()
         self.monitor_gain_db_input.setRange(-60.0, 50.0)
@@ -138,19 +165,50 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.monitor_gain_db_input, 4, 1)
         grid_layout.addWidget(label_streaming_recording, 5, 0)
         grid_layout.addWidget(self.streaming_recording_checkbox, 5, 1)
+        grid_layout.addWidget(label_recording_root, 6, 0)
+        grid_layout.addLayout(recording_root_layout, 6, 1)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
     def on_click_ok_btn(self):
+        recording_root = str(self.recording_root_input.text() or "").strip()
+        if recording_root and not os.path.isdir(recording_root):
+            QMessageBox.warning(self, "设置警告", "音频保存根目录不存在，请重新选择。")
+            return
         self.final_data = {
             "total_time": self.time_input.value(),
             "sample_rate": int(self.samplerate_combo.currentText()),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
+            model_consts.RECORDING_ROOT_CONFIG_KEY: (
+                os.path.abspath(recording_root) if recording_root else ""
+            ),
         }
         self.accept()
+
+    def _select_recording_root(self):
+        current_root = str(self.recording_root_input.text() or "").strip()
+        initial_root = (
+            current_root
+            if os.path.isdir(current_root)
+            else model_consts.STORED_RECORDED_PATH
+        )
+        selected_root = QFileDialog.getExistingDirectory(
+            self,
+            "选择音频保存根目录",
+            initial_root,
+        )
+        if selected_root:
+            self.recording_root_input.setText(os.path.normpath(selected_root))
+
+    def _update_recording_root_tooltip(self, recording_root):
+        selected_root = str(recording_root or "").strip()
+        effective_root = selected_root or model_consts.STORED_RECORDED_PATH
+        self.recording_root_input.setToolTip(
+            os.path.abspath(os.path.normpath(effective_root))
+        )
 
     def _on_monitor_toggled(self, checked: bool):
         self.monitor_gain_db_input.setEnabled(bool(checked))

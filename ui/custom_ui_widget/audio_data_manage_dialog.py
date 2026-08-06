@@ -50,14 +50,25 @@ _ROTATION_SPEED_PATTERN = re.compile(
     r"(?<![0-9A-Za-z])(\d{3,6})[\s_-]*rpm(?![0-9A-Za-z])",
     re.IGNORECASE,
 )
+_PRODUCT_CONDITION_SPEED_PATTERN = re.compile(
+    r"(?<![0-9A-Za-z])(\d{3,6})(?=_[0-9a-f]{12}$)",
+    re.IGNORECASE,
+)
 _ROTATION_SPEED_FILTER_PATTERN = re.compile(r"(\d{3,6})\s*(?:rpm)?", re.IGNORECASE)
+
+
+def extract_audio_file_name(file_path):
+    """Return only the WAV file name for either slash style."""
+    return os.path.basename(str(file_path or "").replace("\\", "/"))
 
 
 def extract_rotation_speed(file_path):
     """Return the RPM encoded in a WAV filename, or None when absent."""
-    file_name = os.path.basename(str(file_path or "").replace("\\", "/"))
+    file_name = extract_audio_file_name(file_path)
     stem, _extension = os.path.splitext(file_name)
     matches = _ROTATION_SPEED_PATTERN.findall(stem)
+    if not matches:
+        matches = _PRODUCT_CONDITION_SPEED_PATTERN.findall(stem)
     if not matches:
         return None
     return int(matches[-1])
@@ -227,7 +238,7 @@ class AudioDataManageDialog(DataManageDialog):
             product_model_set.add(item[2])
             record_date_set.add(item[4])
 
-            file_name = item[1].split("/")[-1]
+            file_name = extract_audio_file_name(item[1])
             row_stimulus_name = stimulus_name.get(item[7], "无激励信号")
             row_data_list = [None, file_name, item[2], item[5], item[3], item[4], row_stimulus_name]
             self.add_row_data(row_data_list)

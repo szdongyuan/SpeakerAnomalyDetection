@@ -21,7 +21,7 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
-from consts import ui_style_const
+from consts import model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.acquisition_config_window import (
@@ -803,6 +803,7 @@ class OptionList(QListView):
                     "monitor_output_channel": 0,
                     "monitor_gain_db": 0.0,
                     "use_streaming_recording": False,
+                    model_consts.RECORDING_ROOT_CONFIG_KEY: "",
                 }
             else:
                 if sequence_config.mode == "RECORD_ONLY":
@@ -815,6 +816,13 @@ class OptionList(QListView):
                         "use_streaming_recording": bool(
                             sequence_config.detail.get("use_streaming_recording", False)
                         ),
+                        model_consts.RECORDING_ROOT_CONFIG_KEY: str(
+                            sequence_config.detail.get(
+                                model_consts.RECORDING_ROOT_CONFIG_KEY,
+                                "",
+                            )
+                            or ""
+                        ).strip(),
                     }
                 elif sequence_config.mode == "IMPORT_AUDIO":
                     sequence_config.detail = {
@@ -1273,6 +1281,7 @@ class OptionList(QListView):
                 "monitor_output_channel": 0,
                 "monitor_gain_db": 0.0,
                 "use_streaming_recording": False,
+                model_consts.RECORDING_ROOT_CONFIG_KEY: "",
             }
             self.signal_len = seq_item.detail.get(
                 "total_time", 4.0

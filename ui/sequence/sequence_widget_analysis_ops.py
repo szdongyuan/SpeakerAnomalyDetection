@@ -8,7 +8,7 @@ import numpy as np
 from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 
-from consts import error_code
+from consts import error_code, model_consts
 from base.ai_runtime_policy import count_judged_results, extract_ai_runtime_state
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
@@ -1562,6 +1562,10 @@ class SequenceWidgetAnalysisOpsMixin:
 
         name_suffix = self._resolve_recording_name_suffix()
         use_product_model_dir = bool(self._get_active_product_condition_key())
+        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        recording_root = str(
+            acq_detail.get(model_consts.RECORDING_ROOT_CONFIG_KEY, "") or ""
+        ).strip()
         self.recorded_path, self.recorded_signal_info = get_recorded_info(
             self.lineedit_type.text(),
             recording_token,
@@ -1569,10 +1573,10 @@ class SequenceWidgetAnalysisOpsMixin:
             label,
             name_suffix=name_suffix,
             use_product_model_dir=use_product_model_dir,
+            recording_root=recording_root,
         )
         if name_suffix:
             self.recorded_signal_info["record_name_suffix"] = name_suffix
-        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         total_time = float(acq_detail.get("total_time", 5.0))
         monitor_playback = acq_detail.get("monitor_playback", False)
         monitor_gain_db = float(acq_detail.get("monitor_gain_db", 0.0))

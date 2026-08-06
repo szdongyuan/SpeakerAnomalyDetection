@@ -23,7 +23,10 @@ from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
+from ui.custom_ui_widget.audio_data_manage_dialog import (
+    AudioDataManageDialog,
+    extract_audio_file_name,
+)
 
 
 class ArchiveAudioDataDialog(AudioDataManageDialog):
@@ -108,7 +111,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             product_model_set.add(item[2])
             record_date_set.add(item[4])
 
-            file_name = item[1].split("/")[-1]
+            file_name = extract_audio_file_name(item[1])
             row_data_list = [None, file_name, item[2], item[5], item[3], item[4], None]
             self.add_row_data(row_data_list)
 

@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import time
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -8,6 +9,11 @@ from consts.running_consts import DEFAULT_DIR
 
 
 class FileOps(object):
+
+    _NUMERIC_PRODUCT_CONDITION_PATTERN = re.compile(
+        r"(\d{3,6})(?:[\s_-]*rpm)?",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     def sanitize_file_name_component(value, fallback=""):
@@ -29,17 +35,42 @@ class FileOps(object):
         return normalized_model
 
     @staticmethod
-    def get_recording_store_dir(product_model, label, use_product_model_dir):
+    def normalize_product_condition_name(name_suffix):
+        """Canonicalize numeric RPM conditions while preserving other names."""
+        condition_name = str(name_suffix or "").strip().strip("_")
+        speed_match = FileOps._NUMERIC_PRODUCT_CONDITION_PATTERN.fullmatch(
+            condition_name
+        )
+        if speed_match:
+            return speed_match.group(1)
+        return FileOps.sanitize_file_name_component(condition_name)
+
+    @staticmethod
+    def resolve_recording_root(recording_root=""):
+        """Use the queue-selected recording root or the application default."""
+        selected_root = str(recording_root or "").strip()
+        if selected_root:
+            return os.path.abspath(os.path.normpath(selected_root))
+        return model_consts.STORED_RECORDED_PATH
+
+    @staticmethod
+    def get_recording_store_dir(
+        product_model,
+        label,
+        use_product_model_dir,
+        recording_root="",
+    ):
         """Keep legacy folders flat and group product-condition audio by model."""
+        storage_root = FileOps.resolve_recording_root(recording_root)
         if not use_product_model_dir:
-            return model_consts.STORED_RECORDED_PATH + "/" + label
+            return os.path.join(storage_root, label)
 
         normalized_model = FileOps.resolve_recording_product_model(product_model, True)
         model_folder = FileOps.sanitize_file_name_component(
             normalized_model,
             model_consts.UNSPECIFIED_PRODUCT_MODEL_FOLDER,
         )
-        return os.path.join(model_consts.STORED_RECORDED_PATH, model_folder, label)
+        return os.path.join(storage_root, model_folder, label)
 
     @staticmethod
     def build_recorded_file_name(
@@ -68,9 +99,7 @@ class FileOps(object):
                 model_consts.UNSPECIFIED_PRODUCT_MODEL_FOLDER,
             )
         )
-        condition_name = FileOps.sanitize_file_name_component(
-            str(name_suffix or "").strip("_")
-        )
+        condition_name = FileOps.normalize_product_condition_name(name_suffix)
         if condition_name:
             name_parts.append(condition_name)
         name_parts.append(FileOps.sanitize_file_name_component(mac_address))
@@ -314,7 +343,7 @@ class FileOps(object):
             return error_code.INVALID_DELETE, f"Failed to delete directory: {str(e)[:40]}"
             
     @staticmethod
-    def move_wav_to_dir(recorded_path, label):
+    def move_wav_to_dir(recorded_path, label, recording_root=""):
         """
         Move the recorded WAV file to the directory corresponding to its label.
 
@@ -329,24 +358,44 @@ class FileOps(object):
         Returns:
             str: The full path of the file after moving, or an empty string if the filename is empty
         """
+        source_path_text = str(recorded_path or "").strip()
+        if not source_path_text:
+            return ""
+
+        storage_root = os.path.abspath(
+            FileOps.resolve_recording_root(recording_root)
+        )
+        source_path = os.path.abspath(source_path_text)
+        source_label_dir = os.path.dirname(source_path)
+        source_storage_dir = os.path.dirname(source_label_dir)
+        target_root = storage_root
+        if os.path.basename(source_label_dir) in ("OK", "NG", "not_labeled"):
+            try:
+                common_root = os.path.commonpath(
+                    [source_storage_dir, storage_root]
+                )
+            except ValueError:
+                common_root = ""
+            if os.path.normcase(common_root) == os.path.normcase(storage_root):
+                target_root = source_storage_dir
+
         dir_paths = [
-            model_consts.STORED_RECORDED_UNLABELED_PATH,
-            model_consts.STORED_RECORDED_OK_PATH,
-            model_consts.STORED_RECORDED_NG_PATH,
+            os.path.join(target_root, "not_labeled"),
+            os.path.join(target_root, "OK"),
+            os.path.join(target_root, "NG"),
         ]
         for path in dir_paths:
             if not os.path.exists(path):
                 os.makedirs(path)
-        source_path = str(recorded_path or "")
         file_name = os.path.basename(source_path)
         target_path = ""
         if file_name:
             if label == "OK":
-                target_path = model_consts.STORED_RECORDED_OK_PATH + "/" + file_name
+                target_path = os.path.join(target_root, "OK", file_name)
             elif label == "NG":
-                target_path = model_consts.STORED_RECORDED_NG_PATH + "/" + file_name
+                target_path = os.path.join(target_root, "NG", file_name)
             elif label == "not_labeled":
-                target_path = model_consts.STORED_RECORDED_UNLABELED_PATH + "/" + file_name
+                target_path = os.path.join(target_root, "not_labeled", file_name)
             else:
                 return
             if os.path.abspath(source_path) == os.path.abspath(target_path):
