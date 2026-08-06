@@ -62,23 +62,6 @@ class LoudnessConfigPanel(QWidget):
     SPECIFIC_PROFILE_LABEL_TO_VALUE = {
         label: value for value, label in SPECIFIC_PROFILE_VALUE_TO_LABEL.items()
     }
-    EXCEEDANCE_MODE_VALUE_TO_LABEL = {
-        "threshold": "固定限值 T",
-        "ref_line": "参考曲线 (SSTS)",
-    }
-    EXCEEDANCE_MODE_LABEL_TO_VALUE = {
-        label: value for value, label in EXCEEDANCE_MODE_VALUE_TO_LABEL.items()
-    }
-    EXCEEDANCE_REF_VALUE_TO_LABEL = {
-        "ref1": "Ref 1",
-        "ref2": "Ref 2",
-        "ref3": "Ref 3",
-        "ref4": "Ref 4",
-    }
-    EXCEEDANCE_REF_LABEL_TO_VALUE = {
-        label: value for value, label in EXCEEDANCE_REF_VALUE_TO_LABEL.items()
-    }
-
     def __init__(self, load_config=None, title_prefix="", comparison_only=False, parent=None):
         super().__init__(parent)
         self.load_config = load_config or {}
@@ -208,9 +191,8 @@ class LoudnessConfigPanel(QWidget):
 
         display_cfg = self.load_config.get("display", {}) or {}
         advanced_cfg = self.load_config.get("advanced", {}) or {}
-
         metric_group = GroupBox("指标")
-        metric_group.setMinimumHeight(220)
+        metric_group.setMinimumHeight(150)
         metric_layout = QVBoxLayout()
         metric_layout.setSpacing(10)
         metric_layout.setContentsMargins(12, 20, 12, 12)
@@ -224,15 +206,6 @@ class LoudnessConfigPanel(QWidget):
             metric_layout.addWidget(self.show_mean_box)
         else:
             summary_metrics = display_cfg.get("summary_metrics", []) or []
-            self.show_specific_exceedance_box = CheckBox("特征响度超限总量")
-            self.show_specific_exceedance_box.setToolTip(
-                "对时间平均后的特征响度曲线 N'(z)，超出限值的部分沿 Bark 频段累加。\n"
-                "判定方式可选：固定限值 T（所有频段同一阈值），或参考曲线 Ref1-Ref4（随频段变化的 SSTS 限值曲线）。"
-            )
-            self.show_specific_exceedance_box.setChecked(
-                "specific_loudness_summed_exceedance" in summary_metrics
-                or "specific_loudness_exceedance" in summary_metrics
-            )
             self.show_steady_avg_box = CheckBox("稳态平均响度")
             self.show_steady_avg_box.setToolTip("响度曲线的时间平均值，单位跟随纵轴（sone 或 phon）。")
             self.show_steady_avg_box.setChecked(
@@ -251,94 +224,8 @@ class LoudnessConfigPanel(QWidget):
                 or "max_transient_loudness" in summary_metrics
                 or "nmax_sone" in summary_metrics
             )
-            self.show_specific_sum_box = CheckBox("特征响度总贡献")
-            self.show_specific_sum_box.setToolTip("对当前特征响度曲线 N'(z) 沿 Bark 轴积分，单位 sone。")
-            self.show_specific_sum_box.setChecked("specific_loudness_sum_sone" in summary_metrics)
-            self.specific_exceedance_threshold_widget = QWidget(self)
-            exceedance_layout = QVBoxLayout()
-            exceedance_layout.setContentsMargins(18, 0, 0, 0)
-            exceedance_layout.setSpacing(6)
-
-            mode_row = QHBoxLayout()
-            mode_row.setContentsMargins(0, 0, 0, 0)
-            mode_row.addWidget(Label("判定方式:"))
-            self.specific_exceedance_mode_combo = ComboBox()
-            self.specific_exceedance_mode_combo.addItems(
-                list(self.EXCEEDANCE_MODE_LABEL_TO_VALUE.keys())
-            )
-            saved_ref_line = str(
-                advanced_cfg.get("specific_loudness_exceedance_ref_line", "") or ""
-            ).lower()
-            saved_mode = "ref_line" if saved_ref_line in self.EXCEEDANCE_REF_VALUE_TO_LABEL else "threshold"
-            self.specific_exceedance_mode_combo.setCurrentText(
-                self.EXCEEDANCE_MODE_VALUE_TO_LABEL.get(saved_mode, "固定限值 T")
-            )
-            self.specific_exceedance_mode_combo.setMinimumWidth(140)
-            self.specific_exceedance_mode_combo.setMaximumWidth(180)
-            self.specific_exceedance_mode_combo.setMinimumHeight(30)
-            mode_row.addWidget(self.specific_exceedance_mode_combo)
-            mode_row.addStretch(1)
-            exceedance_layout.addLayout(mode_row)
-
-            self.specific_exceedance_t_widget = QWidget(self)
-            threshold_layout = QHBoxLayout()
-            threshold_layout.setContentsMargins(0, 0, 0, 0)
-            threshold_layout.addWidget(Label("限值 T:"))
-            self.specific_exceedance_threshold_spin = DoubleSpinBox()
-            self.specific_exceedance_threshold_spin.setRange(0.0, 1000.0)
-            self.specific_exceedance_threshold_spin.setDecimals(2)
-            self.specific_exceedance_threshold_spin.setSingleStep(0.01)
-            self.specific_exceedance_threshold_spin.setValue(
-                float(advanced_cfg.get("specific_loudness_exceedance_threshold_sone_per_bark", 0.0) or 0.0)
-            )
-            self.specific_exceedance_threshold_spin.setMinimumWidth(95)
-            self.specific_exceedance_threshold_spin.setMaximumWidth(115)
-            self.specific_exceedance_threshold_spin.setMinimumHeight(30)
-            threshold_layout.addWidget(self.specific_exceedance_threshold_spin)
-            threshold_layout.addWidget(Label("sone/Bark"))
-            threshold_layout.addStretch(1)
-            self.specific_exceedance_t_widget.setLayout(threshold_layout)
-            exceedance_layout.addWidget(self.specific_exceedance_t_widget)
-
-            self.specific_exceedance_ref_widget = QWidget(self)
-            ref_layout = QHBoxLayout()
-            ref_layout.setContentsMargins(0, 0, 0, 0)
-            ref_layout.addWidget(Label("参考曲线:"))
-            self.specific_exceedance_ref_combo = ComboBox()
-            self.specific_exceedance_ref_combo.addItems(
-                list(self.EXCEEDANCE_REF_LABEL_TO_VALUE.keys())
-            )
-            self.specific_exceedance_ref_combo.setCurrentText(
-                self.EXCEEDANCE_REF_VALUE_TO_LABEL.get(saved_ref_line, "Ref 1")
-            )
-            self.specific_exceedance_ref_combo.setToolTip(
-                "SSTS 频率相关限值曲线，随 Bark 频段变化。Ref1-Ref4 为不同严格程度的预设曲线。"
-            )
-            self.specific_exceedance_ref_combo.setMinimumWidth(95)
-            self.specific_exceedance_ref_combo.setMaximumWidth(115)
-            self.specific_exceedance_ref_combo.setMinimumHeight(30)
-            ref_layout.addWidget(self.specific_exceedance_ref_combo)
-            ref_layout.addStretch(1)
-            self.specific_exceedance_ref_widget.setLayout(ref_layout)
-            exceedance_layout.addWidget(self.specific_exceedance_ref_widget)
-
-            self.specific_exceedance_threshold_widget.setLayout(exceedance_layout)
-            self.show_specific_exceedance_box.toggled.connect(
-                lambda checked: self._set_visible_and_refresh(
-                    self.specific_exceedance_threshold_widget,
-                    checked,
-                )
-            )
-            self.specific_exceedance_threshold_widget.setVisible(self.show_specific_exceedance_box.isChecked())
-            self.specific_exceedance_mode_combo.currentTextChanged.connect(
-                self._refresh_exceedance_mode
-            )
-            self._refresh_exceedance_mode()
             metric_layout.addWidget(self.show_steady_avg_box)
             metric_layout.addWidget(self.show_max_transient_box)
-            metric_layout.addWidget(self.show_specific_sum_box)
-            metric_layout.addWidget(self.show_specific_exceedance_box)
-            metric_layout.addWidget(self.specific_exceedance_threshold_widget)
         metric_group.setLayout(metric_layout)
 
         graph_group = GroupBox("图形")
@@ -608,29 +495,6 @@ class LoudnessConfigPanel(QWidget):
             return False
         return True
 
-    def _refresh_exceedance_mode(self):
-        mode = self.EXCEEDANCE_MODE_LABEL_TO_VALUE.get(
-            self.specific_exceedance_mode_combo.currentText(), "threshold"
-        )
-        is_ref = mode == "ref_line"
-        self.specific_exceedance_t_widget.setVisible(not is_ref)
-        self.specific_exceedance_ref_widget.setVisible(is_ref)
-        self.specific_exceedance_t_widget.updateGeometry()
-        self.specific_exceedance_ref_widget.updateGeometry()
-        self._refresh_parent_semantic_layout()
-
-    def _exceedance_ref_line_value(self, advanced_cfg):
-        if self.comparison_only:
-            return str(advanced_cfg.get("specific_loudness_exceedance_ref_line", "") or "")
-        mode = self.EXCEEDANCE_MODE_LABEL_TO_VALUE.get(
-            self.specific_exceedance_mode_combo.currentText(), "threshold"
-        )
-        if mode != "ref_line":
-            return ""
-        return self.EXCEEDANCE_REF_LABEL_TO_VALUE.get(
-            self.specific_exceedance_ref_combo.currentText(), "ref1"
-        )
-
     @staticmethod
     def _positive_float_or_default(value, default):
         try:
@@ -679,10 +543,6 @@ class LoudnessConfigPanel(QWidget):
                 summary_metrics.append("steady_state_average_loudness")
             if self.show_max_transient_box.isChecked():
                 summary_metrics.append("max_transient_loudness")
-            if self.show_specific_sum_box.isChecked():
-                summary_metrics.append("specific_loudness_sum_sone")
-            if self.show_specific_exceedance_box.isChecked():
-                summary_metrics.append("specific_loudness_summed_exceedance")
 
         curves = ["loudness_time"] if self.show_curve_box.isChecked() else []
         if not self.comparison_only and self.show_specific_profile_box.isChecked():
@@ -718,12 +578,12 @@ class LoudnessConfigPanel(QWidget):
                     if not self.comparison_only
                     else str(advanced_cfg.get("specific_loudness_profile_mode", "steady_average") or "steady_average")
                 ),
-                "specific_loudness_exceedance_threshold_sone_per_bark": (
-                    self.specific_exceedance_threshold_spin.value()
-                    if not self.comparison_only
-                    else float(advanced_cfg.get("specific_loudness_exceedance_threshold_sone_per_bark", 0.0) or 0.0)
+                "specific_loudness_exceedance_threshold_sone_per_bark": float(
+                    advanced_cfg.get("specific_loudness_exceedance_threshold_sone_per_bark", 0.0) or 0.0
                 ),
-                "specific_loudness_exceedance_ref_line": self._exceedance_ref_line_value(advanced_cfg),
+                "specific_loudness_exceedance_ref_line": str(
+                    advanced_cfg.get("specific_loudness_exceedance_ref_line", "") or ""
+                ),
                 "output_time_resolution_ms": self._positive_float_or_default(
                     advanced_cfg.get("output_time_resolution_ms", _DEFAULT_OUTPUT_TIME_RESOLUTION_MS),
                     _DEFAULT_OUTPUT_TIME_RESOLUTION_MS,
@@ -809,7 +669,6 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
             "summary_metrics": [
                 "steady_state_average_loudness",
                 "max_transient_loudness",
-                "specific_loudness_summed_exceedance",
             ],
             "curves": [
                 "loudness_time",
