@@ -211,7 +211,18 @@ class TestManualProductConditionCycle(unittest.TestCase):
         widget._active_product_condition_key = "q6000"
         widget.analysis_config = {
             "spl": {"type": "SPL", "weighting": "Z"},
-            "loudness": {"type": "LOUD", "advanced": {"curve_y_unit": "sone"}},
+            "loudness": {
+                "type": "LOUD",
+                "advanced": {"curve_y_unit": "sone"},
+                "display": {
+                    "summary_metrics": [
+                        "steady_state_average_loudness",
+                        "max_transient_loudness",
+                        "specific_loudness_sum_sone",
+                        "specific_loudness_summed_exceedance",
+                    ]
+                },
+            },
             "ai": {"type": "AI"},
             "fba": {"type": "FBA"},
             "fft": {"type": "FFT"},
@@ -231,6 +242,8 @@ class TestManualProductConditionCycle(unittest.TestCase):
                     "summary": {
                         "steady_state_average_sone": 4.2,
                         "max_transient_sone": 8.1,
+                        "specific_loudness_sum_sone": 12.34,
+                        "specific_loudness_summed_exceedance": 1.1629,
                     }
                 },
                 export_detail={},
@@ -263,10 +276,61 @@ class TestManualProductConditionCycle(unittest.TestCase):
         condition, detail_values = widget.left_panel.analysis_details[-1]
         self.assertEqual(condition, "q6000")
         self.assertEqual(detail_values["SPL"], "总体声压：72.34 dB；判定：OK")
-        self.assertEqual(detail_values["响度"], "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；判定：OK")
+        self.assertEqual(
+            detail_values["响度"],
+            "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；"
+            "特征响度总贡献：12.34 sone；特征响度超限总量：116.29 cSones；判定：OK",
+        )
         self.assertEqual(detail_values["AI分析"], "OK Score：71.60%；NG Score：28.40%；判定：OK")
         self.assertEqual(detail_values["FBA"], "OK")
         self.assertEqual(detail_values["FFT"], "NG")
+
+    def test_left_panel_loudness_details_follow_display_metric_checks(self):
+        widget = _DummyManualCycleWidget()
+        widget._active_product_condition_key = "q6000"
+        widget.analysis_config = {
+            "loudness": {
+                "type": "LOUD",
+                "limit_checked": True,
+                "limit_metric": "max_transient",
+                "advanced": {"curve_y_unit": "sone"},
+                "display": {
+                    "summary_metrics": [
+                        "steady_state_average_loudness",
+                        "specific_loudness_summed_exceedance",
+                    ]
+                },
+            },
+        }
+        widget.data_struct = SimpleNamespace(
+            analysis_result_dict={"响度--通道1": (False, 1.5)}
+        )
+        widget.analysis_window = [
+            SimpleNamespace(
+                _sequence_analysis_key="loudness",
+                title_name="响度--通道1",
+                result={
+                    "summary": {
+                        "steady_state_average_sone": 4.2,
+                        "max_transient_sone": 8.1,
+                        "specific_loudness_sum_sone": 12.34,
+                        "specific_loudness_summed_exceedance": 1.1629,
+                    }
+                },
+                export_detail={},
+            )
+        ]
+
+        synced = widget._sync_left_panel_analysis_details()
+
+        self.assertTrue(synced)
+        _condition, detail_values = widget.left_panel.analysis_details[-1]
+        self.assertEqual(
+            detail_values["响度"],
+            "稳态平均响度：4.20 sone；特征响度超限总量：116.29 cSones；判定：NG",
+        )
+        self.assertNotIn("最大瞬态响度", detail_values["响度"])
+        self.assertNotIn("特征响度总贡献", detail_values["响度"])
 
     def test_left_panel_analysis_details_marks_fba_fft_without_threshold(self):
         widget = _DummyManualCycleWidget()

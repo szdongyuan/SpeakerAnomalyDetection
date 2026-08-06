@@ -563,7 +563,7 @@ class SequenceWidgetStreamingOpsMixin:
         We rely on analysis_result_dict being written by a subset of analysis widgets:
         - AI always writes (label + deviation)
         - RSC always writes (overall OK/NG + max exceed)
-        - SPL/SPLF/FR/HD/RB/PRB write only when threshold/compare (limit or golden) is enabled.
+        - SPL/SPLF/FR/HD/RB/PRB/LOUD/FBA/FFT write only when threshold/compare is enabled.
         """
         cfg = self.analysis_config or {}
         seq = cfg.get("display_sequence") or []
@@ -575,7 +575,7 @@ class SequenceWidgetStreamingOpsMixin:
             item_cfg = cfg.get(key)
             if not isinstance(item_cfg, dict):
                 continue
-            t = item_cfg.get("type")
+            t = str(item_cfg.get("type") or "").strip()
             if t == "AI":
                 candidates.append(key)
                 continue
@@ -585,7 +585,7 @@ class SequenceWidgetStreamingOpsMixin:
                 if has_reference and not current_only_mode and bool(item_cfg.get("enable_threshold_judgment", True)):
                     candidates.append(key)
                 continue
-            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB"):
+            if t in ("SPL", "SPLF", "FR", "HD", "RB", "PRB", "LOUD", "Loudness", "FBA", "FFT"):
                 if item_cfg.get("limit_checked"):
                     candidates.append(key)
 

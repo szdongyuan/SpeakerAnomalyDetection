@@ -622,34 +622,124 @@ class SequenceWidgetAnalysisOpsMixin:
             or advanced_cfg.get("curve_y_unit", "sone")
             or "sone"
         ).lower()
-        if unit == "phon":
-            steady = detail.get("steady_state_average_phon", detail.get("mean_phon"))
-            transient = detail.get("max_transient_phon", detail.get("lnmax_phon"))
-            values = result.get("loudness_level_phon") if isinstance(result, dict) else None
-            unit_text = "phon"
+        unit_text = "phon" if unit == "phon" else "sone"
+        if isinstance(result, dict) and unit_text == "phon":
+            values = result.get("loudness_level_phon")
+        elif isinstance(result, dict):
+            values = result.get("loudness_sone")
         else:
-            steady = detail.get("steady_state_average_sone", detail.get("mean_sone"))
-            transient = detail.get("max_transient_sone", detail.get("nmax_sone"))
-            values = result.get("loudness_sone") if isinstance(result, dict) else None
-            unit_text = "sone"
+            values = None
 
-        if (steady in (None, "") or transient in (None, "")) and values is not None:
-            try:
-                arr = np.asarray(values, dtype=float)
-                arr = arr[np.isfinite(arr)]
-                if arr.size:
-                    if steady in (None, ""):
-                        steady = float(np.mean(arr))
-                    if transient in (None, ""):
-                        transient = float(np.max(arr))
-            except Exception:
-                pass
-
-        text = (
-            f"稳态平均响度：{self._format_left_panel_number(steady)} {unit_text}；"
-            f"最大瞬态响度：{self._format_left_panel_number(transient)} {unit_text}"
-        )
+        parts = [
+            self._loudness_metric_text(metric_key, detail, values, unit_text)
+            for metric_key in self._loudness_display_metric_keys(item_config, unit_text)
+        ]
+        parts = [part for part in parts if part]
+        text = "；".join(parts)
+        if not text:
+            judgement = str(judgement or "").strip().upper()
+            return f"判定：{judgement}" if judgement in ("OK", "NG") else "已检测"
         return self._append_judgement_text(text, judgement)
+
+    @classmethod
+    def _loudness_display_metric_keys(cls, item_config: dict, unit_text: str) -> list[str]:
+        display_cfg = (item_config or {}).get("display")
+        if not isinstance(display_cfg, dict) or "summary_metrics" not in display_cfg:
+            configured_metrics = [
+                "steady_state_average_loudness",
+                "max_transient_loudness",
+            ]
+        else:
+            configured_metrics = display_cfg.get("summary_metrics", []) or []
+
+        metric_keys = []
+        seen = set()
+        for metric in configured_metrics:
+            resolved = cls._resolve_loudness_display_metric_key(metric, unit_text)
+            if not resolved or resolved in seen:
+                continue
+            seen.add(resolved)
+            metric_keys.append(resolved)
+
+        order = {
+            "steady_state_average_sone": 0,
+            "steady_state_average_phon": 0,
+            "max_transient_sone": 1,
+            "max_transient_phon": 1,
+            "specific_loudness_sum_sone": 2,
+            "specific_loudness_summed_exceedance": 3,
+        }
+        return sorted(
+            metric_keys,
+            key=lambda key: (order.get(key, 100), metric_keys.index(key)),
+        )
+
+    @staticmethod
+    def _resolve_loudness_display_metric_key(metric, unit_text: str) -> str:
+        key = str(metric or "").strip()
+        if key == "steady_state_average_loudness":
+            return "steady_state_average_phon" if unit_text == "phon" else "steady_state_average_sone"
+        if key == "max_transient_loudness":
+            return "max_transient_phon" if unit_text == "phon" else "max_transient_sone"
+        if key == "specific_loudness_exceedance":
+            return "specific_loudness_summed_exceedance"
+        if key == "mean_loudness":
+            return "mean_phon" if unit_text == "phon" else "mean_sone"
+        return key
+
+    def _loudness_metric_text(self, metric_key: str, detail: dict, values, unit_text: str) -> str:
+        if metric_key in ("steady_state_average_sone", "steady_state_average_phon", "mean_sone", "mean_phon"):
+            value = detail.get(metric_key)
+            if value in (None, ""):
+                value = detail.get("mean_phon" if unit_text == "phon" else "mean_sone")
+            if value in (None, ""):
+                value = self._loudness_array_stat(values, "mean")
+            return f"稳态平均响度：{self._format_left_panel_number(value)} {unit_text}"
+
+        if metric_key in ("max_transient_sone", "max_transient_phon", "nmax_sone", "lnmax_phon"):
+            value = detail.get(metric_key)
+            if value in (None, ""):
+                value = detail.get("lnmax_phon" if unit_text == "phon" else "nmax_sone")
+            if value in (None, ""):
+                value = self._loudness_array_stat(values, "max")
+            return f"最大瞬态响度：{self._format_left_panel_number(value)} {unit_text}"
+
+        if metric_key == "specific_loudness_sum_sone":
+            value = detail.get("specific_loudness_sum_sone")
+            return f"特征响度总贡献：{self._format_left_panel_number(value)} sone"
+
+        if metric_key == "specific_loudness_summed_exceedance":
+            value = self._scale_loudness_exceedance_to_csones(
+                detail.get("specific_loudness_summed_exceedance")
+            )
+            return f"特征响度超限总量：{self._format_left_panel_number(value)} cSones"
+
+        return ""
+
+    @staticmethod
+    def _loudness_array_stat(values, stat: str):
+        if values is None:
+            return None
+        try:
+            arr = np.asarray(values, dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if not arr.size:
+                return None
+            return float(np.max(arr) if stat == "max" else np.mean(arr))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _scale_loudness_exceedance_to_csones(value):
+        if value in (None, ""):
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return value
+        if not np.isfinite(numeric):
+            return None
+        return numeric * 100.0
 
     def _format_ai_left_panel_detail(self, ai_runtime_state=None, instance=None) -> str:
         state = dict(ai_runtime_state or {})
@@ -941,7 +1031,7 @@ class SequenceWidgetAnalysisOpsMixin:
 
         self.data_btn.setEnabled(True)
         if self.analysis_config.get("auto_analysis"):
-            self.run()
+            self.run(show_windows=False)
 
     def _load_audio_file_to_data_struct(self, file_path: str, sample_rate: float | None = None):
         if not file_path:
@@ -1416,10 +1506,14 @@ class SequenceWidgetAnalysisOpsMixin:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
 
-        if self.analysis_window:
-            self.analysis_window = []
-        if self._analysis_result_summary_window:
-            self._analysis_result_summary_window = None
+        close_analysis_windows = getattr(self, "_close_analysis_windows", None)
+        if callable(close_analysis_windows):
+            close_analysis_windows()
+        else:
+            if self.analysis_window:
+                self.analysis_window = []
+            if self._analysis_result_summary_window:
+                self._analysis_result_summary_window = None
 
         self._current_run_recording_token = self._reserve_recorded_count_for_run()
 
@@ -1623,10 +1717,14 @@ class SequenceWidgetAnalysisOpsMixin:
             QMessageBox.warning(self, "提示", "请先进行录音")
             return
 
-        if self.analysis_window:
-            self.analysis_window = []
-        if self._analysis_result_summary_window:
-            self._analysis_result_summary_window = None
+        close_analysis_windows = getattr(self, "_close_analysis_windows", None)
+        if callable(close_analysis_windows):
+            close_analysis_windows()
+        else:
+            if self.analysis_window:
+                self.analysis_window = []
+            if self._analysis_result_summary_window:
+                self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
         is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
@@ -1736,10 +1834,14 @@ class SequenceWidgetAnalysisOpsMixin:
         """
         # Only reflect THIS run(): clear previous summary results first
         self.data_struct.analysis_result_dict.clear()
-        if self.analysis_window:
-            self.analysis_window = []
-        if self._analysis_result_summary_window:
-            self._analysis_result_summary_window = None
+        close_analysis_windows = getattr(self, "_close_analysis_windows", None)
+        if callable(close_analysis_windows):
+            close_analysis_windows()
+        else:
+            if self.analysis_window:
+                self.analysis_window = []
+            if self._analysis_result_summary_window:
+                self._analysis_result_summary_window = None
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
@@ -1763,68 +1865,42 @@ class SequenceWidgetAnalysisOpsMixin:
                         result = instance.calculate_reference_spectrum()
                         if not result:
                             continue
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_spl"):
                         result = instance.calculate_spl()
                         if not result:
                             continue
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_fr"):
                         result = instance.calculate_fr()
                         if not result:
                             continue
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_thd"):
                         instance.calculate_thd()
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_ai_scores"):
                         instance.calculate_ai_scores(
                             self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
                         )
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_spec"):
                         instance.calculate_spec()
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_peak_detection"):
                         instance.calculate_peak_detection()
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_loose_particle"):
                         instance.calculate_loose_particle()
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_pattern_match"):
                         instance.calculate_pattern_match()
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_pipeline_pd_pm"):
                         instance.calculate_pipeline_pd_pm()
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_fba"):
                         result = instance.calculate_fba()
                         if not result:
                             continue
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_loudness"):
                         result = instance.calculate_loudness()
                         if not result:
                             continue
-                        if show_windows:
-                            instance.show()
                     elif hasattr(instance, "calculate_fft"):
                         result = instance.calculate_fft()
                         if not result:
                             continue
-                        if show_windows:
-                            instance.show()
                 except ValueError as e:
                     if self._is_channel_mismatch_error(e):
                         self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
@@ -1832,24 +1908,25 @@ class SequenceWidgetAnalysisOpsMixin:
                     raise
 
                 if show_windows:
-                    # Restore last geometry if available; otherwise fallback to default cascade
-                    default_geo = {"x": width, "y": height, "w": 600, "h": 500}
-                    geo = self._get_analysis_window_geometry(instance_key) if instance_key else None
-                    if geo is None:
-                        geo = default_geo
-                        # Persist the default once so next run restores from the same place
-                        if instance_key:
-                            self._set_analysis_window_geometry(instance_key, geo)
-                    instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+                    geo = self._analysis_window_display_geometry(
+                        instance_key,
+                        {"x": width, "y": height, "w": 600, "h": 500},
+                        min_width=300,
+                        min_height=255,
+                    )
                     instance.setMinimumSize(QSize(300, 255))
+                    instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
 
                     # Install event filter to capture move/resize and persist geometry (no close listener)
                     if instance_key:
                         self._analysis_window_key_by_obj[instance] = instance_key
                         instance.installEventFilter(self)
 
+                    instance.show()
                     width += 20
                     height += 20
+                else:
+                    self._hide_analysis_window(instance)
 
             # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
             self._capture_excel_export_cache()
@@ -1956,6 +2033,34 @@ class SequenceWidgetAnalysisOpsMixin:
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"
             self._update_current_recent_session_result(result_label=result_label)
 
+    def _analysis_window_display_geometry(self, key: str, default_geo: dict, min_width: int, min_height: int) -> dict:
+        geo = self._get_analysis_window_geometry(key) if key else None
+        if geo is None:
+            geo = dict(default_geo)
+            if key:
+                self._set_analysis_window_geometry(key, geo)
+            return geo
+
+        try:
+            width = int(geo.get("w", 0))
+            height = int(geo.get("h", 0))
+        except Exception:
+            width = 0
+            height = 0
+        if width < min_width or height < min_height:
+            geo = dict(default_geo)
+            if key:
+                self._set_analysis_window_geometry(key, geo)
+        return geo
+
+    @staticmethod
+    def _hide_analysis_window(instance):
+        try:
+            if instance is not None and instance.isVisible():
+                instance.hide()
+        except Exception:
+            pass
+
     @staticmethod
     def _is_channel_mismatch_error(err: Exception) -> bool:
         msg = str(err or "")
@@ -2022,14 +2127,14 @@ class SequenceWidgetAnalysisOpsMixin:
         summary_key = "__analysis_result_summary__"
         setattr(summary, "_sequence_analysis_key", summary_key)
 
-        # Restore geometry if available; otherwise cascade default near the other windows
-        default_geo = {"x": width, "y": height, "w": 520, "h": 360}
-        geo = self._get_analysis_window_geometry(summary_key)
-        if geo is None:
-            geo = default_geo
-            self._set_analysis_window_geometry(summary_key, geo)
-        summary.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
+        geo = self._analysis_window_display_geometry(
+            summary_key,
+            {"x": width, "y": height, "w": 520, "h": 360},
+            min_width=360,
+            min_height=220,
+        )
         summary.setMinimumSize(QSize(360, 220))
+        summary.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
 
         # Ensure eventFilter is installed once for persistence
         if summary_key:
