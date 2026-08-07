@@ -183,7 +183,9 @@ class RecentSessionPanel(QWidget):
         session_id = str(session_record.get("session_id") or "").strip()
         if not session_id or self.session_table is None:
             return
-        self.session_record_by_id[session_id] = dict(session_record)
+        self.session_record_by_id[session_id] = self._panel_session_record(
+            session_record
+        )
         group_id = self._group_id_for_record(session_record)
         old_group_id = self.group_by_session_id.get(session_id)
         if old_group_id and old_group_id != group_id:
@@ -213,7 +215,6 @@ class RecentSessionPanel(QWidget):
                 if condition_session_id == session_id:
                     group.get("session_ids", {}).pop(condition_key, None)
                     group.get("results", {}).pop(condition_key, None)
-                    group.get("records", {}).pop(condition_key, None)
                     break
         self.row_by_session_id.pop(session_id, None)
         self.group_by_session_id.pop(session_id, None)
@@ -261,7 +262,6 @@ class RecentSessionPanel(QWidget):
             "product_model": session_record.get("product_model") or "-",
             "session_ids": {},
             "results": {},
-            "records": {},
         }
 
     def _merge_session_into_group(self, group: dict[str, Any], session_record: dict[str, Any]) -> None:
@@ -274,9 +274,14 @@ class RecentSessionPanel(QWidget):
         if not condition_key:
             return
         group.setdefault("session_ids", {})[condition_key] = session_id
-        group.setdefault("records", {})[condition_key] = dict(session_record)
         group.setdefault("results", {})[condition_key] = self._normalize_result_value_from_record(session_record)
         self._rebuild_row_indexes()
+
+    @staticmethod
+    def _panel_session_record(session_record: dict[str, Any]) -> dict[str, Any]:
+        panel_record = dict(session_record)
+        panel_record.pop("analysis_report_items", None)
+        return panel_record
 
     def _group_id_for_record(self, session_record: dict[str, Any]) -> str:
         explicit = str(session_record.get("group_id") or "").strip()
@@ -736,7 +741,9 @@ class RecentSessionPanel(QWidget):
             if callable(self.on_play_session):
                 record = self.on_play_session(session_id)
                 if isinstance(record, dict):
-                    self.session_record_by_id[session_id] = dict(record)
+                    self.session_record_by_id[session_id] = self._panel_session_record(
+                        record
+                    )
                     return record
         except Exception:
             pass

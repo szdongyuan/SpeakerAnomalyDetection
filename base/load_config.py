@@ -236,6 +236,24 @@ class LoadUiConfig(object):
         return result
 
     @staticmethod
+    def load_product_test_program_pdf_report_config(config_path: str = None):
+        path = config_path or LoadUiConfig.get_product_test_program_default_config_path()
+        load_code, data = LoadUiConfig.load_data_from_json(path)
+        if load_code != error_code.OK or not isinstance(data, dict):
+            return {"enabled": False, "save_dir": ""}
+
+        config = data.get("pdf_report")
+        if not isinstance(config, dict):
+            return {"enabled": False, "save_dir": ""}
+        save_dir = config.get("save_dir", "")
+        if not isinstance(save_dir, str):
+            save_dir = ""
+        return {
+            "enabled": bool(config.get("enabled", False)),
+            "save_dir": save_dir.strip(),
+        }
+
+    @staticmethod
     def save_sequence_config_to_json(config_data, json_file_path):
         """Save ``config_data`` (the inner analysis_list dict) back to json file using the new format."""
         return LoadUiConfig.save_data_to_json(config_data, json_file_path, 6)

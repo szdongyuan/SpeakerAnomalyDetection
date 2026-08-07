@@ -497,9 +497,18 @@ class SequenceWidgetStreamingOpsMixin:
         old_signature = self._product_condition_signature(
             getattr(self, "product_test_condition_configs", []) or []
         )
+        old_pdf_report_config = dict(
+            getattr(self, "product_test_pdf_report_config", {}) or {}
+        )
         self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
+        self.product_test_pdf_report_config = (
+            LoadUiConfig.load_product_test_program_pdf_report_config(config_path)
+        )
         new_signature = self._product_condition_signature(self.product_test_condition_configs)
         conditions_changed = old_signature != new_signature
+        pdf_report_config_changed = (
+            old_pdf_report_config != self.product_test_pdf_report_config
+        )
         should_clear_history = bool(clear_recent_history) or (
             old_signature and conditions_changed
         )
@@ -511,6 +520,14 @@ class SequenceWidgetStreamingOpsMixin:
             reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
             if callable(reset_manual_product_cycle):
                 reset_manual_product_cycle(clear_waveforms=False)
+        if should_clear_history or pdf_report_config_changed:
+            reset_pdf_tracking = getattr(
+                self,
+                "_reset_product_pdf_report_tracking",
+                None,
+            )
+            if callable(reset_pdf_tracking):
+                reset_pdf_tracking()
         if getattr(self, "left_panel", None) is not None:
             if should_rebuild_condition_views:
                 self.left_panel.set_condition_configs(self.product_test_condition_configs)
@@ -906,6 +923,13 @@ class SequenceWidgetStreamingOpsMixin:
 
         if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
+        shutdown_product_pdf = getattr(
+            self,
+            "_shutdown_product_pdf_exporter",
+            None,
+        )
+        if callable(shutdown_product_pdf):
+            shutdown_product_pdf()
         super().closeEvent(event)
 
     def flush_excel_spool_build(self, *, on_close: bool = False) -> list[tuple[str, str]]:

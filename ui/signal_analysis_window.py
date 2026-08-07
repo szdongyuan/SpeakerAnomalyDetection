@@ -355,6 +355,9 @@ class AnalysisGraphWidget(QWidget):
         self.set_plot_font_size(20)
         self.init_ui()
 
+    def get_report_plot_widgets(self):
+        return [self.analysis_plot]
+
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
 
@@ -1764,6 +1767,16 @@ class Spectrogram(QWidget):
         self.init_ui()
         self.setWindowTitle(title_name)
 
+    def get_report_plot_widgets(self):
+        plot_container = self.current_plot_widget
+        if isinstance(plot_container, pg.PlotWidget):
+            return [plot_container]
+        if plot_container is not None:
+            plot_widget = plot_container.findChild(pg.PlotWidget)
+            if isinstance(plot_widget, pg.PlotWidget):
+                return [plot_widget]
+        return []
+
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.main_layout = QVBoxLayout(self)
@@ -1791,6 +1804,14 @@ class Spectrogram(QWidget):
             l_axis = plot_widget.getAxis("left")
             b_axis.setTickFont(font)
             l_axis.setTickFont(font)
+            b_axis.setStyle(
+                autoExpandTextSpace=False,
+                tickTextHeight=26,
+            )
+            l_axis.setStyle(
+                autoExpandTextSpace=False,
+                tickTextWidth=72,
+            )
             b_axis.setTextPen("black")
             l_axis.setTextPen("black")
             b_axis.setLabel(b_axis.labelText, **{"font-size": "20px"})
@@ -1802,8 +1823,12 @@ class Spectrogram(QWidget):
         if self.stft_colorbar:
             color_bar_axis = self.stft_colorbar.axis
             color_bar_font = QFont()
-            color_bar_font.setPixelSize(20)  # 设置颜色条字体大小为 14px
+            color_bar_font.setPixelSize(20)
             color_bar_axis.setTickFont(color_bar_font)
+            color_bar_axis.setStyle(
+                autoExpandTextSpace=False,
+                tickTextWidth=44,
+            )
             color_bar_axis.setTextPen("black")
             # color_bar_axis.setStyle(tickTextOffset=10)
 
@@ -2791,6 +2816,16 @@ class FftAnalysis(AnalysisGraphWidget):
             "window": window,
             "overlap_ratio": overlap_ratio,
             "x_axis_scale": x_axis_scale,
+            "upper_limits": (
+                np.asarray(upper_limits, dtype=np.float64).tolist()
+                if upper_limits is not None
+                else []
+            ),
+            "lower_limits": (
+                np.asarray(lower_limits, dtype=np.float64).tolist()
+                if lower_limits is not None
+                else []
+            ),
         }
         return self.result
 
@@ -3290,6 +3325,16 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             "overall_weighted_db": analysis_result.overall_weighted_db,
             "weighting": analysis_result.weighting,
             "exceeded_bands": list(analysis_result.exceeded_bands),
+            "upper_limits": (
+                np.asarray(upper_limits, dtype=np.float64).tolist()
+                if upper_limits is not None
+                else []
+            ),
+            "lower_limits": (
+                np.asarray(lower_limits, dtype=np.float64).tolist()
+                if lower_limits is not None
+                else []
+            ),
         }
         return self.result
 
@@ -3551,6 +3596,22 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         self.roughness_plot = None
         self.title_name = title_name
         self.setWindowTitle(title_name)
+
+    def get_report_plot_widgets(self):
+        widgets = super().get_report_plot_widgets()
+        if isinstance(self.specific_loudness_profile_widget, pg.PlotWidget):
+            widgets.append(self.specific_loudness_profile_widget)
+
+        heatmap_container = self.specific_loudness_widget
+        if isinstance(heatmap_container, pg.PlotWidget):
+            heatmap_plot = heatmap_container
+        elif heatmap_container is not None:
+            heatmap_plot = heatmap_container.findChild(pg.PlotWidget)
+        else:
+            heatmap_plot = None
+        if isinstance(heatmap_plot, pg.PlotWidget):
+            widgets.append(heatmap_plot)
+        return widgets
 
     def calculate_loudness(self):
         config = self.analysis_config or {}

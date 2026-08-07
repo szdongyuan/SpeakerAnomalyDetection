@@ -68,6 +68,23 @@ def test_main_window_connects_program_changes_before_opening_dialog():
     assert events == ["connected", "opened", "refreshed"]
 
 
+def test_main_window_shuts_down_product_pdf_exporter_before_exit():
+    shutdown_calls = []
+    window = SimpleNamespace(
+        sequence_window=SimpleNamespace(
+            _shutdown_product_pdf_exporter=lambda: shutdown_calls.append(True)
+        )
+    )
+    shutdown_before_exit = _load_main_window_method(
+        "_shutdown_product_pdf_exporter_before_exit",
+        {},
+    )
+
+    shutdown_before_exit(window)
+
+    assert shutdown_calls == [True]
+
+
 def test_product_program_update_refreshes_selector_and_runtime_conditions():
     events = []
     sequence_window = SimpleNamespace(

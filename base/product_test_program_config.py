@@ -11,6 +11,7 @@ from consts.running_consts import (
 
 PROGRAM_REGISTRY_FILE = "program_registry.json"
 DEFAULT_PROGRAM_NAME = "默认配置"
+PDF_REPORT_CONFIG_KEY = "pdf_report"
 INVALID_CONFIG_NAME_CHARS = '<>:"/\\|?*'
 LIMIT_RULE_ANALYSIS_TYPES = {
     "SPL",
@@ -40,6 +41,15 @@ def normalize_trigger_state(value):
     return " ".join(str(value or "").strip().upper().split())
 
 
+def normalize_pdf_report_config(value):
+    config = value if isinstance(value, dict) else {}
+    save_dir = str(config.get("save_dir", "") or "").strip()
+    return {
+        "enabled": bool(config.get("enabled", False)),
+        "save_dir": os.path.abspath(os.path.normpath(save_dir)) if save_dir else "",
+    }
+
+
 class ProductTestProgramValidator(object):
     @staticmethod
     def validate_for_save(program_data, registry, current_file):
@@ -61,6 +71,16 @@ class ProductTestProgramValidator(object):
         if not isinstance(sub_configs, list):
             errors.append("sub_configs 必须是列表")
             return errors
+
+        pdf_report = program_data.get(PDF_REPORT_CONFIG_KEY)
+        if pdf_report is not None:
+            if not isinstance(pdf_report, dict):
+                errors.append("pdf_report 必须是对象")
+            else:
+                if not isinstance(pdf_report.get("enabled", False), bool):
+                    errors.append("pdf_report.enabled 必须是布尔值")
+                if not isinstance(pdf_report.get("save_dir", ""), str):
+                    errors.append("pdf_report.save_dir 必须是字符串")
 
         condition_names = set()
         trigger_states = set()
@@ -142,7 +162,11 @@ class ProductTestProgramConfigManager(object):
 
     @staticmethod
     def default_program():
-        return {"name": DEFAULT_PROGRAM_NAME, "sub_configs": []}
+        return {
+            "name": DEFAULT_PROGRAM_NAME,
+            PDF_REPORT_CONFIG_KEY: normalize_pdf_report_config(None),
+            "sub_configs": [],
+        }
 
     def load_registry(self):
         load_code, data = LoadUiConfig.load_data_from_json(self.registry_path)
@@ -401,6 +425,9 @@ class ProductTestProgramConfigManager(object):
             )
         return {
             "name": normalize_config_name(program_data.get("name", "")),
+            PDF_REPORT_CONFIG_KEY: normalize_pdf_report_config(
+                program_data.get(PDF_REPORT_CONFIG_KEY)
+            ),
             "sub_configs": normalized_sub_configs,
         }
 

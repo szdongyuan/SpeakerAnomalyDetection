@@ -35,9 +35,15 @@ from base.temp_tcp_client import TempTcpClient
 from consts.running_consts import DEFAULT_DIR
 
 from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
+from ui.sequence.analysis_report_snapshot import build_analysis_report_items
+from ui.sequence.product_condition_result_ops import (
+    SequenceWidgetProductConditionResultOpsMixin,
+)
 
 
-class SequenceWidgetAnalysisOpsMixin:
+class SequenceWidgetAnalysisOpsMixin(
+    SequenceWidgetProductConditionResultOpsMixin
+):
     _RECENT_SESSION_WAITING_TEXT = "等待测试完成"
 
     @classmethod
@@ -297,37 +303,10 @@ class SequenceWidgetAnalysisOpsMixin:
         return "待检测", "pending"
 
     def _manual_product_group_raw_results(self, group_id: str):
-        group_id = str(group_id or "").strip()
-        if not group_id:
+        group = self._collect_product_condition_records(group_id)
+        if not isinstance(group, dict):
             return {}
-
-        results = {}
-        recent_session_panel = getattr(self, "recent_session_panel", None)
-        group_records = getattr(recent_session_panel, "group_records", None)
-        if isinstance(group_records, dict):
-            group = group_records.get(group_id)
-            if isinstance(group, dict) and isinstance(group.get("results"), dict):
-                results.update(group.get("results") or {})
-
-        for record in (getattr(self, "recent_test_session_by_id", {}) or {}).values():
-            if not isinstance(record, dict):
-                continue
-            if str(record.get("group_id") or "").strip() != group_id:
-                continue
-            condition_key = str(record.get("condition_key") or record.get("mode") or "").strip()
-            if not condition_key:
-                continue
-            recorded_signal_info = record.get("recorded_signal_info", {}) or {}
-            label = recorded_signal_info.get("labels") or record.get("result_label")
-            results[condition_key] = label
-
-        if group_id == str(getattr(self, "_manual_product_condition_group_id", "") or "").strip():
-            completed_keys = set(getattr(self, "_manual_product_condition_completed_keys", set()) or set())
-            for condition_key in completed_keys:
-                results.setdefault(condition_key, "not_labeled")
-            results.update(getattr(self, "_manual_product_condition_results", {}) or {})
-
-        return results
+        return dict(group.get("results") or {})
 
     def _refresh_manual_product_condition_results_from_group(self, group_id: str, *, force_display: bool = False) -> bool:
         if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
@@ -387,9 +366,13 @@ class SequenceWidgetAnalysisOpsMixin:
         if not target_group_id or target_group_id != display_group_id:
             return None
 
-        complete, label = self._manual_product_group_result_state(target_group_id)
+        complete, label = self._product_group_result_state(target_group_id)
         if not complete or label not in ("OK", "NG", "not_labeled"):
             return None
+
+        maybe_export_pdf = getattr(self, "_maybe_export_product_test_pdf", None)
+        if callable(maybe_export_pdf):
+            maybe_export_pdf(target_group_id, label)
 
         left_panel = getattr(self, "left_panel", None)
         if left_panel is None:
@@ -781,32 +764,7 @@ class SequenceWidgetAnalysisOpsMixin:
         ]
 
     def _manual_product_group_result_state(self, group_id: str):
-        condition_keys = self._manual_product_condition_keys()
-        if len(condition_keys) < 2:
-            return False, None
-        group_id = str(group_id or "").strip()
-        if not group_id:
-            return False, None
-
-        results = self._manual_product_group_raw_results(group_id)
-
-        normalized_values = []
-        for condition_key in condition_keys:
-            if condition_key not in results:
-                return False, None
-            normalized = self._normalize_recent_session_storage_label(results.get(condition_key))
-            if normalized == "not_labeled":
-                normalized_values.append(normalized)
-                continue
-            if normalized not in ("OK", "NG"):
-                return False, None
-            normalized_values.append(normalized)
-
-        if any(value == "NG" for value in normalized_values):
-            return True, "NG"
-        if any(value == "not_labeled" for value in normalized_values):
-            return True, "not_labeled"
-        return True, "OK" if all(value == "OK" for value in normalized_values) else None
+        return self._product_group_result_state(group_id)
 
     def _manual_product_group_summary_label(self, group_id: str):
         complete, label = self._manual_product_group_result_state(group_id)
@@ -1235,6 +1193,19 @@ class SequenceWidgetAnalysisOpsMixin:
         if not group_id:
             group_id = session_id
 
+        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
+        analysis_config = getattr(self, "analysis_config", {}) or {}
+        display_sequence = (
+            analysis_config.get("display_sequence", [])
+            if isinstance(analysis_config, dict)
+            else []
+        )
+        analysis_report_state = (
+            "pending"
+            if report_config.get("enabled", False) and display_sequence
+            else "not_required"
+        )
+
         return {
             "session_id": session_id,
             "group_id": group_id,
@@ -1249,6 +1220,8 @@ class SequenceWidgetAnalysisOpsMixin:
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
             "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+            "analysis_report_state": analysis_report_state,
+            "analysis_report_items": [],
             "sample_rate": self.data_struct.sample_rate,
             "config_snapshot": self._build_recent_session_config_snapshot(),
         }
@@ -1282,7 +1255,81 @@ class SequenceWidgetAnalysisOpsMixin:
         if self.recent_session_panel is not None:
             self.recent_session_panel.upsert_session(session_record)
         self._refresh_manual_product_condition_results_from_group(session_record.get("group_id"))
-        self._refresh_current_manual_product_final_from_group(session_record.get("group_id"))
+        group_id = session_record.get("group_id")
+        final_label = self._refresh_current_manual_product_final_from_group(
+            group_id
+        )
+        if final_label is None:
+            try_export_pdf = getattr(
+                self,
+                "_try_export_product_test_pdf",
+                None,
+            )
+            if callable(try_export_pdf):
+                try_export_pdf(group_id)
+
+    def _capture_current_analysis_report_snapshot(self, session_id=None):
+        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
+        if not isinstance(report_config, dict) or not report_config.get("enabled", False):
+            return
+
+        session_id = session_id or getattr(self, "_current_recent_session_id", None)
+        if not session_id:
+            return
+
+        try:
+            report_items = build_analysis_report_items(
+                list(getattr(self, "analysis_window", []) or []),
+                getattr(self, "analysis_config", {}) or {},
+                getattr(self.data_struct, "analysis_result_dict", {}) or {},
+            )
+            if not report_items:
+                report_state = "not_required"
+            elif any(item.get("state") == "failed" for item in report_items):
+                report_state = "failed"
+            else:
+                report_state = "completed"
+        except Exception as exc:
+            self.default_logger.error(f"capture_product_pdf_analysis_error: {exc}")
+            self._capture_analysis_report_failure(session_id, exc)
+            return
+
+        self._update_recent_session(
+            session_id,
+            analysis_report_state=report_state,
+            analysis_report_items=report_items,
+            analysis_result_dict=dict(
+                getattr(self.data_struct, "analysis_result_dict", {}) or {}
+            ),
+        )
+
+    def _capture_analysis_report_failure(self, session_id, error):
+        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
+        if not isinstance(report_config, dict) or not report_config.get("enabled", False):
+            return
+        if not session_id:
+            return
+
+        error_text = str(error or "未知分析错误")
+        self._update_recent_session(
+            session_id,
+            analysis_report_state="failed",
+            analysis_report_items=[
+                {
+                    "name": "分析报告",
+                    "type": "",
+                    "state": "failed",
+                    "status": "分析失败",
+                    "deviation": "-",
+                    "error": error_text,
+                    "image_errors": [],
+                    "images": [],
+                }
+            ],
+            analysis_result_dict=dict(
+                getattr(self.data_struct, "analysis_result_dict", {}) or {}
+            ),
+        )
 
     def _update_current_recent_session_result(self, result_label: str):
         session_id = getattr(self, "_current_recent_session_id", None)
@@ -1459,7 +1506,7 @@ class SequenceWidgetAnalysisOpsMixin:
                 sample_rate=session_record.get("sample_rate") or previous_sample_rate or None,
             )
             self.count_board.mode = "view"
-            self.run()
+            self.run(show_windows=True, capture_product_report=False)
         except Exception as e:
             QMessageBox.warning(self, "提示", f"查看近期测试结果失败: {e}")
         finally:
@@ -1830,7 +1877,30 @@ class SequenceWidgetAnalysisOpsMixin:
         # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
         return
 
-    def run(self, show_windows=True):
+    def run(
+        self,
+        show_windows=True,
+        *,
+        report_session_id=None,
+        capture_product_report=True,
+    ):
+        target_session_id = ""
+        if capture_product_report:
+            target_session_id = str(
+                report_session_id
+                or getattr(self, "_current_recent_session_id", "")
+                or ""
+            ).strip()
+        try:
+            return self._run_analysis_impl(
+                show_windows=show_windows,
+                report_session_id=target_session_id,
+            )
+        except Exception as exc:
+            self._capture_analysis_report_failure(target_session_id, exc)
+            raise
+
+    def _run_analysis_impl(self, show_windows=True, *, report_session_id=None):
         """
         Executes the analysis tasks and optionally displays the analysis windows.
 
@@ -1863,22 +1933,32 @@ class SequenceWidgetAnalysisOpsMixin:
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
+                setattr(instance, "_product_report_analysis_state", "running")
+                setattr(instance, "_product_report_analysis_error", "")
                 mismatch_info = getattr(instance, "_channel_mismatch_info", None)
                 if getattr(instance, "_channel_mismatch", False):
+                    setattr(instance, "_product_report_analysis_state", "failed")
+                    setattr(instance, "_product_report_analysis_error", "分析通道与录音通道不匹配")
                     self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
                     continue
                 try:
                     if hasattr(instance, "calculate_reference_spectrum"):
                         result = instance.calculate_reference_spectrum()
                         if not result:
+                            setattr(instance, "_product_report_analysis_state", "failed")
+                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_spl"):
                         result = instance.calculate_spl()
                         if not result:
+                            setattr(instance, "_product_report_analysis_state", "failed")
+                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_fr"):
                         result = instance.calculate_fr()
                         if not result:
+                            setattr(instance, "_product_report_analysis_state", "failed")
+                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_thd"):
                         instance.calculate_thd()
@@ -1899,19 +1979,30 @@ class SequenceWidgetAnalysisOpsMixin:
                     elif hasattr(instance, "calculate_fba"):
                         result = instance.calculate_fba()
                         if not result:
+                            setattr(instance, "_product_report_analysis_state", "failed")
+                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_loudness"):
                         result = instance.calculate_loudness()
                         if not result:
+                            setattr(instance, "_product_report_analysis_state", "failed")
+                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_fft"):
                         result = instance.calculate_fft()
                         if not result:
+                            setattr(instance, "_product_report_analysis_state", "failed")
+                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
+                    setattr(instance, "_product_report_analysis_state", "completed")
                 except ValueError as e:
                     if self._is_channel_mismatch_error(e):
+                        setattr(instance, "_product_report_analysis_state", "failed")
+                        setattr(instance, "_product_report_analysis_error", str(e))
                         self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
                         continue
+                    setattr(instance, "_product_report_analysis_state", "failed")
+                    setattr(instance, "_product_report_analysis_error", str(e))
                     raise
 
                 if show_windows:
@@ -2035,6 +2126,8 @@ class SequenceWidgetAnalysisOpsMixin:
         if show_windows:
             # Show summary window at the end (also in test mode), only if dict is not empty
             self._maybe_show_analysis_result_summary(width, height)
+        if report_session_id:
+            self._capture_current_analysis_report_snapshot(report_session_id)
         current_mode = str(getattr(self.count_board, "mode", "") or "")
         if current_mode not in ("test", "view"):
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"

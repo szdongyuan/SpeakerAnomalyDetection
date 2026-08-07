@@ -95,6 +95,7 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self._current_run_recording_token = ""
         self.last_play_count = None
         self._token_seq = 0
+        self.pdf_export_calls = []
 
     def _load_sequence_config_for_product_condition(self, condition_config):
         self.loaded_queues.append(condition_config["test_queue"])
@@ -111,8 +112,34 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
     def start_this_play(self, label="not_labeled"):
         self.started.append((label, self._active_product_condition_key, self._resolve_recording_name_suffix()))
 
+    def _maybe_export_product_test_pdf(self, group_id, overall_result):
+        self.pdf_export_calls.append((group_id, overall_result))
+
 
 class TestManualProductConditionCycle(unittest.TestCase):
+    def test_manual_and_unified_product_results_share_one_summary(self):
+        widget = _DummyManualCycleWidget()
+        widget._manual_product_condition_group_id = "group-1"
+        widget._manual_product_condition_results = {
+            "q6000": "OK",
+            "q7000": "NG",
+            "q8000": "OK",
+        }
+        widget._manual_product_condition_completed_keys = {
+            "q6000",
+            "q7000",
+            "q8000",
+        }
+
+        self.assertEqual(
+            widget._product_group_result_state("group-1"),
+            (True, "NG"),
+        )
+        self.assertEqual(
+            widget._manual_product_group_result_state("group-1"),
+            (True, "NG"),
+        )
+
     def test_play_button_cycles_through_product_conditions(self):
         widget = _DummyManualCycleWidget()
 
@@ -205,6 +232,51 @@ class TestManualProductConditionCycle(unittest.TestCase):
         widget.on_clicked_player_btn()
         self.assertEqual(widget._update_manual_product_condition_result_after_analysis("OK"), "NG")
         self.assertEqual(widget.left_panel.final_results[-1], ("NG", "ng"))
+        self.assertEqual(widget.pdf_export_calls[-1], ("token_1", "NG"))
+
+    def test_recent_session_update_skips_duplicate_pdf_fallback_after_refresh(self):
+        widget = _DummyManualCycleWidget()
+        widget.recent_session_panel = None
+        widget.recent_test_session_by_id = {
+            "session-1": {"group_id": "group-1"}
+        }
+        refresh_calls = []
+        fallback_calls = []
+        widget._refresh_manual_product_condition_results_from_group = (
+            lambda group_id: None
+        )
+        widget._refresh_current_manual_product_final_from_group = (
+            lambda group_id: refresh_calls.append(group_id) or "OK"
+        )
+        widget._try_export_product_test_pdf = (
+            lambda group_id: fallback_calls.append(group_id)
+        )
+
+        widget._update_recent_session("session-1", result_label="OK")
+
+        self.assertEqual(refresh_calls, ["group-1"])
+        self.assertEqual(fallback_calls, [])
+
+    def test_recent_session_update_uses_pdf_fallback_when_group_is_not_displayed(self):
+        widget = _DummyManualCycleWidget()
+        widget.recent_session_panel = None
+        widget.recent_test_session_by_id = {
+            "session-1": {"group_id": "history-group"}
+        }
+        fallback_calls = []
+        widget._refresh_manual_product_condition_results_from_group = (
+            lambda group_id: None
+        )
+        widget._refresh_current_manual_product_final_from_group = (
+            lambda group_id: None
+        )
+        widget._try_export_product_test_pdf = (
+            lambda group_id: fallback_calls.append(group_id)
+        )
+
+        widget._update_recent_session("session-1", result_label="OK")
+
+        self.assertEqual(fallback_calls, ["history-group"])
 
     def test_left_panel_analysis_details_syncs_runtime_metrics(self):
         widget = _DummyManualCycleWidget()

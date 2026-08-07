@@ -163,8 +163,20 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
         self.data_struct.audio_lenth = 2
         self.data_struct.analysis_result_dict = {"viewed": (True, 0.0)}
 
-    def run(self, show_windows=True):
-        self.run_calls.append(show_windows)
+    def run(
+        self,
+        show_windows=True,
+        *,
+        report_session_id=None,
+        capture_product_report=True,
+    ):
+        self.run_calls.append(
+            {
+                "show_windows": show_windows,
+                "report_session_id": report_session_id,
+                "capture_product_report": capture_product_report,
+            }
+        )
         self.run_analysis_configs.append(copy.deepcopy(self.analysis_config))
         self.run_sequence_configs.append(copy.deepcopy(self.sequence_config))
 
@@ -188,12 +200,21 @@ class TestRecentSessionView(unittest.TestCase):
         widget.analysis_instance.close()
         widget.close()
 
-    def test_view_recent_session_does_not_trigger_second_silent_run(self):
+    def test_view_recent_session_does_not_capture_product_report(self):
         widget = _DummySequenceWidget()
 
         widget._show_recent_session_analysis_by_id("recent_1")
 
-        self.assertEqual(widget.run_calls, [True])
+        self.assertEqual(
+            widget.run_calls,
+            [
+                {
+                    "show_windows": True,
+                    "report_session_id": None,
+                    "capture_product_report": False,
+                }
+            ],
+        )
 
     def test_view_recent_session_uses_recorded_condition_config_snapshot(self):
         widget = _DummySequenceWidget()
@@ -233,6 +254,66 @@ class TestRecentSessionView(unittest.TestCase):
         self.assertEqual(widget.analysis_config, original_analysis_config)
         self.assertEqual(widget.sequence_config, original_sequence_config)
         self.assertEqual(widget.using_config_path, original_using_config_path)
+
+
+class _FailingAnalysisWidget(SequenceWidgetAnalysisOpsMixin):
+    def __init__(self):
+        self.product_test_pdf_report_config = {"enabled": True}
+        self._current_recent_session_id = "recent-current"
+        self.data_struct = SimpleNamespace(analysis_result_dict={})
+        self.updated_sessions = []
+
+    def _run_analysis_impl(self, show_windows=True, *, report_session_id=None):
+        raise RuntimeError("analysis crashed")
+
+    def _update_recent_session(self, session_id, **fields):
+        self.updated_sessions.append((session_id, fields))
+
+
+class _RecentSessionUpdateWidget(SequenceWidgetAnalysisOpsMixin):
+    def __init__(self):
+        self.recent_test_session_by_id = {
+            "recent-single": {
+                "session_id": "recent-single",
+                "group_id": "group-single",
+            }
+        }
+        self.recent_session_panel = None
+        self.pdf_groups = []
+
+    def _refresh_manual_product_condition_results_from_group(self, _group_id):
+        return None
+
+    def _refresh_current_manual_product_final_from_group(self, _group_id):
+        return None
+
+    def _try_export_product_test_pdf(self, group_id):
+        self.pdf_groups.append(group_id)
+
+
+class TestProductReportAnalysisFailure(unittest.TestCase):
+    def test_analysis_exception_marks_target_session_failed_before_propagating(self):
+        widget = _FailingAnalysisWidget()
+
+        with self.assertRaisesRegex(RuntimeError, "analysis crashed"):
+            widget.run(show_windows=False)
+
+        self.assertEqual(len(widget.updated_sessions), 1)
+        session_id, fields = widget.updated_sessions[0]
+        self.assertEqual(session_id, "recent-current")
+        self.assertEqual(fields["analysis_report_state"], "failed")
+        self.assertEqual(fields["analysis_report_items"][0]["state"], "failed")
+        self.assertEqual(fields["analysis_report_items"][0]["error"], "analysis crashed")
+
+    def test_terminal_session_update_uses_pdf_specific_group_evaluation(self):
+        widget = _RecentSessionUpdateWidget()
+
+        widget._update_recent_session(
+            "recent-single",
+            analysis_report_state="completed",
+        )
+
+        self.assertEqual(widget.pdf_groups, ["group-single"])
 
 
 if __name__ == "__main__":

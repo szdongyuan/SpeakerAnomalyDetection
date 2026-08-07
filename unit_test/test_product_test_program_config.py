@@ -23,6 +23,10 @@ def make_manager(tmp_path):
 def make_program(name="默认配置"):
     return {
         "name": name,
+        "pdf_report": {
+            "enabled": False,
+            "save_dir": "",
+        },
         "sub_configs": [
             {
                 "condition_name": "6000 rpm",
@@ -87,6 +91,53 @@ def test_load_condition_configs_makes_duplicate_test_queue_keys_unique(tmp_path)
 
     assert [item["condition_name"] for item in configs] == ["6000", "7000", "8000"]
     assert len({item["key"] for item in configs}) == 3
+
+
+def test_load_pdf_report_config_defaults_to_disabled_for_legacy_program(tmp_path):
+    program_path = tmp_path / "legacy_program.json"
+    assert LoadUiConfig.save_data_to_json(
+        {"name": "legacy", "sub_configs": []},
+        str(program_path),
+    )
+
+    assert LoadUiConfig.load_product_test_program_pdf_report_config(
+        str(program_path)
+    ) == {
+        "enabled": False,
+        "save_dir": "",
+    }
+
+
+def test_save_product_program_normalizes_top_level_pdf_report(tmp_path):
+    manager = make_manager(tmp_path)
+    report_dir = tmp_path / "reports"
+    program = make_program()
+    program["pdf_report"] = {
+        "enabled": True,
+        "save_dir": str(report_dir),
+    }
+
+    success, file_name = manager.save_program(None, program)
+
+    assert success
+    load_code, saved_program = manager.load_program(file_name)
+    assert load_code == error_code.OK
+    assert saved_program["pdf_report"] == {
+        "enabled": True,
+        "save_dir": os.path.abspath(str(report_dir)),
+    }
+
+
+def test_validate_rejects_invalid_pdf_report_shape(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["pdf_report"] = {"enabled": "yes", "save_dir": []}
+
+    validation = manager.validate_program(program, None, {})
+
+    assert not validation["can_save"]
+    assert "pdf_report.enabled 必须是布尔值" in validation["save_errors"]
+    assert "pdf_report.save_dir 必须是字符串" in validation["save_errors"]
 
 
 def test_save_and_load_product_program(tmp_path):
