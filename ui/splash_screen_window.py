@@ -48,6 +48,18 @@ class Splash(QWidget):
         self.prg.setValue(step)
         self.lab.setText(f"{message}... {step}%")
 
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            # Move the window
+            self.move(event.globalPos() - self.drag_position)
+        event.accept()
+
+    def mousePressEvent(self, event):
+        # If the mouse is pressed, record mouse move data, start the window resizing
+        if event.button() == Qt.LeftButton:
+            self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+
 
 class LoaderThread(QObject):
     progress = pyqtSignal(str, int)
