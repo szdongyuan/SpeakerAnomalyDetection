@@ -22,6 +22,7 @@ from ui.sequence.sequence_widget_tcp_ops import SequenceWidgetTcpOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
+from ui.sequence.sequence_widget_product_pdf_ops import SequenceWidgetProductPdfOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 
 
@@ -32,6 +33,7 @@ class SequenceWindow(
     SequenceWidgetSerialTriggerOpsMixin,
     SequenceWidgetAnalysisOpsMixin,
     SequenceWidgetConfigOpsMixin,
+    SequenceWidgetProductPdfOpsMixin,
     SequenceWidgetStreamingOpsMixin,
     QWidget,
 ):
@@ -70,6 +72,9 @@ class SequenceWindow(
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
         self.product_test_condition_configs = self.load_active_product_test_condition_configs()
+        self.product_test_pdf_report_config = self.load_active_product_test_pdf_report_config()
+        self._product_pdf_report_states = {}
+        self._product_pdf_report_paths = {}
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
             condition_configs=self.product_test_condition_configs,

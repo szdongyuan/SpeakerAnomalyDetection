@@ -51,6 +51,11 @@ class SequenceWidgetConfigOpsMixin:
             self._get_active_product_program_path()
         )
 
+    def load_active_product_test_pdf_report_config(self):
+        return LoadUiConfig.load_product_test_program_pdf_report_config(
+            self._get_active_product_program_path()
+        )
+
     def _resolve_sequence_queue_path(self, queue_name):
         queue_name = str(queue_name or "").strip()
         if not queue_name:

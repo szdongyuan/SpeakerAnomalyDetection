@@ -140,6 +140,26 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         self.assertIsInstance(view_btn.graphicsEffect(), QGraphicsOpacityEffect)
         self.assertLessEqual(view_btn.graphicsEffect().opacity(), 0.35)
 
+    def test_panel_group_only_keeps_session_ids_not_analysis_images(self):
+        panel = self._panel()
+        session_record = self._session("recent_1", "01", "OK")
+        session_record["analysis_report_items"] = [
+            {
+                "name": "声压级",
+                "images": [{"png_data": b"large-png-data"}],
+            }
+        ]
+
+        panel.upsert_session(session_record)
+
+        self.assertNotIn(
+            "analysis_report_items",
+            panel.session_record_by_id["recent_1"],
+        )
+        group = panel.group_records["group_1"]
+        self.assertEqual(group["session_ids"], {"01": "recent_1"})
+        self.assertNotIn("records", group)
+
     def test_summary_result_is_ng_when_any_condition_is_ng(self):
         panel = self._panel()
 

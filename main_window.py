@@ -445,6 +445,16 @@ class MainWindow(QMainWindow):
                 # Best-effort: ignore any close errors
                 pass
 
+    def _shutdown_product_pdf_exporter_before_exit(self):
+        sequence_window = getattr(self, "sequence_window", None)
+        shutdown_product_pdf = getattr(
+            sequence_window,
+            "_shutdown_product_pdf_exporter",
+            None,
+        )
+        if callable(shutdown_product_pdf):
+            shutdown_product_pdf()
+
     def closeEvent(self, event):
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
@@ -493,6 +503,7 @@ class MainWindow(QMainWindow):
                 else:
                     break
 
+        self._shutdown_product_pdf_exporter_before_exit()
         event.accept()
 
     def mousepressevent(self, event):
