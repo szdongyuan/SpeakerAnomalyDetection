@@ -68,11 +68,17 @@ class SequenceWidgetStreamingOpsMixin:
         recorded_path = getattr(self, "recorded_path", None) or recorded_signal_info.get("file_path")
         if not recorded_path and not recorded_signal_info:
             return
+        source_type = str(recorded_signal_info.get("source_type") or "").strip()
+        session_id = (
+            ""
+            if source_type == "imported"
+            else str(getattr(self, "_current_recent_session_id", "") or "")
+        )
 
         self._condition_record_cache[key] = {
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
-            "session_id": str(getattr(self, "_current_recent_session_id", "") or ""),
+            "session_id": session_id,
         }
         channel_workspace = getattr(self, "channel_workspace", None)
         if channel_workspace is not None:

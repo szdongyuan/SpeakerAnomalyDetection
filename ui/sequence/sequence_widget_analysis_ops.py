@@ -834,6 +834,21 @@ class SequenceWidgetAnalysisOpsMixin(
         load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
         workflow_enabled = callable(load_condition_config)
 
+        validate_acquisition_modes = getattr(
+            self,
+            "_validate_active_product_program_acquisition_modes",
+            None,
+        )
+        if callable(validate_acquisition_modes):
+            valid, message = validate_acquisition_modes()
+            if not valid:
+                QMessageBox.warning(
+                    self,
+                    "产品测试配置不可用",
+                    message,
+                )
+                return None
+
         conditions = self._product_condition_sequence()
         if not conditions:
             # In motor/product-condition workflow, empty config should block "播放"
@@ -941,11 +956,25 @@ class SequenceWidgetAnalysisOpsMixin(
             return f"_{direction}"
         return ""
 
+    def _current_acquisition_mode(self) -> str:
+        try:
+            return str(
+                self.sequence_config[0]["seq1"]["acq"].get("mode") or ""
+            ).strip().upper()
+        except (AttributeError, IndexError, KeyError, TypeError):
+            return ""
+
+    def _is_import_audio_mode(self) -> bool:
+        return self._current_acquisition_mode() == "IMPORT_AUDIO"
+
     def on_clicked_player_btn(self, label="not_labeled"):
         prepared_product_condition = self._prepare_next_manual_product_condition_recording()
         if prepared_product_condition is None:
             return
         if prepared_product_condition:
+            if self._is_import_audio_mode():
+                self.import_audio_and_analyze()
+                return
             self.clicked_player_flag = True
             self.start_this_play(label)
             return
@@ -959,8 +988,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 "如无可选项，请到【功能-测试队列】中保存或导入配置。",
             )
             return
-        acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
-        if acq_mode == "IMPORT_AUDIO":
+        if self._is_import_audio_mode():
             self.import_audio_and_analyze()
             return
         manual_direction_fallback = getattr(self, "_is_manual_direction_fallback_active", None)
@@ -977,6 +1005,9 @@ class SequenceWidgetAnalysisOpsMixin(
         self.start_this_play(label)
 
     def import_audio_and_analyze(self):
+        if getattr(self, "_record_workflow_busy", False):
+            return False
+        product_condition_key = self._get_active_product_condition_key()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择音频文件",
@@ -984,45 +1015,331 @@ class SequenceWidgetAnalysisOpsMixin(
             "WAV Files (*.wav)",
         )
         if not file_path:
-            return
-        # Ensure subsequent exports (CSV/Excel) use this imported file as the current record id,
-        # instead of accidentally reusing a stale `recorded_path` from previous recordings.
+            if product_condition_key:
+                self._abort_imported_product_condition_step()
+            return False
+
+        self._record_workflow_busy = True
         try:
-            self.recorded_path = file_path
-            self.recorded_signal_info = {"file_path": file_path, "barcode": None, "labels": "not_labeled"}
-        except Exception:
-            pass
-        self._load_audio_file_to_data_struct(file_path)
+            try:
+                audio_mono, target_sample_rate = self._decode_audio_file(
+                    file_path,
+                )
+                self.recorded_path = file_path
+                self.recorded_signal_info = {
+                    "file_path": file_path,
+                    "barcode": None,
+                    "labels": "not_labeled",
+                    "source_type": "imported",
+                }
+                self._apply_audio_to_data_struct(
+                    audio_mono,
+                    target_sample_rate,
+                )
+            except Exception as exc:
+                self._clear_failed_import_audio_state(product_condition_key)
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    f"导入音频失败: {exc}",
+                )
+                return False
 
-        self.data_btn.setEnabled(True)
-        if self.analysis_config.get("auto_analysis"):
-            self.run(show_windows=False)
+            self.data_btn.setEnabled(True)
+            if product_condition_key or self.analysis_config.get("auto_analysis"):
+                try:
+                    self.run(
+                        show_windows=True,
+                        capture_product_report=False,
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(
+                        self,
+                        "提示",
+                        f"音频分析失败: {exc}",
+                    )
+                    return False
+            if product_condition_key:
+                self._capture_imported_product_condition_record()
+                self._complete_imported_product_condition_step()
+            return True
+        finally:
+            self._record_workflow_busy = False
+            self.update_player_btn_is_paused()
 
-    def _load_audio_file_to_data_struct(self, file_path: str, sample_rate: float | None = None):
+    def _decode_audio_file(
+        self,
+        file_path: str,
+        sample_rate: float | None = None,
+        *,
+        mono: bool = True,
+    ):
         if not file_path:
-            raise ValueError("missing audio file path")
+            raise ValueError("未选择音频文件")
 
         target_sample_rate = sample_rate
         if target_sample_rate is None:
-            acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"] if self.sequence_config else {}
+            acq_detail = (
+                self.sequence_config[0]["seq1"]["acq"]["detail"]
+                if self.sequence_config
+                else {}
+            )
             target_sample_rate = acq_detail.get("sample_rate", 44100)
 
-        audio_multi, _ = librosa.load(file_path, sr=target_sample_rate, mono=False)
-        audio_multi = np.asarray(audio_multi, dtype=np.float32)
-        if audio_multi.ndim == 1:
-            audio_multi = audio_multi.reshape(1, -1)
-        audio_multi = audio_multi.T
-        self.data_struct.store_wave_data_multi = audio_multi
-        self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(np.float32, copy=False)
-        self.data_struct.sample_rate = target_sample_rate
-        audio_y, _ = librosa.load(file_path, sr=None)
-        self.data_struct.audio_lenth = len(audio_y)
-        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
-        if callable(clear_all_direction_waveforms):
-            clear_all_direction_waveforms()
+        audio_data, _ = librosa.load(
+            file_path,
+            sr=target_sample_rate,
+            mono=mono,
+        )
+        audio_data = np.asarray(audio_data, dtype=np.float32)
+        if audio_data.size <= 0:
+            raise ValueError("音频文件为空")
+        if mono:
+            audio_data = audio_data.reshape(-1)
         else:
+            if audio_data.ndim == 1:
+                audio_data = audio_data.reshape(1, -1)
+            if audio_data.ndim != 2:
+                raise ValueError(
+                    f"不支持的音频数据维度: {audio_data.shape}"
+                )
+            audio_data = audio_data.T
+        return audio_data, target_sample_rate
+
+    def _apply_audio_to_data_struct(
+        self,
+        audio_data,
+        sample_rate: float,
+    ) -> None:
+        audio_data = np.asarray(audio_data, dtype=np.float32)
+        if audio_data.size <= 0:
+            raise ValueError("音频文件为空")
+        if audio_data.ndim == 1:
+            audio_multi = audio_data.reshape(-1, 1)
+        elif audio_data.ndim == 2:
+            audio_multi = audio_data
+        else:
+            raise ValueError(
+                f"不支持的音频数据维度: {audio_data.shape}"
+            )
+
+        self.data_struct.store_wave_data_multi = audio_multi
+        self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(
+            np.float32,
+            copy=False,
+        )
+        self.data_struct.sample_rate = sample_rate
+        self.data_struct.audio_lenth = int(audio_multi.shape[0])
+        if self._is_import_audio_mode():
+            self._active_input_channels = [0]
+
+        if self._is_manual_product_condition_cycle_active():
             self._clear_plot_area()
-        self.plot_waveform_to_workspace(self.data_struct.store_wave_data_multi, self.data_struct.sample_rate)
+        else:
+            clear_all_direction_waveforms = getattr(
+                self,
+                "clear_all_direction_waveforms",
+                None,
+            )
+            if callable(clear_all_direction_waveforms):
+                clear_all_direction_waveforms()
+            else:
+                self._clear_plot_area()
+        self.plot_waveform_to_workspace(
+            self.data_struct.store_wave_data_multi,
+            self.data_struct.sample_rate,
+        )
+
+    def _load_audio_file_to_data_struct(self, file_path: str, sample_rate: float | None = None):
+        audio_data, target_sample_rate = self._decode_audio_file(
+            file_path,
+            sample_rate=sample_rate,
+            mono=self._is_import_audio_mode(),
+        )
+        self._apply_audio_to_data_struct(
+            audio_data,
+            target_sample_rate,
+        )
+
+    def _capture_imported_product_condition_record(self) -> None:
+        condition_key = self._get_active_product_condition_key()
+        group_id = str(
+            getattr(self, "_manual_product_condition_group_id", "") or ""
+        ).strip()
+        if not condition_key or not group_id:
+            return
+
+        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
+        report_items = []
+        report_state = "not_required"
+        if isinstance(report_config, dict) and report_config.get("enabled", False):
+            report_items = build_analysis_report_items(
+                list(getattr(self, "analysis_window", []) or []),
+                getattr(self, "analysis_config", {}) or {},
+                getattr(self.data_struct, "analysis_result_dict", {}) or {},
+            )
+            if report_items:
+                report_state = (
+                    "failed"
+                    if any(item.get("state") == "failed" for item in report_items)
+                    else "completed"
+                )
+
+        result_label = str(
+            (getattr(self, "_manual_product_condition_results", {}) or {}).get(
+                condition_key
+            )
+            or "not_labeled"
+        )
+        now_dt = datetime.now()
+        lineedit_type = getattr(self, "lineedit_type", None)
+        product_model = (
+            str(lineedit_type.text() or "").strip()
+            if lineedit_type is not None
+            else ""
+        )
+        record_cache = getattr(self, "_condition_record_cache", None)
+        if not isinstance(record_cache, dict):
+            record_cache = {}
+            self._condition_record_cache = record_cache
+        cached = dict(record_cache.get(condition_key) or {})
+        cached.update(
+            {
+                "source_type": "imported",
+                "group_id": group_id,
+                "condition_key": condition_key,
+                "created_at": now_dt.isoformat(timespec="seconds"),
+                "time_text": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "product_model": product_model,
+                "barcode": "",
+                "recorded_path": self.recorded_path,
+                "recorded_signal_info": {
+                    **dict(self.recorded_signal_info or {}),
+                    "labels": result_label,
+                },
+                "result_label": result_label,
+                "sample_rate": self.data_struct.sample_rate,
+                "analysis_result_dict": dict(
+                    getattr(self.data_struct, "analysis_result_dict", {}) or {}
+                ),
+                "analysis_report_state": report_state,
+                "analysis_report_items": report_items,
+                "session_id": "",
+            }
+        )
+        record_cache[condition_key] = cached
+
+    def _complete_imported_product_condition_step(self) -> None:
+        condition_key = self._get_active_product_condition_key()
+        if not condition_key:
+            return
+
+        completed_keys = set(
+            getattr(self, "_manual_product_condition_completed_keys", set())
+            or set()
+        )
+        completed_keys.add(condition_key)
+        self._manual_product_condition_completed_keys = completed_keys
+
+        results = getattr(self, "_manual_product_condition_results", {}) or {}
+        left_panel = getattr(self, "left_panel", None)
+        if condition_key not in results and left_panel is not None:
+            left_panel.set_condition_result(condition_key, "完成", tone="ok")
+
+        group_id = str(
+            getattr(self, "_manual_product_condition_group_id", "") or ""
+        ).strip()
+        condition_keys = set(self._manual_product_condition_keys())
+        if condition_keys and condition_keys.issubset(completed_keys):
+            self._refresh_current_manual_product_final_from_group(
+                group_id,
+                stage_text="本轮完成",
+            )
+
+        self._advance_manual_product_condition_cycle_after_recording()
+        self.data_btn.setEnabled(False)
+        self.replayer_btn.setDisabled(True)
+
+    def _abort_imported_product_condition_step(self) -> None:
+        condition_key = self._get_active_product_condition_key()
+        if condition_key:
+            self._clear_plot_area()
+            results = dict(
+                getattr(self, "_manual_product_condition_results", {}) or {}
+            )
+            results.pop(condition_key, None)
+            self._manual_product_condition_results = results
+            completed_keys = set(
+                getattr(
+                    self,
+                    "_manual_product_condition_completed_keys",
+                    set(),
+                )
+                or set()
+            )
+            completed_keys.discard(condition_key)
+            self._manual_product_condition_completed_keys = completed_keys
+            left_panel = getattr(self, "left_panel", None)
+            if left_panel is not None:
+                left_panel.set_condition_result(
+                    condition_key,
+                    "待检测",
+                    tone="pending",
+                )
+                set_current_stage = getattr(
+                    left_panel,
+                    "set_current_stage",
+                    None,
+                )
+                if callable(set_current_stage):
+                    set_current_stage("", tone="pending")
+        self._active_product_condition_key = ""
+        self._active_product_condition_config = None
+        self._waveform_display_override_direction = ""
+        self._current_trigger_direction = ""
+
+    def _clear_failed_import_audio_state(
+        self,
+        product_condition_key: str,
+    ) -> None:
+        if product_condition_key:
+            self._abort_imported_product_condition_step()
+        else:
+            clear_all_direction_waveforms = getattr(
+                self,
+                "clear_all_direction_waveforms",
+                None,
+            )
+            if callable(clear_all_direction_waveforms):
+                clear_all_direction_waveforms()
+
+        self.recorded_path = None
+        self.recorded_signal_info = {}
+        clear_data = getattr(self.data_struct, "clear_data", None)
+        if callable(clear_data):
+            clear_data()
+        else:
+            self.data_struct.store_wave_data = None
+            self.data_struct.store_wave_data_multi = None
+        self.data_struct.sample_rate = None
+        self.data_struct.audio_lenth = None
+        analysis_results = getattr(
+            self.data_struct,
+            "analysis_result_dict",
+            None,
+        )
+        if isinstance(analysis_results, dict):
+            analysis_results.clear()
+        self._active_input_channels = []
+        close_analysis_windows = getattr(
+            self,
+            "_close_analysis_windows",
+            None,
+        )
+        if callable(close_analysis_windows):
+            close_analysis_windows()
+        self.data_btn.setEnabled(False)
+        self.replayer_btn.setDisabled(True)
 
     def _resolve_recent_session_condition(self, direction: str):
         normalized = str(direction or "").strip().lower()
@@ -1885,7 +2202,7 @@ class SequenceWidgetAnalysisOpsMixin(
         capture_product_report=True,
     ):
         target_session_id = ""
-        if capture_product_report:
+        if capture_product_report and not self._is_import_audio_mode():
             target_session_id = str(
                 report_session_id
                 or getattr(self, "_current_recent_session_id", "")
@@ -2044,6 +2361,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 update_ai_cycle_result = getattr(self, "_update_ai_cycle_result_after_analysis", None)
                 if callable(update_ai_cycle_result) and ai_label in ("OK", "NG"):
                     cycle_final_label = update_ai_cycle_result(ai_label, ai_scores=ai_scores)
+            import_audio_mode = self._is_import_audio_mode()
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 if not can_output:
@@ -2068,7 +2386,11 @@ class SequenceWidgetAnalysisOpsMixin(
                                 "AI 未产出有效评分，本次不写入 OK/NG 结果。\n请检查模型与音频时长是否匹配。",
                             )
                         auto_label = None
-                    if directional_cycle_active and auto_label in ("OK", "NG"):
+                    if (
+                        not import_audio_mode
+                        and directional_cycle_active
+                        and auto_label in ("OK", "NG")
+                    ):
                         # Persist the current directional audio with its own AI label
                         # before the cycle-level forward/reverse summary is decided.
                         persist_current_test_audio_label = getattr(self, "_persist_current_test_audio_label", None)
@@ -2079,11 +2401,21 @@ class SequenceWidgetAnalysisOpsMixin(
                     if directional_cycle_active:
                         auto_label = cycle_final_label
                     if manual_product_cycle_active and auto_label in ("OK", "NG"):
-                        persist_current_test_audio_label = getattr(self, "_persist_current_test_audio_label", None)
-                        if callable(persist_current_test_audio_label):
-                            persist_current_test_audio_label(auto_label, show_error=True)
-                        else:
-                            self._update_current_recent_session_result(auto_label)
+                        if not import_audio_mode:
+                            persist_current_test_audio_label = getattr(
+                                self,
+                                "_persist_current_test_audio_label",
+                                None,
+                            )
+                            if callable(persist_current_test_audio_label):
+                                persist_current_test_audio_label(
+                                    auto_label,
+                                    show_error=True,
+                                )
+                            else:
+                                self._update_current_recent_session_result(
+                                    auto_label
+                                )
                         update_product_condition = getattr(
                             self,
                             "_update_manual_product_condition_result_after_analysis",
@@ -2102,18 +2434,19 @@ class SequenceWidgetAnalysisOpsMixin(
                         # produces the final combined AI judgment.
                         pass
                     else:
-                        try:
-                            self.count_board.set_test_result_file(auto_label)
-                            self.count_board.set_test_text()
-                        except Exception:
-                            pass
+                        if not import_audio_mode:
+                            try:
+                                self.count_board.set_test_result_file(auto_label)
+                                self.count_board.set_test_text()
+                            except Exception:
+                                pass
                         if manual_product_cycle_active:
                             self._awaiting_ok_ng = False
                             self._sn_clear_on_next_scan = False
                             self.data_btn.setEnabled(False)
                             self.replayer_btn.setDisabled(True)
                             self.update_player_btn_is_paused()
-                        else:
+                        elif not import_audio_mode:
                             self._finalize_test_run(
                                 auto_label,
                                 update_recent_session=not directional_cycle_active,
@@ -2129,7 +2462,10 @@ class SequenceWidgetAnalysisOpsMixin(
         if report_session_id:
             self._capture_current_analysis_report_snapshot(report_session_id)
         current_mode = str(getattr(self.count_board, "mode", "") or "")
-        if current_mode not in ("test", "view"):
+        if (
+            not self._is_import_audio_mode()
+            and current_mode not in ("test", "view")
+        ):
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"
             self._update_current_recent_session_result(result_label=result_label)
 
@@ -2480,7 +2816,9 @@ class SequenceWidgetAnalysisOpsMixin(
                     return
 
                 raw_channel = 0
-                if isinstance(params, dict):
+                if self._is_import_audio_mode():
+                    raw_channel = 0
+                elif isinstance(params, dict):
                     raw_channel = params.get("analysis_channel", 0)
                     try:
                         raw_channel = int(raw_channel)
