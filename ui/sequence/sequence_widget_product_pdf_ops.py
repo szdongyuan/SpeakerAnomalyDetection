@@ -432,6 +432,18 @@ class SequenceWidgetProductPdfOpsMixin(
             failures = {}
             self._product_pdf_report_failures = failures
         failures[group_key] = result.message
+        current_group_resolver = getattr(
+            self,
+            "_current_manual_product_display_group_id",
+            None,
+        )
+        current_group_key = (
+            str(current_group_resolver() or "").strip()
+            if callable(current_group_resolver)
+            else ""
+        )
+        if current_group_key and current_group_key != group_key:
+            return None
         left_panel = getattr(self, "left_panel", None)
         set_stage = getattr(left_panel, "set_current_stage", None)
         if callable(set_stage):

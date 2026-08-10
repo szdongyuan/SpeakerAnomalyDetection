@@ -381,6 +381,37 @@ def test_runtime_retries_after_pdf_export_failure(monkeypatch):
     assert host._product_pdf_manual_retry_groups == set()
 
 
+def test_old_group_pdf_failure_only_logs_during_new_round():
+    host = _PdfRuntimeHost()
+    stage_calls = []
+    dialog_calls = []
+    error_logs = []
+    host._product_pdf_report_generation = 0
+    host._current_manual_product_display_group_id = lambda: "group-2"
+    host.left_panel = SimpleNamespace(
+        set_current_stage=lambda *args, **kwargs: stage_calls.append(
+            (args, kwargs)
+        )
+    )
+    host.default_logger = SimpleNamespace(
+        error=lambda message: error_logs.append(message)
+    )
+    host._show_product_pdf_failure_retry = (
+        lambda *args: dialog_calls.append(args)
+    )
+
+    host._handle_product_pdf_export_result(
+        (0, "group-1"),
+        None,
+        ProductPdfExportResult(False, "保存失败"),
+    )
+
+    assert error_logs == ["保存失败"]
+    assert host._product_pdf_report_failures["group-1"] == "保存失败"
+    assert stage_calls == []
+    assert dialog_calls == []
+
+
 def test_failure_dialog_shows_reason_and_retries_without_blocking(monkeypatch):
     app = QApplication.instance() or QApplication([])
     host = _AsyncPdfRuntimeHost()

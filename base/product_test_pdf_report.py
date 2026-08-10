@@ -69,17 +69,21 @@ def resolve_product_pdf_output_path(
         report_data.get("product_model"),
         "unknown_model",
     )
-    product_id = _sanitize_filename_part(
-        report_data.get("barcode") or report_data.get("group_id"),
-        "unknown_product",
-    )
+    barcode = str(report_data.get("barcode") or "").strip()
     test_datetime = _parse_report_datetime(report_data.get("created_at"), now_dt)
     mac_address = _local_mac_address_text()
-    file_name = (
-        f"{product_model}_{product_id}_"
-        f"{test_datetime.strftime('%Y%m%d-%H%M%S')}_"
-        f"{mac_address}.pdf"
+    file_name_parts = [product_model]
+    if barcode:
+        file_name_parts.append(
+            _sanitize_filename_part(barcode, "unknown_product")
+        )
+    file_name_parts.extend(
+        [
+            test_datetime.strftime("%Y%m%d-%H%M%S"),
+            mac_address,
+        ]
     )
+    file_name = "_".join(file_name_parts) + ".pdf"
     os.makedirs(effective_dir, exist_ok=True)
     return os.path.join(effective_dir, file_name)
 
