@@ -42,6 +42,7 @@ def make_queue_config():
         {
             "seq1": {
                 "acq": {
+                    "mode": "RECORD_ONLY",
                     "detail": {
                         "total_time": 5.0,
                         "sample_rate": 44100,
@@ -63,6 +64,17 @@ def make_queue_config():
             }
         }
     ]
+
+
+def make_import_queue_config():
+    config = make_queue_config()
+    config[0]["seq1"]["acq"] = {
+        "mode": "IMPORT_AUDIO",
+        "detail": {
+            "sample_rate": 44100,
+        },
+    }
+    return config
 
 
 def test_save_data_to_json_is_atomic(tmp_path):
@@ -319,11 +331,114 @@ def test_queue_catalog_reads_relative_queue_path(tmp_path):
     catalog = manager.load_queue_catalog()
 
     assert catalog["queue_6000"]["available"]
+    assert catalog["queue_6000"]["acquisition_mode"] == "RECORD_ONLY"
     assert catalog["queue_6000"]["duration"] == 5.0
     assert catalog["queue_6000"]["analysis_items"] == [
         "声压级 (SPL) 1",
         "频谱分析 (Spec) 1",
     ]
+
+
+def test_import_audio_queue_is_available_without_total_time(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_dir = os.path.dirname(manager.queue_registry_path)
+    queue_path = os.path.join(queue_dir, "queue_import.json")
+    assert LoadUiConfig.save_data_to_json(make_import_queue_config(), queue_path)
+    assert LoadUiConfig.save_data_to_json(
+        {
+            "queue_import": "queue_import.json",
+            "using_config_path": queue_path,
+        },
+        manager.queue_registry_path,
+    )
+
+    catalog = manager.load_queue_catalog()
+
+    assert catalog["queue_import"]["available"]
+    assert catalog["queue_import"]["acquisition_mode"] == "IMPORT_AUDIO"
+    assert catalog["queue_import"]["duration"] is None
+    assert catalog["queue_import"]["analysis_items"] == [
+        "声压级 (SPL) 1",
+        "频谱分析 (Spec) 1",
+    ]
+
+
+def test_mixed_import_and_record_queues_are_rejected(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_dir = os.path.dirname(manager.queue_registry_path)
+    record_path = os.path.join(queue_dir, "queue_record.json")
+    import_path = os.path.join(queue_dir, "queue_import.json")
+    assert LoadUiConfig.save_data_to_json(make_queue_config(), record_path)
+    assert LoadUiConfig.save_data_to_json(
+        make_import_queue_config(),
+        import_path,
+    )
+    assert LoadUiConfig.save_data_to_json(
+        {
+            "queue_record": record_path,
+            "queue_import": import_path,
+        },
+        manager.queue_registry_path,
+    )
+    program = make_program("混合采集配置")
+    program["sub_configs"] = [
+        {
+            "condition_name": "6000 rpm",
+            "trigger_state": "01",
+            "test_queue": "queue_record",
+        },
+        {
+            "condition_name": "7000 rpm",
+            "trigger_state": "02",
+            "test_queue": "queue_import",
+        },
+    ]
+
+    validation = manager.validate_program(program, None)
+    success, message = manager.save_program(None, program)
+
+    expected = (
+        "同一产品测试配置不能同时包含导入音频和录制音频工况，"
+        "请统一各工况测试队列的采集模式后重试"
+    )
+    assert not validation["can_save"]
+    assert expected in validation["save_errors"]
+    assert not success
+    assert message == expected
+
+
+def test_all_import_queues_remain_usable(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_dir = os.path.dirname(manager.queue_registry_path)
+    first_path = os.path.join(queue_dir, "queue_import_1.json")
+    second_path = os.path.join(queue_dir, "queue_import_2.json")
+    assert LoadUiConfig.save_data_to_json(make_import_queue_config(), first_path)
+    assert LoadUiConfig.save_data_to_json(make_import_queue_config(), second_path)
+    assert LoadUiConfig.save_data_to_json(
+        {
+            "queue_import_1": first_path,
+            "queue_import_2": second_path,
+        },
+        manager.queue_registry_path,
+    )
+    program = make_program("全导入配置")
+    program["sub_configs"] = [
+        {
+            "condition_name": "6000 rpm",
+            "trigger_state": "01",
+            "test_queue": "queue_import_1",
+        },
+        {
+            "condition_name": "7000 rpm",
+            "trigger_state": "02",
+            "test_queue": "queue_import_2",
+        },
+    ]
+
+    validation = manager.validate_program(program, None)
+
+    assert validation["can_save"]
+    assert validation["is_usable"]
 
 
 def test_queue_catalog_recovers_local_file_from_stale_absolute_path(tmp_path):

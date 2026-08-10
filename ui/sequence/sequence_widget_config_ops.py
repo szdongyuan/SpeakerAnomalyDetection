@@ -51,6 +51,17 @@ class SequenceWidgetConfigOpsMixin:
             self._get_active_product_program_path()
         )
 
+    def _validate_active_product_program_acquisition_modes(self):
+        manager = self._get_product_program_manager()
+        config_path = self._get_active_product_program_path()
+        if not config_path:
+            return True, ""
+        load_code, program_data = LoadUiConfig.load_data_from_json(config_path)
+        if load_code != error_code.OK or not isinstance(program_data, dict):
+            return True, ""
+        errors = manager.validate_acquisition_modes(program_data)
+        return not errors, "\n".join(errors)
+
     def load_active_product_test_pdf_report_config(self):
         return LoadUiConfig.load_product_test_program_pdf_report_config(
             self._get_active_product_program_path()

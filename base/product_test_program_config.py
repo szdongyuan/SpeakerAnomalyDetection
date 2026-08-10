@@ -13,6 +13,10 @@ PROGRAM_REGISTRY_FILE = "program_registry.json"
 DEFAULT_PROGRAM_NAME = "默认配置"
 PDF_REPORT_CONFIG_KEY = "pdf_report"
 INVALID_CONFIG_NAME_CHARS = '<>:"/\\|?*'
+MIXED_ACQUISITION_MODE_ERROR = (
+    "同一产品测试配置不能同时包含导入音频和录制音频工况，"
+    "请统一各工况测试队列的采集模式后重试"
+)
 LIMIT_RULE_ANALYSIS_TYPES = {
     "SPL",
     "SPLF",
@@ -51,6 +55,28 @@ def normalize_pdf_report_config(value):
 
 
 class ProductTestProgramValidator(object):
+    @staticmethod
+    def validate_acquisition_modes(program_data, queue_catalog):
+        acquisition_modes = set()
+        for sub_config in program_data.get("sub_configs", []):
+            if not isinstance(sub_config, dict):
+                continue
+            test_queue = str(
+                sub_config.get("test_queue", "") or ""
+            ).strip()
+            queue_info = queue_catalog.get(test_queue)
+            if not isinstance(queue_info, dict):
+                continue
+            acquisition_mode = str(
+                queue_info.get("acquisition_mode") or ""
+            ).strip().upper()
+            if acquisition_mode in {"IMPORT_AUDIO", "RECORD_ONLY"}:
+                acquisition_modes.add(acquisition_mode)
+
+        if len(acquisition_modes) > 1:
+            return [MIXED_ACQUISITION_MODE_ERROR]
+        return []
+
     @staticmethod
     def validate_for_save(program_data, registry, current_file):
         errors = []
@@ -241,6 +267,10 @@ class ProductTestProgramConfigManager(object):
             registry,
             current_file,
         )
+        if not errors:
+            errors.extend(
+                self.validate_acquisition_modes(program_data)
+            )
         if errors:
             return False, "\n".join(errors)
 
@@ -317,6 +347,14 @@ class ProductTestProgramConfigManager(object):
         name = str(program_data.get("name", "") or "").strip()
         return self.save_as(program_data, name)
 
+    def validate_acquisition_modes(self, program_data, queue_catalog=None):
+        if queue_catalog is None:
+            queue_catalog = self.load_queue_catalog()
+        return ProductTestProgramValidator.validate_acquisition_modes(
+            program_data,
+            queue_catalog,
+        )
+
     def validate_program(self, program_data, current_file, queue_catalog=None):
         registry = self.load_registry()
         if queue_catalog is None:
@@ -326,6 +364,13 @@ class ProductTestProgramConfigManager(object):
             registry,
             current_file,
         )
+        if not save_errors:
+            save_errors.extend(
+                self.validate_acquisition_modes(
+                    program_data,
+                    queue_catalog,
+                )
+            )
         use_errors = list(save_errors)
         if not save_errors:
             use_errors.extend(
@@ -447,6 +492,7 @@ class ProductTestProgramConfigManager(object):
         info = {
             "path": file_path,
             "available": False,
+            "acquisition_mode": "",
             "duration": None,
             "analysis_items": [],
             "reason": "",
@@ -467,15 +513,25 @@ class ProductTestProgramConfigManager(object):
             info["reason"] = "测试队列序列格式错误"
             return info
 
-        acquisition_detail = sequence_data.get("acq", {}).get("detail", {})
+        acquisition = sequence_data.get("acq", {})
+        acquisition_mode = str(
+            acquisition.get("mode") or "RECORD_ONLY"
+        ).strip().upper()
+        info["acquisition_mode"] = acquisition_mode
+        acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
         display_sequence = analysis_list.get("display_sequence", [])
         duration = acquisition_detail.get("total_time")
         sample_rate = acquisition_detail.get("sample_rate")
-        if not isinstance(duration, (int, float)) or duration <= 0:
+        if acquisition_mode == "RECORD_ONLY" and (
+            not isinstance(duration, (int, float)) or duration <= 0
+        ):
             info["reason"] = "录音时长无效"
             return info
-        info["duration"] = duration
+        if acquisition_mode not in {"RECORD_ONLY", "IMPORT_AUDIO"}:
+            info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
+            return info
+        info["duration"] = duration if acquisition_mode == "RECORD_ONLY" else None
         if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
             info["reason"] = "采样率无效"
             return info
