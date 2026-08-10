@@ -169,7 +169,11 @@ class SequenceWidgetBarcodeOpsMixin:
         if not bool(getattr(self, "_sn_locked_for_recording", False)):
             return
         self._sn_locked_for_recording = False
-        if self._is_sn_locked_for_cycle():
+        if (
+            self._is_sn_locked_for_product_round()
+            or self._is_sn_locked_for_cycle()
+        ):
+            self._sync_sn_lock_ui()
             return
         try:
             restore_readonly = bool(getattr(self, "_sn_readonly_before_recording", False))

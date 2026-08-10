@@ -919,6 +919,7 @@ class SequenceWidgetAnalysisOpsMixin(
             self._reset_manual_product_condition_cycle(clear_waveforms=False)
             return
         round_completed = False
+        all_conditions_completed = False
         serial_driven = bool(
             getattr(self, "_serial_product_condition_executing", False)
         )
@@ -940,24 +941,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._manual_product_condition_index = incomplete_indexes[0]
             else:
                 self._manual_product_condition_index = 0
-                close_trigger_state = str(
-                    getattr(self, "product_test_close_trigger_state", "") or ""
-                ).strip()
-                if close_trigger_state:
-                    self._serial_product_waiting_for_close = True
-                    left_panel = getattr(self, "left_panel", None)
-                    if left_panel is not None and hasattr(
-                        left_panel,
-                        "set_current_stage",
-                    ):
-                        left_panel.set_current_stage(
-                            "全部工况完成，等待关闭测试",
-                            tone="ok",
-                        )
-                else:
-                    self._manual_product_condition_group_id = ""
-                    self._current_cycle_recorded_count = None
-                    round_completed = True
+                all_conditions_completed = True
         else:
             try:
                 index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
@@ -966,6 +950,24 @@ class SequenceWidgetAnalysisOpsMixin(
             next_index = (index + 1) % len(conditions)
             self._manual_product_condition_index = next_index
             if next_index == 0:
+                all_conditions_completed = True
+
+        if all_conditions_completed:
+            close_trigger_state = str(
+                getattr(self, "product_test_close_trigger_state", "") or ""
+            ).strip()
+            if serial_driven and close_trigger_state:
+                self._serial_product_waiting_for_close = True
+                left_panel = getattr(self, "left_panel", None)
+                if left_panel is not None and hasattr(
+                    left_panel,
+                    "set_current_stage",
+                ):
+                    left_panel.set_current_stage(
+                        "全部工况完成，等待关闭测试",
+                        tone="ok",
+                    )
+            else:
                 self._manual_product_condition_group_id = ""
                 self._current_cycle_recorded_count = None
                 round_completed = True
@@ -1033,6 +1035,11 @@ class SequenceWidgetAnalysisOpsMixin(
         return self._current_acquisition_mode() == "IMPORT_AUDIO"
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        if bool(getattr(self, "_serial_product_waiting_for_close", False)):
+            self.default_logger.info(
+                "manual_product_play_ignored_waiting_for_close"
+            )
+            return
         prepared_product_condition = self._prepare_next_manual_product_condition_recording()
         if prepared_product_condition is None:
             return

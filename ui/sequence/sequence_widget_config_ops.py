@@ -191,6 +191,22 @@ class SequenceWidgetConfigOpsMixin:
 
                 # 焦点在 S/N 输入框
                 if fw is self.lineedit_s_or_n:
+                    # 产品测试整轮锁定期间，键盘楔入扫码也必须直接忽略。
+                    # QLineEdit 的只读状态只能阻止控件自行修改文本，不能阻止
+                    # 下面的 _sn_clear_on_next_scan 分支主动调用 clear()。
+                    is_product_round_locked = getattr(
+                        self,
+                        "_is_sn_locked_for_product_round",
+                        None,
+                    )
+                    if (
+                        callable(is_product_round_locked)
+                        and is_product_round_locked()
+                        and ch
+                        and ch.isprintable()
+                    ):
+                        return True
+
                     # 循环已进入录音阶段（正转或反转）-> 吞掉任何可打印键盘输入。
                     # 原因：下面的 _sn_clear_on_next_scan 分支会主动调 clear()
                     # 来 "为下一次扫码腾空间"，那条路径绕过 setReadOnly，所以

@@ -351,6 +351,17 @@ def test_production_cycle_waits_for_close_frame_when_configured():
     assert host.left_panel.stages[-1] == ("全部工况完成，等待关闭测试", "ok")
 
 
+def test_manual_play_is_ignored_while_serial_round_waits_for_close():
+    on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
+    host = _SerialProductHost()
+    host._serial_product_waiting_for_close = True
+
+    on_clicked_player_btn(host)
+
+    assert host.loaded_queues == []
+    assert host.started == []
+
+
 def test_explicit_close_finishes_round_and_allows_same_condition_in_new_round():
     host = _SerialProductHost()
     host.product_test_close_trigger_state = FRAME_CLOSE

@@ -1,7 +1,15 @@
 import ast
+import os
 from pathlib import Path
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtWidgets import QApplication, QCheckBox, QLineEdit, QWidget
+
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
+from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
 
 ANALYSIS_OPS_PATH = (
@@ -157,6 +165,8 @@ class _ProductRoundBarcodeHost(SequenceWidgetBarcodeOpsMixin):
         self._current_trigger_direction = "q6000"
         self._current_cycle_recorded_count = "round-1"
         self._serial_product_condition_executing = False
+        self._serial_product_waiting_for_close = False
+        self.product_test_close_trigger_state = ""
         self._sn_locked_for_cycle = False
         self._sn_locked_for_product_round = False
         self._record_workflow_busy = False
@@ -203,6 +213,34 @@ class _ProductRoundBarcodeHost(SequenceWidgetBarcodeOpsMixin):
         return None
 
 
+class _BarcodeEventFilterHost(
+    SequenceWidgetConfigOpsMixin,
+    SequenceWidgetBarcodeOpsMixin,
+    QWidget,
+):
+    def __init__(self):
+        super().__init__()
+        self._analysis_window_key_by_obj = {}
+        self.lineedit_type = QLineEdit(self)
+        self.lineedit_s_or_n = QLineEdit(self)
+        self.lineedit_s_or_n.setText("SN001")
+        self.barcode_scanner_box = QCheckBox(self)
+        self.barcode_scanner_box.setChecked(True)
+        self._hid_mode_active_until = 0.0
+        self._current_trigger_direction = "q6000"
+        self._sn_locked_for_cycle = False
+        self._sn_locked_for_product_round = True
+        self._sync_sn_lock_ui()
+        self._sn_clear_on_next_scan = True
+        self.player_status_flag = False
+        self._barcode_debounce_timer = type(
+            "TimerStub",
+            (),
+            {"stop": lambda self: None},
+        )()
+        self.default_logger = _Logger()
+
+
 def test_product_round_locks_existing_barcode_and_rejects_all_new_scans():
     host = _ProductRoundBarcodeHost("SN001")
 
@@ -224,6 +262,29 @@ def test_product_round_can_lock_an_empty_barcode_and_ignore_mid_round_scan():
 
     assert host.lineedit_s_or_n.isReadOnly()
     assert host.lineedit_s_or_n.text() == ""
+
+
+def test_keyboard_wedge_input_cannot_clear_locked_product_round_barcode():
+    app = QApplication.instance() or QApplication([])
+    host = _BarcodeEventFilterHost()
+    host.show()
+    host.lineedit_s_or_n.setFocus()
+    app.processEvents()
+
+    try:
+        key_event = QKeyEvent(
+            QEvent.KeyPress,
+            Qt.Key_X,
+            Qt.NoModifier,
+            "X",
+        )
+        host.eventFilter(host.lineedit_s_or_n, key_event)
+
+        assert host.lineedit_s_or_n.isReadOnly()
+        assert host.lineedit_s_or_n.text() == "SN001"
+        assert host._sn_clear_on_next_scan is True
+    finally:
+        host.close()
 
 
 def test_product_round_unlocks_and_clears_only_after_last_condition():
@@ -249,6 +310,26 @@ def test_product_round_unlocks_and_clears_only_after_last_condition():
     assert host.lineedit_s_or_n.text() == ""
 
 
+def test_manual_product_round_auto_closes_after_last_condition_even_with_close_trigger():
+    host = _ProductRoundBarcodeHost("SN001")
+    host.product_test_close_trigger_state = "01 04 02 00 00 B9 30"
+    host._reserve_recorded_count_for_run()
+
+    host._advance_manual_product_condition_cycle_after_recording()
+    host._active_product_condition_key = "q7000"
+    host._active_product_condition_config = dict(
+        host.product_test_condition_configs[1]
+    )
+    host._reserve_recorded_count_for_run()
+    host._advance_manual_product_condition_cycle_after_recording()
+
+    assert host._manual_product_condition_index == 0
+    assert host._manual_product_condition_group_id == ""
+    assert host._serial_product_waiting_for_close is False
+    assert not host.lineedit_s_or_n.isReadOnly()
+    assert host.lineedit_s_or_n.text() == ""
+
+
 def test_product_round_reset_unlocks_and_clears_barcode():
     host = _ProductRoundBarcodeHost("SN001")
     host._reserve_recorded_count_for_run()
@@ -266,6 +347,20 @@ def test_direction_unlock_does_not_release_product_round_lock():
 
     host._unlock_sn_for_cycle()
 
+    assert host.lineedit_s_or_n.isReadOnly()
+    assert "产品测试轮次" in host.lineedit_s_or_n.toolTip()
+
+
+def test_recording_unlock_does_not_release_product_round_lock():
+    host = _ProductRoundBarcodeHost("SN001")
+    host._sn_locked_for_recording = True
+    host._sn_readonly_before_recording = False
+    host._sn_tooltip_before_recording = ""
+    host._lock_sn_for_product_round()
+
+    host._unlock_sn_after_recording_if_needed()
+
+    assert host._sn_locked_for_product_round is True
     assert host.lineedit_s_or_n.isReadOnly()
     assert "产品测试轮次" in host.lineedit_s_or_n.toolTip()
 
