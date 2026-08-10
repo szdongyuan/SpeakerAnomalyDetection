@@ -572,13 +572,18 @@ class RecentSessionPanel(QWidget):
         group = self.group_records.get(group_id, {})
         value = self._normalize_result_value((group.get("results", {}) or {}).get(condition_key))
         session_id = str((group.get("session_ids", {}) or {}).get(condition_key) or "")
-        cell_widget = QWidget()
+        cell_widget = QWidget(self.session_table.viewport())
         cell_layout = QHBoxLayout()
         cell_layout.setContentsMargins(2, 0, 2, 0)
         cell_layout.setSpacing(3)
         cell_layout.addWidget(self._create_condition_result_combo(group_id, condition_key, value), 1)
         cell_layout.addWidget(self._create_condition_view_button(session_id), 0, Qt.AlignCenter)
         cell_widget.setLayout(cell_layout)
+        # setCellWidget() makes the container visible before Qt's deferred
+        # table-layout pass. Pre-position it so it cannot paint for one frame
+        # at the viewport origin over the time column.
+        target_index = self.session_table.model().index(row, col)
+        cell_widget.setGeometry(self.session_table.visualRect(target_index))
         self.session_table.setCellWidget(row, col, cell_widget)
 
     def _set_summary_cell(self, row: int, group_id: str):
