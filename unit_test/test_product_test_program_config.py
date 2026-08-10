@@ -205,6 +205,63 @@ def test_save_and_load_product_program(tmp_path):
     }
 
 
+def test_save_as_does_not_switch_existing_active_program(tmp_path):
+    manager = make_manager(tmp_path)
+    success, active_file = manager.save_program(None, make_program())
+    assert success
+
+    success, saved_file = manager.save_as(
+        make_program(),
+        "第二配置",
+    )
+
+    assert success
+    assert saved_file == "第二配置.json"
+    assert manager.load_registry()["active_file"] == active_file
+
+
+def test_save_inactive_program_does_not_switch_active_program(tmp_path):
+    manager = make_manager(tmp_path)
+    success, active_file = manager.save_program(None, make_program())
+    assert success
+    success, inactive_file = manager.save_as(
+        make_program(),
+        "第二配置",
+    )
+    assert success
+
+    updated_program = make_program("第二配置")
+    updated_program["sub_configs"][0]["condition_name"] = "7000 rpm"
+    success, saved_file = manager.save_program(
+        inactive_file,
+        updated_program,
+    )
+
+    assert success
+    assert saved_file == inactive_file
+    assert manager.load_registry()["active_file"] == active_file
+
+
+def test_rename_inactive_program_does_not_switch_active_program(tmp_path):
+    manager = make_manager(tmp_path)
+    success, active_file = manager.save_program(None, make_program())
+    assert success
+    success, inactive_file = manager.save_as(
+        make_program(),
+        "第二配置",
+    )
+    assert success
+
+    success, renamed_file = manager.save_program(
+        inactive_file,
+        make_program("已重命名配置"),
+    )
+
+    assert success
+    assert renamed_file == "已重命名配置.json"
+    assert manager.load_registry()["active_file"] == active_file
+
+
 def test_import_program_copies_external_file_to_program_directory(tmp_path):
     manager = make_manager(tmp_path)
     source_dir = tmp_path / "external_configs"
