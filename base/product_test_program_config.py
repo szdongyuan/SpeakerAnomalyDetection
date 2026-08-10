@@ -293,6 +293,7 @@ class ProductTestProgramConfigManager(object):
             return False, "产品测试程序文件名不合法"
 
         registry = self.load_registry()
+        active_file_before_save = registry.get("active_file")
         errors = ProductTestProgramValidator.validate_for_save(
             program_data,
             registry,
@@ -329,7 +330,8 @@ class ProductTestProgramConfigManager(object):
             target_file,
             normalized_program["name"],
         )
-        registry["active_file"] = target_file
+        if not active_file_before_save or active_file_before_save == current_file:
+            registry["active_file"] = target_file
         if not self.save_registry(registry):
             if current_path and current_path != target_path:
                 try:
