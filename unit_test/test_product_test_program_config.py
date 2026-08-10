@@ -293,6 +293,61 @@ def test_import_program_copies_external_file_to_program_directory(tmp_path):
     }
 
 
+def test_import_program_registers_matching_unregistered_file(tmp_path):
+    manager = make_manager(tmp_path)
+    success, active_file = manager.save_program(None, make_program())
+    assert success
+
+    orphan_program = make_program("模拟4")
+    orphan_path = os.path.join(manager.program_dir, "模拟4.json")
+    assert LoadUiConfig.save_data_to_json(orphan_program, orphan_path)
+
+    success, file_name = manager.import_program(orphan_path)
+
+    assert success
+    assert file_name == "模拟4.json"
+    assert manager.load_registry() == {
+        "active_file": active_file,
+        "configs": [
+            {
+                "file": active_file,
+                "name": "默认配置",
+            },
+            {
+                "file": "模拟4.json",
+                "name": "模拟4",
+            },
+        ],
+    }
+
+
+def test_import_program_rejects_different_unregistered_file(tmp_path):
+    manager = make_manager(tmp_path)
+    assert manager.save_registry({"active_file": None, "configs": []})
+    target_program = make_program("模拟4")
+    target_program["sub_configs"][0]["condition_name"] = "existing condition"
+    target_path = os.path.join(manager.program_dir, "模拟4.json")
+    assert LoadUiConfig.save_data_to_json(target_program, target_path)
+
+    source_dir = tmp_path / "external_configs"
+    source_dir.mkdir()
+    source_path = source_dir / "模拟4.json"
+    source_program = make_program("模拟4")
+    assert LoadUiConfig.save_data_to_json(source_program, str(source_path))
+
+    success, message = manager.import_program(str(source_path))
+
+    assert not success
+    assert message == "同名配置文件已存在但内容不同：模拟4.json"
+    load_code, stored_program = manager.load_program("模拟4.json")
+    assert load_code == error_code.OK
+    assert stored_program == target_program
+    assert manager.load_registry() == {
+        "active_file": None,
+        "configs": [],
+    }
+
+
 def test_import_program_rejects_invalid_sub_config_structure(tmp_path):
     manager = make_manager(tmp_path)
     source_path = tmp_path / "invalid.json"
