@@ -377,8 +377,35 @@ class ProductTestProgramConfigManager(object):
         load_code, program_data = LoadUiConfig.load_data_from_json(source_path)
         if load_code != error_code.OK or not isinstance(program_data, dict):
             return False, "导入文件不是有效的产品测试程序 JSON"
-        name = str(program_data.get("name", "") or "").strip()
-        return self.save_as(program_data, name)
+        name = normalize_config_name(program_data.get("name", ""))
+        target_file = config_file_name(name)
+        target_path = os.path.join(self.program_dir, target_file)
+        if not os.path.exists(target_path):
+            return self.save_as(program_data, name)
+
+        registry = self.load_registry()
+        errors = ProductTestProgramValidator.validate_for_save(
+            program_data,
+            registry,
+            None,
+        )
+        if not errors:
+            errors.extend(self.validate_acquisition_modes(program_data))
+        if errors:
+            return False, "\n".join(errors)
+
+        existing_load_code, existing_program = self.load_program(target_file)
+        if existing_load_code != error_code.OK:
+            return False, f"同名配置文件已存在但无法读取：{target_file}"
+        if existing_program != program_data:
+            return False, f"同名配置文件已存在但内容不同：{target_file}"
+
+        self._replace_registry_entry(registry, None, target_file, name)
+        if not registry.get("active_file"):
+            registry["active_file"] = target_file
+        if not self.save_registry(registry):
+            return False, "配置文件已存在，但注册表更新失败"
+        return True, target_file
 
     def validate_acquisition_modes(self, program_data, queue_catalog=None):
         if queue_catalog is None:
