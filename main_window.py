@@ -286,15 +286,19 @@ class MainWindow(QMainWindow):
         self.sequence_window.on_sequence_config_updated()
 
     def on_product_test_program_config(self):
-        dialog = ProductTestProgramConfigDialog(
-            None,
-            self._open_analysis_model_select,
-            self,
-        )
-        dialog.programs_changed.connect(
-            self.sequence_window.on_product_test_program_updated
-        )
-        dialog.exec()
+        self.sequence_window._product_test_program_config_dialog_open = True
+        try:
+            dialog = ProductTestProgramConfigDialog(
+                None,
+                self._open_analysis_model_select,
+                self,
+            )
+            dialog.programs_changed.connect(
+                self.sequence_window.on_product_test_program_updated
+            )
+            dialog.exec()
+        finally:
+            self.sequence_window._product_test_program_config_dialog_open = False
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size

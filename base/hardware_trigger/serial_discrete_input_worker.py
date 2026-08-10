@@ -7,6 +7,7 @@ except Exception:  # pragma: no cover - import failure is surfaced via status si
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from base.hardware_trigger.serial_full_frame_matcher import SerialFullFrameMatcher
 from base.log_manager import LogManager
 
 # 串口触发调试打印开关: 默认关闭, 避免轮询日志(如"轮询已发送，但当前未收到设备响应")
@@ -18,7 +19,7 @@ class SerialDiscreteInputWorker(QThread):
     sig_state_changed = pyqtSignal(object)
     sig_status = pyqtSignal(object)
 
-    def __init__(self, config):
+    def __init__(self, config, full_frame_candidates=None):
         super().__init__()
         self.config = config or {}
         self.logger = LogManager.set_log_handler("core")
@@ -27,6 +28,12 @@ class SerialDiscreteInputWorker(QThread):
         self.serial_port = None
         self.last_raw_hex = None
         self._last_no_response_log_time = 0.0
+        self._product_full_frame_mode = full_frame_candidates is not None
+        self._full_frame_matcher = (
+            SerialFullFrameMatcher(full_frame_candidates or ())
+            if self._product_full_frame_mode
+            else None
+        )
 
     @staticmethod
     def _debug_print(message):
@@ -79,7 +86,7 @@ class SerialDiscreteInputWorker(QThread):
 
         interval_ms = polling_settings.get("interval_ms", 50)
         query_command_hex = polling_settings.get("query_command_hex", "")
-        decoder_mode = decoder.get("mode", "full_frame")
+        decoder_mode = "full_frame" if self._product_full_frame_mode else decoder.get("mode", "full_frame")
         state_byte_index = int(decoder.get("state_byte_index", 3) or 3)
         self._debug_print(
             f"启动监听: port={port}, baudrate={baudrate}, mode={decoder_mode}, "
@@ -93,14 +100,17 @@ class SerialDiscreteInputWorker(QThread):
             self._emit_status(running=False, connected=False, message=msg, error=msg, mode=decoder_mode)
             return
 
-        try:
-            query_bytes = bytes.fromhex(str(query_command_hex or "").strip())
-        except ValueError as e:
-            msg = f"query_command_hex 配置非法: {e}"
-            self.logger.error(msg)
-            self._debug_print(msg)
-            self._emit_status(running=False, connected=False, message=msg, error=msg, mode=decoder_mode)
-            return
+        if self._product_full_frame_mode:
+            query_bytes = b""
+        else:
+            try:
+                query_bytes = bytes.fromhex(str(query_command_hex or "").strip())
+            except ValueError as e:
+                msg = f"query_command_hex 配置非法: {e}"
+                self.logger.error(msg)
+                self._debug_print(msg)
+                self._emit_status(running=False, connected=False, message=msg, error=msg, mode=decoder_mode)
+                return
 
         try:
             self.serial_port = serial.Serial(
@@ -128,7 +138,8 @@ class SerialDiscreteInputWorker(QThread):
 
         while self._is_running:
             try:
-                self.serial_port.write(query_bytes)
+                if not self._product_full_frame_mode and query_bytes:
+                    self.serial_port.write(query_bytes)
                 time.sleep(interval_ms / 1000.0)
 
                 waiting = getattr(self.serial_port, "in_waiting", 0)
@@ -155,6 +166,31 @@ class SerialDiscreteInputWorker(QThread):
                     continue
 
                 raw_hex = " ".join(f"{b:02X}" for b in received_bytes)
+                if self._product_full_frame_mode:
+                    self.logger.info(
+                        f"serial_product_raw_received raw_hex={raw_hex}"
+                    )
+                    self._emit_status(
+                        running=True,
+                        connected=True,
+                        has_response=True,
+                        message="收到串口主动上报数据",
+                        raw_hex=raw_hex,
+                        value="",
+                        mode="full_frame",
+                    )
+                    for frame_bytes in self._full_frame_matcher.feed(received_bytes):
+                        frame_hex = " ".join(f"{byte:02X}" for byte in frame_bytes)
+                        self.sig_state_changed.emit(
+                            {
+                                "mode": "full_frame",
+                                "value": frame_hex,
+                                "raw_hex": frame_hex,
+                                "product_full_frame": True,
+                            }
+                        )
+                    continue
+
                 state_value = self._extract_state_value(received_bytes, raw_hex, decoder_mode, state_byte_index)
                 if raw_hex != self.last_raw_hex:
                     self._debug_print(f"收到原始帧: raw_hex={raw_hex}, extracted={state_value}")

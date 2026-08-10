@@ -82,6 +82,26 @@ class SequenceWidgetBarcodeOpsMixin:
     def _is_sn_locked_for_cycle(self) -> bool:
         return bool(getattr(self, "_sn_locked_for_cycle", False))
 
+    def _is_sn_locked_for_product_round(self) -> bool:
+        return bool(getattr(self, "_sn_locked_for_product_round", False))
+
+    def _sync_sn_lock_ui(self) -> None:
+        product_round_locked = self._is_sn_locked_for_product_round()
+        directional_cycle_locked = self._is_sn_locked_for_cycle()
+        if product_round_locked:
+            tooltip = "产品测试轮次进行中，条码已锁定，整轮结束后可重新扫码"
+        elif directional_cycle_locked:
+            tooltip = "正反转循环进行中，条码已锁定，循环结束后可重新扫码"
+        else:
+            tooltip = ""
+        try:
+            self.lineedit_s_or_n.setReadOnly(
+                product_round_locked or directional_cycle_locked
+            )
+            self.lineedit_s_or_n.setToolTip(tooltip)
+        except Exception:
+            pass
+
     def _suppress_barcode_commits_temporarily(self, milliseconds: int, reason: str = "") -> None:
         try:
             duration = max(0, int(milliseconds)) / 1000.0
@@ -103,25 +123,36 @@ class SequenceWidgetBarcodeOpsMixin:
         if self._is_sn_locked_for_cycle():
             return
         self._sn_locked_for_cycle = True
-        try:
-            self.lineedit_s_or_n.setReadOnly(True)
-            self.lineedit_s_or_n.setToolTip("正反转循环进行中，条码已锁定，循环结束后可重新扫码")
-        except Exception:
-            pass
+        self._sync_sn_lock_ui()
 
     def _unlock_sn_for_cycle(self) -> None:
         if not self._is_sn_locked_for_cycle():
             return
         self._sn_locked_for_cycle = False
-        try:
-            self.lineedit_s_or_n.setReadOnly(False)
-            self.lineedit_s_or_n.setToolTip("")
-        except Exception:
-            pass
+        self._sync_sn_lock_ui()
+
+    def _lock_sn_for_product_round(self) -> None:
+        if self._is_sn_locked_for_product_round():
+            return
+        self._sn_locked_for_product_round = True
+        self._sync_sn_lock_ui()
+
+    def _unlock_sn_for_product_round(self, clear: bool = False) -> None:
+        if not self._is_sn_locked_for_product_round():
+            return
+        self._sn_locked_for_product_round = False
+        self._sync_sn_lock_ui()
+        if clear:
+            try:
+                self.lineedit_s_or_n.clear()
+            except Exception:
+                pass
 
     def _lock_sn_for_recording_if_needed(self) -> None:
         """Temporarily make S/N read-only while mark-mode recording is active."""
         if not self._is_mark_mode():
+            return
+        if self._is_sn_locked_for_product_round():
             return
         if bool(getattr(self, "_sn_locked_for_recording", False)):
             return
@@ -171,13 +202,15 @@ class SequenceWidgetBarcodeOpsMixin:
                 )
 
             self.lineedit_s_or_n.setEnabled(True)
+            self._sync_sn_lock_ui()
             # The keyboard-wedge path needs S/N to own focus so fast scans
             # land in the right edit box; safe to do for HID/serial too.
-            try:
-                self.lineedit_s_or_n.setFocus()
-                self.lineedit_s_or_n.selectAll()
-            except Exception:
-                pass
+            if not self._is_sn_locked_for_product_round():
+                try:
+                    self.lineedit_s_or_n.setFocus()
+                    self.lineedit_s_or_n.selectAll()
+                except Exception:
+                    pass
             if self.hw_manager.start_scanner_and_sensor_listeners():
                 source = getattr(self.hw_manager, "barcode_source", "hid")
                 self.default_logger.info(
@@ -186,10 +219,12 @@ class SequenceWidgetBarcodeOpsMixin:
             else:
                 self.default_logger.warning("硬件初始化异常，已静默降级为普通键盘输入模式")
         else:
-            # Defensive unlock so the read-only / tooltip from a previous
-            # cycle does not leak across a scanner off->on toggle.
+            # Directional-cycle state follows the scanner listener toggle.
+            # A product round remains locked and keeps its barcode until the
+            # whole round completes or is aborted.
             self._unlock_sn_for_cycle()
-            self.lineedit_s_or_n.clear()
+            if not self._is_sn_locked_for_product_round():
+                self.lineedit_s_or_n.clear()
             self.lineedit_s_or_n.setDisabled(True)
             self.hw_manager.stop_scanner_and_sensor_listeners()
             self.default_logger.info("扫码监听已停止")
@@ -341,16 +376,14 @@ class SequenceWidgetBarcodeOpsMixin:
         self._current_cycle_recorded_count = None
         self._pending_serial_trigger_direction = ""
         self._queued_directional_trigger = ""
-        # Cycle is over from any path (normal finish, mode switch, invalid
-        # recording, manual reset). Always release the S/N lock AND clear
-        # the field so the next cycle starts from a clean state. Clearing an
-        # already-empty QLineEdit is a no-op, which is fine for the normal
-        # test-mode path where _finalize_test_run already cleared it.
+        # The directional cycle is over. Release only its lock; an enclosing
+        # product round still owns the barcode and must keep it unchanged.
         self._unlock_sn_for_cycle()
-        try:
-            self.lineedit_s_or_n.clear()
-        except Exception:
-            pass
+        if not self._is_sn_locked_for_product_round():
+            try:
+                self.lineedit_s_or_n.clear()
+            except Exception:
+                pass
 
     def _reset_ai_cycle_panel_state(self):
         self._ai_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -529,12 +562,15 @@ class SequenceWidgetBarcodeOpsMixin:
             self.hw_manager.sig_barcode.disconnect()
             self.hw_manager.sig_trigger.disconnect()
             self.hw_manager.sig_directional_trigger.disconnect()
+            self.hw_manager.sig_serial_full_frame.disconnect()
             self.hw_manager.sig_serial_trigger_status.disconnect()
         except TypeError:
             pass
         self.hw_manager.sig_barcode.connect(self.on_barcode_received)
         self.hw_manager.sig_trigger.connect(self.on_sensor_triggered)
         self.hw_manager.sig_directional_trigger.connect(self.on_directional_triggered)
+        if hasattr(self, "on_serial_full_frame_received"):
+            self.hw_manager.sig_serial_full_frame.connect(self.on_serial_full_frame_received)
         if hasattr(self, "on_serial_trigger_status_changed"):
             self.hw_manager.sig_serial_trigger_status.connect(self.on_serial_trigger_status_changed)
 
@@ -635,6 +671,15 @@ class SequenceWidgetBarcodeOpsMixin:
             try:
                 self.default_logger.info(
                     "[barcode][ui] _commit_barcode drop: 扫码 checkbox 未启用"
+                )
+            except Exception:
+                pass
+            return
+        if self._is_sn_locked_for_product_round():
+            try:
+                self.default_logger.info(
+                    "S/N 已锁定（产品测试轮次进行中），"
+                    f"忽略新条码: {barcode} (source={source})"
                 )
             except Exception:
                 pass

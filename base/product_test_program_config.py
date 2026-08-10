@@ -1,5 +1,6 @@
 import os
 
+from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.load_config import LoadUiConfig
 from consts import error_code
 from consts.running_consts import (
@@ -12,6 +13,7 @@ from consts.running_consts import (
 PROGRAM_REGISTRY_FILE = "program_registry.json"
 DEFAULT_PROGRAM_NAME = "默认配置"
 PDF_REPORT_CONFIG_KEY = "pdf_report"
+CLOSE_TRIGGER_STATE_KEY = "close_trigger_state"
 INVALID_CONFIG_NAME_CHARS = '<>:"/\\|?*'
 MIXED_ACQUISITION_MODE_ERROR = (
     "同一产品测试配置不能同时包含导入音频和录制音频工况，"
@@ -43,6 +45,16 @@ def config_file_name(config_name):
 
 def normalize_trigger_state(value):
     return " ".join(str(value or "").strip().upper().split())
+
+
+def normalize_optional_hex_frame(value):
+    normalized = normalize_trigger_state(value)
+    if not normalized:
+        return ""
+    try:
+        return normalize_hex_frame(normalized)
+    except ValueError:
+        return normalized
 
 
 def normalize_pdf_report_config(value):
@@ -108,6 +120,18 @@ class ProductTestProgramValidator(object):
                 if not isinstance(pdf_report.get("save_dir", ""), str):
                     errors.append("pdf_report.save_dir 必须是字符串")
 
+        close_trigger_state_value = program_data.get(CLOSE_TRIGGER_STATE_KEY, "")
+        close_trigger_state = ""
+        if not isinstance(close_trigger_state_value, str):
+            errors.append("close_trigger_state 必须是字符串")
+        else:
+            close_trigger_state = normalize_trigger_state(close_trigger_state_value)
+            if close_trigger_state:
+                try:
+                    close_trigger_state = normalize_hex_frame(close_trigger_state)
+                except ValueError as error:
+                    errors.append(f"关闭测试报文格式错误：{error}")
+
         condition_names = set()
         trigger_states = set()
         for index, sub_config in enumerate(sub_configs, 1):
@@ -127,14 +151,20 @@ class ProductTestProgramValidator(object):
                 sub_config.get("trigger_state", "")
             )
             if trigger_state:
-                if trigger_state in trigger_states:
-                    errors.append(f"触发状态重复：{trigger_state}")
+                comparison_trigger_state = normalize_optional_hex_frame(trigger_state)
+                if comparison_trigger_state in trigger_states:
+                    errors.append(f"触发状态重复：{comparison_trigger_state}")
                 else:
-                    trigger_states.add(trigger_state)
+                    trigger_states.add(comparison_trigger_state)
 
             test_queue = sub_config.get("test_queue", "")
             if not isinstance(test_queue, str):
                 errors.append(f"第 {index} 个子配置的测试队列名称格式错误")
+
+        if close_trigger_state and close_trigger_state in trigger_states:
+            errors.append(
+                f"关闭测试报文不能与工况状态报文重复：{close_trigger_state}"
+            )
 
         for item in registry.get("configs", []):
             file_name = str(item.get("file", "") or "")
@@ -190,6 +220,7 @@ class ProductTestProgramConfigManager(object):
     def default_program():
         return {
             "name": DEFAULT_PROGRAM_NAME,
+            CLOSE_TRIGGER_STATE_KEY: "",
             PDF_REPORT_CONFIG_KEY: normalize_pdf_report_config(None),
             "sub_configs": [],
         }
@@ -470,6 +501,9 @@ class ProductTestProgramConfigManager(object):
             )
         return {
             "name": normalize_config_name(program_data.get("name", "")),
+            CLOSE_TRIGGER_STATE_KEY: normalize_optional_hex_frame(
+                program_data.get(CLOSE_TRIGGER_STATE_KEY, "")
+            ),
             PDF_REPORT_CONFIG_KEY: normalize_pdf_report_config(
                 program_data.get(PDF_REPORT_CONFIG_KEY)
             ),

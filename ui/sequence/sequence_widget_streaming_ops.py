@@ -506,12 +506,23 @@ class SequenceWidgetStreamingOpsMixin:
         old_pdf_report_config = dict(
             getattr(self, "product_test_pdf_report_config", {}) or {}
         )
+        old_close_trigger_state = str(
+            getattr(self, "product_test_close_trigger_state", "") or ""
+        ).strip()
         self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
+        self.product_test_close_trigger_state = (
+            LoadUiConfig.load_product_test_program_close_trigger_state(config_path)
+        )
         self.product_test_pdf_report_config = (
             LoadUiConfig.load_product_test_program_pdf_report_config(config_path)
         )
         new_signature = self._product_condition_signature(self.product_test_condition_configs)
-        conditions_changed = old_signature != new_signature
+        close_trigger_state_changed = (
+            old_close_trigger_state != self.product_test_close_trigger_state
+        )
+        conditions_changed = (
+            old_signature != new_signature or close_trigger_state_changed
+        )
         pdf_report_config_changed = (
             old_pdf_report_config != self.product_test_pdf_report_config
         )
@@ -1449,6 +1460,11 @@ class SequenceWidgetStreamingOpsMixin:
                 self.default_logger.info(f"Database save successful: {save_msg}")
             else:
                 self.default_logger.error(f"Database save failed: {save_msg}")
+                serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
+                if callable(serial_runtime_error) and serial_runtime_error(
+                    f"录音结果保存失败: {save_msg}"
+                ):
+                    return
 
             # Clean up streaming state
             self.streaming_processor = None
@@ -1522,6 +1538,14 @@ class SequenceWidgetStreamingOpsMixin:
             if self._should_run_silent_analysis_after_recording():
                 self.run(show_windows=False)
 
+            finalize_serial_condition = getattr(
+                self,
+                "_finalize_serial_product_condition_after_analysis",
+                None,
+            )
+            if callable(finalize_serial_condition) and not finalize_serial_condition():
+                return
+
             advance_manual_product_cycle = getattr(
                 self,
                 "_advance_manual_product_condition_cycle_after_recording",
@@ -1529,6 +1553,13 @@ class SequenceWidgetStreamingOpsMixin:
             )
             if callable(advance_manual_product_cycle):
                 advance_manual_product_cycle()
+            serial_condition_completed = getattr(
+                self,
+                "_on_serial_product_condition_completed",
+                None,
+            )
+            if callable(serial_condition_completed):
+                serial_condition_completed()
             if manual_product_cycle_was_active:
                 self.data_btn.setEnabled(False)
                 self.replayer_btn.setDisabled(True)
@@ -1574,6 +1605,9 @@ class SequenceWidgetStreamingOpsMixin:
                 unlock_sn_after_recording()
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
+            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
+            if callable(serial_runtime_error):
+                serial_runtime_error(f"录音完成处理异常: {e}")
             try:
                 self._reset_barcode_commit_dedup()
             except Exception:
@@ -1617,6 +1651,16 @@ class SequenceWidgetStreamingOpsMixin:
         analysis entirely so the bad audio cannot pollute downstream
         statistics or training data.
         """
+        serial_product_condition_was_executing = bool(
+            getattr(self, "_serial_product_condition_executing", False)
+        )
+        if serial_product_condition_was_executing:
+            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
+            if callable(serial_runtime_error) and serial_runtime_error(
+                f"录音无效: {reason}"
+            ):
+                return
+
         bad_path = str(getattr(self, "recorded_path", "") or "")
         if bad_path:
             try:
@@ -1692,6 +1736,9 @@ class SequenceWidgetStreamingOpsMixin:
         except Exception:
             pass
         self._record_workflow_busy = False
+        if serial_product_condition_was_executing:
+            self._serial_product_condition_executing = False
+            self._serial_product_session_started = False
         try:
             self.update_player_btn_is_paused()
         except Exception:
@@ -1699,7 +1746,11 @@ class SequenceWidgetStreamingOpsMixin:
 
         self.default_logger.warning(f"invalid_recording_discarded reason={reason}")
         try:
-            QMessageBox.warning(self, "录音异常", reason)
+            show_serial_error = getattr(self, "_show_serial_product_error_once", None)
+            if serial_product_condition_was_executing and callable(show_serial_error):
+                show_serial_error()
+            else:
+                QMessageBox.warning(self, "录音异常", reason)
         except Exception:
             pass
 

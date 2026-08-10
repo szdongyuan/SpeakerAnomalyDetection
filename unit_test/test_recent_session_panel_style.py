@@ -128,6 +128,28 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         view_btn.click()
         self.assertEqual(clicked_sessions, ["recent_1"])
 
+    def test_fixture_order_keeps_one_group_and_each_condition_analysis_selectable(self):
+        clicked_sessions = []
+        panel = self._panel(
+            on_view_session=lambda session_id: clicked_sessions.append(session_id)
+        )
+
+        panel.upsert_session(self._session("recent_7000", "02", "OK"))
+        panel.upsert_session(self._session("recent_6000", "01", "NG"))
+
+        self.assertEqual(panel.session_table.rowCount(), 1)
+        self.assertEqual(
+            panel.group_records["group_1"]["session_ids"],
+            {"02": "recent_7000", "01": "recent_6000"},
+        )
+        for column in (3, 4):
+            cell_widget = panel.session_table.cellWidget(0, column)
+            view_btn = cell_widget.layout().itemAt(1).widget()
+            self.assertTrue(view_btn.isEnabled())
+            view_btn.click()
+
+        self.assertEqual(clicked_sessions, ["recent_6000", "recent_7000"])
+
     def test_condition_analysis_button_disabled_without_record(self):
         panel = self._panel()
         panel.upsert_session(self._session("recent_1", "01", "OK"))

@@ -72,6 +72,9 @@ class SequenceWindow(
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
         self.product_test_condition_configs = self.load_active_product_test_condition_configs()
+        self.product_test_close_trigger_state = (
+            self.load_active_product_test_close_trigger_state()
+        )
         self.product_test_pdf_report_config = self.load_active_product_test_pdf_report_config()
         self._product_pdf_report_states = {}
         self._product_pdf_report_paths = {}
@@ -135,6 +138,12 @@ class SequenceWindow(
         self._waveform_display_override_direction = ""
         self._pending_serial_trigger_direction = ""
         self._queued_directional_trigger = ""
+        self._serial_product_condition_executing = False
+        self._serial_product_session_started = False
+        self._serial_product_latched_frame = ""
+        self._serial_product_waiting_for_close = False
+        self._product_test_program_config_dialog_open = False
+        self._serial_product_error_dialog_open = False
         self._barcode_first_char_ts = None
         self._barcode_last_char_ts = None
         # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免"必须点到输入框才生效"）
@@ -149,6 +158,7 @@ class SequenceWindow(
             app.installEventFilter(self)
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
+        self._sn_locked_for_product_round = False
 
         # 条码提交去重机制：防止 HID 模式和键盘楔入模式同时触发导致重复提交
         self._last_committed_barcode = None

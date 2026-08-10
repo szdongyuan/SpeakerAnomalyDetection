@@ -135,6 +135,7 @@ class UnifiedHardwareManager(QObject):
     sig_barcode = pyqtSignal(str)
     sig_trigger = pyqtSignal()
     sig_directional_trigger = pyqtSignal(str)
+    sig_serial_full_frame = pyqtSignal(object)
     sig_serial_trigger_status = pyqtSignal(object)
 
     def __init__(self):
@@ -179,6 +180,7 @@ class UnifiedHardwareManager(QObject):
 
         self.serial_worker = None
         self.serial_config = {}
+        self.serial_full_frame_candidates = None
         self.serial_trigger_armed = True
         self.serial_last_trigger_direction = ""
         self.serial_listener_status = {
@@ -583,7 +585,34 @@ class UnifiedHardwareManager(QObject):
             finally:
                 self.hotkey_registered = False
 
-    def start_serial_discrete_input_listener(self, config_data=None):
+    def start_serial_discrete_input_listener(self, config_data=None, full_frame_candidates=None):
+        normalized_candidates = None
+        if full_frame_candidates is not None:
+            from base.hardware_trigger.serial_full_frame_matcher import normalize_frame_candidates
+
+            try:
+                normalized_candidates = normalize_frame_candidates(full_frame_candidates)
+            except ValueError as error:
+                message = f"产品完整状态报文配置无效: {error}"
+                self._emit_serial_status(
+                    enabled=False,
+                    running=False,
+                    connected=False,
+                    message=message,
+                    error=str(error),
+                )
+                return {"ok": False, "message": message}
+            if not normalized_candidates:
+                message = "当前产品未配置可用的完整状态报文"
+                self._emit_serial_status(
+                    enabled=False,
+                    running=False,
+                    connected=False,
+                    message=message,
+                    error=message,
+                )
+                return {"ok": False, "message": message}
+
         if config_data is not None:
             next_config = LoadUiConfig.normalize_serial_discrete_input_config(config_data)
         else:
@@ -608,7 +637,8 @@ class UnifiedHardwareManager(QObject):
                 self.serial_config or {},
                 SerialDiscreteInputConfigDialog.EDITABLE_PATHS,
             )
-            if not diffs:
+            candidates_changed = normalized_candidates != self.serial_full_frame_candidates
+            if not diffs and not candidates_changed:
                 # No worker restart needed, but still refresh the cached
                 # config so any non-dialog-editable fields edited via
                 # other paths (e.g. state_maps changed on disk and
@@ -624,6 +654,7 @@ class UnifiedHardwareManager(QObject):
             self.stop_serial_discrete_input_listener()
 
         self.serial_config = next_config
+        self.serial_full_frame_candidates = normalized_candidates
 
         if not self.serial_config.get("enabled", False):
             self.serial_trigger_armed = True
@@ -651,7 +682,10 @@ class UnifiedHardwareManager(QObject):
             f"baudrate={serial_settings.get('baudrate', 9600)}, "
             f"mode={decoder.get('mode', 'full_frame')}"
         )
-        self.serial_worker = SerialDiscreteInputWorker(self.serial_config)
+        self.serial_worker = SerialDiscreteInputWorker(
+            self.serial_config,
+            full_frame_candidates=self.serial_full_frame_candidates,
+        )
         self.serial_worker.sig_state_changed.connect(self._on_serial_state_changed)
         self.serial_worker.sig_status.connect(self._on_serial_worker_status)
         self.serial_worker.start()
@@ -712,14 +746,38 @@ class UnifiedHardwareManager(QObject):
                 ser.reset_input_buffer()
             except Exception:
                 pass
-            ser.write(bytes.fromhex(str(polling_settings.get("query_command_hex", "")).strip()))
-            time.sleep(float(polling_settings.get("interval_ms", 50)) / 1000.0)
-            received = ser.read(getattr(ser, "in_waiting", 0))
+            query_bytes = bytes.fromhex(
+                str(polling_settings.get("query_command_hex", "")).strip()
+            )
+            passive_mode = not query_bytes
+            if query_bytes:
+                ser.write(query_bytes)
+                time.sleep(float(polling_settings.get("interval_ms", 50)) / 1000.0)
+                received = ser.read(getattr(ser, "in_waiting", 0))
+            else:
+                received = b""
+                deadline = time.monotonic() + max(
+                    1.0,
+                    float(serial_settings.get("timeout", 0.1) or 0.1),
+                )
+                while time.monotonic() < deadline and not received:
+                    waiting = getattr(ser, "in_waiting", 0)
+                    if waiting > 0:
+                        received = ser.read(waiting)
+                        break
+                    time.sleep(0.02)
             ser.close()
             raw_hex = " ".join(f"{b:02X}" for b in received) if received else ""
             if raw_hex:
                 self._debug_print(f"测试连接收到响应: raw_hex={raw_hex}")
                 return {"ok": True, "message": "测试连接成功", "raw_hex": raw_hex}
+            if passive_mode:
+                self._debug_print("串口已打开，但等待期间未收到主动上报报文")
+                return {
+                    "ok": True,
+                    "message": "串口已打开，但等待期间未收到主动上报报文",
+                    "raw_hex": "",
+                }
             self._debug_print("测试连接成功，但未收到设备响应")
             return {"ok": False, "message": "测试连接成功，但未收到设备响应", "raw_hex": ""}
         except Exception as e:
@@ -782,6 +840,26 @@ class UnifiedHardwareManager(QObject):
         mode = str(payload.get("mode", self.serial_config.get("decoder", {}).get("mode", "full_frame")))
         state_code = str(payload.get("value", "") or "")
         raw_hex = str(payload.get("raw_hex", "") or "")
+        if payload.get("product_full_frame", False):
+            event = {
+                "mode": "full_frame",
+                "value": state_code,
+                "raw_hex": raw_hex,
+                "product_full_frame": True,
+            }
+            self.sig_serial_full_frame.emit(event)
+            self._emit_serial_status(
+                enabled=bool(self.serial_config.get("enabled", False)),
+                mode="full_frame",
+                has_response=bool(raw_hex),
+                raw_hex=raw_hex,
+                value=state_code,
+                action="product_condition",
+                direction="",
+                message=f"收到产品完整状态报文: {state_code}",
+            )
+            return
+
         state_map = (self.serial_config.get("state_maps", {}) or {}).get(mode, {}) or {}
         state_config = state_map.get(state_code)
         self._debug_print(
