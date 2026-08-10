@@ -67,6 +67,11 @@ class SequenceWidgetConfigOpsMixin:
             self._get_active_product_program_path()
         )
 
+    def load_active_product_test_close_trigger_state(self):
+        return LoadUiConfig.load_product_test_program_close_trigger_state(
+            self._get_active_product_program_path()
+        )
+
     def _resolve_sequence_queue_path(self, queue_name):
         queue_name = str(queue_name or "").strip()
         if not queue_name:
@@ -407,6 +412,9 @@ class SequenceWidgetConfigOpsMixin:
         try:
             self.update_using_file_combobox()
             self._sync_product_test_conditions(clear_recent_history=True)
+            refresh_serial_runtime = getattr(self, "refresh_serial_product_trigger_runtime", None)
+            if callable(refresh_serial_runtime):
+                refresh_serial_runtime()
         except Exception as error:
             self.default_logger.warning(
                 f"Failed to refresh product test program after update: {error}"

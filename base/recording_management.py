@@ -208,17 +208,29 @@ class RecordingManager(object):
             return error_code.INVALID_MOVE, err_msg
 
     def delete_audio(self, file_path):
+        raw_path = str(file_path or "").strip()
+        if not raw_path:
+            return error_code.INVALID_PATH, "The file path is empty."
+
+        errors = []
+        if os.path.exists(raw_path):
+            try:
+                os.remove(raw_path)
+            except OSError as error:
+                errors.append(f"file delete failed: {error}")
+
+        delete_condition = {
+            "file_path": self.normalize_audio_path_for_db(raw_path),
+        }
         try:
-            if not os.path.exists(file_path):
-                return error_code.INVALID_PATH, "The file does not exist."
-            os.remove(file_path)
-            delete_condition = {"file_path": file_path}
             with DataSave(self.db_path) as database:
                 database.delete_with_condition("audio_data_table", delete_condition)
-            return error_code.OK, "The file is deleted successfully."
-        except Exception as e:
-            err_msg = "The delete operation failed. %s" % (str(e)[:40])
-            return error_code.INVALID_DELETE, err_msg
+        except Exception as error:
+            errors.append(f"database delete failed: {error}")
+
+        if errors:
+            return error_code.INVALID_DELETE, "; ".join(errors)
+        return error_code.OK, "The file and database record are deleted successfully."
 
     def query_signal_info(self, file_path):
         try:

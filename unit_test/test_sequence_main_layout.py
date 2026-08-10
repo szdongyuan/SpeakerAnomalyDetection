@@ -159,6 +159,9 @@ class _WaveformRefreshWidget(SequenceWidgetStreamingOpsMixin):
     def _apply_condition_mode_to_waveforms(self):
         return None
 
+    def _get_active_product_condition_key(self):
+        return self._active_product_condition_key
+
 
 class _SyncLeftPanel:
     def __init__(self):
@@ -512,6 +515,36 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.plot_waveform_to_workspace([0.0, 0.4], 1.0, direction="01")
 
         self.assertEqual([entry[0] for entry in widget.channel_workspace.direction_data], ["01"])
+
+    def test_active_product_condition_routes_waveform_to_matching_card(self):
+        widget = _WaveformRefreshWidget()
+        widget._active_product_condition_key = "02"
+
+        active_direction = widget._resolve_active_recording_waveform_direction(fallback="")
+        widget.plot_waveform_to_workspace([0.0, 0.7], 1.0, direction=active_direction)
+
+        self.assertEqual(active_direction, "02")
+        self.assertEqual([entry[0] for entry in widget.channel_workspace.direction_data], ["02"])
+        self.assertIn("02", widget._direction_waveform_cache)
+        self.assertNotIn("01", widget._direction_waveform_cache)
+
+    def test_invalid_serial_recording_uses_whole_round_abort(self):
+        calls = []
+
+        class _InvalidRecordingHost:
+            _serial_product_condition_executing = True
+
+            def _on_serial_product_runtime_error(self, reason):
+                calls.append(reason)
+                return True
+
+        SequenceWidgetStreamingOpsMixin._handle_invalid_recording(
+            _InvalidRecordingHost(),
+            "empty audio",
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("empty audio", calls[0])
 
     def test_waveform_panel_resets_old_grid_columns_after_config_switch(self):
         panel = DirectionWaveformPanel(

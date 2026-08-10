@@ -254,6 +254,18 @@ class LoadUiConfig(object):
         }
 
     @staticmethod
+    def load_product_test_program_close_trigger_state(config_path: str = None):
+        path = config_path or LoadUiConfig.get_product_test_program_default_config_path()
+        load_code, data = LoadUiConfig.load_data_from_json(path)
+        if load_code != error_code.OK or not isinstance(data, dict):
+            return ""
+
+        close_trigger_state = data.get("close_trigger_state", "")
+        if not isinstance(close_trigger_state, str):
+            return ""
+        return " ".join(close_trigger_state.strip().upper().split())
+
+    @staticmethod
     def save_sequence_config_to_json(config_data, json_file_path):
         """Save ``config_data`` (the inner analysis_list dict) back to json file using the new format."""
         return LoadUiConfig.save_data_to_json(config_data, json_file_path, 6)

@@ -131,7 +131,24 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     assert config_layout.itemAt(1).widget() is dialog.config_combobox
     assert config_layout.itemAt(2).spacerItem() is not None
     assert config_layout.count() == 3
-    pdf_report_layout = dialog.layout().itemAt(3).layout()
+    close_trigger_layout = dialog.layout().itemAt(3).layout()
+    assert close_trigger_layout.itemAt(0).widget() is dialog.close_trigger_label
+    assert close_trigger_layout.itemAt(1).widget() is dialog.close_trigger_input
+    assert close_trigger_layout.itemAt(2).spacerItem() is not None
+    assert close_trigger_layout.count() == 3
+    assert dialog.close_trigger_label.text() == "关闭测试报文："
+    assert dialog.close_trigger_label.objectName() == ""
+    assert dialog.close_trigger_label.font() == dialog.pdf_report_checkbox.font()
+    assert dialog.close_trigger_label.font() == dialog.pdf_save_dir_label.font()
+    assert dialog.close_trigger_input.minimumWidth() == 360
+    assert dialog.close_trigger_input.maximumWidth() == 520
+    assert dialog.close_trigger_input.placeholderText() == (
+        "例如：01 04 02 00 00 B9 30"
+    )
+    assert dialog.close_trigger_input.toolTip() == (
+        "工装关闭测试按钮对应的完整十六进制报文，需包含CRC。"
+    )
+    pdf_report_layout = dialog.layout().itemAt(4).layout()
     assert pdf_report_layout.itemAt(0).widget() is dialog.pdf_report_checkbox
     assert pdf_report_layout.itemAt(1).spacerItem() is not None
     assert pdf_report_layout.itemAt(2).widget() is dialog.pdf_save_dir_label
@@ -169,7 +186,7 @@ def test_dialog_collects_top_level_pdf_report_config(tmp_path):
     dialog.show()
     app.processEvents()
     collapsed_table_height = dialog.program_table.height()
-    collapsed_report_height = dialog.layout().itemAt(3).layout().geometry().height()
+    collapsed_report_height = dialog.layout().itemAt(4).layout().geometry().height()
 
     report_dir = tmp_path / "reports"
     dialog.pdf_report_checkbox.setChecked(True)
@@ -179,7 +196,7 @@ def test_dialog_collects_top_level_pdf_report_config(tmp_path):
     assert not dialog.pdf_save_dir_label.isHidden()
     assert not dialog.pdf_save_dir_input.isHidden()
     assert dialog.program_table.height() == collapsed_table_height
-    assert dialog.layout().itemAt(3).layout().geometry().height() == (
+    assert dialog.layout().itemAt(4).layout().geometry().height() == (
         collapsed_report_height
     )
     assert dialog.collect_program()["pdf_report"] == {
@@ -327,6 +344,31 @@ def test_manually_edited_trigger_state_is_collected(tmp_path):
         "FE 02 01 02 10 5D"
     )
     dialog._dirty = False
+    dialog.close()
+
+
+def test_dialog_loads_and_collects_close_trigger_state(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    dialog = ProductTestProgramConfigDialog(manager)
+
+    dialog.close_trigger_input.setText("01  04 02 00 00 b9 30")
+    app.processEvents()
+
+    assert dialog.collect_program()["close_trigger_state"] == (
+        "01 04 02 00 00 B9 30"
+    )
+    dialog._show_program(
+        {
+            "name": "关闭测试配置",
+            "close_trigger_state": "AA BB CC DD",
+            "sub_configs": [],
+        },
+        None,
+    )
+    assert dialog.close_trigger_input.text() == "AA BB CC DD"
+    assert not dialog._dirty
     dialog.close()
 
 

@@ -21,7 +21,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.product_test_program_config import (
+    CLOSE_TRIGGER_STATE_KEY,
     DEFAULT_PROGRAM_NAME,
     PDF_REPORT_CONFIG_KEY,
     ProductTestProgramConfigManager,
@@ -55,6 +57,8 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.config_combobox = QComboBox()
         self.config_label = QLabel("配置名称：")
         self.section_title_label = QLabel("工况配置")
+        self.close_trigger_label = QLabel("关闭测试报文：")
+        self.close_trigger_input = QLineEdit()
         self.pdf_report_checkbox = QCheckBox("测试完成后生成 PDF 报告")
         self.pdf_save_dir_label = QLabel("保存目录：")
         self.pdf_save_dir_input = QLineEdit()
@@ -99,12 +103,21 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.pdf_report_checkbox.setMinimumHeight(38)
         self.pdf_save_dir_input.setMinimumHeight(38)
 
+        self.close_trigger_input.setObjectName("productProgramCloseTriggerInput")
+        self.close_trigger_input.setMinimumHeight(38)
+        self.close_trigger_input.setMinimumWidth(360)
+        self.close_trigger_input.setMaximumWidth(520)
+        self.close_trigger_input.setPlaceholderText("例如：01 04 02 00 00 B9 30")
+        self.close_trigger_input.setToolTip(
+            "工装关闭测试按钮对应的完整十六进制报文，需包含CRC。"
+        )
+
         self.program_table.setObjectName("productProgramTable")
         self.program_table.setHorizontalHeaderLabels(
             [
                 "序号",
                 "工况名称",
-                "触发状态",
+                "完整状态报文（HEX）",
                 "测试队列配置",
                 "录音时长",
                 "分析内容",
@@ -187,6 +200,13 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         pdf_report_layout.addWidget(self.pdf_save_dir_label)
         pdf_report_layout.addWidget(self.pdf_save_dir_input, 1)
 
+        close_trigger_layout = QHBoxLayout()
+        close_trigger_layout.setContentsMargins(0, 8, 0, 0)
+        close_trigger_layout.setSpacing(10)
+        close_trigger_layout.addWidget(self.close_trigger_label)
+        close_trigger_layout.addWidget(self.close_trigger_input, 1)
+        close_trigger_layout.addStretch(1)
+
         footer_separator = QFrame()
         footer_separator.setObjectName("productProgramFooterSeparator")
         footer_separator.setFrameShape(QFrame.HLine)
@@ -198,6 +218,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         layout.addLayout(config_layout)
         layout.addLayout(table_button_layout)
         layout.addWidget(self.program_table, 1)
+        layout.addLayout(close_trigger_layout)
         layout.addLayout(pdf_report_layout)
         layout.addWidget(footer_separator)
         layout.addLayout(bottom_button_layout)
@@ -219,6 +240,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.pdf_report_checkbox.toggled.connect(
             self._on_pdf_report_enabled_changed
         )
+        self.close_trigger_input.textEdited.connect(self._on_program_changed)
         self.pdf_save_dir_input.textChanged.connect(
             self._on_pdf_save_dir_changed
         )
@@ -260,6 +282,9 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             program_data.get("name", DEFAULT_PROGRAM_NAME) or ""
         )
         self._refresh_config_selector(program_data.get("name", DEFAULT_PROGRAM_NAME))
+        self.close_trigger_input.setText(
+            normalize_trigger_state(program_data.get(CLOSE_TRIGGER_STATE_KEY, ""))
+        )
         pdf_report = normalize_pdf_report_config(
             program_data.get(PDF_REPORT_CONFIG_KEY)
         )
@@ -324,9 +349,16 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
     def _create_trigger_combobox(self, current_state):
         combobox = QComboBox()
         combobox.setEditable(True)
+        combobox.setToolTip(
+            "请输入工装主动上报的完整十六进制报文，包含 CRC，例如 FE 02 01 03 D1 9D"
+        )
         combobox.addItem(NO_TRIGGER_TEXT, "")
         for state_code in self.trigger_states:
-            combobox.addItem(state_code, state_code)
+            try:
+                full_frame = normalize_hex_frame(state_code)
+            except ValueError:
+                continue
+            combobox.addItem(full_frame, full_frame)
         if current_state and combobox.findData(current_state) < 0:
             combobox.addItem(current_state, current_state)
         selected_index = combobox.findData(current_state)
@@ -657,12 +689,25 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             )
         return {
             "name": str(self.config_combobox.currentText() or "").strip(),
+            CLOSE_TRIGGER_STATE_KEY: self._normalize_trigger_input(
+                self.close_trigger_input.text()
+            ),
             PDF_REPORT_CONFIG_KEY: {
                 "enabled": bool(self.pdf_report_checkbox.isChecked()),
                 "save_dir": str(self.pdf_save_dir_input.text() or "").strip(),
             },
             "sub_configs": sub_configs,
         }
+
+    @staticmethod
+    def _normalize_trigger_input(value):
+        normalized = normalize_trigger_state(value)
+        if not normalized:
+            return ""
+        try:
+            return normalize_hex_frame(normalized)
+        except ValueError:
+            return normalized
 
     @staticmethod
     def _combobox_value(combobox):
@@ -683,10 +728,15 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             current_index >= 0
             and current_text == combobox.itemText(current_index)
         ):
-            return normalize_trigger_state(
-                combobox.itemData(current_index)
-            )
-        return normalize_trigger_state(current_text)
+            value = normalize_trigger_state(combobox.itemData(current_index))
+        else:
+            value = normalize_trigger_state(current_text)
+        if not value:
+            return ""
+        try:
+            return normalize_hex_frame(value)
+        except ValueError:
+            return value
 
     def _update_row_summary(self, row):
         if row < 0 or row >= self.program_table.rowCount():

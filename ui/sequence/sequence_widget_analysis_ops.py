@@ -206,6 +206,13 @@ class SequenceWidgetAnalysisOpsMixin(
         return f"_{safe_name}" if safe_name else ""
 
     def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
+        unlock_product_round_barcode = getattr(
+            self,
+            "_unlock_sn_for_product_round",
+            None,
+        )
+        if callable(unlock_product_round_barcode):
+            unlock_product_round_barcode(clear=True)
         self._manual_product_condition_index = 0
         self._manual_product_condition_group_id = ""
         self._displayed_manual_product_condition_group_id = ""
@@ -216,6 +223,7 @@ class SequenceWidgetAnalysisOpsMixin(
         self._active_product_condition_config = None
         self._waveform_display_override_direction = ""
         self._current_cycle_recorded_count = None
+        self._serial_product_waiting_for_close = False
         if clear_waveforms:
             clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
             if callable(clear_all_direction_waveforms):
@@ -875,7 +883,7 @@ class SequenceWidgetAnalysisOpsMixin(
             return None
 
         group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
-        if index == 0 or not group_id:
+        if not group_id:
             group_id = self._generate_recording_token()
             self._manual_product_condition_group_id = group_id
             self._displayed_manual_product_condition_group_id = group_id
@@ -910,19 +918,69 @@ class SequenceWidgetAnalysisOpsMixin(
         if not conditions:
             self._reset_manual_product_condition_cycle(clear_waveforms=False)
             return
-        try:
-            index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
-        except (TypeError, ValueError):
-            index = 0
-        next_index = (index + 1) % len(conditions)
-        self._manual_product_condition_index = next_index
-        if next_index == 0:
-            self._manual_product_condition_group_id = ""
-            self._current_cycle_recorded_count = None
+        round_completed = False
+        serial_driven = bool(
+            getattr(self, "_serial_product_condition_executing", False)
+        )
+        if serial_driven:
+            completed_keys = set(
+                getattr(self, "_manual_product_condition_completed_keys", set())
+                or set()
+            )
+            indexed_keys = [
+                (index, self._product_condition_runtime_key(condition, index))
+                for index, condition in enumerate(conditions)
+            ]
+            incomplete_indexes = [
+                index
+                for index, condition_key in indexed_keys
+                if condition_key not in completed_keys
+            ]
+            if incomplete_indexes:
+                self._manual_product_condition_index = incomplete_indexes[0]
+            else:
+                self._manual_product_condition_index = 0
+                close_trigger_state = str(
+                    getattr(self, "product_test_close_trigger_state", "") or ""
+                ).strip()
+                if close_trigger_state:
+                    self._serial_product_waiting_for_close = True
+                    left_panel = getattr(self, "left_panel", None)
+                    if left_panel is not None and hasattr(
+                        left_panel,
+                        "set_current_stage",
+                    ):
+                        left_panel.set_current_stage(
+                            "全部工况完成，等待关闭测试",
+                            tone="ok",
+                        )
+                else:
+                    self._manual_product_condition_group_id = ""
+                    self._current_cycle_recorded_count = None
+                    round_completed = True
+        else:
+            try:
+                index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
+            except (TypeError, ValueError):
+                index = 0
+            next_index = (index + 1) % len(conditions)
+            self._manual_product_condition_index = next_index
+            if next_index == 0:
+                self._manual_product_condition_group_id = ""
+                self._current_cycle_recorded_count = None
+                round_completed = True
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
         self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
+        if round_completed:
+            unlock_product_round_barcode = getattr(
+                self,
+                "_unlock_sn_for_product_round",
+                None,
+            )
+            if callable(unlock_product_round_barcode):
+                unlock_product_round_barcode(clear=True)
 
     def _reserve_recorded_count_for_run(self) -> str:
         if self._is_manual_product_condition_cycle_active():
@@ -930,6 +988,13 @@ class SequenceWidgetAnalysisOpsMixin(
             if not cycle_token:
                 cycle_token = self._generate_recording_token()
                 self._manual_product_condition_group_id = cycle_token
+            lock_product_round_barcode = getattr(
+                self,
+                "_lock_sn_for_product_round",
+                None,
+            )
+            if callable(lock_product_round_barcode):
+                lock_product_round_barcode()
             self._current_cycle_recorded_count = cycle_token
             self.last_play_count = cycle_token
             return cycle_token
@@ -1703,6 +1768,13 @@ class SequenceWidgetAnalysisOpsMixin(
     def _begin_recent_session_for_current_run(self):
         self._current_recent_session_id = None
         self._append_recent_session_from_current_run(self._RECENT_SESSION_WAITING_TEXT)
+        serial_session_started = getattr(
+            self,
+            "_on_serial_product_recent_session_started",
+            None,
+        )
+        if callable(serial_session_started):
+            serial_session_started()
 
     def _resolve_recent_session(self, session_id: str):
         return self.recent_test_session_by_id.get(session_id)
@@ -2152,7 +2224,13 @@ class SequenceWidgetAnalysisOpsMixin(
             drain = getattr(self, "_drain_queued_directional_trigger", None)
             if callable(drain):
                 drain()
-            QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
+            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
+            handled = bool(
+                callable(serial_runtime_error)
+                and serial_runtime_error(f"初始化录音失败: {e}")
+            )
+            if not handled:
+                QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
 
         if not self._should_use_streaming_recording():
@@ -2187,7 +2265,13 @@ class SequenceWidgetAnalysisOpsMixin(
             drain = getattr(self, "_drain_queued_directional_trigger", None)
             if callable(drain):
                 drain()
-            QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
+            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
+            handled = bool(
+                callable(serial_runtime_error)
+                and serial_runtime_error(f"启动录音失败: {e}")
+            )
+            if not handled:
+                QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
             return
 
         # Return immediately - completion will be handled by _on_streaming_complete()

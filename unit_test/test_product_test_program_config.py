@@ -23,6 +23,7 @@ def make_manager(tmp_path):
 def make_program(name="默认配置"):
     return {
         "name": name,
+        "close_trigger_state": "",
         "pdf_report": {
             "enabled": False,
             "save_dir": "",
@@ -118,6 +119,37 @@ def test_load_pdf_report_config_defaults_to_disabled_for_legacy_program(tmp_path
         "enabled": False,
         "save_dir": "",
     }
+
+
+def test_load_close_trigger_state_defaults_to_empty_for_legacy_program(tmp_path):
+    program_path = tmp_path / "legacy_program.json"
+    assert LoadUiConfig.save_data_to_json(
+        {"name": "legacy", "sub_configs": []},
+        str(program_path),
+    )
+
+    assert (
+        LoadUiConfig.load_product_test_program_close_trigger_state(
+            str(program_path)
+        )
+        == ""
+    )
+
+
+def test_save_product_program_normalizes_close_trigger_state(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["close_trigger_state"] = "0104020000b930"
+
+    success, file_name = manager.save_program(None, program)
+
+    assert success
+    load_code, saved_program = manager.load_program(file_name)
+    assert load_code == error_code.OK
+    assert saved_program["close_trigger_state"] == "01 04 02 00 00 B9 30"
+    assert LoadUiConfig.load_product_test_program_close_trigger_state(
+        os.path.join(manager.program_dir, file_name)
+    ) == "01 04 02 00 00 B9 30"
 
 
 def test_save_product_program_normalizes_top_level_pdf_report(tmp_path):
@@ -299,6 +331,29 @@ def test_validate_rejects_duplicate_condition_and_trigger(tmp_path):
     assert not result["can_save"]
     assert "工况名称重复：6000 rpm" in result["save_errors"]
     assert "触发状态重复：01" in result["save_errors"]
+
+
+def test_validate_rejects_invalid_or_conflicting_close_trigger_state(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["sub_configs"][0]["trigger_state"] = "01 04 02 00 01 78 F0"
+    program["close_trigger_state"] = "010402000178f0"
+
+    conflict_result = manager.validate_program(program, None)
+
+    assert not conflict_result["can_save"]
+    assert (
+        "关闭测试报文不能与工况状态报文重复：01 04 02 00 01 78 F0"
+        in conflict_result["save_errors"]
+    )
+
+    program["close_trigger_state"] = "01"
+    invalid_result = manager.validate_program(program, None)
+    assert not invalid_result["can_save"]
+    assert any(
+        error.startswith("关闭测试报文格式错误：")
+        for error in invalid_result["save_errors"]
+    )
 
 
 def test_incomplete_program_can_save_but_is_not_usable(tmp_path):
