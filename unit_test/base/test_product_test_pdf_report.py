@@ -149,6 +149,30 @@ def test_resolve_product_pdf_output_path_uses_product_identity(
     )
 
 
+def test_resolve_product_pdf_output_path_omits_internal_group_without_sn(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "base.product_test_pdf_report._local_mac_address_text",
+        lambda: "001122AABBCC",
+    )
+    report_data = make_report_data()
+    report_data["barcode"] = ""
+    report_data["group_id"] = "152415080843"
+
+    output_path = resolve_product_pdf_output_path(
+        {"enabled": True, "save_dir": str(tmp_path)},
+        report_data,
+        now_dt=datetime(2026, 8, 6, 11, 0, 0),
+    )
+
+    assert output_path == os.path.join(
+        str(tmp_path),
+        "S004-1_20260806-103020_001122AABBCC.pdf",
+    )
+
+
 def test_product_report_signature_changes_when_condition_result_changes():
     report_data = make_report_data()
     first_signature = product_report_signature(report_data)
