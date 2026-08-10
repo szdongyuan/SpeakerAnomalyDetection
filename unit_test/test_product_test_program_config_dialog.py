@@ -431,7 +431,7 @@ def test_clear_preserves_current_config_name(tmp_path):
     dialog.close()
 
 
-def test_save_as_reports_incomplete_configuration(tmp_path, monkeypatch):
+def test_save_as_rejects_configuration_without_test_queue(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     manager = make_manager(tmp_path)
     dialog = ProductTestProgramConfigDialog(manager)
@@ -445,23 +445,22 @@ def test_save_as_reports_incomplete_configuration(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         QMessageBox,
-        "information",
-        lambda _parent, _title, message: messages.append(message),
+        "warning",
+        lambda _parent, title, message: messages.append((title, message)),
     )
 
     dialog._save_program_as()
     app.processEvents()
 
     assert len(messages) == 1
-    assert messages[0] == (
-        "配置已另存，但暂不能用于测试。\n"
-        "请完善触发状态和测试队列配置。"
-    )
+    assert messages[0] == ("无法另存为", "6000 rpm 尚未选择测试队列")
     assert dialog.result() != QDialog.Accepted
+    assert manager.load_registry()["configs"] == []
+    dialog._dirty = False
     dialog.close()
 
 
-def test_save_closes_after_saving_incomplete_configuration(
+def test_save_rejects_configuration_without_test_queue(
     tmp_path,
     monkeypatch,
 ):
@@ -473,19 +472,48 @@ def test_save_closes_after_saving_incomplete_configuration(
     messages = []
     monkeypatch.setattr(
         QMessageBox,
-        "information",
-        lambda _parent, _title, message: messages.append(message),
+        "warning",
+        lambda _parent, title, message: messages.append((title, message)),
     )
 
     dialog._save_program()
     app.processEvents()
 
-    assert dialog.result() == QDialog.Accepted
+    assert dialog.result() != QDialog.Accepted
     assert len(messages) == 1
-    assert messages[0] == (
-        "配置已保存，但暂不能用于测试。\n"
-        "请完善触发状态和测试队列配置。"
+    assert messages[0] == ("无法保存", "6000 rpm 尚未选择测试队列")
+    assert manager.load_registry()["configs"] == []
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_save_rejects_unavailable_test_queue(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    assert LoadUiConfig.save_data_to_json(
+        {"ffgfg": str(tmp_path / "missing_queue.json")},
+        manager.queue_registry_path,
     )
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog._add_empty_row()
+    dialog.program_table.item(0, 1).setText("222")
+    queue_combobox = dialog._queue_combobox(0)
+    queue_combobox.setCurrentIndex(queue_combobox.findData("ffgfg"))
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+
+    dialog._save_program()
+    app.processEvents()
+
+    assert dialog.result() != QDialog.Accepted
+    assert messages == [("无法保存", "222 引用的测试队列不可用：ffgfg")]
+    assert manager.load_registry()["configs"] == []
+    dialog._dirty = False
+    dialog.close()
 
 
 def test_save_hides_automatic_judgment_details_from_customer(
@@ -603,12 +631,12 @@ def test_selecting_queue_updates_duration_and_analysis_summary(tmp_path):
     dialog.close()
 
 
-def test_missing_queue_reference_is_not_shown(tmp_path):
+def test_legacy_missing_queue_reference_is_not_shown(tmp_path):
     app = QApplication.instance() or QApplication([])
     manager = make_manager(tmp_path)
     prepare_program(manager)
-    success, message = manager.save_program(
-        manager.load_registry()["active_file"],
+    active_file = manager.load_registry()["active_file"]
+    assert LoadUiConfig.save_data_to_json(
         {
             "name": "默认配置",
             "sub_configs": [
@@ -619,8 +647,8 @@ def test_missing_queue_reference_is_not_shown(tmp_path):
                 }
             ],
         },
+        os.path.join(manager.program_dir, active_file),
     )
-    assert success, message
     dialog = ProductTestProgramConfigDialog(manager, lambda _path: None)
 
     queue_cell = dialog.program_table.cellWidget(0, 3)
