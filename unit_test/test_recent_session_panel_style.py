@@ -128,6 +128,27 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         view_btn.click()
         self.assertEqual(clicked_sessions, ["recent_1"])
 
+    def test_refreshed_condition_cell_is_positioned_before_first_paint(self):
+        panel = self._panel()
+        panel.resize(1200, 420)
+        panel.show()
+        QApplication.processEvents()
+        try:
+            panel.upsert_session(
+                self._session("recent_1", "01", panel._RESULT_WAITING_TEXT)
+            )
+            QApplication.processEvents()
+
+            panel.upsert_session(self._session("recent_1", "01", "not_labeled"))
+
+            cell_widget = panel.session_table.cellWidget(0, 3)
+            widget_center = cell_widget.geometry().center()
+
+            self.assertEqual(panel.session_table.rowAt(widget_center.y()), 0)
+            self.assertEqual(panel.session_table.columnAt(widget_center.x()), 3)
+        finally:
+            panel.close()
+
     def test_fixture_order_keeps_one_group_and_each_condition_analysis_selectable(self):
         clicked_sessions = []
         panel = self._panel(
