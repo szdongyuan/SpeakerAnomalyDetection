@@ -361,6 +361,29 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(board.mode, "test")
         self.assertEqual(board.stacked_widget.currentIndex(), 0)
 
+    def test_count_board_rejects_test_mode_with_condition_threshold_prompt(self):
+        reason = (
+            "以下工况未启用阈值判定，无法进入测试模式：\n"
+            "- 7000 rpm 未启用可自动输出 OK/NG 的规则阈值：queue_7000\n"
+            "请启用所有工况的阈值，或使用标记模式。"
+        )
+        with patch.object(SequenceCountBoard, "set_test_text"), patch.object(
+            SequenceCountBoard,
+            "set_mark_text",
+        ):
+            board = SequenceCountBoard({})
+            board.on_mark_btn_clicked()
+            board.set_test_available(False, reason)
+
+            with patch(
+                "ui.sequence.sequencement_count_board.QMessageBox.information"
+            ) as information:
+                board.on_test_btn_clicked()
+
+        information.assert_called_once_with(board, "提示", reason)
+        self.assertEqual(board.mode, "mark")
+        self.assertFalse(board.test_btn.isEnabled())
+
     def test_sync_product_conditions_preserves_state_when_signature_unchanged(self):
         condition_configs = [
             {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
@@ -437,6 +460,47 @@ class TestSequenceMainLayout(unittest.TestCase):
             self.assertEqual(texts, ["2条波形", "4条波形"])
             self.assertEqual(widget.using_file_combobox.currentText(), "4条波形")
             self.assertEqual(widget.using_file_combobox.currentData(), "4条波形.json")
+
+    def test_active_product_program_reports_partial_threshold_configuration(self):
+        manager = types.SimpleNamespace(
+            load_registry=lambda: {
+                "active_file": "motor.json",
+                "configs": [{"file": "motor.json", "name": "motor"}],
+            },
+            load_program=lambda _file_name: (
+                error_code.OK,
+                {
+                    "name": "motor",
+                    "sub_configs": [
+                        {
+                            "condition_name": "6000 rpm",
+                            "trigger_state": "01",
+                            "test_queue": "queue_6000",
+                        },
+                        {
+                            "condition_name": "7000 rpm",
+                            "trigger_state": "02",
+                            "test_queue": "queue_7000",
+                        },
+                    ],
+                },
+            ),
+            validate_program=lambda _program, _file_name: {
+                "is_usable": True,
+                "is_test_mode_usable": False,
+                "use_errors": [],
+                "test_mode_errors": [
+                    "7000 rpm 未启用可自动输出 OK/NG 的规则阈值：queue_7000"
+                ],
+            },
+        )
+        widget = _DummyProductProgramWidget(manager)
+
+        available, reason = widget._active_product_program_test_mode_availability()
+
+        self.assertFalse(available)
+        self.assertIn("7000 rpm", reason)
+        self.assertIn("请启用所有工况的阈值，或使用标记模式", reason)
 
     def test_waveform_condition_actions_follow_mode(self):
         played = []

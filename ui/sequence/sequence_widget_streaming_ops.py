@@ -464,16 +464,19 @@ class SequenceWidgetStreamingOpsMixin:
 
     def _refresh_test_mode_availability(self):
         """
-        Enable/disable test mode based on whether current config can output OK/NG.
+        Enable test mode only when every condition in the active product
+        program can output OK/NG.
         """
+        count_board = getattr(self, "count_board", None)
         try:
-            can_output, reason = self._can_output_ok_ng()
-            if self.count_board:
-                # Keep UX consistent: disable test if not eligible
-                self.count_board.set_test_available(bool(can_output), reason or "")
+            can_output, reason = (
+                self._active_product_program_test_mode_availability()
+            )
+            if count_board:
+                count_board.set_test_available(bool(can_output), reason or "")
         except Exception:
-            if self.count_board:
-                self.count_board.set_test_available(False, "无法判定是否具备OK/NG输出能力")
+            if count_board:
+                count_board.set_test_available(False, "产品配置校验失败，无法进入测试模式")
 
     def update_v2pa_factor(self):
         self.v2pa_factor = get_mic_v2pa_factor()
@@ -564,6 +567,7 @@ class SequenceWidgetStreamingOpsMixin:
         if getattr(self, "recent_session_panel", None) is not None:
             if should_clear_history and hasattr(self.recent_session_panel, "set_conditions"):
                 self.recent_session_panel.set_conditions(self.product_test_condition_configs)
+        self._refresh_test_mode_availability()
 
     def _summarize_ok_ng(self):
         """

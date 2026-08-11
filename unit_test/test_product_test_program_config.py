@@ -866,7 +866,68 @@ def test_ai_only_queue_is_available_without_automatic_judgment(tmp_path):
         catalog,
     )
     assert validation["is_usable"]
+    assert not validation["is_test_mode_usable"]
     assert "不能自动输出 OK/NG" in validation["use_warnings"][0]
+    assert "未启用可自动输出 OK/NG 的规则阈值" in validation["test_mode_errors"][0]
+
+
+def test_test_mode_requires_every_condition_to_have_rule_judgment(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["sub_configs"].append(
+        {
+            "condition_name": "7000 rpm",
+            "trigger_state": "02",
+            "test_queue": "queue_7000",
+        }
+    )
+    queue_catalog = {
+        "queue_6000": {
+            "available": True,
+            "acquisition_mode": "RECORD_ONLY",
+            "can_auto_judge": True,
+        },
+        "queue_7000": {
+            "available": True,
+            "acquisition_mode": "RECORD_ONLY",
+            "can_auto_judge": False,
+            "judgment_reason": "未配置可输出 OK/NG 的规则阈值",
+        },
+    }
+
+    validation = manager.validate_program(program, None, queue_catalog)
+
+    assert validation["is_usable"]
+    assert not validation["is_test_mode_usable"]
+    assert validation["test_mode_errors"] == [
+        "7000 rpm 未启用可自动输出 OK/NG 的规则阈值：queue_7000"
+    ]
+
+
+def test_test_mode_is_usable_when_every_condition_has_rule_judgment(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["sub_configs"].append(
+        {
+            "condition_name": "7000 rpm",
+            "trigger_state": "02",
+            "test_queue": "queue_7000",
+        }
+    )
+    queue_catalog = {
+        queue_name: {
+            "available": True,
+            "acquisition_mode": "RECORD_ONLY",
+            "can_auto_judge": True,
+        }
+        for queue_name in ("queue_6000", "queue_7000")
+    }
+
+    validation = manager.validate_program(program, None, queue_catalog)
+
+    assert validation["is_usable"]
+    assert validation["is_test_mode_usable"]
+    assert validation["test_mode_errors"] == []
 
 
 def test_trigger_states_include_non_idle_hardware_states(tmp_path, monkeypatch):

@@ -51,6 +51,44 @@ class SequenceWidgetConfigOpsMixin:
             self._get_active_product_program_path()
         )
 
+    def _active_product_program_test_mode_availability(self):
+        manager = self._get_product_program_manager()
+        registry = manager.load_registry()
+        active_file = str((registry or {}).get("active_file") or "").strip()
+        self.product_program_registry = registry
+        self.active_product_program_file = active_file or None
+        if not active_file:
+            return False, "当前未选择有效的产品配置，无法进入测试模式"
+
+        load_code, program_data = manager.load_program(active_file)
+        if load_code != error_code.OK or not isinstance(program_data, dict):
+            return False, "当前产品配置无法读取，无法进入测试模式"
+
+        validation = manager.validate_program(program_data, active_file)
+        if not validation.get("is_usable", False):
+            details = "\n".join(
+                f"- {message}"
+                for message in validation.get("use_errors", [])
+            )
+            reason = "当前产品配置不可用，无法进入测试模式"
+            return False, f"{reason}：\n{details}" if details else reason
+
+        if not validation.get("is_test_mode_usable", False):
+            details = "\n".join(
+                f"- {message}"
+                for message in validation.get("test_mode_errors", [])
+            )
+            reason = "以下工况未启用阈值判定，无法进入测试模式"
+            suffix = "\n请启用所有工况的阈值，或使用标记模式。"
+            message = (
+                f"{reason}：\n{details}{suffix}"
+                if details
+                else f"{reason}。{suffix}"
+            )
+            return False, message
+
+        return True, ""
+
     def _validate_active_product_program_acquisition_modes(self):
         manager = self._get_product_program_manager()
         config_path = self._get_active_product_program_path()

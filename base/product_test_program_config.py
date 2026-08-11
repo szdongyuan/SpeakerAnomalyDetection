@@ -485,6 +485,7 @@ class ProductTestProgramConfigManager(object):
                 )
             )
         use_warnings = []
+        test_mode_errors = []
         if not save_errors:
             for index, sub_config in enumerate(
                 program_data.get("sub_configs", []),
@@ -508,12 +509,18 @@ class ProductTestProgramConfigManager(object):
                         f"{row_name} 的测试队列不能自动输出 OK/NG："
                         f"{test_queue}（{reason}）"
                     )
+                    test_mode_errors.append(
+                        f"{row_name} 未启用可自动输出 OK/NG 的规则阈值："
+                        f"{test_queue}"
+                    )
         return {
             "can_save": not save_errors,
             "is_usable": not use_errors,
+            "is_test_mode_usable": not use_errors and not test_mode_errors,
             "save_errors": save_errors,
             "use_errors": use_errors,
             "use_warnings": use_warnings,
+            "test_mode_errors": test_mode_errors,
         }
 
     def load_queue_catalog(self):
