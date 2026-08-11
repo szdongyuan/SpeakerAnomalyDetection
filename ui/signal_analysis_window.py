@@ -11,7 +11,7 @@ from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt, QModelIndex
-from PyQt5.QtGui import QIcon, QTextCursor, QTextCharFormat, QColor, QFont
+from PyQt5.QtGui import QIcon, QColor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QTextEdit,
@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QLabel,
+    QFrame,
     QMessageBox,
     QTableWidget,
     QTableWidgetItem,
@@ -1634,55 +1635,219 @@ class AI(QWidget):
         self.setWindowTitle(title_name)
 
     def init_ui(self):
+        self.setObjectName("aiAnalysisWindow")
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         ai_analyse_layout = self.create_ai_analyse_layout()
         self.setLayout(ai_analyse_layout)
+        self.setStyleSheet(self._build_ai_stylesheet())
+        self._set_ai_view_state(
+            rows=[
+                ("状态", "等待分析"),
+                ("评分模型", "--"),
+            ],
+            tone="neutral",
+        )
 
     def create_ai_analyse_layout(self):
         ai_analyse_layout = QVBoxLayout()
-        analyse_score_layout = QHBoxLayout()
-        self.ai_analyse_score_textedit = QTextEdit()
-        self.ai_analyse_score_textedit.setAlignment(Qt.AlignCenter)
-        self.ai_analyse_score_textedit.setDisabled(True)
+        ai_analyse_layout.setContentsMargins(24, 20, 24, 24)
+        ai_analyse_layout.setSpacing(8)
 
-        self.ai_analyse_score_textedit.setStyleSheet(ui_style_const.qtextedit_style)
-        analyse_score_layout.addWidget(self.ai_analyse_score_textedit)
-        analyse_score_layout.setContentsMargins(20, 0, 20, 0)
+        title_label = QLabel("AI 分析")
+        title_label.setObjectName("aiTitleLabel")
+        ai_analyse_layout.addWidget(title_label)
 
-        ai_analyse_layout.addLayout(analyse_score_layout)
+        ai_analyse_layout.addSpacing(4)
+        ai_analyse_layout.addWidget(self._create_ai_table_line())
+
+        self.ai_row_widgets = []
+        self.ai_row_name_labels = []
+        self.ai_row_value_labels = []
+        self.ai_row_separators = []
+        for row_index in range(5):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 11, 0, 11)
+            row_layout.setSpacing(16)
+
+            name_label = QLabel()
+            name_label.setObjectName("aiRowName")
+            name_label.setFixedWidth(104)
+            value_label = QLabel()
+            value_label.setObjectName("aiRowValue")
+            value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value_label.setWordWrap(True)
+
+            row_layout.addWidget(name_label)
+            row_layout.addWidget(value_label, 1)
+            ai_analyse_layout.addWidget(row_widget)
+
+            self.ai_row_widgets.append(row_widget)
+            self.ai_row_name_labels.append(name_label)
+            self.ai_row_value_labels.append(value_label)
+
+            if row_index < 4:
+                separator = self._create_ai_table_line()
+                ai_analyse_layout.addWidget(separator)
+                self.ai_row_separators.append(separator)
+
+        ai_analyse_layout.addWidget(self._create_ai_table_line())
+        ai_analyse_layout.addStretch(1)
 
         return ai_analyse_layout
 
-    def highlight_keywords(self, keyword, text_edit):
-        cursor = text_edit.textCursor()
-        format = QTextCharFormat()
-        format.setForeground(QColor("red"))
+    @staticmethod
+    def _create_ai_table_line():
+        line = QFrame()
+        line.setObjectName("aiTableLine")
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Plain)
+        return line
 
-        matches = []
-        cursor.movePosition(QTextCursor.Start)
-        while True:
-            cursor = text_edit.document().find(keyword, cursor)
-            if cursor.isNull():
-                break
-            matches.append(cursor)
+    @staticmethod
+    def _build_ai_stylesheet():
+        return """
+            QWidget#aiAnalysisWindow {
+                background-color: #FFFFFF;
+                color: #111827;
+                font-family: __UI_FONT_FAMILY__;
+            }
+            QWidget#aiAnalysisWindow QLabel {
+                font-family: __UI_FONT_FAMILY__;
+            }
+            QLabel#aiTitleLabel {
+                color: #000000;
+                font-size: 30px;
+                font-weight: 400;
+            }
+            QLabel#aiRowName {
+                color: #111827;
+                font-size: 24px;
+                font-weight: 400;
+            }
+            QLabel#aiRowValue {
+                color: #000000;
+                font-size: 24px;
+                font-weight: 400;
+            }
+            QFrame#aiTableLine {
+                color: #C7CDD6;
+                background-color: #C7CDD6;
+                border: none;
+                max-height: 1px;
+            }
+        """.replace("__UI_FONT_FAMILY__", ui_style_const.UI_FONT_FAMILY)
 
-        if len(matches) == 2:
-            first_match = matches[0]
-            first_match.mergeCharFormat(format)
+    def _set_ai_view_state(
+        self,
+        *,
+        rows,
+        tone,
+    ):
+        tone_styles = {
+            "neutral": "#000000",
+            "running": "#0B4FB3",
+            "success": "#00652F",
+            "danger": "#AE1022",
+            "warning": "#A84300",
+        }
+        accent_color = tone_styles[tone]
+        visible_rows = list(rows)[: len(self.ai_row_widgets)]
+        for row_index, row_widget in enumerate(self.ai_row_widgets):
+            is_visible = row_index < len(visible_rows)
+            row_widget.setVisible(is_visible)
+            if not is_visible:
+                continue
+            name, value = visible_rows[row_index]
+            name_text = str(name or "")
+            self.ai_row_name_labels[row_index].setText(name_text)
+            self.ai_row_value_labels[row_index].setText(str(value or "--"))
+            is_primary_status = name_text in ("状态", "最终判定")
+            is_final_judgement = name_text == "最终判定"
+            value_color = accent_color if is_primary_status else "#000000"
+            if is_primary_status:
+                value_size = "30px"
+            elif name_text == "评分模型":
+                value_size = "21px"
+            else:
+                value_size = "24px"
+            self.ai_row_value_labels[row_index].setStyleSheet(
+                f"color:{value_color}; font-size:{value_size}; "
+                f"font-weight:{'700' if is_final_judgement else '400'};"
+            )
+        for separator_index, separator in enumerate(self.ai_row_separators):
+            separator.setVisible(separator_index < len(visible_rows) - 1)
+
+    @staticmethod
+    def _format_ai_score(value):
+        try:
+            return f"{float(value):.2f}%"
+        except (TypeError, ValueError):
+            return "--"
+
+    @staticmethod
+    def _split_ai_message_line(message_line):
+        for separator in ("：", ":"):
+            if separator in message_line:
+                name, value = message_line.split(separator, 1)
+                return name.strip(), value.strip()
+        return "详情", message_line.strip()
+
+    def _show_ai_error(self, message, model_name=None, *, mismatch=False):
+        normalized_message = str(message or "").strip()
+        message_lines = [line.strip() for line in normalized_message.splitlines() if line.strip()]
+        if mismatch and message_lines:
+            rows = [
+                ("状态", message_lines[0]),
+                ("评分模型", model_name or "--"),
+            ]
+            rows.extend(self._split_ai_message_line(line) for line in message_lines[1:])
+        else:
+            rows = [
+                ("状态", "无法分析"),
+                ("评分模型", model_name or "--"),
+            ]
+            if normalized_message:
+                rows.append(("详情", normalized_message))
+        self._set_ai_view_state(
+            rows=rows,
+            tone="warning" if mismatch else "danger",
+        )
+
+    def _show_ai_result(self, model_name):
+        detail = self.export_detail if isinstance(self.export_detail, dict) else {}
+        label = str(self.result or "").strip().upper()
+        tone = "success" if label == "OK" else "danger" if label == "NG" else "neutral"
+        self._set_ai_view_state(
+            rows=[
+                ("最终判定", label or "分析完成"),
+                ("评分模型", model_name or "--"),
+                ("OK Score", self._format_ai_score(detail.get("ok_score"))),
+                ("NG Score", self._format_ai_score(detail.get("ng_score"))),
+            ],
+            tone=tone,
+        )
 
     def calculate_ai_scores(self, mode, analysis_config, acq_mode=None):
         model_name = self.analysis_config["analyse_model_name"]
         self.result = None
         self.export_detail = {}
+        self._set_ai_view_state(
+            rows=[
+                ("状态", "正在分析"),
+                ("评分模型", model_name),
+            ],
+            tone="running",
+        )
         code, result = self.get_model_info(model_name, self.default_logger)
         if code != error_code.OK or not os.path.exists(result[0]):
-            self.ai_analyse_score_textedit.setPlainText("模型不存在，请重新选择")
+            self._show_ai_error("模型不存在，请重新选择。", model_name=model_name)
             return
         model_path, config_path = result
         try:
             ai_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
         except Exception as e:
-            self.ai_analyse_score_textedit.setPlainText(str(e))
+            self._show_ai_error(str(e), model_name=model_name)
             return
 
         if should_validate_model_duration(mode, acq_mode=acq_mode):
@@ -1693,19 +1858,17 @@ class AI(QWidget):
                 config_path=config_path,
             )
             if not matched:
-                self.ai_analyse_score_textedit.setPlainText(message)
                 self.export_detail = build_blocked_ai_export_detail(
                     model_name,
                     reason="duration_mismatch",
                     message=message,
                 )
-                QMessageBox.information(self, "提示", message)
+                self._show_ai_error(message, model_name=model_name, mismatch=True)
                 return
             self.default_logger.info("The model matches the audio duration. Starting analysis...")
         kwargs = {"config_path": config_path}
-        result_text = self.model_predict(model_path, model_name, signal_data=ai_signal, **kwargs)
-        self.ai_analyse_score_textedit.setPlainText(result_text)
-        self.highlight_keywords("ng", self.ai_analyse_score_textedit)
+        self.model_predict(model_path, model_name, signal_data=ai_signal, **kwargs)
+        self._show_ai_result(model_name)
 
     def model_predict(self, model_path, model_name, signal_data=None, **kwargs):
         if signal_data is None:
