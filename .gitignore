@@ -32,3 +32,4 @@ create_hardware_tables.exe
 tmp
 .tmp
 dist_onedir
+data_output/

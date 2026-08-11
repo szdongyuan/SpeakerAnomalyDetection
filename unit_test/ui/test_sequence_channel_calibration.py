@@ -220,6 +220,8 @@ def _run_golden_sample_operation(tmp_path, items, resolve_impl, events=None):
     )
     dialog = types.SimpleNamespace(
         select_list=types.SimpleNamespace(config=[sequence], data_struct=data_struct),
+        mic={"samplerate": 48000, "index": 5},
+        speaker={"samplerate": 48000, "index": 7},
         using_config_path="config.json",
         default_logger=FakeLogger(),
         set_data_struct_stimulus_signal=lambda *args, **kwargs: None,
@@ -937,6 +939,8 @@ def test_golden_sample_rb_standard_thd_skips_calibration_resolution(tmp_path):
     data_struct = types.SimpleNamespace(stimulus_info={"type": "sine"}, sample_rate=48000, store_wave_data=None)
     dialog = types.SimpleNamespace(
         select_list=types.SimpleNamespace(config=[sequence], data_struct=data_struct),
+        mic={"samplerate": 48000, "index": 5},
+        speaker={"samplerate": 48000, "index": 7},
         using_config_path="config.json",
         default_logger=FakeLogger(),
         set_data_struct_stimulus_signal=lambda *args, **kwargs: None,
@@ -1007,6 +1011,8 @@ def test_golden_sample_fr_skips_calibration_requirement(tmp_path):
     data_struct = types.SimpleNamespace(stimulus_info={"type": "sine"}, sample_rate=48000, store_wave_data=None)
     dialog = types.SimpleNamespace(
         select_list=types.SimpleNamespace(config=[sequence], data_struct=data_struct),
+        mic={"samplerate": 48000, "index": 5},
+        speaker={"samplerate": 48000, "index": 7},
         using_config_path="config.json",
         default_logger=FakeLogger(),
         set_data_struct_stimulus_signal=lambda *args, **kwargs: None,
@@ -1077,6 +1083,8 @@ def test_golden_sample_rb_standard_thd_missing_calibration_does_not_warn(tmp_pat
     data_struct = types.SimpleNamespace(stimulus_info={"type": "sine"}, sample_rate=48000, store_wave_data=None)
     dialog = types.SimpleNamespace(
         select_list=types.SimpleNamespace(config=[sequence], data_struct=data_struct),
+        mic={"samplerate": 48000, "index": 5},
+        speaker={"samplerate": 48000, "index": 7},
         using_config_path="config.json",
         default_logger=FakeLogger(),
         set_data_struct_stimulus_signal=lambda *args, **kwargs: None,

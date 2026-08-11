@@ -30,18 +30,50 @@
     },
     "SPLF": {
         "splf_calc_mode": "fundamental",
-        "octave_smoothing": 0,
-        "golden_sample_checked": false,
-        "golden_sample_display_modes": ["deviation"],
-        "limit_checked": false,
-        "limit_data": null,
+        "octave_smoothing": 3,
+        "golden_sample_checked": true,
+        "golden_sample_display_modes": [
+            "deviation"
+        ],
+        "limit_checked": true,
+        "limit_data": [
+            [
+                1000.0,
+                3000.0,
+                3001.0,
+                6000.0,
+                6001.0,
+                16000.0
+            ],
+            [
+                2.5,
+                2.5,
+                2.0,
+                2.0,
+                3.0,
+                3.0
+            ],
+            [
+                -2.5,
+                -2.5,
+                -2.0,
+                -2.0,
+                -3.0,
+                -3.0
+            ]
+        ],
         "limit_mode": "csv",
         "manual_upper_enabled": true,
         "manual_lower_enabled": false,
         "manual_upper_segments": [],
         "manual_lower_segments": [],
         "weighting": "Z",
-        "analysis_channel": 0
+        "analysis_channel": 0,
+        "display": {
+            "main_curve_color": "#33C44D",
+            "upper_limit_color": "#800080",
+            "lower_limit_color": "#800080"
+        }
     },
     "Spec": {
         "n_fft": 2048,
@@ -78,7 +110,9 @@
     "FR": {
         "octave_smoothing": 0,
         "golden_sample_checked": false,
-        "golden_sample_display_modes": ["deviation"],
+        "golden_sample_display_modes": [
+            "deviation"
+        ],
         "limit_checked": false,
         "limit_data": null,
         "limit_mode": "csv",
@@ -111,7 +145,9 @@
         ],
         "all_checked": false,
         "golden_sample_checked": false,
-        "golden_sample_display_modes": ["deviation"],
+        "golden_sample_display_modes": [
+            "deviation"
+        ],
         "limit_checked": false,
         "limit_data": null,
         "limit_mode": "csv",
@@ -141,7 +177,9 @@
         ],
         "all_checked": false,
         "golden_sample_checked": false,
-        "golden_sample_display_modes": ["deviation"],
+        "golden_sample_display_modes": [
+            "deviation"
+        ],
         "limit_checked": false,
         "limit_data": null,
         "limit_mode": "csv",
@@ -156,7 +194,9 @@
             "sc_metric": "totalnl_x_ehs"
         },
         "golden_sample_checked": false,
-        "golden_sample_display_modes": ["deviation"],
+        "golden_sample_display_modes": [
+            "deviation"
+        ],
         "limit_checked": false,
         "limit_data": null,
         "limit_mode": "csv",

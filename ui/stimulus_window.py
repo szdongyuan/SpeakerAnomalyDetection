@@ -2667,6 +2667,32 @@ class StimulusWindow(QDialog):
         and uses an instance of the SoundcardAudioProcessor class to call the sd_play method
         for playing the signal. If the playback fails, an error log is recorded.
         """
+        if self.speaker is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
+        raw_device_idx = self.speaker.get("index") if isinstance(self.speaker, dict) else None
+        if isinstance(raw_device_idx, bool):
+            device_idx = None
+        elif isinstance(raw_device_idx, int):
+            device_idx = raw_device_idx
+        elif isinstance(raw_device_idx, str):
+            try:
+                device_idx = int(raw_device_idx.strip(), 10)
+            except ValueError:
+                device_idx = None
+        else:
+            device_idx = None
+        if device_idx is None or device_idx < 0:
+            MessageBox.warning(
+                self,
+                "提示",
+                "输出设备信息无效，请在硬件管理中重新选择设备。",
+            )
+            return
         if self.offline_reference_authoring:
             sample_rate = self._current_playback_sample_rate_or_warn()
             if sample_rate is None:
@@ -2684,8 +2710,6 @@ class StimulusWindow(QDialog):
             sample_rate = self.stimulus_info["sample_rate"]
             stimulus_data = self.stimulus_data
             amplitude = self.stimulus_info["amplitude"]
-        device_idx = self.speaker["index"] if self.speaker else None
-
         # Construct the stimulus parameter dictionary, including signal data, amplitude, and sample rate
         stimulus_param = {
             "data": stimulus_data,

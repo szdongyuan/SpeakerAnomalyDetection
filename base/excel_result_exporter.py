@@ -7,6 +7,18 @@ import csv
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import (
+    Context,
+    Decimal,
+    DecimalException,
+    DivisionByZero,
+    InvalidOperation,
+    MAX_EMAX,
+    MIN_EMIN,
+    Overflow,
+    ROUND_HALF_UP,
+    localcontext,
+)
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -25,9 +37,13 @@ from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_DISPLAY_ENVELOPE,
 )
 from consts.excel_export_consts import (
+    CSV_DECIMAL_PLACES_KEY,
+    DEFAULT_CSV_DECIMAL_PLACES,
     EXCEL_OUTPUT_DEVIATION,
     EXCEL_OUTPUT_MARGIN,
     EXCEL_OUTPUT_TEST_CURVE,
+    MAX_CSV_DECIMAL_PLACES,
+    MIN_CSV_DECIMAL_PLACES,
     SAVE_ITEM_OUTPUTS_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
@@ -49,6 +65,161 @@ _INVALID_FILENAME_CHARS_RE = re.compile(r"[<>:\"/\\\\|?*]")
 class ExportResult:
     ok: bool
     message: str
+
+
+def _resolve_csv_decimal_places(excel_cfg: Mapping[str, Any]) -> int:
+    if CSV_DECIMAL_PLACES_KEY not in excel_cfg:
+        return DEFAULT_CSV_DECIMAL_PLACES
+
+    value = excel_cfg[CSV_DECIMAL_PLACES_KEY]
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, np.integer)
+    ):
+        raise ValueError(f"CSV 数据小数位配置无效: {value!r}")
+
+    places = int(value)
+    if not MIN_CSV_DECIMAL_PLACES <= places <= MAX_CSV_DECIMAL_PLACES:
+        raise ValueError(f"CSV 数据小数位配置无效: {value!r}")
+    return places
+
+
+def _make_csv_decimal_context() -> Context:
+    return Context(
+        prec=1,
+        rounding=ROUND_HALF_UP,
+        Emin=MIN_EMIN,
+        Emax=MAX_EMAX,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
+
+
+def _csv_decimal_precision(decimal_value: Decimal, places: int) -> int:
+    decimal_tuple = decimal_value.as_tuple()
+    return (
+        len(decimal_tuple.digits)
+        + max(decimal_tuple.exponent, 0)
+        + places
+        + 4
+    )
+
+
+def _quantize_csv_decimal(decimal_value: Decimal, places: int) -> Decimal:
+    format_context = _make_csv_decimal_context()
+    format_context.prec = _csv_decimal_precision(decimal_value, places)
+    with localcontext(format_context):
+        return decimal_value.quantize(Decimal(1).scaleb(-places))
+
+
+def _format_csv_decimal(
+    value: Any,
+    places: int,
+    *,
+    accept_numeric_text: bool = False,
+    decimal_shift: int = 0,
+    margin_nonfinite_tokens: bool = False,
+) -> Any:
+    accepted_types = (Decimal, int, float, np.integer, np.floating)
+    if accept_numeric_text:
+        accepted_types += (str,)
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, accepted_types):
+        return value
+
+    format_context = _make_csv_decimal_context()
+    try:
+        decimal_value = Decimal(str(value), context=format_context)
+    except InvalidOperation:
+        if accept_numeric_text and isinstance(value, str):
+            return value
+        raise
+
+    if not decimal_value.is_finite():
+        if margin_nonfinite_tokens:
+            if decimal_value.is_infinite():
+                return "-INF" if decimal_value.is_signed() else "INF"
+            if decimal_value.is_qnan():
+                return "NAN"
+            return str(value)
+        return value
+
+    if decimal_shift:
+        decimal_tuple = decimal_value.as_tuple()
+        decimal_value = Decimal(
+            (
+                decimal_tuple.sign,
+                decimal_tuple.digits,
+                decimal_tuple.exponent + decimal_shift,
+            ),
+            context=format_context,
+        )
+
+    quantized = _quantize_csv_decimal(decimal_value, places)
+    return format(quantized, f".{places}f")
+
+
+class _CsvDecimalFormattingError(ValueError):
+    pass
+
+
+class _CsvCoordinateValidationError(ValueError):
+    pass
+
+
+def _format_csv_payload_field(
+    value: Any,
+    places: int,
+    *,
+    item_name: str,
+    field_role: str,
+    accept_numeric_text: bool = False,
+    decimal_shift: int = 0,
+    margin_nonfinite_tokens: bool = False,
+) -> Any:
+    try:
+        if accept_numeric_text or decimal_shift or margin_nonfinite_tokens:
+            return _format_csv_decimal(
+                value,
+                places,
+                accept_numeric_text=accept_numeric_text,
+                decimal_shift=decimal_shift,
+                margin_nonfinite_tokens=margin_nonfinite_tokens,
+            )
+        return _format_csv_decimal(value, places)
+    except DecimalException as error:
+        raise _CsvDecimalFormattingError(
+            f"CSV数值格式化失败: 分析项 {item_name!r}, 字段 {field_role}: {error}"
+        ) from error
+
+
+def _prepare_csv_coordinates(
+    coordinates: Iterable[Any],
+    *,
+    item_name: str,
+    item_type: Any,
+) -> list[Any]:
+    if item_type in ("SPL", "LOUD"):
+        return [_normalize_header_value(value) for value in coordinates]
+
+    prepared: list[Any] = []
+    for index, value in enumerate(coordinates):
+        try:
+            decimal_value = Decimal(str(value), context=_make_csv_decimal_context())
+            if not decimal_value.is_finite():
+                raise _CsvCoordinateValidationError(
+                    f"CSV曲线坐标无效: 分析项 {item_name!r}, "
+                    f"坐标[{index}]={value!r} 必须是有限数值"
+                )
+            prepared.append(int(_quantize_csv_decimal(decimal_value, 0)))
+        except _CsvCoordinateValidationError:
+            raise
+        except DecimalException as error:
+            raise _CsvCoordinateValidationError(
+                f"CSV曲线坐标无效: 分析项 {item_name!r}, "
+                f"坐标[{index}]={value!r} 必须是有限数值"
+            ) from error
+    return prepared
 
 
 _RUNTIME_FILE_LOCK_BYTES = 1
@@ -99,9 +270,9 @@ class _RuntimeFileLocker:
     def _headers_equivalent(self, existing: list[Any], expected: list[Any]) -> bool:
         if len(existing) != len(expected):
             return False
-        a = [_normalize_header_value(_coerce_csv_number(v)) for v in existing]
-        b = [_normalize_header_value(_coerce_csv_number(v)) for v in expected]
-        return _headers_match(a, b)
+        a = [_normalize_header_value(_coerce_csv_header_number(v)) for v in existing]
+        b = [_normalize_header_value(_coerce_csv_header_number(v)) for v in expected]
+        return _csv_headers_match(a, b)
 
     def _lock_file(self, f) -> None:
         if msvcrt is None:
@@ -688,6 +859,47 @@ def _headers_match(existing: list[Any], expected: list[Any]) -> bool:
     return True
 
 
+def _csv_headers_match(existing: list[Any], expected: list[Any]) -> bool:
+    if len(existing) != len(expected):
+        return False
+    numeric_types = (Decimal, int, float, np.integer, np.floating)
+    decimal_context = _make_csv_decimal_context()
+    tolerance = Decimal("0.000001", context=decimal_context)
+    for a, b in zip(existing, expected):
+        if a is None and b is None:
+            continue
+        if isinstance(a, numeric_types) and isinstance(b, numeric_types):
+            decimal_a = Decimal(
+                str(int(a) if isinstance(a, (bool, np.bool_)) else a),
+                context=decimal_context,
+            )
+            decimal_b = Decimal(
+                str(int(b) if isinstance(b, (bool, np.bool_)) else b),
+                context=decimal_context,
+            )
+            if decimal_a.is_nan() or decimal_b.is_nan():
+                if not (decimal_a.is_nan() and decimal_b.is_nan()):
+                    return False
+                continue
+            if decimal_a.is_infinite() or decimal_b.is_infinite():
+                if decimal_a != decimal_b:
+                    return False
+                continue
+            comparison_context = _make_csv_decimal_context()
+            comparison_context.prec = max(
+                _csv_decimal_precision(decimal_a, 6),
+                _csv_decimal_precision(decimal_b, 6),
+            )
+            with localcontext(comparison_context):
+                difference = abs(decimal_a - decimal_b)
+            if difference > tolerance:
+                return False
+        else:
+            if str(a) != str(b):
+                return False
+    return True
+
+
 def _normalize_header_value(v: Any) -> Any:
     if isinstance(v, (np.floating, float)):
         return round(float(v), 6)
@@ -1015,6 +1227,31 @@ def _format_margin_value(item_type: Any, deviation: Any) -> str:
     return f"{v:.2E}"
 
 
+def _format_csv_margin_value(
+    item_type: Any,
+    deviation: Any,
+    places: int,
+    *,
+    item_name: str,
+) -> Any:
+    if deviation is None:
+        return ""
+    if isinstance(deviation, (bool, np.bool_)):
+        return deviation
+
+    return _format_csv_payload_field(
+        deviation,
+        places,
+        item_name=item_name,
+        field_role="Margin值",
+        accept_numeric_text=True,
+        decimal_shift=(
+            2 if str(item_type or "").strip().upper() == "AI" else 0
+        ),
+        margin_nonfinite_tokens=True,
+    )
+
+
 CURVE_SHEET_HEADER_PREFIX = ["SN", "time"]
 AI_SHEET_HEADER = ["SN", "time", "AI result", "OK score(%)", "NG score(%)", "Model"]
 RESULT_SHEET_HEADER = ["SN", "time", "Name", "Margin", "Unit", "Result", "Tolerance", "Limit Type"]
@@ -1062,6 +1299,21 @@ def _coerce_csv_number(v: Any) -> Any:
         return text
 
 
+def _coerce_csv_header_number(v: Any) -> Any:
+    if v is None or isinstance(
+        v,
+        (Decimal, int, float, np.integer, np.floating),
+    ):
+        return v
+    text = str(v).strip()
+    if text == "":
+        return None
+    try:
+        return Decimal(text, context=_make_csv_decimal_context())
+    except InvalidOperation:
+        return text
+
+
 def _read_csv_header(path: str) -> list[Any] | None:
     # If the CSV is locked by this process (runtime lock), reuse the same handle.
     try:
@@ -1100,9 +1352,9 @@ def _resolve_curve_spool_csv_path(
         hdr = _read_csv_header(path)
         if not isinstance(hdr, list) or len(hdr) < 3:
             return False
-        existing = [_coerce_csv_number(v) for v in hdr[2:]]
+        existing = [_coerce_csv_header_number(v) for v in hdr[2:]]
         existing = [_normalize_header_value(v) for v in existing]
-        return _headers_match(existing, expected)
+        return _csv_headers_match(existing, expected)
 
     p0 = _csv_path(sheet_base)
     if os.path.exists(p0) and _header_matches(p0):
@@ -1145,6 +1397,120 @@ def _append_csv_row_locked(path: str, *, header: list[Any], row: list[Any]) -> E
     return _RUNTIME_LOCKER.append_csv_row(path, header=header, row=row)
 
 
+@dataclass(frozen=True)
+class _PreparedCsvRow:
+    sheet_name: str
+    header: list[Any]
+    row: list[Any]
+    expected_x: list[Any] | None = None
+
+
+def _prepare_csv_rows(
+    *,
+    selections: Mapping[str, Iterable[str]],
+    analysis_items_data: Mapping[str, Any],
+    analysis_config: Mapping[str, Any],
+    analysis_result_dict: Mapping[str, Any],
+    resolved_curves: Mapping[str, list[tuple[str, list[Any], list[Any]]]],
+    sn: str,
+    date_text: str,
+    max_points: int,
+    decimal_places: int,
+) -> list[_PreparedCsvRow]:
+    prepared: list[_PreparedCsvRow] = []
+    for item_name, selected_outputs in selections.items():
+        item_data = analysis_items_data.get(item_name)
+        if not isinstance(item_data, dict):
+            continue
+        item_type = item_data.get("type")
+        if item_type == "Spec":
+            continue
+
+        if item_type == "AI" and EXCEL_OUTPUT_TEST_CURVE in selected_outputs:
+            label = item_data.get("label") or item_data.get("result") or ""
+            ok_score = _format_csv_payload_field(
+                item_data.get("ok_score"),
+                decimal_places,
+                item_name=item_name,
+                field_role="AI OK分数",
+            )
+            ng_score = _format_csv_payload_field(
+                item_data.get("ng_score"),
+                decimal_places,
+                item_name=item_name,
+                field_role="AI NG分数",
+            )
+            model_name = item_data.get("model_name") or item_data.get("model") or ""
+            prepared.append(
+                _PreparedCsvRow(
+                    sheet_name=_sanitize_sheet_name(item_name),
+                    header=AI_SHEET_HEADER,
+                    row=[sn, date_text, label, ok_score, ng_score, model_name],
+                )
+            )
+        else:
+            for curve_name, curve_x, curve_y in resolved_curves.get(item_name, []):
+                x, y = _downsample_xy(
+                    curve_x,
+                    curve_y,
+                    min(int(max_points), EXCEL_MAX_DATA_POINTS),
+                )
+                prepared_x = _prepare_csv_coordinates(
+                    x,
+                    item_name=item_name,
+                    item_type=item_type,
+                )
+                formatted_y = [
+                    _format_csv_payload_field(
+                        value,
+                        decimal_places,
+                        item_name=item_name,
+                        field_role="曲线Y值",
+                    )
+                    for value in y
+                ]
+                prepared.append(
+                    _PreparedCsvRow(
+                        sheet_name=curve_name,
+                        header=CURVE_SHEET_HEADER_PREFIX
+                        + prepared_x,
+                        row=[sn, date_text] + formatted_y,
+                        expected_x=prepared_x,
+                    )
+                )
+
+        result_tuple = analysis_result_dict.get(item_name)
+        if (
+            EXCEL_OUTPUT_MARGIN in selected_outputs
+            and isinstance(result_tuple, tuple)
+            and len(result_tuple) == 2
+        ):
+            ok_val, deviation = result_tuple
+            cfg = analysis_config.get(item_name)
+            short_name = _export_short_name(item_name, item_type)
+            prepared.append(
+                _PreparedCsvRow(
+                    sheet_name=_make_margin_sheet_title(item_name),
+                    header=RESULT_SHEET_HEADER,
+                    row=[
+                        sn,
+                        _format_result_time_minute(date_text),
+                        f"{short_name} margin",
+                        _format_csv_margin_value(
+                            item_type,
+                            deviation,
+                            decimal_places,
+                            item_name=item_name,
+                        ),
+                        _export_unit(item_type, cfg if isinstance(cfg, dict) else None),
+                        "" if ok_val is None else ("PASS" if bool(ok_val) else "FAIL"),
+                        *_export_tolerance(cfg if isinstance(cfg, dict) else None),
+                    ],
+                )
+            )
+    return prepared
+
+
 def export_analysis_to_csv_spool(
     excel_cfg: dict[str, Any],
     *,
@@ -1165,6 +1531,11 @@ def export_analysis_to_csv_spool(
     if not isinstance(excel_cfg, dict) or not excel_cfg.get("enabled", True):
         return ExportResult(ok=True, message="Excel导出未启用")
 
+    try:
+        decimal_places = _resolve_csv_decimal_places(excel_cfg)
+    except ValueError as error:
+        return ExportResult(ok=False, message=str(error))
+
     selections = _normalize_runtime_output_selections(
         excel_cfg,
         analysis_config,
@@ -1178,6 +1549,22 @@ def export_analysis_to_csv_spool(
     if error:
         return ExportResult(ok=False, message=error)
 
+    max_points = resolve_excel_max_points(excel_cfg)
+    try:
+        prepared_rows = _prepare_csv_rows(
+            selections=selections,
+            analysis_items_data=analysis_items_data,
+            analysis_config=analysis_config,
+            analysis_result_dict=analysis_result_dict,
+            resolved_curves=resolved_curves,
+            sn=sn,
+            date_text=date_text,
+            max_points=max_points,
+            decimal_places=decimal_places,
+        )
+    except (_CsvDecimalFormattingError, _CsvCoordinateValidationError) as error:
+        return ExportResult(ok=False, message=str(error))
+
     try:
         file_path = str(file_path or resolve_excel_output_path(excel_cfg, product_model=product_model))
         parent_dir = os.path.dirname(file_path)
@@ -1185,7 +1572,6 @@ def export_analysis_to_csv_spool(
             os.makedirs(parent_dir, exist_ok=True)
     except Exception as e:
         return ExportResult(ok=False, message=f"保存目录不可达或无权限: {e}")
-    max_points = resolve_excel_max_points(excel_cfg)
     try:
         spool_dir = str(spool_dir or resolve_excel_spool_dir(excel_cfg, file_path=file_path))
         os.makedirs(spool_dir, exist_ok=True)
@@ -1222,75 +1608,21 @@ def export_analysis_to_csv_spool(
         except Exception as e:
             return ExportResult(ok=False, message=f"Excel加锁失败: {e}")
 
-    for item_name, selected_outputs in selections.items():
-        item_data = analysis_items_data.get(item_name)
-        if not isinstance(item_data, dict):
-            continue
-        item_type = item_data.get("type")
-        if item_type == "Spec":
-            continue
-
-        if item_type == "AI" and EXCEL_OUTPUT_TEST_CURVE in selected_outputs:
-            sheet_name = _sanitize_sheet_name(item_name)
-            csv_path = os.path.join(spool_dir, f"{_sanitize_filename(sheet_name)}.csv")
-            header = AI_SHEET_HEADER
-            label = item_data.get("label") or item_data.get("result") or ""
-            ok_score = item_data.get("ok_score")
-            ng_score = item_data.get("ng_score")
-            model_name = item_data.get("model_name") or item_data.get("model") or ""
-            ret = append_csv(
-                csv_path, header=header, row=[sn, date_text, label, ok_score, ng_score, model_name]
+    for prepared in prepared_rows:
+        if prepared.expected_x is None:
+            csv_path = os.path.join(
+                spool_dir,
+                f"{_sanitize_filename(prepared.sheet_name)}.csv",
             )
-            if not ret.ok:
-                return ret
         else:
-            named_curves = resolved_curves.get(item_name, [])
-            for curve_name, curve_x, curve_y in named_curves:
-                x, y = _downsample_xy(
-                    curve_x,
-                    curve_y,
-                    min(int(max_points), EXCEL_MAX_DATA_POINTS),
-                )
-
-                _sheet_name, csv_path = _resolve_curve_spool_csv_path(
-                    spool_dir,
-                    item_name=curve_name,
-                    expected_x=x,
-                )
-                header = CURVE_SHEET_HEADER_PREFIX + [
-                    _normalize_header_value(v) for v in x
-                ]
-                row = [sn, date_text] + list(y)
-                ret = append_csv(csv_path, header=header, row=row)
-                if not ret.ok:
-                    return ret
-
-        result_tuple = analysis_result_dict.get(item_name)
-        if (
-            EXCEL_OUTPUT_MARGIN in selected_outputs
-            and isinstance(result_tuple, tuple)
-            and len(result_tuple) == 2
-        ):
-            ok_val, deviation = result_tuple
-            cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
-            sheet_name = _make_margin_sheet_title(item_name)
-            csv_path = os.path.join(spool_dir, f"{_sanitize_filename(sheet_name)}.csv")
-
-            short_name = _export_short_name(item_name, item_type)
-            margin_name = f"{short_name} margin"
-            margin_text = _format_margin_value(item_type, deviation)
-            unit_text = _export_unit(item_type, cfg if isinstance(cfg, dict) else None)
-            result_text = "" if ok_val is None else ("PASS" if bool(ok_val) else "FAIL")
-            tol_text, limit_type_text = _export_tolerance(cfg if isinstance(cfg, dict) else None)
-            time_text = _format_result_time_minute(date_text)
-
-            ret = append_csv(
-                csv_path,
-                header=RESULT_SHEET_HEADER,
-                row=[sn, time_text, margin_name, margin_text, unit_text, result_text, tol_text, limit_type_text],
+            _sheet_name, csv_path = _resolve_curve_spool_csv_path(
+                spool_dir,
+                item_name=prepared.sheet_name,
+                expected_x=prepared.expected_x,
             )
-            if not ret.ok:
-                return ret
+        ret = append_csv(csv_path, header=prepared.header, row=prepared.row)
+        if not ret.ok:
+            return ret
 
     return ExportResult(ok=True, message=f"CSV缓存写入: {spool_dir}")
 

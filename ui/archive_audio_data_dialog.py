@@ -856,10 +856,31 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             self._is_switching_playback = False
 
     def _start_resolved_audio_playback(self, path):
+        if self.speaker is None:
+            return (
+                error_code.INVALID_PLAY,
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+        raw_device = self.speaker.get("index") if isinstance(self.speaker, dict) else None
+        if isinstance(raw_device, bool):
+            device = None
+        elif isinstance(raw_device, int):
+            device = raw_device
+        elif isinstance(raw_device, str):
+            try:
+                device = int(raw_device.strip(), 10)
+            except ValueError:
+                device = None
+        else:
+            device = None
+        if device is None or device < 0:
+            return (
+                error_code.INVALID_PLAY,
+                "输出设备信息无效，请在硬件管理中重新选择设备。",
+            )
         result = resolve_output_sample_rate(self.speaker)
         if not result.ok:
             return error_code.INVALID_PLAY, result.message
-        device = self.speaker.get("index") if isinstance(self.speaker, dict) else None
         return self.playback_controller.start_audio_playback(
             path,
             device=device,

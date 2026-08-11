@@ -362,6 +362,20 @@ class OutputCalibration(QWidget):
         This function controls the audio playback and stop based on the current playback state,
         and updates the countdown display during playback.
         """
+        if self._selected_speaker_for_playback() is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
+        if self._selected_speaker_index_for_playback() is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "输出设备信息无效，请在硬件管理中重新选择设备。",
+            )
+            return
         stimulus_dict = self.create_signal()
         sap = SoundcardAudioProcessor()
         if not self.play_flag:
@@ -408,11 +422,14 @@ class OutputCalibration(QWidget):
 
     def _selected_speaker_hardware_id(self):
         speaker = self._selected_speaker_for_playback()
-        if speaker is None:
-            saved_devices = SoundDeviceManager.load_selected_devices() or {}
-            speaker = saved_devices.get("speaker")
         hardware_id = self._speaker_field(speaker, "hardware_id") if speaker is not None else None
         return hardware_id or None
+
+    def _selected_speaker_index_for_playback(self):
+        speaker = self._selected_speaker_for_playback()
+        if speaker is None:
+            return None
+        return self._coerce_non_negative_int(self._speaker_field(speaker, "index"))
 
     def _is_asio_output_playback(self):
         speaker = self._selected_speaker_for_playback()
@@ -508,7 +525,7 @@ class OutputCalibration(QWidget):
     def _resolve_output_playback_params(self):
         speaker = self._selected_speaker_for_playback()
         if speaker is None:
-            return {"sample_rate": 44100}
+            return None
 
         default_sample_rate = self._coerce_positive_sample_rate(
             self._speaker_field(speaker, "default_samplerate")
@@ -520,7 +537,7 @@ class OutputCalibration(QWidget):
         )
 
         if device_index is None:
-            return {"sample_rate": 44100}
+            return None
 
         sample_rate_candidates = []
         if default_sample_rate is not None:
@@ -644,6 +661,20 @@ class OutputCalibration(QWidget):
             - stimulus_dict: A dictionary containing the generated stimulus signal data, sampling rate, and current
         stimulus amplitude.
         """
+        if self._selected_speaker_for_playback() is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
+        if self._selected_speaker_index_for_playback() is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "输出设备信息无效，请在硬件管理中重新选择设备。",
+            )
+            return
         target_voltage = self.target_voltage_box.value()
         scm = SoundcardCalibrationManager(speaker_hardware_id=self._selected_speaker_hardware_id())
         calibrate_code, calibrate_result = scm.calibrate_amplitude(target_voltage)
@@ -724,6 +755,20 @@ class OutputCalibration(QWidget):
         calibration.
             After calibration, it handles the results based on the fit_code: logs and prompts success or failure.
         """
+        if self._selected_speaker_for_playback() is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
+        if self._selected_speaker_index_for_playback() is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "输出设备信息无效，请在硬件管理中重新选择设备。",
+            )
+            return
         scm = SoundcardCalibrationManager(speaker_hardware_id=self._selected_speaker_hardware_id())
         if len(self.output_voltage_value) != self.calibration_param["calibration_nums"]:
             self.calibration_popup(success_flag=False)

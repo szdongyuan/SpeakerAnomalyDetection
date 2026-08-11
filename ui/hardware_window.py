@@ -286,7 +286,7 @@ class HardwareSelectionView(QDialog):
         mic_channel_box = self._wrap_table_group("选择通道", self.mic_channel_table)
 
         # 左右两个大框
-        left_big = GroupBox("选择扬声器")
+        left_big = GroupBox("选择扬声器（可选）")
         left_layout = QVBoxLayout()
         left_layout.addWidget(speaker_device_box)
         left_big.setLayout(left_layout)
@@ -519,8 +519,8 @@ class HardwareSelectionController:
 
         mic_channels = sorted(int(x) for x in self.view.mic_channel_table.checked_payloads())
 
-        if not (speaker and mic and mic_channels):
-            MessageBox.warning(self.view, "提示", "请选择扬声器和麦克风设备，以及麦克风通道！")
+        if not (mic and mic_channels):
+            MessageBox.warning(self.view, "提示", "请选择麦克风设备和麦克风通道！")
             return None
 
         SoundDeviceManager.refresh_available_device()
@@ -533,16 +533,24 @@ class HardwareSelectionController:
 
         runtime_index = self._runtime_devices_by_api(runtime_devices)
         mic_match = self._match_registered_asset(mic, runtime_index)
-        speaker_match = self._match_registered_asset(speaker, runtime_index)
-        if mic_match[0] == "missing" or speaker_match[0] == "missing":
+        if mic_match[0] == "missing":
             MessageBox.warning(self.view, "提示", "已注册硬件当前不可用，请检查设备连接后重试。")
             return None
-        if mic_match[0] == "ambiguous" or speaker_match[0] == "ambiguous":
+        if mic_match[0] == "ambiguous":
             MessageBox.warning(self.view, "提示", "已注册硬件匹配到多个当前设备，无法安全应用。")
             return None
 
         runtime_mic = mic_match[1]
-        runtime_speaker = speaker_match[1]
+        if speaker is not None:
+            speaker_match = self._match_registered_asset(speaker, runtime_index)
+            if speaker_match[0] == "missing":
+                MessageBox.warning(self.view, "提示", "已注册硬件当前不可用，请检查设备连接后重试。")
+                return None
+            if speaker_match[0] == "ambiguous":
+                MessageBox.warning(self.view, "提示", "已注册硬件匹配到多个当前设备，无法安全应用。")
+                return None
+            runtime_speaker = speaker_match[1]
+
         mic_max_input_channels = runtime_mic.get("max_input_channels")
         if not self._is_positive_int(mic_max_input_channels):
             MessageBox.warning(self.view, "提示", "当前麦克风设备不支持输入通道，请检查设备连接或重新选择。")
@@ -550,14 +558,16 @@ class HardwareSelectionController:
         if any(channel < 0 or channel >= mic_max_input_channels for channel in mic_channels):
             MessageBox.warning(self.view, "提示", "当前麦克风设备不支持所选输入通道，请检查设备连接或重新选择。")
             return None
-        if not self._is_positive_int(runtime_speaker.get("max_output_channels")):
-            MessageBox.warning(self.view, "提示", "当前扬声器设备不支持输出通道，请检查设备连接或重新选择。")
-            return None
 
         mic_idx = int(runtime_mic.get("index"))
-        speaker_idx = int(runtime_speaker.get("index"))
         mic_payload = self._augment_runtime_device(runtime_mic, mic)
-        speaker_payload = self._augment_runtime_device(runtime_speaker, speaker)
+        speaker_payload = None
+        if speaker is not None:
+            if not self._is_positive_int(runtime_speaker.get("max_output_channels")):
+                MessageBox.warning(self.view, "提示", "当前扬声器设备不支持输出通道，请检查设备连接或重新选择。")
+                return None
+            speaker_idx = int(runtime_speaker.get("index"))
+            speaker_payload = self._augment_runtime_device(runtime_speaker, speaker)
 
         try:
             selected_devices_snapshot = self._snapshot_selected_devices_config()
@@ -581,7 +591,10 @@ class HardwareSelectionController:
             return None
 
         try:
-            SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
+            if speaker_payload is None:
+                SoundDeviceManager.change_default_input_device(mic_idx)
+            else:
+                SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
         except Exception as e:
             try:
                 self._restore_selected_devices_config(selected_devices_snapshot)

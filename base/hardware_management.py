@@ -92,9 +92,9 @@ def augment_runtime_device(runtime_device, asset):
 
 def build_selected_device_payload(mic, speaker, mic_channels):
     return {
-        "version": 2,
+        "version": 3,
         "mic": _selected_device_entry(mic),
-        "speaker": _selected_device_entry(speaker),
+        "speaker": _selected_device_entry(speaker) if speaker is not None else None,
         "mic_channels": [int(channel) for channel in mic_channels],
     }
 

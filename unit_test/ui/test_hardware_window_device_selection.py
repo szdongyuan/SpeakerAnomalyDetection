@@ -180,6 +180,15 @@ def test_hardware_selection_view_has_no_manual_refresh_button(qapp):
         view.close()
 
 
+def test_hardware_selection_view_labels_speaker_as_optional_without_speaker_requirement(qapp):
+    view = HardwareSelectionView()
+    try:
+        group_titles = [group.title() for group in view.findChildren(module.GroupBox)]
+        assert "选择扬声器（可选）" in group_titles
+    finally:
+        view.close()
+
+
 def test_selection_controller_initial_render_still_loads_registered_assets(qapp, monkeypatch):
     speaker = _asset("speaker-1", "Registered speaker", "Runtime speaker", outputs=2)
     repository = FakeRepository([speaker])
@@ -439,15 +448,14 @@ def test_ok_clicked_refreshes_runtime_devices_before_matching(qapp, monkeypatch)
 
 
 @pytest.mark.parametrize(
-    "select_speaker,select_mic,select_channel",
+    "select_mic,select_channel",
     [
-        (False, True, True),
-        (True, False, True),
-        (True, True, False),
+        (False, True),
+        (True, False),
     ],
 )
-def test_ok_clicked_rejects_missing_selection_before_runtime_matching(
-    qapp, monkeypatch, select_speaker, select_mic, select_channel
+def test_ok_clicked_rejects_missing_required_selection_before_runtime_matching(
+    qapp, monkeypatch, select_mic, select_channel
 ):
     speaker = _asset("speaker-1", "Registered speaker", "Runtime speaker", outputs=2)
     mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
@@ -474,8 +482,6 @@ def test_ok_clicked_rejects_missing_selection_before_runtime_matching(
     )
     monkeypatch.setattr(module.SoundDeviceManager, "get_device_info", staticmethod(runtime_enumeration))
     try:
-        if select_speaker:
-            view.speaker_device_table.set_checked_by_predicate(lambda payload: payload["hardware_id"] == "speaker-1")
         if select_mic:
             view.mic_device_table.set_checked_by_predicate(lambda payload: payload["hardware_id"] == "mic-1")
         if select_channel:
@@ -487,7 +493,269 @@ def test_ok_clicked_rejects_missing_selection_before_runtime_matching(
         assert runtime_calls == []
         assert view.result() != QDialog.Accepted
         assert warnings
-        assert "请选择扬声器和麦克风设备，以及麦克风通道" in warnings[-1][2]
+        assert warnings[-1][2] == "请选择麦克风设备和麦克风通道！"
+    finally:
+        view.close()
+
+
+def test_ok_clicked_accepts_mic_and_channels_without_speaker(qapp, monkeypatch):
+    mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
+    repository = FakeRepository(
+        [mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]}
+    )
+    runtime_mic = _device(7, "Runtime mic", inputs=2)
+    runtime_devices = {"API": {"input": [runtime_mic], "output": []}}
+    saved = []
+    input_only_applied = []
+    duplex_applied = []
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "save_selected_devices",
+        staticmethod(lambda *args: saved.append(args)),
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_idx: input_only_applied.append(mic_idx)),
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *args: duplex_applied.append(args)),
+    )
+
+    controller, view, warnings = _build_controller(
+        qapp, repository, monkeypatch, runtime_devices=runtime_devices
+    )
+    try:
+        view.mic_device_table.set_checked_by_predicate(
+            lambda payload: payload["hardware_id"] == "mic-1"
+        )
+        controller._restore_channels(view.mic_channel_table, [0])
+
+        controller._on_ok_clicked()
+
+        selected_speaker, selected_mic, selected_channels = controller.get_selected_devices()
+        assert warnings == []
+        assert saved == [(selected_mic, None, [0])]
+        assert input_only_applied == [runtime_mic["index"]]
+        assert duplex_applied == []
+        assert selected_speaker is None
+        assert selected_channels == [0]
+        assert view.result() == QDialog.Accepted
+    finally:
+        view.close()
+
+
+def test_ok_clicked_unchecking_speaker_persists_null_and_applies_only_mic(
+    qapp, monkeypatch, tmp_path
+):
+    speaker = _asset("speaker-1", "Registered speaker", "Runtime speaker", outputs=2)
+    mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
+    repository = FakeRepository(
+        [speaker, mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]}
+    )
+    runtime_mic = _device(7, "Runtime mic", inputs=2)
+    runtime_speaker = _device(9, "Runtime speaker", outputs=2)
+    runtime_devices = {
+        "API": {"input": [runtime_mic], "output": [runtime_speaker]}
+    }
+    config_path = tmp_path / "last_audio_devices.json"
+    monkeypatch.setattr(
+        module.sound_device_manager_module, "AUDIO_DEVICE_CONFIG_PATH", str(config_path)
+    )
+    input_only_applied = []
+    duplex_applied = []
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_idx: input_only_applied.append(mic_idx)),
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *args: duplex_applied.append(args)),
+    )
+
+    model = HardwareSelectionModel(
+        HardwareSelectionState(
+            speaker_device=speaker,
+            mic_device=mic,
+            mic_channels=[0],
+            api_name="API",
+        ),
+        repository=repository,
+    )
+    view = HardwareSelectionView()
+    warnings = []
+    monkeypatch.setattr(
+        module.SoundDeviceManager, "refresh_available_device", staticmethod(lambda: None)
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "get_device_info",
+        staticmethod(lambda: runtime_devices),
+    )
+    monkeypatch.setattr(
+        module.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args)),
+    )
+    controller = HardwareSelectionController(model, view)
+    try:
+        qapp.processEvents()
+        view.speaker_device_table.set_checked_by_predicate(lambda _payload: False)
+
+        controller._on_ok_clicked()
+
+        persisted = json.loads(config_path.read_text(encoding="utf-8"))
+        assert warnings == []
+        assert persisted["speaker"] is None
+        assert input_only_applied == [7]
+        assert duplex_applied == []
+        assert controller.get_selected_devices()[0] is None
+        assert view.result() == QDialog.Accepted
+    finally:
+        view.close()
+
+
+def test_ok_clicked_without_speaker_restores_exact_config_when_save_fails(
+    qapp, monkeypatch, tmp_path
+):
+    mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
+    repository = FakeRepository(
+        [mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]}
+    )
+    runtime_devices = {"API": {"input": [_device(7, "Runtime mic", inputs=2)], "output": []}}
+    config_path = tmp_path / "last_audio_devices.json"
+    previous_bytes = b'{\n  "speaker": {"name": "Previous output"}\n}\n'
+    config_path.write_bytes(previous_bytes)
+    monkeypatch.setattr(
+        module.sound_device_manager_module, "AUDIO_DEVICE_CONFIG_PATH", str(config_path)
+    )
+    input_only_applied = []
+
+    def partial_save(*_args):
+        config_path.write_text('{"speaker": null', encoding="utf-8")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        module.SoundDeviceManager, "save_selected_devices", staticmethod(partial_save)
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_idx: input_only_applied.append(mic_idx)),
+    )
+
+    controller, view, warnings = _build_controller(
+        qapp, repository, monkeypatch, runtime_devices=runtime_devices
+    )
+    try:
+        view.mic_device_table.set_checked_by_predicate(
+            lambda payload: payload["hardware_id"] == "mic-1"
+        )
+        controller._restore_channels(view.mic_channel_table, [0])
+
+        controller._on_ok_clicked()
+
+        assert view.result() != QDialog.Accepted
+        assert input_only_applied == []
+        assert config_path.read_bytes() == previous_bytes
+        assert controller.model.state.speaker_device is None
+        assert warnings and "保存" in warnings[-1][2]
+    finally:
+        view.close()
+
+
+def test_ok_clicked_without_speaker_restores_exact_config_when_input_apply_fails(
+    qapp, monkeypatch, tmp_path
+):
+    mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
+    repository = FakeRepository(
+        [mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]}
+    )
+    runtime_devices = {"API": {"input": [_device(7, "Runtime mic", inputs=2)], "output": []}}
+    config_path = tmp_path / "last_audio_devices.json"
+    previous_bytes = b'{\n  "speaker": {"name": "Previous output"}\n}\n'
+    config_path.write_bytes(previous_bytes)
+    monkeypatch.setattr(
+        module.sound_device_manager_module, "AUDIO_DEVICE_CONFIG_PATH", str(config_path)
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(
+            lambda _mic_idx: (_ for _ in ()).throw(RuntimeError("input apply failed"))
+        ),
+    )
+
+    controller, view, warnings = _build_controller(
+        qapp, repository, monkeypatch, runtime_devices=runtime_devices
+    )
+    try:
+        view.mic_device_table.set_checked_by_predicate(
+            lambda payload: payload["hardware_id"] == "mic-1"
+        )
+        controller._restore_channels(view.mic_channel_table, [0])
+
+        controller._on_ok_clicked()
+
+        assert view.result() != QDialog.Accepted
+        assert config_path.read_bytes() == previous_bytes
+        assert controller.model.state.speaker_device is None
+        assert warnings and "应用" in warnings[-1][2]
+    finally:
+        view.close()
+
+
+def test_ok_clicked_rejects_selected_speaker_missing_at_runtime_without_degrading(
+    qapp, monkeypatch
+):
+    speaker = _asset("speaker-1", "Registered speaker", "Missing speaker", outputs=2)
+    mic = _asset("mic-1", "Registered mic", "Runtime mic", inputs=2)
+    repository = FakeRepository(
+        [speaker, mic], channels={"mic-1": [_input_channel("mic-1", "In1", 0)]}
+    )
+    runtime_devices = {"API": {"input": [_device(7, "Runtime mic", inputs=2)], "output": []}}
+    saved = []
+    input_only_applied = []
+    duplex_applied = []
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "save_selected_devices",
+        staticmethod(lambda *args: saved.append(args)),
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_idx: input_only_applied.append(mic_idx)),
+    )
+    monkeypatch.setattr(
+        module.SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *args: duplex_applied.append(args)),
+    )
+
+    controller, view, warnings = _build_controller(
+        qapp, repository, monkeypatch, runtime_devices=runtime_devices
+    )
+    try:
+        view.speaker_device_table.set_checked_by_predicate(
+            lambda payload: payload["hardware_id"] == "speaker-1"
+        )
+        view.mic_device_table.set_checked_by_predicate(
+            lambda payload: payload["hardware_id"] == "mic-1"
+        )
+        controller._restore_channels(view.mic_channel_table, [0])
+
+        controller._on_ok_clicked()
+
+        assert view.result() != QDialog.Accepted
+        assert saved == []
+        assert input_only_applied == []
+        assert duplex_applied == []
+        assert warnings and "不可用" in warnings[-1][2]
     finally:
         view.close()
 

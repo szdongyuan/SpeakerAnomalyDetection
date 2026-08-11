@@ -474,6 +474,56 @@ class AnalysisModelSelect(QDialog):
             MessageBox.warning(self, "提示", "请先配置测试序列")
             return
 
+        mic = _safe_dialog_attr(self, "mic", None)
+        if mic is None:
+            mic = _safe_dialog_attr(self.select_list, "mic", None)
+        speaker = _safe_dialog_attr(self, "speaker", None)
+        if speaker is None:
+            speaker = _safe_dialog_attr(self.select_list, "speaker", None)
+        if speaker is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
+
+        def normalized_device_record(device):
+            raw_index = device.get("index") if isinstance(device, dict) else None
+            if isinstance(raw_index, bool):
+                return None
+            if isinstance(raw_index, int):
+                device_index = raw_index
+            elif isinstance(raw_index, str):
+                try:
+                    device_index = int(raw_index.strip(), 10)
+                except ValueError:
+                    return None
+            else:
+                return None
+            if device_index < 0:
+                return None
+            normalized = dict(device)
+            normalized["index"] = device_index
+            return normalized
+
+        selected_mic = normalized_device_record(mic)
+        if selected_mic is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "输入设备信息无效，请在硬件管理中重新选择设备。",
+            )
+            return
+        selected_speaker = normalized_device_record(speaker)
+        if selected_speaker is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "输出设备信息无效，请在硬件管理中重新选择设备。",
+            )
+            return
+
         seq = self.select_list.config[0]
 
         detail = normalize_play_record_detail(getattr(seq, "detail", None) or {})
@@ -546,10 +596,7 @@ class AnalysisModelSelect(QDialog):
             # Blocking play+record (also saves wav)
             try:
                 sap = SoundcardAudioProcessor()
-                mic = _safe_dialog_attr(self, "mic", None)
-                if mic is None:
-                    mic = _safe_dialog_attr(self.select_list, "mic", None)
-                hardware_id = mic.get("hardware_id") if isinstance(mic, dict) else None
+                hardware_id = selected_mic.get("hardware_id")
                 input_channels = _safe_dialog_attr(self.select_list, "mic_channels", None) or [0]
                 input_channels = [int(channel) for channel in input_channels]
                 input_channels = [input_channels[0]] if input_channels else [0]
@@ -558,6 +605,8 @@ class AnalysisModelSelect(QDialog):
                     hardware_id=hardware_id,
                     logger=self.default_logger,
                 )
+                recorded_dict["input_device"] = selected_mic
+                recorded_dict["output_device"] = selected_speaker
                 recorded_dict["input_channels"] = input_channels
                 recorded_dict["wav_calibration_metadata"] = calibration_metadata
                 record_code, aligned_data = sap.sd_play_rec(

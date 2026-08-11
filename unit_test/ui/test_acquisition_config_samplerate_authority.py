@@ -11,6 +11,9 @@ from ui.acquisition_config_window import (
 )
 
 
+EXPECTED_MISSING_SPEAKER_PROMPT = "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+
+
 @pytest.fixture(scope="module")
 def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -54,7 +57,7 @@ def test_play_record_config_blocks_mismatched_samplerates(qapp, monkeypatch):
     assert getattr(window, "final_data", None) is None
 
 
-def test_play_record_stimulus_config_blocks_missing_output_before_opening_window(qapp, monkeypatch):
+def test_play_record_open_stimulus_blocks_missing_speaker_with_exact_prompt(qapp, monkeypatch):
     detail = {"stimulus_info": {"sample_rate": 44100, "total_time": 0.01}}
     window = PlayRecordConfigWindow(
         detail,
@@ -84,9 +87,54 @@ def test_play_record_stimulus_config_blocks_missing_output_before_opening_window
 
     assert created_windows == []
     assert len(warnings) == 1
-    assert warnings[0][1:] == ("采样率配置", "未选择输出设备，请在硬件管理中选择设备。")
+    assert warnings[0][1:] == ("提示", EXPECTED_MISSING_SPEAKER_PROMPT)
     assert window.stimulus_config_data == before_click_data
     assert not hasattr(window, "stimulus_window")
+
+
+def test_play_record_missing_speaker_ok_button_is_clickable_and_prompts(qapp, monkeypatch):
+    warnings = []
+    saved = []
+    window = PlayRecordConfigWindow(
+        {"stimulus_info": {"sample_rate": 44100, "total_time": 0.01}},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker=None,
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+    monkeypatch.setattr("ui.acquisition_config_window.MessageBox.warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        "ui.acquisition_config_window.save_acquisition_default",
+        lambda *args, **kwargs: saved.append(args) or True,
+    )
+
+    assert window.ok_btn.isEnabled() is True
+    window.ok_btn.click()
+
+    assert [args[1:] for args in warnings] == [("提示", EXPECTED_MISSING_SPEAKER_PROMPT)]
+    assert accepted == []
+    assert saved == []
+    assert window.final_data is None
+
+
+def test_play_record_default_blocks_missing_speaker_with_exact_prompt(qapp, monkeypatch):
+    warnings = []
+    saved = []
+    window = PlayRecordConfigWindow(
+        {"stimulus_info": {"sample_rate": 44100, "total_time": 0.01}},
+        mic={"name": "mic", "samplerate": 44100},
+        speaker=None,
+    )
+    monkeypatch.setattr("ui.acquisition_config_window.MessageBox.warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        "ui.acquisition_config_window.save_acquisition_default",
+        lambda *args, **kwargs: saved.append(args) or True,
+    )
+
+    window.on_default_btn_clicked()
+
+    assert [args[1:] for args in warnings] == [("提示", EXPECTED_MISSING_SPEAKER_PROMPT)]
+    assert saved == []
 
 
 def test_play_record_config_rebuilds_frequency_stepped_payload_at_resolved_duplex_samplerate(qapp):
@@ -193,7 +241,12 @@ def test_record_config_monitor_default_save_blocks_mismatched_samplerates(qapp, 
     monkeypatch.setattr("ui.acquisition_config_window.MessageBox.warning", lambda *args: warnings.append(args))
     monkeypatch.setattr("ui.acquisition_config_window.MessageBox.information", lambda *args: None)
     window = RecordConfigWindow(
-        {"sample_rate": 44100, "total_time": 1.0, "monitor_playback": True},
+        {
+            "sample_rate": 44100,
+            "total_time": 1.0,
+            "monitor_playback": True,
+            "use_streaming_recording": True,
+        },
         mic={"name": "mic", "samplerate": 44100},
         speaker={"name": "speaker", "samplerate": 48000, "max_output_channels": 2},
     )
@@ -203,6 +256,39 @@ def test_record_config_monitor_default_save_blocks_mismatched_samplerates(qapp, 
     assert saved == []
     assert warnings
     assert "不一致" in warnings[-1][-1]
+
+
+@pytest.mark.parametrize("action", ["on_click_ok_btn", "on_default_btn_clicked"])
+def test_record_config_forced_monitor_playback_blocks_missing_speaker_with_exact_prompt(
+    qapp, monkeypatch, action
+):
+    warnings = []
+    saved = []
+    window = RecordConfigWindow(
+        {
+            "sample_rate": 44100,
+            "total_time": 1.0,
+            "monitor_playback": False,
+            "use_streaming_recording": True,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker=None,
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+    window.monitor_checkbox.setChecked(True)
+    monkeypatch.setattr("ui.acquisition_config_window.MessageBox.warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        "ui.acquisition_config_window.save_acquisition_default",
+        lambda *args, **kwargs: saved.append(args) or True,
+    )
+
+    getattr(window, action)()
+
+    assert [args[1:] for args in warnings] == [("提示", EXPECTED_MISSING_SPEAKER_PROMPT)]
+    assert accepted == []
+    assert saved == []
+    assert window.final_data is None
 
 
 def test_import_stimulus_audio_config_does_not_present_speaker_samplerate_as_analysis_rate(qapp):

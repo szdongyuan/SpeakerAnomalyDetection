@@ -9,9 +9,13 @@ from PyQt5.QtWidgets import QApplication
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ui import operation_sequence
+from base.soundcard_audio_processor import SoundcardAudioProcessor
 
 
-@pytest.fixture
+EXPECTED_MISSING_SPEAKER_PROMPT = "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+
+
+@pytest.fixture(scope="session")
 def qapp():
     return QApplication.instance() or QApplication([])
 
@@ -39,8 +43,8 @@ def test_record_golden_sample_converts_configured_recording_start_delay(qapp, mo
     dialog.using_config_path = "unused.json"
     dialog.default_logger = SimpleNamespace(error=lambda *args, **kwargs: None)
     dialog.set_data_struct_stimulus_signal = lambda *args, **kwargs: None
-    dialog.mic = {"samplerate": 48000}
-    dialog.speaker = {"samplerate": 48000}
+    dialog.mic = {"samplerate": 48000, "index": "5"}
+    dialog.speaker = {"samplerate": 48000, "index": "7"}
 
     def fake_get_dict(data_struct, recording_start_delay_ms=None, total_time=None):
         recorded = {"sr": data_struct.sample_rate, "num_frames": 2}
@@ -67,6 +71,9 @@ def test_record_golden_sample_converts_configured_recording_start_delay(qapp, mo
 
     assert captured["recorded_dict"]["recording_start_delay_frames"] == 12000
     assert "recording_start_delay_ms" not in captured["recorded_dict"]
+    assert captured["recorded_dict"]["input_device"]["index"] == 5
+    assert captured["recorded_dict"]["output_device"]["index"] == 7
+    assert SoundcardAudioProcessor._playrec_device_selector(captured["recorded_dict"]) == (5, 7)
 
 
 def test_golden_sample_runtime_rate_requires_selected_duplex_devices():
@@ -82,6 +89,95 @@ def test_golden_sample_runtime_rate_requires_selected_duplex_devices():
     assert result.ok is False
     assert result.sample_rate is None
     assert "输入设备" in result.message
+
+
+def test_record_golden_sample_missing_speaker_prompts_before_output_work(qapp, monkeypatch):
+    data_struct = SimpleNamespace(sample_rate=48000, store_wave_data=None)
+    seq = SimpleNamespace(
+        detail={"recording_start_delay_ms": 0.0},
+        analysis_list={
+            "display_sequence": ["fr"],
+            "fr": {"type": "FR", "golden_sample_checked": True},
+        },
+    )
+    dialog = operation_sequence.AnalysisModelSelect.__new__(operation_sequence.AnalysisModelSelect)
+    dialog.select_list = SimpleNamespace(config=[seq], data_struct=data_struct, speaker=None)
+    dialog.mic = {"samplerate": 48000}
+    dialog.speaker = None
+    warnings = []
+    monkeypatch.setattr(operation_sequence.MessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        operation_sequence,
+        "SoundcardAudioProcessor",
+        lambda: (_ for _ in ()).throw(AssertionError("output processor must not be constructed")),
+    )
+    monkeypatch.setattr(
+        operation_sequence.os,
+        "makedirs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("temporary output setup must not run")),
+    )
+
+    dialog.record_golden_sample_btn_clicked()
+
+    assert [args[1:] for args in warnings] == [("提示", EXPECTED_MISSING_SPEAKER_PROMPT)]
+    assert data_struct.sample_rate == 48000
+    assert data_struct.store_wave_data is None
+
+
+@pytest.mark.parametrize(
+    ("mic", "speaker", "expected_message"),
+    [
+        (None, {"samplerate": 48000, "index": 7}, "输入设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": True}, {"samplerate": 48000, "index": 7}, "输入设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": -1}, {"samplerate": 48000, "index": 7}, "输入设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": 1.0}, {"samplerate": 48000, "index": 7}, "输入设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": "abc"}, {"samplerate": 48000, "index": 7}, "输入设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": 5}, {}, "输出设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": 5}, {"samplerate": 48000, "index": True}, "输出设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": 5}, {"samplerate": 48000, "index": -1}, "输出设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": 5}, {"samplerate": 48000, "index": 1.0}, "输出设备信息无效，请在硬件管理中重新选择设备。"),
+        ({"samplerate": 48000, "index": 5}, {"samplerate": 48000, "index": "abc"}, "输出设备信息无效，请在硬件管理中重新选择设备。"),
+    ],
+)
+def test_record_golden_sample_rejects_invalid_selected_device_before_work(
+    qapp, monkeypatch, mic, speaker, expected_message
+):
+    data_struct = SimpleNamespace(sample_rate=48000, store_wave_data=None)
+    seq = SimpleNamespace(
+        detail={"recording_start_delay_ms": 0.0},
+        analysis_list={
+            "display_sequence": ["fr"],
+            "fr": {"type": "FR", "golden_sample_checked": True},
+        },
+    )
+    dialog = operation_sequence.AnalysisModelSelect.__new__(operation_sequence.AnalysisModelSelect)
+    dialog.select_list = SimpleNamespace(config=[seq], data_struct=data_struct)
+    dialog.mic = mic
+    dialog.speaker = speaker
+    warnings = []
+    monkeypatch.setattr(operation_sequence.MessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        dialog,
+        "set_data_struct_stimulus_signal",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("stimulus setup must not run")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        operation_sequence,
+        "SoundcardAudioProcessor",
+        lambda: (_ for _ in ()).throw(AssertionError("output processor must not be constructed")),
+    )
+    monkeypatch.setattr(
+        operation_sequence.os,
+        "makedirs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("temporary output setup must not run")),
+    )
+
+    dialog.record_golden_sample_btn_clicked()
+
+    assert [args[1:] for args in warnings] == [("提示", expected_message)]
+    assert data_struct.sample_rate == 48000
+    assert data_struct.store_wave_data is None
 
 
 def test_record_golden_sample_stimulus_setup_exception_restores_runtime_stimulus_state(qapp, monkeypatch):

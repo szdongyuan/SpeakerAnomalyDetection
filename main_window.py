@@ -40,7 +40,9 @@ class MainWindow(QMainWindow):
         self.mic_channels = startup_devices.get("mic_channels", [])
         self.startup_device_fallback_targets = startup_devices.get("fallback_targets", [])
         self.startup_device_notice_message = startup_devices.get("startup_notice_message")
-        self.device_workflow_available = bool(startup_devices.get("device_available", bool(self.mic and self.speaker)))
+        self.device_workflow_available = bool(
+            startup_devices.get("device_available", bool(self.mic and self.mic_channels))
+        )
         self.startup_device_error_reason = startup_devices.get("startup_device_error_reason")
         self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
         self.startup_recovery_action = startup_devices.get("startup_recovery_action")
@@ -286,7 +288,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _audio_device_selection_complete(speaker, mic, mic_channels):
-        return bool(speaker and mic and mic_channels)
+        return bool(mic and mic_channels)
 
     @staticmethod
     def _sequence_audio_workflow_active(sequence_window):

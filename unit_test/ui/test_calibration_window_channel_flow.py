@@ -323,8 +323,7 @@ def test_output_create_signal_falls_back_when_all_selected_device_preflight_cand
         widget.close()
 
 
-def test_output_create_signal_preserves_default_playback_when_no_selected_speaker(qapp, monkeypatch):
-    fake = _use_fake_stimulus(monkeypatch)
+def test_output_resolve_playback_params_rejects_missing_speaker(qapp, monkeypatch):
     monkeypatch.setattr(
         calibration_window.sd,
         "check_output_settings",
@@ -332,25 +331,140 @@ def test_output_create_signal_preserves_default_playback_when_no_selected_speake
     )
     widget = calibration_window.OutputCalibration()
     try:
-        stimulus = widget.create_signal()
+        playback_params = widget._resolve_output_playback_params()
 
-        assert fake.sample_rates == [44100]
-        assert stimulus["sr"] == 44100
-        assert "device" not in stimulus
-        assert "output_channels" not in stimulus
+        assert playback_params is None
+    finally:
+        widget.close()
+
+
+def test_output_playback_rejects_missing_speaker_before_state_changes(qapp, monkeypatch):
+    warnings = []
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = None
+        monkeypatch.setattr(
+            calibration_window.MessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+        )
+        monkeypatch.setattr(
+            widget,
+            "create_signal",
+            lambda: pytest.fail("signal generation should not start"),
+        )
+        monkeypatch.setattr(
+            calibration_window.threading,
+            "Thread",
+            lambda *args, **kwargs: pytest.fail("playback thread should not be created"),
+        )
+        monkeypatch.setattr(
+            calibration_window.SoundcardAudioProcessor,
+            "sd_play",
+            lambda self, params: pytest.fail("playback should not start"),
+        )
+
+        widget.play_btn_clicked()
+
+        assert len(warnings) == 1
+        assert warnings[0][0][2] == "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+        assert widget.play_flag is False
+        assert widget.timer.isActive() is False
+    finally:
+        widget.close()
+
+
+def test_output_test_calibration_rejects_missing_speaker_before_database_access(
+    qapp, monkeypatch
+):
+    warnings = []
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = None
+        monkeypatch.setattr(
+            calibration_window.MessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "SoundcardCalibrationManager",
+            lambda *args, **kwargs: pytest.fail("calibration database should not be accessed"),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "StimulusSignal",
+            lambda: pytest.fail("signal generation should not start"),
+        )
+        monkeypatch.setattr(
+            calibration_window.SoundcardAudioProcessor,
+            "sd_play",
+            lambda self, params: pytest.fail("playback should not start"),
+        )
+
+        widget.test_calibration()
+
+        assert len(warnings) == 1
+        assert warnings[0][0][2] == "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+    finally:
+        widget.close()
+
+
+def test_output_calibration_rejects_missing_speaker_before_database_access(qapp, monkeypatch):
+    warnings = []
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = None
+        monkeypatch.setattr(
+            calibration_window.MessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "SoundcardCalibrationManager",
+            lambda *args, **kwargs: pytest.fail("calibration database should not be accessed"),
+        )
+
+        widget.calibration()
+
+        assert len(warnings) == 1
+        assert warnings[0][0][2] == "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+    finally:
+        widget.close()
+
+
+def test_selected_speaker_hardware_id_does_not_fall_back_to_saved_speaker(qapp, monkeypatch):
+    load_calls = []
+    monkeypatch.setattr(
+        calibration_window.SoundDeviceManager,
+        "load_selected_devices",
+        staticmethod(
+            lambda: load_calls.append("loaded")
+            or {"speaker": {"hardware_id": "saved-speaker"}}
+        ),
+    )
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = None
+
+        hardware_id = widget._selected_speaker_hardware_id()
+
+        assert hardware_id is None
+        assert load_calls == []
     finally:
         widget.close()
 
 
 @pytest.mark.parametrize("invalid_index", [None, True, False, -1, 1.2, "abc"])
-def test_output_create_signal_skips_preflight_and_omits_device_for_invalid_selected_speaker_index(
+def test_output_playback_rejects_invalid_selected_speaker_index_before_state_changes(
     qapp, monkeypatch, invalid_index
 ):
-    fake = _use_fake_stimulus(monkeypatch)
+    warnings = []
     monkeypatch.setattr(
         calibration_window.sd,
         "check_output_settings",
-        lambda **kwargs: pytest.fail("preflight should be skipped"),
+        lambda **kwargs: pytest.fail("selected-device preflight should not start"),
     )
     widget = calibration_window.OutputCalibration()
     try:
@@ -359,13 +473,101 @@ def test_output_create_signal_skips_preflight_and_omits_device_for_invalid_selec
             "default_samplerate": 96000.0,
             "max_output_channels": 2,
         }
+        monkeypatch.setattr(
+            calibration_window.MessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+        )
+        monkeypatch.setattr(
+            widget,
+            "create_signal",
+            lambda: pytest.fail("signal generation should not start"),
+        )
+        monkeypatch.setattr(
+            calibration_window.threading,
+            "Thread",
+            lambda *args, **kwargs: pytest.fail("playback thread should not be created"),
+        )
+        monkeypatch.setattr(
+            calibration_window.SoundcardAudioProcessor,
+            "sd_play",
+            lambda self, params: pytest.fail("playback should not start"),
+        )
 
-        stimulus = widget.create_signal()
+        widget.play_btn_clicked()
 
-        assert fake.sample_rates == [44100]
-        assert stimulus["sr"] == 44100
-        assert "device" not in stimulus
-        assert "output_channels" not in stimulus
+        assert len(warnings) == 1
+        assert warnings[0][0][2] == "输出设备信息无效，请在硬件管理中重新选择设备。"
+        assert widget.play_flag is False
+        assert widget.timer.isActive() is False
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("invalid_index", [None, True, -1, 1.2, "abc"])
+def test_output_test_calibration_rejects_invalid_selected_speaker_index_before_work(
+    qapp, monkeypatch, invalid_index
+):
+    warnings = []
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = {
+            "index": invalid_index,
+            "default_samplerate": 48000.0,
+            "max_output_channels": 2,
+        }
+        monkeypatch.setattr(
+            calibration_window.MessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "SoundcardCalibrationManager",
+            lambda *args, **kwargs: pytest.fail("calibration database should not be accessed"),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "StimulusSignal",
+            lambda: pytest.fail("signal generation should not start"),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "SoundcardAudioProcessor",
+            lambda: pytest.fail("audio processor should not be created"),
+        )
+
+        widget.test_calibration()
+
+        assert len(warnings) == 1
+        assert warnings[0][0][2] == "输出设备信息无效，请在硬件管理中重新选择设备。"
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("invalid_index", [None, True, -1, 1.2, "abc"])
+def test_output_calibration_rejects_invalid_selected_speaker_index_before_database_access(
+    qapp, monkeypatch, invalid_index
+):
+    warnings = []
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = {"index": invalid_index}
+        monkeypatch.setattr(
+            calibration_window.MessageBox,
+            "warning",
+            staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+        )
+        monkeypatch.setattr(
+            calibration_window,
+            "SoundcardCalibrationManager",
+            lambda *args, **kwargs: pytest.fail("calibration database should not be accessed"),
+        )
+
+        widget.calibration()
+
+        assert len(warnings) == 1
+        assert warnings[0][0][2] == "输出设备信息无效，请在硬件管理中重新选择设备。"
     finally:
         widget.close()
 
@@ -431,53 +633,6 @@ def test_output_playback_uses_main_thread_nonblocking_for_asio(qapp, monkeypatch
         assert play_calls[0]["device"] == 14
         assert play_calls[0]["output_channels"] == 2
         assert play_calls[0]["sr"] == 48000
-    finally:
-        widget.close()
-
-
-def test_output_playback_keeps_threaded_path_for_asio_metadata_with_invalid_index(qapp, monkeypatch):
-    constructed_threads = []
-    play_calls = []
-
-    class CapturingImmediateThread(_ImmediateThread):
-        def __init__(self, target=None, args=None, kwargs=None):
-            constructed_threads.append(self)
-            super().__init__(target=target, args=args, kwargs=kwargs)
-
-    monkeypatch.setattr(calibration_window.threading, "Thread", CapturingImmediateThread)
-    monkeypatch.setattr(
-        calibration_window.sd,
-        "check_output_settings",
-        lambda **kwargs: pytest.fail("invalid selected index should skip selected-device preflight"),
-    )
-    monkeypatch.setattr(
-        calibration_window.SoundDeviceManager,
-        "get_api_info",
-        staticmethod(lambda api_index=None: {"name": "ASIO"}),
-    )
-    monkeypatch.setattr(
-        calibration_window.SoundcardAudioProcessor,
-        "sd_play",
-        lambda self, stimulus_dict: play_calls.append(stimulus_dict)
-        or (calibration_window.error_code.OK, "ok"),
-    )
-    widget = calibration_window.OutputCalibration()
-    try:
-        widget.speaker = {
-            "index": None,
-            "hostapi": 7,
-            "default_samplerate": 48000.0,
-            "max_output_channels": 2,
-        }
-
-        widget.play_btn_clicked()
-
-        assert len(constructed_threads) == 1
-        assert len(play_calls) == 1
-        assert "blocking" not in play_calls[0]
-        assert "device" not in play_calls[0]
-        assert "output_channels" not in play_calls[0]
-        assert play_calls[0]["sr"] == 44100
     finally:
         widget.close()
 
@@ -631,6 +786,7 @@ def test_output_playback_uses_parent_window_speaker_for_asio_nonblocking_path(
 def test_output_playback_logs_sd_play_failures(qapp, monkeypatch):
     errors = []
     monkeypatch.setattr(calibration_window.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(calibration_window.sd, "check_output_settings", lambda **kwargs: None)
     monkeypatch.setattr(
         calibration_window.SoundcardAudioProcessor,
         "sd_play",
@@ -638,6 +794,11 @@ def test_output_playback_logs_sd_play_failures(qapp, monkeypatch):
     )
     widget = calibration_window.OutputCalibration()
     try:
+        widget.speaker = {
+            "index": 21,
+            "default_samplerate": 48000.0,
+            "max_output_channels": 2,
+        }
         monkeypatch.setattr(widget.default_logger, "error", lambda message: errors.append(message))
 
         widget.play_btn_clicked()

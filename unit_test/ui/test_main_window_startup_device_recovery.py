@@ -237,6 +237,90 @@ def test_hardware_management_menu_action_matches_hardware_role_and_opens_window(
     assert opened[0]["audio_workflow_active_provider"]() is False
 
 
+def test_audio_device_selection_complete_requires_mic_and_channels_not_speaker(main_window_module):
+    assert main_window_module.MainWindow._audio_device_selection_complete(None, {"name": "Mic"}, [0]) is True
+    assert main_window_module.MainWindow._audio_device_selection_complete(None, {"name": "Mic"}, []) is False
+    assert main_window_module.MainWindow._audio_device_selection_complete({"name": "Speaker"}, None, [0]) is False
+
+
+def test_constructor_propagates_available_mic_only_startup_result(qapp, main_window_module, monkeypatch):
+    mic = {"name": "Mic", "index": 1}
+
+    class FakeManager:
+        def get_startup_devices(self):
+            return {
+                "mic": mic,
+                "speaker": None,
+                "mic_channels": [0],
+                "device_available": True,
+            }
+
+    monkeypatch.setattr(main_window_module, "SoundDeviceManager", lambda: FakeManager())
+    monkeypatch.setattr(main_window_module.MainWindow, "init_ui", lambda self: None)
+
+    window = main_window_module.MainWindow()
+
+    assert window.device_workflow_available is True
+    assert window.mic == mic
+    assert window.speaker is None
+    assert window.mic_channels == [0]
+
+    window.sequence_window = FakeSequenceWindow()
+    window._apply_startup_audio_devices_to_sequence()
+
+    assert window.sequence_window.mic == mic
+    assert window.sequence_window.speaker is None
+    assert window.sequence_window.mic_channels == [0]
+    assert window.sequence_window.available_calls[-1] == (True, "")
+
+
+def test_constructor_fallback_treats_mic_only_startup_result_as_available(
+    qapp, main_window_module, monkeypatch
+):
+    mic = {"name": "Mic", "index": 1}
+
+    class FakeManager:
+        def get_startup_devices(self):
+            return {"mic": mic, "speaker": None, "mic_channels": [0]}
+
+    monkeypatch.setattr(main_window_module, "SoundDeviceManager", lambda: FakeManager())
+    monkeypatch.setattr(main_window_module.MainWindow, "init_ui", lambda self: None)
+
+    window = main_window_module.MainWindow()
+
+    assert window.device_workflow_available is True
+    assert window.mic == mic
+    assert window.speaker is None
+    assert window.mic_channels == [0]
+
+
+def test_statusbar_keeps_existing_missing_output_text_for_mic_only_selection(main_window_module):
+    class FakeTrayPopupButton:
+        def __init__(self):
+            self.input_device = None
+            self.output_device = None
+
+        def set_in_device(self, value):
+            self.input_device = value
+
+        def set_out_device(self, value):
+            self.output_device = value
+
+    window = _window(main_window_module)
+    window.mic = {"name": "Mic"}
+    window.speaker = None
+    window.user_name = "alice"
+    window.access_lvl = "Engineer"
+    window.tray_popup_button = FakeTrayPopupButton()
+    window.user_label = types.SimpleNamespace(setText=lambda value: None)
+
+    window.update_statusbar = types.MethodType(main_window_module.MainWindow.update_statusbar, window)
+    window.update_statusbar()
+
+    assert window.tray_popup_button.input_device == "Mic"
+    assert window.tray_popup_button.output_device == "无可用输出设备"
+
+
 def test_init_sequence_widget_reloads_play_record_stimulus_after_attaching_devices(
     qapp, main_window_module, monkeypatch
 ):
@@ -359,6 +443,7 @@ def test_deleted_selected_hardware_callback_clears_main_window_devices(main_wind
     assert window.sequence_window.mic is None
     assert window.sequence_window.speaker is None
     assert window.sequence_window.mic_channels == []
+    assert window.device_workflow_available is False
     assert window.sequence_window.available_calls[-1][0] is False
     assert "已删除" in window.sequence_window.available_calls[-1][1]
     assert window.statusbar_updates == 1
@@ -1227,6 +1312,23 @@ def test_hardware_recovery_success_enables_workflow(main_window_module, monkeypa
     assert window.sequence_window.available_calls[-1] == (True, "")
 
 
+def test_hardware_recovery_accepts_mic_only_completion(main_window_module, monkeypatch):
+    window = _window(main_window_module)
+    mic = {"name": "New Mic", "index": 10, "hostapi": 0}
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, mic, [1]))
+
+    window._open_hardware_selection_for_recovery()
+
+    assert window.device_workflow_available is True
+    assert window.mic == mic
+    assert window.speaker is None
+    assert window.mic_channels == [1]
+    assert window.sequence_window.mic == mic
+    assert window.sequence_window.speaker is None
+    assert window.sequence_window.mic_channels == [1]
+    assert window.sequence_window.available_calls[-1] == (True, "")
+
+
 def test_hardware_recovery_cancel_keeps_workflow_disabled(main_window_module, monkeypatch):
     window = _window(main_window_module)
     monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, None, []))
@@ -1258,6 +1360,52 @@ def test_menu_hardware_success_restores_unavailable_workflow(main_window_module,
     assert window.mic == mic
     assert window.speaker == speaker
     assert window.mic_channels == [1]
+    assert window.sequence_window.available_calls[-1] == (True, "")
+
+
+def test_menu_hardware_mic_only_selection_clears_previous_speaker(main_window_module, monkeypatch):
+    window = _window(main_window_module)
+    old_speaker = {"name": "Old Speaker", "index": 2, "hostapi": 0}
+    mic = {"name": "New Mic", "index": 10, "hostapi": 0}
+    window.mic = {"name": "Old Mic", "index": 1, "hostapi": 0}
+    window.speaker = old_speaker
+    window.mic_channels = [0]
+    window.device_workflow_available = True
+    window.sequence_window.player_status_flag = False
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, mic, [1]))
+
+    window.on_hardware_window_init()
+
+    assert window.device_workflow_available is True
+    assert window.mic == mic
+    assert window.speaker is None
+    assert window.mic_channels == [1]
+    assert window.sequence_window.mic == mic
+    assert window.sequence_window.speaker is None
+    assert window.sequence_window.mic_channels == [1]
+    assert window.sequence_window.available_calls[-1] == (True, "")
+
+
+def test_menu_hardware_cancel_preserves_previous_complete_selection(main_window_module, monkeypatch):
+    window = _window(main_window_module)
+    old_mic = {"name": "Old Mic", "index": 1, "hostapi": 0}
+    old_speaker = {"name": "Old Speaker", "index": 2, "hostapi": 0}
+    window.mic = old_mic
+    window.speaker = old_speaker
+    window.mic_channels = [0]
+    window.device_workflow_available = True
+    window.sequence_window.player_status_flag = False
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, None, []))
+
+    window.on_hardware_window_init()
+
+    assert window.device_workflow_available is True
+    assert window.mic == old_mic
+    assert window.speaker == old_speaker
+    assert window.mic_channels == [0]
+    assert window.sequence_window.mic == old_mic
+    assert window.sequence_window.speaker == old_speaker
+    assert window.sequence_window.mic_channels == [0]
     assert window.sequence_window.available_calls[-1] == (True, "")
 
 

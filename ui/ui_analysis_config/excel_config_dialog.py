@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QFileDialog,
@@ -15,10 +16,14 @@ from base.excel_export_selection import (
     serialize_save_item_outputs,
 )
 from consts.excel_export_consts import (
+    CSV_DECIMAL_PLACES_KEY,
+    DEFAULT_CSV_DECIMAL_PLACES,
     EXCEL_OUTPUT_DEVIATION,
     EXCEL_OUTPUT_MARGIN,
     EXCEL_OUTPUT_ORDER,
     EXCEL_OUTPUT_TEST_CURVE,
+    MAX_CSV_DECIMAL_PLACES,
+    MIN_CSV_DECIMAL_PLACES,
     SAVE_ITEM_OUTPUTS_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
@@ -123,6 +128,29 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
         self.max_points_spin.setValue(int(self.load_config.get("max_points", 2000) or 2000))
         max_points_layout.addWidget(self.max_points_spin)
         basic_layout.addLayout(max_points_layout)
+
+        csv_decimal_places_layout = QHBoxLayout()
+        csv_decimal_places_layout.addWidget(Label("CSV 数据小数位数:"))
+        self.csv_decimal_places_spin = SpinBox()
+        self.csv_decimal_places_spin.setRange(
+            MIN_CSV_DECIMAL_PLACES,
+            MAX_CSV_DECIMAL_PLACES,
+        )
+        configured_places = self.load_config.get(
+            CSV_DECIMAL_PLACES_KEY,
+            DEFAULT_CSV_DECIMAL_PLACES,
+        )
+        if not (
+            isinstance(configured_places, (int, np.integer))
+            and not isinstance(configured_places, (bool, np.bool_))
+            and MIN_CSV_DECIMAL_PLACES
+            <= configured_places
+            <= MAX_CSV_DECIMAL_PLACES
+        ):
+            configured_places = DEFAULT_CSV_DECIMAL_PLACES
+        self.csv_decimal_places_spin.setValue(int(configured_places))
+        csv_decimal_places_layout.addWidget(self.csv_decimal_places_spin)
+        basic_layout.addLayout(csv_decimal_places_layout)
 
         # Item selection
         select_box = GroupBox("选择需要保存的分析项")
@@ -398,6 +426,7 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
         lock_files = self.lock_files_chk.isChecked()
         add_model_dir = self.add_model_dir_chk.isChecked()
         max_points = int(self.max_points_spin.value())
+        csv_decimal_places = int(self.csv_decimal_places_spin.value())
         save_item_outputs = serialize_save_item_outputs(
             {
                 name: [
@@ -418,6 +447,7 @@ class ExcelConfigWindow(SemanticAnalysisConfigDialogBase):
             "lock_files": lock_files,
             "date_format": "%Y%m%d",
             "max_points": max_points,
+            CSV_DECIMAL_PLACES_KEY: csv_decimal_places,
             "save_items": save_items,
             SAVE_ITEM_OUTPUTS_KEY: save_item_outputs,
             "save_mes_enabled": self.mes_chk.isChecked(),

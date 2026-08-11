@@ -17,6 +17,7 @@ from consts import error_code
 from consts.acoustic_analysis.curve_style_consts import DEFAULT_CURVE_COLORS
 from consts.acoustic_analysis.specific_consts import spec_consts
 from consts.excel_export_consts import (
+    CSV_DECIMAL_PLACES_KEY,
     EXCEL_OUTPUT_DEVIATION,
     EXCEL_OUTPUT_MARGIN,
     EXCEL_OUTPUT_ORDER,
@@ -3235,6 +3236,7 @@ def test_excel_dialog_preserves_output_config_after_semantic_migration(qapp):
         "lock_files": False,
         "date_format": "%Y%m%d",
         "max_points": 500,
+        CSV_DECIMAL_PLACES_KEY: 2,
         "save_items": ["FBA", "SPL"],
         "save_item_outputs": {
             "FBA": ["test_curve"],
@@ -3276,6 +3278,90 @@ def _excel_output_config(*, excel_config):
         },
         "Spec": {"type": "Spec"},
     }
+
+
+def test_excel_dialog_defaults_missing_csv_decimal_places_to_two(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    window = ExcelConfigWindow(
+        FakeConfigManager({"Excel": {}, "SPL": {"type": "SPL"}}),
+        "Excel",
+    )
+
+    assert window.csv_decimal_places_spin.minimum() == 0
+    assert window.csv_decimal_places_spin.maximum() == 10
+    assert window.csv_decimal_places_spin.value() == 2
+    assert window.get_default_config()[CSV_DECIMAL_PLACES_KEY] == 2
+    assert any(
+        label.text() == "CSV 数据小数位数:"
+        for label in window.findChildren(QLabel)
+    )
+    window.close()
+
+
+@pytest.mark.parametrize("places", [0, 2, 10])
+def test_excel_dialog_round_trips_csv_decimal_places(qapp, places):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    window = ExcelConfigWindow(
+        FakeConfigManager(
+            _excel_output_config(
+                excel_config={
+                    CSV_DECIMAL_PLACES_KEY: places,
+                    SAVE_ITEM_OUTPUTS_KEY: {
+                        "FR": [EXCEL_OUTPUT_TEST_CURVE],
+                        "SPLF": [EXCEL_OUTPUT_DEVIATION],
+                    },
+                }
+            )
+        ),
+        "Excel",
+    )
+
+    config = window.get_default_config()
+    assert window.csv_decimal_places_spin.value() == places
+    assert config[CSV_DECIMAL_PLACES_KEY] == places
+    assert config[SAVE_ITEM_OUTPUTS_KEY] == {
+        "FR": [EXCEL_OUTPUT_TEST_CURVE],
+        "SPLF": [EXCEL_OUTPUT_DEVIATION],
+    }
+    window.close()
+
+
+def test_excel_dialog_loads_numpy_integer_csv_decimal_places(qapp):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    window = ExcelConfigWindow(
+        FakeConfigManager(
+            {"Excel": {CSV_DECIMAL_PLACES_KEY: np.int64(4)}, "SPL": {"type": "SPL"}}
+        ),
+        "Excel",
+    )
+
+    assert window.csv_decimal_places_spin.value() == 4
+    assert window.get_default_config()[CSV_DECIMAL_PLACES_KEY] == 4
+    window.close()
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [None, True, np.bool_(False), 2.0, 2.5, "2", -1, 11],
+)
+def test_excel_dialog_renders_invalid_external_precision_safely(qapp, invalid):
+    from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
+
+    source_config = {
+        "Excel": {CSV_DECIMAL_PLACES_KEY: invalid},
+        "SPL": {"type": "SPL"},
+    }
+    config_manager = FakeConfigManager(source_config)
+
+    window = ExcelConfigWindow(config_manager, "Excel")
+
+    assert window.csv_decimal_places_spin.value() == 2
+    assert source_config["Excel"][CSV_DECIMAL_PLACES_KEY] is invalid
+    assert config_manager.saved == []
+    window.close()
 
 
 def test_excel_output_tree_structure_filtering_and_initial_state(qapp):
