@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 
@@ -144,6 +145,8 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self._queued_directional_trigger = ""
         self._pending_serial_trigger_direction = ""
         self.clicked_player_flag = False
+        self.count_board = SimpleNamespace(mode="test")
+        self.data_struct = SimpleNamespace(analysis_result_dict={})
         self.default_logger = _Logger()
         self.left_panel = _LeftPanel()
         self.started = []
@@ -438,6 +441,8 @@ def test_idle_close_frame_during_final_condition_closes_after_analysis():
         host.complete_current("OK")
 
     host.on_serial_full_frame_received(_payload(FRAME_8000))
+    # Recording completion marks the condition before synchronous analysis runs.
+    host._manual_product_condition_completed_keys.add(FRAME_8000)
     host.on_serial_full_frame_received(_payload(FRAME_CLOSE))
 
     assert host._serial_product_pending_close_frame == FRAME_CLOSE
@@ -609,7 +614,9 @@ def test_frame_outside_current_product_is_logged_and_ignored():
     )
 
 
-def test_future_frame_during_recording_aborts_the_round(monkeypatch):
+def test_other_condition_frame_ignored_during_recording_can_trigger_after_completion(
+    monkeypatch,
+):
     warnings = []
     monkeypatch.setattr(
         "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
@@ -618,12 +625,44 @@ def test_future_frame_during_recording_aborts_the_round(monkeypatch):
     host = _SerialProductHost()
     host.on_serial_full_frame_received(_payload(FRAME_6000))
 
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
     host.on_serial_full_frame_received(_payload(FRAME_7000))
 
-    assert host.reset_count == 1
-    assert host.cleanup_count == 1
+    assert host.reset_count == 0
+    assert host.cleanup_count == 0
     assert host._manual_product_condition_index == 0
-    assert warnings == [host.SERIAL_PRODUCT_ERROR_MESSAGE]
+    assert host.started == [FRAME_6000]
+    assert host._serial_product_latched_frame == FRAME_6000
+    assert warnings == []
+    assert any(
+        level == "info" and "serial_product_duplicate_ignored" in message
+        for level, message in host.default_logger.messages
+    )
+    assert any(
+        level == "info" and "serial_product_other_condition_ignored" in message
+        for level, message in host.default_logger.messages
+    )
+
+    host.complete_current("OK")
+    host.on_serial_full_frame_received(_payload(FRAME_7000))
+
+    assert host.started == [FRAME_6000, FRAME_7000]
+    assert host._serial_product_latched_frame == FRAME_7000
+    assert warnings == []
+
+
+def test_idle_unfinished_round_can_start_untested_condition_despite_stale_latch():
+    host = _SerialProductHost()
+    host._manual_product_condition_group_id = "round-1"
+    host._manual_product_condition_completed_keys = {FRAME_6000}
+    host._manual_product_condition_index = 1
+    host._serial_product_latched_frame = FRAME_7000
+
+    host.on_serial_full_frame_received(_payload(FRAME_7000))
+
+    assert host.started == [FRAME_7000]
+    assert host._manual_product_condition_index == 1
+    assert host._serial_product_condition_executing
 
 
 def test_abort_deletes_the_whole_round_and_restores_idle_ui(monkeypatch):
@@ -658,17 +697,63 @@ def test_config_dialog_open_ignores_serial_product_frames():
     assert host.reset_count == 0
 
 
-def test_missing_ok_ng_result_aborts_the_whole_round(monkeypatch):
-    monkeypatch.setattr(
-        "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
-        lambda *_args: None,
-    )
+def test_serial_trigger_does_not_require_ok_ng_to_complete_condition():
     host = _SerialProductHost()
     host.on_serial_full_frame_received(_payload(FRAME_6000))
 
-    assert not host._finalize_serial_product_condition_after_analysis()
+    host.complete_current("")
+
+    assert host.reset_count == 0
+    assert host.discarded_groups == []
+    assert host._manual_product_condition_completed_keys == {FRAME_6000}
+    assert host._manual_product_condition_index == 1
+    assert not host._serial_product_condition_executing
+    assert any(
+        level == "info"
+        and "serial_product_condition_finalize" in message
+        and f"condition={FRAME_6000}" in message
+        and "condition_results={}" in message
+        for level, message in host.default_logger.messages
+    )
+
+
+def test_missing_runtime_entry_shows_specific_warning_without_round_cleanup(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
+        lambda *_args: warnings.append((_args[-2], _args[-1])),
+    )
+    host = _SerialProductHost()
+    host._prepare_next_manual_product_condition_recording = None
+
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
+
+    assert host.reset_count == 0
+    assert host.discarded_groups == []
+    assert warnings == [
+        (
+            "产品测试无法开始",
+            "产品工况运行入口不可用，请检查程序版本或重新打开测试页面。",
+        )
+    ]
+
+
+def test_recording_workflow_start_failure_shows_reason_before_round_cleanup(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
+        lambda *_args: warnings.append(_args[-1]),
+    )
+    host = _SerialProductHost()
+    host.start_this_play = lambda _label: None
+
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
+
     assert host.reset_count == 1
-    assert host._manual_product_condition_index == 0
+    assert host.discarded_groups == [("round-1", True)]
+    assert warnings == [
+        f"录音流程未能启动\n\n{host.SERIAL_PRODUCT_ERROR_MESSAGE}"
+    ]
 
 
 def test_condition_without_judgement_configuration_advances_normally():
@@ -756,9 +841,10 @@ def test_close_frame_is_included_in_match_candidates_and_cannot_duplicate_condit
 
 
 def test_serial_trigger_rejects_import_audio_queue(monkeypatch):
+    warnings = []
     monkeypatch.setattr(
         "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
-        lambda *_args: None,
+        lambda *_args: warnings.append(_args[-1]),
     )
     host = _SerialProductHost()
     host._is_import_audio_mode = lambda: True
@@ -766,8 +852,13 @@ def test_serial_trigger_rejects_import_audio_queue(monkeypatch):
     host.on_serial_full_frame_received(_payload(FRAME_6000))
 
     assert host.started == []
-    assert host.reset_count == 1
+    assert host.reset_count == 0
+    assert host.discarded_groups == []
+    assert host._manual_product_condition_group_id == ""
     assert host._manual_product_condition_index == 0
+    assert warnings == [
+        "当前工况绑定了 IMPORT_AUDIO 测试队列，串口触发不支持导入音频，请更换为录音测试队列。"
+    ]
 
 
 def test_error_dialog_suppresses_reentrant_frames_and_duplicate_warning(monkeypatch):
@@ -786,7 +877,7 @@ def test_error_dialog_suppresses_reentrant_frames_and_duplicate_warning(monkeypa
 
     host._abort_serial_product_round("首次异常")
 
-    assert warnings == [host.SERIAL_PRODUCT_ERROR_MESSAGE]
+    assert warnings == [f"首次异常\n\n{host.SERIAL_PRODUCT_ERROR_MESSAGE}"]
     assert host.started == []
     assert host.reset_count == 1
 

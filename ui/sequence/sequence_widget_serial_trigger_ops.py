@@ -186,16 +186,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
             self.default_logger.info(f"serial_product_frame_unconfigured frame={received_frame}")
             return
 
-        latched_frame = str(
-            getattr(self, "_serial_product_latched_frame", "") or ""
-        ).strip()
-        if received_frame == latched_frame:
-            self.default_logger.info(
-                f"serial_product_held_frame_ignored frame={received_frame}"
-            )
-            return
-        self._serial_product_latched_frame = received_frame
-
         condition, _frame = conditions[frame_index]
         key_resolver = getattr(self, "_product_condition_runtime_key", None)
         condition_key = (
@@ -225,9 +215,10 @@ class SequenceWidgetSerialTriggerOpsMixin:
                     f"serial_product_duplicate_ignored frame={received_frame} condition={condition_key}"
                 )
                 return
-            self._abort_serial_product_round(
-                "当前工况执行期间收到其他工况报文: "
-                f"active={active_frame or 'unknown'}, actual={received_frame}"
+            self.default_logger.info(
+                "serial_product_other_condition_ignored "
+                f"active={active_frame or 'unknown'} actual={received_frame} "
+                f"condition={condition_key}"
             )
             return
 
@@ -244,8 +235,19 @@ class SequenceWidgetSerialTriggerOpsMixin:
             )
             return
 
+        if not group_id:
+            latched_frame = str(
+                getattr(self, "_serial_product_latched_frame", "") or ""
+            ).strip()
+            if received_frame == latched_frame:
+                self.default_logger.info(
+                    f"serial_product_held_frame_ignored frame={received_frame}"
+                )
+                return
+
         self._manual_product_condition_index = frame_index
-        self._start_serial_product_condition(received_frame)
+        if self._start_serial_product_condition(received_frame):
+            self._serial_product_latched_frame = received_frame
 
     def _handle_serial_product_close_frame(self, close_frame):
         group_id = str(
@@ -258,18 +260,22 @@ class SequenceWidgetSerialTriggerOpsMixin:
             )
             return False
 
+        if bool(getattr(self, "_serial_product_condition_executing", False)):
+            if self._can_complete_round_after_active_condition():
+                self._serial_product_pending_close_frame = close_frame
+                self.default_logger.info(
+                    "serial_product_close_pending_final_condition "
+                    f"group_id={group_id} frame={close_frame}"
+                )
+            else:
+                self.default_logger.info(
+                    "serial_product_close_ignored_active_incomplete_round "
+                    f"group_id={group_id} frame={close_frame}"
+                )
+            return False
+
         if self._is_serial_product_round_complete():
             return self._finish_serial_product_round(group_id, close_frame)
-
-        if bool(getattr(self, "_serial_product_condition_executing", False)) and (
-            self._can_complete_round_after_active_condition()
-        ):
-            self._serial_product_pending_close_frame = close_frame
-            self.default_logger.info(
-                "serial_product_close_pending_final_condition "
-                f"group_id={group_id} frame={close_frame}"
-            )
-            return False
 
         self.default_logger.info(
             "serial_product_idle_ignored_incomplete_round "
@@ -339,15 +345,25 @@ class SequenceWidgetSerialTriggerOpsMixin:
     def _start_serial_product_condition(self, received_frame):
         prepare = getattr(self, "_prepare_next_manual_product_condition_recording", None)
         if not callable(prepare):
-            self._abort_serial_product_round("产品工况运行入口不可用")
+            reason = "产品工况运行入口不可用，请检查程序版本或重新打开测试页面。"
+            self.default_logger.error(f"serial_product_start_rejected reason={reason}")
+            self._show_serial_product_notice_once("产品测试无法开始", reason)
             return False
 
         prepared = prepare()
         if prepared is not True:
-            self._abort_serial_product_round("当前产品工况或测试队列无法加载")
+            self.default_logger.warning(
+                "serial_product_start_rejected reason=当前产品工况或测试队列无法加载"
+            )
             return False
         if getattr(self, "_is_import_audio_mode", lambda: False)():
-            self._abort_serial_product_round("串口触发不支持导入音频测试队列")
+            reason = (
+                "当前工况绑定了 IMPORT_AUDIO 测试队列，串口触发不支持导入音频，"
+                "请更换为录音测试队列。"
+            )
+            self.default_logger.warning(f"serial_product_start_rejected reason={reason}")
+            self._cancel_prepared_serial_product_condition()
+            self._show_serial_product_notice_once("产品测试无法开始", reason)
             return False
 
         self._serial_product_condition_executing = True
@@ -366,26 +382,51 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return False
         return True
 
+    def _cancel_prepared_serial_product_condition(self):
+        """Cancel a condition that failed preflight without deleting prior round data."""
+        self._serial_product_condition_executing = False
+        self._serial_product_session_started = False
+        self._active_product_condition_key = ""
+        self._active_product_condition_config = None
+        self._waveform_display_override_direction = ""
+        self._current_trigger_direction = ""
+        self._record_workflow_busy = False
+        self.player_status_flag = False
+        self.clicked_player_flag = False
+
+        completed_keys = set(
+            getattr(self, "_manual_product_condition_completed_keys", set()) or set()
+        )
+        if completed_keys:
+            return
+
+        self._manual_product_condition_group_id = ""
+        self._displayed_manual_product_condition_group_id = ""
+        self._current_cycle_recorded_count = None
+        unlock_round = getattr(self, "_unlock_sn_for_product_round", None)
+        if callable(unlock_round):
+            unlock_round(clear=False)
+
     def _finalize_serial_product_condition_after_analysis(self):
         if not getattr(self, "_serial_product_condition_executing", False):
             return True
+
         active_key = str(getattr(self, "_get_active_product_condition_key", lambda: "")() or "")
-        result = str(
-            (getattr(self, "_manual_product_condition_results", {}) or {}).get(active_key)
-            or ""
-        ).upper()
-        if result not in ("OK", "NG"):
-            can_output_ok_ng = getattr(self, "_can_output_ok_ng", None)
-            if callable(can_output_ok_ng):
-                can_output, reason = can_output_ok_ng()
-                if not can_output:
-                    self.default_logger.info(
-                        "serial_product_condition_completed_without_judgement "
-                        f"condition={active_key} reason={reason}"
-                    )
-                    return True
-            self._abort_serial_product_round("当前工况分析未产生有效 OK/NG 结果")
-            return False
+        mode = str(
+            getattr(getattr(self, "count_board", None), "mode", "") or ""
+        ).strip().lower()
+        analysis_results = dict(
+            getattr(getattr(self, "data_struct", None), "analysis_result_dict", {})
+            or {}
+        )
+        manual_results = dict(
+            getattr(self, "_manual_product_condition_results", {}) or {}
+        )
+        self.default_logger.info(
+            "serial_product_condition_finalize "
+            f"condition={active_key} mode={mode or 'unknown'} "
+            f"analysis_results={analysis_results} condition_results={manual_results}"
+        )
         return True
 
     def _on_serial_product_condition_completed(self):
@@ -485,7 +526,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
 
         self.default_logger.error(f"serial_product_round_aborted reason={reason}")
         if show_warning:
-            self._show_serial_product_error_once()
+            self._show_serial_product_error_once(reason)
 
     def _delete_serial_product_round_records(self, group_id):
         target_group_id = str(group_id or "").strip()
@@ -539,15 +580,24 @@ class SequenceWidgetSerialTriggerOpsMixin:
         self._pending_recent_session_append = False
         return len(session_ids)
 
-    def _show_serial_product_error_once(self):
+    def _show_serial_product_notice_once(self, title, message):
         if getattr(self, "_serial_product_error_dialog_open", False):
             return False
         self._serial_product_error_dialog_open = True
         try:
-            QMessageBox.warning(self, "测试异常", self.SERIAL_PRODUCT_ERROR_MESSAGE)
+            QMessageBox.warning(self, str(title or "提示"), str(message or ""))
         finally:
             self._serial_product_error_dialog_open = False
         return True
+
+    def _show_serial_product_error_once(self, reason=""):
+        detail = str(reason or "").strip()
+        message = (
+            f"{detail}\n\n{self.SERIAL_PRODUCT_ERROR_MESSAGE}"
+            if detail
+            else self.SERIAL_PRODUCT_ERROR_MESSAGE
+        )
+        return self._show_serial_product_notice_once("测试异常", message)
 
     def on_serial_trigger_status_changed(self, status):
         status = status or {}
