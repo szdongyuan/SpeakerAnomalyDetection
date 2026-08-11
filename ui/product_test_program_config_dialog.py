@@ -40,6 +40,16 @@ NO_TRIGGER_TEXT = "未绑定"
 NO_QUEUE_TEXT = "暂无可用测试队列"
 
 
+class _RefreshingQueueComboBox(QComboBox):
+    def __init__(self, refresh_callback, parent=None):
+        super().__init__(parent)
+        self._refresh_callback = refresh_callback
+
+    def showPopup(self):
+        self._refresh_callback()
+        super().showPopup()
+
+
 class ProductTestProgramConfigDialog(ConfigDialogBase):
     programs_changed = pyqtSignal()
 
@@ -366,17 +376,30 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         combobox.currentTextChanged.connect(self._on_row_option_changed)
         return combobox
 
-    def _create_queue_combobox(self, current_queue):
-        combobox = QComboBox()
-        if self.queue_catalog:
+    def _queue_option_names(self):
+        return sorted(
+            queue_name
+            for queue_name, queue_info in self.queue_catalog.items()
+            if isinstance(queue_info, dict)
+            and os.path.isfile(str(queue_info.get("path") or ""))
+        )
+
+    def _populate_queue_combobox(self, combobox, current_queue):
+        combobox.clear()
+        queue_names = self._queue_option_names()
+        if queue_names:
             combobox.addItem("请选择", "")
-            for queue_name in sorted(self.queue_catalog):
+            for queue_name in queue_names:
                 combobox.addItem(queue_name, queue_name)
         else:
             combobox.addItem(NO_QUEUE_TEXT, "")
 
         selected_index = combobox.findData(current_queue)
         combobox.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+
+    def _create_queue_combobox(self, current_queue):
+        combobox = _RefreshingQueueComboBox(self._refresh_queue_options)
+        self._populate_queue_combobox(combobox, current_queue)
         combobox.currentTextChanged.connect(self._on_row_option_changed)
         return combobox
 
@@ -507,26 +530,37 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             self._refresh_queue_options()
 
     def _refresh_queue_options(self):
-        selected_queues = []
-        for row in range(self.program_table.rowCount()):
-            selected_queues.append(
-                self._combobox_value(self._queue_combobox(row))
-            )
+        selected_queues = [
+            self._combobox_value(self._queue_combobox(row))
+            for row in range(self.program_table.rowCount())
+        ]
 
         self.queue_catalog = self.manager.load_queue_catalog()
+        previous_loading = self._loading
+        selection_changed = False
         self._loading = True
-        for row, queue_name in enumerate(selected_queues):
-            old_widget = self.program_table.cellWidget(row, 3)
-            if old_widget is not None:
-                old_widget.deleteLater()
-            self.program_table.setCellWidget(
-                row,
-                3,
-                self._create_queue_cell(queue_name),
-            )
-            self._update_row_summary(row)
-        self._loading = False
-        self._on_program_changed()
+        try:
+            for row, queue_name in enumerate(selected_queues):
+                combobox = self._queue_combobox(row)
+                if combobox is None:
+                    continue
+                signals_blocked = combobox.blockSignals(True)
+                try:
+                    self._populate_queue_combobox(combobox, queue_name)
+                finally:
+                    combobox.blockSignals(signals_blocked)
+                selection_changed = selection_changed or (
+                    self._combobox_value(combobox) != queue_name
+                )
+                self._update_queue_edit_button(
+                    self.program_table.cellWidget(row, 3)
+                )
+                self._update_row_summary(row)
+        finally:
+            self._loading = previous_loading
+
+        if selection_changed and not previous_loading:
+            self._on_program_changed()
 
     def _clear_program(self):
         current_name = self.config_combobox.currentText()
