@@ -2871,11 +2871,33 @@ class SequenceWidgetAnalysisOpsMixin(
                     self._schedule_excel_spool_build(spool_cfgs)
                 break
 
-            # If there are failures, show retry dialog
+            failure_details = "\n".join(
+                f"{cfg_name}：{message}"
+                for cfg_name, message in failed_exports
+            )
+            config_incomplete = any(
+                message == "未选择需要保存的分析项"
+                for _, message in failed_exports
+            )
+
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Warning)
-            msg_box.setWindowTitle("数据保存失败")
-            msg_box.setText("无法保存数据到文件，可能是文件被占用或权限不足。\n请关闭相关文件后重试。")
+            if config_incomplete:
+                msg_box.setWindowTitle("Excel导出配置不完整")
+                msg_box.setText(
+                    f"{failure_details}\n\n"
+                    "请在测试队列配置的“结果导出 (Excel)”中至少勾选一个分析项；"
+                    "如不需要导出，请删除该 Excel 导出项。"
+                )
+                msg_box.addButton("知道了", QMessageBox.RejectRole)
+                msg_box.exec_()
+                break
+
+            msg_box.setWindowTitle("Excel结果导出失败")
+            msg_box.setText(
+                f"无法保存Excel结果，具体原因如下：\n{failure_details}\n\n"
+                "请根据上述原因处理后重试。"
+            )
             retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
             msg_box.addButton("忽略", QMessageBox.RejectRole)
             msg_box.setDefaultButton(retry_btn)

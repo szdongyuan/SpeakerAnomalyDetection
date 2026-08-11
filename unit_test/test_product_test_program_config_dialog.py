@@ -14,7 +14,10 @@ from PyQt5.QtWidgets import (
 from base.load_config import LoadUiConfig
 from base.product_test_program_config import ProductTestProgramConfigManager
 from consts import ui_style_const
-from ui.product_test_program_config_dialog import ProductTestProgramConfigDialog
+from ui.product_test_program_config_dialog import (
+    NO_QUEUE_TEXT,
+    ProductTestProgramConfigDialog,
+)
 
 
 def make_manager(tmp_path):
@@ -487,7 +490,7 @@ def test_save_rejects_configuration_without_test_queue(
     dialog.close()
 
 
-def test_save_rejects_unavailable_test_queue(tmp_path, monkeypatch):
+def test_missing_queue_is_not_selectable_or_savable(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     manager = make_manager(tmp_path)
     assert LoadUiConfig.save_data_to_json(
@@ -498,7 +501,8 @@ def test_save_rejects_unavailable_test_queue(tmp_path, monkeypatch):
     dialog._add_empty_row()
     dialog.program_table.item(0, 1).setText("222")
     queue_combobox = dialog._queue_combobox(0)
-    queue_combobox.setCurrentIndex(queue_combobox.findData("ffgfg"))
+    assert queue_combobox.findData("ffgfg") == -1
+    assert queue_combobox.currentData() == ""
     messages = []
     monkeypatch.setattr(
         QMessageBox,
@@ -510,7 +514,7 @@ def test_save_rejects_unavailable_test_queue(tmp_path, monkeypatch):
     app.processEvents()
 
     assert dialog.result() != QDialog.Accepted
-    assert messages == [("无法保存", "222 引用的测试队列不可用：ffgfg")]
+    assert messages == [("无法保存", "222 尚未选择测试队列")]
     assert manager.load_registry()["configs"] == []
     dialog._dirty = False
     dialog.close()
@@ -695,3 +699,54 @@ def test_cancel_discards_changes_without_confirmation(tmp_path):
     app.processEvents()
 
     assert dialog.result() == QDialog.Rejected
+
+
+def test_opening_queue_dropdown_refreshes_renamed_queue(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    dialog = ProductTestProgramConfigDialog(manager, lambda _path: None)
+    queue_combobox = dialog._queue_combobox(0)
+
+    queue_dir = os.path.dirname(manager.queue_registry_path)
+    old_path = os.path.join(queue_dir, "queue_6000.json")
+    renamed_path = os.path.join(queue_dir, "queue_7000.json")
+    os.replace(old_path, renamed_path)
+    assert LoadUiConfig.save_data_to_json(
+        {"queue_7000": renamed_path},
+        manager.queue_registry_path,
+    )
+
+    queue_combobox.showPopup()
+    app.processEvents()
+    queue_combobox.hidePopup()
+
+    assert queue_combobox.findData("queue_6000") == -1
+    assert queue_combobox.findData("queue_7000") >= 0
+    assert queue_combobox.currentData() == ""
+    assert queue_combobox.currentText() == "请选择"
+    assert dialog.program_table.cellWidget(0, 3).edit_button.text() == "新建"
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_opening_queue_dropdown_removes_deleted_queue(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    dialog = ProductTestProgramConfigDialog(manager, lambda _path: None)
+    queue_combobox = dialog._queue_combobox(0)
+
+    queue_path = manager.load_queue_catalog()["queue_6000"]["path"]
+    os.remove(queue_path)
+
+    queue_combobox.showPopup()
+    app.processEvents()
+    queue_combobox.hidePopup()
+
+    assert queue_combobox.findData("queue_6000") == -1
+    assert queue_combobox.currentData() == ""
+    assert queue_combobox.currentText() == NO_QUEUE_TEXT
+    assert dialog.program_table.cellWidget(0, 3).edit_button.text() == "新建"
+    dialog._dirty = False
+    dialog.close()
