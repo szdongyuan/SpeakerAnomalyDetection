@@ -9,9 +9,6 @@ from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDial
 
 class SequenceWidgetSerialTriggerOpsMixin:
     SERIAL_PRODUCT_ERROR_MESSAGE = "测试异常，本轮测试记录已删除，等待工况状态码。"
-    SERIAL_PRODUCT_INCOMPLETE_CLOSE_MESSAGE = (
-        "当前产品仍有未完成工况，本轮测试记录已删除，等待工况状态码。"
-    )
 
     def _serial_product_conditions(self):
         sequence_loader = getattr(self, "_product_condition_sequence", None)
@@ -255,20 +252,33 @@ class SequenceWidgetSerialTriggerOpsMixin:
             getattr(self, "_manual_product_condition_group_id", "") or ""
         ).strip()
         if not group_id:
+            self._serial_product_pending_close_frame = ""
             self.default_logger.info(
                 f"serial_product_close_ignored_no_active_round frame={close_frame}"
             )
             return False
 
-        if bool(getattr(self, "_serial_product_condition_executing", False)) or bool(
-            getattr(self, "_record_workflow_busy", False)
+        if self._is_serial_product_round_complete():
+            return self._finish_serial_product_round(group_id, close_frame)
+
+        if bool(getattr(self, "_serial_product_condition_executing", False)) and (
+            self._can_complete_round_after_active_condition()
         ):
-            self._abort_serial_product_round("工况执行期间收到关闭测试报文")
+            self._serial_product_pending_close_frame = close_frame
+            self.default_logger.info(
+                "serial_product_close_pending_final_condition "
+                f"group_id={group_id} frame={close_frame}"
+            )
             return False
 
-        if not self._is_serial_product_round_complete():
-            self._discard_incomplete_serial_product_round(group_id)
-            return False
+        self.default_logger.info(
+            "serial_product_idle_ignored_incomplete_round "
+            f"group_id={group_id} frame={close_frame}"
+        )
+        return False
+
+    def _finish_serial_product_round(self, group_id, close_frame):
+        self._serial_product_pending_close_frame = ""
 
         self._manual_product_condition_index = 0
         self._manual_product_condition_group_id = ""
@@ -291,7 +301,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
         )
         return True
 
-    def _is_serial_product_round_complete(self):
+    def _serial_product_expected_condition_keys(self):
         conditions = self._serial_product_conditions()
         key_resolver = getattr(self, "_product_condition_runtime_key", None)
         expected_keys = {
@@ -303,33 +313,28 @@ class SequenceWidgetSerialTriggerOpsMixin:
             for index, (condition, _frame) in enumerate(conditions)
         }
         expected_keys.discard("")
+        return expected_keys
+
+    def _is_serial_product_round_complete(self):
+        expected_keys = self._serial_product_expected_condition_keys()
         completed_keys = set(
             getattr(self, "_manual_product_condition_completed_keys", set()) or set()
         )
         return bool(expected_keys) and expected_keys.issubset(completed_keys)
 
-    def _discard_incomplete_serial_product_round(self, group_id):
-        self._abort_serial_product_round(
-            "关闭测试时当前产品仍有未完成工况",
-            show_warning=False,
+    def _can_complete_round_after_active_condition(self):
+        active_key = str(
+            getattr(self, "_get_active_product_condition_key", lambda: "")() or ""
+        ).strip()
+        if not active_key:
+            return False
+        expected_keys = self._serial_product_expected_condition_keys()
+        completed_keys = set(
+            getattr(self, "_manual_product_condition_completed_keys", set()) or set()
         )
-        left_panel = getattr(self, "left_panel", None)
-        if left_panel is not None and hasattr(left_panel, "set_current_stage"):
-            left_panel.set_current_stage("本轮未完成，等待工况状态码", tone="ng")
-
-        self.default_logger.warning(
-            f"serial_product_incomplete_round_discarded group_id={group_id}"
+        return bool(expected_keys) and expected_keys.issubset(
+            completed_keys | {active_key}
         )
-        if not getattr(self, "_serial_product_error_dialog_open", False):
-            self._serial_product_error_dialog_open = True
-            try:
-                QMessageBox.warning(
-                    self,
-                    "测试未完成",
-                    self.SERIAL_PRODUCT_INCOMPLETE_CLOSE_MESSAGE,
-                )
-            finally:
-                self._serial_product_error_dialog_open = False
 
     def _start_serial_product_condition(self, received_frame):
         prepare = getattr(self, "_prepare_next_manual_product_condition_recording", None)
@@ -386,6 +391,23 @@ class SequenceWidgetSerialTriggerOpsMixin:
     def _on_serial_product_condition_completed(self):
         self._serial_product_condition_executing = False
         self._serial_product_session_started = False
+        pending_close_frame = str(
+            getattr(self, "_serial_product_pending_close_frame", "") or ""
+        ).strip()
+        if not pending_close_frame:
+            return
+
+        self._serial_product_pending_close_frame = ""
+        group_id = str(
+            getattr(self, "_manual_product_condition_group_id", "") or ""
+        ).strip()
+        if group_id and self._is_serial_product_round_complete():
+            self._finish_serial_product_round(group_id, pending_close_frame)
+            return
+        self.default_logger.info(
+            "serial_product_pending_close_dropped_incomplete_round "
+            f"group_id={group_id or 'none'} frame={pending_close_frame}"
+        )
 
     def _on_serial_product_recent_session_started(self):
         if getattr(self, "_serial_product_condition_executing", False):
@@ -409,6 +431,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
         self._serial_product_condition_executing = False
         self._serial_product_session_started = False
         self._serial_product_waiting_for_close = False
+        self._serial_product_pending_close_frame = ""
         self._queued_directional_trigger = ""
         self._pending_serial_trigger_direction = ""
 
