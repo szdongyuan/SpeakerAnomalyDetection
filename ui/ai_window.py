@@ -12,7 +12,7 @@ from base.log_manager import LogManager
 from base.model_config import init_model_from_config
 from base.training_model import train_with_dir, train_with_data, save_trained_model
 from base.training_model_management import TrainingModelManagement
-from consts import error_code, model_consts
+from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.model_manager_widget import ModelInfoList
@@ -812,15 +812,21 @@ class AiBrainModelStructure(ConfigDialogBase):
         self.setLayout(layout)
 
     def create_text_edit(self):
-        model_structure_texteditor = QTextEdit()
-        model_structure_texteditor.setReadOnly(True)
-        model_structure_texteditor.setLineWrapMode(QTextEdit.NoWrap)
-        model_structure_texteditor.setAlignment(Qt.AlignCenter)
-        model_structure_texteditor.setMinimumSize(700, 450)
-        self.set_text_data(model_structure_texteditor)
+        self.model_structure_texteditor = QTextEdit()
+        self.model_structure_texteditor.setObjectName("modelStructureTextEdit")
+        self.model_structure_texteditor.setReadOnly(True)
+        self.model_structure_texteditor.setLineWrapMode(QTextEdit.NoWrap)
+        self.model_structure_texteditor.setMinimumSize(700, 450)
+        self.model_structure_texteditor.setStyleSheet(
+            "QTextEdit#modelStructureTextEdit {"
+            f"font-family: {ui_style_const.UI_FONT_FAMILY};"
+            "font-size: 15px;"
+            "}"
+        )
+        self.set_text_data(self.model_structure_texteditor)
 
         layout = QVBoxLayout()
-        layout.addWidget(model_structure_texteditor)
+        layout.addWidget(self.model_structure_texteditor)
         return layout
 
     def set_text_data(self, text_edit: QTextEdit):
