@@ -168,6 +168,108 @@ def test_stimulus_window_preview_uses_speaker_samplerate(qapp, monkeypatch):
     assert calls[-1]["device"] == 7
 
 
+def test_stimulus_window_preview_rejects_missing_speaker(qapp, monkeypatch):
+    warnings = []
+    regeneration_calls = []
+    play_calls = []
+    window = StimulusWindow(
+        stimulus_config_data=_stimulus_config(),
+        speaker={"name": "speaker", "samplerate": 48000, "index": 7},
+    )
+    window.speaker = None
+    monkeypatch.setattr(
+        window,
+        "_ensure_stimulus_data_matches_authoritative_sample_rate",
+        lambda: regeneration_calls.append("regenerated") or True,
+    )
+    monkeypatch.setattr(
+        "ui.stimulus_window.SoundcardAudioProcessor.sd_play",
+        lambda self, params: play_calls.append(params) or (0, "ok"),
+    )
+    monkeypatch.setattr(
+        "ui.stimulus_window.MessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+
+    window.play_btn_clicked()
+
+    assert len(warnings) == 1
+    assert warnings[0][2] == "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+    assert regeneration_calls == []
+    assert play_calls == []
+
+
+@pytest.mark.parametrize(
+    ("speaker", "offline_reference_authoring"),
+    [
+        ({}, False),
+        ({"name": "speaker", "samplerate": 48000}, True),
+        ({"name": "speaker", "samplerate": 48000, "index": True}, False),
+        ({"name": "speaker", "samplerate": 48000, "index": -1}, False),
+        ({"name": "speaker", "samplerate": 48000, "index": 7.5}, True),
+        ({"name": "speaker", "samplerate": 48000, "index": "not-an-index"}, False),
+    ],
+)
+def test_stimulus_window_preview_rejects_invalid_selected_speaker_index_before_work(
+    qapp, monkeypatch, speaker, offline_reference_authoring
+):
+    warnings = []
+    window = StimulusWindow(
+        stimulus_config_data=_stimulus_config(sample_rate=44100),
+        speaker={"name": "speaker", "samplerate": 48000, "index": 7},
+        offline_reference_authoring=offline_reference_authoring,
+    )
+    window.speaker = speaker
+    previous_info = window.stimulus_info.copy()
+    previous_data = window.stimulus_data.copy()
+    previous_data_sample_rate = window._stimulus_data_sample_rate
+
+    monkeypatch.setattr(
+        window,
+        "_current_playback_sample_rate_or_warn",
+        lambda: pytest.fail("playback sample-rate resolution should not start"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_ensure_stimulus_data_matches_authoritative_sample_rate",
+        lambda: pytest.fail("stimulus regeneration should not start"),
+    )
+    monkeypatch.setattr(
+        "ui.stimulus_window.SoundcardAudioProcessor",
+        lambda: pytest.fail("audio processor should not be created"),
+    )
+    monkeypatch.setattr(
+        "ui.stimulus_window.MessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+
+    window.play_btn_clicked()
+
+    assert len(warnings) == 1
+    assert warnings[0][2] == "输出设备信息无效，请在硬件管理中重新选择设备。"
+    assert window.stimulus_info == previous_info
+    assert np.array_equal(window.stimulus_data, previous_data)
+    assert window._stimulus_data_sample_rate == previous_data_sample_rate
+
+
+def test_stimulus_window_preview_normalizes_integer_string_speaker_index(qapp, monkeypatch):
+    calls = []
+    window = StimulusWindow(
+        stimulus_config_data=_stimulus_config(),
+        speaker={"name": "speaker", "samplerate": 48000, "index": 7},
+    )
+    window.speaker = {"name": "speaker", "samplerate": 48000, "index": " 7 "}
+    window.stimulus_data = np.zeros(8, dtype=np.float32)
+    monkeypatch.setattr(
+        "ui.stimulus_window.SoundcardAudioProcessor.sd_play",
+        lambda self, params: calls.append(params) or (0, "ok"),
+    )
+
+    window.play_btn_clicked()
+
+    assert calls[-1]["device"] == 7
+
+
 def test_offline_reference_authoring_preview_blocks_without_valid_speaker_samplerate(qapp, monkeypatch):
     play_calls = []
     warnings = []

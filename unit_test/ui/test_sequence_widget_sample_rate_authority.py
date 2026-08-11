@@ -11,6 +11,7 @@ from ui.sequence import sequence_widget
 
 
 _DEFAULT_DEVICE = object()
+EXPECTED_MISSING_SPEAKER_PROMPT = "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
 
 
 def _window(mode, detail, mic=_DEFAULT_DEVICE, speaker=_DEFAULT_DEVICE):
@@ -144,7 +145,7 @@ def test_record_only_without_monitor_does_not_require_speaker_samplerate(monkeyp
     assert recorded_dict["output_device"] is None
 
 
-def test_preflight_record_only_without_monitor_does_not_require_speaker(monkeypatch):
+def test_preflight_record_only_without_monitor_playback_does_not_require_speaker(monkeypatch):
     win = _window(
         "RECORD_ONLY",
         {"sample_rate": 44100, "total_time": 1.0, "monitor_playback": False},
@@ -174,7 +175,7 @@ def test_preflight_record_only_string_false_monitor_does_not_require_speaker(mon
     assert warnings == []
 
 
-def test_preflight_record_only_monitor_requires_speaker(monkeypatch):
+def test_preflight_record_only_monitor_playback_missing_speaker_uses_exact_prompt(monkeypatch):
     win = _window(
         "RECORD_ONLY",
         {"sample_rate": 44100, "total_time": 1.0, "monitor_playback": True},
@@ -184,13 +185,17 @@ def test_preflight_record_only_monitor_requires_speaker(monkeypatch):
     win.audio_devices_available = True
     warnings = []
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        sequence_widget,
+        "_resolve_runtime_sample_rate_for_mode",
+        lambda *args: (_ for _ in ()).throw(AssertionError("sample-rate resolution must not run")),
+    )
 
     assert sequence_widget.SequenceWindow.checked_work_status_message(win) is True
-    assert warnings
-    assert "输出设备" in str(warnings[0])
+    assert [args[1:] for args in warnings] == [("提示", EXPECTED_MISSING_SPEAKER_PROMPT)]
 
 
-def test_preflight_play_and_record_requires_speaker(monkeypatch):
+def test_preflight_play_and_record_missing_speaker_uses_exact_prompt(monkeypatch):
     win = _window(
         "PLAY_AND_RECORD",
         {"stimulus_info": {"sample_rate": 44100, "total_time": 0.01}},
@@ -200,10 +205,14 @@ def test_preflight_play_and_record_requires_speaker(monkeypatch):
     win.audio_devices_available = True
     warnings = []
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        sequence_widget,
+        "_resolve_runtime_sample_rate_for_mode",
+        lambda *args: (_ for _ in ()).throw(AssertionError("sample-rate resolution must not run")),
+    )
 
     assert sequence_widget.SequenceWindow.checked_work_status_message(win) is True
-    assert warnings
-    assert "输出设备" in str(warnings[0])
+    assert [args[1:] for args in warnings] == [("提示", EXPECTED_MISSING_SPEAKER_PROMPT)]
 
 
 def test_record_only_invalid_mic_samplerate_warns_without_exception(monkeypatch):

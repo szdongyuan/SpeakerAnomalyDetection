@@ -2142,6 +2142,18 @@ class SequenceWindow(QWidget):
         except Exception:
             pass
 
+        speaker_required = acq_mode == "PLAY_AND_RECORD" or (
+            acq_mode == "RECORD_ONLY"
+            and normalize_record_only_detail(acq_detail).get("monitor_playback", False)
+        )
+        if speaker_required and not self.speaker:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return True
+
         sample_rate_result = _resolve_runtime_sample_rate_for_mode(self, acq_mode, acq_detail)
         if sample_rate_result is not None:
             if not sample_rate_result.ok:

@@ -528,7 +528,7 @@ def test_augment_runtime_device_preserves_runtime_keys_and_adds_registered_metad
     assert payload["latency_ms"] == 100
 
 
-def test_build_selected_device_payload_uses_version_two_schema_without_runtime_indexes():
+def test_build_selected_device_payload_uses_version_three_schema_without_runtime_indexes():
     mic = augment_runtime_device(runtime_device(index=3), registered_asset(hardware_id="mic-1"))
     speaker = augment_runtime_device(
         runtime_device(name="Speaker", outputs=2, inputs=0, hostapi=1),
@@ -537,7 +537,7 @@ def test_build_selected_device_payload_uses_version_two_schema_without_runtime_i
 
     payload = build_selected_device_payload(mic, speaker, [0, "1"])
 
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert payload["mic_channels"] == [0, 1]
     assert "index" not in payload["mic"]
     assert "index" not in payload["speaker"]
@@ -545,3 +545,17 @@ def test_build_selected_device_payload_uses_version_two_schema_without_runtime_i
     assert payload["speaker"]["name"] == payload["speaker"]["device_name"]
     assert payload["mic"]["hardware_id"] == "mic-1"
     assert payload["speaker"]["hardware_id"] == "speaker-1"
+
+
+def test_build_selected_device_payload_version_three_allows_missing_speaker():
+    mic = augment_runtime_device(
+        runtime_device(index=3, inputs=2),
+        registered_asset(hardware_id="mic-1"),
+    )
+
+    payload = build_selected_device_payload(mic, None, [0, "1"])
+
+    assert payload["version"] == 3
+    assert payload["mic"]["hardware_id"] == "mic-1"
+    assert payload["speaker"] is None
+    assert payload["mic_channels"] == [0, 1]

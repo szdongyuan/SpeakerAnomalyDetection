@@ -572,6 +572,118 @@ def test_record_config_window_valid_mic_confirms_normally(qapp):
     assert window.final_data["sample_rate"] == 44100
 
 
+def test_record_config_plain_record_only_without_monitor_playback_allows_missing_speaker(qapp):
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    window = RecordConfigWindow(
+        {
+            "total_time": 2.0,
+            "sample_rate": 44100,
+            "monitor_playback": False,
+            "use_streaming_recording": False,
+            "recording_start_delay_ms": 100.0,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker=None,
+        available_channels=[0],
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    window.on_click_ok_btn()
+
+    assert accepted == [True]
+    assert window.final_data["monitor_playback"] is False
+    assert window.final_data["sample_rate"] == 44100
+
+
+def test_record_config_missing_speaker_preserves_monitor_state_and_allows_explicit_disable(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    warnings = []
+    monkeypatch.setattr(module.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+    window = RecordConfigWindow(
+        {
+            "total_time": 2.0,
+            "sample_rate": 44100,
+            "monitor_playback": True,
+            "monitor_input_channel": 0,
+            "monitor_gain_db": 0.0,
+            "use_streaming_recording": True,
+            "recording_start_delay_ms": 100.0,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker=None,
+        available_channels=[0],
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    assert window.monitor_checkbox.isChecked() is True
+    assert window.monitor_checkbox.isEnabled() is True
+
+    window.monitor_checkbox.setChecked(False)
+    window.on_click_ok_btn()
+
+    assert warnings == []
+    assert accepted == [True]
+    assert window.final_data["monitor_playback"] is False
+
+
+def test_record_config_missing_speaker_monitor_guard_uses_exact_prompt(qapp, monkeypatch):
+    from ui import acquisition_config_window as module
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    warnings = []
+    monkeypatch.setattr(module.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+    window = RecordConfigWindow(
+        {
+            "total_time": 2.0,
+            "sample_rate": 44100,
+            "monitor_playback": True,
+            "monitor_input_channel": 0,
+            "monitor_gain_db": 0.0,
+            "use_streaming_recording": True,
+            "recording_start_delay_ms": 100.0,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker=None,
+        available_channels=[0],
+    )
+    accepted = []
+    window.accept = lambda: accepted.append(True)
+
+    window.on_click_ok_btn()
+
+    assert window.monitor_checkbox.isChecked() is True
+    assert window.monitor_checkbox.isEnabled() is True
+    assert accepted == []
+    assert warnings[-1][2] == "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。"
+
+
+def test_record_config_zero_output_capacity_preserves_saved_monitor_state(qapp):
+    from ui.acquisition_config_window import RecordConfigWindow
+
+    window = RecordConfigWindow(
+        {
+            "total_time": 2.0,
+            "sample_rate": 44100,
+            "monitor_playback": True,
+            "monitor_input_channel": 0,
+            "monitor_gain_db": 0.0,
+            "use_streaming_recording": True,
+            "recording_start_delay_ms": 100.0,
+        },
+        mic={"name": "mic", "samplerate": 44100},
+        speaker={"name": "speaker", "samplerate": 44100, "max_output_channels": 0},
+        available_channels=[0],
+    )
+
+    assert window.monitor_checkbox.isChecked() is True
+    assert window.monitor_checkbox.isEnabled() is True
+
+
 def test_import_audio_config_window_valid_mic_confirms_normally(qapp):
     from ui.acquisition_config_window import ImportAudioConfigWindow
 

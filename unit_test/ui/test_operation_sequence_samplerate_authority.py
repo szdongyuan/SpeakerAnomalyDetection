@@ -41,7 +41,10 @@ def _selector(mic, speaker):
 
 
 def test_record_golden_sample_uses_duplex_samplerate_not_config(monkeypatch):
-    selector = _selector({"samplerate": 48000, "hostapi": 1}, {"samplerate": 48000, "hostapi": 1})
+    selector = _selector(
+        {"samplerate": 48000, "hostapi": 1, "index": 5},
+        {"samplerate": 48000, "hostapi": 1, "index": 7},
+    )
     calls = []
     monkeypatch.setattr(
         operation_sequence.AnalysisModelSelect,
@@ -95,7 +98,10 @@ def test_record_golden_sample_blocks_mismatched_samplerates(monkeypatch):
 
 
 def test_record_golden_sample_passes_wav_calibration_metadata(monkeypatch):
-    selector = _selector({"samplerate": 48000, "hostapi": 1, "hardware_id": "mic-1"}, {"samplerate": 48000, "hostapi": 1})
+    selector = _selector(
+        {"samplerate": 48000, "hostapi": 1, "hardware_id": "mic-1", "index": 5},
+        {"samplerate": 48000, "hostapi": 1, "index": 7},
+    )
     selector.select_list.mic_channels = [2, 4]
     metadata = {
         "recorded_channels": [
@@ -208,7 +214,10 @@ def test_record_golden_sample_success_saves_runtime_payload_then_restores_shared
     saved_path = Path("unit_test/ui/.golden_baseline_regression.json").resolve()
     if saved_path.exists():
         saved_path.unlink()
-    selector = _selector({"samplerate": 48000, "hostapi": 1}, {"samplerate": 48000, "hostapi": 1})
+    selector = _selector(
+        {"samplerate": 48000, "hostapi": 1, "index": 5},
+        {"samplerate": 48000, "hostapi": 1, "index": 7},
+    )
     data_struct = selector.select_list.data_struct
     data_struct.sample_rate = 44100
     data_struct.stimulus_data = seeded_stimulus

@@ -1,14 +1,18 @@
 import os
 import tempfile
 import csv
+from decimal import Decimal, Inexact, InvalidOperation, ROUND_DOWN, localcontext
 
 import numpy as np
 import pytest
 from openpyxl import load_workbook
 
+import base.excel_result_exporter as excel_result_exporter
 from base.excel_result_exporter import (
     ExcelExportSession,
     _extract_curve_xy,
+    _format_csv_decimal,
+    _resolve_csv_decimal_places,
     build_excel_from_csv_spool,
     export_analysis_to_csv_spool,
     export_analysis_to_excel,
@@ -16,6 +20,7 @@ from base.excel_result_exporter import (
 )
 from base.golden_sample_export_payload import build_golden_sample_curve_exports
 from consts.acoustic_analysis.common_consts import GOLDEN_SAMPLE_CURVE_EXPORTS_KEY
+from consts.excel_export_consts import CSV_DECIMAL_PLACES_KEY
 
 
 def test_extract_curve_xy_prefers_raw_keys_when_present():
@@ -159,6 +164,78 @@ def _read_csv_rows(path):
         return list(csv.reader(stream))
 
 
+@pytest.mark.parametrize("value", [0, 2, 10, np.int64(2)])
+def test_resolve_csv_decimal_places_accepts_declared_integer_types(value):
+    assert _resolve_csv_decimal_places({CSV_DECIMAL_PLACES_KEY: value}) == int(value)
+
+
+def test_resolve_csv_decimal_places_defaults_missing_value_to_two():
+    assert _resolve_csv_decimal_places({}) == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, True, np.bool_(True), 2.0, 2.5, "2", "", -1, 11],
+)
+def test_resolve_csv_decimal_places_rejects_invalid_present_values(value):
+    with pytest.raises(ValueError, match="CSV.*小数位"):
+        _resolve_csv_decimal_places({CSV_DECIMAL_PLACES_KEY: value})
+
+
+def test_fixed_csv_decimal_uses_half_up_and_handles_large_finite_values():
+    assert _format_csv_decimal(2.5, 0) == "3"
+    assert _format_csv_decimal(-2.5, 0) == "-3"
+    assert _format_csv_decimal(2.345, 2) == "2.35"
+    assert _format_csv_decimal(-2.345, 2) == "-2.35"
+    assert _format_csv_decimal(1.2, 10) == "1.2000000000"
+    assert _format_csv_decimal(1e100, 2) == f"{'1' + ('0' * 100)}.00"
+
+
+def test_fixed_csv_decimal_ignores_ambient_inexact_trap_without_mutating_context():
+    with localcontext() as ambient:
+        ambient.prec = 3
+        ambient.rounding = ROUND_DOWN
+        ambient.traps[Inexact] = True
+        ambient.flags[Inexact] = False
+
+        assert _format_csv_decimal(2.345, 2) == "2.35"
+        assert ambient.prec == 3
+        assert ambient.rounding == ROUND_DOWN
+        assert ambient.traps[Inexact] is True
+        assert ambient.flags[Inexact] is False
+
+
+def test_fixed_csv_decimal_ignores_ambient_exponent_bounds_without_mutating_context():
+    with localcontext() as ambient:
+        ambient.Emax = 10
+        ambient.Emin = -10
+
+        assert _format_csv_decimal(Decimal("1e20"), 2) == f"1{'0' * 20}.00"
+        assert ambient.Emax == 10
+        assert ambient.Emin == -10
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (float("nan"), "nan"),
+        (float("inf"), "inf"),
+        (float("-inf"), "-inf"),
+        (None, None),
+        ("", ""),
+        ("label", "label"),
+        (True, True),
+        (np.bool_(False), np.bool_(False)),
+    ],
+)
+def test_fixed_csv_decimal_preserves_nonfinite_and_nonnumeric_payloads(value, expected):
+    formatted = _format_csv_decimal(value, 2)
+    if isinstance(expected, str) and expected in {"nan", "inf", "-inf"}:
+        assert str(formatted) == expected
+    else:
+        assert formatted == expected
+
+
 def _multi_export_args(items):
     return {
         "sn": "SN001",
@@ -196,6 +273,1088 @@ def _selected_export_args(result, *, analysis_result_dict=None, item_name="SPLF"
     args = _export_args(result, analysis_result_dict=analysis_result_dict)
     args["analysis_config"] = _fully_available_analysis_config(item_name)
     return args
+
+
+def _typed_curve_export_args(item_name, item_type, x_values, y_values):
+    return {
+        "sn": "SN001",
+        "date_text": "2026-07-30 14:30:45",
+        "analysis_items_data": {
+            item_name: {
+                "type": item_type,
+                "result": {
+                    "frequency_list": x_values,
+                    "spl_db_raw": y_values,
+                },
+            }
+        },
+        "analysis_config": _fully_available_analysis_config(item_name),
+        "analysis_result_dict": {},
+    }
+
+
+def _time_curve_export_args(item_name, item_type, x_key, y_key, x_values, y_values):
+    args = _typed_curve_export_args(item_name, item_type, x_values, y_values)
+    args["analysis_items_data"][item_name]["result"] = {
+        x_key: x_values,
+        y_key: y_values,
+    }
+    return args
+
+
+@pytest.mark.parametrize("places", [0, 10])
+def test_spl_time_header_ignores_configured_decimal_places(tmp_path, places):
+    spool_dir = tmp_path / f"spool-{places}"
+    args = _typed_curve_export_args(
+        "SPL_ITEM",
+        "SPL",
+        [0.123456789, 1.0, float("nan")],
+        [10.1, 20.2, 30.3],
+    )
+    args["analysis_items_data"]["SPL_ITEM"]["result"] = {
+        "signal_duration": [0.123456789, 1.0, float("nan")],
+        "signal_spl_raw": [10.1, 20.2, 30.3],
+    }
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: places,
+            "save_item_outputs": {"SPL_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / f"result-{places}.xlsx"),
+        spool_dir=str(spool_dir),
+        **args,
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "SPL_ITEM.csv")[0] == [
+        "SN",
+        "time",
+        "0.123457",
+        "1.0",
+        "nan",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("configured_places", "expected_y"),
+    [
+        (None, ["1.23", "2.35", "3.46"]),
+        (0, ["1", "2", "3"]),
+        (10, ["1.2340000000", "2.3450000000", "3.4560000000"]),
+    ],
+)
+def test_loud_time_header_uses_spl_preservation_rule(
+    tmp_path,
+    configured_places,
+    expected_y,
+):
+    suffix = "default" if configured_places is None else str(configured_places)
+    spool_dir = tmp_path / f"spool-{suffix}"
+    args = _time_curve_export_args(
+        "LOUD_ITEM",
+        "LOUD",
+        "time_s",
+        "loudness_sone",
+        [0.123456789, 1.0, float("nan")],
+        [1.234, 2.345, 3.456],
+    )
+
+    excel_cfg = {
+        "enabled": True,
+        "save_item_outputs": {"LOUD_ITEM": ["test_curve"]},
+        "lock_files": False,
+    }
+    if configured_places is not None:
+        excel_cfg[CSV_DECIMAL_PLACES_KEY] = configured_places
+
+    result = export_analysis_to_csv_spool(
+        excel_cfg,
+        file_path=str(tmp_path / f"result-{suffix}.xlsx"),
+        spool_dir=str(spool_dir),
+        **args,
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "LOUD_ITEM.csv")[0] == [
+        "SN",
+        "time",
+        "0.123457",
+        "1.0",
+        "nan",
+    ]
+    assert _read_csv_rows(spool_dir / "LOUD_ITEM.csv")[1][2:] == expected_y
+
+
+def test_non_spl_headers_use_integer_half_up_without_realigning_values(tmp_path):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_typed_curve_export_args(
+            "SPLF_ITEM",
+            "SPLF",
+            [1.5, -1.5, 2.4, 2.49],
+            [10.1, 20.2, 30.3, 40.4],
+        ),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "SPLF_ITEM.csv") == [
+        ["SN", "time", "2", "-2", "2", "2"],
+        ["SN001", "2026-07-30 14:30:45", "10.10", "20.20", "30.30", "40.40"],
+    ]
+
+
+@pytest.mark.parametrize("coordinate", [float("nan"), float("inf"), "invalid"])
+def test_nonfinite_non_spl_coordinate_fails_before_partial_spool(
+    tmp_path,
+    coordinate,
+):
+    output_parent = tmp_path / "missing" / "excel"
+    spool_dir = tmp_path / "missing" / "spool"
+    items = {
+        "VALID": {
+            "type": "SPLF",
+            "result": {"frequency_list": [100.0], "spl_db_raw": [1.0]},
+        },
+        "MALFORMED": {
+            "type": "SPLF",
+            "result": {"frequency_list": [coordinate], "spl_db_raw": [2.0]},
+        },
+    }
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {
+                "VALID": ["test_curve"],
+                "MALFORMED": ["test_curve"],
+            },
+            "lock_files": False,
+        },
+        file_path=str(output_parent / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_multi_export_args(items),
+    )
+
+    assert result.ok is False
+    assert "MALFORMED" in result.message
+    assert "坐标" in result.message
+    assert str(coordinate) in result.message
+    assert not output_parent.exists()
+    assert not spool_dir.exists()
+
+
+def test_large_finite_non_spl_coordinate_rounds_without_decimal_context_failure(
+    tmp_path,
+):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_typed_curve_export_args(
+            "SPLF_ITEM",
+            "SPLF",
+            [Decimal("1e100")],
+            [1.2],
+        ),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "SPLF_ITEM.csv")[0][2] == "1" + ("0" * 100)
+
+
+def test_non_spl_coordinate_rounding_ignores_ambient_decimal_context(tmp_path):
+    spool_dir = tmp_path / "spool"
+
+    with localcontext() as ambient:
+        ambient.prec = 3
+        ambient.rounding = ROUND_DOWN
+        ambient.traps[Inexact] = True
+        ambient.flags[Inexact] = False
+        result = export_analysis_to_csv_spool(
+            {
+                "enabled": True,
+                CSV_DECIMAL_PLACES_KEY: 2,
+                "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+                "lock_files": False,
+            },
+            file_path=str(tmp_path / "result.xlsx"),
+            spool_dir=str(spool_dir),
+            **_typed_curve_export_args("SPLF_ITEM", "SPLF", [2.5], [1.2]),
+        )
+
+        assert result.ok is True
+        assert ambient.prec == 3
+        assert ambient.rounding == ROUND_DOWN
+        assert ambient.traps[Inexact] is True
+        assert ambient.flags[Inexact] is False
+
+    assert _read_csv_rows(spool_dir / "SPLF_ITEM.csv")[0][2] == "3"
+
+
+def test_compatible_header_reuses_historical_spool_after_integer_rounding(tmp_path):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "SPLF_ITEM.csv"
+    historical_path.write_text(
+        "SN,time,100.0\nOLD,2026-07-29 10:00:00,1.5\n",
+        encoding="utf-8-sig",
+    )
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_typed_curve_export_args("SPLF_ITEM", "SPLF", [100.0], [2.345]),
+    )
+
+    assert result.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == {"SPLF_ITEM.csv"}
+    assert _read_csv_rows(historical_path) == [
+        ["SN", "time", "100.0"],
+        ["OLD", "2026-07-29 10:00:00", "1.5"],
+        ["SN001", "2026-07-30 14:30:45", "2.35"],
+    ]
+
+
+def test_versioned_spool_preserves_incompatible_historical_file(tmp_path):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "SPLF_ITEM.csv"
+    historical_path.write_text(
+        "SN,time,100.4\nOLD,2026-07-29 10:00:00,1.5\n",
+        encoding="utf-8-sig",
+    )
+    historical_bytes = historical_path.read_bytes()
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_typed_curve_export_args("SPLF_ITEM", "SPLF", [100.4], [2.345]),
+    )
+
+    assert result.ok is True
+    assert historical_path.read_bytes() == historical_bytes
+    assert {path.name for path in spool_dir.iterdir()} == {
+        "SPLF_ITEM.csv",
+        "SPLF_ITEM_v2.csv",
+    }
+    assert _read_csv_rows(spool_dir / "SPLF_ITEM_v2.csv") == [
+        ["SN", "time", "100"],
+        ["SN001", "2026-07-30 14:30:45", "2.35"],
+    ]
+
+
+def test_loud_versioned_spool_preserves_incompatible_integer_header(tmp_path):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "LOUD_ITEM.csv"
+    historical_path.write_text(
+        "SN,time,0,1\nOLD,2026-07-29 10:00:00,1.0,2.0\n",
+        encoding="utf-8-sig",
+    )
+    historical_bytes = historical_path.read_bytes()
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"LOUD_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_time_curve_export_args(
+            "LOUD_ITEM",
+            "LOUD",
+            "time_s",
+            "loudness_sone",
+            [0.25, 1.25],
+            [1.2, 2.3],
+        ),
+    )
+
+    assert result.ok is True
+    assert historical_path.read_bytes() == historical_bytes
+    assert {path.name for path in spool_dir.iterdir()} == {
+        "LOUD_ITEM.csv",
+        "LOUD_ITEM_v2.csv",
+    }
+    assert _read_csv_rows(spool_dir / "LOUD_ITEM_v2.csv") == [
+        ["SN", "time", "0.25", "1.25"],
+        ["SN001", "2026-07-30 14:30:45", "1.20", "2.30"],
+    ]
+
+
+def test_historical_header_nan_is_incompatible_with_new_finite_coordinate(tmp_path):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "SPLF_ITEM.csv"
+    historical_path.write_text(
+        "SN,time,nan\nOLD,2026-07-29 10:00:00,1.5\n",
+        encoding="utf-8-sig",
+    )
+    historical_bytes = historical_path.read_bytes()
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_typed_curve_export_args("SPLF_ITEM", "SPLF", [100.0], [2.345]),
+    )
+
+    assert result.ok is True
+    assert historical_path.read_bytes() == historical_bytes
+    assert _read_csv_rows(spool_dir / "SPLF_ITEM_v2.csv") == [
+        ["SN", "time", "100"],
+        ["SN001", "2026-07-30 14:30:45", "2.35"],
+    ]
+
+
+def test_historical_header_nan_remains_compatible_with_spl_nan(tmp_path):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "SPL_ITEM.csv"
+    historical_path.write_text(
+        "SN,time,nan\nOLD,2026-07-29 10:00:00,1.5\n",
+        encoding="utf-8-sig",
+    )
+    args = _typed_curve_export_args("SPL_ITEM", "SPL", [0.0], [2.345])
+    args["analysis_items_data"]["SPL_ITEM"]["result"] = {
+        "signal_duration": [float("nan")],
+        "signal_spl_raw": [2.345],
+    }
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPL_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **args,
+    )
+
+    assert result.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == {"SPL_ITEM.csv"}
+    assert _read_csv_rows(historical_path)[-1] == [
+        "SN001",
+        "2026-07-30 14:30:45",
+        "2.35",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("existing", "expected", "matches"),
+    [
+        (float("nan"), float("nan"), True),
+        (float("nan"), 100, False),
+        (float("nan"), float("inf"), False),
+        (float("inf"), float("inf"), True),
+        (float("-inf"), float("-inf"), True),
+        (float("inf"), float("-inf"), False),
+        (float("inf"), 100, False),
+        (float("-inf"), 100, False),
+    ],
+)
+def test_header_match_handles_nonfinite_numbers_by_kind_and_sign(
+    existing,
+    expected,
+    matches,
+):
+    assert excel_result_exporter._csv_headers_match([existing], [expected]) is matches
+
+
+def test_header_match_compares_huge_finite_integers_without_float_loss():
+    huge = 10**400
+
+    assert excel_result_exporter._csv_headers_match([huge], [huge]) is True
+    assert excel_result_exporter._csv_headers_match([huge], [huge + 1]) is False
+
+
+def test_header_match_preserves_finite_one_millionth_tolerance():
+    assert excel_result_exporter._csv_headers_match([100], [100.000001]) is True
+    assert excel_result_exporter._csv_headers_match([100], [100.0000011]) is False
+
+
+def test_locked_header_match_compares_huge_finite_tokens_without_float_loss():
+    huge = 10**400
+    existing = ["SN", "time", str(huge)]
+
+    assert excel_result_exporter._RUNTIME_LOCKER._headers_equivalent(
+        existing,
+        ["SN", "time", huge],
+    ) is True
+    assert excel_result_exporter._RUNTIME_LOCKER._headers_equivalent(
+        existing,
+        ["SN", "time", huge + 1],
+    ) is False
+    assert excel_result_exporter._RUNTIME_LOCKER._headers_equivalent(
+        ["SN", "time", "nan"],
+        ["SN", "time", float("nan")],
+    ) is True
+    assert excel_result_exporter._RUNTIME_LOCKER._headers_equivalent(
+        ["SN", "time", "nan"],
+        ["SN", "time", 100],
+    ) is False
+
+
+@pytest.mark.parametrize("lock_files", [False, True])
+@pytest.mark.parametrize("exponent", [100, 1000])
+def test_scientific_historical_header_reuses_exact_equivalent_spool(
+    tmp_path,
+    lock_files,
+    exponent,
+):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "SPLF_ITEM.csv"
+    historical_path.write_text(
+        f"SN,time,1e+{exponent}\nOLD,2026-07-29 10:00:00,1.5\n",
+        encoding="utf-8-sig",
+    )
+
+    try:
+        result = export_analysis_to_csv_spool(
+            {
+                "enabled": True,
+                CSV_DECIMAL_PLACES_KEY: 2,
+                "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+                "lock_files": lock_files,
+            },
+            file_path=str(tmp_path / "result.xlsx"),
+            spool_dir=str(spool_dir),
+            **_typed_curve_export_args(
+                "SPLF_ITEM",
+                "SPLF",
+                [Decimal(f"1e{exponent}")],
+                [2.345],
+            ),
+        )
+    finally:
+        excel_result_exporter._RUNTIME_LOCKER.close_all()
+
+    assert result.ok is True
+    assert {path.name for path in spool_dir.iterdir()} == {"SPLF_ITEM.csv"}
+    assert _read_csv_rows(historical_path)[-1] == [
+        "SN001",
+        "2026-07-30 14:30:45",
+        "2.35",
+    ]
+
+
+@pytest.mark.parametrize("lock_files", [False, True])
+def test_distinct_huge_decimal_header_versions_without_rewriting_history(
+    tmp_path,
+    lock_files,
+):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    historical_path = spool_dir / "SPLF_ITEM.csv"
+    historical_path.write_text(
+        "SN,time,100000000000000000001.0\n"
+        "OLD,2026-07-29 10:00:00,1.5\n",
+        encoding="utf-8-sig",
+    )
+    historical_bytes = historical_path.read_bytes()
+
+    try:
+        result = export_analysis_to_csv_spool(
+            {
+                "enabled": True,
+                CSV_DECIMAL_PLACES_KEY: 2,
+                "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+                "lock_files": lock_files,
+            },
+            file_path=str(tmp_path / "result.xlsx"),
+            spool_dir=str(spool_dir),
+            **_typed_curve_export_args(
+                "SPLF_ITEM",
+                "SPLF",
+                [100000000000000000000],
+                [2.345],
+            ),
+        )
+    finally:
+        excel_result_exporter._RUNTIME_LOCKER.close_all()
+
+    assert result.ok is True
+    assert historical_path.read_bytes() == historical_bytes
+    assert _read_csv_rows(spool_dir / "SPLF_ITEM_v2.csv") == [
+        ["SN", "time", "100000000000000000000"],
+        ["SN001", "2026-07-30 14:30:45", "2.35"],
+    ]
+
+
+def test_direct_xlsx_header_boundary_preserves_decimal_token_versioning(tmp_path):
+    file_path = tmp_path / "direct.xlsx"
+    cfg = {
+        "enabled": True,
+        "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+        "lock_files": False,
+    }
+
+    first = export_analysis_to_excel(
+        cfg,
+        file_path=str(file_path),
+        **_typed_curve_export_args("SPLF_ITEM", "SPLF", [100], [1.0]),
+    )
+    second = export_analysis_to_excel(
+        cfg,
+        file_path=str(file_path),
+        **_typed_curve_export_args(
+            "SPLF_ITEM",
+            "SPLF",
+            [Decimal("100.0")],
+            [2.0],
+        ),
+    )
+
+    assert first.ok is True
+    assert second.ok is True
+    workbook = load_workbook(file_path, data_only=True)
+    assert workbook.sheetnames == ["SPLF_ITEM", "SPLF_ITEM_v2"]
+    assert workbook["SPLF_ITEM"].max_row == 2
+    assert workbook["SPLF_ITEM_v2"].cell(row=2, column=3).value == 2
+
+
+def test_session_xlsx_header_boundary_preserves_decimal_token_versioning(tmp_path):
+    file_path = tmp_path / "session.xlsx"
+    session = ExcelExportSession(file_path=str(file_path))
+
+    first = session.append(
+        save_items=["SPLF_ITEM"],
+        save_item_outputs={"SPLF_ITEM": ["test_curve"]},
+        max_points=2000,
+        **_typed_curve_export_args("SPLF_ITEM", "SPLF", [100], [1.0]),
+    )
+    second = session.append(
+        save_items=["SPLF_ITEM"],
+        save_item_outputs={"SPLF_ITEM": ["test_curve"]},
+        max_points=2000,
+        **_typed_curve_export_args(
+            "SPLF_ITEM",
+            "SPLF",
+            [Decimal("100.0")],
+            [2.0],
+        ),
+    )
+    saved = session.save()
+
+    assert first.ok is True
+    assert second.ok is True
+    assert saved.ok is True
+    workbook = load_workbook(file_path, data_only=True)
+    assert workbook.sheetnames == ["SPLF_ITEM", "SPLF_ITEM_v2"]
+    assert workbook["SPLF_ITEM"].max_row == 2
+    assert workbook["SPLF_ITEM_v2"].cell(row=2, column=3).value == 2
+
+
+def test_locked_precision_matches_unlocked_prepared_header_and_payload(
+    tmp_path,
+    monkeypatch,
+):
+    captured = {}
+
+    def capture_unlocked(path, *, header, row):
+        captured["unlocked"] = (list(header), list(row))
+        return excel_result_exporter.ExportResult(ok=True, message=str(path))
+
+    def capture_locked(path, *, header, row):
+        captured["locked"] = (list(header), list(row))
+        return excel_result_exporter.ExportResult(ok=True, message=str(path))
+
+    monkeypatch.setattr(excel_result_exporter, "_append_csv_row", capture_unlocked)
+    monkeypatch.setattr(excel_result_exporter, "_append_csv_row_locked", capture_locked)
+    args = _typed_curve_export_args("SPLF_ITEM", "SPLF", [1.5], [2.345])
+
+    try:
+        for lock_files in (False, True):
+            result = export_analysis_to_csv_spool(
+                {
+                    "enabled": True,
+                    CSV_DECIMAL_PLACES_KEY: 2,
+                    "save_item_outputs": {"SPLF_ITEM": ["test_curve"]},
+                    "lock_files": lock_files,
+                },
+                file_path=str(tmp_path / f"result-{lock_files}.xlsx"),
+                spool_dir=str(tmp_path / f"spool-{lock_files}"),
+                **args,
+            )
+            assert result.ok is True
+    finally:
+        excel_result_exporter._RUNTIME_LOCKER.close_all()
+
+    assert captured["locked"] == captured["unlocked"] == (
+        ["SN", "time", 2],
+        ["SN001", "2026-07-30 14:30:45", "2.35"],
+    )
+
+
+def test_rebuilt_precision_preserves_margin_text_and_numeric_curve_ai_cells(tmp_path):
+    spool_dir = tmp_path / "spool"
+    file_path = tmp_path / "result.xlsx"
+    items = {
+        "CURVE": {
+            "type": "SPLF",
+            "result": {"frequency_list": [100.4], "spl_db_raw": [2.345]},
+        },
+        "AI结果": {
+            "type": "AI",
+            "label": "OK",
+            "ok_score": 0.126,
+            "ng_score": 0.874,
+            "model_name": "demo",
+        },
+    }
+    args = _multi_export_args(items)
+    args["analysis_result_dict"] = {"CURVE": (True, 0.6)}
+
+    exported = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {
+                "CURVE": ["test_curve", "margin"],
+                "AI结果": ["test_curve"],
+            },
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
+        **args,
+    )
+    rebuilt = build_excel_from_csv_spool(
+        {"enabled": True, "lock_files": False},
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
+    )
+
+    assert exported.ok is True
+    assert rebuilt.ok is True
+    workbook = load_workbook(file_path, data_only=True)
+    assert workbook["CURVE margin"].cell(row=2, column=4).value == "0.60"
+    assert workbook["CURVE"].cell(row=2, column=3).value == 2.35
+    assert workbook["AI结果"].cell(row=2, column=4).value == 0.13
+
+
+def test_rebuilt_loud_curve_preserves_fractional_time_coordinates(tmp_path):
+    spool_dir = tmp_path / "spool"
+    file_path = tmp_path / "result.xlsx"
+    args = _time_curve_export_args(
+        "LOUD_ITEM",
+        "LOUD",
+        "time_s",
+        "loudness_sone",
+        [0.125, 0.375],
+        [1.234, 2.345],
+    )
+
+    exported = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"LOUD_ITEM": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
+        **args,
+    )
+    rebuilt = build_excel_from_csv_spool(
+        {"enabled": True, "lock_files": False},
+        file_path=str(file_path),
+        spool_dir=str(spool_dir),
+    )
+
+    assert exported.ok is True
+    assert rebuilt.ok is True
+    workbook = load_workbook(file_path, data_only=True)
+    assert [
+        workbook["LOUD_ITEM"].cell(row=1, column=3).value,
+        workbook["LOUD_ITEM"].cell(row=1, column=4).value,
+    ] == ["0.125", "0.375"]
+    assert [
+        workbook["LOUD_ITEM"].cell(row=2, column=3).value,
+        workbook["LOUD_ITEM"].cell(row=2, column=4).value,
+    ] == [1.23, 2.35]
+
+
+def test_direct_excel_precision_config_leaves_curve_and_margin_behavior_unchanged(
+    tmp_path,
+):
+    file_path = tmp_path / "direct.xlsx"
+
+    result = export_analysis_to_excel(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 0,
+            "save_item_outputs": {"SPLF_ITEM": ["test_curve", "margin"]},
+            "lock_files": False,
+        },
+        file_path=str(file_path),
+        **(
+            _typed_curve_export_args("SPLF_ITEM", "SPLF", [100.4], [2.345])
+            | {"analysis_result_dict": {"SPLF_ITEM": (True, 0.6)}}
+        ),
+    )
+
+    assert result.ok is True
+    workbook = load_workbook(file_path, data_only=True)
+    assert workbook["SPLF_ITEM"].cell(row=1, column=3).value == 100.4
+    assert workbook["SPLF_ITEM"].cell(row=2, column=3).value == 2.345
+    assert workbook["SPLF_ITEM margin"].cell(row=2, column=4).value == "6.00E-01"
+
+
+def test_csv_spool_formats_curve_y_values_with_configured_precision(tmp_path):
+    spool_dir = tmp_path / "spool"
+    large_value = 1e100
+    values = [
+        1.2,
+        2.345,
+        -2.345,
+        large_value,
+        None,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "label",
+        True,
+    ]
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(
+            {
+                "frequency_list": [float(index) for index in range(len(values))],
+                "spl_db_raw": values,
+            }
+        ),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "SPLF.csv")[1] == [
+        "SN001",
+        "2026-07-30 14:30:45",
+        "1.20",
+        "2.35",
+        "-2.35",
+        f"{'1' + ('0' * 100)}.00",
+        "",
+        "nan",
+        "inf",
+        "-inf",
+        "label",
+        "True",
+    ]
+
+
+def test_csv_spool_formats_ai_scores_without_rescaling_and_preserves_text_fields(tmp_path):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"AI结果": ["test_curve"]},
+            "lock_files": False,
+        },
+        sn="00123",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={
+            "AI结果": {
+                "type": "AI",
+                "label": "456",
+                "ok_score": 0.126,
+                "ng_score": 2.345,
+                "model_name": "789",
+            }
+        },
+        analysis_config=_fully_available_analysis_config("AI结果"),
+        analysis_result_dict={},
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "AI结果.csv") == [
+        ["SN", "time", "AI result", "OK score(%)", "NG score(%)", "Model"],
+        ["00123", "2026-07-30 14:30:45", "456", "0.13", "2.35", "789"],
+    ]
+
+
+def test_csv_spool_formats_ordinary_and_ai_margin_with_business_scaling(tmp_path):
+    spool_dir = tmp_path / "spool"
+    items = {
+        "ORDINARY": {"type": "SPLF"},
+        "AI结果": {"type": "AI", "label": "OK"},
+        "LARGE": {"type": "SPLF"},
+        "NONFINITE": {"type": "SPLF"},
+    }
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {
+                "ORDINARY": ["margin"],
+                "AI结果": ["margin"],
+                "LARGE": ["margin"],
+                "NONFINITE": ["margin"],
+            },
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data=items,
+        analysis_config=_fully_available_analysis_config("ORDINARY")
+        | _fully_available_analysis_config("AI结果")
+        | _fully_available_analysis_config("LARGE")
+        | _fully_available_analysis_config("NONFINITE"),
+        analysis_result_dict={
+            "ORDINARY": (True, 0.6),
+            "AI结果": (False, 0.006),
+            "LARGE": (True, 1e100),
+            "NONFINITE": (False, float("inf")),
+        },
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "ORDINARY margin.csv")[1][3] == "0.60"
+    assert _read_csv_rows(spool_dir / "AI结果 margin.csv")[1][3] == "0.60"
+    assert _read_csv_rows(spool_dir / "LARGE margin.csv")[1][3] == (
+        f"{'1' + ('0' * 100)}.00"
+    )
+    assert _read_csv_rows(spool_dir / "NONFINITE margin.csv")[1][3] == "INF"
+
+
+@pytest.mark.parametrize(
+    ("item_type", "deviation", "zero_count"),
+    [
+        ("SPLF", Decimal("1e10000"), 10000),
+        ("SPLF", 10**400, 400),
+        ("AI", Decimal("1e10000"), 10002),
+    ],
+)
+def test_csv_spool_formats_finite_margin_beyond_binary_float_range(
+    tmp_path,
+    item_type,
+    deviation,
+    zero_count,
+):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"ITEM": ["margin"]},
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={"ITEM": {"type": item_type}},
+        analysis_config=_fully_available_analysis_config("ITEM"),
+        analysis_result_dict={"ITEM": (True, deviation)},
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "ITEM margin.csv")[1][3] == (
+        f"1{'0' * zero_count}.00"
+    )
+
+
+@pytest.mark.parametrize(
+    ("deviation", "expected"),
+    [
+        (Decimal("NaN"), "NAN"),
+        (Decimal("Infinity"), "INF"),
+        (Decimal("-Infinity"), "-INF"),
+        ("not available", "not available"),
+    ],
+)
+def test_csv_spool_preserves_nonfinite_margin_tokens_and_nonnumeric_text(
+    tmp_path,
+    deviation,
+    expected,
+):
+    spool_dir = tmp_path / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {"ITEM": ["margin"]},
+            "lock_files": False,
+        },
+        sn="SN001",
+        date_text="2026-07-30 14:30:45",
+        analysis_items_data={"ITEM": {"type": "SPLF"}},
+        analysis_config=_fully_available_analysis_config("ITEM"),
+        analysis_result_dict={"ITEM": (True, deviation)},
+        file_path=str(tmp_path / "result.xlsx"),
+        spool_dir=str(spool_dir),
+    )
+
+    assert result.ok is True
+    assert _read_csv_rows(spool_dir / "ITEM margin.csv")[1][3] == expected
+
+
+@pytest.mark.parametrize("deviation", ["not available", ""])
+def test_csv_spool_preserves_invalid_margin_text_when_ambient_invalid_trap_is_disabled(
+    tmp_path,
+    deviation,
+):
+    spool_dir = tmp_path / "spool"
+
+    with localcontext() as ambient:
+        ambient.traps[InvalidOperation] = False
+        ambient.flags[InvalidOperation] = False
+        result = export_analysis_to_csv_spool(
+            {
+                "enabled": True,
+                CSV_DECIMAL_PLACES_KEY: 2,
+                "save_item_outputs": {"ITEM": ["margin"]},
+                "lock_files": False,
+            },
+            sn="SN001",
+            date_text="2026-07-30 14:30:45",
+            analysis_items_data={"ITEM": {"type": "SPLF"}},
+            analysis_config=_fully_available_analysis_config("ITEM"),
+            analysis_result_dict={"ITEM": (True, deviation)},
+            file_path=str(tmp_path / "result.xlsx"),
+            spool_dir=str(spool_dir),
+        )
+
+        assert result.ok is True
+        assert _read_csv_rows(spool_dir / "ITEM margin.csv")[1][3] == deviation
+        assert ambient.traps[InvalidOperation] is False
+        assert ambient.flags[InvalidOperation] is False
+
+
+def test_csv_spool_rejects_invalid_precision_before_creating_output_parent(tmp_path):
+    output_parent = tmp_path / "missing" / "excel"
+    spool_dir = tmp_path / "missing" / "spool"
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2.0,
+            "save_item_outputs": {"SPLF": ["test_curve"]},
+            "lock_files": False,
+        },
+        file_path=str(output_parent / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_selected_export_args(
+            {"frequency_list": [100.0], "spl_db_raw": [1.2]}
+        ),
+    )
+
+    assert result.ok is False
+    assert "CSV" in result.message
+    assert "小数位" in result.message
+    assert not output_parent.exists()
+    assert not spool_dir.exists()
+
+
+def test_csv_spool_normalizes_decimal_failure_with_item_and_field_before_any_write(
+    tmp_path,
+    monkeypatch,
+):
+    output_parent = tmp_path / "missing" / "excel"
+    spool_dir = tmp_path / "missing" / "spool"
+    real_formatter = excel_result_exporter._format_csv_decimal
+
+    def fail_for_second_item(value, places):
+        if value == 22.2:
+            raise InvalidOperation
+        return real_formatter(value, places)
+
+    monkeypatch.setattr(
+        excel_result_exporter,
+        "_format_csv_decimal",
+        fail_for_second_item,
+    )
+
+    result = export_analysis_to_csv_spool(
+        {
+            "enabled": True,
+            CSV_DECIMAL_PLACES_KEY: 2,
+            "save_item_outputs": {
+                "FIRST": ["test_curve"],
+                "SECOND": ["test_curve"],
+            },
+            "lock_files": False,
+        },
+        file_path=str(output_parent / "result.xlsx"),
+        spool_dir=str(spool_dir),
+        **_multi_export_args(
+            {
+                "FIRST": {
+                    "type": "SPLF",
+                    "result": {"frequency_list": [100.0], "spl_db_raw": [11.1]},
+                },
+                "SECOND": {
+                    "type": "SPLF",
+                    "result": {"frequency_list": [100.0], "spl_db_raw": [22.2]},
+                },
+            }
+        ),
+    )
+
+    assert result.ok is False
+    assert "SECOND" in result.message
+    assert "曲线Y值" in result.message
+    assert not output_parent.exists()
+    assert not spool_dir.exists()
 
 
 @pytest.mark.parametrize(
@@ -616,8 +1775,8 @@ def test_csv_spool_exports_envelope_only_and_no_auxiliary_curves(tmp_path):
     assert result.ok is True
     assert sorted(path.name for path in spool_dir.iterdir()) == ["SPLF_测试曲线.csv"]
     assert _read_csv_rows(spool_dir / "SPLF_测试曲线.csv") == [
-        ["SN", "time", "100.0", "200.0"],
-        ["SN001", "2026-07-30 14:30:45", "31.0", "33.5"],
+        ["SN", "time", "100", "200"],
+        ["SN001", "2026-07-30 14:30:45", "31.00", "33.50"],
     ]
 
 
@@ -830,8 +1989,8 @@ def test_csv_spool_selected_test_curve_uses_raw_fallback_without_declared_envelo
 
     assert result.ok is True
     assert _read_csv_rows(spool_dir / "SPLF_测试曲线.csv") == [
-        ["SN", "time", "100.0"],
-        ["SN001", "2026-07-30 14:30:45", "10.0"],
+        ["SN", "time", "100"],
+        ["SN001", "2026-07-30 14:30:45", "10.00"],
     ]
 
 
@@ -1133,6 +2292,7 @@ def test_csv_spool_downsamples_each_current_series_without_recalculating_values(
     )
 
     assert result.ok is True
+    selected_indices = [0, 2, 4, 6, 8, 11, 13, 15, 17, 20]
     for file_name, canonical_y in (
         ("SPLF_偏差曲线.csv", deviation_y),
         ("SPLF_测试曲线.csv", envelope_y),
@@ -1142,8 +2302,7 @@ def test_csv_spool_downsamples_each_current_series_without_recalculating_values(
         exported_y = [float(value) for value in rows[1][2:]]
         assert len(exported_x) == 10
         assert list(zip(exported_x, exported_y)) == [
-            (x_value, canonical_y[x_values.index(x_value)])
-            for x_value in exported_x
+            (float(index), canonical_y[index]) for index in selected_indices
         ]
 
 

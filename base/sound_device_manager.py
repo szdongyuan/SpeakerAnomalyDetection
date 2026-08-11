@@ -47,6 +47,25 @@ class SoundDeviceManager(object):
         sd.default.device = (mic_id, speaker_id)
 
     @staticmethod
+    def change_default_input_device(mic_id):
+        previous_default = tuple(sd.default.device)
+        previous_output_id = previous_default[1]
+        sd.default.device = (mic_id, previous_output_id)
+        applied_default = tuple(sd.default.device)
+        if applied_default[1] != previous_output_id:
+            preservation_error = RuntimeError(
+                "default output device changed while applying input device: "
+                f"expected {previous_output_id}, got {applied_default[1]}"
+            )
+            try:
+                sd.default.device = previous_default
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    f"{preservation_error}; rollback failed: {rollback_error}"
+                ) from rollback_error
+            raise preservation_error
+
+    @staticmethod
     def get_api_info(api_index=None):
         return sd.query_hostapis(api_index)
 
@@ -324,18 +343,23 @@ class SoundDeviceManager(object):
     def _devices_have_registered_hardware_ids(mic, speaker):
         return (
             isinstance(mic, dict)
-            and isinstance(speaker, dict)
             and bool(mic.get("hardware_id"))
-            and bool(speaker.get("hardware_id"))
+            and (
+                speaker is None
+                or (isinstance(speaker, dict) and bool(speaker.get("hardware_id")))
+            )
         )
 
     @staticmethod
     def _saved_devices_have_registered_hardware_ids(saved_devices):
-        if not isinstance(saved_devices, dict):
+        if not isinstance(saved_devices, dict) or "speaker" not in saved_devices:
+            return False
+        speaker = saved_devices["speaker"]
+        if speaker is None and saved_devices.get("version") != 3:
             return False
         return SoundDeviceManager._devices_have_registered_hardware_ids(
             saved_devices.get("mic"),
-            saved_devices.get("speaker"),
+            speaker,
         )
 
     @staticmethod
@@ -521,8 +545,6 @@ class SoundDeviceManager(object):
         if not grouped_assets:
             return False
         for api_group in grouped_assets.values():
-            if not api_group.get("output"):
-                continue
             if any(
                 SoundDeviceManager._registered_asset_has_selectable_input_channel(repository, asset)
                 for asset in api_group.get("input", [])
@@ -538,17 +560,22 @@ class SoundDeviceManager(object):
             return SoundDeviceManager._selection_group_can_complete_selection(repository, grouped_assets)
 
         registered_assets = repository.list_assets()
-        has_input = any(asset.get("max_input_channels", 0) > 0 for asset in registered_assets)
-        has_output = any(asset.get("max_output_channels", 0) > 0 for asset in registered_assets)
-        return has_input and has_output
+        return any(
+            asset.get("max_input_channels", 0) > 0
+            and SoundDeviceManager._registered_asset_has_selectable_input_channel(repository, asset)
+            for asset in registered_assets
+        )
 
     def _try_resolve_registered_startup_devices(self, saved_devices, runtime_devices):
         if not self._saved_devices_have_registered_hardware_ids(saved_devices):
             return None
+        if "speaker" not in saved_devices:
+            return None
 
         repository = HardwareManagementRepository()
         saved_mic = saved_devices.get("mic")
-        saved_speaker = saved_devices.get("speaker")
+        saved_speaker = saved_devices["speaker"]
+        speaker_required = saved_speaker is not None
         try:
             tables_exist = repository.tables_exist()
         except MissingHardwareTablesError:
@@ -570,7 +597,11 @@ class SoundDeviceManager(object):
 
         try:
             mic_asset = repository.get_asset(saved_mic.get("hardware_id"))
-            speaker_asset = repository.get_asset(saved_speaker.get("hardware_id"))
+            speaker_asset = (
+                repository.get_asset(saved_speaker.get("hardware_id"))
+                if speaker_required
+                else None
+            )
         except MissingHardwareTablesError:
             return self._build_unavailable_startup_result(
                 "已注册硬件当前不可用，请检查设备连接后重试。",
@@ -582,7 +613,7 @@ class SoundDeviceManager(object):
                 can_retry_saved_devices=True,
             )
 
-        if mic_asset is None or speaker_asset is None:
+        if mic_asset is None or (speaker_required and speaker_asset is None):
             try:
                 can_complete_selection = self._registered_assets_can_complete_selection(repository)
             except MissingHardwareTablesError:
@@ -632,13 +663,21 @@ class SoundDeviceManager(object):
             )
 
         mic_match_status, runtime_mic = self._match_registered_runtime_device(mic_asset, runtime_devices)
-        speaker_match_status, runtime_speaker = self._match_registered_runtime_device(speaker_asset, runtime_devices)
-        if mic_match_status == "missing" or speaker_match_status == "missing":
+        if speaker_required:
+            speaker_match_status, runtime_speaker = self._match_registered_runtime_device(
+                speaker_asset,
+                runtime_devices,
+            )
+        else:
+            speaker_match_status, runtime_speaker = None, None
+        if mic_match_status == "missing" or (speaker_required and speaker_match_status == "missing"):
             return self._build_unavailable_startup_result(
                 "已注册硬件当前不可用，请检查设备连接后重试。",
                 can_retry_saved_devices=True,
             )
-        if mic_match_status == "ambiguous" or speaker_match_status == "ambiguous":
+        if mic_match_status == "ambiguous" or (
+            speaker_required and speaker_match_status == "ambiguous"
+        ):
             return self._build_unavailable_startup_result(
                 "已注册硬件匹配到多个当前设备，无法安全应用。",
                 can_retry_saved_devices=True,
@@ -649,27 +688,22 @@ class SoundDeviceManager(object):
                 "已保存的麦克风通道不存在或配置无效，请检查设备连接或重新选择设备。",
                 can_retry_saved_devices=True,
             )
-        if not self._runtime_speaker_has_output_capacity(runtime_speaker):
+        if speaker_required and not self._runtime_speaker_has_output_capacity(runtime_speaker):
             return self._build_unavailable_startup_result(
                 "已注册硬件当前不可用，请检查设备连接后重试。",
                 can_retry_saved_devices=True,
             )
 
         mic = augment_runtime_device(runtime_mic, mic_asset)
-        speaker = augment_runtime_device(runtime_speaker, speaker_asset)
+        speaker = augment_runtime_device(runtime_speaker, speaker_asset) if speaker_required else None
         try:
-            self.change_default_device(mic["index"], speaker["index"])
+            if speaker_required:
+                self.change_default_device(mic["index"], speaker["index"])
+            else:
+                self.change_default_input_device(mic["index"])
         except Exception as e:
             return self._build_unavailable_startup_result(
                 f"音频设备应用失败，请检查设备连接或重新选择设备。{e}",
-                can_retry_saved_devices=True,
-            )
-
-        try:
-            self._save_selected_devices_with_config_rollback(mic, speaker, mic_channels)
-        except Exception as e:
-            return self._build_unavailable_startup_result(
-                f"音频设备配置保存失败，请检查设备连接或重新选择设备。{e}",
                 can_retry_saved_devices=True,
             )
 
@@ -751,15 +785,6 @@ class SoundDeviceManager(object):
                 f"音频设备应用失败，请检查设备连接或重新选择设备。{e}",
                 can_retry_saved_devices=True,
             )
-
-        if not self._saved_devices_have_registered_hardware_ids(saved_devices):
-            try:
-                self._save_selected_devices_with_config_rollback(mic, speaker, mic_channels)
-            except Exception as e:
-                return self._build_unavailable_startup_result(
-                    f"音频设备配置保存失败，请检查设备连接或重新选择设备。{e}",
-                    can_retry_saved_devices=True,
-                )
 
         return {
             "mic": mic,

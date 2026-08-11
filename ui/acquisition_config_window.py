@@ -16,7 +16,6 @@ from base.audio_sample_rate import resolve_duplex_sample_rate, resolve_input_sam
 from base.stimulus_resolver import _generate_stimulus_data
 from base.stimulus_signal.methods import normalize_stimulus_method
 from consts.frequency_stepped_consts import FREQUENCY_STEPPED_METHOD
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import (
     PushButton,
     GroupBox,
@@ -187,11 +186,11 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return out_group_box
 
     def _required_devices_available(self):
-        return (
-            self._has_device_name(self.mic)
-            and self._has_device_name(self.speaker)
-            and resolve_duplex_sample_rate(self.mic, self.speaker).ok
-        )
+        if not self._has_device_name(self.mic):
+            return False
+        if self.speaker is None:
+            return True
+        return self._has_device_name(self.speaker) and resolve_duplex_sample_rate(self.mic, self.speaker).ok
 
     def _synchronize_stimulus_payload_sample_rate(self, sample_rate):
         self.stimulus_config_data["sample_rate"] = int(sample_rate)
@@ -216,7 +215,16 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return True
 
     def on_click_ok_btn(self):
-        if not self._has_device_name(self.mic) or not self._has_device_name(self.speaker):
+        if not self._has_device_name(self.mic):
+            return
+        if self.speaker is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
+        if not self._has_device_name(self.speaker):
             return
         sample_rate_result = resolve_duplex_sample_rate(self.mic, self.speaker)
         if not sample_rate_result.ok:
@@ -232,6 +240,13 @@ class PlayRecordConfigWindow(BaseConfigWindow):
     def on_default_btn_clicked(self):
         if not self._has_device_name(self.mic):
             MessageBox.warning(self, "采样率配置", "未选择输入设备，请在硬件管理中选择设备。")
+            return
+        if self.speaker is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
             return
         if not self._has_device_name(self.speaker):
             MessageBox.warning(self, "采样率配置", "未选择输出设备，请在硬件管理中选择设备。")
@@ -251,6 +266,13 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self._show_default_save_result(ok)
 
     def open_stimulus_window(self):
+        if self.speaker is None:
+            MessageBox.warning(
+                self,
+                "提示",
+                "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+            )
+            return
         sample_rate_result = resolve_output_sample_rate(self.speaker)
         if not sample_rate_result.ok:
             MessageBox.warning(self, "采样率配置", sample_rate_result.message)
@@ -334,6 +356,7 @@ class RecordConfigWindow(BaseConfigWindow):
         label_streaming_recording = Label("流式录制:")
         self.streaming_recording_checkbox = CheckBox("启用")
         self.streaming_recording_checkbox.setChecked(bool(self.input_data.get("use_streaming_recording", False)))
+        self.streaming_recording_checkbox.toggled.connect(self._on_streaming_recording_toggled)
         label_delay = Label("启动延迟:")
         self.recording_start_delay_ms_input = DoubleSpinBox()
         self.recording_start_delay_ms_input.setRange(0.0, 1000.0)
@@ -363,17 +386,8 @@ class RecordConfigWindow(BaseConfigWindow):
             saved_channel = self.available_channels[0]
         idx = self.monitor_channel_combo.findData(saved_channel)
         self.monitor_channel_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._on_streaming_recording_toggled(self.streaming_recording_checkbox.isChecked())
 
-        max_out = 0
-        try:
-            if self.speaker:
-                max_out = int(self.speaker.get("max_output_channels") or 0)
-        except Exception:
-            max_out = 0
-
-        if max_out <= 0:
-            self.monitor_checkbox.setChecked(False)
-            self.monitor_checkbox.setEnabled(False)
         self._on_monitor_toggled(self.monitor_checkbox.isChecked())
 
         grid_layout.addWidget(label_time, 0, 0)
@@ -400,6 +414,15 @@ class RecordConfigWindow(BaseConfigWindow):
 
     def _required_devices_available(self):
         return self._has_device_name(self.mic) and resolve_input_sample_rate(self.mic).ok
+
+    def _on_streaming_recording_toggled(self, checked):
+
+        self.monitor_checkbox.setEnabled(checked)
+        self.monitor_gain_db_input.setEnabled(checked)
+        self.monitor_channel_combo.setEnabled(checked)
+
+        if not checked:
+            self.monitor_checkbox.setChecked(False)
 
     def _input_sample_rate_for_display(self):
         result = resolve_input_sample_rate(self.mic)
@@ -429,6 +452,13 @@ class RecordConfigWindow(BaseConfigWindow):
             MessageBox.warning(self, "采样率配置", result.message)
             return
         if self.monitor_checkbox.isChecked():
+            if self.speaker is None:
+                MessageBox.warning(
+                    self,
+                    "提示",
+                    "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+                )
+                return
             duplex_result = resolve_duplex_sample_rate(self.mic, self.speaker)
             if not duplex_result.ok:
                 MessageBox.warning(self, "采样率配置", duplex_result.message)
@@ -442,6 +472,13 @@ class RecordConfigWindow(BaseConfigWindow):
             MessageBox.warning(self, "采样率配置", result.message)
             return
         if self.monitor_checkbox.isChecked():
+            if self.speaker is None:
+                MessageBox.warning(
+                    self,
+                    "提示",
+                    "未选择扬声器，请在【硬件-硬件选择】中选择扬声器。",
+                )
+                return
             duplex_result = resolve_duplex_sample_rate(self.mic, self.speaker)
             if not duplex_result.ok:
                 MessageBox.warning(self, "采样率配置", duplex_result.message)

@@ -1,5 +1,10 @@
 """Stable serialized identifiers for selecting Excel export outputs."""
 
+CSV_DECIMAL_PLACES_KEY = "csv_decimal_places"
+DEFAULT_CSV_DECIMAL_PLACES = 2
+MIN_CSV_DECIMAL_PLACES = 0
+MAX_CSV_DECIMAL_PLACES = 10
+
 SAVE_ITEM_OUTPUTS_KEY = "save_item_outputs"
 EXCEL_OUTPUT_TEST_CURVE = "test_curve"
 EXCEL_OUTPUT_MARGIN = "margin"

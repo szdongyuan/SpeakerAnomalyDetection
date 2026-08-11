@@ -2,8 +2,10 @@ import builtins
 import json
 import os
 import sqlite3
+import types
 
 import base.sound_device_manager as module
+import pytest
 from base.hardware_management import MissingHardwareTablesError
 from base.sound_device_manager import SoundDeviceManager
 
@@ -154,7 +156,7 @@ def _install_audio(monkeypatch, tmp_path, *, devices_by_api=None, default_mic=No
     return config_path
 
 
-def test_v2_save_shape_with_hardware_id_omits_runtime_indexes(monkeypatch, tmp_path):
+def test_v3_save_shape_with_hardware_id_omits_runtime_indexes(monkeypatch, tmp_path):
     config_path = _install_audio(monkeypatch, tmp_path)
     mic = _augmented_device(3, "Registered Mic", "mic-1", inputs=4, samplerate=96000.0)
     speaker = _augmented_device(8, "Registered Speaker", "speaker-1", outputs=2, samplerate=44100.0)
@@ -163,7 +165,7 @@ def test_v2_save_shape_with_hardware_id_omits_runtime_indexes(monkeypatch, tmp_p
 
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert set(payload) == {"version", "mic", "speaker", "mic_channels"}
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert payload["mic_channels"] == [0, 1]
     assert "index" not in payload["mic"]
     assert "index" not in payload["speaker"]
@@ -176,6 +178,103 @@ def test_v2_save_shape_with_hardware_id_omits_runtime_indexes(monkeypatch, tmp_p
     assert payload["mic"]["samplerate"] == 44100
     assert payload["mic"]["bit_depth"] == 32
     assert payload["mic"]["latency_ms"] == 55
+
+
+def test_change_default_input_device_preserves_current_output(monkeypatch):
+    fake_default = types.SimpleNamespace(device=(4, 9))
+    monkeypatch.setattr(module.sd, "default", fake_default)
+
+    SoundDeviceManager.change_default_input_device(7)
+
+    assert fake_default.device == (7, 9)
+
+
+def test_change_default_input_device_restores_pair_after_output_postcondition_failure(monkeypatch):
+    class OutputMutatingDefault:
+        def __init__(self):
+            self._device = (4, 9)
+            self.assignments = 0
+
+        @property
+        def device(self):
+            return self._device
+
+        @device.setter
+        def device(self, value):
+            self.assignments += 1
+            self._device = (value[0], 99) if self.assignments == 1 else tuple(value)
+
+    fake_default = OutputMutatingDefault()
+    monkeypatch.setattr(module.sd, "default", fake_default)
+
+    with pytest.raises(RuntimeError, match="default output device changed"):
+        SoundDeviceManager.change_default_input_device(7)
+
+    assert fake_default.device == (4, 9)
+
+
+def test_change_default_input_device_reports_output_and_rollback_failures(monkeypatch):
+    class RollbackFailingDefault:
+        def __init__(self):
+            self._device = (4, 9)
+            self.assignments = 0
+
+        @property
+        def device(self):
+            return self._device
+
+        @device.setter
+        def device(self, value):
+            self.assignments += 1
+            if self.assignments == 1:
+                self._device = (value[0], 99)
+                return
+            raise OSError("device rollback denied")
+
+    fake_default = RollbackFailingDefault()
+    monkeypatch.setattr(module.sd, "default", fake_default)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        SoundDeviceManager.change_default_input_device(7)
+
+    message = str(exc_info.value)
+    assert "default output device changed" in message
+    assert "rollback failed" in message
+    assert "device rollback denied" in message
+
+
+def test_registered_device_predicate_accepts_mic_and_no_speaker():
+    assert SoundDeviceManager._devices_have_registered_hardware_ids(
+        {"hardware_id": "mic-1"}, None
+    ) is True
+
+
+def test_save_selected_devices_persists_version_three_with_null_speaker(monkeypatch, tmp_path):
+    config_path = _install_audio(monkeypatch, tmp_path)
+    mic = _augmented_device(3, "Registered Mic", "mic-1", inputs=2)
+
+    SoundDeviceManager.save_selected_devices(mic, None, [0])
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["version"] == 3
+    assert "speaker" in payload
+    assert payload["speaker"] is None
+    assert payload["mic_channels"] == [0]
+
+
+def test_saved_selected_device_payload_requires_explicit_version_three_speaker_key():
+    missing_speaker = {
+        "version": 3,
+        "mic": {"hardware_id": "mic-1"},
+        "mic_channels": [0],
+    }
+    explicit_null_speaker = {**missing_speaker, "speaker": None}
+
+    assert SoundDeviceManager._saved_devices_have_registered_hardware_ids(missing_speaker) is False
+    assert SoundDeviceManager._saved_devices_have_registered_hardware_ids(explicit_null_speaker) is True
+    assert SoundDeviceManager._saved_devices_have_registered_hardware_ids(
+        {**explicit_null_speaker, "version": 2}
+    ) is False
 
 
 def test_legacy_save_behavior_is_preserved_without_hardware_id(monkeypatch, tmp_path):
@@ -376,10 +475,10 @@ def test_saved_devices_restore_when_present(monkeypatch, tmp_path):
     assert result["speaker"] == {**speaker, "samplerate": 44100}
     assert result["mic_channels"] == [1]
     assert applied == [(5, 6)]
-    assert saved == [({**mic, "samplerate": 44100}, {**speaker, "samplerate": 44100}, [1])]
+    assert saved == []
 
 
-def test_legacy_startup_restore_persists_saved_samplerate_across_restart(monkeypatch, tmp_path):
+def test_legacy_startup_restore_reads_saved_samplerate_without_rewriting_across_restart(monkeypatch, tmp_path):
     mic = _device(5, "Saved Mic", inputs=2)
     speaker = _device(6, "Saved Speaker", outputs=2)
     config_path = _install_audio(
@@ -387,26 +486,24 @@ def test_legacy_startup_restore_persists_saved_samplerate_across_restart(monkeyp
         tmp_path,
         devices_by_api={"API": {"input": [mic], "output": [speaker]}},
     )
-    config_path.write_text(
-        json.dumps(
-            {
-                "mic": {
-                    "name": "Saved Mic",
-                    "hostapi_name": "API",
-                    "default_samplerate": 48000.0,
-                    "samplerate": 44100,
-                },
-                "speaker": {
-                    "name": "Saved Speaker",
-                    "hostapi_name": "API",
-                    "default_samplerate": 48000.0,
-                    "samplerate": 44100,
-                },
-                "mic_channels": [1],
-            }
-        ),
-        encoding="utf-8",
-    )
+    original_bytes = json.dumps(
+        {
+            "mic": {
+                "name": "Saved Mic",
+                "hostapi_name": "API",
+                "default_samplerate": 48000.0,
+                "samplerate": 44100,
+            },
+            "speaker": {
+                "name": "Saved Speaker",
+                "hostapi_name": "API",
+                "default_samplerate": 48000.0,
+                "samplerate": 44100,
+            },
+            "mic_channels": [1],
+        }
+    ).encode("utf-8")
+    config_path.write_bytes(original_bytes)
     applied = []
     monkeypatch.setattr(SoundDeviceManager, "change_default_device", staticmethod(lambda *args: applied.append(args)))
 
@@ -415,9 +512,7 @@ def test_legacy_startup_restore_persists_saved_samplerate_across_restart(monkeyp
     assert first_result["device_available"] is True
     assert first_result["mic"] == {**mic, "samplerate": 44100}
     assert first_result["speaker"] == {**speaker, "samplerate": 44100}
-    rewritten_payload = json.loads(config_path.read_text(encoding="utf-8"))
-    assert rewritten_payload["mic"]["samplerate"] == 44100
-    assert rewritten_payload["speaker"]["samplerate"] == 44100
+    assert config_path.read_bytes() == original_bytes
 
     second_result = SoundDeviceManager().get_startup_devices()
 
@@ -425,6 +520,7 @@ def test_legacy_startup_restore_persists_saved_samplerate_across_restart(monkeyp
     assert second_result["mic"] == {**mic, "samplerate": 44100}
     assert second_result["speaker"] == {**speaker, "samplerate": 44100}
     assert applied == [(5, 6), (5, 6)]
+    assert config_path.read_bytes() == original_bytes
 
 
 def test_legacy_startup_restore_without_saved_samplerate_is_unavailable(monkeypatch, tmp_path):
@@ -517,7 +613,7 @@ def test_saved_devices_restore_change_default_failure_returns_retryable_unavaila
     assert saved == []
 
 
-def test_saved_devices_restore_save_failure_returns_retryable_unavailable(monkeypatch, tmp_path):
+def test_legacy_startup_restore_does_not_invoke_save_selected_devices(monkeypatch, tmp_path):
     mic = _device(5, "Saved Mic", inputs=2)
     speaker = _device(6, "Saved Speaker", outputs=2)
     config_path = _install_audio(
@@ -557,12 +653,12 @@ def test_saved_devices_restore_save_failure_returns_retryable_unavailable(monkey
 
     result = SoundDeviceManager().get_startup_devices()
 
-    assert result["device_available"] is False
+    assert result["device_available"] is True
     assert result["can_retry_saved_devices"] is True
-    assert result["mic"] is None
-    assert result["speaker"] is None
-    assert result["mic_channels"] == []
-    assert "save failed" in result["startup_device_error_reason"]
+    assert result["mic"] == {**mic, "samplerate": 44100}
+    assert result["speaker"] == {**speaker, "samplerate": 44100}
+    assert result["mic_channels"] == [1]
+    assert result["startup_device_error_reason"] is None
     assert applied == [(5, 6)]
     assert config_path.read_text(encoding="utf-8") == original_config
 
@@ -588,7 +684,7 @@ def test_save_selected_devices_failure_removes_new_partial_config(monkeypatch, t
     assert not config_path.exists()
 
 
-def test_saved_devices_restore_save_failure_reports_rollback_write_failure(monkeypatch, tmp_path):
+def test_legacy_startup_restore_does_not_invoke_config_rollback_writer(monkeypatch, tmp_path):
     mic = _device(5, "Saved Mic", inputs=2)
     speaker = _device(6, "Saved Speaker", outputs=2)
     config_path = _install_audio(
@@ -613,32 +709,20 @@ def test_saved_devices_restore_save_failure_reports_rollback_write_failure(monke
             "mic_channels": [1],
         }
     )
-    partial_config = '{"mic":'
     config_path.write_text(original_config, encoding="utf-8")
     monkeypatch.setattr(SoundDeviceManager, "change_default_device", staticmethod(lambda *args: None))
-
-    def partial_save(*args):
-        config_path.write_text(partial_config, encoding="utf-8")
-        raise RuntimeError("save failed")
-
-    real_open = builtins.open
-
-    def fail_restore_write(path, mode="r", *args, **kwargs):
-        if str(path) == str(config_path) and mode == "wb":
-            raise OSError("restore failed")
-        return real_open(path, mode, *args, **kwargs)
-
-    monkeypatch.setattr(SoundDeviceManager, "save_selected_devices", staticmethod(partial_save))
-    monkeypatch.setattr(builtins, "open", fail_restore_write)
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "_save_selected_devices_with_config_rollback",
+        lambda *args: (_ for _ in ()).throw(AssertionError("startup must not rewrite")),
+    )
 
     result = SoundDeviceManager().get_startup_devices()
 
-    assert result["device_available"] is False
+    assert result["device_available"] is True
     assert result["can_retry_saved_devices"] is True
-    assert "save failed" in result["startup_device_error_reason"]
-    assert "rollback" in result["startup_device_error_reason"] or "restor" in result["startup_device_error_reason"]
-    assert "restore failed" in result["startup_device_error_reason"]
-    assert config_path.read_text(encoding="utf-8") == partial_config
+    assert result["startup_device_error_reason"] is None
+    assert config_path.read_text(encoding="utf-8") == original_config
 
 
 def test_save_selected_devices_failure_reports_new_partial_config_delete_failure(monkeypatch, tmp_path):
@@ -669,6 +753,407 @@ def test_save_selected_devices_failure_reports_new_partial_config_delete_failure
         raise AssertionError("expected rollback cleanup failure")
 
     assert config_path.read_text(encoding="utf-8") == partial_config
+
+
+def test_version_three_registered_mic_only_restores_without_touching_output(monkeypatch, tmp_path):
+    runtime_mic = _device(5, "Runtime Mic", inputs=2)
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": [runtime_mic], "output": []}},
+    )
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "mic": {"hardware_id": "mic-1"},
+                "speaker": None,
+                "mic_channels": [0],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository = _FakeHardwareRepository(
+        assets=[_registered_asset("mic-1", "Runtime Mic", inputs=2)],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    input_only_calls = []
+    duplex_calls = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: input_only_calls.append(mic_id)),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *device_ids: duplex_calls.append(device_ids)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is True
+    assert result["mic"]["hardware_id"] == "mic-1"
+    assert result["speaker"] is None
+    assert result["mic_channels"] == [0]
+    assert input_only_calls == [runtime_mic["index"]]
+    assert duplex_calls == []
+    assert repository.get_asset_calls == ["mic-1"]
+
+
+def test_version_three_registered_dual_device_restores_with_duplex_apply(monkeypatch, tmp_path):
+    runtime_mic = _device(5, "Runtime Mic", inputs=2)
+    runtime_speaker = _device(6, "Runtime Speaker", outputs=2)
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": [runtime_mic], "output": [runtime_speaker]}},
+    )
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "mic": {"hardware_id": "mic-1"},
+                "speaker": {"hardware_id": "speaker-1"},
+                "mic_channels": [0],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository = _FakeHardwareRepository(
+        assets=[
+            _registered_asset("mic-1", "Runtime Mic", inputs=2),
+            _registered_asset("speaker-1", "Runtime Speaker", outputs=2),
+        ],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    input_only_calls = []
+    duplex_calls = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: input_only_calls.append(mic_id)),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *device_ids: duplex_calls.append(device_ids)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is True
+    assert result["mic"]["hardware_id"] == "mic-1"
+    assert result["speaker"]["hardware_id"] == "speaker-1"
+    assert input_only_calls == []
+    assert duplex_calls == [(5, 6)]
+    assert repository.get_asset_calls == ["mic-1", "speaker-1"]
+
+
+@pytest.mark.parametrize("runtime_mics", [[], [_device(5, "Runtime Mic", inputs=2), _device(7, "Runtime Mic", inputs=2)]])
+def test_version_three_mic_only_missing_or_ambiguous_runtime_mic_is_unavailable(
+    monkeypatch, tmp_path, runtime_mics
+):
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": runtime_mics, "output": []}},
+    )
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "mic": {"hardware_id": "mic-1"},
+                "speaker": None,
+                "mic_channels": [0],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository = _FakeHardwareRepository(
+        assets=[_registered_asset("mic-1", "Runtime Mic", inputs=2)],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    applied = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: applied.append(mic_id)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is False
+    assert result["speaker"] is None
+    assert result["mic_channels"] == []
+    assert applied == []
+
+
+@pytest.mark.parametrize("saved_channels", [["invalid"], [2]])
+def test_version_three_mic_only_invalid_or_out_of_range_channels_are_unavailable(
+    monkeypatch, tmp_path, saved_channels
+):
+    runtime_mic = _device(5, "Runtime Mic", inputs=2)
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": [runtime_mic], "output": []}},
+    )
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "mic": {"hardware_id": "mic-1"},
+                "speaker": None,
+                "mic_channels": saved_channels,
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository = _FakeHardwareRepository(
+        assets=[_registered_asset("mic-1", "Runtime Mic", inputs=2)],
+        channels={"mic-1": [_input_channel("mic-1", 0), _input_channel("mic-1", 1)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    applied = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: applied.append(mic_id)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is False
+    assert result["mic_channels"] == []
+    assert applied == []
+
+
+@pytest.mark.parametrize("version", [None, 2])
+def test_version_three_mic_only_rejects_older_null_speaker_payloads(monkeypatch, tmp_path, version):
+    config_path = _install_audio(monkeypatch, tmp_path)
+    payload = {
+        "mic": {"hardware_id": "mic-1"},
+        "speaker": None,
+        "mic_channels": [0],
+    }
+    if version is not None:
+        payload["version"] = version
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    applied = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: applied.append(mic_id)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is False
+    assert result["can_retry_saved_devices"] is False
+    assert applied == []
+
+
+def test_version_three_payload_omitting_speaker_is_invalid(monkeypatch, tmp_path):
+    config_path = _install_audio(monkeypatch, tmp_path)
+    config_path.write_text(
+        json.dumps({"version": 3, "mic": {"hardware_id": "mic-1"}, "mic_channels": [0]}),
+        encoding="utf-8",
+    )
+    repository_created = []
+    monkeypatch.setattr(
+        module,
+        "HardwareManagementRepository",
+        lambda: repository_created.append(True),
+        raising=False,
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is False
+    assert result["can_retry_saved_devices"] is False
+    assert repository_created == []
+
+
+def test_version_two_declared_unavailable_speaker_keeps_whole_group_unavailable(monkeypatch, tmp_path):
+    runtime_mic = _device(5, "Runtime Mic", inputs=2)
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": [runtime_mic], "output": []}},
+    )
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "mic": {"hardware_id": "mic-1"},
+                "speaker": {"hardware_id": "speaker-1"},
+                "mic_channels": [0],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository = _FakeHardwareRepository(
+        assets=[
+            _registered_asset("mic-1", "Runtime Mic", inputs=2),
+            _registered_asset("speaker-1", "Missing Speaker", outputs=2),
+        ],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    input_only_calls = []
+    duplex_calls = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: input_only_calls.append(mic_id)),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *device_ids: duplex_calls.append(device_ids)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is False
+    assert result["speaker"] is None
+    assert input_only_calls == []
+    assert duplex_calls == []
+
+
+def test_complete_selection_without_output_accepts_registered_input_with_channels():
+    mic_asset = _registered_asset("mic-1", "Runtime Mic", inputs=2)
+    repository = _FakeHardwareRepository(
+        assets=[mic_asset],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+
+    assert SoundDeviceManager._selection_group_can_complete_selection(
+        repository,
+        {"API": {"input": [mic_asset], "output": []}},
+    ) is True
+
+    repository.list_assets_for_selection = None
+    assert SoundDeviceManager._registered_assets_can_complete_selection(repository) is True
+
+
+def test_version_three_mic_only_input_apply_failure_preserves_saved_config(monkeypatch, tmp_path):
+    runtime_mic = _device(5, "Runtime Mic", inputs=2)
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": [runtime_mic], "output": []}},
+    )
+    original_bytes = b'{"version":3,"mic":{"hardware_id":"mic-1"},"speaker":null,"mic_channels":[0]}\n'
+    config_path.write_bytes(original_bytes)
+    repository = _FakeHardwareRepository(
+        assets=[_registered_asset("mic-1", "Runtime Mic", inputs=2)],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    duplex_calls = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: (_ for _ in ()).throw(RuntimeError("input apply failed"))),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *device_ids: duplex_calls.append(device_ids)),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is False
+    assert "input apply failed" in result["startup_device_error_reason"]
+    assert duplex_calls == []
+    assert config_path.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("schema", ["legacy", "version_two", "version_three_dual", "version_three_mic_only"])
+def test_successful_startup_preserves_saved_config_bytes_and_never_rewrites(
+    monkeypatch, tmp_path, schema
+):
+    runtime_mic = _device(5, "Runtime Mic", inputs=2)
+    runtime_speaker = _device(6, "Runtime Speaker", outputs=2)
+    config_path = _install_audio(
+        monkeypatch,
+        tmp_path,
+        devices_by_api={"API": {"input": [runtime_mic], "output": [runtime_speaker]}},
+    )
+    if schema == "legacy":
+        payload = {
+            "mic": {
+                "name": "Runtime Mic",
+                "hostapi_name": "API",
+                "default_samplerate": 48000.0,
+                "samplerate": 44100,
+            },
+            "speaker": {
+                "name": "Runtime Speaker",
+                "hostapi_name": "API",
+                "default_samplerate": 48000.0,
+                "samplerate": 44100,
+            },
+            "mic_channels": [0],
+        }
+    else:
+        payload = {
+            "version": 2 if schema == "version_two" else 3,
+            "mic": {"hardware_id": "mic-1"},
+            "speaker": None if schema == "version_three_mic_only" else {"hardware_id": "speaker-1"},
+            "mic_channels": [0],
+        }
+    original_bytes = (json.dumps(payload, separators=(", ", ": ")) + "\n").encode("utf-8")
+    config_path.write_bytes(original_bytes)
+    repository = _FakeHardwareRepository(
+        assets=[
+            _registered_asset("mic-1", "Runtime Mic", inputs=2),
+            _registered_asset("speaker-1", "Runtime Speaker", outputs=2),
+        ],
+        channels={"mic-1": [_input_channel("mic-1", 0)]},
+    )
+    monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
+    input_only_calls = []
+    duplex_calls = []
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_input_device",
+        staticmethod(lambda mic_id: input_only_calls.append(mic_id)),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "change_default_device",
+        staticmethod(lambda *device_ids: duplex_calls.append(device_ids)),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "save_selected_devices",
+        staticmethod(lambda *args: (_ for _ in ()).throw(AssertionError("startup must not save"))),
+    )
+    monkeypatch.setattr(
+        SoundDeviceManager,
+        "_save_selected_devices_with_config_rollback",
+        lambda *args: (_ for _ in ()).throw(AssertionError("startup must not rewrite")),
+    )
+
+    result = SoundDeviceManager().get_startup_devices()
+
+    assert result["device_available"] is True
+    assert config_path.read_bytes() == original_bytes
+    if schema == "version_three_mic_only":
+        assert result["speaker"] is None
+        assert input_only_calls == [5]
+        assert duplex_calls == []
+    else:
+        assert result["speaker"] is not None
+        assert input_only_calls == []
+        assert duplex_calls == [(5, 6)]
 
 
 def test_v2_startup_restore_by_hardware_id_succeeds_with_exact_runtime_match(monkeypatch, tmp_path):
@@ -725,33 +1210,9 @@ def test_v2_startup_restore_by_hardware_id_succeeds_with_exact_runtime_match(mon
     assert result["device_available"] is True
     assert result["mic_channels"] == [0, 2]
     assert applied == [(5, 6)]
-    assert saved == [
-        (
-            {
-                **runtime_mic,
-                "hardware_id": "mic-1",
-                "display_name": "DB Mic",
-                "device_name": "Runtime Mic",
-                "hardware_type": "audio_interface",
-                "hostapi_name": "API",
-                "samplerate": 44100,
-                "bit_depth": 32,
-                "latency_ms": 55,
-            },
-            {
-                **runtime_speaker,
-                "hardware_id": "speaker-1",
-                "display_name": "DB Speaker",
-                "device_name": "Runtime Speaker",
-                "hardware_type": "audio_interface",
-                "hostapi_name": "API",
-                "samplerate": 44100,
-                "bit_depth": 32,
-                "latency_ms": 55,
-            },
-            [0, 2],
-        )
-    ]
+    assert result["mic"]["samplerate"] == 44100
+    assert result["speaker"]["samplerate"] == 44100
+    assert saved == []
     assert repository.get_asset_calls == ["mic-1", "speaker-1"]
     assert repository.list_channels_calls == [("mic-1", "input")]
 
@@ -802,7 +1263,7 @@ def test_v2_startup_restore_change_default_failure_returns_retryable_unavailable
     assert saved == []
 
 
-def test_v2_startup_restore_save_failure_returns_retryable_unavailable(monkeypatch, tmp_path):
+def test_v2_startup_restore_does_not_invoke_save_selected_devices(monkeypatch, tmp_path):
     runtime_mic = _device(5, "Runtime Mic", inputs=4)
     runtime_speaker = _device(6, "Runtime Speaker", outputs=2)
     config_path = _install_audio(
@@ -841,12 +1302,12 @@ def test_v2_startup_restore_save_failure_returns_retryable_unavailable(monkeypat
 
     result = SoundDeviceManager().get_startup_devices()
 
-    assert result["device_available"] is False
+    assert result["device_available"] is True
     assert result["can_retry_saved_devices"] is True
-    assert result["mic"] is None
-    assert result["speaker"] is None
-    assert result["mic_channels"] == []
-    assert "save failed" in result["startup_device_error_reason"]
+    assert result["mic"]["hardware_id"] == "mic-1"
+    assert result["speaker"]["hardware_id"] == "speaker-1"
+    assert result["mic_channels"] == [0]
+    assert result["startup_device_error_reason"] is None
     assert applied == [(5, 6)]
     assert config_path.read_text(encoding="utf-8") == original_config
 
@@ -896,14 +1357,12 @@ def test_registered_db_row_wins_over_saved_mutable_metadata(monkeypatch, tmp_pat
         channels={"mic-1": [_input_channel("mic-1", 1)]},
     )
     monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
-    saved = []
     monkeypatch.setattr(SoundDeviceManager, "change_default_device", staticmethod(lambda *args: None))
-    monkeypatch.setattr(SoundDeviceManager, "save_selected_devices", staticmethod(lambda *args: saved.append(args)))
 
     result = SoundDeviceManager().get_startup_devices()
 
     assert result["device_available"] is True
-    restored_mic = saved[0][0]
+    restored_mic = result["mic"]
     assert restored_mic["samplerate"] == 44100
     assert restored_mic["bit_depth"] == 32
     assert restored_mic["latency_ms"] == 25
@@ -976,9 +1435,7 @@ def test_registered_startup_restore_matches_all_runtime_devices_not_channel_grou
     )
     monkeypatch.setattr(module, "HardwareManagementRepository", lambda: repository, raising=False)
     applied = []
-    saved = []
     monkeypatch.setattr(SoundDeviceManager, "change_default_device", staticmethod(lambda *args: applied.append(args)))
-    monkeypatch.setattr(SoundDeviceManager, "save_selected_devices", staticmethod(lambda *args: saved.append(args)))
 
     result = SoundDeviceManager().get_startup_devices()
 
@@ -986,8 +1443,8 @@ def test_registered_startup_restore_matches_all_runtime_devices_not_channel_grou
     assert result["mic"]["hardware_id"] == "mic-1"
     assert result["speaker"]["hardware_id"] == "speaker-1"
     assert applied == [(5, 6)]
-    assert saved[0][0]["name"] == "Runtime Mic"
-    assert saved[0][1]["name"] == "Runtime Speaker"
+    assert result["mic"]["name"] == "Runtime Mic"
+    assert result["speaker"]["name"] == "Runtime Speaker"
 
 
 def test_registered_startup_restore_rejects_runtime_mic_without_input_capacity(monkeypatch, tmp_path):
