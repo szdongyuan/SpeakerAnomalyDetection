@@ -6,6 +6,7 @@ import types
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QComboBox, QSplitter, QVBoxLayout, QWidget
 
@@ -591,6 +592,52 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual([entry[0] for entry in widget.channel_workspace.direction_data], ["02"])
         self.assertIn("02", widget._direction_waveform_cache)
         self.assertNotIn("01", widget._direction_waveform_cache)
+
+    def test_waveform_display_downsamples_peaks_without_changing_cached_audio(self):
+        widget = _WaveformRefreshWidget()
+        waveform = np.zeros(10_000, dtype=np.float32)
+        waveform[1_234] = -9.0
+        waveform[8_765] = 8.0
+
+        widget.plot_waveform_to_workspace(waveform, 1_000.0, direction="01")
+
+        cached_waveform, cached_sample_rate = widget._direction_waveform_cache["01"]
+        _, display_x, display_y = widget.channel_workspace.direction_data[-1]
+        self.assertEqual(cached_sample_rate, 1_000.0)
+        self.assertTrue(np.array_equal(cached_waveform, waveform))
+        self.assertEqual(len(display_x), len(display_y))
+        self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
+        self.assertEqual(min(display_y), -9.0)
+        self.assertEqual(max(display_y), 8.0)
+        self.assertEqual(display_x[0], 0.0)
+        self.assertAlmostEqual(display_x[-1], 9.999)
+
+    def test_streaming_writer_receives_full_chunk_when_display_is_downsampled(self):
+        class _Writer:
+            def __init__(self):
+                self.chunks = []
+
+            def write_chunk(self, chunk):
+                self.chunks.append(chunk)
+
+        widget = _WaveformRefreshWidget()
+        chunk = np.arange(12_000, dtype=np.float32).reshape(6_000, 2)
+        widget.streaming_buffer_multi = []
+        widget.streaming_wav_writer = _Writer()
+        widget.data_struct = types.SimpleNamespace(sample_rate=48_000)
+        widget._active_product_condition_key = "01"
+        widget._streaming_first_chunk_logged = True
+        widget.default_logger = logging.getLogger(__name__)
+
+        widget.on_audio_chunk_received({"multi": chunk})
+
+        cached_waveform, cached_sample_rate = widget._direction_waveform_cache["01"]
+        _, _, display_y = widget.channel_workspace.direction_data[-1]
+        self.assertEqual(cached_sample_rate, 48_000.0)
+        self.assertEqual(cached_waveform.shape[0], chunk.shape[0])
+        self.assertEqual(len(widget.streaming_wav_writer.chunks), 1)
+        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], chunk))
+        self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
 
     def test_invalid_serial_recording_uses_whole_round_abort(self):
         calls = []
