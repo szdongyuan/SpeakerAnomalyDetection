@@ -137,6 +137,7 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self._serial_product_session_started = False
         self._serial_product_latched_frame = ""
         self._serial_product_waiting_for_close = False
+        self._serial_product_pending_close_frame = ""
         self.product_test_close_trigger_state = ""
         self._serial_product_error_dialog_open = False
         self._product_test_program_config_dialog_open = False
@@ -384,7 +385,7 @@ def test_explicit_close_finishes_round_and_allows_same_condition_in_new_round():
     assert host.started[-1] == FRAME_7000
 
 
-def test_close_frame_discards_incomplete_round(monkeypatch):
+def test_idle_close_frame_between_conditions_is_ignored_and_round_continues(monkeypatch):
     warnings = []
     monkeypatch.setattr(
         "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
@@ -396,12 +397,60 @@ def test_close_frame_discards_incomplete_round(monkeypatch):
     host.complete_current("OK")
 
     host.on_serial_full_frame_received(_payload(FRAME_CLOSE))
+    host.on_serial_full_frame_received(_payload(FRAME_CLOSE))
 
-    assert host.discarded_groups == [("round-1", True)]
+    assert host.discarded_groups == []
+    assert host._manual_product_condition_group_id == "round-1"
+    assert host._serial_product_waiting_for_close is False
+    assert host.cleared_waveforms == 1
+    assert warnings == []
+    assert sum(
+        1
+        for level, message in host.default_logger.messages
+        if level == "info" and "serial_product_idle_ignored_incomplete_round" in message
+    ) == 2
+
+    host.on_serial_full_frame_received(_payload(FRAME_7000))
+
+    assert host._manual_product_condition_group_id == "round-1"
+    assert host.started == [FRAME_6000, FRAME_7000]
+
+
+def test_idle_close_frame_during_nonfinal_condition_is_ignored():
+    host = _SerialProductHost()
+    host.product_test_close_trigger_state = FRAME_CLOSE
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
+
+    host.on_serial_full_frame_received(_payload(FRAME_CLOSE))
+
+    assert host._serial_product_pending_close_frame == ""
+    assert host._manual_product_condition_group_id == "round-1"
+    assert host.discarded_groups == []
+    assert host.reset_count == 0
+    assert host.started == [FRAME_6000]
+
+
+def test_idle_close_frame_during_final_condition_closes_after_analysis():
+    host = _SerialProductHost()
+    host.product_test_close_trigger_state = FRAME_CLOSE
+    for frame in (FRAME_6000, FRAME_7000):
+        host.on_serial_full_frame_received(_payload(frame))
+        host.complete_current("OK")
+
+    host.on_serial_full_frame_received(_payload(FRAME_8000))
+    host.on_serial_full_frame_received(_payload(FRAME_CLOSE))
+
+    assert host._serial_product_pending_close_frame == FRAME_CLOSE
+    assert host._manual_product_condition_group_id == "round-1"
+    assert host.discarded_groups == []
+
+    host.complete_current("OK")
+
+    assert host._serial_product_pending_close_frame == ""
     assert host._manual_product_condition_group_id == ""
     assert host._serial_product_waiting_for_close is False
-    assert host.cleared_waveforms == 2
-    assert warnings == [host.SERIAL_PRODUCT_INCOMPLETE_CLOSE_MESSAGE]
+    assert host.discarded_groups == []
+    assert host.left_panel.stages[-1] == ("本轮测试已关闭", "ok")
 
 
 def test_close_frame_without_active_round_is_idempotently_ignored():
@@ -584,6 +633,7 @@ def test_abort_deletes_the_whole_round_and_restores_idle_ui(monkeypatch):
     )
     host = _SerialProductHost()
     host.on_serial_full_frame_received(_payload(FRAME_6000))
+    host._serial_product_pending_close_frame = FRAME_CLOSE
 
     host._abort_serial_product_round("录音异常")
 
@@ -593,6 +643,7 @@ def test_abort_deletes_the_whole_round_and_restores_idle_ui(monkeypatch):
     assert host._record_workflow_busy is False
     assert host.pause_update_count == 1
     assert host.unlock_count == 1
+    assert host._serial_product_pending_close_frame == ""
     assert host.data_btn.disabled is True
     assert host.replayer_btn.disabled is True
 
