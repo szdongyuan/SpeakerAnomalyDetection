@@ -85,6 +85,32 @@ def test_active_report_full_frame_mode_does_not_write_query(monkeypatch):
     assert events[0]["product_full_frame"] is True
 
 
+def test_active_report_prints_raw_data_and_matched_state_code(
+    monkeypatch,
+    capsys,
+):
+    config = {
+        "serial_settings": {"port": "FAKE", "timeout": 0.01},
+        "polling_settings": {"interval_ms": 1, "query_command_hex": ""},
+    }
+    worker = SerialDiscreteInputWorker(
+        config,
+        full_frame_candidates=[FRAME],
+    )
+    port = _FakeSerialPort(worker, bytes.fromhex(FRAME))
+    monkeypatch.setattr(
+        worker_module,
+        "serial",
+        SimpleNamespace(Serial=lambda **_kwargs: port),
+    )
+
+    worker.run()
+
+    output = capsys.readouterr().out
+    assert f"收到主动上报原始数据: raw_hex={FRAME}" in output
+    assert f"匹配完整状态码: frame={FRAME}" in output
+
+
 def test_active_report_worker_emits_every_transport_duplicate(monkeypatch):
     config = {
         "serial_settings": {"port": "FAKE", "timeout": 0.01},
@@ -105,7 +131,10 @@ def test_active_report_worker_emits_every_transport_duplicate(monkeypatch):
     assert [event["raw_hex"] for event in events] == [FRAME, FRAME]
 
 
-def test_unconfigured_active_report_is_logged_without_business_event(monkeypatch):
+def test_unconfigured_active_report_is_printed_without_business_event(
+    monkeypatch,
+    capsys,
+):
     config = {
         "serial_settings": {"port": "FAKE", "timeout": 0.01},
         "polling_settings": {"interval_ms": 1, "query_command_hex": ""},
@@ -128,6 +157,9 @@ def test_unconfigured_active_report_is_logged_without_business_event(monkeypatch
         f"serial_product_raw_received raw_hex={UNCONFIGURED_FRAME}" in message
         for message in worker.logger.infos
     )
+    output = capsys.readouterr().out
+    assert f"收到主动上报原始数据: raw_hex={UNCONFIGURED_FRAME}" in output
+    assert "匹配完整状态码" not in output
 
 
 def test_legacy_polling_mode_still_writes_the_configured_query(monkeypatch):
