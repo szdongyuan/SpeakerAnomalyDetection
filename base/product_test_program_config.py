@@ -90,6 +90,32 @@ class ProductTestProgramValidator(object):
         return []
 
     @staticmethod
+    def validate_test_queue_references(program_data, queue_catalog):
+        errors = []
+        for index, sub_config in enumerate(
+            program_data.get("sub_configs", []),
+            1,
+        ):
+            if not isinstance(sub_config, dict):
+                continue
+            condition_name = str(
+                sub_config.get("condition_name", "") or ""
+            ).strip()
+            row_name = condition_name or f"第 {index} 个子配置"
+            test_queue_value = sub_config.get("test_queue", "")
+            if not isinstance(test_queue_value, str):
+                continue
+            test_queue = test_queue_value.strip()
+            if not test_queue:
+                continue
+            queue_info = queue_catalog.get(test_queue)
+            if not queue_info:
+                errors.append(f"{row_name} 引用的测试队列不存在：{test_queue}")
+            elif not queue_info.get("available", False):
+                errors.append(f"{row_name} 引用的测试队列不可用：{test_queue}")
+        return errors
+
+    @staticmethod
     def validate_for_save(program_data, registry, current_file):
         errors = []
         if not isinstance(program_data, dict):
@@ -140,6 +166,7 @@ class ProductTestProgramValidator(object):
                 continue
 
             condition_name = str(sub_config.get("condition_name", "") or "").strip()
+            row_name = condition_name or f"第 {index} 个子配置"
             if not condition_name:
                 errors.append(f"第 {index} 个子配置的工况名称不能为空")
             elif condition_name in condition_names:
@@ -160,6 +187,8 @@ class ProductTestProgramValidator(object):
             test_queue = sub_config.get("test_queue", "")
             if not isinstance(test_queue, str):
                 errors.append(f"第 {index} 个子配置的测试队列名称格式错误")
+            elif not test_queue.strip():
+                errors.append(f"{row_name} 尚未选择测试队列")
 
         if close_trigger_state and close_trigger_state in trigger_states:
             errors.append(
@@ -294,15 +323,11 @@ class ProductTestProgramConfigManager(object):
 
         registry = self.load_registry()
         active_file_before_save = registry.get("active_file")
-        errors = ProductTestProgramValidator.validate_for_save(
+        errors = self._collect_save_errors(
             program_data,
             registry,
             current_file,
         )
-        if not errors:
-            errors.extend(
-                self.validate_acquisition_modes(program_data)
-            )
         if errors:
             return False, "\n".join(errors)
 
@@ -384,13 +409,11 @@ class ProductTestProgramConfigManager(object):
             return self.save_as(program_data, name)
 
         registry = self.load_registry()
-        errors = ProductTestProgramValidator.validate_for_save(
+        errors = self._collect_save_errors(
             program_data,
             registry,
             None,
         )
-        if not errors:
-            errors.extend(self.validate_acquisition_modes(program_data))
         if errors:
             return False, "\n".join(errors)
 
@@ -415,22 +438,44 @@ class ProductTestProgramConfigManager(object):
             queue_catalog,
         )
 
-    def validate_program(self, program_data, current_file, queue_catalog=None):
-        registry = self.load_registry()
-        if queue_catalog is None:
-            queue_catalog = self.load_queue_catalog()
-        save_errors = ProductTestProgramValidator.validate_for_save(
+    def _collect_save_errors(
+        self,
+        program_data,
+        registry,
+        current_file,
+        queue_catalog=None,
+    ):
+        errors = ProductTestProgramValidator.validate_for_save(
             program_data,
             registry,
             current_file,
         )
-        if not save_errors:
-            save_errors.extend(
-                self.validate_acquisition_modes(
-                    program_data,
-                    queue_catalog,
-                )
+        if errors:
+            return errors
+        if queue_catalog is None:
+            queue_catalog = self.load_queue_catalog()
+        errors.extend(
+            ProductTestProgramValidator.validate_test_queue_references(
+                program_data,
+                queue_catalog,
             )
+        )
+        if not errors:
+            errors.extend(
+                self.validate_acquisition_modes(program_data, queue_catalog)
+            )
+        return errors
+
+    def validate_program(self, program_data, current_file, queue_catalog=None):
+        registry = self.load_registry()
+        if queue_catalog is None:
+            queue_catalog = self.load_queue_catalog()
+        save_errors = self._collect_save_errors(
+            program_data,
+            registry,
+            current_file,
+            queue_catalog,
+        )
         use_errors = list(save_errors)
         if not save_errors:
             use_errors.extend(

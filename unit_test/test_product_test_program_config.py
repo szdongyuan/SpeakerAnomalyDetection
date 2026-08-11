@@ -13,11 +13,18 @@ def make_manager(tmp_path):
     queue_registry_path = queue_dir / "sequence_config_registry.json"
     program_dir.mkdir()
     queue_dir.mkdir()
-    return ProductTestProgramConfigManager(
+    manager = ProductTestProgramConfigManager(
         str(program_dir),
         str(registry_path),
         str(queue_registry_path),
     )
+    queue_path = queue_dir / "queue_6000.json"
+    assert LoadUiConfig.save_data_to_json(make_queue_config(), str(queue_path))
+    assert LoadUiConfig.save_data_to_json(
+        {"queue_6000": str(queue_path)},
+        str(queue_registry_path),
+    )
+    return manager
 
 
 def make_program(name="默认配置"):
@@ -468,18 +475,72 @@ def test_validate_rejects_invalid_or_conflicting_close_trigger_state(tmp_path):
     )
 
 
-def test_incomplete_program_can_save_but_is_not_usable(tmp_path):
+def test_program_without_test_queue_cannot_save_or_be_used(tmp_path):
     manager = make_manager(tmp_path)
     program = make_program()
-    program["sub_configs"][0]["trigger_state"] = ""
     program["sub_configs"][0]["test_queue"] = ""
 
     result = manager.validate_program(program, None)
 
+    assert not result["can_save"]
+    assert not result["is_usable"]
+    assert "6000 rpm 尚未选择测试队列" in result["save_errors"]
+    assert "6000 rpm 尚未选择测试队列" in result["use_errors"]
+
+    success, message = manager.save_program(None, program)
+    assert not success
+    assert message == "6000 rpm 尚未选择测试队列"
+
+
+def test_program_without_trigger_can_save_but_is_not_usable(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["sub_configs"][0]["trigger_state"] = ""
+
+    result = manager.validate_program(
+        program,
+        None,
+        {"queue_6000": {"available": True, "can_auto_judge": True}},
+    )
+
     assert result["can_save"]
     assert not result["is_usable"]
-    assert "6000 rpm 尚未绑定触发状态" in result["use_errors"]
-    assert "6000 rpm 尚未选择测试队列" in result["use_errors"]
+    assert result["save_errors"] == []
+    assert result["use_errors"] == ["6000 rpm 尚未绑定触发状态"]
+
+
+def test_program_with_missing_test_queue_cannot_be_saved(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["sub_configs"][0]["test_queue"] = "missing_queue"
+
+    validation = manager.validate_program(program, None)
+    success, message = manager.save_program(None, program)
+
+    expected = "6000 rpm 引用的测试队列不存在：missing_queue"
+    assert not validation["can_save"]
+    assert validation["save_errors"] == [expected]
+    assert not success
+    assert message == expected
+
+
+def test_program_with_unavailable_test_queue_cannot_be_saved(tmp_path):
+    manager = make_manager(tmp_path)
+    assert LoadUiConfig.save_data_to_json(
+        {"broken_queue": str(tmp_path / "missing_queue.json")},
+        manager.queue_registry_path,
+    )
+    program = make_program()
+    program["sub_configs"][0]["test_queue"] = "broken_queue"
+
+    validation = manager.validate_program(program, None)
+    success, message = manager.save_program(None, program)
+
+    expected = "6000 rpm 引用的测试队列不可用：broken_queue"
+    assert not validation["can_save"]
+    assert validation["save_errors"] == [expected]
+    assert not success
+    assert message == expected
 
 
 def test_queue_catalog_reads_relative_queue_path(tmp_path):
