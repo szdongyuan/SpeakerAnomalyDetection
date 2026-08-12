@@ -476,7 +476,7 @@ class AiWindow(ConfigDialogBase):
         if not os.path.exists(path_file):
             return ""
         with open(path_file, "r") as f:
-            path = f.read()
+            path = f.read().strip()
         return path
 
 
