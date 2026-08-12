@@ -11,7 +11,7 @@ from librosa.feature import spectral
 from librosa.sequence import dtw
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt, QModelIndex
-from PyQt5.QtGui import QIcon, QColor, QFont
+from PyQt5.QtGui import QIcon, QColor, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QApplication,
     QTextEdit,
@@ -3333,13 +3333,63 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
     }
 
     def __init__(self, title_name):
+        self._fba_tick_labels = []
         super().__init__()
+        self.analysis_plot.getViewBox().sigResized.connect(
+            self._on_fba_view_resized
+        )
         self.data_struct = DataDealStruct()
         self.v2pa_factor = None
         self.analysis_config = None
         self.result = {}
         self.title_name = title_name
         self.setWindowTitle(title_name)
+
+    def _on_fba_view_resized(self, _view_box):
+        self._update_fba_axis_ticks()
+
+    @staticmethod
+    def _select_fba_tick_indices(text_widths, available_width, min_gap=12):
+        label_count = len(text_widths)
+        if label_count <= 0:
+            return []
+        if label_count == 1:
+            return [0]
+
+        center_spacing = available_width / (label_count - 1)
+        last_left = available_width - text_widths[-1] / 2
+        previous_right = text_widths[0] / 2
+        indices = [0]
+        for index in range(1, label_count - 1):
+            center = index * center_spacing
+            left = center - text_widths[index] / 2
+            right = center + text_widths[index] / 2
+            if (
+                left >= previous_right + min_gap
+                and right + min_gap <= last_left
+            ):
+                indices.append(index)
+                previous_right = right
+        indices.append(label_count - 1)
+        return indices
+
+    def _update_fba_axis_ticks(self):
+        labels = self._fba_tick_labels
+        if not labels:
+            return
+
+        bottom_axis = self.analysis_plot.getAxis("bottom")
+        tick_font = bottom_axis.style.get("tickFont") or self.font()
+        font_metrics = QFontMetrics(tick_font)
+        text_widths = [
+            font_metrics.horizontalAdvance(str(label))
+            for label in labels
+        ]
+        view_width = float(self.analysis_plot.getViewBox().width())
+        indices = self._select_fba_tick_indices(text_widths, view_width)
+        bottom_axis.setTicks(
+            [[(index, labels[index]) for index in indices]]
+        )
 
     def calculate_fba(self):
         """执行频段能量分析、阈值判定并绘制结果。"""
@@ -3698,9 +3748,8 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 text_item.setPos(index, plot_levels[index])
                 self.analysis_plot.addItem(text_item)
 
-        self.analysis_plot.getAxis("bottom").setTicks(
-            [[(index, label) for index, label in enumerate(labels)]]
-        )
+        self._fba_tick_labels = labels
+        self._update_fba_axis_ticks()
         weight_label = f"dB({weighting})" if weighting != "Z" else "dB"
         self.analysis_plot.setLabel(
             "left",
