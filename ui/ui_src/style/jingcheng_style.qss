@@ -7,7 +7,7 @@ QLineEdit {
   background: #f8fafc;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 5px 8px;
+  padding: 4px 8px;
 }
 
 QLineEdit:focus {
