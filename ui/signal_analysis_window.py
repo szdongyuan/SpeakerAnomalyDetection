@@ -1751,7 +1751,7 @@ class AI(QWidget):
         tone_styles = {
             "neutral": "#000000",
             "running": "#0B4FB3",
-            "success": "#00652F",
+            "success": "#16A34A",
             "danger": "#AE1022",
             "warning": "#A84300",
         }

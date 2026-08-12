@@ -224,6 +224,7 @@ def test_successful_ai_result_updates_industrial_table_rows(
         ("OK Score", "87.25%"),
         ("NG Score", "12.75%"),
     ]
+    assert "color:#16A34A" in widget.ai_row_value_labels[0].styleSheet()
     assert "font-weight:700" in widget.ai_row_value_labels[0].styleSheet()
     assert "font-weight:400" in widget.ai_row_value_labels[1].styleSheet()
     assert "font-weight:400" in widget.ai_row_value_labels[2].styleSheet()
