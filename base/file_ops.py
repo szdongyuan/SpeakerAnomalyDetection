@@ -254,7 +254,8 @@ class FileOps(object):
         ----------
         file_path_list : list[str]
             Paths of files to be included in the archive. Relative paths will be
-            evaluated against ``base_dir``.
+            evaluated against ``base_dir``. Absolute paths may be located on a
+            different local drive or UNC share.
         output_zip_path : str, optional
             Full path of the output zip file. When omitted a file named
             ``export_YYYYMMDD.zip`` is created under
@@ -293,7 +294,14 @@ class FileOps(object):
         with ZipFile(output_zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
             for path in file_path_list:
                 full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
-                rel_path = os.path.relpath(full_path, base_dir)
+                try:
+                    rel_path = os.path.relpath(full_path, base_dir)
+                except ValueError:
+                    # Windows cannot calculate a relative path between a local
+                    # drive and a UNC share (or between different drive letters).
+                    # The archive only needs the source path for categorization
+                    # and its basename for the stored entry name.
+                    rel_path = full_path
 
                 arcname = os.path.basename(rel_path)
                 for key, folder in category_rules.items():

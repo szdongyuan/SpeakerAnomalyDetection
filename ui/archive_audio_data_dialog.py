@@ -487,11 +487,21 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.packaging_progress.show()
         QApplication.processEvents()
 
-        FileOps.create_zip_with_files(file_path_list, file_path, progress_callback=self.update_packaging_progress)
+        try:
+            FileOps.create_zip_with_files(
+                file_path_list,
+                file_path,
+                progress_callback=self.update_packaging_progress,
+            )
+        except Exception as error:
+            self.logger.error("failed to package audio data: %s" % error)
+            QMessageBox.warning(self, "打包失败", "音频数据打包失败：%s" % error)
+            return
+        finally:
+            self.packaging_progress.close()
+            self.packaging_progress = None
 
         self.set_all_checkboxes_checked([0], False)
-        self.packaging_progress.close()
-        self.packaging_progress = None
 
     def on_clicked_delete_btn(self):
         current_file = self.playback_controller.get_current_playing_file()
