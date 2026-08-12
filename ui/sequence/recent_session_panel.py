@@ -192,13 +192,17 @@ class RecentSessionPanel(QWidget):
             self.remove_session(session_id)
 
         row = self.row_by_group_id.get(group_id)
-        if row is None:
+        is_new_group = row is None
+        if is_new_group:
             row = self._insert_group_row(group_id)
 
         self.group_by_session_id[session_id] = group_id
         group = self.group_records.setdefault(group_id, self._new_group_record(session_record))
         self._merge_session_into_group(group, session_record)
         self._populate_group_row(row, group_id)
+        if is_new_group:
+            self.session_table.selectRow(row)
+            self.session_table.scrollToTop()
 
     def remove_session(self, session_id: str):
         if not session_id or self.session_table is None:

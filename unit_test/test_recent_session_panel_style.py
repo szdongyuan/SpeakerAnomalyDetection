@@ -92,6 +92,26 @@ class TestRecentSessionPanelStyle(unittest.TestCase):
         self.assertEqual(panel.session_table.horizontalHeaderItem(5).text(), "汇总结果")
         self.assertIsNone(panel._get_cell_center_widget(panel.session_table, 0, 6))
 
+    def test_new_group_is_selected_at_top_without_reselecting_on_group_update(self):
+        panel = self._panel()
+        first = self._session("recent_1", "01", "OK")
+        second = self._session("recent_2", "01", "OK")
+        second["group_id"] = "group_2"
+
+        panel.upsert_session(first)
+        panel.upsert_session(second)
+
+        self.assertEqual(panel.session_table.currentRow(), 0)
+        self.assertEqual({item.row() for item in panel.session_table.selectedItems()}, {0})
+
+        panel.session_table.selectRow(1)
+        second_condition = self._session("recent_3", "02", "OK")
+        second_condition["group_id"] = "group_2"
+        panel.upsert_session(second_condition)
+
+        self.assertEqual(panel.session_table.currentRow(), 1)
+        self.assertEqual({item.row() for item in panel.session_table.selectedItems()}, {1})
+
     def test_condition_headers_append_rpm_when_missing(self):
         panel = self._panel(
             condition_configs=[
