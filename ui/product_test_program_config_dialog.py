@@ -73,6 +73,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.pdf_save_dir_label = QLabel("保存目录：")
         self.pdf_save_dir_input = QLineEdit()
         self.program_table = QTableWidget(0, 6)
+        self.new_btn = QPushButton("新建")
         self.add_btn = QPushButton("+ 添加配置")
         self.delete_btn = QPushButton("删除配置")
         self.clear_btn = QPushButton("清空")
@@ -165,6 +166,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
 
         self.save_btn.setObjectName("productProgramPrimaryButton")
         for button in (
+            self.new_btn,
             self.add_btn,
             self.delete_btn,
             self.clear_btn,
@@ -174,6 +176,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             self.save_btn,
         ):
             button.setMinimumHeight(38)
+        self.new_btn.setMinimumWidth(90)
         self.add_btn.setMinimumWidth(135)
         self.delete_btn.setMinimumWidth(110)
         self.save_as_btn.setMinimumWidth(105)
@@ -195,6 +198,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
 
         bottom_button_layout = QHBoxLayout()
         bottom_button_layout.setSpacing(10)
+        bottom_button_layout.addWidget(self.new_btn)
         bottom_button_layout.addWidget(self.clear_btn)
         bottom_button_layout.addWidget(self.import_btn)
         bottom_button_layout.addWidget(self.save_as_btn)
@@ -258,6 +262,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             self._select_pdf_report_dir
         )
         self.program_table.itemChanged.connect(self._on_table_item_changed)
+        self.new_btn.clicked.connect(self._new_program)
         self.add_btn.clicked.connect(self._add_empty_row)
         self.delete_btn.clicked.connect(self._delete_selected_row)
         self.clear_btn.clicked.connect(self._clear_program)
@@ -569,6 +574,14 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             self.current_file,
         )
         self._dirty = True
+
+    def _new_program(self):
+        if not self._confirm_discard_changes():
+            return
+        program_data = self.manager.default_program()
+        program_data["name"] = ""
+        self._show_program(program_data, None)
+        self.config_combobox.setFocus()
 
     def _import_program(self):
         source_path, _ = QFileDialog.getOpenFileName(
