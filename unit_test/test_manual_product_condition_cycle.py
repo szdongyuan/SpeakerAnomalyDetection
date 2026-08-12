@@ -699,6 +699,34 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_3"))
         self.assertEqual(widget.count_board.mark_results, ["NG"])
 
+    def test_single_condition_mark_result_uses_product_group_summary(self):
+        widget = _DummyManualCycleWidget()
+        widget.count_board.mode = "mark"
+        widget.recent_session_panel = None
+        widget.product_test_condition_configs = [
+            {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
+        ]
+        widget.recent_test_session_by_id = {
+            "recent_1": {
+                "session_id": "recent_1",
+                "group_id": "group_1",
+                "condition_key": "q6000",
+                "result_label": "not labeled",
+                "recorded_signal_info": {"labels": "not_labeled"},
+            },
+        }
+
+        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
+        self.assertEqual(widget.count_board.mark_results, ["not_labeled"])
+
+        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
+        self.assertEqual(widget.count_board.mark_results, ["not_labeled"])
+
+        widget.recent_test_session_by_id["recent_1"]["result_label"] = "ng"
+        widget.recent_test_session_by_id["recent_1"]["recorded_signal_info"]["labels"] = "NG"
+        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
+        self.assertEqual(widget.count_board.mark_relabels, [("not_labeled", "NG")])
+
     def test_manual_product_group_count_rolls_back_when_label_returns_to_not_labeled(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"

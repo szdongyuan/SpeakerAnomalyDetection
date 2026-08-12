@@ -789,7 +789,7 @@ class SequenceWidgetAnalysisOpsMixin(
     def _update_manual_product_mark_group_count(self, group_id: str) -> bool:
         if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
             return False
-        if len(self._manual_product_condition_keys()) < 2:
+        if not self._manual_product_condition_keys():
             return False
 
         group_id = str(group_id or "").strip()
@@ -1842,6 +1842,23 @@ class SequenceWidgetAnalysisOpsMixin(
         if current_recorded_path and os.path.abspath(current_recorded_path) == os.path.abspath(recorded_path):
             self.recorded_path = new_recorded_path
             self.recorded_signal_info = dict(updated_signal_info or {})
+
+        condition_key = str(session_record.get("condition_key") or "")
+        cached_record = (getattr(self, "_condition_record_cache", {}) or {}).get(condition_key)
+        if (
+            isinstance(cached_record, dict)
+            and str(cached_record.get("session_id") or "") == str(session_id or "")
+        ):
+            cached_record.update(
+                recorded_path=new_recorded_path,
+                recorded_signal_info=dict(updated_signal_info or {}),
+            )
+            channel_workspace = getattr(self, "channel_workspace", None)
+            if channel_workspace is not None:
+                if hasattr(channel_workspace, "set_condition_result"):
+                    channel_workspace.set_condition_result(condition_key, normalized_label)
+                if hasattr(channel_workspace, "set_condition_audio_path"):
+                    channel_workspace.set_condition_audio_path(condition_key, new_recorded_path)
         return True
 
     def _show_recent_session_analysis_by_id(self, session_id: str):
