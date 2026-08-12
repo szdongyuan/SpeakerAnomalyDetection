@@ -9,7 +9,7 @@ from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from consts import error_code, model_consts
-from base.ai_runtime_policy import count_judged_results, extract_ai_runtime_state
+from base.ai_runtime_policy import extract_ai_runtime_state
 from base.excel_result_exporter import (
     build_excel_from_csv_spool,
     export_analysis_to_csv_spool,
@@ -2442,7 +2442,6 @@ class SequenceWidgetAnalysisOpsMixin(
             can_output, _reason = self._can_output_ok_ng()
             ai_runtime_state = extract_ai_runtime_state(self.analysis_window, self.analysis_config)
             has_ai_analysis = bool(ai_runtime_state.get("has_ai_analysis", False))
-            ai_label = ai_runtime_state.get("label")
             ai_scores = ai_runtime_state.get("scores") or {"ok_score": None, "ng_score": None}
             self._sync_left_panel_analysis_details(ai_runtime_state)
             cycle_final_label = None
@@ -2450,17 +2449,22 @@ class SequenceWidgetAnalysisOpsMixin(
             if can_output:
                 _passed, label = self._summarize_ok_ng()
                 update_ai_cycle_result = getattr(self, "_update_ai_cycle_result_after_analysis", None)
-                if callable(update_ai_cycle_result) and ai_label in ("OK", "NG"):
-                    cycle_final_label = update_ai_cycle_result(ai_label, ai_scores=ai_scores)
+                if (
+                    has_ai_analysis
+                    and callable(update_ai_cycle_result)
+                    and label in ("OK", "NG")
+                ):
+                    cycle_final_label = update_ai_cycle_result(
+                        label,
+                        ai_scores=ai_scores,
+                    )
             import_audio_mode = self._is_import_audio_mode()
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 if not can_output:
                     QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
                 else:
-                    judged_count = count_judged_results(getattr(self.data_struct, "analysis_result_dict", None))
-                    auto_label = ai_label if has_ai_analysis else label
-                    ai_block_message = str(ai_runtime_state.get("blocked_message") or "") if has_ai_analysis else ""
+                    auto_label = label
                     is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
                     directional_cycle_active = (
                         callable(is_directional_cycle_active) and is_directional_cycle_active()
@@ -2469,20 +2473,12 @@ class SequenceWidgetAnalysisOpsMixin(
                     manual_product_cycle_active = (
                         callable(is_manual_product_cycle_active) and is_manual_product_cycle_active()
                     )
-                    if has_ai_analysis and auto_label not in ("OK", "NG"):
-                        if judged_count == 0 and not ai_block_message:
-                            QMessageBox.warning(
-                                self,
-                                "提示",
-                                "AI 未产出有效评分，本次不写入 OK/NG 结果。\n请检查模型与音频时长是否匹配。",
-                            )
-                        auto_label = None
                     if (
                         not import_audio_mode
                         and directional_cycle_active
                         and auto_label in ("OK", "NG")
                     ):
-                        # Persist the current directional audio with its own AI label
+                        # Persist the current directional audio with the combined label
                         # before the cycle-level forward/reverse summary is decided.
                         persist_current_test_audio_label = getattr(self, "_persist_current_test_audio_label", None)
                         if callable(persist_current_test_audio_label):
@@ -2522,7 +2518,7 @@ class SequenceWidgetAnalysisOpsMixin(
                         auto_label = None
                     if auto_label is None:
                         # Directional cycle should only be counted/finalized after the reverse leg
-                        # produces the final combined AI judgment.
+                        # produces the final combined judgment.
                         pass
                     else:
                         if not import_audio_mode:
