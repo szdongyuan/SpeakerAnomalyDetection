@@ -1319,6 +1319,15 @@ class SequenceWidgetStreamingOpsMixin:
         self._cache_condition_record(target_direction)
         self._refresh_direction_waveform_workspace(target_direction)
 
+    def _resolve_recording_acq_detail(self) -> dict:
+        try:
+            acq_detail = (
+                (self.sequence_config[0]["seq1"].get("acq", {}) or {}).get("detail", {}) or {}
+            )
+        except (AttributeError, IndexError, KeyError, TypeError):
+            return {}
+        return acq_detail if isinstance(acq_detail, dict) else {}
+
     def on_audio_chunk_received(self, chunk):
         """
         Handle streaming audio chunk for real-time waveform display.
@@ -1359,8 +1368,16 @@ class SequenceWidgetStreamingOpsMixin:
 
         sample_rate = float(self.data_struct.sample_rate or 1.0)
         direction = self._resolve_active_recording_waveform_direction() or "forward"
-        self._direction_waveform_cache[direction] = (accumulated.mean(axis=1).astype(np.float32, copy=False), sample_rate)
-        self._refresh_direction_waveform_workspace(direction)
+        trim_samples = resolve_startup_trim_samples(
+            self._resolve_recording_acq_detail(), sample_rate
+        )
+        visible_accumulated = accumulated[trim_samples:]
+        if visible_accumulated.shape[0] > 0:
+            self._direction_waveform_cache[direction] = (
+                visible_accumulated.mean(axis=1).astype(np.float32, copy=False),
+                sample_rate,
+            )
+            self._refresh_direction_waveform_workspace(direction)
 
         if self.streaming_wav_writer:
             try:
@@ -1441,20 +1458,15 @@ class SequenceWidgetStreamingOpsMixin:
                 self.streaming_wav_writer.finalize()
                 self.streaming_wav_writer = None
 
-            try:
-                acq_detail = (
-                    (self.sequence_config[0]["seq1"].get("acq", {}) or {}).get("detail", {}) or {}
-                )
-            except Exception:
-                acq_detail = {}
+            acq_detail = self._resolve_recording_acq_detail()
 
             # Startup pop trim: drop the leading samples that capture the
             # sound-card / DAC power-on transient before the quality gate
             # sees them, so a pop cannot keep an otherwise-dead recording
             # above threshold. The just-finalized WAV is rewritten so the
             # file on disk matches the in-memory buffer used by the AI /
-            # plotting / DB. The trim is opt-in: configs without
-            # ``startup_trim_ms`` (or with it set to 0) record verbatim.
+            # plotting / DB. Configs can explicitly set
+            # ``startup_trim_ms`` to 0 when verbatim capture is required.
             trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
             if 0 < trim_samples < recorded_multi.shape[0]:
                 recorded_multi = recorded_multi[trim_samples:]

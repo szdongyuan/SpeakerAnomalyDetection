@@ -625,6 +625,9 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.streaming_buffer_multi = []
         widget.streaming_wav_writer = _Writer()
         widget.data_struct = types.SimpleNamespace(sample_rate=48_000)
+        widget.sequence_config = [
+            {"seq1": {"acq": {"detail": {"startup_trim_ms": 0}}}}
+        ]
         widget._active_product_condition_key = "01"
         widget._streaming_first_chunk_logged = True
         widget.default_logger = logging.getLogger(__name__)
@@ -638,6 +641,43 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(len(widget.streaming_wav_writer.chunks), 1)
         self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], chunk))
         self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
+
+    def test_streaming_waveform_hides_startup_trim_but_writer_keeps_raw_chunks(self):
+        class _Writer:
+            def __init__(self):
+                self.chunks = []
+
+            def write_chunk(self, chunk):
+                self.chunks.append(chunk)
+
+        widget = _WaveformRefreshWidget()
+        full_audio = np.arange(280, dtype=np.float32).reshape(140, 2)
+        first_chunk = full_audio[:60]
+        second_chunk = full_audio[60:]
+        widget.streaming_buffer_multi = []
+        widget.streaming_wav_writer = _Writer()
+        widget.data_struct = types.SimpleNamespace(sample_rate=1_000)
+        widget.sequence_config = [
+            {"seq1": {"acq": {"detail": {"startup_trim_ms": 100}}}}
+        ]
+        widget._active_product_condition_key = "01"
+        widget._streaming_first_chunk_logged = True
+        widget.default_logger = logging.getLogger(__name__)
+
+        widget.on_audio_chunk_received({"multi": first_chunk})
+
+        self.assertNotIn("01", widget._direction_waveform_cache)
+        self.assertEqual(widget.channel_workspace.direction_data, [])
+        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], first_chunk))
+
+        widget.on_audio_chunk_received({"multi": second_chunk})
+
+        cached_waveform, cached_sample_rate = widget._direction_waveform_cache["01"]
+        expected_waveform = full_audio[100:].mean(axis=1)
+        self.assertEqual(cached_sample_rate, 1_000.0)
+        self.assertTrue(np.array_equal(cached_waveform, expected_waveform))
+        self.assertEqual(len(widget.streaming_wav_writer.chunks), 2)
+        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[1], second_chunk))
 
     def test_invalid_serial_recording_uses_whole_round_abort(self):
         calls = []

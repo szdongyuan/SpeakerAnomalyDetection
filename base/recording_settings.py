@@ -30,7 +30,7 @@ from consts import model_consts
 
 
 _HARDCODE_DEFAULTS: Dict[str, Any] = {
-    "startup_trim_ms": 0,
+    "startup_trim_ms": 100.0,
     "monitor_fade_in_ms": 1.0,
     "audio_validation": {
         "enabled": False,
