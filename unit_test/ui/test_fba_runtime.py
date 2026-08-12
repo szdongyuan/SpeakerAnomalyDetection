@@ -270,3 +270,43 @@ def test_fba_resolves_constant_manual_limits(signal_module):
 
     assert np.allclose(upper, [85.0, 85.0, 85.0])
     assert np.allclose(lower, [25.0, 25.0, 25.0])
+
+
+def test_fba_tick_labels_adapt_to_available_width(signal_module):
+    select_indices = signal_module.FrequencyBandAnalysis._select_fba_tick_indices
+
+    assert select_indices([40] * 31, available_width=390) == [
+        0,
+        4,
+        8,
+        12,
+        16,
+        20,
+        24,
+        30,
+    ]
+    assert select_indices([40] * 5, available_width=600) == [0, 1, 2, 3, 4]
+
+
+def test_fba_ticks_recompute_after_hidden_window_is_shown(signal_module, qapp):
+    widget = signal_module.FrequencyBandAnalysis("FBA")
+    widget._fba_tick_labels = [f"{index} Hz" for index in range(31)]
+    bottom_axis = widget.analysis_plot.getAxis("bottom")
+
+    widget._update_fba_axis_ticks()
+    hidden_ticks = bottom_axis._tickLevels[0]
+
+    widget.setGeometry(0, 0, 475, 320)
+    widget.show()
+    qapp.processEvents()
+    shown_ticks = bottom_axis._tickLevels[0]
+
+    widget.resize(1200, 500)
+    qapp.processEvents()
+    wide_ticks = bottom_axis._tickLevels[0]
+
+    assert len(shown_ticks) < len(hidden_ticks)
+    assert len(shown_ticks) < len(wide_ticks)
+    assert shown_ticks[0] == (0, "0 Hz")
+    assert shown_ticks[-1] == (30, "30 Hz")
+    widget.close()
