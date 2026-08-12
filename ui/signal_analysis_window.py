@@ -71,6 +71,9 @@ from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
     limits_from_manual_config,
 )
+from ui.ui_analysis_config.threshold_csv_manual import (
+    validate_limit_data_values,
+)
 
 
 def get_class_mapping():
@@ -233,6 +236,7 @@ def _resolve_spl_limit_data(config, target_x):
             limit_x, upper_limit, lower_limit = limit_data
         except (TypeError, ValueError) as exc:
             raise ValueError("CSV 阈值数据格式不正确") from exc
+        validate_limit_data_values(limit_data)
         return limit_x, upper_limit, lower_limit
     raise ValueError(f"不支持的阈值模式: {limit_mode}")
 
@@ -2908,6 +2912,13 @@ class FftAnalysis(AnalysisGraphWidget):
         lower_limits = None
         out_mask = None
         if bool(config.get("limit_checked", False)):
+            if not np.any(np.isfinite(display_y)):
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "当前 FFT 结果没有有效频点，无法执行阈值判定。",
+                )
+                return False
             try:
                 upper_limits, lower_limits = self._resolve_limits(
                     config,
@@ -2924,13 +2935,6 @@ class FftAnalysis(AnalysisGraphWidget):
             valid_mask = np.isfinite(display_y) & (
                 np.isfinite(upper_limits) | np.isfinite(lower_limits)
             )
-            if not np.any(valid_mask):
-                QMessageBox.warning(
-                    self,
-                    "提示",
-                    "当前 FFT 结果没有可用于阈值判定的有效频点。",
-                )
-                return False
             out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
                 display_y,
                 upper_limits,
@@ -3172,6 +3176,7 @@ class FftAnalysis(AnalysisGraphWidget):
                 csv_x, csv_upper, csv_lower = limit_data
             except (TypeError, ValueError) as exc:
                 raise ValueError("CSV 阈值数据格式不正确") from exc
+            validate_limit_data_values(limit_data)
             upper_limits = cls._interpolate_limit_side(
                 target_x,
                 csv_x,
@@ -3188,10 +3193,6 @@ class FftAnalysis(AnalysisGraphWidget):
         overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
         if np.any(lower_limits[overlap] > upper_limits[overlap]):
             raise ValueError("下限不能大于上限")
-        if not np.any(np.isfinite(upper_limits)) and not np.any(
-            np.isfinite(lower_limits)
-        ):
-            raise ValueError("当前频率范围内没有可用的上下限")
         return upper_limits, lower_limits
 
     @staticmethod
@@ -3445,16 +3446,16 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 analysis_result.band_levels_weighted_db,
                 dtype=np.float64,
             )
-            valid_mask = np.isfinite(levels) & (
-                np.isfinite(upper_limits) | np.isfinite(lower_limits)
-            )
-            if not np.any(valid_mask):
+            if not np.any(np.isfinite(levels)):
                 QMessageBox.warning(
                     self,
                     "提示",
-                    "当前 FBA 结果没有可用于阈值判定的有效频段。",
+                    "当前 FBA 结果没有有效频段，无法执行阈值判定。",
                 )
                 return False
+            valid_mask = np.isfinite(levels) & (
+                np.isfinite(upper_limits) | np.isfinite(lower_limits)
+            )
             out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
                 levels,
                 upper_limits,
@@ -3519,6 +3520,7 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
                 csv_x, csv_upper, csv_lower = limit_data
             except (TypeError, ValueError) as exc:
                 raise ValueError("CSV 阈值数据格式不正确") from exc
+            validate_limit_data_values(limit_data)
             upper_limits = cls._interpolate_limit_side(
                 centers,
                 csv_x,
@@ -3535,10 +3537,6 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
         if np.any(lower_limits[overlap] > upper_limits[overlap]):
             raise ValueError("下限不能大于上限")
-        if not np.any(np.isfinite(upper_limits)) and not np.any(
-            np.isfinite(lower_limits)
-        ):
-            raise ValueError("当前频段范围内没有可用的上下限")
         return upper_limits, lower_limits
 
     @staticmethod
@@ -3563,13 +3561,23 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
             [points[x_value] for x_value in sorted(points)],
             dtype=np.float64,
         )
-        return np.interp(
-            np.asarray(target_x, dtype=np.float64),
-            sorted_x,
-            sorted_values,
-            left=sorted_values[0],
-            right=sorted_values[-1],
+        target_values = np.asarray(target_x, dtype=np.float64)
+        output = np.full(
+            target_values.shape,
+            np.nan,
+            dtype=np.float64,
         )
+        in_range = (
+            (target_values >= sorted_x[0])
+            & (target_values <= sorted_x[-1])
+        )
+        if np.any(in_range):
+            output[in_range] = np.interp(
+                target_values[in_range],
+                sorted_x,
+                sorted_values,
+            )
+        return output
 
     @staticmethod
     def _parse_custom_bands_text(text: str):
@@ -4349,6 +4357,7 @@ class LoudnessAnalysis(AnalysisGraphWidget):
                 csv_x, csv_upper, csv_lower = limit_data
             except (TypeError, ValueError) as exc:
                 raise ValueError("CSV 阈值数据格式不正确") from exc
+            validate_limit_data_values(limit_data)
             upper_limits = cls._interpolate_loudness_limit_side(
                 target_x,
                 csv_x,
@@ -4365,10 +4374,6 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
         if np.any(lower_limits[overlap] > upper_limits[overlap]):
             raise ValueError("下限不能大于上限")
-        if not np.any(np.isfinite(upper_limits)) and not np.any(
-            np.isfinite(lower_limits)
-        ):
-            raise ValueError("当前时间范围内没有可用的上下限")
         return upper_limits, lower_limits
 
     @staticmethod

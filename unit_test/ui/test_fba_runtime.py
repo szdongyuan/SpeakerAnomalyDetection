@@ -175,6 +175,84 @@ def test_fba_runtime_interpolates_csv_limits_and_maps_class(signal_module):
     )
 
 
+def test_fba_csv_limits_without_band_overlap_are_ok(signal_module, qapp):
+    widget = signal_module.FrequencyBandAnalysis("频段能量 (FBA) 无重叠")
+    widget.data_struct.store_wave_data = _sine_wave(1000.0)
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.analysis_result_dict.clear()
+    widget.v2pa_factor = 1.0
+    config = _manual_config(200.0)
+    config.update(
+        {
+            "limit_mode": "csv",
+            "limit_data": (
+                [4000.0, 5000.0],
+                [80.0, 80.0],
+                [20.0, 20.0],
+            ),
+        }
+    )
+    widget.analysis_config = config
+
+    result = widget.calculate_fba()
+
+    assert result
+    assert result["exceeded_bands"] == []
+    assert widget.data_struct.analysis_result_dict[widget.title_name] == (
+        True,
+        0.0,
+    )
+    widget.close()
+
+
+def test_fba_invalid_analysis_data_is_not_accepted_as_no_overlap(
+    signal_module,
+    qapp,
+    monkeypatch,
+):
+    widget = signal_module.FrequencyBandAnalysis("频段能量 (FBA) 无效结果")
+    widget.data_struct.store_wave_data = _sine_wave(1000.0)
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.analysis_result_dict.clear()
+    widget.v2pa_factor = 1.0
+    config = _manual_config(200.0)
+    config.update(
+        {
+            "limit_mode": "csv",
+            "limit_data": (
+                [4000.0, 5000.0],
+                [80.0, 80.0],
+                [20.0, 20.0],
+            ),
+        }
+    )
+    widget.analysis_config = config
+    warnings = []
+    monkeypatch.setattr(
+        signal_module.FrequencyBandAnalyzer,
+        "analyze",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            bands=[
+                types.SimpleNamespace(f_center=1000.0),
+                types.SimpleNamespace(f_center=3000.0),
+            ],
+            band_levels_weighted_db=np.asarray([np.nan, np.nan]),
+        ),
+    )
+    monkeypatch.setattr(
+        signal_module.QMessageBox,
+        "warning",
+        lambda *args: warnings.append(args[-1]),
+    )
+
+    assert widget.calculate_fba() is False
+    assert any("没有有效频段" in message for message in warnings)
+    assert widget.title_name not in widget.data_struct.analysis_result_dict
+    widget.close()
+
+
 def test_fba_resolves_constant_manual_limits(signal_module):
     centers = np.asarray([100.0, 1000.0, 2000.0])
 
