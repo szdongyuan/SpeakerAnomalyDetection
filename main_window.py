@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
+        self.sequence_window.update_v2pa_factor()
 
     @staticmethod
     def _create_menu_row(menu_bar):
@@ -411,11 +412,15 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
+        self.sequence_window.update_v2pa_factor()
         self.sequence_window.refresh_channel_windows()
 
     def on_calibration_window_init(self):
         # calibration the mic and speaker
-        dlg = CalibrationWindow()
+        dlg = CalibrationWindow(
+            input_device=self.mic,
+            input_channels=self.mic_channels,
+        )
         dlg.speaker = self.speaker
         dlg.exec()
         if dlg.input_calibration_flag:
