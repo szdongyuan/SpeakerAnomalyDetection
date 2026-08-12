@@ -419,6 +419,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         if widget is not None:
             self._apply_semantic_size_policy(widget)
             content_layout.addWidget(widget)
+            self._bind_semantic_size_hint_changed(widget)
         if layout is not None:
             content_layout.addLayout(layout)
         section_layout.addWidget(content_widget)
@@ -470,6 +471,11 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         ):
             vertical_policy = QSizePolicy.Minimum
         widget.setSizePolicy(QSizePolicy.Expanding, vertical_policy)
+
+    def _bind_semantic_size_hint_changed(self, widget: QWidget) -> None:
+        size_hint_changed = getattr(widget, "size_hint_changed", None)
+        if size_hint_changed is not None:
+            size_hint_changed.connect(self._refresh_section_container_minimum_height)
 
     def _refresh_widget_minimum_height(self, widget: QWidget) -> None:
         if widget.isHidden():
@@ -545,6 +551,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         content_layout = self._semantic_section_contents[group_key].layout()
         self._apply_semantic_size_policy(widget)
         content_layout.addWidget(widget)
+        self._bind_semantic_size_hint_changed(widget)
         self._refresh_section_container_minimum_height()
         return content_layout
 
@@ -972,6 +979,8 @@ class TimeSmoothingWidget(QWidget):
 class GoldenSampleWidget(QWidget):
     """Golden-sample enable switch and display-mode checkboxes."""
 
+    size_hint_changed = pyqtSignal()
+
     def __init__(self, cfg: dict[str, Any] | None = None, parent=None):
         super().__init__(parent)
         config = cfg or {}
@@ -1011,15 +1020,30 @@ class GoldenSampleWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         layout.addWidget(self.enabled_checkbox)
-        layout.addWidget(self.display_label)
-        layout.addWidget(self.deviation_checkbox)
-        layout.addWidget(self.envelope_checkbox)
+
+        self.display_label_layout = QVBoxLayout()
+        self.display_label_layout.setContentsMargins(16, 0, 0, 0)
+        self.display_label_layout.setSpacing(0)
+        self.display_label_layout.addWidget(self.display_label)
+        layout.addLayout(self.display_label_layout)
+
+        self.display_options_layout = QVBoxLayout()
+        self.display_options_layout.setContentsMargins(32, 0, 0, 0)
+        self.display_options_layout.setSpacing(8)
+        self.display_options_layout.addWidget(self.deviation_checkbox)
+        self.display_options_layout.addWidget(self.envelope_checkbox)
+        layout.addLayout(self.display_options_layout)
         self._sync_display_modes_enabled()
 
     def _sync_display_modes_enabled(self, *args) -> None:
         enabled = self.enabled_checkbox.isChecked()
+        self.display_label.setVisible(enabled)
+        self.deviation_checkbox.setVisible(enabled)
+        self.envelope_checkbox.setVisible(enabled)
         self.deviation_checkbox.setEnabled(enabled)
         self.envelope_checkbox.setEnabled(enabled)
+        self.updateGeometry()
+        self.size_hint_changed.emit()
 
     def is_checked(self) -> bool:
         return self.enabled_checkbox.isChecked()
