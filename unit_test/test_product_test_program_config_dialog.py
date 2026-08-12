@@ -173,6 +173,15 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     assert dialog.save_btn.objectName() == "productProgramPrimaryButton"
     assert dialog.delete_btn.text() == "删除配置"
     assert dialog.delete_btn.objectName() == ""
+    bottom_button_layout = dialog.layout().itemAt(6).layout()
+    assert bottom_button_layout.itemAt(0).widget() is dialog.new_btn
+    assert bottom_button_layout.itemAt(1).widget() is dialog.clear_btn
+    assert bottom_button_layout.itemAt(2).widget() is dialog.import_btn
+    assert bottom_button_layout.itemAt(3).widget() is dialog.save_as_btn
+    assert bottom_button_layout.itemAt(4).spacerItem() is not None
+    assert bottom_button_layout.itemAt(5).widget() is dialog.cancel_btn
+    assert bottom_button_layout.itemAt(6).widget() is dialog.save_btn
+    assert bottom_button_layout.count() == 7
     assert not hasattr(dialog, "status_label")
     dialog.close()
 
@@ -432,6 +441,88 @@ def test_clear_preserves_current_config_name(tmp_path):
     assert dialog._dirty
     dialog._dirty = False
     dialog.close()
+
+
+def test_new_program_button_starts_blank_draft_without_changing_active_program(
+    tmp_path,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    active_file = manager.load_registry()["active_file"]
+    dialog = ProductTestProgramConfigDialog(manager)
+
+    dialog.new_btn.click()
+    app.processEvents()
+
+    assert dialog.new_btn.text() == "新建"
+    assert dialog.current_file is None
+    assert dialog.config_combobox.currentText() == ""
+    assert dialog.program_table.rowCount() == 0
+    assert dialog.close_trigger_input.text() == ""
+    assert not dialog._dirty
+    assert manager.load_registry()["active_file"] == active_file
+    dialog.close()
+
+
+def test_new_program_button_keeps_current_program_when_discard_is_declined(
+    tmp_path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    dialog = ProductTestProgramConfigDialog(manager)
+    current_file = dialog.current_file
+    dialog.program_table.item(0, 1).setText("未保存工况")
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.No,
+    )
+
+    dialog.new_btn.click()
+    app.processEvents()
+
+    assert dialog.current_file == current_file
+    assert dialog.config_combobox.currentText() == "默认配置"
+    assert dialog.program_table.item(0, 1).text() == "未保存工况"
+    assert dialog._dirty
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_saving_new_program_creates_file_without_activating_it(
+    tmp_path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    active_file = manager.load_registry()["active_file"]
+    dialog = ProductTestProgramConfigDialog(manager)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+
+    dialog.new_btn.click()
+    dialog.config_combobox.setEditText("新产品配置")
+    dialog._add_empty_row()
+    dialog.program_table.item(0, 1).setText("7000 rpm")
+    dialog.program_table.cellWidget(0, 2).setEditText("02")
+    queue_combobox = dialog._queue_combobox(0)
+    queue_combobox.setCurrentIndex(queue_combobox.findData("queue_6000"))
+
+    dialog._save_program()
+    app.processEvents()
+
+    registry = manager.load_registry()
+    assert dialog.result() == QDialog.Accepted
+    assert dialog.current_file == "新产品配置.json"
+    assert os.path.isfile(os.path.join(manager.program_dir, dialog.current_file))
+    assert registry["active_file"] == active_file
+    assert {item["name"] for item in registry["configs"]} == {
+        "默认配置",
+        "新产品配置",
+    }
 
 
 def test_save_as_rejects_configuration_without_test_queue(tmp_path, monkeypatch):
