@@ -112,3 +112,18 @@ def test_model_structure_empty_message_uses_same_editor(ai_window_module, qapp):
     assert dialog.model_structure_texteditor.toPlainText() == "模型结构为空"
     assert "font-size: 15px" in dialog.model_structure_texteditor.styleSheet()
     dialog.close()
+
+
+def test_training_process_uses_compact_shared_font(ai_window_module, qapp):
+    dialog = ai_window_module.Process_Widget()
+    editor = dialog.model_structure_texteditor
+    editor.ensurePolished()
+
+    assert editor.objectName() == "trainingProcessTextEdit"
+    assert editor.isReadOnly()
+    assert editor.lineWrapMode() == QTextEdit.NoWrap
+    assert "font-family: 'SimSun'" in editor.styleSheet()
+    assert "font-size: 15px" in editor.styleSheet()
+    assert editor.font().family() == "SimSun"
+    assert editor.font().pixelSize() == 15
+    dialog.close()
