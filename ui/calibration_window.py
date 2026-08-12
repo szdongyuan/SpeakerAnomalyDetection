@@ -1,9 +1,8 @@
 import sys
 import threading
-from datetime import datetime
 
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
@@ -23,15 +22,20 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.play_and_record import stream_record_without_play
 from base.soundcard_audio_processor import SoundcardAudioProcessor
-from base.soundcard_calibration_manager import SoundcardCalibrationManager
+from base.soundcard_calibration_manager import (
+    SoundcardCalibrationManager,
+    save_mic_input_calibration,
+)
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
 
 
 class CalibrationWindow(QDialog):
 
-    def __init__(self):
+    def __init__(self, input_device=None, input_channels=None):
         super().__init__()
+        self.input_device = input_device
+        self.input_channels = list(input_channels or [])
         self.init_ui()
 
     def init_ui(self):
@@ -52,7 +56,13 @@ class CalibrationWindow(QDialog):
 
         self.tabwidget = QTabWidget()
         self.output_cal_wnd = OutputCalibration()
-        self.input_cal_wnd = InputCalibration()
+        self.input_cal_wnd = InputCalibration(
+            input_device=self.input_device,
+            input_channels=self.input_channels,
+        )
+        self.input_cal_wnd.calibration_finished.connect(
+            self._on_input_calibration_finished
+        )
         self.tabwidget.addTab(self.output_cal_wnd, "输出校准")
         self.tabwidget.addTab(self.input_cal_wnd, "输入校准")
 
@@ -101,8 +111,13 @@ class CalibrationWindow(QDialog):
             self.output_cal_wnd.calibration()
         elif current_tab_index == 1:
             self.cal_btn.setDisabled(True)
-            self.input_cal_wnd.clicked_calibration()
+            if not self.input_cal_wnd.clicked_calibration():
+                self.cal_btn.setEnabled(True)
+
+    def _on_input_calibration_finished(self, success):
+        if success:
             self.input_calibration_flag = True
+        self.cal_btn.setEnabled(True)
 
     def clicked_reset_button(self):
         """
@@ -122,7 +137,6 @@ class CalibrationWindow(QDialog):
         elif current_tab_index == 1:
             self.input_cal_wnd.reset_btn_clicked()
             self.cal_btn.setDisabled(False)
-            self.input_calibration_flag = False
 
     def clicked_close_button(self):
         """
@@ -133,12 +147,11 @@ class CalibrationWindow(QDialog):
             If the first tab is active, it directly closes the window; if the second tab is active, it first stops the
         timer, and then closes the window.
         """
-        current_tab_index = self.tabwidget.currentIndex()
-        if current_tab_index == 0:
-            self.close()
-        elif current_tab_index == 1:
-            self.input_cal_wnd.stop_timer = True
-            self.close()
+        self.reject()
+
+    def reject(self):
+        self.input_cal_wnd.cancel_calibration()
+        super().reject()
 
 
 class OutputCalibration(QWidget):
@@ -559,9 +572,12 @@ class OutputCalibration(QWidget):
 
 
 class InputCalibration(QWidget):
+    calibration_finished = pyqtSignal(bool)
 
-    def __init__(self):
+    def __init__(self, input_device=None, input_channels=None):
         super().__init__()
+        self.input_device = input_device
+        self.input_channels = list(input_channels or [])
         self.default_logger = LogManager.set_log_handler("core")  # Configures and retrieves the logger
         self.stop_timer = False  # Initializes the stop timer flag to False
         self.update_ui_timer = QTimer()
@@ -587,6 +603,7 @@ class InputCalibration(QWidget):
         self.standard_spl_flag = True
         self.recorded_flag = False
 
+        input_device_box = self.create_input_device_box()
         standard_spl_box = self.create_standard_spl_box()
         recorded_box = self.create_recorded_box()
         v2pa_factor_box = self.create_v2pa_factor_box()
@@ -596,6 +613,7 @@ class InputCalibration(QWidget):
         v_spacer_3 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         layout = QVBoxLayout()
+        layout.addWidget(input_device_box)
         layout.addWidget(standard_spl_box)
         layout.addItem(v_spacer_1)
         layout.addWidget(recorded_box)
@@ -616,6 +634,28 @@ class InputCalibration(QWidget):
             + ui_style_const.qradiobutton_style
         )
 
+    def create_input_device_box(self):
+        input_device_box = QGroupBox("校准输入")
+        device_name = "未选择输入设备"
+        if self.input_device is not None:
+            getter = getattr(self.input_device, "get", None)
+            if callable(getter):
+                device_name = str(getter("name") or device_name)
+
+        channel_name = "未选择通道"
+        if len(self.input_channels) == 1:
+            try:
+                channel_name = f"In{int(self.input_channels[0]) + 1}"
+            except (TypeError, ValueError):
+                channel_name = "无效通道"
+
+        self.input_device_label = QLabel(f"{device_name} / {channel_name}")
+        self.input_device_label.setWordWrap(True)
+        input_device_layout = QHBoxLayout()
+        input_device_layout.addWidget(self.input_device_label)
+        input_device_box.setLayout(input_device_layout)
+        return input_device_box
+
     def create_v2pa_factor_box(self):
         """
         Create a QGroupBox to display the sound pressure v2pa_factor.
@@ -628,7 +668,7 @@ class InputCalibration(QWidget):
             QGroupBox: A QGroupBox containing the sound pressure v2pa_factor label and line edit.
         """
         v2pa_factor_box = QGroupBox("校准结果")
-        v2pa_factor_label = QLabel("校准系数（V/Pa）：")
+        v2pa_factor_label = QLabel("校准系数（Pa/V）：")
         self.v2pa_factor_lineedit = QLineEdit()
         self.v2pa_factor_lineedit.setStyleSheet("background-color: white;")
         self.v2pa_factor_lineedit.setDisabled(True)
@@ -722,28 +762,57 @@ class InputCalibration(QWidget):
         allowing the UI timer to update the countdown in real-time. No waveform display is needed.
         """
 
-        # Reset state
-        self.recorded_time = 10
+        if self.input_device is None or len(self.input_channels) != 1:
+            self.calibration_popup(
+                success_flag=False,
+                message="输入校准要求先选择一个麦克风设备和一个输入通道。",
+            )
+            return False
+        try:
+            input_channel = int(self.input_channels[0])
+        except (TypeError, ValueError):
+            self.calibration_popup(
+                success_flag=False,
+                message="当前输入通道无效，请重新选择硬件。",
+            )
+            return False
+        if input_channel < 0:
+            self.calibration_popup(
+                success_flag=False,
+                message="当前输入通道无效，请重新选择硬件。",
+            )
+            return False
 
-        prolong = 1
+        self.stop_timer = False
+        self.recorded_time = 10
+        self.v2pa_factor_lineedit.clear()
+
         recorded_dict = {
             "channels": 1,
             "sample_rate": 44100,
             "num_frames": 10 * 44100,
-            "prolong_frames": int(prolong * 44100),
-            "device": None,  # Use default input device
+            "device": self.input_device,
+            "input_channels": [input_channel],
         }
 
-        # Start UI countdown timer
+        try:
+            self.streaming_processor, _ = stream_record_without_play(
+                recorded_dict,
+                None,
+                None,
+            )
+        except Exception as exc:
+            self.streaming_processor = None
+            self.default_logger.error(f"Failed to start input calibration recording: {exc}")
+            self.calibration_popup(
+                success_flag=False,
+                message=f"输入校准录音启动失败：{str(exc)[:80]}",
+            )
+            return False
+
         self.update_ui_timer.start()
-
-        # Start streaming recording (non-blocking, no signal connection needed for waveform)
-        self.streaming_processor, _ = stream_record_without_play(
-            recorded_dict, None, None  # file_path - we don't need to save file  # signal_info
-        )
-
-        # Start polling timer to check completion
-        self.streaming_poll_timer.start(50)  # Poll every 50ms
+        self.streaming_poll_timer.start(50)
+        return True
 
     def _poll_streaming_queue(self):
         """
@@ -755,13 +824,12 @@ class InputCalibration(QWidget):
         if self.streaming_processor is None:
             return
 
-        # Process all available chunks from queue (non-blocking)
         try:
-            while True:
-                chunk = self.streaming_processor.audio_queue.get_nowait()
-                self.streaming_processor.accumulated_chunks.append(chunk)
-        except Exception:
-            pass
+            self.streaming_processor.process_queue(emit_signal=False)
+        except Exception as exc:
+            self.default_logger.error(f"Failed to process input calibration audio: {exc}")
+            self._finish_failed_calibration("输入校准录音数据处理失败，请重试。")
+            return
 
         # Check if recording is complete
         if not self.streaming_processor.is_recording:
@@ -772,37 +840,58 @@ class InputCalibration(QWidget):
         """
         Handle streaming recording completion and calculate calibration result.
         """
+        processor = self.streaming_processor
         try:
-            # Stop UI timer
-            self.update_ui_timer.stop()
+            processor.process_queue(emit_signal=False)
+            if processor.error_occurred:
+                raise RuntimeError(processor.error_message or "录音设备发生错误")
+            recorded_data = processor.get_recorded_data()
+            if recorded_data.size != processor.target_samples:
+                raise ValueError(
+                    f"录音长度不完整：{recorded_data.size}/{processor.target_samples}"
+                )
 
-            # Get complete recorded data from processor
-            recorded_data = self.streaming_processor.get_recorded_data()
-
-            # Calculate average SPL from recorded data
             self.average_value = self._calculate_spl_from_data(recorded_data)
-
-            # Calculate v2pa_factor
             v2pa_factor = self.calculate_v2pa_factor(self.average_value)
-            self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=3)))
+            if not np.isfinite(self.average_value) or not np.isfinite(v2pa_factor) or v2pa_factor <= 0.0:
+                raise ValueError("输入校准计算结果无效")
 
-            # Clean up
+            standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
+            saved, message = save_mic_input_calibration(
+                v2pa_factor=v2pa_factor,
+                input_device=self.input_device,
+                input_channel=self.input_channels[0],
+                standard_spl_db=standard_spl_db,
+                sample_rate_hz=processor.sample_rate,
+                duration_seconds=processor.target_samples / processor.sample_rate,
+            )
+            if not saved:
+                raise OSError(message)
+
+            self._stop_calibration_timers()
             self.streaming_processor = None
-
-            # Show result
+            self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=6)))
             if not self.stop_timer:
-                if str(v2pa_factor) == "inf":
-                    self.calibration_popup(success_flag=False)
-                else:
-                    self.calibration_popup(success_flag=True)
-                    self.default_logger.info("Calibration success.")
-                    self.save_v2pa_factor_to_text(v2pa_factor)
-
+                self.calibration_popup(success_flag=True)
+                self.default_logger.info("Input calibration succeeded and was saved.")
+                self.calibration_finished.emit(True)
         except Exception as e:
             self.default_logger.error(f"Error in streaming calibration completion: {e}")
-            self.update_ui_timer.stop()
-            self.streaming_processor = None
-            self.calibration_popup(success_flag=False)
+            self._finish_failed_calibration(str(e))
+
+    def _stop_calibration_timers(self):
+        self.update_ui_timer.stop()
+        self.streaming_poll_timer.stop()
+
+    def _finish_failed_calibration(self, message):
+        self._stop_calibration_timers()
+        processor = self.streaming_processor
+        self.streaming_processor = None
+        if processor is not None:
+            processor.stop_streaming()
+        if not self.stop_timer:
+            self.calibration_popup(success_flag=False, message=message)
+            self.calibration_finished.emit(False)
 
     def _calculate_spl_from_data(self, recorded_data):
         """
@@ -822,7 +911,7 @@ class InputCalibration(QWidget):
         spl_sample = spl_smooth[spl_smooth_start:spl_smooth_end]
         return np.mean(spl_sample)
 
-    def calibration_popup(self, success_flag=True):
+    def calibration_popup(self, success_flag=True, message=None):
         """
         Display a calibration result popup.
 
@@ -836,11 +925,11 @@ class InputCalibration(QWidget):
         cal_msg = QMessageBox(self)
         if success_flag:
             cal_msg.setIcon(QMessageBox.Information)
-            cal_msg.setText("校准成功")
+            cal_msg.setText(message or "校准成功")
             cal_msg.setWindowTitle("校准成功")
         else:
             cal_msg.setIcon(QMessageBox.Critical)
-            cal_msg.setText("校准失败，请重试")
+            cal_msg.setText(message or "校准失败，请重试")
             cal_msg.setWindowTitle("校准失败")
         cal_msg.setStandardButtons(QMessageBox.Ok)
         cal_msg.exec_()
@@ -908,24 +997,6 @@ class InputCalibration(QWidget):
         v2pa_factor = 10 ** (deviation_value / 20)
         return v2pa_factor
 
-    @staticmethod
-    def save_v2pa_factor_to_text(v2pa_factor):
-        """
-        Save the v2pa_factor to a text file.
-
-        This method writes the given v2pa_factor to a specified text file, along with the current date.
-        This is particularly useful for tracking and debugging changes in UI configuration.
-
-        Parameters:
-        v2pa_factor (float): The v2pa_factor to be saved.
-        """
-        dir_path = DEFAULT_DIR + "ui/ui_config/"
-        file_path = dir_path + "mic_calibration.txt"
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        with open(file_path, "w") as f:
-            f.write(f"v2pa_factor: \n{v2pa_factor}\n")
-            f.write(f"Datetime: \n{current_time}\n")
-
     def reset_btn_clicked(self):
         """
         This method is triggered when the reset button is clicked.
@@ -953,6 +1024,13 @@ class InputCalibration(QWidget):
             f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
         )
         self.v2pa_factor_lineedit.clear()
+
+    def cancel_calibration(self):
+        self.stop_timer = True
+        self._stop_calibration_timers()
+        if self.streaming_processor is not None:
+            self.streaming_processor.stop_streaming()
+            self.streaming_processor = None
 
 
 if __name__ == "__main__":

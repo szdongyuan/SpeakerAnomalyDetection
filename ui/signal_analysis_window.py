@@ -407,7 +407,7 @@ class AnalysisGraphWidget(QWidget):
             QMessageBox.warning(
                 self,
                 "提示",
-                "麦克风校准系数无效，请先完成声卡校准。",
+                "麦克风校准系数无效，请先完成输入校准。",
             )
             return None
         return factor

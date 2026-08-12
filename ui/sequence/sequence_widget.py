@@ -48,7 +48,14 @@ class SequenceWindow(
         self.count_board = None
         self.toolsbar = SequenceToolsBar()
 
-        self.v2pa_factor = get_mic_v2pa_factor()
+        self.mic = None
+        self.mic_channels = []
+        self.speaker = None
+        self.speaker_channels = []
+        self.v2pa_factor = get_mic_v2pa_factor(
+            self.mic,
+            self.mic_channels,
+        )
         self.using_config_path, self.registry = self.get_sequence_config_from_registry()
         self.sequence_config = list()
         self.analysis_config = dict()

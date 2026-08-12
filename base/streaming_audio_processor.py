@@ -213,7 +213,7 @@ class StreamingAudioProcessor:
 
         self._queue_chunk_and_maybe_stop(multi)
 
-    def process_queue(self):
+    def process_queue(self, emit_signal: bool = True):
         """
         Process audio chunks from queue and emit signals.
 
@@ -236,8 +236,8 @@ class StreamingAudioProcessor:
                 self.accumulated_chunks.append(mono)
                 self.accumulated_multi_chunks.append(multi)
 
-                # Emit signal to update UI (waveform plot)
-                sign.stream_audio_chunk_signal.emit(payload)
+                if emit_signal:
+                    sign.stream_audio_chunk_signal.emit(payload)
 
         except queue.Empty:
             # No more chunks to process
@@ -298,6 +298,7 @@ class StreamingAudioProcessor:
             except Exception:
                 max_in = 0
             if max_in > 0 and any(i >= max_in for i in in_sel):
+                self.is_recording = False
                 return error_code.INVALID_RECORD, f"Invalid input_channels: {in_sel}, max_input_channels={max_in}"
 
         if output_device:
@@ -306,6 +307,7 @@ class StreamingAudioProcessor:
             except Exception:
                 max_out = 0
             if max_out > 0 and any(i >= max_out for i in out_sel):
+                self.is_recording = False
                 return error_code.INVALID_RECORD, f"Invalid output_channels: {out_sel}, max_output_channels={max_out}"
 
         try:
@@ -408,6 +410,7 @@ class StreamingAudioProcessor:
             return error_code.OK, "Streaming started successfully"
 
         except Exception as e:
+            self.is_recording = False
             self.error_occurred = True
             self.error_message = str(e)
             self.logger.error(f"Error starting streaming recording: {e}")

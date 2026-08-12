@@ -1,31 +1,240 @@
 import json
+import math
 import os
+import tempfile
+import threading
+from datetime import datetime
 
 import numpy as np
 
 from base.log_manager import LogManager
-from consts import error_code, model_consts, running_consts
+from base.sound_device_manager import SoundDeviceManager
+from consts import error_code, model_consts
 
 
-def get_mic_v2pa_factor():
+MIC_INPUT_CALIBRATION_PATH = os.path.join(
+    model_consts.JSON_DIR_PATH,
+    "mic_input_calibration.json",
+)
+MIC_INPUT_CALIBRATION_VERSION = 1
+_mic_input_calibration_io_lock = threading.Lock()
+
+
+def _device_value(device, key):
+    getter = getattr(device, "get", None)
+    return getter(key) if callable(getter) else None
+
+
+def build_mic_input_identity(input_device, input_channel):
+    """Return the stable identity used to bind a single-channel calibration."""
+    if (
+        input_device is None
+        or isinstance(input_channel, bool)
+        or not isinstance(input_channel, (int, np.integer))
+    ):
+        return None
+
+    try:
+        channel_index = int(input_channel)
+        hostapi_index = int(_device_value(input_device, "hostapi"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    device_name = str(_device_value(input_device, "name") or "").strip()
+    if not device_name or channel_index < 0:
+        return None
+
+    try:
+        api_info = SoundDeviceManager.get_api_info(hostapi_index)
+        api_name = str(_device_value(api_info, "name") or "").strip()
+    except Exception:
+        return None
+
+    if not api_name:
+        return None
+
+    return {
+        "api_name": api_name,
+        "device_name": device_name,
+        "channel_index": channel_index,
+    }
+
+
+def _validated_mic_input_calibration(payload):
+    if not isinstance(payload, dict):
+        return None
+    version = payload.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != MIC_INPUT_CALIBRATION_VERSION
+    ):
+        return None
+
+    input_config = payload.get("input")
+    calibration = payload.get("calibration")
+    if not isinstance(input_config, dict) or not isinstance(calibration, dict):
+        return None
+
+    api_name = input_config.get("api_name")
+    device_name = input_config.get("device_name")
+    channel_index = input_config.get("channel_index")
+    if not isinstance(api_name, str) or not api_name.strip():
+        return None
+    if not isinstance(device_name, str) or not device_name.strip():
+        return None
+    if isinstance(channel_index, bool) or not isinstance(channel_index, int) or channel_index < 0:
+        return None
+
+    factor_value = calibration.get("v2pa_factor")
+    standard_spl_value = calibration.get("standard_spl_db")
+    sample_rate_value = calibration.get("sample_rate_hz")
+    duration_value = calibration.get("duration_seconds")
+    numeric_types = (int, float, np.integer, np.floating)
+    if any(
+        isinstance(value, bool) or not isinstance(value, numeric_types)
+        for value in (factor_value, standard_spl_value, duration_value)
+    ):
+        return None
+    if isinstance(sample_rate_value, bool) or not isinstance(
+        sample_rate_value,
+        (int, np.integer),
+    ):
+        return None
+
+    factor = float(factor_value)
+    standard_spl = float(standard_spl_value)
+    sample_rate = int(sample_rate_value)
+    duration = float(duration_value)
+
+    calibrated_at = calibration.get("calibrated_at")
+    if not math.isfinite(factor) or factor <= 0.0:
+        return None
+    if not math.isfinite(standard_spl) or standard_spl <= 0.0:
+        return None
+    if sample_rate <= 0 or not math.isfinite(duration) or duration <= 0.0:
+        return None
+    if not isinstance(calibrated_at, str) or not calibrated_at.strip():
+        return None
+
+    return {
+        "version": MIC_INPUT_CALIBRATION_VERSION,
+        "input": {
+            "api_name": api_name.strip(),
+            "device_name": device_name.strip(),
+            "channel_index": channel_index,
+        },
+        "calibration": {
+            "v2pa_factor": factor,
+            "standard_spl_db": standard_spl,
+            "sample_rate_hz": sample_rate,
+            "duration_seconds": duration,
+            "calibrated_at": calibrated_at.strip(),
+        },
+    }
+
+
+def load_mic_input_calibration(calibration_path=None):
+    """Load and validate the persisted single-channel microphone calibration."""
+    path = calibration_path or MIC_INPUT_CALIBRATION_PATH
+    try:
+        with _mic_input_calibration_io_lock:
+            with open(path, "r", encoding="utf-8") as calibration_file:
+                payload = json.load(calibration_file)
+    except (OSError, ValueError, TypeError):
+        return None
+    return _validated_mic_input_calibration(payload)
+
+
+def _atomic_write_json(path, payload):
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=".mic_input_calibration_",
+        suffix=".json.tmp",
+        dir=directory,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as calibration_file:
+            json.dump(payload, calibration_file, ensure_ascii=False, indent=2)
+            calibration_file.flush()
+            os.fsync(calibration_file.fileno())
+        os.replace(temporary_path, path)
+    except Exception:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
+def save_mic_input_calibration(
+    v2pa_factor,
+    input_device,
+    input_channel,
+    standard_spl_db,
+    sample_rate_hz,
+    duration_seconds,
+    calibration_path=None,
+    calibrated_at=None,
+):
+    """Atomically save a calibration bound to one input device and channel."""
+    identity = build_mic_input_identity(input_device, input_channel)
+    if identity is None:
+        return False, "无法识别当前输入设备或通道。"
+
+    payload = {
+        "version": MIC_INPUT_CALIBRATION_VERSION,
+        "input": identity,
+        "calibration": {
+            "v2pa_factor": v2pa_factor,
+            "standard_spl_db": standard_spl_db,
+            "sample_rate_hz": sample_rate_hz,
+            "duration_seconds": duration_seconds,
+            "calibrated_at": calibrated_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        },
+    }
+    validated_payload = _validated_mic_input_calibration(payload)
+    if validated_payload is None:
+        return False, "输入校准结果无效，未保存。"
+
+    path = calibration_path or MIC_INPUT_CALIBRATION_PATH
+    try:
+        with _mic_input_calibration_io_lock:
+            _atomic_write_json(path, validated_payload)
+    except OSError as exc:
+        return False, f"输入校准配置保存失败：{str(exc)[:80]}"
+    return True, "输入校准配置保存成功。"
+
+
+def resolve_mic_input_calibration(input_device, input_channels, calibration_path=None):
+    """Resolve a factor only when the current device and one channel match exactly."""
+    if not isinstance(input_channels, (list, tuple)) or len(input_channels) != 1:
+        return 0.0
+    identity = build_mic_input_identity(input_device, input_channels[0])
+    if identity is None:
+        return 0.0
+
+    payload = load_mic_input_calibration(calibration_path)
+    if payload is None or payload["input"] != identity:
+        return 0.0
+    return float(payload["calibration"]["v2pa_factor"])
+
+
+def get_mic_v2pa_factor(input_device=None, input_channels=None, calibration_path=None):
     """
-        Reads the microphone calibration v2pa_factor value from a specified file.
-
-        This method is static because it does not depend on the instance state of the class and can operate independently.
-        The v2pa_factor value is read from a file as it may vary based on environmental conditions and needs to be
-    dynamically adjusted.
+        Read the single-channel microphone factor for the active hardware selection.
 
         Return:
-            The microphone calibration v2pa_factor value. Returns 0.0 if reading the file fails.
+            The microphone calibration v2pa_factor. Returns 0.0 when the
+            selection is missing, ambiguous, invalid, or does not match the
+            saved calibration.
     """
-    file_path = running_consts.DEFAULT_DIR + "ui/ui_config/mic_calibration.txt"
-    try:
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-            v2pa_factor = lines[1].strip()
-            return float(v2pa_factor)
-    except Exception as e:
-        return 0.0
+    return resolve_mic_input_calibration(
+        input_device,
+        input_channels,
+        calibration_path=calibration_path,
+    )
 
 
 class SoundcardCalibrationManager(object):

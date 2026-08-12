@@ -480,7 +480,10 @@ class SequenceWidgetStreamingOpsMixin:
                 count_board.set_test_available(False, "产品配置校验失败，无法进入测试模式")
 
     def update_v2pa_factor(self):
-        self.v2pa_factor = get_mic_v2pa_factor()
+        self.v2pa_factor = get_mic_v2pa_factor(
+            getattr(self, "mic", None),
+            getattr(self, "mic_channels", None),
+        )
 
     @staticmethod
     def _product_condition_signature(condition_configs):
