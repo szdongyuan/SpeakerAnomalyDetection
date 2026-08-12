@@ -138,8 +138,6 @@ def read_wav_calibration_metadata(path, logger=None) -> Optional[dict]:
         _log_metadata_issue(logger, "Failed to read WAV calibration metadata", exc)
         return None
 
-    print(last_valid_metadata)
-
     return last_valid_metadata
 
 
