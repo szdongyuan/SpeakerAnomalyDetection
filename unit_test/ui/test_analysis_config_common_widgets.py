@@ -148,12 +148,37 @@ def test_golden_sample_widget_renders_vertical_display_checkboxes(qapp):
     assert widget.envelope_checkbox.isChecked()
     assert widget.display_modes() == ("deviation", "envelope")
     assert widget.limit_value_semantics() == "offset"
-    layout = widget.layout()
-    assert layout.indexOf(widget.display_label) < layout.indexOf(widget.deviation_checkbox)
-    assert layout.indexOf(widget.deviation_checkbox) < layout.indexOf(widget.envelope_checkbox)
+    assert widget.layout().indexOf(widget.enabled_checkbox) == 0
+    assert widget.display_label_layout.indexOf(widget.display_label) == 0
+    assert widget.display_options_layout.indexOf(widget.deviation_checkbox) == 0
+    assert widget.display_options_layout.indexOf(widget.envelope_checkbox) == 1
 
 
-def test_golden_sample_widget_enable_state_preserves_display_selection(qapp):
+def test_golden_sample_widget_hides_display_rows_when_disabled(qapp):
+    widget = GoldenSampleWidget(
+        {
+            "golden_sample_checked": False,
+            "golden_sample_display_modes": ["deviation", "envelope"],
+        }
+    )
+
+    assert widget.enabled_checkbox.isHidden() is False
+    assert widget.display_label.isHidden() is True
+    assert widget.deviation_checkbox.isHidden() is True
+    assert widget.envelope_checkbox.isHidden() is True
+
+
+def test_golden_sample_widget_shows_indented_display_rows_when_enabled(qapp):
+    widget = GoldenSampleWidget({"golden_sample_checked": True})
+
+    assert widget.display_label.isHidden() is False
+    assert widget.deviation_checkbox.isHidden() is False
+    assert widget.envelope_checkbox.isHidden() is False
+    assert widget.display_label_layout.contentsMargins().left() == 16
+    assert widget.display_options_layout.contentsMargins().left() == 32
+
+
+def test_golden_sample_widget_visibility_toggle_preserves_display_selection(qapp):
     widget = GoldenSampleWidget(
         {
             "golden_sample_checked": True,
@@ -161,17 +186,32 @@ def test_golden_sample_widget_enable_state_preserves_display_selection(qapp):
         }
     )
 
-    assert widget.deviation_checkbox.isEnabled() is True
-    assert widget.envelope_checkbox.isEnabled() is True
+    widget.show()
+    qapp.processEvents()
+    enabled_height = widget.sizeHint().height()
+
     widget.enabled_checkbox.setChecked(False)
-    assert widget.deviation_checkbox.isEnabled() is False
-    assert widget.envelope_checkbox.isEnabled() is False
+    qapp.processEvents()
+
+    assert widget.display_label.isHidden() is True
+    assert widget.deviation_checkbox.isHidden() is True
+    assert widget.envelope_checkbox.isHidden() is True
     assert widget.display_modes() == ("deviation", "envelope")
     assert widget.limit_value_semantics() == "bounds"
+    disabled_height = widget.sizeHint().height()
+    assert disabled_height < enabled_height
+
     widget.enabled_checkbox.setChecked(True)
+
+    qapp.processEvents()
+    assert widget.display_label.isHidden() is False
+    assert widget.deviation_checkbox.isHidden() is False
+    assert widget.envelope_checkbox.isHidden() is False
     assert widget.deviation_checkbox.isEnabled() is True
     assert widget.envelope_checkbox.isEnabled() is True
     assert widget.display_modes() == ("deviation", "envelope")
+    assert widget.sizeHint().height() == enabled_height
+    widget.hide()
 
 
 @pytest.mark.parametrize(
@@ -299,6 +339,101 @@ def _filler_widget(min_height=120):
     layout = QVBoxLayout(widget)
     layout.addWidget(ChannelSelectorWidget({"analysis_channel": 0}, [0]))
     return widget
+
+
+def test_golden_sample_widget_toggle_refreshes_semantic_section_height(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    golden = GoldenSampleWidget(
+        {
+            "golden_sample_checked": True,
+            "golden_sample_display_modes": ["deviation", "envelope"],
+        }
+    )
+    dialog.add_semantic_section("reference", widget=golden)
+    dialog.resize(630, 520)
+    dialog.show()
+    qapp.processEvents()
+
+    section = dialog._semantic_sections["reference"]
+    initial_dialog_size = dialog.size()
+    expanded_heights = (
+        golden.minimumHeight(),
+        section.minimumHeight(),
+        dialog.section_container.minimumHeight(),
+    )
+
+    golden.enabled_checkbox.setChecked(False)
+    qapp.processEvents()
+
+    collapsed_heights = (
+        golden.minimumHeight(),
+        section.minimumHeight(),
+        dialog.section_container.minimumHeight(),
+    )
+    assert all(collapsed < expanded for collapsed, expanded in zip(collapsed_heights, expanded_heights))
+    assert section.minimumHeight() > golden.sizeHint().height()
+    assert dialog.size() == initial_dialog_size
+    assert golden.display_modes() == ("deviation", "envelope")
+
+    golden.enabled_checkbox.setChecked(True)
+    qapp.processEvents()
+
+    assert (
+        golden.minimumHeight(),
+        section.minimumHeight(),
+        dialog.section_container.minimumHeight(),
+    ) == expanded_heights
+    assert dialog.size() == initial_dialog_size
+    assert golden.display_modes() == ("deviation", "envelope")
+    dialog.close()
+
+
+def test_appended_golden_sample_widget_refreshes_semantic_section_height(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    dialog.add_semantic_section("reference", widget=_filler_widget(40))
+    golden = GoldenSampleWidget({"golden_sample_checked": True})
+    dialog.add_or_append_semantic_widget("reference", golden)
+    dialog.resize(630, 520)
+    dialog.show()
+    qapp.processEvents()
+
+    section = dialog._semantic_sections["reference"]
+    expanded_section_height = section.minimumHeight()
+    expanded_container_height = dialog.section_container.minimumHeight()
+    initial_dialog_size = dialog.size()
+
+    golden.enabled_checkbox.setChecked(False)
+    qapp.processEvents()
+
+    assert section.minimumHeight() < expanded_section_height
+    assert dialog.section_container.minimumHeight() < expanded_container_height
+    assert dialog.size() == initial_dialog_size
+    dialog.close()
+
+
+@pytest.mark.parametrize("insertion_path", ["direct", "append"])
+def test_semantic_dialog_binds_size_hint_changed_once(qapp, insertion_path):
+    class CountingSemanticDialog(SemanticAnalysisConfigDialogBase):
+        def __init__(self):
+            self.refresh_calls = 0
+            super().__init__()
+
+        def _refresh_section_container_minimum_height(self):
+            self.refresh_calls += 1
+            return super()._refresh_section_container_minimum_height()
+
+    dialog = CountingSemanticDialog()
+    golden = GoldenSampleWidget({"golden_sample_checked": True})
+    if insertion_path == "direct":
+        dialog.add_semantic_section("reference", widget=golden)
+    else:
+        dialog.add_semantic_section("reference", widget=_filler_widget(40))
+        dialog.add_or_append_semantic_widget("reference", golden)
+
+    dialog.refresh_calls = 0
+    golden.size_hint_changed.emit()
+
+    assert dialog.refresh_calls == 1
 
 
 def test_semantic_dialog_refresh_respects_nested_group_size_hint(qapp):
