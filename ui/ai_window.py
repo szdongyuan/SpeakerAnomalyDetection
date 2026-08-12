@@ -852,10 +852,17 @@ class Process_Widget(ConfigDialogBase):
         self.setLayout(layout)
 
     def create_text_edit(self):
+        self.model_structure_texteditor.setObjectName("trainingProcessTextEdit")
         self.model_structure_texteditor.setReadOnly(True)
         self.model_structure_texteditor.ensureCursorVisible()
         self.model_structure_texteditor.setLineWrapMode(QTextEdit.NoWrap)
         self.model_structure_texteditor.setMinimumSize(720, 450)
+        self.model_structure_texteditor.setStyleSheet(
+            "QTextEdit#trainingProcessTextEdit {"
+            f"font-family: {ui_style_const.UI_FONT_FAMILY};"
+            "font-size: 15px;"
+            "}"
+        )
 
         layout = QVBoxLayout()
         layout.addWidget(self.model_structure_texteditor)
