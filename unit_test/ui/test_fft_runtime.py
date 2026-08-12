@@ -270,6 +270,73 @@ def test_fft_csv_limits_only_apply_inside_defined_frequency_range(
     assert signal_module.get_class_mapping()["FFT"] is signal_module.FftAnalysis
 
 
+def test_fft_csv_limits_without_frequency_overlap_are_ok(signal_module, qapp):
+    widget = _widget(signal_module)
+    config = _config()
+    config.update(
+        {
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": (
+                [3000.0, 4000.0],
+                [80.0, 80.0],
+                [20.0, 20.0],
+            ),
+        }
+    )
+    widget.analysis_config = config
+
+    result = widget.calculate_fft()
+
+    assert result
+    assert widget.data_struct.analysis_result_dict[widget.title_name] == (
+        True,
+        0.0,
+    )
+    widget.close()
+
+
+def test_fft_invalid_analysis_data_is_not_accepted_as_no_overlap(
+    signal_module,
+    qapp,
+    monkeypatch,
+):
+    widget = _widget(signal_module)
+    config = _config()
+    config.update(
+        {
+            "limit_checked": True,
+            "limit_mode": "csv",
+            "limit_data": (
+                [3000.0, 4000.0],
+                [80.0, 80.0],
+                [20.0, 20.0],
+            ),
+        }
+    )
+    widget.analysis_config = config
+    warnings = []
+    monkeypatch.setattr(
+        signal_module.FftAnalyzer,
+        "analyze",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            frequencies_hz=np.asarray([100.0, 1000.0]),
+            spectrum_db=np.asarray([np.nan, np.nan]),
+            weighting="Z",
+        ),
+    )
+    monkeypatch.setattr(
+        signal_module.QMessageBox,
+        "warning",
+        lambda *args: warnings.append(args[-1]),
+    )
+
+    assert widget.calculate_fft() is False
+    assert any("没有有效频点" in message for message in warnings)
+    assert widget.title_name not in widget.data_struct.analysis_result_dict
+    widget.close()
+
+
 def test_fft_resolves_constant_manual_limits(signal_module):
     target_x = np.asarray([100.0, 1000.0, 2000.0])
 

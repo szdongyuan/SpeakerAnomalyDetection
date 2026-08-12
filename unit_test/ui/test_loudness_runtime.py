@@ -306,6 +306,111 @@ def test_loudness_curve_limit_interpolates_csv_threshold(signal_module, qapp):
     widget.close()
 
 
+def test_loudness_curve_limit_without_threshold_overlap_is_ok(signal_module, qapp):
+    widget = signal_module.LoudnessAnalysis("响度 CSV 曲线阈值无重叠")
+    widget.data_struct.analysis_result_dict.clear()
+    raw_result = SimpleNamespace(
+        time_s=np.asarray([2.0, 2.5, 3.0]),
+        loudness_sone=np.asarray([1.0, 2.0, 3.0]),
+        loudness_level_phon=np.asarray([40.0, 50.0, 60.0]),
+        metadata={},
+    )
+
+    widget._apply_loudness_curve_limit(
+        raw_result,
+        {
+            "limit_mode": "csv",
+            "limit_data": (
+                [0.0, 1.0],
+                [1.5, 2.5],
+                [np.nan, np.nan],
+            ),
+            "curve_limit_unit": "sone",
+        },
+        {"curve_y_unit": "sone"},
+    )
+
+    assert widget.data_struct.analysis_result_dict["响度 CSV 曲线阈值无重叠"] == (
+        True,
+        0.0,
+    )
+    widget.close()
+
+
+def test_loudness_manual_curve_limit_without_threshold_overlap_is_ok(
+    signal_module,
+    qapp,
+):
+    widget = signal_module.LoudnessAnalysis("响度手动曲线阈值无重叠")
+    widget.data_struct.analysis_result_dict.clear()
+    raw_result = SimpleNamespace(
+        time_s=np.asarray([2.0, 2.5, 3.0]),
+        loudness_sone=np.asarray([1.0, 2.0, 3.0]),
+        loudness_level_phon=np.asarray([40.0, 50.0, 60.0]),
+        metadata={},
+    )
+
+    widget._apply_loudness_curve_limit(
+        raw_result,
+        {
+            "limit_mode": "manual",
+            "manual_input_mode": "segments",
+            "manual_upper_enabled": True,
+            "manual_upper_segments": [
+                {
+                    "start_x": 0.0,
+                    "start_y": 1.5,
+                    "end_x": 1.0,
+                    "end_y": 2.5,
+                }
+            ],
+            "manual_lower_enabled": False,
+            "manual_lower_segments": [],
+            "curve_limit_unit": "sone",
+        },
+        {"curve_y_unit": "sone"},
+    )
+
+    assert widget.data_struct.analysis_result_dict["响度手动曲线阈值无重叠"] == (
+        True,
+        0.0,
+    )
+    widget.close()
+
+
+def test_loudness_invalid_analysis_data_is_not_accepted_as_no_overlap(
+    signal_module,
+    qapp,
+):
+    widget = signal_module.LoudnessAnalysis("响度无效分析数据")
+    widget.data_struct.analysis_result_dict.clear()
+    raw_result = SimpleNamespace(
+        time_s=np.asarray([2.0, 2.5, 3.0]),
+        loudness_sone=np.asarray([np.nan, np.nan, np.nan]),
+        loudness_level_phon=np.asarray([np.nan, np.nan, np.nan]),
+        metadata={},
+    )
+
+    widget._apply_loudness_curve_limit(
+        raw_result,
+        {
+            "limit_mode": "csv",
+            "limit_data": (
+                [0.0, 1.0],
+                [1.5, 2.5],
+                [np.nan, np.nan],
+            ),
+            "curve_limit_unit": "sone",
+        },
+        {"curve_y_unit": "sone"},
+    )
+
+    is_ok, deviation = widget.data_struct.analysis_result_dict["响度无效分析数据"]
+    assert is_ok is False
+    assert np.isnan(deviation)
+    widget.close()
+
+
 def test_loudness_curve_limit_uses_edited_segments(signal_module, qapp):
     widget = signal_module.LoudnessAnalysis("响度编辑曲线阈值")
     widget.data_struct.analysis_result_dict.clear()

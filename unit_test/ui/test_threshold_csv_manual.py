@@ -212,6 +212,16 @@ def test_load_threshold_csv_rejects_rows_with_no_threshold_value(local_tmp_path)
         load_threshold_csv(str(path))
 
 
+def test_validate_limit_data_values_rejects_empty_runtime_data():
+    with pytest.raises(ThresholdCsvManualError, match="为空"):
+        validate_limit_data_values(([], [], []))
+
+
+def test_validate_limit_data_values_rejects_runtime_row_without_bounds():
+    with pytest.raises(ThresholdCsvManualError, match="至少"):
+        validate_limit_data_values(([0.0], [math.nan], [math.nan]))
+
+
 def test_load_threshold_csv_rejects_unique_row_lower_above_upper(local_tmp_path):
     path = local_tmp_path / "limit.csv"
     path.write_text("x,upperbound,lowerbound\n0,10,11\n", encoding="utf-8")
