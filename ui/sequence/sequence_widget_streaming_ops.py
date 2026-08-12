@@ -280,8 +280,19 @@ class SequenceWidgetStreamingOpsMixin:
         old_abs_path = labelable_path
         session_id = ""
         if isinstance(record, dict):
-            session_id = str(record.get("session_id") or getattr(self, "_current_recent_session_id", "") or "")
             recorded_signal_info = dict(record.get("recorded_signal_info", {}) or {})
+            source_type = str(recorded_signal_info.get("source_type") or "").strip()
+            session_id = str(record.get("session_id") or "")
+            session_record = (getattr(self, "recent_test_session_by_id", {}) or {}).get(session_id)
+            if source_type == "imported":
+                session_id = ""
+            elif not self._condition_key_matches_record(key, session_record):
+                recent_record = self._condition_record_from_recent_sessions(key)
+                session_id = (
+                    str(recent_record.get("session_id") or "")
+                    if isinstance(recent_record, dict)
+                    else ""
+                )
             previous_label = self._normalize_audio_label(recorded_signal_info.get("labels")) or "not_labeled"
             recorded_path = record.get("recorded_path") or recorded_signal_info.get("file_path")
 
@@ -312,11 +323,6 @@ class SequenceWidgetStreamingOpsMixin:
                 if current_path and os.path.abspath(current_path) == os.path.abspath(old_abs_path):
                     self.recorded_path = new_path
                     self.recorded_signal_info = dict(updated_info or {})
-                    if not session_id:
-                        try:
-                            self._update_current_recent_session_result(normalized_label)
-                        except Exception:
-                            pass
                 update_group_count = getattr(self, "_update_manual_product_mark_group_count_for_session", None)
                 group_count_handled = callable(update_group_count) and update_group_count(session_id)
                 if not group_count_handled:

@@ -169,6 +169,79 @@ class TestRecentSessionLabelUpdate(unittest.TestCase):
         )
         self.assertEqual(widget.count_board_relabel_updates, [("not_labeled", "OK")])
 
+    def test_change_recent_session_result_syncs_matching_waveform_record(self):
+        widget = _DummySequenceWidget()
+        widget.recent_test_session_by_id["recent_1"].update(
+            {
+                "condition_key": "01",
+                "result_label": "ok",
+                "recorded_path": "D:/audio_data/stored_data/OK/test.wav",
+                "recorded_signal_info": {
+                    "file_path": "audio_data/stored_data/OK/test.wav",
+                    "labels": "OK",
+                },
+            }
+        )
+        widget.recorded_path = "D:/audio_data/stored_data/OK/test.wav"
+        widget.recorded_signal_info = {
+            "file_path": "audio_data/stored_data/OK/test.wav",
+            "labels": "OK",
+        }
+        widget._condition_record_cache = {
+            "01": {
+                "recorded_path": "D:/audio_data/stored_data/OK/test.wav",
+                "recorded_signal_info": {
+                    "file_path": "audio_data/stored_data/OK/test.wav",
+                    "labels": "OK",
+                },
+                "session_id": "recent_1",
+            }
+        }
+        result_updates = []
+        path_updates = []
+        widget.channel_workspace = SimpleNamespace(
+            set_condition_result=lambda key, label: result_updates.append((key, label)),
+            set_condition_audio_path=lambda key, path: path_updates.append((key, path)),
+        )
+
+        changed = widget._change_recent_session_result_by_id("recent_1", "not_labeled")
+
+        self.assertTrue(changed)
+        cached = widget._condition_record_cache["01"]
+        self.assertEqual(cached["recorded_path"], "D:/audio_data/stored_data/not_labeled/test.wav")
+        self.assertEqual(cached["recorded_signal_info"]["labels"], "not_labeled")
+        self.assertEqual(cached["session_id"], "recent_1")
+        self.assertEqual(result_updates, [("01", "not_labeled")])
+        self.assertEqual(
+            path_updates,
+            [("01", "D:/audio_data/stored_data/not_labeled/test.wav")],
+        )
+
+    def test_change_old_session_result_does_not_sync_current_waveform_record(self):
+        widget = _DummySequenceWidget()
+        widget.recent_test_session_by_id["recent_1"]["condition_key"] = "01"
+        widget._condition_record_cache = {
+            "01": {
+                "recorded_path": "D:/audio_data/current/not_labeled/test.wav",
+                "recorded_signal_info": {"labels": "not_labeled"},
+                "session_id": "recent_2",
+            }
+        }
+        result_updates = []
+        path_updates = []
+        widget.channel_workspace = SimpleNamespace(
+            set_condition_result=lambda key, label: result_updates.append((key, label)),
+            set_condition_audio_path=lambda key, path: path_updates.append((key, path)),
+        )
+
+        changed = widget._change_recent_session_result_by_id("recent_1", "OK")
+
+        self.assertTrue(changed)
+        self.assertEqual(widget._condition_record_cache["01"]["session_id"], "recent_2")
+        self.assertEqual(widget._condition_record_cache["01"]["recorded_signal_info"]["labels"], "not_labeled")
+        self.assertEqual(result_updates, [])
+        self.assertEqual(path_updates, [])
+
     def test_change_recent_session_result_refreshes_left_product_condition_state(self):
         widget = _DummySequenceWidget()
         widget.left_panel = _SpyLeftPanel()
