@@ -2035,9 +2035,9 @@ class SequenceWidgetAnalysisOpsMixin(
         # Keep both keys for compatibility across legacy/streaming code paths.
         recorded_dict["sample_rate"] = sample_rate
 
-        # Startup-trim compensation: if the product config opts into
-        # startup-pop trimming (``startup_trim_ms`` set in ``acq.detail``),
-        # the same sample count drives three places so the pop is
+        # Startup-trim compensation: resolve the shared default plus any
+        # product-level ``startup_trim_ms`` override. The same sample count
+        # drives three places so the pop is
         # suppressed everywhere it could be heard or stored:
         #
         # 1. ``num_frames`` is extended so the streaming-completion
