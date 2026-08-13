@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QHBoxLayout,
     QLayout,
@@ -80,7 +81,10 @@ SEMANTIC_GROUP_TITLES = {
 }
 
 VERTICAL_GOLDEN_DIALOG_WIDTH = 630
-VERTICAL_GOLDEN_DIALOG_HEIGHT = 840
+VERTICAL_GOLDEN_DIALOG_HEIGHT = 700
+VERTICAL_GOLDEN_DIALOG_MIN_WIDTH = 560
+VERTICAL_GOLDEN_DIALOG_MIN_HEIGHT = 480
+VERTICAL_GOLDEN_DIALOG_SCREEN_MARGIN = 16
 
 
 class AnalysisConfigDialogBase(ConfigDialogBase):
@@ -117,8 +121,27 @@ class AnalysisConfigDialogBase(ConfigDialogBase):
         width: int = DEFAULT_DIALOG_WIDTH,
         height: int = DEFAULT_DIALOG_HEIGHT,
     ) -> None:
-        self.setMinimumSize(width, height)
-        self.resize(width, height)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.setMinimumSize(
+                VERTICAL_GOLDEN_DIALOG_MIN_WIDTH,
+                VERTICAL_GOLDEN_DIALOG_MIN_HEIGHT,
+            )
+            self.resize(width, height)
+            return
+
+        available_geometry = screen.availableGeometry()
+        total_margin = VERTICAL_GOLDEN_DIALOG_SCREEN_MARGIN * 2
+        maximum_width = max(1, available_geometry.width() - total_margin)
+        maximum_height = max(1, available_geometry.height() - total_margin)
+
+        target_width = min(width, maximum_width)
+        target_height = min(height, maximum_height)
+        minimum_width = min(VERTICAL_GOLDEN_DIALOG_MIN_WIDTH, maximum_width)
+        minimum_height = min(VERTICAL_GOLDEN_DIALOG_MIN_HEIGHT, maximum_height)
+
+        self.setMinimumSize(minimum_width, minimum_height)
+        self.resize(target_width, target_height)
 
 
 class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
