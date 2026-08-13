@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtWidgets import QApplication, QSizePolicy, QWidget, QVBoxLayout
 
 from consts.harmonic_detection_consts import (
@@ -12,6 +12,7 @@ from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
 )
 from ui.ui_analysis_config.common_widgets import (
+    AnalysisConfigDialogBase,
     ChannelSelectorWidget,
     GoldenSampleWidget,
     HarmonicDetectionMethodSelectorWidget,
@@ -21,6 +22,14 @@ from ui.ui_analysis_config.common_widgets import (
     TimeSmoothingWidget,
     WeightingSelectorWidget,
 )
+
+
+class _ScreenStub:
+    def __init__(self, width, height):
+        self._available_geometry = QRect(0, 0, width, height)
+
+    def availableGeometry(self):
+        return self._available_geometry
 
 
 @pytest.fixture(scope="module")
@@ -207,6 +216,36 @@ def _filler_widget(min_height=120):
     layout = QVBoxLayout(widget)
     layout.addWidget(ChannelSelectorWidget({"analysis_channel": 0}, [0]))
     return widget
+
+
+def test_analysis_dialog_keeps_preferred_size_when_screen_has_room(qapp, monkeypatch):
+    monkeypatch.setattr(QApplication, "primaryScreen", lambda: _ScreenStub(1920, 1040))
+    dialog = AnalysisConfigDialogBase()
+
+    dialog.apply_vertical_golden_dialog_size()
+
+    assert (dialog.width(), dialog.height()) == (630, 700)
+    assert (dialog.minimumWidth(), dialog.minimumHeight()) == (560, 480)
+
+
+def test_analysis_dialog_fits_within_low_screen_available_height(qapp, monkeypatch):
+    monkeypatch.setattr(QApplication, "primaryScreen", lambda: _ScreenStub(1366, 728))
+    dialog = AnalysisConfigDialogBase()
+
+    dialog.apply_vertical_golden_dialog_size()
+
+    assert (dialog.width(), dialog.height()) == (630, 696)
+    assert (dialog.minimumWidth(), dialog.minimumHeight()) == (560, 480)
+
+
+def test_analysis_dialog_minimum_size_does_not_exceed_very_small_screen(qapp, monkeypatch):
+    monkeypatch.setattr(QApplication, "primaryScreen", lambda: _ScreenStub(520, 440))
+    dialog = AnalysisConfigDialogBase()
+
+    dialog.apply_vertical_golden_dialog_size()
+
+    assert (dialog.width(), dialog.height()) == (488, 408)
+    assert (dialog.minimumWidth(), dialog.minimumHeight()) == (488, 408)
 
 
 def test_semantic_dialog_refresh_respects_nested_group_size_hint(qapp):
