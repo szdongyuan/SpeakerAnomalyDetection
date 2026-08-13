@@ -4,7 +4,7 @@ import importlib
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
 from PyQt5.QtWidgets import QWidget, QProgressBar, QLabel
 from consts.running_consts import DEFAULT_DIR, MODULES_LOAD
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QFontDatabase, QPixmap
 
 
 class Splash(QWidget):
@@ -34,6 +34,16 @@ class Splash(QWidget):
         self.label.setScaledContents(True)
         self.label.setObjectName("label")
 
+        QFontDatabase.addApplicationFont("C:/Windows/Fonts/STXINGKA.TTF")
+        self.product_name_label = QLabel(self)
+        self.product_name_label.setGeometry(QRect(30, 292, 350, 42))
+        self.product_name_label.setStyleSheet(
+            'background-color: white; color: black; '
+            'font-family: "STXingkai", "KaiTi"; font-size: 26px;'
+        )
+        self.product_name_label.setText("欢迎使用希听异音检测系统")
+        self.product_name_label.setObjectName("productNameLabel")
+
         self.lab = QLabel(self)
         self.lab.setGeometry(QRect(30, 340, 200, 16))
         self.lab.setStyleSheet("color: rgb(0, 0, 0);")
@@ -41,6 +51,7 @@ class Splash(QWidget):
         self.lab.setText("正在初始化...0%")
 
         self.label.raise_()
+        self.product_name_label.raise_()
         self.prg.raise_()
         self.lab.raise_()
 
