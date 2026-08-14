@@ -35,6 +35,55 @@ def resolve_spl_unit(weighting: Any) -> str:
     }.get(normalized, "dB")
 
 
+def resolve_free_field_distance_correction_db(
+    config: Mapping[str, Any] | None,
+) -> float:
+    """Return the free-field spherical-spreading correction in decibels."""
+    cfg = config or {}
+    if not cfg.get("free_field_distance_enabled", False):
+        return 0.0
+    distances = (
+        ("measurement_distance_m", "测量距离"),
+        ("target_distance_m", "目标距离"),
+    )
+    resolved = {}
+    for key, label in distances:
+        try:
+            distance = float(cfg.get(key))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}必须为有限正数。") from exc
+        if not np.isfinite(distance) or distance <= 0.0:
+            raise ValueError(f"{label}必须为有限正数。")
+        resolved[key] = distance
+
+    return float(
+        -20.0
+        * np.log10(
+            resolved["target_distance_m"]
+            / resolved["measurement_distance_m"]
+        )
+    )
+
+
+def resolve_directional_additional_correction_db(
+    config: Mapping[str, Any] | None,
+) -> float:
+    """Return the configured manual directional correction in decibels."""
+    cfg = config or {}
+    if not cfg.get("directional_correction_enabled", False):
+        return 0.0
+
+    try:
+        correction_db = float(
+            cfg.get("directional_additional_correction_db", 0.0)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("方向修正必须为有限数值。") from exc
+    if not np.isfinite(correction_db):
+        raise ValueError("方向修正必须为有限数值。")
+    return correction_db
+
+
 def apply_spl_analysis_time_range(
     recorded_signal,
     sample_rate: float,

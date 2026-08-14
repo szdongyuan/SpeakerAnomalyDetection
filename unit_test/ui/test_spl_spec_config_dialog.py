@@ -44,6 +44,10 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
                 "analysis_time_range_enabled": True,
                 "analysis_start_time_sec": 0.25,
                 "analysis_end_time_sec": 1.5,
+                "free_field_distance_enabled": True,
+                "measurement_distance_m": 0.2,
+                "target_distance_m": 1.5,
+                "directional_additional_correction_db": -12.5,
                 "limit_checked": False,
                 "limit_data": None,
             }
@@ -71,9 +75,35 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert dialog.analysis_time_range_widget.enabled_checkbox.isChecked() is True
     assert dialog.analysis_time_range_widget.start_spin.value() == pytest.approx(0.25)
     assert dialog.analysis_time_range_widget.end_spin.value() == pytest.approx(1.5)
+    assert not hasattr(dialog, "free_field_distance_group")
+    assert dialog.free_field_distance_box.isChecked() is True
+    assert dialog.free_field_distance_parameters_widget.isHidden() is False
+    assert dialog.directional_correction_widget.isHidden() is False
+    assert dialog.measurement_distance_spin.value() == pytest.approx(0.2)
+    assert dialog.target_distance_spin.value() == pytest.approx(1.5)
+    assert dialog.directional_correction_box.text() == "方向修正"
+    assert dialog.directional_correction_box.isChecked() is False
+    assert dialog.directional_additional_correction_spin.isHidden() is True
+    assert dialog.directional_additional_correction_spin.isEnabled() is False
+    assert dialog.directional_additional_correction_spin.value() == pytest.approx(
+        -12.5
+    )
     compute_layout = dialog.smooth_checkbox.parentWidget().layout()
     assert compute_layout.indexOf(dialog.show_overall_spl_box) == (
         compute_layout.indexOf(dialog.smooth_checkbox) + 1
+    )
+    assert compute_layout.indexOf(dialog.free_field_distance_box) == (
+        compute_layout.indexOf(dialog.show_overall_spl_box) + 1
+    )
+    assert compute_layout.indexOf(dialog.free_field_distance_parameters_widget) == (
+        compute_layout.indexOf(dialog.free_field_distance_box) + 1
+    )
+    assert compute_layout.indexOf(dialog.directional_correction_widget) == (
+        compute_layout.indexOf(dialog.free_field_distance_parameters_widget) + 1
+    )
+    assert (
+        dialog.directional_correction_widget.layout().contentsMargins().left()
+        == 0
     )
 
     plot_view = dialog.plot_view_config_widget
@@ -89,6 +119,11 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert config["analysis_time_range_enabled"] is True
     assert config["analysis_start_time_sec"] == pytest.approx(0.25)
     assert config["analysis_end_time_sec"] == pytest.approx(1.5)
+    assert config["free_field_distance_enabled"] is True
+    assert config["measurement_distance_m"] == pytest.approx(0.2)
+    assert config["target_distance_m"] == pytest.approx(1.5)
+    assert config["directional_correction_enabled"] is False
+    assert config["directional_additional_correction_db"] == pytest.approx(-12.5)
     assert config["limit_checked"] is False
     assert config["limit_mode"] == "csv"
     assert config["manual_input_mode"] == "constant"
@@ -131,14 +166,144 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     ]
     assert dialog.show_overall_spl_box is None
     assert dialog.analysis_time_range_widget is None
+    assert dialog.free_field_distance_box is None
+    assert dialog.free_field_distance_parameters_widget is None
+    assert dialog.directional_correction_widget is None
+    assert dialog.directional_correction_box is None
     config = dialog.get_default_config()
     assert config["splf_calc_mode"] == "total"
     assert config["octave_smoothing"] == 3
     assert config["golden_sample_checked"] is True
     assert "show_overall_spl" not in config
+    assert "free_field_distance_enabled" not in config
+    assert "measurement_distance_m" not in config
+    assert "target_distance_m" not in config
+    assert "directional_correction_enabled" not in config
+    assert "directional_additional_correction_db" not in config
     assert config["limit_mode"] == "csv"
     assert dialog.threshold_widget.allow_manual_limits is True
     assert dialog.threshold_widget.allow_constant_limits is True
+    dialog.close()
+
+
+def test_spl_free_field_distance_controls_follow_enable_switch(qapp):
+    dialog = SplConfigWindow(
+        _ConfigManager({"SPL": {"limit_checked": False}}),
+        "SPL",
+        available_channels=[0],
+    )
+
+    assert dialog.free_field_distance_box.isChecked() is False
+    assert dialog.free_field_distance_parameters_widget.isHidden() is True
+    assert dialog.directional_correction_widget.isHidden() is False
+    assert dialog.measurement_distance_spin.value() == pytest.approx(0.05)
+    assert dialog.target_distance_spin.value() == pytest.approx(1.0)
+    assert dialog.directional_correction_box.isChecked() is False
+    assert dialog.directional_additional_correction_spin.isHidden() is True
+    assert dialog.directional_additional_correction_spin.isEnabled() is False
+    assert dialog.directional_additional_correction_spin.value() == pytest.approx(0.0)
+
+    dialog.free_field_distance_box.setChecked(True)
+    dialog.show()
+    qapp.processEvents()
+
+    assert dialog.free_field_distance_parameters_widget.isHidden() is False
+    assert dialog.directional_correction_widget.isVisible() is True
+    assert dialog.directional_additional_correction_spin.isVisible() is False
+    compute_section = dialog._semantic_sections["compute"]
+    parameters_bottom = dialog.free_field_distance_parameters_widget.mapTo(
+        compute_section,
+        dialog.free_field_distance_parameters_widget.rect().bottomLeft(),
+    ).y()
+    assert parameters_bottom <= compute_section.height()
+    assert dialog.directional_correction_widget.geometry().x() == (
+        dialog.free_field_distance_box.geometry().x()
+    )
+    dialog.free_field_distance_box.setChecked(False)
+    qapp.processEvents()
+    assert dialog.free_field_distance_parameters_widget.isHidden() is True
+    assert dialog.directional_correction_widget.isVisible() is True
+    config = dialog.get_default_config()
+    assert config["free_field_distance_enabled"] is False
+    assert config["measurement_distance_m"] == pytest.approx(0.05)
+    assert config["target_distance_m"] == pytest.approx(1.0)
+    assert config["directional_correction_enabled"] is False
+    assert config["directional_additional_correction_db"] == pytest.approx(0.0)
+    dialog.close()
+
+
+def test_spl_distance_tooltip_shows_dynamic_combined_correction(qapp):
+    dialog = SplConfigWindow(
+        _ConfigManager({"SPL": {"limit_checked": False}}),
+        "SPL",
+        available_channels=[0],
+    )
+
+    assert "当前总修正量：+0.00 dB" in (
+        dialog.free_field_distance_box.toolTip()
+    )
+    assert "球面扩散：未启用" in dialog.free_field_distance_box.toolTip()
+    assert dialog.directional_correction_box.text() == "方向修正"
+    assert dialog.directional_correction_box.isChecked() is False
+    assert "方向修正：未启用" in dialog.free_field_distance_box.toolTip()
+
+    dialog.free_field_distance_box.setChecked(True)
+    dialog.measurement_distance_spin.setValue(0.02)
+    dialog.target_distance_spin.setValue(1.0)
+    dialog.directional_additional_correction_spin.setValue(-5.0)
+
+    assert "当前总修正量：-33.98 dB" in (
+        dialog.free_field_distance_box.toolTip()
+    )
+    assert "方向修正：未启用" in dialog.free_field_distance_box.toolTip()
+    dialog.directional_correction_box.setChecked(True)
+    assert dialog.directional_additional_correction_spin.isHidden() is False
+    assert dialog.directional_additional_correction_spin.isEnabled() is True
+
+    expected_tooltip_parts = (
+        "当前总修正量：-38.98 dB",
+        "球面扩散：-33.98 dB",
+        "方向修正：-5.00 dB",
+    )
+    tooltip_widgets = (
+        dialog.free_field_distance_box,
+        dialog.free_field_distance_parameters_widget,
+        dialog.measurement_distance_spin,
+        dialog.target_distance_spin,
+        dialog.directional_correction_widget,
+        dialog.directional_correction_box,
+        dialog.directional_additional_correction_spin,
+    )
+    for widget in tooltip_widgets:
+        tooltip = widget.toolTip()
+        for expected_part in expected_tooltip_parts:
+            assert expected_part in tooltip
+        assert "估算结果" not in tooltip
+
+    dialog.free_field_distance_box.setChecked(False)
+    assert "当前总修正量：-5.00 dB" in (
+        dialog.directional_correction_box.toolTip()
+    )
+    assert "球面扩散：未启用" in (
+        dialog.directional_correction_box.toolTip()
+    )
+    config = dialog.get_default_config()
+    assert config["free_field_distance_enabled"] is False
+    assert config["directional_correction_enabled"] is True
+
+    dialog.directional_additional_correction_spin.setValue(5.0)
+    assert "当前总修正量：+5.00 dB" in (
+        dialog.free_field_distance_box.toolTip()
+    )
+    assert "方向修正：+5.00 dB" in (
+        dialog.free_field_distance_box.toolTip()
+    )
+    dialog.directional_correction_box.setChecked(False)
+    assert dialog.directional_additional_correction_spin.isHidden() is True
+    assert dialog.directional_additional_correction_spin.isEnabled() is False
+    assert "当前总修正量：+0.00 dB" in (
+        dialog.directional_correction_box.toolTip()
+    )
     dialog.close()
 
 
@@ -296,6 +461,11 @@ def test_spl_new_item_replaces_legacy_threshold_defaults(monkeypatch):
     assert config["analysis_time_range_enabled"] is False
     assert config["analysis_start_time_sec"] == 0.0
     assert config["analysis_end_time_sec"] == 0.0
+    assert config["free_field_distance_enabled"] is False
+    assert config["measurement_distance_m"] == pytest.approx(0.05)
+    assert config["target_distance_m"] == pytest.approx(1.0)
+    assert config["directional_correction_enabled"] is False
+    assert config["directional_additional_correction_db"] == pytest.approx(0.0)
     assert config["manual_upper_segments"] == []
     assert config["manual_lower_segments"] == []
     assert "upper_limit" not in config

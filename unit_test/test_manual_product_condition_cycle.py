@@ -405,6 +405,26 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertEqual(detail_values["FBA"], "OK")
         self.assertEqual(detail_values["FFT"], "NG")
 
+    def test_spl_left_panel_fallback_keeps_target_distance_correction(self):
+        widget = _DummyManualCycleWidget()
+        instance = SimpleNamespace(
+            result={
+                "recorded_signal": [1.0, -1.0],
+                "distance_correction_db": -20.0,
+                "applied_correction_db": -25.0,
+            },
+            v2pa_factor=2.0,
+            _get_spl_unit=lambda: "dB",
+        )
+
+        detail = widget._format_spl_left_panel_detail(
+            instance,
+            {"type": "SPL", "weighting": "Z"},
+            "OK",
+        )
+
+        self.assertEqual(detail, "总体声压：75.00 dB；判定：OK")
+
     def test_left_panel_loudness_details_follow_display_metric_checks(self):
         widget = _DummyManualCycleWidget()
         widget._active_product_condition_key = "q6000"

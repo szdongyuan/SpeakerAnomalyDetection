@@ -3,10 +3,20 @@
 import re
 from typing import List, Optional
 
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
+from base.pre_processing.spl_runtime_config import (
+    resolve_directional_additional_correction_db,
+    resolve_free_field_distance_correction_db,
+)
 from ui.custom_ui_widget.popuputils import PopupUtils
-from ui.custom_ui_widget.widgets import CheckBox, GroupBox, RadioButton
+from ui.custom_ui_widget.widgets import (
+    CheckBox,
+    DoubleSpinBox,
+    GroupBox,
+    Label,
+    RadioButton,
+)
 from ui.ui_analysis_config.common_widgets import (
     AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
@@ -26,6 +36,11 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         "analysis_time_range_enabled": False,
         "analysis_start_time_sec": 0.0,
         "analysis_end_time_sec": 0.0,
+        "free_field_distance_enabled": False,
+        "measurement_distance_m": 0.05,
+        "target_distance_m": 1.0,
+        "directional_correction_enabled": False,
+        "directional_additional_correction_db": 0.0,
         "weighting": "Z",
         "smooth_checked": False,
         "limit_checked": False,
@@ -161,6 +176,13 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         compute_layout.addWidget(self.weighting_selector)
 
         self.show_overall_spl_box = None
+        self.free_field_distance_box = None
+        self.free_field_distance_parameters_widget = None
+        self.measurement_distance_spin = None
+        self.target_distance_spin = None
+        self.directional_correction_widget = None
+        self.directional_correction_box = None
+        self.directional_additional_correction_spin = None
         if self.model_type != "SPLF":
             self.show_overall_spl_box = CheckBox(
                 "显示总体声压级",
@@ -174,6 +196,89 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
                     )
                 )
             )
+            self.free_field_distance_box = CheckBox(
+                "启用球面扩散距离推算",
+                self,
+            )
+            self.free_field_distance_box.setChecked(
+                bool(
+                    self.load_config.get(
+                        "free_field_distance_enabled",
+                        False,
+                    )
+                )
+            )
+
+            self.free_field_distance_parameters_widget = QWidget(
+                compute_widget
+            )
+            parameters_layout = QVBoxLayout(
+                self.free_field_distance_parameters_widget
+            )
+            parameters_layout.setContentsMargins(24, 0, 0, 0)
+            parameters_layout.setSpacing(8)
+
+            distance_row = QHBoxLayout()
+            self.measurement_distance_spin = self._create_distance_spin(
+                self.load_config.get("measurement_distance_m", 0.05)
+            )
+            self.target_distance_spin = self._create_distance_spin(
+                self.load_config.get("target_distance_m", 1.0)
+            )
+            distance_row.addWidget(Label("测量距离："))
+            distance_row.addWidget(self.measurement_distance_spin)
+            distance_row.addWidget(Label("目标距离："))
+            distance_row.addWidget(self.target_distance_spin)
+            distance_row.addStretch(1)
+            parameters_layout.addLayout(distance_row)
+
+            self.directional_correction_widget = QWidget(compute_widget)
+            correction_row = QHBoxLayout(
+                self.directional_correction_widget
+            )
+            correction_row.setContentsMargins(0, 0, 0, 0)
+            self.directional_correction_box = CheckBox(
+                "方向修正",
+                self.directional_correction_widget,
+            )
+            self.directional_correction_box.setChecked(
+                bool(
+                    self.load_config.get(
+                        "directional_correction_enabled",
+                        False,
+                    )
+                )
+            )
+            self.directional_additional_correction_spin = (
+                self._create_correction_spin(
+                    self.load_config.get(
+                        "directional_additional_correction_db",
+                        0.0,
+                    )
+                )
+            )
+            correction_row.addWidget(self.directional_correction_box)
+            correction_row.addWidget(
+                self.directional_additional_correction_spin
+            )
+            correction_row.addStretch(1)
+
+            for spin in (
+                self.measurement_distance_spin,
+                self.target_distance_spin,
+                self.directional_additional_correction_spin,
+            ):
+                spin.valueChanged.connect(
+                    self._update_spl_correction_tooltip
+                )
+            self.directional_correction_box.stateChanged.connect(
+                self._sync_directional_correction_controls
+            )
+            self.free_field_distance_box.stateChanged.connect(
+                self._sync_free_field_distance_controls
+            )
+            self._sync_directional_correction_controls()
+            self._sync_free_field_distance_controls()
 
         self.smooth_checkbox = None
         self.splf_mode_group = None
@@ -217,6 +322,11 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             )
             compute_layout.addWidget(self.smooth_checkbox)
             compute_layout.addWidget(self.show_overall_spl_box)
+            compute_layout.addWidget(self.free_field_distance_box)
+            compute_layout.addWidget(
+                self.free_field_distance_parameters_widget
+            )
+            compute_layout.addWidget(self.directional_correction_widget)
 
         self.add_semantic_section("compute", widget=compute_widget)
 
@@ -267,6 +377,25 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             config["show_overall_spl"] = (
                 self.show_overall_spl_box.isChecked()
             )
+            config.update(
+                {
+                    "free_field_distance_enabled": (
+                        self.free_field_distance_box.isChecked()
+                    ),
+                    "measurement_distance_m": float(
+                        self.measurement_distance_spin.value()
+                    ),
+                    "target_distance_m": float(
+                        self.target_distance_spin.value()
+                    ),
+                    "directional_correction_enabled": (
+                        self.directional_correction_box.isChecked()
+                    ),
+                    "directional_additional_correction_db": float(
+                        self.directional_additional_correction_spin.value()
+                    ),
+                }
+            )
             config.update(self.analysis_time_range_widget.get_config())
 
         config.update(self.weighting_selector.get_config())
@@ -283,6 +412,96 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         if not self.validate_plot_view_config():
             return False
         return self.threshold_widget.validate()
+
+    def _create_distance_spin(self, value):
+        spin = DoubleSpinBox(self)
+        spin.setRange(0.0001, 1000000.0)
+        spin.setDecimals(4)
+        spin.setSingleStep(0.1)
+        spin.setSuffix(" m")
+        spin.setValue(float(value))
+        spin.setMinimumWidth(140)
+        spin.setMaximumWidth(180)
+        return spin
+
+    def _create_correction_spin(self, value):
+        spin = DoubleSpinBox(self)
+        spin.setRange(-200.0, 200.0)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.1)
+        spin.setSuffix(" dB")
+        spin.setValue(float(value))
+        spin.setMinimumWidth(140)
+        spin.setMaximumWidth(180)
+        return spin
+
+    def _sync_free_field_distance_controls(self, *args):
+        enabled = self.free_field_distance_box.isChecked()
+        self.free_field_distance_parameters_widget.setVisible(enabled)
+        self._update_spl_correction_tooltip()
+        self.free_field_distance_parameters_widget.updateGeometry()
+        parent_widget = self.free_field_distance_parameters_widget.parentWidget()
+        parent_layout = parent_widget.layout()
+        if parent_layout is not None:
+            parent_layout.invalidate()
+            parent_layout.activate()
+        self._refresh_section_container_minimum_height()
+
+    def _sync_directional_correction_controls(self, *args):
+        enabled = self.directional_correction_box.isChecked()
+        self.directional_additional_correction_spin.setVisible(enabled)
+        self.directional_additional_correction_spin.setEnabled(enabled)
+        self._update_spl_correction_tooltip()
+
+    def _update_spl_correction_tooltip(self, *args):
+        correction_config = {
+            "free_field_distance_enabled": (
+                self.free_field_distance_box.isChecked()
+            ),
+            "measurement_distance_m": self.measurement_distance_spin.value(),
+            "target_distance_m": self.target_distance_spin.value(),
+            "directional_correction_enabled": (
+                self.directional_correction_box.isChecked()
+            ),
+            "directional_additional_correction_db": (
+                self.directional_additional_correction_spin.value()
+            ),
+        }
+        distance_correction_db = (
+            resolve_free_field_distance_correction_db(correction_config)
+        )
+        directional_correction_db = (
+            resolve_directional_additional_correction_db(correction_config)
+        )
+        total_correction_db = (
+            distance_correction_db + directional_correction_db
+        )
+        status_text = f"当前总修正量：{total_correction_db:+.2f} dB"
+        if self.free_field_distance_box.isChecked():
+            distance_text = f"球面扩散：{distance_correction_db:+.2f} dB"
+        else:
+            distance_text = "球面扩散：未启用"
+        if self.directional_correction_box.isChecked():
+            directional_text = (
+                f"方向修正：{directional_correction_db:+.2f} dB"
+            )
+        else:
+            directional_text = "方向修正：未启用"
+        tooltip = (
+            f"{status_text}\n"
+            f"{distance_text}\n"
+            f"{directional_text}（正值提高，负值降低）"
+        )
+        for widget in (
+            self.free_field_distance_box,
+            self.free_field_distance_parameters_widget,
+            self.measurement_distance_spin,
+            self.target_distance_spin,
+            self.directional_correction_widget,
+            self.directional_correction_box,
+            self.directional_additional_correction_spin,
+        ):
+            widget.setToolTip(tooltip)
 
     def on_default_btn_clicked(self):
         if not self._validate_config():

@@ -1,8 +1,11 @@
 import numpy as np
+import pytest
 
 from base.pre_processing.spl_runtime_config import (
     apply_spl_analysis_time_range,
     calculate_overall_spl,
+    resolve_directional_additional_correction_db,
+    resolve_free_field_distance_correction_db,
     resolve_spl_unit,
 )
 
@@ -28,6 +31,111 @@ def test_resolve_spl_unit_matches_frequency_weighting():
     assert resolve_spl_unit("B") == "dBB"
     assert resolve_spl_unit("C") == "dBC"
     assert resolve_spl_unit("D") == "dBD"
+
+
+def test_free_field_distance_correction_uses_spherical_spreading():
+    assert resolve_free_field_distance_correction_db(
+        {
+            "free_field_distance_enabled": True,
+            "measurement_distance_m": 0.1,
+            "target_distance_m": 1.0,
+        }
+    ) == pytest.approx(-20.0)
+    assert resolve_free_field_distance_correction_db(
+        {
+            "free_field_distance_enabled": True,
+            "measurement_distance_m": 1.0,
+            "target_distance_m": 0.5,
+        }
+    ) == pytest.approx(6.020599913)
+    assert resolve_free_field_distance_correction_db(
+        {
+            "free_field_distance_enabled": True,
+            "measurement_distance_m": 1.0,
+            "target_distance_m": 1.0,
+        }
+    ) == pytest.approx(0.0)
+
+
+def test_free_field_distance_correction_is_backward_compatible_when_disabled():
+    assert resolve_free_field_distance_correction_db({}) == 0.0
+    assert resolve_free_field_distance_correction_db(
+        {
+            "free_field_distance_enabled": False,
+            "measurement_distance_m": 0.0,
+            "target_distance_m": float("nan"),
+        }
+    ) == 0.0
+
+
+def test_directional_correction_is_independent_and_supports_signed_values():
+    assert resolve_directional_additional_correction_db({}) == 0.0
+    assert resolve_directional_additional_correction_db(
+        {
+            "free_field_distance_enabled": False,
+            "directional_correction_enabled": True,
+            "directional_additional_correction_db": -12.5,
+        }
+    ) == pytest.approx(-12.5)
+    assert resolve_directional_additional_correction_db(
+        {
+            "directional_correction_enabled": True,
+            "directional_additional_correction_db": 6.0,
+        }
+    ) == pytest.approx(6.0)
+    assert resolve_directional_additional_correction_db(
+        {
+            "free_field_distance_enabled": True,
+            "directional_correction_enabled": False,
+            "directional_additional_correction_db": float("nan"),
+        }
+    ) == 0.0
+    # 没有明确保存启用开关时，方向修正默认关闭。
+    assert resolve_directional_additional_correction_db(
+        {
+            "free_field_distance_enabled": True,
+            "directional_additional_correction_db": -3.0,
+        }
+    ) == 0.0
+    assert resolve_directional_additional_correction_db(
+        {
+            "free_field_distance_enabled": False,
+            "directional_additional_correction_db": float("nan"),
+        }
+    ) == 0.0
+
+    with pytest.raises(ValueError, match="方向修正"):
+        resolve_directional_additional_correction_db(
+            {
+                "free_field_distance_enabled": False,
+                "directional_correction_enabled": True,
+                "directional_additional_correction_db": float("nan"),
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("measurement_distance_m", "target_distance_m"),
+    [
+        (0.0, 1.0),
+        (-0.1, 1.0),
+        (0.1, 0.0),
+        (0.1, float("inf")),
+        ("invalid", 1.0),
+    ],
+)
+def test_free_field_distance_correction_rejects_invalid_enabled_distances(
+    measurement_distance_m,
+    target_distance_m,
+):
+    with pytest.raises(ValueError, match="距离"):
+        resolve_free_field_distance_correction_db(
+            {
+                "free_field_distance_enabled": True,
+                "measurement_distance_m": measurement_distance_m,
+                "target_distance_m": target_distance_m,
+            }
+        )
 
 
 def test_spl_analysis_time_range_slices_signal_and_returns_source_offset():
