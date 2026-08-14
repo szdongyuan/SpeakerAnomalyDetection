@@ -138,4 +138,86 @@ def test_spl_runtime_optionally_displays_overall_level(
 
     assert "overall_spl" not in result
     assert titles == [""]
+    assert "distance_correction_db" not in result
+    widget.close()
+
+
+def test_spl_runtime_projects_curve_and_overall_level_to_target_distance(
+    signal_module,
+    qapp,
+    monkeypatch,
+):
+    widget = signal_module.Spl("声压级 (SPL) 1")
+    widget.data_struct.store_wave_data = np.tile([1.0, -1.0], 16)
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 48000
+    widget.v2pa_factor = 2.0
+    widget.analysis_config = {
+        "analysis_channel": 0,
+        "weighting": "Z",
+        "show_overall_spl": True,
+        "smooth_checked": False,
+        "limit_checked": False,
+        "free_field_distance_enabled": True,
+        "measurement_distance_m": 0.1,
+        "target_distance_m": 1.0,
+        "directional_additional_correction_db": -5.0,
+    }
+    plotted = []
+
+    monkeypatch.setattr(
+        signal_module.AudioThdFrequencyResponseAnalysis,
+        "spl_calculation",
+        lambda self, *args, **kwargs: np.array([42.0, 43.0]),
+    )
+    monkeypatch.setattr(
+        widget,
+        "plot_spl",
+        lambda time_axis, spl: plotted.append(np.asarray(spl)),
+    )
+
+    result = widget.calculate_spl()
+
+    assert result["signal_spl"] == pytest.approx([22.0, 23.0])
+    assert result["overall_spl"] == pytest.approx(80.0)
+    assert result["measurement_distance_m"] == pytest.approx(0.1)
+    assert result["target_distance_m"] == pytest.approx(1.0)
+    assert result["distance_correction_db"] == pytest.approx(-20.0)
+    assert result["directional_additional_correction_db"] == pytest.approx(0.0)
+    assert result["applied_correction_db"] == pytest.approx(-20.0)
+    assert plotted[0].tolist() == pytest.approx([22.0, 23.0])
+
+    widget.analysis_config["directional_correction_enabled"] = True
+    plotted.clear()
+    result = widget.calculate_spl()
+
+    assert result["signal_spl"] == pytest.approx([17.0, 18.0])
+    assert result["overall_spl"] == pytest.approx(75.0)
+    assert result["directional_additional_correction_db"] == pytest.approx(-5.0)
+    assert result["applied_correction_db"] == pytest.approx(-25.0)
+    assert plotted[0].tolist() == pytest.approx([17.0, 18.0])
+
+    widget.analysis_config["directional_correction_enabled"] = True
+    widget.analysis_config["directional_additional_correction_db"] = 5.0
+    plotted.clear()
+    result = widget.calculate_spl()
+
+    assert result["signal_spl"] == pytest.approx([27.0, 28.0])
+    assert result["overall_spl"] == pytest.approx(85.0)
+    assert result["directional_additional_correction_db"] == pytest.approx(5.0)
+    assert result["applied_correction_db"] == pytest.approx(-15.0)
+    assert plotted[0].tolist() == pytest.approx([27.0, 28.0])
+
+    widget.analysis_config["free_field_distance_enabled"] = False
+    plotted.clear()
+    result = widget.calculate_spl()
+
+    assert result["signal_spl"] == pytest.approx([47.0, 48.0])
+    assert result["overall_spl"] == pytest.approx(105.0)
+    assert "measurement_distance_m" not in result
+    assert "target_distance_m" not in result
+    assert result["distance_correction_db"] == pytest.approx(0.0)
+    assert result["directional_additional_correction_db"] == pytest.approx(5.0)
+    assert result["applied_correction_db"] == pytest.approx(5.0)
+    assert plotted[0].tolist() == pytest.approx([47.0, 48.0])
     widget.close()

@@ -44,6 +44,8 @@ from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.spl_runtime_config import (
     apply_spl_analysis_time_range,
     calculate_overall_spl,
+    resolve_directional_additional_correction_db,
+    resolve_free_field_distance_correction_db,
     resolve_spl_unit,
 )
 from base.core_algorithm.response import (
@@ -970,8 +972,27 @@ class Spl(AnalysisGraphWidget):
             sample_rate,
             self.analysis_config,
         )
+        config = self.analysis_config or {}
+        try:
+            distance_correction_db = (
+                resolve_free_field_distance_correction_db(config)
+            )
+            directional_additional_correction_db = (
+                resolve_directional_additional_correction_db(config)
+            )
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                "提示",
+                f"SPL 修正配置无效: {str(exc)[:200]}",
+            )
+            return False
+        applied_correction_db = (
+            distance_correction_db
+            + directional_additional_correction_db
+        )
         show_overall_spl = bool(
-            (self.analysis_config or {}).get(
+            config.get(
                 "show_overall_spl",
                 False,
             )
@@ -983,6 +1004,7 @@ class Spl(AnalysisGraphWidget):
                 reference_pressure,
                 v2pa_factor=self.v2pa_factor,
             )
+            overall_spl += applied_correction_db
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             analysis_signal,
             reference_pressure,
@@ -999,6 +1021,7 @@ class Spl(AnalysisGraphWidget):
         if self.analysis_config and self.analysis_config.get("smooth_checked"):
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
+        signal_spl = np.asarray(signal_spl, dtype=float) + applied_correction_db
         limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
             try:
@@ -1030,6 +1053,30 @@ class Spl(AnalysisGraphWidget):
         }
         if show_overall_spl:
             self.result["overall_spl"] = overall_spl
+        if config.get(
+            "free_field_distance_enabled",
+            False,
+        ) or config.get("directional_correction_enabled", False):
+            self.result.update(
+                {
+                    "distance_correction_db": distance_correction_db,
+                    "directional_additional_correction_db": (
+                        directional_additional_correction_db
+                    ),
+                    "applied_correction_db": applied_correction_db,
+                }
+            )
+        if config.get("free_field_distance_enabled", False):
+            self.result.update(
+                {
+                    "measurement_distance_m": float(
+                        config["measurement_distance_m"]
+                    ),
+                    "target_distance_m": float(
+                        config["target_distance_m"]
+                    ),
+                }
+            )
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):

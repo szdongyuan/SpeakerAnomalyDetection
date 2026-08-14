@@ -582,6 +582,9 @@ class SequenceWidgetAnalysisOpsMixin(
                         np.asarray(recorded_signal, dtype=float),
                         v2pa_factor=getattr(instance, "v2pa_factor", None),
                     )
+                    overall_spl += float(
+                        result.get("applied_correction_db", 0.0) or 0.0
+                    )
                 except Exception:
                     overall_spl = None
 
