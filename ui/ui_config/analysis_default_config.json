@@ -30,40 +30,16 @@
     },
     "SPLF": {
         "splf_calc_mode": "fundamental",
-        "octave_smoothing": 3,
+        "octave_smoothing": 0,
         "golden_sample_checked": true,
         "golden_sample_display_modes": [
-            "deviation"
+            "deviation",
+            "envelope"
         ],
-        "limit_checked": true,
-        "limit_data": [
-            [
-                1000.0,
-                3000.0,
-                3001.0,
-                6000.0,
-                6001.0,
-                16000.0
-            ],
-            [
-                2.5,
-                2.5,
-                2.0,
-                2.0,
-                3.0,
-                3.0
-            ],
-            [
-                -2.5,
-                -2.5,
-                -2.0,
-                -2.0,
-                -3.0,
-                -3.0
-            ]
-        ],
-        "limit_mode": "csv",
-        "manual_upper_enabled": true,
+        "limit_checked": false,
+        "limit_data": null,
+        "limit_mode": "manual",
+        "manual_upper_enabled": false,
         "manual_lower_enabled": false,
         "manual_upper_segments": [],
         "manual_lower_segments": [],
