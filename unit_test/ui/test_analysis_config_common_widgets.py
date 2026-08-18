@@ -4,7 +4,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt5.QtCore import QRect, Qt
-from PyQt5.QtWidgets import QApplication, QSizePolicy, QWidget, QVBoxLayout
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import (
+    QApplication,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+    QVBoxLayout,
+)
 
 from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_FOURIER,
@@ -424,3 +432,33 @@ def test_semantic_dialog_footer_buttons_call_callbacks(qapp):
     dialog.semantic_ok_btn.click()
 
     assert calls == ["default", "restore", "cancel", "ok"]
+
+
+def test_semantic_dialog_enter_does_not_trigger_buttons(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    input_widget = QLineEdit()
+    dialog.add_semantic_section("input", widget=input_widget)
+    calls = []
+    dialog.set_semantic_button_callbacks(
+        default_callback=lambda: calls.append("default"),
+        restore_callback=lambda: calls.append("restore"),
+        ok_callback=lambda: calls.append("ok"),
+        cancel_callback=lambda: calls.append("cancel"),
+    )
+    dialog.show()
+    input_widget.setFocus()
+    qapp.processEvents()
+
+    QTest.keyClick(input_widget, Qt.Key_Return)
+    qapp.processEvents()
+
+    assert calls == []
+    assert all(
+        not button.autoDefault() and not button.isDefault()
+        for button in dialog.findChildren(QPushButton)
+    )
+
+    dialog.semantic_default_btn.click()
+
+    assert calls == ["default"]
+    dialog.close()

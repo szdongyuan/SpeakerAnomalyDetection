@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
     QLayout,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -101,6 +102,13 @@ class AnalysisConfigDialogBase(ConfigDialogBase):
         if disable_close_button:
             self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Enter in a parameter field must not invoke a persistent dialog action.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
 
     def create_standard_button_layout(self, default_callback, ok_callback) -> QHBoxLayout:
         btn_layout = QHBoxLayout()
