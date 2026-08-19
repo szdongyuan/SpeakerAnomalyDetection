@@ -13,8 +13,6 @@ from base.log_manager import LogManager
 # 串口触发调试打印开关: 默认关闭, 避免轮询日志(如"轮询已发送，但当前未收到设备响应")
 # 在训练/评估等重定向了 stdout 的窗口里刷屏。需要排查串口时改为 True 即可。
 SERIAL_TRIGGER_DEBUG = False
-# 产品完整帧现场跟踪: 在 PyCharm Run 窗口打印原始字节和匹配状态码。
-SERIAL_PRODUCT_FRAME_PRINT = True
 
 
 class SerialDiscreteInputWorker(QThread):
@@ -41,11 +39,6 @@ class SerialDiscreteInputWorker(QThread):
     def _debug_print(message):
         if SERIAL_TRIGGER_DEBUG:
             print(f"[serial-trigger][worker] {message}")
-
-    @staticmethod
-    def _print_product_frame(message):
-        if SERIAL_PRODUCT_FRAME_PRINT:
-            print(f"[serial-trigger][worker] {message}", flush=True)
 
     def _emit_status(self, **kwargs):
         payload = {
@@ -174,9 +167,6 @@ class SerialDiscreteInputWorker(QThread):
 
                 raw_hex = " ".join(f"{b:02X}" for b in received_bytes)
                 if self._product_full_frame_mode:
-                    self._print_product_frame(
-                        f"收到主动上报原始数据: raw_hex={raw_hex}"
-                    )
                     self.logger.info(
                         f"serial_product_raw_received raw_hex={raw_hex}"
                     )
@@ -191,8 +181,8 @@ class SerialDiscreteInputWorker(QThread):
                     )
                     for frame_bytes in self._full_frame_matcher.feed(received_bytes):
                         frame_hex = " ".join(f"{byte:02X}" for byte in frame_bytes)
-                        self._print_product_frame(
-                            f"匹配完整状态码: frame={frame_hex}"
+                        self.logger.info(
+                            f"serial_product_frame_matched frame={frame_hex}"
                         )
                         self.sig_state_changed.emit(
                             {
