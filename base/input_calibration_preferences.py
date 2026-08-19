@@ -1,7 +1,7 @@
 import json
-import logging
 import os
 import tempfile
+from base.log_manager import LogManager
 
 from consts.calibration_consts import (
     INPUT_CALIBRATION_MODE_MANUAL,
@@ -19,7 +19,7 @@ _DEFAULT_PATH = os.path.join(
 
 
 def _warn(logger, message):
-    target_logger = logger if logger is not None else logging.getLogger(__name__)
+    target_logger = logger if logger is not None else LogManager.set_log_handler("core")
     target_logger.warning(message)
 
 
