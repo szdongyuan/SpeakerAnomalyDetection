@@ -15,6 +15,7 @@ from base.soundcard_calibration_manager import (
     replace_mic_channel_v2pa_factors,
     resolve_analysis_v2pa_factor_for_channel,
     resolve_mic_channel_v2pa_factor,
+    save_manual_mic_channel_v2pa_factor,
     save_mic_channel_v2pa_factor,
 )
 from consts import model_consts
@@ -160,6 +161,183 @@ def test_db_replace_preserves_existing_standard_spl_for_reused_channel(tmp_path)
     )["standard_spl"] == 94
 
 
+def test_db_manual_save_writes_null_and_standard_save_still_requires_spl(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    save_manual_mic_channel_v2pa_factor(
+        0, 1.234567, hardware_id=asset["hardware_id"], db_path=str(db_path)
+    )
+
+    row = repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa")
+    assert row["factor_value"] == 1.234567
+    assert row["standard_spl"] is None
+
+    with pytest.raises(ValueError, match="standard_spl"):
+        save_mic_channel_v2pa_factor(
+            0, 1.25, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+    with pytest.raises(ValueError, match="standard_spl"):
+        save_mic_channel_v2pa_factor(
+            0, 1.25, standard_spl=None, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+
+
+@pytest.mark.parametrize("factor", [0, -1, float("inf"), float("nan"), "bad"])
+def test_db_manual_save_rejects_invalid_factor(tmp_path, factor):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(ValueError, match="v2pa_factor"):
+        save_manual_mic_channel_v2pa_factor(
+            0, factor, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
+
+
+def test_db_manual_save_rejects_boolean_channel_and_factor(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=2, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(ValueError, match="channel_index"):
+        save_manual_mic_channel_v2pa_factor(
+            True, 1.25, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+    with pytest.raises(ValueError, match="v2pa_factor"):
+        save_manual_mic_channel_v2pa_factor(
+            0, True, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 1, "mic_v2pa") is None
+
+
+def test_db_standard_save_rejects_boolean_channel_and_factor(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=2, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(ValueError, match="channel_index"):
+        save_mic_channel_v2pa_factor(
+            True, 1.25, standard_spl=94, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+    with pytest.raises(ValueError, match="v2pa_factor"):
+        save_mic_channel_v2pa_factor(
+            0, True, standard_spl=94, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 1, "mic_v2pa") is None
+
+
+def test_db_standard_save_rejects_boolean_standard_spl(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(ValueError, match="standard_spl"):
+        save_mic_channel_v2pa_factor(
+            0, 1.25, standard_spl=True, hardware_id=asset["hardware_id"], db_path=str(db_path)
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
+
+
+def test_db_replace_rejects_boolean_standard_spl(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(ValueError, match="standard_spl"):
+        replace_mic_channel_v2pa_factors(
+            {0: 1.25},
+            channel_standard_spl={0: True},
+            hardware_id=asset["hardware_id"],
+            db_path=str(db_path),
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
+
+
+def test_db_replace_preserves_existing_manual_null_provenance(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=2, outputs=0), "Windows WASAPI", "Mic", 48000)
+    save_manual_mic_channel_v2pa_factor(
+        0, 1.25, hardware_id=asset["hardware_id"], db_path=str(db_path)
+    )
+
+    replace_mic_channel_v2pa_factors(
+        {0: 1.5, 1: 2.5},
+        channel_standard_spl={1: 94},
+        hardware_id=asset["hardware_id"],
+        db_path=str(db_path),
+    )
+
+    assert repo.get_channel_calibration(
+        asset["hardware_id"], "input", 0, "mic_v2pa"
+    )["standard_spl"] is None
+    assert repo.get_channel_calibration(
+        asset["hardware_id"], "input", 1, "mic_v2pa"
+    )["standard_spl"] == 94
+
+
+def test_db_replace_rejects_new_channel_without_provenance(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(ValueError, match="standard_spl"):
+        replace_mic_channel_v2pa_factors(
+            {0: 1.25},
+            channel_standard_spl={},
+            hardware_id=asset["hardware_id"],
+            db_path=str(db_path),
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
+
+
+def test_db_mic_provenance_transitions_standard_to_manual_to_standard(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    save_mic_channel_v2pa_factor(
+        0, 1.25, standard_spl=114, hardware_id=asset["hardware_id"], db_path=str(db_path)
+    )
+    assert repo.get_channel_calibration(
+        asset["hardware_id"], "input", 0, "mic_v2pa"
+    )["standard_spl"] == 114
+
+    save_manual_mic_channel_v2pa_factor(
+        0, 1.5, hardware_id=asset["hardware_id"], db_path=str(db_path)
+    )
+    assert repo.get_channel_calibration(
+        asset["hardware_id"], "input", 0, "mic_v2pa"
+    )["standard_spl"] is None
+
+    save_mic_channel_v2pa_factor(
+        0, 2.5, standard_spl=94, hardware_id=asset["hardware_id"], db_path=str(db_path)
+    )
+    assert repo.get_channel_calibration(
+        asset["hardware_id"], "input", 0, "mic_v2pa"
+    )["standard_spl"] == 94
+
+
 def test_db_clear_channel_v2pa_factors(tmp_path):
     db_path = tmp_path / "system_data.db"
     create_system_db(db_path)
@@ -258,6 +436,7 @@ def test_mic_calibration_helpers_expose_only_database_backed_paths():
     helpers = [
         load_mic_channel_v2pa_factors,
         save_mic_channel_v2pa_factor,
+        save_manual_mic_channel_v2pa_factor,
         clear_mic_channel_v2pa_factors,
         replace_mic_channel_v2pa_factors,
         resolve_mic_channel_v2pa_factor,

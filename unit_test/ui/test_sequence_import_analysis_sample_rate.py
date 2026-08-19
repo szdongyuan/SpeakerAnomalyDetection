@@ -173,6 +173,7 @@ def test_import_stimulus_audio_external_reference_length_check_uses_loaded_metad
     win.analysis_config = {"auto_analysis": True, "display_sequence": []}
     win.analysis_window = []
     win._analysis_result_summary_window = None
+    win.mode = "IMPORT_STIMULUS_AUDIO"
     win.count_board = SimpleNamespace(mode="normal")
     win.data_struct.analysis_result_dict = {}
     win.screen = lambda: _Screen()

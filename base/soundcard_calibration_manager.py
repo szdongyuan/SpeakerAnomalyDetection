@@ -27,6 +27,8 @@ class AnalysisV2paPreparation:
 
 
 def _normalize_channel_index(channel_index):
+    if isinstance(channel_index, bool):
+        raise ValueError("channel_index must be a non-negative integer.")
     try:
         normalized = int(channel_index)
     except (TypeError, ValueError) as exc:
@@ -37,6 +39,8 @@ def _normalize_channel_index(channel_index):
 
 
 def _normalize_positive_factor(v2pa_factor):
+    if isinstance(v2pa_factor, bool):
+        raise ValueError("v2pa_factor must be a finite positive number.")
     try:
         normalized = float(v2pa_factor)
     except (TypeError, ValueError) as exc:
@@ -49,6 +53,8 @@ def _normalize_positive_factor(v2pa_factor):
 def _normalize_standard_spl(standard_spl):
     if standard_spl is None:
         return None
+    if isinstance(standard_spl, bool):
+        raise ValueError("standard_spl must be a finite number.")
     try:
         numeric = float(standard_spl)
     except (TypeError, ValueError) as exc:
@@ -111,10 +117,22 @@ def load_mic_channel_v2pa_factors(hardware_id=None, db_path=None):
 def save_mic_channel_v2pa_factor(channel_index, v2pa_factor, standard_spl=None, hardware_id=None, db_path=None):
     normalized_channel = _normalize_channel_index(channel_index)
     resolved_hardware_id = _resolve_mic_hardware_id(hardware_id)
+    normalized_spl = _normalize_standard_spl(standard_spl)
+    if normalized_spl is None:
+        raise ValueError("standard_spl is required for standard SPL calibration")
     _repository(db_path).update_mic_channel_calibrations(
         resolved_hardware_id,
         {normalized_channel: _normalize_positive_factor(v2pa_factor)},
-        channel_standard_spl={normalized_channel: _normalize_standard_spl(standard_spl)},
+        channel_standard_spl={normalized_channel: normalized_spl},
+    )
+
+
+def save_manual_mic_channel_v2pa_factor(channel_index, v2pa_factor, hardware_id=None, db_path=None):
+    normalized_channel = _normalize_channel_index(channel_index)
+    _repository(db_path).update_mic_channel_calibrations(
+        _resolve_mic_hardware_id(hardware_id),
+        {normalized_channel: _normalize_positive_factor(v2pa_factor)},
+        channel_standard_spl={normalized_channel: None},
     )
 
 
@@ -138,8 +156,9 @@ def replace_mic_channel_v2pa_factors(channel_factors, channel_standard_spl=None,
 
     existing_standard_spl_by_channel = {}
     for row in _load_mic_channel_calibration_rows(hardware_id=resolved_hardware_id, db_path=db_path):
-        if row.get("standard_spl") is not None:
-            existing_standard_spl_by_channel[_normalize_channel_index(row["channel_index"])] = row["standard_spl"]
+        existing_standard_spl_by_channel[_normalize_channel_index(row["channel_index"])] = _normalize_standard_spl(
+            row.get("standard_spl")
+        )
 
     complete_standard_spl = {}
     for channel_index in normalized_factors:

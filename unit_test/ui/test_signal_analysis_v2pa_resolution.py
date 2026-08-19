@@ -559,6 +559,42 @@ def test_peak_detection_direct_analysis_passes_resolved_v2pa(qapp, monkeypatch):
     assert result["spl_db_series"].tolist() == [60.0, 61.0]
 
 
+def test_peak_detection_consumes_sequence_prepared_v2pa_without_resolving(qapp, monkeypatch):
+    captured = {}
+    warnings = []
+
+    def fake_peak_detection(recorded_signal, sample_rate, analysis_config, *, v2pa_factor):
+        captured["v2pa_factor"] = v2pa_factor
+        return {
+            "peaks_index": [],
+            "peaks_time_sec": [],
+            "spl_db_series": np.array([60.0, 61.0]),
+        }
+
+    widget = _recording_widget(saw.PeakDetection("PD"), analysis_channel=6)
+    widget.v2pa_factor = 9.25
+    widget._v2pa_raw_analysis_channel = 6
+    widget._use_pre_resolved_v2pa_factor = True
+    monkeypatch.setattr(saw, "peak_detection", fake_peak_detection)
+    monkeypatch.setattr(
+        saw,
+        "resolve_analysis_v2pa_factor_for_channel",
+        lambda *args, **kwargs: pytest.fail("sequence-prepared PD must not resolve again"),
+    )
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    result = widget.calculate_peak_detection()
+
+    assert captured["v2pa_factor"] == 9.25
+    assert result["spl_db_series"].tolist() == [60.0, 61.0]
+    assert widget._use_pre_resolved_v2pa_factor is False
+    assert warnings == []
+
+
 def test_peak_detection_imported_wav_uses_selected_channel_signal_and_metadata(qapp, monkeypatch):
     captured = {}
     channel_0 = np.array([0.0, 10.0, 20.0, 30.0], dtype=np.float64)
@@ -647,6 +683,60 @@ def test_pipeline_pd_pm_passes_resolved_v2pa_to_embedded_peak_detection(
     assert captured["analysis_config"] == {"analysis_channel": 8}
     assert warnings == expected_warnings
     assert result["total"] == 0
+
+
+def test_pipeline_pd_pm_consumes_sequence_prepared_v2pa_without_resolving(qapp, monkeypatch):
+    captured = {}
+    warnings = []
+
+    class FakePatternMatch:
+        pass
+
+    def fake_peak_detection(recorded_signal, sample_rate, analysis_config, *, v2pa_factor):
+        captured["v2pa_factor"] = v2pa_factor
+        captured["analysis_config"] = dict(analysis_config)
+        return {
+            "peaks_index": [],
+            "peaks_time_sec": [],
+            "spl_db_series": np.array([60.0, 61.0]),
+        }
+
+    widget = saw.PipelinePdPm("PD+PM")
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.store_wave_data = np.ones(32, dtype=np.float64)
+    widget.analysis_config = {
+        "head": {"config": {"analysis_channel": 8}},
+        "tail": {"config": {}},
+        "pass_condition": {},
+    }
+    widget.v2pa_factor = 10.5
+    widget._v2pa_raw_analysis_channel = 8
+    widget._use_pre_resolved_v2pa_factor = True
+
+    monkeypatch.setattr(saw, "peak_detection", fake_peak_detection)
+    monkeypatch.setattr(
+        saw,
+        "get_class_mapping",
+        lambda: {"PD": saw.PeakDetection, "PM": FakePatternMatch},
+    )
+    monkeypatch.setattr(
+        saw,
+        "resolve_analysis_v2pa_factor_for_channel",
+        lambda *args, **kwargs: pytest.fail("sequence-prepared ED must not resolve again"),
+    )
+    monkeypatch.setattr(
+        saw.MessageBox,
+        "warning",
+        lambda parent, title, message: warnings.append(message),
+    )
+
+    result = widget.calculate_pipeline_pd_pm()
+
+    assert captured["v2pa_factor"] == 10.5
+    assert captured["analysis_config"] == {"analysis_channel": 8}
+    assert result["total"] == 0
+    assert widget._use_pre_resolved_v2pa_factor is False
+    assert warnings == []
 
 
 def test_pipeline_pd_pm_imported_wav_metadata_factor_is_used_without_database(qapp, monkeypatch):

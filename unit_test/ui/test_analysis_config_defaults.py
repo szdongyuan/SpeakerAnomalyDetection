@@ -92,9 +92,11 @@ def test_curve_and_distortion_defaults_keep_legacy_threshold_and_golden_keys():
         assert defaults[analysis_type]["limit_checked"] is False
         assert "limit_data" in defaults[analysis_type]
 
-    for analysis_type in ("SPLF", "FR", "HD", "RB", "PRB"):
+    for analysis_type in ("FR", "HD", "RB", "PRB"):
         assert defaults[analysis_type]["golden_sample_checked"] is False
         assert defaults[analysis_type]["golden_sample_display_modes"] == ["deviation"]
+    assert defaults["SPLF"]["golden_sample_checked"] is True
+    assert defaults["SPLF"]["golden_sample_display_modes"] == ["deviation", "envelope"]
 
 
 def test_manual_segment_enabled_defaults_have_stable_schema_without_scalar_keys():
@@ -104,8 +106,12 @@ def test_manual_segment_enabled_defaults_have_stable_schema_without_scalar_keys(
         config = defaults[analysis_type]
         for key in MANUAL_SEGMENT_DEFAULT_KEYS:
             assert key in config, analysis_type
-        assert config["limit_mode"] == "csv"
-        assert config["manual_upper_enabled"] is True
+        if analysis_type == "SPLF":
+            assert config["limit_mode"] == "manual"
+            assert config["manual_upper_enabled"] is False
+        else:
+            assert config["limit_mode"] == "csv"
+            assert config["manual_upper_enabled"] is True
         assert config["manual_lower_enabled"] is False
         assert config["manual_upper_segments"] == []
         assert config["manual_lower_segments"] == []
@@ -132,13 +138,13 @@ def test_spec_defaults_include_all_spectrum_modes():
     assert spec_defaults["hop_length"] == spec_consts.DEFAULT_SPEC_HOP_LENGTH
     assert spec_defaults["window_func"] == spec_consts.DEFAULT_SPEC_WINDOW
     assert spec_defaults["color_map"] == spec_consts.DEFAULT_SPEC_COLOR_MAP
-    assert spec_defaults["freq_scale_type"] == spec_consts.DEFAULT_SPEC_MODE
+    assert spec_defaults["freq_scale_type"] == "log"
     assert spec_defaults["mel_n_mels"] == spec_consts.DEFAULT_MEL_BAND_COUNT
     assert spec_defaults["mel_fmin_hz"] == spec_consts.DEFAULT_MEL_FMIN_HZ
     assert spec_defaults["mel_fmax_mode"] == spec_consts.DEFAULT_MEL_FMAX_MODE
     assert "mel_fmax_hz" not in spec_defaults
-    assert spec_defaults["top_limit"] == spec_consts.DEFAULT_SPEC_TOP_LIMIT
-    assert spec_defaults["bottom_limit"] == spec_consts.DEFAULT_SPEC_BOTTOM_LIMIT
+    assert spec_defaults["top_limit"] == 20
+    assert spec_defaults["bottom_limit"] == 2
     assert spec_defaults["custom_limit"] is spec_consts.DEFAULT_SPEC_CUSTOM_LIMIT
     assert spec_defaults["analysis_channel"] == spec_consts.DEFAULT_SPEC_ANALYSIS_CHANNEL
     assert "MEL" not in defaults

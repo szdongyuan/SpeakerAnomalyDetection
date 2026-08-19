@@ -170,7 +170,6 @@ def test_ensure_audio_database_ready_uses_canonical_database_path(monkeypatch, l
     canonical_path = local_tmp_path / "canonical" / "runtime.db"
     stale_audio_path = local_tmp_path / "stale" / "audio_data.db"
     monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(canonical_path))
-    monkeypatch.setattr(model_consts, "AUDIO_DATABASE_PATH", str(stale_audio_path))
 
     code, msg = db_manager_module.ensure_audio_database_ready()
 

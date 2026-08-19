@@ -212,6 +212,27 @@ def test_calibration_update_rejects_missing_channel_placeholder(tmp_path):
         repo.update_mic_channel_calibrations(asset["hardware_id"], {2: 2.5}, channel_standard_spl={2: 94})
 
 
+def test_mic_nullable_multi_channel_update_rolls_back_before_missing_placeholder(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+    repo.update_mic_channel_calibrations(
+        asset["hardware_id"], {0: 2.0}, channel_standard_spl={0: 114}
+    )
+
+    with pytest.raises(HardwareValidationError, match="channel"):
+        repo.update_mic_channel_calibrations(
+            asset["hardware_id"],
+            {0: 1.25, 1: 2.5},
+            channel_standard_spl={0: None, 1: 94},
+        )
+
+    row = repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa")
+    assert row["factor_value"] == 2.0
+    assert row["standard_spl"] == 114
+
+
 def test_output_calibration_rejects_missing_channel_placeholder(tmp_path):
     db_path = tmp_path / "system_data.db"
     create_system_db(db_path)
@@ -236,13 +257,42 @@ def test_mic_calibration_validates_factor_and_standard_spl(tmp_path):
                 channel_standard_spl={0: 94},
             )
 
-    for standard_spl in (None, math.inf, math.nan, "bad"):
+    for standard_spl in (math.inf, math.nan, "bad"):
         with pytest.raises(HardwareValidationError):
             repo.update_mic_channel_calibrations(
                 asset["hardware_id"],
                 {0: 1.25},
                 channel_standard_spl={0: standard_spl},
             )
+
+
+def test_mic_calibration_accepts_explicit_manual_null_standard_spl(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    repo.update_mic_channel_calibrations(
+        asset["hardware_id"], {0: 1.234567}, channel_standard_spl={0: None}
+    )
+
+    row = repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa")
+    assert row["factor_value"] == 1.234567
+    assert row["standard_spl"] is None
+
+
+def test_mic_calibration_still_rejects_missing_provenance_key(tmp_path):
+    db_path = tmp_path / "system_data.db"
+    create_system_db(db_path)
+    repo = HardwareManagementRepository(str(db_path))
+    asset = repo.register_asset(runtime_device(inputs=1, outputs=0), "Windows WASAPI", "Mic", 48000)
+
+    with pytest.raises(HardwareValidationError, match="standard_spl"):
+        repo.update_mic_channel_calibrations(
+            asset["hardware_id"], {0: 1.25}, channel_standard_spl={}
+        )
+
+    assert repo.get_channel_calibration(asset["hardware_id"], "input", 0, "mic_v2pa") is None
 
 
 @pytest.mark.parametrize(

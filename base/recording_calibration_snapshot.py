@@ -75,7 +75,7 @@ def build_recording_wav_calibration_metadata(input_channels, hardware_id=None, d
     for wav_channel_index, input_channel in enumerate(normalized_channels):
         factor = _finite_positive_float(v2pa_factors.get(input_channel))
         spl = _finite_float(standard_spl.get(input_channel))
-        calibrated = factor is not None and spl is not None
+        calibrated = factor is not None
         recorded_channels.append(
             {
                 "wav_channel_index": wav_channel_index,

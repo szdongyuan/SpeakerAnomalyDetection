@@ -4127,6 +4127,8 @@ class PatternMatch(QWidget):
 
 
 class PipelinePdPm(QWidget):
+    _supports_pre_resolved_v2pa_factor = True
+
     def __init__(self, title_name):
         super().__init__()
         self.data_struct = DataDealStruct()
@@ -4413,13 +4415,27 @@ class PipelinePdPm(QWidget):
 
         recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls = context
         head_config = head.get("config", {}) or {}
-        if getattr(self.data_struct, "wav_calibration_metadata_authoritative", False):
+        use_pre_resolved_v2pa_factor = getattr(
+            self,
+            "_use_pre_resolved_v2pa_factor",
+            False,
+        )
+        if use_pre_resolved_v2pa_factor:
+            self._use_pre_resolved_v2pa_factor = False
+        needs_v2pa_resolution = not (
+            use_pre_resolved_v2pa_factor and self.v2pa_factor is not None
+        )
+        if needs_v2pa_resolution and getattr(
+            self.data_struct,
+            "wav_calibration_metadata_authoritative",
+            False,
+        ):
             self.v2pa_factor = resolve_imported_wav_v2pa_factor(
                 self.data_struct,
                 head_config.get("analysis_channel", 0),
                 warn_callback=lambda message: MessageBox.warning(self, "提示", message),
             )
-        else:
+        elif needs_v2pa_resolution:
             try:
                 self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
                     head_config.get("analysis_channel", 0),

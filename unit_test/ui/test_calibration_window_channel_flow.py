@@ -1,13 +1,21 @@
 import os
 import queue
+import sqlite3
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QValidator
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication, QSizePolicy
 
 import ui.calibration_window as calibration_window
+from consts.calibration_consts import (
+    INPUT_CALIBRATION_MODE_MANUAL,
+    INPUT_CALIBRATION_MODE_STANDARD_SPL,
+)
 
 
 class _DummyStreamingProcessor:
@@ -85,6 +93,883 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def isolate_input_calibration_mode_preference(monkeypatch):
+    monkeypatch.setattr(
+        calibration_window,
+        "load_input_calibration_mode",
+        lambda: INPUT_CALIBRATION_MODE_STANDARD_SPL,
+    )
+    monkeypatch.setattr(calibration_window, "save_input_calibration_mode", lambda mode: True)
+
+
+def _vertical_policy(spacer):
+    return spacer.sizePolicy().verticalPolicy()
+
+
+def test_input_calibration_restores_manual_mode_spacer_layout(qapp, monkeypatch):
+    monkeypatch.setattr(calibration_window, "load_input_calibration_mode", lambda: INPUT_CALIBRATION_MODE_MANUAL)
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[0],
+        startup_channels=[0],
+        saved_factors={0: 1.234567},
+    )
+    try:
+        assert widget.standard_spl_mode_radio.text() == "标准声压校准"
+        assert widget.manual_mode_radio.text() == "手动输入"
+        assert widget.calibration_mode == INPUT_CALIBRATION_MODE_MANUAL
+        assert widget.manual_mode_radio.isChecked() is True
+        assert widget.standard_spl_box.isHidden() is True
+        assert widget.recorded_box.isHidden() is True
+        assert widget.v2pa_factor_box.title() == "输入校准系数"
+        assert widget.v2pa_factor_lineedit.isReadOnly() is False
+        assert widget.v2pa_factor_lineedit.text() == "1.234"
+        gap = calibration_window.ui_style_const.scale_size_px(20)
+        assert widget._input_calibration_layout.spacing() == 0
+        assert [spacer.sizeHint().height() for spacer in widget._input_calibration_middle_spacers] == [
+            gap,
+            gap,
+            0,
+            0,
+        ]
+        assert [
+            _vertical_policy(spacer)
+            for spacer in widget._input_calibration_middle_spacers
+        ] == [QSizePolicy.Fixed] * 4
+        assert _vertical_policy(widget._input_calibration_bottom_spacer) == QSizePolicy.Expanding
+        assert widget._input_calibration_bottom_spacer.sizeHint().height() == 0
+        all_spacers = (
+            *widget._input_calibration_middle_spacers,
+            widget._input_calibration_bottom_spacer,
+        )
+        assert all(
+            spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Minimum
+            for spacer in all_spacers
+        )
+    finally:
+        widget.close()
+
+
+def test_input_calibration_standard_mode_layout_and_user_change(qapp, monkeypatch):
+    saved_modes = []
+    monkeypatch.setattr(calibration_window, "save_input_calibration_mode", lambda mode: saved_modes.append(mode) or True)
+    widget = _build_widget(monkeypatch, saved_channels=[0], startup_channels=[0])
+    try:
+        assert widget.calibration_mode == INPUT_CALIBRATION_MODE_STANDARD_SPL
+        assert widget.standard_spl_mode_radio.isChecked() is True
+        assert widget.standard_spl_box.isHidden() is False
+        assert widget.recorded_box.isHidden() is False
+        assert widget.v2pa_factor_box.title() == "校准结果"
+        assert widget.v2pa_factor_lineedit.isReadOnly() is True
+
+        middle_spacers = tuple(widget._input_calibration_middle_spacers)
+        bottom_spacer = widget._input_calibration_bottom_spacer
+        layout_count = widget._input_calibration_layout.count()
+        original_spacing = widget._input_calibration_default_spacing
+        layout_items = tuple(
+            widget._input_calibration_layout.itemAt(index).widget()
+            or widget._input_calibration_layout.itemAt(index).spacerItem()
+            for index in range(layout_count)
+        )
+
+        assert layout_count == 10
+        assert widget._input_calibration_layout.itemAt(0).widget() is widget.calibration_mode_box
+        assert widget._input_calibration_layout.itemAt(1).spacerItem() is middle_spacers[0]
+        assert widget._input_calibration_layout.itemAt(2).widget().title() == "输入通道"
+        assert widget._input_calibration_layout.itemAt(3).spacerItem() is middle_spacers[1]
+        assert widget._input_calibration_layout.itemAt(4).widget() is widget.standard_spl_box
+        assert widget._input_calibration_layout.itemAt(5).spacerItem() is middle_spacers[2]
+        assert widget._input_calibration_layout.itemAt(6).widget() is widget.recorded_box
+        assert widget._input_calibration_layout.itemAt(7).spacerItem() is middle_spacers[3]
+        assert widget._input_calibration_layout.itemAt(8).widget() is widget.v2pa_factor_box
+        assert widget._input_calibration_layout.itemAt(9).spacerItem() is bottom_spacer
+
+        assert widget._input_calibration_layout.spacing() == original_spacing
+        assert [spacer.sizeHint().height() for spacer in middle_spacers] == [0, 0, 0, 0]
+        assert all(_vertical_policy(spacer) == QSizePolicy.Expanding for spacer in middle_spacers)
+        assert _vertical_policy(bottom_spacer) == QSizePolicy.Fixed
+        assert bottom_spacer.sizeHint().height() == 0
+        assert all(
+            spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Minimum
+            for spacer in (*middle_spacers, bottom_spacer)
+        )
+
+        widget.manual_mode_radio.click()
+        qapp.processEvents()
+
+        assert widget.calibration_mode == INPUT_CALIBRATION_MODE_MANUAL
+        assert saved_modes == [INPUT_CALIBRATION_MODE_MANUAL]
+        assert widget.standard_spl_box.isHidden() is True
+        assert widget.recorded_box.isHidden() is True
+
+        widget.standard_spl_mode_radio.click()
+        qapp.processEvents()
+
+        assert widget._input_calibration_layout.count() == layout_count
+        assert tuple(widget._input_calibration_middle_spacers) == middle_spacers
+        assert widget._input_calibration_bottom_spacer is bottom_spacer
+        assert tuple(
+            widget._input_calibration_layout.itemAt(index).widget()
+            or widget._input_calibration_layout.itemAt(index).spacerItem()
+            for index in range(layout_count)
+        ) == layout_items
+        assert widget._input_calibration_layout.spacing() == original_spacing
+        assert [spacer.sizeHint().height() for spacer in middle_spacers] == [0, 0, 0, 0]
+        assert all(_vertical_policy(spacer) == QSizePolicy.Expanding for spacer in middle_spacers)
+        assert _vertical_policy(bottom_spacer) == QSizePolicy.Fixed
+        assert bottom_spacer.sizeHint().height() == 0
+        assert all(
+            spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Minimum
+            for spacer in (*middle_spacers, bottom_spacer)
+        )
+    finally:
+        widget.close()
+
+
+def test_input_calibration_preference_save_failure_logs_without_popup(qapp, monkeypatch):
+    errors = []
+    popup_calls = []
+    monkeypatch.setattr(calibration_window, "save_input_calibration_mode", lambda mode: False)
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: popup_calls.append((args, kwargs))),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[0], startup_channels=[0])
+    try:
+        monkeypatch.setattr(widget.default_logger, "warning", lambda message: errors.append(message))
+        widget.manual_mode_radio.click()
+        qapp.processEvents()
+
+        assert widget.calibration_mode == INPUT_CALIBRATION_MODE_MANUAL
+        assert errors
+        assert popup_calls == []
+    finally:
+        widget.close()
+
+
+def _enter_manual_mode(widget, qapp):
+    widget.manual_mode_radio.click()
+    qapp.processEvents()
+
+
+def _user_edit_factor(widget, text):
+    widget.v2pa_factor_lineedit.setText(text)
+    widget.v2pa_factor_lineedit.textEdited.emit(text)
+    widget.v2pa_factor_lineedit.editingFinished.emit()
+
+
+@pytest.mark.parametrize("text", ["1", "01.2", "1.23", "1.234", "1."])
+def test_manual_factor_validator_accepts_strict_decimal_intermediate_or_complete(qapp, monkeypatch, text):
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        validator = widget.v2pa_factor_lineedit.validator()
+
+        state, _, _ = validator.validate(text, len(text))
+
+        assert state != QValidator.Invalid
+    finally:
+        widget.close()
+
+
+def test_factor_editor_refreshes_read_only_and_editable_colors_on_mode_switch(qapp, monkeypatch):
+    widget = _build_widget(monkeypatch, saved_channels=[0], startup_channels=[0])
+    editor = widget.v2pa_factor_lineedit
+    editor.setStyleSheet(
+        'QLineEdit { background-color: white; } '
+        'QLineEdit[readOnly="true"] { background-color: rgb(211, 211, 211); }'
+    )
+    try:
+        widget._apply_calibration_mode()
+        qapp.processEvents()
+        assert editor.isReadOnly() is True
+        assert editor.palette().color(editor.backgroundRole()) == QColor(211, 211, 211)
+
+        widget.manual_mode_radio.click()
+        qapp.processEvents()
+        assert editor.isReadOnly() is False
+        assert editor.palette().color(editor.backgroundRole()) == QColor("white")
+
+        widget.standard_spl_mode_radio.click()
+        qapp.processEvents()
+        assert editor.isReadOnly() is True
+        assert editor.palette().color(editor.backgroundRole()) == QColor(211, 211, 211)
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["1.2345", "+1.2", "-1.2", ".5", "1,234", "1e2", "1,2", "１２.３", "١.٢"],
+)
+def test_manual_factor_validator_rejects_disallowed_syntax(qapp, monkeypatch, text):
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        validator = widget.v2pa_factor_lineedit.validator()
+
+        state, _, _ = validator.validate(text, len(text))
+
+        assert state == QValidator.Invalid
+    finally:
+        widget.close()
+
+
+def test_manual_factor_validator_allows_empty_intermediate(qapp, monkeypatch):
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        validator = widget.v2pa_factor_lineedit.validator()
+
+        state, _, _ = validator.validate("", 0)
+
+        assert state == QValidator.Intermediate
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize(
+    ("factor", "expected"),
+    [(1.2, "1.200"), (1.23, "1.230"), (1.234, "1.234"), (1.234567, "1.234")],
+)
+def test_factor_display_is_truncated_and_fixed_to_three_decimals(qapp, monkeypatch, factor, expected):
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[1],
+        startup_channels=[1],
+        saved_factors={1: factor},
+    )
+    try:
+        assert widget.v2pa_factor_lineedit.text() == expected
+
+        _enter_manual_mode(widget, qapp)
+
+        assert widget.v2pa_factor_lineedit.text() == expected
+    finally:
+        widget.close()
+
+
+def test_high_precision_history_mode_and_channel_refresh_do_not_save(qapp, monkeypatch):
+    save_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+    )
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[1, 3],
+        startup_channels=[1, 3],
+        saved_factors={1: 1.234567, 3: 2.345678},
+    )
+    try:
+        assert widget.v2pa_factor_lineedit.text() == "1.234"
+
+        _enter_manual_mode(widget, qapp)
+        widget.channel_combo_box.setCurrentIndex(1)
+        qapp.processEvents()
+        widget.standard_spl_mode_radio.click()
+        qapp.processEvents()
+
+        assert widget.v2pa_factor_lineedit.text() == "2.345"
+        assert save_calls == []
+    finally:
+        widget.close()
+
+
+def test_manual_three_decimal_value_saves_on_focus_and_enter(qapp, monkeypatch):
+    save_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda channel, factor, hardware_id=None: save_calls.append((channel, factor, hardware_id)),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1, 3], startup_channels=[1, 3])
+    try:
+        _enter_manual_mode(widget, qapp)
+        _user_edit_factor(widget, "1.234")
+
+        widget.channel_combo_box.setCurrentIndex(1)
+        qapp.processEvents()
+        widget.show()
+        widget.v2pa_factor_lineedit.setFocus()
+        widget.v2pa_factor_lineedit.setText("2.345")
+        widget.v2pa_factor_lineedit.textEdited.emit("2.345")
+        QTest.keyClick(widget.v2pa_factor_lineedit, Qt.Key_Return)
+        qapp.processEvents()
+
+        assert save_calls == [(1, 1.234, "mic-1"), (3, 2.345, "mic-1")]
+        assert widget.v2pa_factor_lineedit.text() == "2.345"
+    finally:
+        widget.close()
+
+
+def test_digit_only_float_overflow_does_not_save_and_restores_snapshot(qapp, monkeypatch):
+    save_calls = []
+    warnings = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[1],
+        startup_channels=[1],
+        saved_factors={1: 1.25},
+    )
+    try:
+        _enter_manual_mode(widget, qapp)
+
+        _user_edit_factor(widget, "9" * 400)
+
+        assert save_calls == []
+        assert len(warnings) == 1
+        assert widget.v2pa_factor_lineedit.text() == "1.250"
+    finally:
+        widget.close()
+
+
+def test_large_finite_factor_displays_without_decimal_context_failure(qapp, monkeypatch):
+    widget = _build_widget(
+        monkeypatch,
+        saved_channels=[1],
+        startup_channels=[1],
+        saved_factors={1: float("1" + ("0" * 100))},
+    )
+    try:
+        assert widget.v2pa_factor_lineedit.text() == ("1" + ("0" * 100) + ".000")
+    finally:
+        widget.close()
+
+
+def test_standard_completion_keeps_full_session_factor_but_displays_truncated_value(qapp, monkeypatch):
+    replace_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "replace_mic_channel_v2pa_factors",
+        lambda factors, channel_standard_spl=None, hardware_id=None: replace_calls.append(
+            (dict(factors), dict(channel_standard_spl or {}), hardware_id)
+        ),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        _install_successful_streaming_calibration(monkeypatch, widget, [1.234567])
+
+        _complete_current_channel(qapp, widget)
+
+        assert widget.session_channel_factors == {1: 1.234567}
+        assert replace_calls == [({1: 1.234567}, {1: 94}, "mic-1")]
+        assert widget.v2pa_factor_lineedit.text() == "1.234"
+    finally:
+        widget.close()
+
+
+def test_manual_factor_save_is_exact_idempotent_and_channel_isolated(qapp, monkeypatch):
+    save_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda channel, factor, hardware_id=None: save_calls.append((channel, factor, hardware_id)),
+        raising=False,
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1, 3], startup_channels=[1, 3])
+    try:
+        widget.current_channel = 3
+        widget.session_channel_factors = {1: 9.25}
+        widget.session_channel_standard_spl = {1: 94}
+        widget.unsaved_session_channels = {1, 3}
+        widget.calibrated_channels = {1}
+        widget._refresh_channel_selector(preferred_channel=3)
+        _enter_manual_mode(widget, qapp)
+
+        _user_edit_factor(widget, "1.234")
+        widget.v2pa_factor_lineedit.editingFinished.emit()
+
+        assert save_calls == [(3, 1.234, "mic-1")]
+        assert widget.session_channel_factors == {1: 9.25, 3: 1.234}
+        assert widget.session_channel_standard_spl == {1: 94, 3: None}
+        assert widget.unsaved_session_channels == {1}
+        assert widget.calibrated_channels == {1, 3}
+        assert widget.v2pa_factor_lineedit.text() == "1.234"
+        assert widget._manual_factor_dirty is False
+    finally:
+        widget.close()
+
+
+def test_manual_factor_precision_focus_and_deliberate_truncated_edit_saves(qapp, monkeypatch):
+    save_calls = []
+    value = 1.23456789012345
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+        raising=False,
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[3], startup_channels=[3], saved_factors={3: value})
+    try:
+        _enter_manual_mode(widget, qapp)
+        assert widget.v2pa_factor_lineedit.text() == "1.234"
+        assert widget._manual_factor_dirty is False
+
+        widget.v2pa_factor_lineedit.editingFinished.emit()
+        widget._refresh_current_channel_display()
+        assert widget._manual_factor_dirty is False
+
+        _user_edit_factor(widget, "01.234")
+        widget.v2pa_factor_lineedit.editingFinished.emit()
+
+        assert save_calls == [((3, 1.234), {"hardware_id": "mic-1"})]
+        assert widget.v2pa_factor_lineedit.text() == "1.234"
+        assert widget._manual_factor_dirty is False
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("text", ["", "not-a-number", "0", "-1", "nan", "inf", "-inf"])
+@pytest.mark.parametrize("saved_factors, expected_text", [({3: 1.23456789012345}, "1.234"), ({}, "")])
+def test_invalid_manual_factor_restores_exact_database_or_empty_snapshot(
+    qapp, monkeypatch, text, saved_factors, expected_text
+):
+    save_calls = []
+    warnings = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[3], startup_channels=[3], saved_factors=saved_factors)
+    try:
+        _enter_manual_mode(widget, qapp)
+        _user_edit_factor(widget, text)
+
+        assert save_calls == []
+        assert len(warnings) == 1
+        assert widget.v2pa_factor_lineedit.text() == expected_text
+        assert widget._manual_factor_dirty is False
+    finally:
+        widget.close()
+
+
+def test_failed_manual_override_restores_unsaved_standard_session_snapshot(qapp, monkeypatch):
+    warnings = []
+    errors = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database unavailable")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        widget.session_channel_factors = {1: 2.5000000000001}
+        widget.session_channel_standard_spl = {1: 114}
+        widget.unsaved_session_channels = {1}
+        widget.calibrated_channels = {1}
+        widget._refresh_current_channel_display()
+        _enter_manual_mode(widget, qapp)
+        monkeypatch.setattr(widget.default_logger, "error", lambda message: errors.append(message))
+
+        _user_edit_factor(widget, "3.75")
+
+        assert widget.session_channel_factors == {1: 2.5000000000001}
+        assert widget.session_channel_standard_spl == {1: 114}
+        assert widget.unsaved_session_channels == {1}
+        assert widget.calibrated_channels == {1}
+        assert widget.v2pa_factor_lineedit.text() == "2.500"
+        assert len(warnings) == 1
+        assert errors and "mic-1" in errors[-1] and "1" in errors[-1]
+    finally:
+        widget.close()
+
+
+def test_unexpected_manual_save_failure_propagates_without_database_warning_or_rollback(qapp, monkeypatch):
+    warnings = []
+    errors = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("programming defect")),
+    )
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1], saved_factors={1: 1.25})
+    try:
+        _enter_manual_mode(widget, qapp)
+        monkeypatch.setattr(widget.default_logger, "error", lambda message: errors.append(message))
+        widget.v2pa_factor_lineedit.setText("2.5")
+        widget.v2pa_factor_lineedit.textEdited.emit("2.5")
+
+        with pytest.raises(RuntimeError, match="programming defect"):
+            widget._manual_factor_editing_finished()
+
+        assert warnings == []
+        assert errors == []
+        assert widget.v2pa_factor_lineedit.text() == "2.5"
+        assert widget._manual_factor_dirty is True
+        assert widget.session_channel_factors == {}
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("preflight", ["device", "hardware", "channel"])
+def test_manual_save_preflight_failure_restores_snapshot(qapp, monkeypatch, preflight):
+    save_calls = []
+    warnings = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[3], startup_channels=[3], saved_factors={3: 1.25})
+    try:
+        _enter_manual_mode(widget, qapp)
+        if preflight == "device":
+            widget.selected_input_device = None
+        elif preflight == "hardware":
+            monkeypatch.setattr(widget, "_selected_mic_hardware_id", lambda: None)
+        else:
+            widget.current_channel = None
+        _user_edit_factor(widget, "2.5")
+
+        assert save_calls == []
+        assert len(warnings) == 1
+        assert widget.session_channel_factors == {}
+        assert widget.calibrated_channels == set()
+        assert widget.v2pa_factor_lineedit.text() == "1.250"
+    finally:
+        widget.close()
+
+
+def test_unsaved_standard_session_survives_manual_mode_without_user_edit(qapp, monkeypatch):
+    save_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+        raising=False,
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        widget.session_channel_factors = {1: 2.5000000000001}
+        widget.session_channel_standard_spl = {1: 114}
+        widget.unsaved_session_channels = {1}
+        widget.calibrated_channels = {1}
+        widget._refresh_current_channel_display()
+
+        _enter_manual_mode(widget, qapp)
+        widget.v2pa_factor_lineedit.editingFinished.emit()
+        widget.standard_spl_mode_radio.click()
+        qapp.processEvents()
+
+        assert save_calls == []
+        assert widget.session_channel_factors == {1: 2.5000000000001}
+        assert widget.session_channel_standard_spl == {1: 114}
+        assert widget.unsaved_session_channels == {1}
+    finally:
+        widget.close()
+
+
+def test_manual_edit_replaces_unsaved_standard_session_with_null_provenance(qapp, monkeypatch):
+    save_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda channel, factor, hardware_id=None: save_calls.append((channel, factor, hardware_id)),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        widget.session_channel_factors = {1: 2.5000000000001}
+        widget.session_channel_standard_spl = {1: 114}
+        widget.unsaved_session_channels = {1}
+        widget.calibrated_channels = {1}
+        widget._refresh_current_channel_display()
+        _enter_manual_mode(widget, qapp)
+
+        _user_edit_factor(widget, "3.125")
+
+        assert save_calls == [(1, 3.125, "mic-1")]
+        assert widget.session_channel_factors == {1: 3.125}
+        assert widget.session_channel_standard_spl == {1: None}
+        assert widget.unsaved_session_channels == set()
+    finally:
+        widget.close()
+
+
+def test_complete_payload_and_standard_recalibration_preserve_explicit_provenance(qapp, monkeypatch):
+    replace_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "replace_mic_channel_v2pa_factors",
+        lambda factors, channel_standard_spl=None, hardware_id=None: replace_calls.append(
+            (dict(factors), dict(channel_standard_spl), hardware_id)
+        ),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1, 3], startup_channels=[1, 3])
+    try:
+        widget.session_channel_factors = {1: 1.5, 3: 3.5}
+        widget.session_channel_standard_spl = {1: None, 3: 114}
+        widget.unsaved_session_channels = {3}
+        assert widget._persist_complete_selected_channel_factors_if_ready() is True
+        assert replace_calls == [({1: 1.5, 3: 3.5}, {1: None, 3: 114}, "mic-1")]
+
+        widget.active_capture_channel = 1
+        widget.current_channel = 1
+        widget.streaming_processor = _ContractStreamingProcessor(payloads=[_streaming_payload()])
+        widget.streaming_processor.process_queue()
+        widget.standard_spl_flag = True
+        monkeypatch.setattr(widget, "_calculate_spl_from_data", lambda data: 90.0)
+        monkeypatch.setattr(widget, "calculate_v2pa_factor", lambda value: 2.25)
+        monkeypatch.setattr(widget, "calibration_popup", lambda success_flag=True: None)
+        widget._on_streaming_complete()
+
+        assert widget.session_channel_standard_spl[1] == 94
+    finally:
+        widget.close()
+
+
+def test_close_persists_complete_mixed_manual_and_standard_provenance(qapp, monkeypatch):
+    replace_calls = []
+    warnings = []
+    startup_device = {
+        "hardware_id": "mic-1",
+        "name": "Demo Mic",
+        "index": 7,
+        "max_input_channels": 8,
+        "samplerate": 44100,
+    }
+    monkeypatch.setattr(
+        calibration_window.SoundDeviceManager,
+        "load_selected_devices",
+        staticmethod(lambda: {"mic": {"hardware_id": "mic-1"}, "mic_channels": [1, 3]}),
+    )
+    monkeypatch.setattr(
+        calibration_window.SoundDeviceManager,
+        "get_startup_devices",
+        lambda self: {"mic": startup_device, "mic_channels": [1, 3]},
+    )
+    monkeypatch.setattr(
+        calibration_window.SoundDeviceManager,
+        "restore_mic_channels",
+        staticmethod(lambda device, channels: list(channels or [])),
+    )
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda **kwargs: {})
+    monkeypatch.setattr(
+        calibration_window,
+        "replace_mic_channel_v2pa_factors",
+        lambda factors, channel_standard_spl=None, hardware_id=None: replace_calls.append(
+            (dict(factors), dict(channel_standard_spl), hardware_id)
+        ),
+    )
+    monkeypatch.setattr(
+        calibration_window.MessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append((args, kwargs))),
+    )
+    window = calibration_window.CalibrationWindow()
+    try:
+        window.tabwidget.setCurrentIndex(1)
+        widget = window.input_cal_wnd
+        widget.session_channel_factors = {1: 1.5, 3: 3.5}
+        widget.session_channel_standard_spl = {1: None, 3: 114}
+        widget.calibrated_channels = {1, 3}
+        widget.unsaved_session_channels = {3}
+        widget.pending_persistence_failure = True
+        event = _FakeCloseEvent()
+
+        window.closeEvent(event)
+
+        assert replace_calls == [({1: 1.5, 3: 3.5}, {1: None, 3: 114}, "mic-1")]
+        assert event.accepted is True
+        assert event.ignored is False
+        assert widget.pending_persistence_failure is False
+        assert warnings == []
+    finally:
+        window.input_cal_wnd.selected_input_channels = []
+        window.input_cal_wnd.pending_persistence_failure = False
+        window.close()
+
+
+def test_manual_edit_transaction_is_cleared_by_reset_without_changing_mode(qapp, monkeypatch):
+    save_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "save_manual_mic_channel_v2pa_factor",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(calibration_window, "clear_mic_channel_v2pa_factors", lambda **kwargs: None)
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1], saved_factors={1: 1.25})
+    try:
+        monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda **kwargs: {})
+        _enter_manual_mode(widget, qapp)
+        widget.v2pa_factor_lineedit.setText("2.5")
+        widget.v2pa_factor_lineedit.textEdited.emit("2.5")
+        assert widget._manual_factor_dirty is True
+
+        widget.reset_btn_clicked()
+        widget.v2pa_factor_lineedit.editingFinished.emit()
+
+        assert widget.calibration_mode == INPUT_CALIBRATION_MODE_MANUAL
+        assert widget._manual_factor_dirty is False
+        assert widget._manual_edit_snapshot["factor"] is None
+        assert widget.session_channel_factors == {}
+        assert widget.session_channel_standard_spl == {}
+        assert widget.calibrated_channels == set()
+        assert widget.unsaved_session_channels == set()
+        assert save_calls == []
+    finally:
+        widget.close()
+
+
+def test_shared_calibration_button_is_always_visible_and_mode_aware(qapp, monkeypatch):
+    _install_calibration_window_startup_devices(monkeypatch)
+    window = calibration_window.CalibrationWindow()
+    try:
+        window.show()
+        qapp.processEvents()
+        assert window.tabwidget.currentIndex() == 0
+        assert window.cal_btn.isVisible() is True
+        assert window.cal_btn.isEnabled() is True
+
+        window.tabwidget.setCurrentIndex(1)
+        qapp.processEvents()
+        assert window.cal_btn.isVisible() is True
+        assert window.cal_btn.isEnabled() is True
+
+        window.input_cal_wnd.manual_mode_radio.click()
+        qapp.processEvents()
+        assert window.cal_btn.isVisible() is True
+        assert window.cal_btn.isEnabled() is False
+
+        window.tabwidget.setCurrentIndex(0)
+        qapp.processEvents()
+        assert window.cal_btn.isVisible() is True
+        assert window.cal_btn.isEnabled() is True
+    finally:
+        window.close()
+
+
+def test_input_capture_keeps_shared_button_disabled_across_tab_switch(qapp, monkeypatch):
+    _install_calibration_window_startup_devices(monkeypatch)
+    processor = _DummyStreamingProcessor()
+    monkeypatch.setattr(
+        calibration_window,
+        "stream_record_without_play",
+        lambda *args, **kwargs: (processor, 44100),
+    )
+    window = calibration_window.CalibrationWindow()
+    try:
+        window.show()
+        window.tabwidget.setCurrentIndex(1)
+        qapp.processEvents()
+
+        window.clicked_calibration_button()
+        assert window.input_cal_wnd.active_capture_channel == 0
+        assert window.cal_btn.isEnabled() is False
+
+        window.tabwidget.setCurrentIndex(0)
+        qapp.processEvents()
+        assert window.cal_btn.isVisible() is True
+        assert window.cal_btn.isEnabled() is False
+
+        window.input_cal_wnd.stop_active_streaming_capture()
+        qapp.processEvents()
+        assert window.input_cal_wnd.active_capture_channel is None
+        assert window.cal_btn.isEnabled() is True
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize(
+    "capture_exit",
+    ["startup_failure", "stop", "reset", "success", "invalid_result", "stream_failure"],
+)
+def test_shared_calibration_button_recovers_after_capture_lifecycle_exit(
+    qapp, monkeypatch, capture_exit
+):
+    _install_calibration_window_startup_devices(monkeypatch)
+    if capture_exit == "startup_failure":
+        monkeypatch.setattr(
+            calibration_window,
+            "stream_record_without_play",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+    else:
+        processor = _ContractStreamingProcessor(payloads=[_streaming_payload()], is_recording=False)
+        monkeypatch.setattr(
+            calibration_window,
+            "stream_record_without_play",
+            lambda *args, **kwargs: (processor, 44100),
+        )
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", staticmethod(lambda *args, **kwargs: None))
+    monkeypatch.setattr(calibration_window, "clear_mic_channel_v2pa_factors", lambda **kwargs: None)
+    monkeypatch.setattr(calibration_window, "replace_mic_channel_v2pa_factors", lambda *args, **kwargs: None)
+
+    window = calibration_window.CalibrationWindow()
+    input_widget = window.input_cal_wnd
+    try:
+        window.show()
+        window.tabwidget.setCurrentIndex(1)
+        qapp.processEvents()
+        monkeypatch.setattr(input_widget, "calibration_popup", lambda success_flag=True: None)
+        if capture_exit == "stream_failure":
+            monkeypatch.setattr(
+                input_widget,
+                "_calculate_spl_from_data",
+                lambda data: (_ for _ in ()).throw(ValueError("bad recording")),
+            )
+        else:
+            monkeypatch.setattr(input_widget, "_calculate_spl_from_data", lambda data: 90.0)
+        monkeypatch.setattr(
+            input_widget,
+            "calculate_v2pa_factor",
+            lambda average_value: np.nan if capture_exit == "invalid_result" else 1.25,
+        )
+
+        window.clicked_calibration_button()
+        expected_enabled_after_click = capture_exit == "startup_failure"
+        assert window.cal_btn.isEnabled() is expected_enabled_after_click
+
+        if capture_exit == "stop":
+            input_widget.stop_active_streaming_capture()
+        elif capture_exit == "reset":
+            input_widget.reset_btn_clicked()
+        elif capture_exit in {"success", "invalid_result", "stream_failure"}:
+            input_widget._poll_streaming_queue()
+        qapp.processEvents()
+
+        assert input_widget.active_capture_channel is None
+        assert window.cal_btn.isVisible() is True
+        assert window.cal_btn.isEnabled() is True
+    finally:
+        window.close()
+
+
 class _FakeStimulusSignal:
     def __init__(self):
         self.sample_rates = []
@@ -102,9 +987,11 @@ def _use_fake_stimulus(monkeypatch):
 
 def _install_calibration_window_startup_devices(monkeypatch):
     startup_device = {
+        "hardware_id": "mic-1",
         "name": "Demo Mic",
         "index": 7,
         "max_input_channels": 8,
+        "samplerate": 44100,
     }
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
@@ -984,6 +1871,7 @@ def test_clicked_calibration_returns_false_when_stream_start_fails(qapp, monkeyp
         assert widget.streaming_processor is None
         assert not widget.update_ui_timer.isActive()
         assert not widget.streaming_poll_timer.isActive()
+        assert widget.calibration_mode_box.isEnabled() is True
         assert warnings
         assert "录音启动失败" in warnings[-1][0][2]
     finally:
@@ -1028,6 +1916,7 @@ def test_clicked_calibration_uses_selected_device_and_current_channel(qapp, monk
         assert recorded_dict["input_channels"] == [3]
         assert widget.active_capture_channel == 3
         assert widget.channel_combo_box.isEnabled() is False
+        assert widget.calibration_mode_box.isEnabled() is False
         assert widget.update_ui_timer.isActive() is True
         assert widget.streaming_poll_timer.isActive() is True
     finally:
@@ -1075,6 +1964,51 @@ def test_clicked_calibration_uses_registered_input_sample_rate(qapp, monkeypatch
         assert payload["input_channels"] == [3]
     finally:
         widget.reset_btn_clicked()
+        widget.close()
+
+
+def test_stop_active_capture_reenables_calibration_mode(qapp, monkeypatch):
+    processor = _DummyStreamingProcessor()
+    monkeypatch.setattr(
+        calibration_window,
+        "stream_record_without_play",
+        lambda *args, **kwargs: (processor, 44100),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        assert widget.clicked_calibration() is True
+        assert widget.calibration_mode_box.isEnabled() is False
+
+        widget.stop_active_streaming_capture()
+
+        assert widget.active_capture_channel is None
+        assert widget.calibration_mode_box.isEnabled() is True
+    finally:
+        widget.close()
+
+
+def test_stream_completion_failure_reenables_calibration_mode(qapp, monkeypatch):
+    processor = _ContractStreamingProcessor(payloads=[_streaming_payload()], is_recording=False)
+    popup_calls = []
+    monkeypatch.setattr(
+        calibration_window,
+        "stream_record_without_play",
+        lambda *args, **kwargs: (processor, 44100),
+    )
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    try:
+        monkeypatch.setattr(widget, "_calculate_spl_from_data", lambda data: (_ for _ in ()).throw(ValueError("bad")))
+        monkeypatch.setattr(widget, "calibration_popup", lambda success_flag=True: popup_calls.append(success_flag))
+
+        assert widget.clicked_calibration() is True
+        assert widget.calibration_mode_box.isEnabled() is False
+        widget._poll_streaming_queue()
+        qapp.processEvents()
+
+        assert widget.active_capture_channel is None
+        assert widget.calibration_mode_box.isEnabled() is True
+        assert popup_calls == [False]
+    finally:
         widget.close()
 
 
@@ -1165,8 +2099,9 @@ def test_inflight_channel_switch_does_not_change_saved_channel(qapp, monkeypatch
         assert widget.streaming_processor is None
         assert replace_calls == []
         assert popup_calls == [True]
-        assert button_states == [True]
+        assert button_states == [False, True]
         assert widget.active_capture_channel is None
+        assert widget.calibration_mode_box.isEnabled() is True
         assert widget.session_channel_factors[1] == 2.5
         assert widget.session_channel_standard_spl[1] == 94
         assert widget.calibrated_channels == {1}
@@ -1210,7 +2145,7 @@ def test_non_final_channel_calibration_stays_in_session_without_persisting(qapp,
         assert widget.current_channel == 3
         assert widget.v2pa_factor_lineedit.text() == ""
         assert popup_calls == [True]
-        assert button_states == [True]
+        assert button_states == [False, True]
     finally:
         widget.close()
 
@@ -1244,7 +2179,7 @@ def test_final_channel_calibration_persists_complete_selected_set(qapp, monkeypa
         assert widget.unsaved_session_channels == set()
         assert widget.calibrated_channels == {1, 3}
         assert popup_calls == [True, True]
-        assert button_states == [True, True]
+        assert button_states == [False, True, False, True]
     finally:
         widget.close()
 
@@ -1358,7 +2293,7 @@ def test_final_persistence_reuses_saved_selected_channel_factors(qapp, monkeypat
         assert widget.session_channel_standard_spl == {3: 94}
         assert widget.calibrated_channels == {3}
         assert popup_calls == [True]
-        assert button_states == [True]
+        assert button_states == [False, True]
     finally:
         widget.close()
 
@@ -1391,8 +2326,8 @@ def test_final_persistence_failure_keeps_session_state_and_reenables_button(qapp
         assert widget.unsaved_session_channels == {1}
         assert widget.calibrated_channels == {1}
         assert widget.current_channel == 1
-        assert widget.v2pa_factor_lineedit.text() == "2.5"
-        assert button_states == [True]
+        assert widget.v2pa_factor_lineedit.text() == "2.500"
+        assert button_states == [False, True]
         assert errors
         assert "disk full" in errors[-1]
     finally:
@@ -1437,12 +2372,12 @@ def test_final_persistence_failure_keeps_visible_session_result_when_saved_data_
         _complete_current_channel(qapp, widget)
 
         assert widget.current_channel == 3
-        assert widget.v2pa_factor_lineedit.text() == "3.5"
+        assert widget.v2pa_factor_lineedit.text() == "3.500"
         assert widget.session_channel_factors == {3: 3.5}
         assert widget.session_channel_standard_spl == {3: 114}
         assert widget.unsaved_session_channels == {3}
         assert widget.calibrated_channels == {3}
-        assert button_states == [True]
+        assert button_states == [False, True]
         assert errors
         assert "replace disturbed saved data" in errors[-1]
     finally:
@@ -1512,6 +2447,7 @@ def test_reset_clears_persisted_session_state_and_selects_first_post_reload_chan
         assert widget.session_channel_standard_spl == {}
         assert widget.unsaved_session_channels == set()
         assert widget.pending_persistence_failure is False
+        assert widget.calibration_mode_box.isEnabled() is True
         assert widget.v2pa_factor_lineedit.text() == ""
     finally:
         widget.close()
@@ -1659,6 +2595,11 @@ def test_close_event_blocks_after_final_persistence_failure(qapp, monkeypatch):
         _complete_current_channel(qapp, widget)
 
         assert widget.uncalibrated_selected_channels() == []
+        processor = _DummyStreamingProcessor()
+        widget.streaming_processor = processor
+        widget.active_capture_channel = 1
+        widget.update_ui_timer.start()
+        widget.streaming_poll_timer.start(50)
 
         event = _FakeCloseEvent()
         window.closeEvent(event)
@@ -1667,7 +2608,15 @@ def test_close_event_blocks_after_final_persistence_failure(qapp, monkeypatch):
         assert event.accepted is False
         assert warnings
         assert "保存" in warnings[-1][0][2]
+        assert processor.stop_calls == 0
+        assert widget.streaming_processor is processor
+        assert widget.active_capture_channel == 1
+        assert widget.update_ui_timer.isActive() is True
+        assert widget.streaming_poll_timer.isActive() is True
     finally:
+        window.input_cal_wnd.pending_persistence_failure = False
+        window.input_cal_wnd.stop_active_streaming_capture()
+        window.tabwidget.setCurrentIndex(0)
         window.close()
 
 
@@ -2021,6 +2970,37 @@ def test_close_event_stops_active_streaming_when_close_is_allowed(qapp):
         assert window.input_cal_wnd.stop_timer is True
         assert processor.stop_calls == 1
         assert window.input_cal_wnd.streaming_processor is None
+        assert window.input_cal_wnd.update_ui_timer.isActive() is False
+        assert window.input_cal_wnd.streaming_poll_timer.isActive() is False
+    finally:
+        window.close()
+
+
+def test_close_event_stops_active_input_capture_after_switching_to_output(qapp, monkeypatch):
+    _install_calibration_window_startup_devices(monkeypatch)
+    processor = _DummyStreamingProcessor()
+    monkeypatch.setattr(
+        calibration_window,
+        "stream_record_without_play",
+        lambda *args, **kwargs: (processor, 44100),
+    )
+    window = calibration_window.CalibrationWindow()
+    try:
+        window.tabwidget.setCurrentIndex(1)
+        window.clicked_calibration_button()
+        assert window.input_cal_wnd.active_capture_channel == 0
+        assert window.input_cal_wnd.update_ui_timer.isActive() is True
+        assert window.input_cal_wnd.streaming_poll_timer.isActive() is True
+
+        window.tabwidget.setCurrentIndex(0)
+        event = _FakeCloseEvent()
+        window.closeEvent(event)
+
+        assert event.accepted is True
+        assert event.ignored is False
+        assert processor.stop_calls == 1
+        assert window.input_cal_wnd.streaming_processor is None
+        assert window.input_cal_wnd.active_capture_channel is None
         assert window.input_cal_wnd.update_ui_timer.isActive() is False
         assert window.input_cal_wnd.streaming_poll_timer.isActive() is False
     finally:

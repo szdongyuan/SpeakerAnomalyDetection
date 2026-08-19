@@ -66,12 +66,16 @@ from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.acquisition_recording_defaults import normalize_play_record_detail, normalize_record_only_detail
 from base.audio_sample_rate import resolve_duplex_sample_rate, resolve_input_sample_rate
+from base.analysis_warning_preferences import (
+    is_uncalibrated_microphone_warning_suppressed,
+    save_uncalibrated_microphone_warning_suppressed,
+)
 from consts import ui_style_const, error_code
 from consts.action_code import RequestTypeEnum
 from consts.acoustic_analysis.common_consts import GOLDEN_SAMPLE_RESULT_PATH_KEY
 from consts.audio_consts import normalize_float_bit_depth
 from consts.running_consts import DEFAULT_DIR
-from ui.custom_ui_widget.widgets import MessageBox
+from ui.custom_ui_widget.widgets import CheckBox, MessageBox
 from ui.operation_sequence import AnalysisModelSelect
 from base.stimulus_resolver import set_data_struct_analysis_reference_signal
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
@@ -81,6 +85,18 @@ from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_map
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
 from ui.ui_src import ui_resources
+
+
+def _show_uncalibrated_microphone_warning(parent, text, logger=None):
+    message_box = MessageBox(parent)
+    message_box.setIcon(MessageBox.Warning)
+    message_box.setWindowTitle("提示")
+    message_box.setText(text)
+    check_box = CheckBox("不在提示")
+    message_box.setCheckBox(check_box)
+    message_box.exec_()
+    if check_box.isChecked():
+        save_uncalibrated_microphone_warning_suppressed(logger=logger)
 
 
 def _clear_data_struct_stimulus_runtime_state(data_struct, *, clear_sample_rate: bool) -> None:
@@ -2645,7 +2661,8 @@ class SequenceWindow(QWidget):
                 "_analysis_v2pa_batch",
                 missing_temporary_attribute,
             )
-            shown_v2pa_warning_messages = set()
+            collected_v2pa_warning_messages = []
+            collected_v2pa_warning_message_set = set()
             missing_calibration_message = "麦克风未进行校准，结果仅供参考。"
             uncalibrated_raw_channels = []
             uncalibrated_raw_channel_set = set()
@@ -2671,13 +2688,13 @@ class SequenceWindow(QWidget):
             else:
                 analysis_v2pa_batch = AnalysisV2paBatch()
 
-            def show_v2pa_warning_once(message):
-                if message in shown_v2pa_warning_messages:
+            def collect_v2pa_warning_once(message):
+                if message in collected_v2pa_warning_message_set:
                     return
-                shown_v2pa_warning_messages.add(message)
-                MessageBox.warning(self, "提示", message)
+                collected_v2pa_warning_message_set.add(message)
+                collected_v2pa_warning_messages.append(message)
 
-            self._analysis_v2pa_warning_callback = show_v2pa_warning_once
+            self._analysis_v2pa_warning_callback = collect_v2pa_warning_once
             self._analysis_v2pa_batch = analysis_v2pa_batch
             try:
                 for key in item_sort_list:
@@ -2686,6 +2703,8 @@ class SequenceWindow(QWidget):
                         continue
                     item_type = key_config.get("type")
                     self.instance_analysis_class(key, item_type, key_config)
+                    for message in analysis_v2pa_batch.messages:
+                        collect_v2pa_warning_once(message)
             finally:
                 if previous_v2pa_warning_callback is missing_temporary_attribute:
                     if hasattr(self, "_analysis_v2pa_warning_callback"):
@@ -2697,27 +2716,50 @@ class SequenceWindow(QWidget):
                         del self._analysis_v2pa_batch
                 else:
                     self._analysis_v2pa_batch = previous_v2pa_batch
-            if self.mode == "RECORD_ONLY" and uncalibrated_raw_channels:
-                remaining_messages = [
-                    message
-                    for message in analysis_v2pa_batch.messages
-                    if message != missing_calibration_message
-                ]
-                v2pa_warning_text = "\n".join(
-                    [
-                        missing_calibration_message,
-                        "未校准通道：",
-                        *(
-                            f"• {format_input_channel_label(raw_channel)}"
-                            for raw_channel in uncalibrated_raw_channels
-                        ),
-                        *remaining_messages,
-                    ]
+            messages = collected_v2pa_warning_messages
+            has_missing_calibration = missing_calibration_message in messages
+            remaining_messages = [
+                message for message in messages if message != missing_calibration_message
+            ]
+            suppressed = (
+                has_missing_calibration
+                and is_uncalibrated_microphone_warning_suppressed(
+                    logger=getattr(self, "default_logger", None),
+                )
+            )
+            if has_missing_calibration and not suppressed:
+                if self.mode == "RECORD_ONLY" and uncalibrated_raw_channels:
+                    v2pa_warning_text = "\n".join(
+                        [
+                            missing_calibration_message,
+                            "未校准通道：",
+                            *(
+                                f"• {format_input_channel_label(raw_channel)}"
+                                for raw_channel in uncalibrated_raw_channels
+                            ),
+                            *remaining_messages,
+                        ]
+                    )
+                elif len(messages) == 1:
+                    v2pa_warning_text = messages[0]
+                else:
+                    v2pa_warning_text = "\n".join(
+                        f"• {message}" for message in messages
+                    )
+                _show_uncalibrated_microphone_warning(
+                    self,
+                    v2pa_warning_text,
+                    logger=getattr(self, "default_logger", None),
                 )
             else:
-                v2pa_warning_text = analysis_v2pa_batch.warning_text()
-            if v2pa_warning_text:
-                MessageBox.warning(self, "提示", v2pa_warning_text)
+                if len(remaining_messages) == 1:
+                    v2pa_warning_text = remaining_messages[0]
+                else:
+                    v2pa_warning_text = "\n".join(
+                        f"• {message}" for message in remaining_messages
+                    )
+                if v2pa_warning_text:
+                    MessageBox.warning(self, "提示", v2pa_warning_text)
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
@@ -3228,17 +3270,23 @@ class SequenceWindow(QWidget):
         v2pa_warning_callback = getattr(self, "_analysis_v2pa_warning_callback", None)
         if v2pa_warning_callback is None:
             v2pa_warning_callback = lambda msg: MessageBox.warning(self, "提示", msg)
+        analysis_channel_config = params if isinstance(params, dict) else {}
+        if type == "ED":
+            head = analysis_channel_config.get("head")
+            if isinstance(head, dict):
+                head_config = head.get("config")
+                if isinstance(head_config, dict):
+                    analysis_channel_config = head_config
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
                 if self.mode == "RECORD_ONLY":
                     mapped_channel = 0
                     raw_channel = 0
-                    if isinstance(params, dict):
-                        try:
-                            raw_channel = int(params.get("analysis_channel", 0) or 0)
-                        except (TypeError, ValueError, OverflowError):
-                            raw_channel = 0
+                    try:
+                        raw_channel = int(analysis_channel_config.get("analysis_channel", 0) or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        raw_channel = 0
                     if raw_channel < 0:
                         raw_channel = 0
                     channel_mismatch = False
@@ -3274,9 +3322,16 @@ class SequenceWindow(QWidget):
                                     warn_callback=v2pa_warning_callback,
                                 )
                             except ValueError as err:
-                                MessageBox.warning(self, "提示", str(err))
+                                v2pa_warning_callback(str(err))
                                 return
-                        if hasattr(class_instance, "_resolve_v2pa_factor_for_analysis"):
+                        if hasattr(
+                            class_instance,
+                            "_resolve_v2pa_factor_for_analysis",
+                        ) or getattr(
+                            class_instance,
+                            "_supports_pre_resolved_v2pa_factor",
+                            False,
+                        ):
                             class_instance._v2pa_raw_analysis_channel = raw_channel
                             class_instance._use_pre_resolved_v2pa_factor = True
                     runtime_params = dict(params) if isinstance(params, dict) else {}
@@ -3293,11 +3348,10 @@ class SequenceWindow(QWidget):
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
                 raw_channel = 0
-                if isinstance(params, dict):
-                    try:
-                        raw_channel = int(params.get("analysis_channel", 0) or 0)
-                    except (TypeError, ValueError, OverflowError):
-                        raw_channel = 0
+                try:
+                    raw_channel = int(analysis_channel_config.get("analysis_channel", 0) or 0)
+                except (TypeError, ValueError, OverflowError):
+                    raw_channel = 0
                 if raw_channel < 0:
                     raw_channel = 0
                 if requires_v2pa and self.mode not in {"IMPORT_AUDIO", "IMPORT_STIMULUS_AUDIO"}:
@@ -3313,9 +3367,16 @@ class SequenceWindow(QWidget):
                                 warn_callback=v2pa_warning_callback,
                             )
                         except ValueError as err:
-                            MessageBox.warning(self, "提示", str(err))
+                            v2pa_warning_callback(str(err))
                             return
-                    if type != "PD" and hasattr(class_instance, "_resolve_v2pa_factor_for_analysis"):
+                    if hasattr(
+                        class_instance,
+                        "_resolve_v2pa_factor_for_analysis",
+                    ) or getattr(
+                        class_instance,
+                        "_supports_pre_resolved_v2pa_factor",
+                        False,
+                    ):
                         class_instance._v2pa_raw_analysis_channel = raw_channel
                         class_instance._use_pre_resolved_v2pa_factor = True
                 # Inject sequence-level golden baseline path into per-item params
