@@ -43,6 +43,36 @@ def test_build_recording_wav_metadata_uses_active_channel_order(monkeypatch):
     }
 
 
+def test_build_recording_wav_metadata_treats_manual_factor_as_calibrated(monkeypatch):
+    monkeypatch.setattr(
+        recording_calibration_snapshot,
+        "load_mic_channel_v2pa_factors",
+        lambda hardware_id=None, db_path=None: {2: 1.234567},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        recording_calibration_snapshot,
+        "load_mic_channel_standard_spl",
+        lambda hardware_id=None, db_path=None: {},
+        raising=False,
+    )
+
+    metadata = recording_calibration_snapshot.build_recording_wav_calibration_metadata(
+        [2], hardware_id="mic-1", logger=FakeLogger()
+    )
+
+    assert metadata == {
+        "recorded_channels": [
+            {
+                "wav_channel_index": 0,
+                "v2pa_factor": 1.234567,
+                "standard_spl": None,
+                "calibrated": True,
+            }
+        ]
+    }
+
+
 def test_build_recording_wav_metadata_marks_uncalibrated_channels(monkeypatch):
     monkeypatch.setattr(
         recording_calibration_snapshot,

@@ -144,15 +144,13 @@ class ReferenceSpectrumCompareWindow(QWidget):
     def _create_channel_card(self) -> dict:
         card = QFrame()
         card.setObjectName("rscChannelCard")
-        card.setStyleSheet(
-            """
+        card.setStyleSheet("""
             QFrame#rscChannelCard {
                 background: #f8fafc;
                 border: 1px solid #d7dde5;
                 border-radius: 16px;
             }
-            """
-        )
+            """)
 
         card_layout = QVBoxLayout()
         card_layout.setContentsMargins(18, 16, 18, 14)

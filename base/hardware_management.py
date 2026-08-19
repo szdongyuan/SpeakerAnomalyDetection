@@ -262,7 +262,7 @@ class HardwareManagementRepository:
                 (
                     normalized_channel,
                     _validate_finite_positive(factor_value, "factor_value"),
-                    _validate_standard_spl_required(standard_spl),
+                    _validate_optional_standard_spl(standard_spl),
                 )
             )
 
@@ -597,6 +597,12 @@ def _validate_standard_spl_required(value):
     if normalized.is_integer():
         return int(normalized)
     return normalized
+
+
+def _validate_optional_standard_spl(value):
+    if value is None:
+        return None
+    return _validate_standard_spl_required(value)
 
 
 def _validate_output_coefficients(coefficients):

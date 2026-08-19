@@ -521,7 +521,7 @@ def test_sequence_init_import_stimulus_audio_defers_reference_generation(monkeyp
     sequence_widget.SequenceWindow.init_data_struct_stimulus_config(win)
 
     assert calls == []
-    assert win.data_struct.sample_rate is None
+    assert win.data_struct.sample_rate == 48000
     assert win.data_struct.stimulus_data is None
     assert win.data_struct.stimulus_info is None
     assert not hasattr(win.data_struct, "alignment_sample_count")
@@ -558,7 +558,10 @@ def test_record_golden_sample_resolves_duplex_runtime_rate(monkeypatch):
 
     calls = []
     warnings = []
-    win = _golden_sample_window({"samplerate": 48000}, {"samplerate": 48000})
+    win = _golden_sample_window(
+        {"index": 0, "samplerate": 48000},
+        {"index": 1, "samplerate": 48000},
+    )
 
     def fake_setup(data_struct, detail, using_config_path=None, *, runtime_sample_rate, logger=None):
         calls.append((data_struct.sample_rate, detail, using_config_path, runtime_sample_rate))
@@ -589,7 +592,10 @@ def test_record_golden_sample_warns_on_duplex_mismatch(monkeypatch):
 
     calls = []
     warnings = []
-    win = _golden_sample_window({"samplerate": 44100}, {"samplerate": 48000})
+    win = _golden_sample_window(
+        {"index": 0, "samplerate": 44100},
+        {"index": 1, "samplerate": 48000},
+    )
     win.set_data_struct_stimulus_signal = lambda *args, **kwargs: calls.append((args, kwargs))
     monkeypatch.setattr(
         operation_sequence.MessageBox,

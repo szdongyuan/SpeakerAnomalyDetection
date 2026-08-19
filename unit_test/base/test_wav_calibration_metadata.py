@@ -114,6 +114,33 @@ def test_normalize_metadata_keeps_only_wav_channel_calibration_fields():
     }
 
 
+def test_manual_calibration_normalizes_serializes_and_resolves_as_authoritative(tmp_path):
+    path = tmp_path / "manual_calibration.wav"
+    wavfile.write(path, 48000, np.array([0.1, 0.2], dtype=np.float32))
+    metadata = {
+        "recorded_channels": [
+            {
+                "wav_channel_index": 0,
+                "v2pa_factor": 1.234567,
+                "standard_spl": None,
+                "calibrated": True,
+            }
+        ]
+    }
+
+    normalized = normalize_wav_calibration_metadata(metadata)
+    assert normalized == metadata
+    assert append_wav_calibration_metadata(path, normalized) is True
+
+    serialized = read_wav_calibration_metadata(path)
+    assert serialized == metadata
+    assert resolve_wav_channel_v2pa_factor(serialized, 0) == WavCalibrationResolution(
+        factor=1.234567,
+        has_valid_metadata=True,
+        used_file_metadata=True,
+    )
+
+
 def test_resolve_wav_channel_factor_uses_one_for_missing_or_uncalibrated():
     metadata = {
         "recorded_channels": [

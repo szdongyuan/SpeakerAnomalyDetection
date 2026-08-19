@@ -8,7 +8,9 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QSplitter, QVBoxLayout, QWidget
 
+from base.utils.custom_signals import MySignals
 import ui.sequence.sequencement_count_board as count_board_module
+import ui.sequence.sequence_widget as sequence_widget_module
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.sequence.sequencement_count_board import SequenceCountBoard
@@ -67,7 +69,10 @@ def qapp():
 
 
 @pytest.fixture
-def count_board_runtime(tmp_path, monkeypatch):
+def count_board_runtime(tmp_path, monkeypatch, qapp):
+    test_signals = MySignals()
+    monkeypatch.setattr(sequence_widget_module, "sign", test_signals)
+
     root = tmp_path
     mark_path = root / "ui" / "ui_config" / "mark_result.json"
     mark_path.parent.mkdir(parents=True, exist_ok=True)
