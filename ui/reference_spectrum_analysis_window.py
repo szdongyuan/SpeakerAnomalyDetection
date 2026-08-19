@@ -8,7 +8,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph import mkPen
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -25,7 +25,6 @@ from base.reference_spectrum_cache import (
     get_reference_data_state,
     load_reference_data,
 )
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import MessageBox, PushButton, Label
 from ui.graph_widget import custom_log_tick_strings
 
@@ -72,8 +71,6 @@ class ReferenceSpectrumCompareWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
-
         layout = QVBoxLayout()
         top_row = QHBoxLayout()
         top_row.addWidget(self.summary_label, 1)
