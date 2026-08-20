@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
 
 from base.load_config import LoadUiConfig
 from base.product_test_program_config import ProductTestProgramConfigManager
-from consts import ui_style_const
+from consts import error_code, ui_style_const
 from ui.product_test_program_config_dialog import (
     NO_QUEUE_TEXT,
     ProductTestProgramConfigDialog,
@@ -550,6 +550,46 @@ def test_save_as_rejects_configuration_without_test_queue(tmp_path, monkeypatch)
     assert messages[0] == ("无法另存为", "6000 rpm 尚未选择测试队列")
     assert dialog.result() != QDialog.Accepted
     assert manager.load_registry()["configs"] == []
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_save_rejects_partial_trigger_states_without_refreshing_runtime(
+    tmp_path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    active_file = manager.load_registry()["active_file"]
+    load_code, original_program = manager.load_program(active_file)
+    assert load_code == error_code.OK
+    dialog = ProductTestProgramConfigDialog(manager)
+    dialog._add_empty_row()
+    dialog.program_table.item(1, 1).setText("7000 rpm")
+    queue_combobox = dialog._queue_combobox(1)
+    queue_combobox.setCurrentIndex(queue_combobox.findData("queue_6000"))
+    emitted = []
+    dialog.programs_changed.connect(lambda: emitted.append(True))
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    dialog._save_program()
+    app.processEvents()
+
+    assert dialog.result() != QDialog.Accepted
+    assert warnings == [
+        ("无法保存", "所有工况状态码必须全部配置或全部留空")
+    ]
+    assert emitted == []
+    assert manager.load_registry()["active_file"] == active_file
+    load_code, saved_program = manager.load_program(active_file)
+    assert load_code == error_code.OK
+    assert saved_program == original_program
     dialog._dirty = False
     dialog.close()
 

@@ -492,10 +492,11 @@ def test_program_without_test_queue_cannot_save_or_be_used(tmp_path):
     assert message == "6000 rpm 尚未选择测试队列"
 
 
-def test_program_without_trigger_can_save_but_is_not_usable(tmp_path):
+def test_program_without_triggers_is_usable_as_manual_config(tmp_path):
     manager = make_manager(tmp_path)
     program = make_program()
     program["sub_configs"][0]["trigger_state"] = ""
+    program["close_trigger_state"] = "01 04 02 00 00 B9 30"
 
     result = manager.validate_program(
         program,
@@ -504,9 +505,65 @@ def test_program_without_trigger_can_save_but_is_not_usable(tmp_path):
     )
 
     assert result["can_save"]
-    assert not result["is_usable"]
+    assert result["is_usable"]
+    assert result["is_test_mode_usable"]
     assert result["save_errors"] == []
-    assert result["use_errors"] == ["6000 rpm 尚未绑定触发状态"]
+    assert result["use_errors"] == []
+
+
+def test_program_with_partial_trigger_states_cannot_be_saved_or_used(tmp_path):
+    manager = make_manager(tmp_path)
+    program = make_program()
+    program["sub_configs"].append(
+        {
+            "condition_name": "7000 rpm",
+            "trigger_state": "",
+            "test_queue": "queue_6000",
+        }
+    )
+
+    result = manager.validate_program(
+        program,
+        None,
+        {"queue_6000": {"available": True, "can_auto_judge": True}},
+    )
+
+    assert not result["can_save"]
+    assert not result["is_usable"]
+    assert result["save_errors"] == ["所有工况状态码必须全部配置或全部留空"]
+    assert result["use_errors"] == ["所有工况状态码必须全部配置或全部留空"]
+
+
+def test_save_and_import_reject_partial_trigger_states_without_registry_change(
+    tmp_path,
+):
+    manager = make_manager(tmp_path)
+    program = make_program("混合状态码")
+    program["sub_configs"].append(
+        {
+            "condition_name": "7000 rpm",
+            "trigger_state": "",
+            "test_queue": "queue_6000",
+        }
+    )
+    registry_before = manager.load_registry()
+
+    success, message = manager.save_program(None, program)
+
+    assert not success
+    assert message == "所有工况状态码必须全部配置或全部留空"
+    assert manager.load_registry() == registry_before
+    assert not os.path.exists(os.path.join(manager.program_dir, "混合状态码.json"))
+
+    source_path = tmp_path / "partial_trigger_program.json"
+    assert LoadUiConfig.save_data_to_json(program, str(source_path))
+
+    success, message = manager.import_program(str(source_path))
+
+    assert not success
+    assert message == "所有工况状态码必须全部配置或全部留空"
+    assert manager.load_registry() == registry_before
+    assert not os.path.exists(os.path.join(manager.program_dir, "混合状态码.json"))
 
 
 def test_program_with_missing_test_queue_cannot_be_saved(tmp_path):

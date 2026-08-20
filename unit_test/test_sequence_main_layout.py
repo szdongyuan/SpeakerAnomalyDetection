@@ -462,6 +462,27 @@ class TestSequenceMainLayout(unittest.TestCase):
             self.assertEqual(widget.using_file_combobox.currentText(), "4条波形")
             self.assertEqual(widget.using_file_combobox.currentData(), "4条波形.json")
 
+    def test_initial_product_program_population_does_not_emit_switch_signal(self):
+        manager = types.SimpleNamespace(
+            load_registry=lambda: {
+                "active_file": "b.json",
+                "configs": [
+                    {"file": "a.json", "name": "配置 A"},
+                    {"file": "b.json", "name": "配置 B"},
+                ],
+            }
+        )
+        widget = _DummyProductProgramWidget(manager)
+        emitted_texts = []
+        widget.using_file_combobox.currentTextChanged.connect(
+            emitted_texts.append
+        )
+
+        widget.add_file_to_using_file_combobox()
+
+        self.assertEqual(widget.using_file_combobox.currentData(), "b.json")
+        self.assertEqual(emitted_texts, [])
+
     def test_active_product_program_reports_partial_threshold_configuration(self):
         manager = types.SimpleNamespace(
             load_registry=lambda: {

@@ -2,6 +2,11 @@ from PyQt5.QtWidgets import QMessageBox
 
 from base.hardware_trigger.serial_full_frame_matcher import normalize_frame_candidates
 from base.load_config import LoadUiConfig
+from base.product_test_program_config import (
+    PRODUCT_TRIGGER_MODE_MANUAL,
+    PRODUCT_TRIGGER_MODE_MIXED,
+    classify_product_trigger_mode,
+)
 from base.recording_management import RecordingManager
 from consts import error_code, ui_style_const
 from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
@@ -13,6 +18,15 @@ class SequenceWidgetSerialTriggerOpsMixin:
     def _serial_product_conditions(self):
         sequence_loader = getattr(self, "_product_condition_sequence", None)
         conditions = sequence_loader() if callable(sequence_loader) else []
+        if not conditions:
+            raise ValueError("当前产品未配置可用工况")
+
+        trigger_mode = classify_product_trigger_mode(conditions)
+        if trigger_mode == PRODUCT_TRIGGER_MODE_MIXED:
+            raise ValueError("所有工况状态码必须全部配置或全部留空")
+        if trigger_mode == PRODUCT_TRIGGER_MODE_MANUAL:
+            return []
+
         result = []
         for index, condition in enumerate(conditions):
             condition_name = str(
@@ -29,13 +43,14 @@ class SequenceWidgetSerialTriggerOpsMixin:
                 raise ValueError(f"{condition_name}: {error}") from error
             result.append((condition, normalized))
 
-        if not result:
-            raise ValueError("当前产品未配置可用工况")
         normalize_frame_candidates(frame for _, frame in result)
         return result
 
     def _serial_full_frame_candidates(self):
-        candidates = [frame for _, frame in self._serial_product_conditions()]
+        serial_conditions = self._serial_product_conditions()
+        if not serial_conditions:
+            return ()
+        candidates = [frame for _, frame in serial_conditions]
         close_frame = self._serial_product_close_frame()
         if close_frame:
             candidates.append(close_frame)
@@ -56,8 +71,16 @@ class SequenceWidgetSerialTriggerOpsMixin:
         try:
             candidates = self._serial_full_frame_candidates()
         except ValueError as error:
-            self.hw_manager.stop_serial_discrete_input_listener()
-            return {"ok": False, "message": f"产品完整状态报文配置无效: {error}"}
+            message = f"产品完整状态报文配置无效: {error}"
+            runtime_status = self.hw_manager.get_serial_discrete_input_status()
+            if config.get("enabled", False) and not runtime_status.get("running", False):
+                fallback = self.hw_manager.start_serial_discrete_input_listener(
+                    config,
+                    full_frame_candidates=(),
+                )
+                if not fallback.get("ok", False):
+                    message = f"{message}；{fallback.get('message', '串口启动失败')}"
+            return {"ok": False, "message": message}
         return self.hw_manager.start_serial_discrete_input_listener(
             config,
             full_frame_candidates=candidates,
@@ -130,11 +153,14 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return
 
         _action, config = result
-        self._serial_trigger_config = LoadUiConfig.normalize_serial_discrete_input_config(dict(config or {}))
+        next_config = LoadUiConfig.normalize_serial_discrete_input_config(
+            dict(config or {})
+        )
 
-        if not LoadUiConfig.save_serial_discrete_input_config(self._serial_trigger_config):
+        if not LoadUiConfig.save_serial_discrete_input_config(next_config):
             QMessageBox.warning(self, "保存失败", "无法保存串口离散输入触发配置。")
             return
+        self._serial_trigger_config = next_config
 
         if self._serial_trigger_config.get("enabled", False):
             ret = self._start_serial_product_listener(self._serial_trigger_config)
@@ -167,7 +193,9 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return
         try:
             conditions = self._serial_product_conditions()
-            close_frame = self._serial_product_close_frame()
+            # A retained close frame belongs to serial-driven programs only.
+            # Ignore queued frames after switching to an all-empty manual program.
+            close_frame = self._serial_product_close_frame() if conditions else ""
             received_frame = normalize_frame_candidates([raw_hex])[0]
         except ValueError as error:
             self.default_logger.warning(f"serial_product_frame_rejected frame={raw_hex} error={error}")

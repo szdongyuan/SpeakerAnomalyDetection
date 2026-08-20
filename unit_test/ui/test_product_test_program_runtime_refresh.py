@@ -2,6 +2,8 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
+from consts import error_code
+from ui.sequence import sequence_widget_config_ops as config_ops_module
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
 
@@ -92,8 +94,176 @@ def test_product_program_update_refreshes_selector_and_runtime_conditions():
         _sync_product_test_conditions=lambda clear_recent_history=False: events.append(
             ("conditions", clear_recent_history)
         ),
+        update_player_btn_is_paused=lambda: events.append("play_button"),
     )
 
     SequenceWidgetConfigOpsMixin.on_product_test_program_updated(sequence_window)
 
-    assert events == ["selector", ("conditions", True)]
+    assert events == ["selector", ("conditions", True), "play_button"]
+
+
+class _ComboBoxStub:
+    def __init__(self, current_data):
+        self._current_data = current_data
+
+    def currentData(self):
+        return self._current_data
+
+    def clearFocus(self):
+        return None
+
+
+class _ButtonStub:
+    def setDisabled(self, _disabled):
+        return None
+
+
+def _program_switch_host(manager, events):
+    return SimpleNamespace(
+        player_status_flag=False,
+        using_file_combobox=_ComboBoxStub("candidate.json"),
+        _get_product_program_manager=lambda: manager,
+        restore_previous_configuration=lambda: events.append("restored"),
+        _sync_product_test_conditions=lambda clear_recent_history=False: events.append(
+            ("conditions", clear_recent_history)
+        ),
+        refresh_serial_product_trigger_runtime=lambda: events.append("serial_refresh"),
+        update_player_btn_is_paused=lambda: events.append("play_button"),
+        _reset_manual_product_condition_cycle=lambda clear_waveforms=False: events.append(
+            ("reset", clear_waveforms)
+        ),
+        replayer_btn=_ButtonStub(),
+        data_btn=_ButtonStub(),
+        data_struct=SimpleNamespace(
+            store_wave_data="recorded",
+            store_wave_data_multi="recorded_multi",
+        ),
+        lineedit_s_or_n=SimpleNamespace(isEnabled=lambda: False),
+        setFocus=lambda: None,
+    )
+
+
+def test_invalid_product_program_switch_keeps_registry_and_serial_runtime(
+    monkeypatch,
+):
+    events = []
+
+    class _Manager:
+        def load_program(self, file_name):
+            assert file_name == "candidate.json"
+            return error_code.OK, {
+                "name": "混合状态码",
+                "sub_configs": [
+                    {"trigger_state": "01"},
+                    {"trigger_state": ""},
+                ],
+            }
+
+        def validate_program(self, _program, file_name):
+            assert file_name == "candidate.json"
+            return {
+                "is_usable": False,
+                "use_errors": ["所有工况状态码必须全部配置或全部留空"],
+            }
+
+        def load_registry(self):
+            return {"active_file": "current.json", "configs": []}
+
+        def save_registry(self, _registry):
+            events.append("registry_saved")
+            return True
+
+    warnings = []
+    monkeypatch.setattr(
+        config_ops_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    host = _program_switch_host(_Manager(), events)
+
+    SequenceWidgetConfigOpsMixin.on_using_file_combobox_changed(host, "混合状态码")
+
+    assert events == ["restored"]
+    assert warnings == [
+        ("产品配置不可用", "所有工况状态码必须全部配置或全部留空")
+    ]
+    assert not hasattr(host, "active_product_program_file")
+
+
+def test_product_program_switch_stops_when_registry_save_fails(monkeypatch):
+    events = []
+
+    class _Manager:
+        def load_program(self, file_name):
+            assert file_name == "candidate.json"
+            return error_code.OK, {
+                "name": "自动配置",
+                "sub_configs": [{"trigger_state": "01"}],
+            }
+
+        def validate_program(self, _program, file_name):
+            assert file_name == "candidate.json"
+            return {"is_usable": True, "use_errors": []}
+
+        def load_registry(self):
+            return {"active_file": "current.json", "configs": []}
+
+        def save_registry(self, registry):
+            events.append(("registry_attempt", registry["active_file"]))
+            return False
+
+    warnings = []
+    monkeypatch.setattr(
+        config_ops_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    host = _program_switch_host(_Manager(), events)
+
+    SequenceWidgetConfigOpsMixin.on_using_file_combobox_changed(host, "自动配置")
+
+    assert events == [("registry_attempt", "candidate.json"), "restored"]
+    assert warnings == [
+        (
+            "产品配置切换失败",
+            "无法切换使用配置：当前配置记录保存失败，请检查配置目录权限。",
+        )
+    ]
+    assert not hasattr(host, "active_product_program_file")
+    assert not hasattr(host, "product_program_registry")
+
+
+def test_valid_product_program_switch_refreshes_serial_match_candidates():
+    events = []
+
+    class _Manager:
+        def load_program(self, file_name):
+            assert file_name == "candidate.json"
+            return error_code.OK, {
+                "name": "自动配置",
+                "sub_configs": [{"trigger_state": "01"}],
+            }
+
+        def validate_program(self, _program, file_name):
+            assert file_name == "candidate.json"
+            return {"is_usable": True, "use_errors": []}
+
+        def load_registry(self):
+            return {"active_file": "current.json", "configs": []}
+
+        def save_registry(self, registry):
+            events.append(("registry", registry["active_file"]))
+            return True
+
+    host = _program_switch_host(_Manager(), events)
+
+    SequenceWidgetConfigOpsMixin.on_using_file_combobox_changed(host, "自动配置")
+
+    assert events == [
+        ("registry", "candidate.json"),
+        ("conditions", True),
+        "serial_refresh",
+        "play_button",
+        ("reset", True),
+    ]
+    assert host.active_product_program_file == "candidate.json"

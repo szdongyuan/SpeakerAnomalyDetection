@@ -2,6 +2,10 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
+from base.product_test_program_config import (
+    classify_product_trigger_mode,
+    is_manual_product_play_allowed,
+)
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 
 
@@ -37,7 +41,10 @@ def _load_analysis_method(method_name):
         body=[method],
         decorator_list=[],
     )
-    namespace = {}
+    namespace = {
+        "classify_product_trigger_mode": classify_product_trigger_mode,
+        "is_manual_product_play_allowed": is_manual_product_play_allowed,
+    }
     exec(
         compile(
             ast.fix_missing_locations(ast.Module(body=[test_class], type_ignores=[])),
@@ -883,3 +890,163 @@ def test_error_dialog_suppresses_reentrant_frames_and_duplicate_warning(monkeypa
 
     host.on_serial_full_frame_received(_payload(FRAME_6000))
     assert host.started == [FRAME_6000]
+
+
+def test_manual_play_starts_for_empty_status_codes_even_when_serial_is_on():
+    on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
+    host = _SerialProductHost()
+    for condition in host.product_test_condition_configs:
+        condition["trigger_state"] = ""
+    host._serial_trigger_config = {"enabled": True}
+
+    on_clicked_player_btn(host)
+
+    assert host.loaded_queues == ["queue_6000"]
+    assert host.started == [""]
+
+
+def test_manual_play_is_ignored_for_complete_status_codes_when_serial_is_off():
+    on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
+    host = _SerialProductHost()
+    host._serial_trigger_config = {"enabled": False}
+
+    on_clicked_player_btn(host)
+
+    assert host.loaded_queues == []
+    assert host.started == []
+    assert host.default_logger.messages[-1] == (
+        "info",
+        "manual_product_play_ignored_trigger_mode mode=serial",
+    )
+
+
+def test_manual_play_is_ignored_for_complete_status_codes_when_serial_is_on():
+    on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
+    host = _SerialProductHost()
+    host._serial_trigger_config = {"enabled": True}
+
+    on_clicked_player_btn(host)
+
+    assert host.loaded_queues == []
+    assert host.started == []
+    assert host.default_logger.messages[-1] == (
+        "info",
+        "manual_product_play_ignored_trigger_mode mode=serial",
+    )
+
+
+def test_manual_play_is_ignored_until_serial_config_is_loaded():
+    on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
+    host = _SerialProductHost()
+
+    on_clicked_player_btn(host)
+
+    assert host.loaded_queues == []
+    assert host.started == []
+    assert host.default_logger.messages[-1] == (
+        "info",
+        "manual_product_play_ignored_trigger_mode mode=serial",
+    )
+
+
+def test_manual_play_is_ignored_for_mixed_status_codes():
+    on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
+    host = _SerialProductHost()
+    host.product_test_condition_configs[-1]["trigger_state"] = ""
+    host._serial_trigger_config = {"enabled": False}
+
+    on_clicked_player_btn(host)
+
+    assert host.loaded_queues == []
+    assert host.started == []
+    assert host.default_logger.messages[-1] == (
+        "info",
+        "manual_product_play_ignored_trigger_mode mode=mixed",
+    )
+
+
+def test_manual_config_uses_empty_match_candidates_and_ignores_close_frame():
+    host = _SerialProductHost()
+    for condition in host.product_test_condition_configs:
+        condition["trigger_state"] = ""
+    host.product_test_close_trigger_state = FRAME_CLOSE
+
+    assert host._serial_product_conditions() == []
+    assert host._serial_full_frame_candidates() == ()
+
+
+def test_manual_config_ignores_queued_close_frame_after_runtime_switch():
+    host = _SerialProductHost()
+    for condition in host.product_test_condition_configs:
+        condition["trigger_state"] = ""
+    host.product_test_close_trigger_state = FRAME_CLOSE
+    handled_close_frames = []
+    host._handle_serial_product_close_frame = handled_close_frames.append
+
+    host.on_serial_full_frame_received(_payload(FRAME_CLOSE))
+
+    assert handled_close_frames == []
+    assert host._serial_product_latched_frame == ""
+    assert (
+        "info",
+        f"serial_product_frame_unconfigured frame={FRAME_CLOSE}",
+    ) in host.default_logger.messages
+
+
+def test_partial_trigger_config_does_not_stop_existing_serial_listener():
+    class _HardwareManager:
+        def __init__(self):
+            self.start_calls = []
+            self.stop_calls = 0
+
+        def get_serial_discrete_input_status(self):
+            return {"running": True, "connected": True}
+
+        def start_serial_discrete_input_listener(
+            self,
+            config,
+            full_frame_candidates=None,
+        ):
+            self.start_calls.append((config, full_frame_candidates))
+            return {"ok": True, "message": "started"}
+
+        def stop_serial_discrete_input_listener(self):
+            self.stop_calls += 1
+
+    host = _SerialProductHost()
+    host.product_test_condition_configs[-1]["trigger_state"] = ""
+    host.hw_manager = _HardwareManager()
+
+    result = host._start_serial_product_listener({"enabled": True})
+
+    assert not result["ok"]
+    assert "必须全部配置或全部留空" in result["message"]
+    assert host.hw_manager.start_calls == []
+    assert host.hw_manager.stop_calls == 0
+
+
+def test_invalid_product_match_config_does_not_block_serial_startup():
+    class _HardwareManager:
+        def __init__(self):
+            self.start_calls = []
+
+        def get_serial_discrete_input_status(self):
+            return {"running": False, "connected": False}
+
+        def start_serial_discrete_input_listener(
+            self,
+            config,
+            full_frame_candidates=None,
+        ):
+            self.start_calls.append((config, full_frame_candidates))
+            return {"ok": True, "message": "starting"}
+
+    host = _SerialProductHost()
+    host.product_test_condition_configs[-1]["trigger_state"] = ""
+    host.hw_manager = _HardwareManager()
+    serial_config = {"enabled": True}
+
+    result = host._start_serial_product_listener(serial_config)
+
+    assert not result["ok"]
+    assert host.hw_manager.start_calls == [(serial_config, ())]
