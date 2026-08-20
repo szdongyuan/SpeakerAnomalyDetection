@@ -140,6 +140,52 @@ def manual_config_from_limit_data(
     return config
 
 
+def validate_duplicate_x_limit_order(
+    limit_data,
+    *,
+    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
+) -> None:
+    """Reject proven curve crossings without tightening other duplicate-X rules."""
+    x_values, upper_values, lower_values = _limit_data_lists(limit_data)
+    if len(set(x_values)) == len(x_values):
+        return
+
+    try:
+        upper_segments = _segments_from_side_limit_data(
+            x_values,
+            upper_values,
+            label="上限",
+        )
+        lower_segments = _segments_from_side_limit_data(
+            x_values,
+            lower_values,
+            label="下限",
+        )
+    except ThresholdCsvManualError:
+        return
+
+    for upper_segment in upper_segments:
+        for lower_segment in lower_segments:
+            left = max(upper_segment["start_x"], lower_segment["start_x"])
+            right = min(upper_segment["end_x"], lower_segment["end_x"])
+            if right <= left:
+                continue
+            for x_value in (left, right):
+                upper_y = _segment_value_at(upper_segment, x_value)
+                lower_y = _segment_value_at(lower_segment, x_value)
+                if lower_y > upper_y:
+                    error_prefix = (
+                        "黄金样本上下框线偏移量配置错误"
+                        if value_semantics == LIMIT_VALUE_SEMANTICS_OFFSET
+                        else "CSV 上下限配置错误"
+                    )
+                    raise ThresholdCsvManualError(
+                        f"{error_prefix}：下限不能大于上限。\n"
+                        f"位置: X={x_value}\n"
+                        f"lower={lower_y}, upper={upper_y}"
+                    )
+
+
 def manual_config_has_complete_segments(config: dict) -> bool:
     """Return True when saved manual config contains at least one complete segment on an enabled side."""
     config = config or {}
@@ -297,6 +343,12 @@ def _segments_from_side_limit_data(x_values: list[Any], side_values: list[Any], 
             }
         )
     return segments
+
+
+def _segment_value_at(segment: dict[str, float], x_value: float) -> float:
+    start_x = segment["start_x"]
+    ratio = (x_value - start_x) / (segment["end_x"] - start_x)
+    return segment["start_y"] + ratio * (segment["end_y"] - segment["start_y"])
 
 
 def _coerce_optional_limit_number(raw_value: Any, *, label: str, row_index: int) -> float:

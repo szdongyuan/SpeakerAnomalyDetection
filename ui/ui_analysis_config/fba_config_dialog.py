@@ -175,6 +175,7 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
             model_type=self.model_type_str,
             allow_manual_limits=True,
             allow_constant_limits=True,
+            allow_csv_limit_offsets=True,
         )
         self.threshold_widget.setSizePolicy(
             QSizePolicy.Expanding,
