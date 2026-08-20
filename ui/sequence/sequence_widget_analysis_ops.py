@@ -18,6 +18,10 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.load_config import LoadUiConfig
+from base.product_test_program_config import (
+    classify_product_trigger_mode,
+    is_manual_product_play_allowed,
+)
 
 from base.play_and_record import (
     get_recorded_info,
@@ -1041,6 +1045,13 @@ class SequenceWidgetAnalysisOpsMixin(
         if bool(getattr(self, "_serial_product_waiting_for_close", False)):
             self.default_logger.info(
                 "manual_product_play_ignored_waiting_for_close"
+            )
+            return
+        condition_configs = getattr(self, "product_test_condition_configs", [])
+        trigger_mode = classify_product_trigger_mode(condition_configs)
+        if not is_manual_product_play_allowed(condition_configs):
+            self.default_logger.info(
+                f"manual_product_play_ignored_trigger_mode mode={trigger_mode}"
             )
             return
         prepared_product_condition = self._prepare_next_manual_product_condition_recording()

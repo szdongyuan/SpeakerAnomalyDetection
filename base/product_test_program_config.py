@@ -14,6 +14,9 @@ PROGRAM_REGISTRY_FILE = "program_registry.json"
 DEFAULT_PROGRAM_NAME = "默认配置"
 PDF_REPORT_CONFIG_KEY = "pdf_report"
 CLOSE_TRIGGER_STATE_KEY = "close_trigger_state"
+PRODUCT_TRIGGER_MODE_MANUAL = "manual"
+PRODUCT_TRIGGER_MODE_SERIAL = "serial"
+PRODUCT_TRIGGER_MODE_MIXED = "mixed"
 INVALID_CONFIG_NAME_CHARS = '<>:"/\\|?*'
 MIXED_ACQUISITION_MODE_ERROR = (
     "同一产品测试配置不能同时包含导入音频和录制音频工况，"
@@ -45,6 +48,23 @@ def config_file_name(config_name):
 
 def normalize_trigger_state(value):
     return " ".join(str(value or "").strip().upper().split())
+
+
+def classify_product_trigger_mode(sub_configs):
+    trigger_flags = [
+        bool(normalize_trigger_state(item.get("trigger_state", "")))
+        for item in (sub_configs or [])
+        if isinstance(item, dict)
+    ]
+    if not any(trigger_flags):
+        return PRODUCT_TRIGGER_MODE_MANUAL
+    if all(trigger_flags):
+        return PRODUCT_TRIGGER_MODE_SERIAL
+    return PRODUCT_TRIGGER_MODE_MIXED
+
+
+def is_manual_product_play_allowed(sub_configs):
+    return classify_product_trigger_mode(sub_configs) == PRODUCT_TRIGGER_MODE_MANUAL
 
 
 def normalize_optional_hex_frame(value):
@@ -135,6 +155,8 @@ class ProductTestProgramValidator(object):
         if not isinstance(sub_configs, list):
             errors.append("sub_configs 必须是列表")
             return errors
+        if classify_product_trigger_mode(sub_configs) == PRODUCT_TRIGGER_MODE_MIXED:
+            errors.append("所有工况状态码必须全部配置或全部留空")
 
         pdf_report = program_data.get(PDF_REPORT_CONFIG_KEY)
         if pdf_report is not None:
@@ -212,16 +234,11 @@ class ProductTestProgramValidator(object):
 
         for index, sub_config in enumerate(sub_configs, 1):
             condition_name = str(sub_config.get("condition_name", "") or "").strip()
-            trigger_state = normalize_trigger_state(
-                sub_config.get("trigger_state", "")
-            )
             test_queue = str(sub_config.get("test_queue", "") or "").strip()
             row_name = condition_name or f"第 {index} 个子配置"
 
             if not condition_name:
                 errors.append(f"第 {index} 个子配置的工况名称不能为空")
-            if not trigger_state:
-                errors.append(f"{row_name} 尚未绑定触发状态")
             if not test_queue:
                 errors.append(f"{row_name} 尚未选择测试队列")
                 continue

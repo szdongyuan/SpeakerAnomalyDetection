@@ -469,6 +469,7 @@ class SequenceWidgetConfigOpsMixin:
             refresh_serial_runtime = getattr(self, "refresh_serial_product_trigger_runtime", None)
             if callable(refresh_serial_runtime):
                 refresh_serial_runtime()
+            self.update_player_btn_is_paused()
         except Exception as error:
             self.default_logger.warning(
                 f"Failed to refresh product test program after update: {error}"
@@ -482,27 +483,30 @@ class SequenceWidgetConfigOpsMixin:
         active_file = str((registry or {}).get("active_file") or "")
         selected_key = None
         visible_count = 0
+        was_blocked = self.using_file_combobox.blockSignals(True)
+        try:
+            for item in (registry or {}).get("configs", []):
+                if not isinstance(item, dict):
+                    continue
+                file_name = str(item.get("file") or "").strip()
+                name = str(item.get("name") or "").strip()
+                if not file_name or not name:
+                    continue
+                self.using_file_combobox.addItem(name, file_name)
+                visible_count += 1
+                if active_file and file_name == active_file:
+                    selected_key = name
 
-        for item in (registry or {}).get("configs", []):
-            if not isinstance(item, dict):
-                continue
-            file_name = str(item.get("file") or "").strip()
-            name = str(item.get("name") or "").strip()
-            if not file_name or not name:
-                continue
-            self.using_file_combobox.addItem(name, file_name)
-            visible_count += 1
-            if active_file and file_name == active_file:
-                selected_key = name
+            if visible_count == 0:
+                self.using_file_combobox.addItem("无配置", None)
+                selected_key = "无配置"
 
-        if visible_count == 0:
-            self.using_file_combobox.addItem("无配置", None)
-            selected_key = "无配置"
-
-        if selected_key:
-            idx = self.using_file_combobox.findText(selected_key)
-            if idx >= 0:
-                self.using_file_combobox.setCurrentIndex(idx)
+            if selected_key:
+                idx = self.using_file_combobox.findText(selected_key)
+                if idx >= 0:
+                    self.using_file_combobox.setCurrentIndex(idx)
+        finally:
+            self.using_file_combobox.blockSignals(was_blocked)
 
     def on_using_file_combobox_changed(self, text):
         """
@@ -522,19 +526,44 @@ class SequenceWidgetConfigOpsMixin:
             product_file = None
         if product_file:
             manager = self._get_product_program_manager()
+            load_code, program_data = manager.load_program(str(product_file))
+            if load_code != error_code.OK or not isinstance(program_data, dict):
+                self.restore_previous_configuration()
+                QMessageBox.warning(self, "产品配置不可用", "产品配置文件无法读取")
+                return
+            validation = manager.validate_program(program_data, str(product_file))
+            if not validation.get("is_usable", False):
+                self.restore_previous_configuration()
+                message = "\n".join(validation.get("use_errors", []))
+                QMessageBox.warning(
+                    self,
+                    "产品配置不可用",
+                    message or "产品配置校验失败",
+                )
+                return
             registry = manager.load_registry()
             registry["active_file"] = str(product_file)
-            manager.save_registry(registry)
+            if not manager.save_registry(registry):
+                self.restore_previous_configuration()
+                QMessageBox.warning(
+                    self,
+                    "产品配置切换失败",
+                    "无法切换使用配置：当前配置记录保存失败，请检查配置目录权限。",
+                )
+                return
             self.product_program_registry = registry
             self.active_product_program_file = str(product_file)
             sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
             if callable(sync_product_conditions):
                 sync_product_conditions(clear_recent_history=True)
-            # Refresh Play button enable state immediately after program switch.
-            try:
-                self.update_player_btn_is_paused()
-            except Exception:
-                pass
+            refresh_serial_runtime = getattr(
+                self,
+                "refresh_serial_product_trigger_runtime",
+                None,
+            )
+            if callable(refresh_serial_runtime):
+                refresh_serial_runtime()
+            self.update_player_btn_is_paused()
             reset_manual_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
             if callable(reset_manual_cycle):
                 reset_manual_cycle(clear_waveforms=True)

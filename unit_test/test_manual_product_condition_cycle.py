@@ -226,18 +226,26 @@ class TestManualProductConditionCycle(unittest.TestCase):
             {"key": "uuid_8000", "trigger_state": "03", "condition_name": "8000", "test_queue": "queue_8000"},
         ]
 
-        widget.on_clicked_player_btn()
-        self.assertEqual(widget.started[-1], ("not_labeled", "01", "_6000"))
-        widget._mark_manual_product_condition_recording_completed()
-        self.assertIn(("01", "完成", "ok"), widget.left_panel.condition_results)
+        self.assertEqual(
+            [
+                widget._product_condition_runtime_key(condition, index)
+                for index, condition in enumerate(widget.product_test_condition_configs)
+            ],
+            ["01", "02", "03"],
+        )
 
-        widget._advance_manual_product_condition_cycle_after_recording()
-        widget.on_clicked_player_btn()
-        self.assertEqual(widget.started[-1], ("not_labeled", "02", "_7000"))
+    def test_play_button_does_not_start_complete_status_code_config(self):
+        widget = _DummyManualCycleWidget()
+        widget.default_logger = logging.getLogger(__name__)
+        for index, condition in enumerate(widget.product_test_condition_configs, 1):
+            condition["trigger_state"] = f"0{index}"
+        widget._serial_trigger_config = {"enabled": False}
 
-        widget._advance_manual_product_condition_cycle_after_recording()
         widget.on_clicked_player_btn()
-        self.assertEqual(widget.started[-1], ("not_labeled", "03", "_8000"))
+
+        self.assertEqual(widget.loaded_queues, [])
+        self.assertEqual(widget.started, [])
+        self.assertEqual(widget._manual_product_condition_group_id, "")
 
     def test_mark_mode_allows_next_play_with_unlabeled_history(self):
         widget = _DummyManualCycleWidget()
