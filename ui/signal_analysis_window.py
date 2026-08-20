@@ -226,6 +226,75 @@ def _sorted_finite_positive_x_for_limits(x_values, y_values):
     return x_valid
 
 
+def _interpolate_spl_limit_side(target, x_values, y_values):
+    """Interpolate one SPL limit polyline without bridging missing values."""
+    interpolated = np.full(target.shape, np.nan, dtype=float)
+    finite_target = np.isfinite(target)
+
+    right_indices = np.searchsorted(x_values, target, side="right")
+    left_indices = right_indices - 1
+    between_points = (
+        finite_target
+        & (left_indices >= 0)
+        & (right_indices < x_values.size)
+    )
+    safe_left = np.clip(left_indices, 0, x_values.size - 1)
+    safe_right = np.clip(right_indices, 0, x_values.size - 1)
+    left_x = x_values[safe_left]
+    right_x = x_values[safe_right]
+    left_y = y_values[safe_left]
+    right_y = y_values[safe_right]
+    segment_mask = (
+        between_points
+        & (right_x > left_x)
+        & np.isfinite(left_y)
+        & np.isfinite(right_y)
+    )
+    ratio = (target[segment_mask] - left_x[segment_mask]) / (
+        right_x[segment_mask] - left_x[segment_mask]
+    )
+    interpolated[segment_mask] = left_y[segment_mask] + ratio * (
+        right_y[segment_mask] - left_y[segment_mask]
+    )
+
+    finite_rows = np.isfinite(y_values)
+    if np.any(finite_rows):
+        finite_x = x_values[finite_rows]
+        finite_y = y_values[finite_rows]
+        exact_x, first_indices = np.unique(finite_x, return_index=True)
+        exact_y = finite_y[first_indices]
+        exact_indices = np.searchsorted(exact_x, target, side="left")
+        safe_exact = np.clip(exact_indices, 0, exact_x.size - 1)
+        exact_mask = finite_target & np.isclose(
+            target,
+            exact_x[safe_exact],
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        interpolated[exact_mask] = exact_y[safe_exact[exact_mask]]
+
+    return interpolated
+
+
+def _interpolate_spl_limit_curves(
+    target_x,
+    limit_x,
+    upper_limits,
+    lower_limits,
+):
+    """Match upper and lower SPL CSV polylines to measured time points."""
+    target = np.asarray(target_x, dtype=float)
+    x_values = np.asarray(limit_x, dtype=float)
+    order = np.argsort(x_values, kind="stable")
+    x_values = x_values[order]
+    upper_values = np.asarray(upper_limits, dtype=float)[order]
+    lower_values = np.asarray(lower_limits, dtype=float)[order]
+    return (
+        _interpolate_spl_limit_side(target, x_values, upper_values),
+        _interpolate_spl_limit_side(target, x_values, lower_values),
+    )
+
+
 def _resolve_spl_limit_data(config, target_x):
     limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
     if limit_mode == "manual":
@@ -1085,7 +1154,7 @@ class Spl(AnalysisGraphWidget):
 
         Note:
         - Uses LimitPlotUtils.setup_limit_plot() for canvas, curves, and axis setup
-        - Matching logic: kept here (nearest neighbor + time threshold, SPL specific)
+        - Matching logic: interpolates each visible CSV polyline to measured time points
         - Limit comparison: uses LimitPlotUtils.compare_with_limits()
         - Out-of-limit plotting: uses LimitPlotUtils.plot_out_segments()
 
@@ -1110,29 +1179,20 @@ class Spl(AnalysisGraphWidget):
             ),
         )
 
-        # === 2. Matching: nearest neighbor + time threshold filter (SPL specific) ===
-        max_time_diff = 0.01  # 10 ms threshold
+        # === 2. Match the continuously drawn limit curves to each SPL point ===
         sig_t = np.asarray(signal_duration, dtype=float)
         sig_spl = np.asarray(signal_spl, dtype=float)
-        csv_t = np.asarray(csv_time_list, dtype=float)
-        csv_u = np.asarray(csv_upper_list, dtype=float)
-        csv_l = np.asarray(csv_lower_list, dtype=float)
-
-        # Use searchsorted for vectorized nearest index lookup (O(N*logM) instead of O(N*M))
-        insert_idx = np.searchsorted(csv_t, sig_t)
-        insert_idx = np.clip(insert_idx, 0, len(csv_t) - 1)
-        left_idx = np.clip(insert_idx - 1, 0, len(csv_t) - 1)
-        dist_right = np.abs(csv_t[insert_idx] - sig_t)
-        dist_left = np.abs(csv_t[left_idx] - sig_t)
-        nearest_idx = np.where(dist_left < dist_right, left_idx, insert_idx)
-
-        # Time threshold filter: points exceeding threshold are invalid
-        nearest_time = csv_t[nearest_idx]
-        valid_mask = np.abs(nearest_time - sig_t) <= max_time_diff
-
-        # Get upper/lower limits for each signal point
-        upper_at = csv_u[nearest_idx]
-        lower_at = csv_l[nearest_idx]
+        upper_at, lower_at = _interpolate_spl_limit_curves(
+            sig_t,
+            csv_time_list,
+            csv_upper_list,
+            csv_lower_list,
+        )
+        valid_mask = (
+            np.isfinite(sig_t)
+            & np.isfinite(sig_spl)
+            & (np.isfinite(upper_at) | np.isfinite(lower_at))
+        )
 
         # === 5. Limit comparison using LimitPlotUtils ===
         out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(sig_spl, upper_at, lower_at, valid_mask)
