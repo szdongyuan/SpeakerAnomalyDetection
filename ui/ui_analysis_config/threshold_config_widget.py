@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QLayout,
     QApplication,
 )
-from pyqtgraph import PlotWidget, mkPen
+from pyqtgraph import PlotWidget, ViewBox, mkPen
 
 from consts.running_consts import DEFAULT_DIR
 from consts.acoustic_analysis.common_consts import LIMIT_VALUE_SEMANTICS_BOUNDS
@@ -58,12 +58,54 @@ from ui.ui_analysis_config.threshold_csv_manual import (
     load_threshold_csv,
     manual_config_from_limit_data,
     manual_config_has_complete_segments,
+    validate_duplicate_x_limit_order,
     validate_limit_data_values,
     write_manual_config_csv,
 )
 
 class _ManualTableValidationError(ValueError):
     pass
+
+
+class _OffsetDoubleSpinBox(DoubleSpinBox):
+    """Show direction for non-zero offsets while keeping zero neutral."""
+
+    def textFromValue(self, value):
+        text = super().textFromValue(value)
+        return f"+{text}" if value > 0 else text
+
+
+def _copy_limit_data(limit_data):
+    if not limit_data:
+        return limit_data
+    x_values, upper_values, lower_values = limit_data
+    return list(x_values), list(upper_values), list(lower_values)
+
+
+def apply_csv_limit_offsets(
+    source_limit_data,
+    enabled: bool,
+    upper_offset: float,
+    lower_offset: float,
+):
+    """Derive effective CSV bounds without mutating the imported source data."""
+    copied = _copy_limit_data(source_limit_data)
+    if not copied or not enabled:
+        return copied
+
+    x_values, upper_values, lower_values = copied
+
+    def offset_side(values, offset):
+        return [
+            value if np.isnan(value) else value + offset
+            for value in values
+        ]
+
+    return (
+        x_values,
+        offset_side(upper_values, float(upper_offset)),
+        offset_side(lower_values, float(lower_offset)),
+    )
 
 
 def _configure_limit_graph_style(plot_widget: PlotWidget) -> None:
@@ -758,6 +800,7 @@ class ThresholdConfigWidget(QWidget):
         allow_constant_limits: bool = False,
         constant_limit_unit: str = "dB",
         limit_value_semantics_provider=None,
+        allow_csv_limit_offsets: bool = False,
     ):
         """
         初始化阈值配置组件
@@ -771,15 +814,42 @@ class ThresholdConfigWidget(QWidget):
         super().__init__(parent)
         self.load_config = load_config or {}
         self.csv_validator = csv_validator
-        self.limit_data = self.load_config.get("limit_data", None)
+        loaded_limit_data = self.load_config.get("limit_data", None)
         self.model_type = model_type
         self.allow_manual_limits = bool(allow_manual_limits)
         self.allow_constant_limits = bool(
             allow_manual_limits and allow_constant_limits
         )
+        self.allow_csv_limit_offsets = bool(allow_csv_limit_offsets)
         self.constant_limit_unit = str(constant_limit_unit or "").strip()
         self.limit_value_semantics_provider = limit_value_semantics_provider
         self._curve_color_widget = None
+
+        self.csv_source_limit_data = None
+        self._csv_limit_offset_enabled = False
+        self._csv_upper_offset = 0.0
+        self._csv_lower_offset = 0.0
+        if self.allow_csv_limit_offsets:
+            self.csv_source_limit_data = _copy_limit_data(
+                self.load_config.get("csv_source_limit_data", loaded_limit_data)
+            )
+            self._csv_limit_offset_enabled = bool(
+                self.load_config.get("csv_limit_offset_enabled", False)
+            )
+            self._csv_upper_offset = float(
+                self.load_config.get("csv_upper_offset", 0.0) or 0.0
+            )
+            self._csv_lower_offset = float(
+                self.load_config.get("csv_lower_offset", 0.0) or 0.0
+            )
+            self.limit_data = apply_csv_limit_offsets(
+                self.csv_source_limit_data,
+                self._csv_limit_offset_enabled,
+                self._csv_upper_offset,
+                self._csv_lower_offset,
+            )
+        else:
+            self.limit_data = loaded_limit_data
 
         self._init_ui()
 
@@ -807,6 +877,15 @@ class ThresholdConfigWidget(QWidget):
         # 文件选择
         self._create_config_dir()
 
+        self.csv_limit_offset_widget = None
+        self.csv_limit_offset_fields_widget = None
+        self.csv_limit_offset_fields_layout = None
+        self.csv_limit_offset_check = None
+        self.csv_upper_offset_spin = None
+        self.csv_lower_offset_spin = None
+        if self.allow_csv_limit_offsets:
+            self._create_csv_limit_offset_controls()
+
         self.manual_widget = None
         self._pending_manual_seed_data = None
         if self.allow_manual_limits:
@@ -825,6 +904,8 @@ class ThresholdConfigWidget(QWidget):
             mode_layout.addStretch()
             group_layout.addLayout(mode_layout)
         group_layout.addWidget(self.config_dir_box)
+        if self.csv_limit_offset_widget is not None:
+            group_layout.addWidget(self.csv_limit_offset_widget)
         if self.manual_widget is not None:
             group_layout.addWidget(self.manual_widget)
         group_layout.addSpacing(10)
@@ -853,6 +934,88 @@ class ThresholdConfigWidget(QWidget):
 
         if self.load_config.get("limit_data", None):
             self.config_dir_box.setText("已加载")
+
+    def _create_csv_limit_offset_controls(self) -> None:
+        self.csv_limit_offset_widget = QWidget(self.limit_group_box)
+        layout = QVBoxLayout(self.csv_limit_offset_widget)
+        layout.setContentsMargins(0, 4, 0, 0)
+
+        self.csv_limit_offset_check = CheckBox(
+            "启用整体偏移",
+            self.csv_limit_offset_widget,
+        )
+        self.csv_limit_offset_check.setChecked(self._csv_limit_offset_enabled)
+        layout.addWidget(self.csv_limit_offset_check)
+
+        self.csv_limit_offset_fields_widget = QWidget(
+            self.csv_limit_offset_widget
+        )
+        self.csv_limit_offset_fields_layout = QHBoxLayout(
+            self.csv_limit_offset_fields_widget
+        )
+        self.csv_limit_offset_fields_layout.setContentsMargins(18, 0, 0, 0)
+
+        self.csv_upper_offset_spin = self._create_csv_limit_offset_spinbox(
+            self._csv_upper_offset,
+            self.csv_limit_offset_fields_widget,
+        )
+        self.csv_upper_offset_label = Label(
+            "上限：",
+            self.csv_limit_offset_fields_widget,
+        )
+        self.csv_limit_offset_fields_layout.addWidget(
+            self.csv_upper_offset_label
+        )
+        self.csv_limit_offset_fields_layout.addWidget(
+            self.csv_upper_offset_spin
+        )
+        self.csv_limit_offset_fields_layout.addSpacing(12)
+
+        self.csv_lower_offset_spin = self._create_csv_limit_offset_spinbox(
+            self._csv_lower_offset,
+            self.csv_limit_offset_fields_widget,
+        )
+        self.csv_lower_offset_label = Label(
+            "下限：",
+            self.csv_limit_offset_fields_widget,
+        )
+        self.csv_limit_offset_fields_layout.addWidget(
+            self.csv_lower_offset_label
+        )
+        self.csv_limit_offset_fields_layout.addWidget(
+            self.csv_lower_offset_spin
+        )
+        self.csv_limit_offset_fields_layout.addStretch()
+        layout.addWidget(self.csv_limit_offset_fields_widget)
+
+        self.csv_limit_offset_check.stateChanged.connect(
+            self._on_csv_limit_offset_enabled_changed
+        )
+        self.csv_upper_offset_spin.valueChanged.connect(
+            self._on_csv_limit_offset_value_changed
+        )
+        self.csv_lower_offset_spin.valueChanged.connect(
+            self._on_csv_limit_offset_value_changed
+        )
+        # QDoubleSpinBox normalizes loaded values to its precision and range.
+        # Rebuild the effective curve from those same displayed values.
+        self._refresh_effective_csv_limit_data()
+        self._refresh_current_limit_preview()
+        self._sync_csv_limit_offset_controls()
+
+    def _create_csv_limit_offset_spinbox(self, value, parent) -> DoubleSpinBox:
+        spinbox = _OffsetDoubleSpinBox(parent)
+        spinbox.setRange(-10000.0, 10000.0)
+        spinbox.setDecimals(1)
+        spinbox.setSingleStep(0.1)
+        spinbox.setSuffix(self._limit_unit_suffix())
+        spinbox.setMinimumWidth(120)
+        spinbox.setMaximumWidth(145)
+        spinbox.setValue(float(value))
+        return spinbox
+
+    def _limit_unit_suffix(self) -> str:
+        return f" {self.constant_limit_unit}" if self.constant_limit_unit else ""
 
     def _create_manual_limit_controls(self) -> None:
         limit_mode = str(self.load_config.get("limit_mode", "csv") or "csv").lower()
@@ -977,14 +1140,13 @@ class ThresholdConfigWidget(QWidget):
 
     def set_constant_limit_unit(self, unit: str) -> None:
         self.constant_limit_unit = str(unit or "").strip()
-        suffix = (
-            f" {self.constant_limit_unit}"
-            if self.constant_limit_unit
-            else ""
-        )
+        suffix = self._limit_unit_suffix()
         if getattr(self, "constant_upper_spin", None) is not None:
             self.constant_upper_spin.setSuffix(suffix)
             self.constant_lower_spin.setSuffix(suffix)
+        if self.csv_upper_offset_spin is not None:
+            self.csv_upper_offset_spin.setSuffix(suffix)
+            self.csv_lower_offset_spin.setSuffix(suffix)
         if "LOUD" in str(self.model_type or ""):
             self.model_type = f"LOUD_{(self.constant_limit_unit or 'sone').upper()}"
             self.limit_graph.setLabel(
@@ -1008,6 +1170,78 @@ class ThresholdConfigWidget(QWidget):
         self.constant_lower_spin.setEnabled(
             self.constant_lower_check.isChecked()
         )
+
+    def _on_csv_limit_offset_enabled_changed(self, _state) -> None:
+        self._refresh_effective_csv_limit_data()
+        self._sync_csv_limit_offset_controls()
+        self._refresh_current_limit_preview()
+        self._auto_range_csv_limit_y()
+        self._refresh_parent_scroll_layout()
+        self.config_changed.emit()
+
+    def _on_csv_limit_offset_value_changed(self, _value) -> None:
+        self._refresh_effective_csv_limit_data()
+        self._refresh_current_limit_preview()
+        self._auto_range_csv_limit_y()
+        self.config_changed.emit()
+
+    def _auto_range_csv_limit_y(self) -> None:
+        view_box = self.limit_graph.getViewBox()
+        view_box.enableAutoRange(axis=ViewBox.YAxis, enable=True)
+        view_box.updateAutoRange()
+
+    def _refresh_effective_csv_limit_data(self) -> None:
+        if not self.allow_csv_limit_offsets:
+            return
+        self.limit_data = apply_csv_limit_offsets(
+            self.csv_source_limit_data,
+            self.csv_limit_offset_check.isChecked(),
+            self.csv_upper_offset_spin.value(),
+            self.csv_lower_offset_spin.value(),
+        )
+        if getattr(self, "_pending_manual_seed_data", None) is not None:
+            self._pending_manual_seed_data = _copy_limit_data(self.limit_data)
+
+    def _csv_limit_side_available(self, side_index: int) -> bool:
+        if not self.csv_source_limit_data:
+            return False
+        values = self.csv_source_limit_data[side_index]
+        return values is not None and any(not np.isnan(value) for value in values)
+
+    def _sync_csv_limit_offset_controls(self) -> None:
+        if self.csv_limit_offset_widget is None:
+            return
+        csv_mode = (
+            self.limit_checkbox.isChecked()
+            and self.current_limit_mode() == "csv"
+        )
+        upper_available = self._csv_limit_side_available(1)
+        lower_available = self._csv_limit_side_available(2)
+        source_available = upper_available or lower_available
+        offset_enabled = csv_mode and self.csv_limit_offset_check.isChecked()
+
+        self.csv_limit_offset_widget.setVisible(csv_mode and source_available)
+        self.csv_limit_offset_fields_widget.setVisible(
+            offset_enabled and source_available
+        )
+        self.csv_limit_offset_check.setEnabled(source_available)
+        self.csv_upper_offset_spin.setEnabled(offset_enabled and upper_available)
+        self.csv_lower_offset_spin.setEnabled(offset_enabled and lower_available)
+
+        upper_tip = (
+            "应用到 CSV 中已有的上限值。"
+            if upper_available
+            else "当前 CSV 未提供上限，此偏移不生效。"
+        )
+        lower_tip = (
+            "应用到 CSV 中已有的下限值。"
+            if lower_available
+            else "当前 CSV 未提供下限，此偏移不生效。"
+        )
+        self.csv_upper_offset_label.setToolTip(upper_tip)
+        self.csv_upper_offset_spin.setToolTip(upper_tip)
+        self.csv_lower_offset_label.setToolTip(lower_tip)
+        self.csv_lower_offset_spin.setToolTip(lower_tip)
 
     def _on_limit_checkbox_changed(self, state):
         """阈值复选框状态变更处理"""
@@ -1068,6 +1302,7 @@ class ThresholdConfigWidget(QWidget):
         self.limit_graph.setVisible(enabled)
         if not self.allow_manual_limits:
             self.config_dir_box.setVisible(enabled)
+            self._sync_csv_limit_offset_controls()
             self._refresh_parent_scroll_layout()
             return
 
@@ -1085,6 +1320,7 @@ class ThresholdConfigWidget(QWidget):
             self.manual_edit_button.setVisible(manual and not constant)
         else:
             self.manual_edit_button.setVisible(manual)
+        self._sync_csv_limit_offset_controls()
         self._refresh_current_limit_preview()
         self._refresh_parent_scroll_layout()
 
@@ -1140,12 +1376,17 @@ class ThresholdConfigWidget(QWidget):
                     value_semantics=self.current_limit_value_semantics(),
                 )
             if result:
-                self.limit_data = result
+                if self.allow_csv_limit_offsets:
+                    self.csv_source_limit_data = _copy_limit_data(result)
+                    self.csv_limit_offset_check.setChecked(False)
+                    self._refresh_effective_csv_limit_data()
+                    self._sync_csv_limit_offset_controls()
+                    self._refresh_parent_scroll_layout()
+                else:
+                    self.limit_data = result
                 self._pending_manual_seed_data = result if self.allow_manual_limits else None
                 self._refresh_current_limit_preview()
                 self.config_dir_box.setText("已加载")
-            else:
-                self.config_dir_box.setText("未加载")
 
     def _seed_manual_from_pending_limit_data_if_needed(self) -> None:
         if not self.allow_manual_limits or self.current_limit_mode() != "manual":
@@ -1222,6 +1463,19 @@ class ThresholdConfigWidget(QWidget):
             "limit_checked": self.limit_checkbox.isChecked(),
             "limit_data": self.limit_data,
         }
+        if self.allow_csv_limit_offsets:
+            config.update(
+                {
+                    "csv_source_limit_data": _copy_limit_data(
+                        self.csv_source_limit_data
+                    ),
+                    "csv_limit_offset_enabled": (
+                        self.csv_limit_offset_check.isChecked()
+                    ),
+                    "csv_upper_offset": self.csv_upper_offset_spin.value(),
+                    "csv_lower_offset": self.csv_lower_offset_spin.value(),
+                }
+            )
         config.update(self._manual_limit_config())
         if self._curve_color_widget is not None:
             config.update(self._curve_color_widget.get_config())
@@ -1280,6 +1534,16 @@ class ThresholdConfigWidget(QWidget):
                         self.limit_data,
                         value_semantics=self.current_limit_value_semantics(),
                     )
+                    if (
+                        self.allow_csv_limit_offsets
+                        and self.csv_limit_offset_check.isChecked()
+                    ):
+                        validate_duplicate_x_limit_order(
+                            self.limit_data,
+                            value_semantics=(
+                                self.current_limit_value_semantics()
+                            ),
+                        )
                 except ThresholdCsvManualError as exc:
                     MessageBox.warning(self, "提示", str(exc))
                     return False

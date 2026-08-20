@@ -378,6 +378,7 @@ class LoudnessConfigPanel(QWidget):
             allow_manual_limits=True,
             allow_constant_limits=True,
             constant_limit_unit=self._curve_limit_unit(),
+            allow_csv_limit_offsets=True,
         )
         self.curve_threshold_widget.limit_checkbox.hide()
         self.curve_threshold_widget.limit_checkbox.setChecked(True)

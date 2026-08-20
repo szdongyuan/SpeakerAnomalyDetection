@@ -296,6 +296,7 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
             model_type="FFT",
             allow_manual_limits=True,
             allow_constant_limits=True,
+            allow_csv_limit_offsets=True,
         )
         self.add_threshold_curve_sections(
             self.threshold_widget,
