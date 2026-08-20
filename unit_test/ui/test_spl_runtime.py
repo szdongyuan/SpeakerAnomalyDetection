@@ -393,6 +393,123 @@ def test_spl_legacy_csv_without_limit_mode_still_works(signal_module, qapp, monk
     widget.close()
 
 
+def test_spl_sparse_csv_interpolates_between_points_for_runtime_judgment(
+    signal_module,
+    qapp,
+    monkeypatch,
+):
+    widget = signal_module.Spl("SPL")
+    widget.data_struct.analysis_result_dict.clear()
+    widget.analysis_config = {}
+    captured_out_masks = []
+    monkeypatch.setattr(
+        signal_module.LimitPlotUtils,
+        "plot_out_segments",
+        lambda _plot, _x, _y, out_mask: captured_out_masks.append(
+            np.asarray(out_mask, dtype=bool).copy()
+        ),
+    )
+
+    widget.plot_spl_with_limits(
+        np.asarray([0.8, 0.86, 0.9]),
+        np.asarray([80.0, 89.0, 80.0]),
+        [0.8, 0.9],
+        [85.0, 84.0],
+        [np.nan, np.nan],
+    )
+
+    assert widget.data_struct.analysis_result_dict["SPL"] == (False, 4.6)
+    assert captured_out_masks[0].tolist() == [False, True, False]
+    widget.close()
+
+
+def test_spl_sparse_lower_only_csv_interpolates_for_runtime_judgment(
+    signal_module,
+    qapp,
+    monkeypatch,
+):
+    widget = signal_module.Spl("SPL")
+    widget.data_struct.analysis_result_dict.clear()
+    widget.analysis_config = {}
+    captured_out_masks = []
+    monkeypatch.setattr(
+        signal_module.LimitPlotUtils,
+        "plot_out_segments",
+        lambda _plot, _x, _y, out_mask: captured_out_masks.append(
+            np.asarray(out_mask, dtype=bool).copy()
+        ),
+    )
+
+    widget.plot_spl_with_limits(
+        np.asarray([0.8, 0.86, 0.9]),
+        np.asarray([80.0, 70.0, 80.0]),
+        [0.8, 0.9],
+        [np.nan, np.nan],
+        [75.0, 76.0],
+    )
+
+    assert widget.data_struct.analysis_result_dict["SPL"] == (False, 5.6)
+    assert captured_out_masks[0].tolist() == [False, True, False]
+    widget.close()
+
+
+def test_spl_sparse_csv_renders_interpolated_out_of_limit_segment(
+    signal_module,
+    qapp,
+):
+    widget = signal_module.Spl("SPL")
+    widget.data_struct.analysis_result_dict.clear()
+    widget.analysis_config = {}
+
+    widget.plot_spl_with_limits(
+        np.asarray([0.8, 0.84, 0.85, 0.86, 0.9]),
+        np.asarray([80.0, 89.0, 89.0, 89.0, 80.0]),
+        [0.8, 0.9],
+        [85.0, 84.0],
+        [np.nan, np.nan],
+    )
+
+    red_x, red_y = widget.analysis_plot.listDataItems()[-1].getData()
+    np.testing.assert_allclose(red_x, [0.84, 0.85, 0.86])
+    np.testing.assert_allclose(red_y, [89.0, 89.0, 89.0])
+    assert widget.data_struct.analysis_result_dict["SPL"] == (False, 4.6)
+    widget.close()
+
+
+def test_spl_csv_interpolation_keeps_missing_sides_and_outside_range_unjudged(
+    signal_module,
+):
+    upper, lower = signal_module._interpolate_spl_limit_curves(
+        [-1.0, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0],
+        [0.0, 1.0, 2.0],
+        [10.0, np.nan, 20.0],
+        [-1.0, 0.0, 1.0],
+    )
+
+    np.testing.assert_allclose(
+        upper,
+        [np.nan, 10.0, np.nan, np.nan, np.nan, 20.0, np.nan],
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        lower,
+        [np.nan, -1.0, -0.5, 0.0, 0.5, 1.0, np.nan],
+        equal_nan=True,
+    )
+
+
+def test_spl_csv_interpolation_preserves_duplicate_x_jump(signal_module):
+    upper, lower = signal_module._interpolate_spl_limit_curves(
+        [0.5, 1.0, 1.0001, 1.5],
+        [0.0, 1.0, 1.0, 2.0],
+        [10.0, 20.0, 30.0, 40.0],
+        [np.nan, np.nan, np.nan, np.nan],
+    )
+
+    np.testing.assert_allclose(upper, [15.0, 20.0, 30.001, 35.0])
+    assert np.isnan(lower).all()
+
+
 def test_spl_invalid_manual_segments_show_warning(signal_module, qapp, monkeypatch):
     widget = signal_module.Spl("SPL")
     widget.data_struct.store_wave_data = np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
