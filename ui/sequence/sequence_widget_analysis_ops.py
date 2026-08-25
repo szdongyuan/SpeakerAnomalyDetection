@@ -30,6 +30,11 @@ from base.play_and_record import (
     stream_record_without_play,
 )
 from base.save_data import save_audio_simple
+from base.soundcard_calibration_manager import (
+    MicCalibrationFormatError,
+    MicCalibrationIOError,
+    load_mic_channel_v2pa_factors,
+)
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.pre_processing.spl_runtime_config import calculate_overall_spl, resolve_spl_unit
 
@@ -2339,6 +2344,95 @@ class SequenceWidgetAnalysisOpsMixin(
             self._capture_analysis_report_failure(target_session_id, exc)
             raise
 
+    def _reset_live_mic_calibration_batch(self):
+        self._live_mic_channel_v2pa_factors = {}
+        self._missing_mic_calibration_channels = []
+        self._missing_mic_calibration_channel_set = set()
+
+    def _live_batch_requires_mic_calibration(self):
+        if self._is_import_audio_mode():
+            return False
+        class_mapping = get_class_mapping()
+        item_sort_list = (self.analysis_config or {}).get(
+            "display_sequence",
+            [],
+        )
+        for key in item_sort_list:
+            key_config = self.analysis_config.get(key)
+            if not isinstance(key_config, dict):
+                continue
+            item_type = key_config.get("type")
+            if item_type != "RSC" and class_mapping.get(item_type) is not None:
+                return True
+        return False
+
+    def _prepare_live_mic_calibration_batch(self):
+        self._live_mic_channel_v2pa_factors = load_mic_channel_v2pa_factors(
+            getattr(self, "mic", None)
+        )
+
+    def _resolve_live_mic_channel_v2pa_factor(self, raw_channel):
+        factor = getattr(
+            self,
+            "_live_mic_channel_v2pa_factors",
+            {},
+        ).get(raw_channel)
+        if factor is not None:
+            return float(factor)
+
+        missing_channels = getattr(
+            self,
+            "_missing_mic_calibration_channels",
+            None,
+        )
+        if missing_channels is None:
+            missing_channels = []
+            self._missing_mic_calibration_channels = missing_channels
+        missing_channel_set = getattr(
+            self,
+            "_missing_mic_calibration_channel_set",
+            None,
+        )
+        if missing_channel_set is None:
+            missing_channel_set = set()
+            self._missing_mic_calibration_channel_set = missing_channel_set
+        if raw_channel not in missing_channel_set:
+            missing_channel_set.add(raw_channel)
+            missing_channels.append(raw_channel)
+        return 1.0
+
+    def _show_missing_mic_channel_calibration_warning(self):
+        missing_channels = getattr(
+            self,
+            "_missing_mic_calibration_channels",
+            [],
+        )
+        if not missing_channels:
+            return
+        channel_names = "、".join(
+            f"In{raw_channel + 1}" for raw_channel in missing_channels
+        )
+        QMessageBox.warning(
+            self,
+            "输入通道未校准",
+            f"{channel_names} 未校准，结果仅供参考",
+        )
+
+    def _abort_live_mic_calibration_batch(self, error):
+        self._live_mic_channel_v2pa_factors = {}
+        self._missing_mic_calibration_channels = []
+        self._missing_mic_calibration_channel_set = set()
+        self.analysis_window = []
+        self.data_struct.analysis_result_dict.clear()
+        self.default_logger.error(
+            f"microphone_calibration_load_error: {error}"
+        )
+        QMessageBox.critical(
+            self,
+            "输入校准文件错误",
+            "输入校准文件错误，本次分析已停止",
+        )
+
     def _run_analysis_impl(self, show_windows=True, *, report_session_id=None):
         """
         Executes the analysis tasks and optionally displays the analysis windows.
@@ -2359,6 +2453,19 @@ class SequenceWidgetAnalysisOpsMixin(
             if self._analysis_result_summary_window:
                 self._analysis_result_summary_window = None
 
+        self._reset_live_mic_calibration_batch()
+        if self._live_batch_requires_mic_calibration():
+            try:
+                self._prepare_live_mic_calibration_batch()
+            except (MicCalibrationFormatError, MicCalibrationIOError) as error:
+                self._abort_live_mic_calibration_batch(error)
+                if report_session_id:
+                    self._capture_analysis_report_failure(
+                        report_session_id,
+                        error,
+                    )
+                return False
+
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
         if self.analysis_config:
@@ -2369,6 +2476,7 @@ class SequenceWidgetAnalysisOpsMixin(
                     continue
                 item_type = key_config.get("type")
                 self.instance_analysis_class(key, item_type, key_config)
+            self._show_missing_mic_channel_calibration_warning()
             for instance in self.analysis_window:
                 # Bind this instance to its analysis item key (used for geometry restore/persist)
                 instance_key = getattr(instance, "_sequence_analysis_key", None)
@@ -2586,6 +2694,7 @@ class SequenceWidgetAnalysisOpsMixin(
         ):
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"
             self._update_current_recent_session_result(result_label=result_label)
+        return True
 
     def _analysis_window_display_geometry(self, key: str, default_geo: dict, min_width: int, min_height: int) -> dict:
         geo = self._get_analysis_window_geometry(key) if key else None
@@ -2994,7 +3103,12 @@ class SequenceWidgetAnalysisOpsMixin(
                         "active_input_channels": list(active_input_channels),
                     },
                 )
-                class_instance.v2pa_factor = self.v2pa_factor
+                if self._is_import_audio_mode():
+                    class_instance.v2pa_factor = self.v2pa_factor
+                else:
+                    class_instance.v2pa_factor = (
+                        self._resolve_live_mic_channel_v2pa_factor(raw_channel)
+                    )
                 runtime_params = dict(params) if isinstance(params, dict) else {}
                 runtime_params["analysis_channel"] = mapped_channel
                 # Inject sequence-level golden baseline path into per-item params
