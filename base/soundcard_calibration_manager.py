@@ -6,6 +6,7 @@ import threading
 from datetime import datetime
 
 import numpy as np
+import sounddevice as sd
 
 from base.log_manager import LogManager
 from base.sound_device_manager import SoundDeviceManager
@@ -16,8 +17,20 @@ MIC_INPUT_CALIBRATION_PATH = os.path.join(
     model_consts.JSON_DIR_PATH,
     "mic_input_calibration.json",
 )
-MIC_INPUT_CALIBRATION_VERSION = 1
+MIC_INPUT_CALIBRATION_VERSION = 2
 _mic_input_calibration_io_lock = threading.Lock()
+
+
+class MicCalibrationError(Exception):
+    """Base error for the microphone calibration file boundary."""
+
+
+class MicCalibrationFormatError(MicCalibrationError):
+    """The calibration JSON exists but is unsupported or invalid."""
+
+
+class MicCalibrationIOError(MicCalibrationError):
+    """The calibration JSON could not be read or atomically updated."""
 
 
 def _device_value(device, key):
@@ -25,29 +38,24 @@ def _device_value(device, key):
     return getter(key) if callable(getter) else None
 
 
-def build_mic_input_identity(input_device, input_channel):
-    """Return the stable identity used to bind a single-channel calibration."""
-    if (
-        input_device is None
-        or isinstance(input_channel, bool)
-        or not isinstance(input_channel, (int, np.integer))
-    ):
+def build_mic_input_identity(input_device):
+    """Return the normalized identity shared by all channels of a device."""
+    if input_device is None:
         return None
 
     try:
-        channel_index = int(input_channel)
         hostapi_index = int(_device_value(input_device, "hostapi"))
     except (TypeError, ValueError, OverflowError):
         return None
 
     device_name = str(_device_value(input_device, "name") or "").strip()
-    if not device_name or channel_index < 0:
+    if not device_name:
         return None
 
     try:
         api_info = SoundDeviceManager.get_api_info(hostapi_index)
         api_name = str(_device_value(api_info, "name") or "").strip()
-    except Exception:
+    except (TypeError, ValueError, OverflowError, OSError, sd.PortAudioError):
         return None
 
     if not api_name:
@@ -56,119 +64,264 @@ def build_mic_input_identity(input_device, input_channel):
     return {
         "api_name": api_name,
         "device_name": device_name,
-        "channel_index": channel_index,
     }
 
 
-def _validated_mic_input_calibration(payload):
-    if not isinstance(payload, dict):
-        return None
-    version = payload.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != MIC_INPUT_CALIBRATION_VERSION
-    ):
-        return None
+def _validated_channel_index(input_channel):
+    if isinstance(input_channel, bool) or not isinstance(input_channel, (int, np.integer)):
+        raise ValueError("The physical input channel must be a non-negative integer.")
+    channel_index = int(input_channel)
+    if channel_index < 0:
+        raise ValueError("The physical input channel must be a non-negative integer.")
+    return channel_index
 
-    input_config = payload.get("input")
-    calibration = payload.get("calibration")
-    if not isinstance(input_config, dict) or not isinstance(calibration, dict):
-        return None
 
-    api_name = input_config.get("api_name")
-    device_name = input_config.get("device_name")
-    channel_index = input_config.get("channel_index")
-    if not isinstance(api_name, str) or not api_name.strip():
-        return None
-    if not isinstance(device_name, str) or not device_name.strip():
-        return None
-    if isinstance(channel_index, bool) or not isinstance(channel_index, int) or channel_index < 0:
-        return None
+def _decimal_channel_key_to_index(channel_key):
+    if len(channel_key) <= 9:
+        return int(channel_key)
 
-    factor_value = calibration.get("v2pa_factor")
-    standard_spl_value = calibration.get("standard_spl_db")
-    sample_rate_value = calibration.get("sample_rate_hz")
-    duration_value = calibration.get("duration_seconds")
+    channel_index = 0
+    for offset in range(0, len(channel_key), 9):
+        chunk = channel_key[offset:offset + 9]
+        channel_index = channel_index * (10 ** len(chunk)) + int(chunk)
+    return channel_index
+
+
+def _channel_index_to_decimal_key(channel_index):
+    if channel_index < 1_000_000_000:
+        return str(channel_index)
+
+    chunks = []
+    while channel_index:
+        channel_index, remainder = divmod(channel_index, 1_000_000_000)
+        chunks.append(remainder)
+    return str(chunks[-1]) + "".join(
+        f"{chunk:09d}"
+        for chunk in reversed(chunks[:-1])
+    )
+
+
+def _validated_timestamp(value, error_type):
+    if not isinstance(value, str) or not value.strip():
+        raise error_type("calibrated_at must be an ISO-8601 timestamp with an offset")
+    normalized = value.strip()
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise error_type("calibrated_at must be a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise error_type("calibrated_at must include a UTC offset")
+    return normalized
+
+
+def _float_value(value, field_name, error_type):
+    try:
+        return float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise error_type(f"{field_name} must be a representable number") from exc
+
+
+def _validated_record(record, error_type):
+    expected_fields = {
+        "v2pa_factor",
+        "standard_spl_db",
+        "sample_rate_hz",
+        "duration_seconds",
+        "calibrated_at",
+    }
+    if not isinstance(record, dict) or set(record) != expected_fields:
+        raise error_type("A channel calibration record has an invalid structure")
+
     numeric_types = (int, float, np.integer, np.floating)
-    if any(
-        isinstance(value, bool) or not isinstance(value, numeric_types)
-        for value in (factor_value, standard_spl_value, duration_value)
-    ):
-        return None
-    if isinstance(sample_rate_value, bool) or not isinstance(
-        sample_rate_value,
-        (int, np.integer),
-    ):
-        return None
-
-    factor = float(factor_value)
-    standard_spl = float(standard_spl_value)
-    sample_rate = int(sample_rate_value)
-    duration = float(duration_value)
-
-    calibrated_at = calibration.get("calibrated_at")
-    if not math.isfinite(factor) or factor <= 0.0:
-        return None
-    if not math.isfinite(standard_spl) or standard_spl <= 0.0:
-        return None
-    if sample_rate <= 0 or not math.isfinite(duration) or duration <= 0.0:
-        return None
-    if not isinstance(calibrated_at, str) or not calibrated_at.strip():
-        return None
+    factor = record["v2pa_factor"]
+    standard_spl = record["standard_spl_db"]
+    sample_rate = record["sample_rate_hz"]
+    duration = record["duration_seconds"]
+    if isinstance(factor, bool) or not isinstance(factor, numeric_types):
+        raise error_type("v2pa_factor must be numeric")
+    factor_value = _float_value(factor, "v2pa_factor", error_type)
+    if not math.isfinite(factor_value) or factor_value <= 0.0:
+        raise error_type("v2pa_factor must be finite and positive")
+    if isinstance(standard_spl, bool) or not isinstance(standard_spl, numeric_types):
+        raise error_type("standard_spl_db must be numeric")
+    standard_spl_value = _float_value(standard_spl, "standard_spl_db", error_type)
+    if not math.isfinite(standard_spl_value) or standard_spl_value not in (94.0, 114.0):
+        raise error_type("standard_spl_db must be exactly 94 or 114")
+    if isinstance(standard_spl, np.integer):
+        standard_spl = int(standard_spl)
+    elif isinstance(standard_spl, np.floating):
+        standard_spl = float(standard_spl)
+    if isinstance(sample_rate, bool) or not isinstance(sample_rate, (int, np.integer)):
+        raise error_type("sample_rate_hz must be an integer")
+    sample_rate_value = int(sample_rate)
+    if sample_rate_value <= 0:
+        raise error_type("sample_rate_hz must be positive")
+    if isinstance(duration, bool) or not isinstance(duration, numeric_types):
+        raise error_type("duration_seconds must be numeric")
+    duration_value = _float_value(duration, "duration_seconds", error_type)
+    if not math.isfinite(duration_value) or duration_value <= 0.0:
+        raise error_type("duration_seconds must be finite and positive")
 
     return {
-        "version": MIC_INPUT_CALIBRATION_VERSION,
-        "input": {
+        "v2pa_factor": factor_value,
+        "standard_spl_db": standard_spl,
+        "sample_rate_hz": sample_rate_value,
+        "duration_seconds": duration_value,
+        "calibrated_at": _validated_timestamp(record["calibrated_at"], error_type),
+    }
+
+
+def _validated_mic_input_registry(payload):
+    if not isinstance(payload, dict) or set(payload) != {"version", "devices"}:
+        raise MicCalibrationFormatError("The microphone calibration root is invalid")
+    version = payload["version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version != 2:
+        raise MicCalibrationFormatError("Unsupported microphone calibration version")
+    if not isinstance(payload["devices"], list):
+        raise MicCalibrationFormatError("devices must be a list")
+
+    canonical_devices = []
+    seen_identities = set()
+    for device in payload["devices"]:
+        if not isinstance(device, dict) or set(device) != {"input", "channels"}:
+            raise MicCalibrationFormatError("A device calibration has an invalid structure")
+        identity = device["input"]
+        if not isinstance(identity, dict) or set(identity) != {"api_name", "device_name"}:
+            raise MicCalibrationFormatError("A device identity has an invalid structure")
+        api_name = identity["api_name"]
+        device_name = identity["device_name"]
+        if not isinstance(api_name, str) or not api_name.strip():
+            raise MicCalibrationFormatError("api_name must be a non-empty string")
+        if not isinstance(device_name, str) or not device_name.strip():
+            raise MicCalibrationFormatError("device_name must be a non-empty string")
+        canonical_identity = {
             "api_name": api_name.strip(),
             "device_name": device_name.strip(),
-            "channel_index": channel_index,
-        },
-        "calibration": {
-            "v2pa_factor": factor,
-            "standard_spl_db": standard_spl,
-            "sample_rate_hz": sample_rate,
-            "duration_seconds": duration,
-            "calibrated_at": calibrated_at.strip(),
-        },
-    }
+        }
+        identity_key = (canonical_identity["api_name"], canonical_identity["device_name"])
+        if identity_key in seen_identities:
+            raise MicCalibrationFormatError("Duplicate microphone device identity")
+        seen_identities.add(identity_key)
+
+        channels = device["channels"]
+        if not isinstance(channels, dict):
+            raise MicCalibrationFormatError("channels must be an object")
+        canonical_channels = {}
+        for channel_key, record in channels.items():
+            if (
+                not isinstance(channel_key, str)
+                or not channel_key.isascii()
+                or not channel_key.isdecimal()
+                or (channel_key != "0" and channel_key.startswith("0"))
+            ):
+                raise MicCalibrationFormatError("Channel keys must be canonical non-negative integers")
+            canonical_channels[channel_key] = _validated_record(
+                record,
+                MicCalibrationFormatError,
+            )
+        canonical_devices.append({
+            "input": canonical_identity,
+            "channels": canonical_channels,
+        })
+
+    return {"version": MIC_INPUT_CALIBRATION_VERSION, "devices": canonical_devices}
+
+
+def _load_mic_input_calibration_unlocked(path):
+    try:
+        with open(path, "r", encoding="utf-8") as calibration_file:
+            payload = json.load(calibration_file)
+    except FileNotFoundError:
+        return {"version": MIC_INPUT_CALIBRATION_VERSION, "devices": []}
+    except json.JSONDecodeError as exc:
+        raise MicCalibrationFormatError("The microphone calibration JSON is malformed") from exc
+    except RecursionError as exc:
+        raise MicCalibrationFormatError("The microphone calibration JSON is too deeply nested") from exc
+    except ValueError as exc:
+        raise MicCalibrationFormatError("The microphone calibration JSON is invalid") from exc
+    except UnicodeError as exc:
+        raise MicCalibrationFormatError("The microphone calibration JSON encoding is invalid") from exc
+    except OSError as exc:
+        raise MicCalibrationIOError("The microphone calibration file could not be read") from exc
+
+    if (
+        isinstance(payload, dict)
+        and not isinstance(payload.get("version"), bool)
+        and isinstance(payload.get("version"), int)
+        and payload.get("version") == 1
+    ):
+        return {"version": MIC_INPUT_CALIBRATION_VERSION, "devices": []}
+    return _validated_mic_input_registry(payload)
 
 
 def load_mic_input_calibration(calibration_path=None):
-    """Load and validate the persisted single-channel microphone calibration."""
+    """Load the canonical version-2 microphone calibration registry."""
     path = calibration_path or MIC_INPUT_CALIBRATION_PATH
-    try:
-        with _mic_input_calibration_io_lock:
-            with open(path, "r", encoding="utf-8") as calibration_file:
-                payload = json.load(calibration_file)
-    except (OSError, ValueError, TypeError):
-        return None
-    return _validated_mic_input_calibration(payload)
+    with _mic_input_calibration_io_lock:
+        return _load_mic_input_calibration_unlocked(path)
 
 
 def _atomic_write_json(path, payload):
     directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    fd, temporary_path = tempfile.mkstemp(
-        prefix=".mic_input_calibration_",
-        suffix=".json.tmp",
-        dir=directory,
-    )
+    fd = None
+    temporary_path = None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as calibration_file:
+        os.makedirs(directory, exist_ok=True)
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".mic_input_calibration_",
+            suffix=".json.tmp",
+            dir=directory,
+        )
+        calibration_file = os.fdopen(fd, "w", encoding="utf-8")
+        fd = None
+        with calibration_file:
             json.dump(payload, calibration_file, ensure_ascii=False, indent=2)
             calibration_file.flush()
             os.fsync(calibration_file.fileno())
         os.replace(temporary_path, path)
-    except Exception:
-        try:
-            os.unlink(temporary_path)
-        except OSError:
-            pass
-        raise
+    except (OSError, TypeError, ValueError, UnicodeError) as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+        raise MicCalibrationIOError("The microphone calibration file could not be updated") from exc
 
 
-def save_mic_input_calibration(
+def _device_entry(registry, identity):
+    return next(
+        (device for device in registry["devices"] if device["input"] == identity),
+        None,
+    )
+
+
+def _validated_save_record(
+    v2pa_factor,
+    standard_spl_db,
+    sample_rate_hz,
+    duration_seconds,
+    calibrated_at,
+):
+    return _validated_record(
+        {
+            "v2pa_factor": v2pa_factor,
+            "standard_spl_db": standard_spl_db,
+            "sample_rate_hz": sample_rate_hz,
+            "duration_seconds": duration_seconds,
+            "calibrated_at": calibrated_at,
+        },
+        ValueError,
+    )
+
+
+def save_mic_channel_calibration(
     v2pa_factor,
     input_device,
     input_channel,
@@ -178,47 +331,126 @@ def save_mic_input_calibration(
     calibration_path=None,
     calibrated_at=None,
 ):
-    """Atomically save a calibration bound to one input device and channel."""
-    identity = build_mic_input_identity(input_device, input_channel)
+    """Atomically save one physical-channel calibration record."""
+    identity = build_mic_input_identity(input_device)
     if identity is None:
-        return False, "无法识别当前输入设备或通道。"
-
-    payload = {
-        "version": MIC_INPUT_CALIBRATION_VERSION,
-        "input": identity,
-        "calibration": {
-            "v2pa_factor": v2pa_factor,
-            "standard_spl_db": standard_spl_db,
-            "sample_rate_hz": sample_rate_hz,
-            "duration_seconds": duration_seconds,
-            "calibrated_at": calibrated_at or datetime.now().astimezone().isoformat(timespec="seconds"),
-        },
-    }
-    validated_payload = _validated_mic_input_calibration(payload)
-    if validated_payload is None:
-        return False, "输入校准结果无效，未保存。"
+        raise ValueError("The input device identity is invalid.")
+    channel_index = _validated_channel_index(input_channel)
+    if calibrated_at is None:
+        calibrated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    record = _validated_save_record(
+        v2pa_factor,
+        standard_spl_db,
+        sample_rate_hz,
+        duration_seconds,
+        calibrated_at,
+    )
 
     path = calibration_path or MIC_INPUT_CALIBRATION_PATH
+    with _mic_input_calibration_io_lock:
+        registry = _load_mic_input_calibration_unlocked(path)
+        device = _device_entry(registry, identity)
+        if device is None:
+            device = {"input": identity, "channels": {}}
+            registry["devices"].append(device)
+        device["channels"][_channel_index_to_decimal_key(channel_index)] = record
+        _atomic_write_json(path, _validated_mic_input_registry(registry))
+
+
+def clear_mic_channel_calibrations(
+    input_device,
+    input_channels,
+    calibration_path=None,
+):
+    """Remove selected physical-channel records, returning whether data changed."""
+    identity = build_mic_input_identity(input_device)
+    if identity is None:
+        raise ValueError("The input device identity is invalid.")
+    if not isinstance(input_channels, (list, tuple)):
+        raise ValueError("Input channels must be a sequence.")
+    channels = {_validated_channel_index(channel) for channel in input_channels}
+
+    path = calibration_path or MIC_INPUT_CALIBRATION_PATH
+    with _mic_input_calibration_io_lock:
+        registry = _load_mic_input_calibration_unlocked(path)
+        device = _device_entry(registry, identity)
+        if device is None:
+            return False
+        changed = False
+        for channel in channels:
+            channel_key = _channel_index_to_decimal_key(channel)
+            if device["channels"].pop(channel_key, None) is not None:
+                changed = True
+        if not changed:
+            return False
+        if not device["channels"]:
+            registry["devices"].remove(device)
+        _atomic_write_json(path, _validated_mic_input_registry(registry))
+        return True
+
+
+def load_mic_channel_calibrations(input_device, calibration_path=None):
+    """Return calibration records keyed by physical channel for one device."""
+    identity = build_mic_input_identity(input_device)
+    if identity is None:
+        return {}
+    registry = load_mic_input_calibration(calibration_path)
+    device = _device_entry(registry, identity)
+    if device is None:
+        return {}
+    return {
+        _decimal_channel_key_to_index(channel): dict(record)
+        for channel, record in device["channels"].items()
+    }
+
+
+def load_mic_channel_v2pa_factors(input_device, calibration_path=None):
+    """Return finite positive factors keyed by exact physical channel."""
+    return {
+        channel: float(record["v2pa_factor"])
+        for channel, record in load_mic_channel_calibrations(
+            input_device,
+            calibration_path,
+        ).items()
+    }
+
+
+def resolve_mic_channel_v2pa_factor(
+    input_device,
+    input_channel,
+    calibration_path=None,
+):
+    """Return one exact physical-channel factor, or None when it is absent."""
     try:
-        with _mic_input_calibration_io_lock:
-            _atomic_write_json(path, validated_payload)
-    except OSError as exc:
-        return False, f"输入校准配置保存失败：{str(exc)[:80]}"
-    return True, "输入校准配置保存成功。"
+        channel_index = _validated_channel_index(input_channel)
+    except ValueError:
+        return None
+    identity = build_mic_input_identity(input_device)
+    if identity is None:
+        return None
+    registry = load_mic_input_calibration(calibration_path)
+    device = _device_entry(registry, identity)
+    if device is None:
+        return None
+    channel_key = _channel_index_to_decimal_key(channel_index)
+    record = device["channels"].get(channel_key)
+    return None if record is None else float(record["v2pa_factor"])
 
 
 def resolve_mic_input_calibration(input_device, input_channels, calibration_path=None):
     """Resolve a factor only when the current device and one channel match exactly."""
     if not isinstance(input_channels, (list, tuple)) or len(input_channels) != 1:
         return 0.0
-    identity = build_mic_input_identity(input_device, input_channels[0])
-    if identity is None:
+    if build_mic_input_identity(input_device) is None:
         return 0.0
-
-    payload = load_mic_input_calibration(calibration_path)
-    if payload is None or payload["input"] != identity:
+    factor = resolve_mic_channel_v2pa_factor(
+        input_device,
+        input_channels[0],
+        calibration_path,
+    )
+    if factor is None:
         return 0.0
-    return float(payload["calibration"]["v2pa_factor"])
+    return float(factor)
 
 
 def get_mic_v2pa_factor(input_device=None, input_channels=None, calibration_path=None):

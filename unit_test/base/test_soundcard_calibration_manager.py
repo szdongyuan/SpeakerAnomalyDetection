@@ -54,12 +54,11 @@ class TestSoundcardCalibrationManager(object):
         ([(error_code.OK, {"calibration_coefficients": [0.05037773, -0.00083921],
                            "calibration_voltage": [2, 3.99, 5.97],
                            "max_voltage": 5.97})],
-         0.1503, 8,
-         (error_code.INVALID_DATA_LOADING, "Target voltage cannot be greater than max voltage at calibration.")),
+         0.1503, 8, (error_code.OK, (0.1503, 5.97))),
         ([(error_code.OK, {"calibration_coefficients": [0.05037773, -0.00083921],
                            "calibration_voltage": [2, 3.99, 5.97],
                            "max_voltage": 5.97})],
-         0.1503, 3, (error_code.OK, 0.1503)),
+         0.1503, 3, (error_code.OK, (0.1503, 5.97))),
         ([(error_code.INVALID_DATA_LOADING, {"calibration_coefficients": [0.05037773, -0.00083921],
                                              "calibration_voltage": [2, 3.99, 5.97],
                                              "max_voltage": 5.97})],
@@ -78,21 +77,24 @@ class TestSoundcardCalibrationManager(object):
     @pytest.mark.parametrize("json_ret, coefficients, max_voltages, json_file_name, result_ret", [
         (mock.Mock(), (1, 2), 10, "calibration_coefficients.json",
          (error_code.INVALID_TYPE_DATA, "Coefficients must be a list or numpy array.")),
-        (mock.Mock(), [1, 2], 10, "calibration_coefficients.json",
-         (error_code.OK, f"Successfully save the coefficients to D:/PyCharm Community Edition "
-                         f"2024.1.4/Python_project/szdongyuan/code1/SpeakerAnomalyDetection/consts/../"
-                         f"storagecalibration_coefficients.json.")),
-        (mock.Mock(), [1, 2], 10, "calibration_coefficients",
-         (error_code.OK, f"Successfully save the coefficients to D:/PyCharm Community Edition "
-                         f"2024.1.4/Python_project/szdongyuan/code1/SpeakerAnomalyDetection/consts/../"
-                         f"storagecalibration_coefficients.json.")),
+        (mock.Mock(), [1, 2], 10, "calibration_coefficients.json", None),
+        (mock.Mock(), [1, 2], 10, "calibration_coefficients", None),
         (Exception('xxx'), [1, 2], 10, "calibration_coefficients",
          (error_code.INVALID_SAVE, 'Failed saving coefficients to json. xxx')),
     ])
     @mock.patch("json.dump")
-    def test_save_coefficients_to_json(self, mock_json, json_ret, coefficients, max_voltages, json_file_name, result_ret):
+    def test_save_coefficients_to_json(
+            self, mock_json, tmp_path, monkeypatch,
+            json_ret, coefficients, max_voltages, json_file_name, result_ret):
+        monkeypatch.setattr(model_consts, "JSON_DIR_PATH", str(tmp_path))
         mock_json.side_effect = json_ret
         result = SoundcardCalibrationManager().save_coefficients_to_json(coefficients, max_voltages, json_file_name)
+        if result_ret is None:
+            result_ret = (
+                error_code.OK,
+                f"Successfully save the coefficients to "
+                f"{tmp_path}/calibration_coefficients.json.",
+            )
         assert result == result_ret
 
     @pytest.mark.parametrize("load_ret, json_file_name, result_ret", [
@@ -102,7 +104,12 @@ class TestSoundcardCalibrationManager(object):
          (error_code.INVALID_DATA_LOADING, "This json file does not exist.")),
     ])
     @mock.patch("json.load")
-    def test_load_data_from_json(self, mock_load, load_ret, json_file_name, result_ret):
+    def test_load_data_from_json(
+            self, mock_load, tmp_path, monkeypatch,
+            load_ret, json_file_name, result_ret):
+        monkeypatch.setattr(model_consts, "JSON_DIR_PATH", str(tmp_path))
         mock_load.return_value = load_ret
+        if result_ret[0] == error_code.OK:
+            (tmp_path / json_file_name).touch()
         result = SoundcardCalibrationManager().load_data_from_json(json_file_name)
         assert result == result_ret

@@ -1,5 +1,6 @@
 import sys
 import threading
+from numbers import Integral
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -8,6 +9,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QDoubleSpinBox,
+    QComboBox,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -23,8 +25,12 @@ from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.play_and_record import stream_record_without_play
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import (
+    MicCalibrationFormatError,
+    MicCalibrationIOError,
     SoundcardCalibrationManager,
-    save_mic_input_calibration,
+    clear_mic_channel_calibrations,
+    load_mic_channel_v2pa_factors,
+    save_mic_channel_calibration,
 )
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
@@ -63,10 +69,15 @@ class CalibrationWindow(QDialog):
         self.input_cal_wnd.calibration_finished.connect(
             self._on_input_calibration_finished
         )
+        self.input_cal_wnd.calibration_state_changed.connect(
+            self._on_input_calibration_state_changed
+        )
         self.tabwidget.addTab(self.output_cal_wnd, "输出校准")
         self.tabwidget.addTab(self.input_cal_wnd, "输入校准")
 
         btn_layout = self.create_btn_box()
+        self.tabwidget.currentChanged.connect(self._sync_calibration_button_state)
+        self._sync_calibration_button_state()
 
         cal_wnd_layout.addWidget(self.tabwidget)
         cal_wnd_layout.addLayout(btn_layout)
@@ -83,15 +94,15 @@ class CalibrationWindow(QDialog):
         btn_layout = QHBoxLayout()
         self.cal_btn = QPushButton(" 校  准 ")
         self.cal_btn.clicked.connect(self.clicked_calibration_button)
-        reset_btn = QPushButton(" 重  置 ")
-        reset_btn.clicked.connect(self.clicked_reset_button)
+        self.reset_btn = QPushButton(" 重  置 ")
+        self.reset_btn.clicked.connect(self.clicked_reset_button)
         cancel_btn = QPushButton(" 退  出 ")
         cancel_btn.clicked.connect(self.clicked_close_button)
         h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_btn2 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(self.cal_btn)
         btn_layout.addItem(h_spacer_btn1)
-        btn_layout.addWidget(reset_btn)
+        btn_layout.addWidget(self.reset_btn)
         btn_layout.addItem(h_spacer_btn2)
         btn_layout.addWidget(cancel_btn)
         return btn_layout
@@ -110,14 +121,36 @@ class CalibrationWindow(QDialog):
         if current_tab_index == 0:
             self.output_cal_wnd.calibration()
         elif current_tab_index == 1:
+            if not self._input_calibration_controls_available():
+                self._sync_calibration_button_state()
+                return
             self.cal_btn.setDisabled(True)
-            if not self.input_cal_wnd.clicked_calibration():
-                self.cal_btn.setEnabled(True)
+            self.input_cal_wnd.clicked_calibration()
+            self._sync_calibration_button_state()
 
-    def _on_input_calibration_finished(self, success):
-        if success:
+    def _on_input_calibration_finished(self, _success):
+        self._sync_calibration_button_state()
+
+    def _on_input_calibration_state_changed(self, changed):
+        if changed:
             self.input_calibration_flag = True
+        self._sync_calibration_button_state()
+
+    def _input_calibration_controls_available(self):
+        return (
+            self.input_cal_wnd.calibration_available
+            and self.input_cal_wnd.current_channel is not None
+            and self.input_cal_wnd.streaming_processor is None
+        )
+
+    def _sync_calibration_button_state(self, _index=None):
+        if self.tabwidget.currentIndex() == 1:
+            enabled = self._input_calibration_controls_available()
+            self.cal_btn.setEnabled(enabled)
+            self.reset_btn.setEnabled(enabled)
+            return
         self.cal_btn.setEnabled(True)
+        self.reset_btn.setEnabled(True)
 
     def clicked_reset_button(self):
         """
@@ -135,8 +168,11 @@ class CalibrationWindow(QDialog):
         if current_tab_index == 0:
             self.output_cal_wnd.reset_btn_clicked()
         elif current_tab_index == 1:
+            if not self._input_calibration_controls_available():
+                self._sync_calibration_button_state()
+                return
             self.input_cal_wnd.reset_btn_clicked()
-            self.cal_btn.setDisabled(False)
+            self._sync_calibration_button_state()
 
     def clicked_close_button(self):
         """
@@ -573,11 +609,16 @@ class OutputCalibration(QWidget):
 
 class InputCalibration(QWidget):
     calibration_finished = pyqtSignal(bool)
+    calibration_state_changed = pyqtSignal(bool)
 
     def __init__(self, input_device=None, input_channels=None):
         super().__init__()
         self.input_device = input_device
-        self.input_channels = list(input_channels or [])
+        self.input_channels = self._normalize_input_channels(input_channels)
+        self.saved_v2pa_factors = {}
+        self.current_channel = None
+        self.calibration_available = False
+        self.calibration_unavailable_message = None
         self.default_logger = LogManager.set_log_handler("core")  # Configures and retrieves the logger
         self.stop_timer = False  # Initializes the stop timer flag to False
         self.update_ui_timer = QTimer()
@@ -586,10 +627,149 @@ class InputCalibration(QWidget):
 
         # Streaming recording state (no waveform display needed)
         self.streaming_processor = None
+        self.active_capture_channel = None
         self.streaming_poll_timer = QTimer(self)
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
 
         self.init_ui()
+        self._initialize_calibration_state()
+
+    @staticmethod
+    def _normalize_input_channels(input_channels):
+        normalized = []
+        seen = set()
+        for channel in input_channels or []:
+            if isinstance(channel, bool) or not isinstance(channel, Integral):
+                continue
+            physical_channel = int(channel)
+            if physical_channel < 0 or physical_channel in seen:
+                continue
+            seen.add(physical_channel)
+            normalized.append(physical_channel)
+        return normalized
+
+    def _initialize_calibration_state(self):
+        if self.input_device is None:
+            self._set_calibration_unavailable("未选择输入设备")
+            return
+        if not self.input_channels:
+            self._set_calibration_unavailable("未选择有效输入通道")
+            return
+
+        try:
+            self.saved_v2pa_factors = load_mic_channel_v2pa_factors(
+                self.input_device
+            )
+        except (MicCalibrationFormatError, MicCalibrationIOError) as exc:
+            self.default_logger.error(
+                f"Failed to load input calibration registry: {exc}"
+            )
+            self._set_calibration_unavailable("状态: 输入校准文件错误")
+            QMessageBox.critical(
+                self,
+                "输入校准错误",
+                "输入校准文件错误，无法进行输入校准",
+            )
+            return
+
+        self.calibration_available = True
+        self.calibration_unavailable_message = None
+        self.channel_combo_box.setEnabled(True)
+        initial_channel = next(
+            (
+                channel
+                for channel in self.input_channels
+                if channel not in self.saved_v2pa_factors
+            ),
+            self.input_channels[0],
+        )
+        self.channel_combo_box.setCurrentIndex(
+            self.channel_combo_box.findData(initial_channel)
+        )
+        self._on_channel_changed(self.channel_combo_box.currentIndex())
+
+    def _set_calibration_unavailable(self, message):
+        self.calibration_available = False
+        self.calibration_unavailable_message = message
+        self.current_channel = None
+        self.channel_combo_box.blockSignals(True)
+        self.channel_combo_box.setCurrentIndex(-1)
+        self.channel_combo_box.blockSignals(False)
+        self.channel_combo_box.setEnabled(False)
+        self.channel_status_label.setText(message)
+        self.v2pa_factor_lineedit.clear()
+
+    def _on_channel_changed(self, index):
+        if not self.calibration_available or index < 0:
+            self.current_channel = None
+            return
+        if self.active_capture_channel is not None:
+            pinned_index = self.channel_combo_box.findData(
+                self.active_capture_channel
+            )
+            if index != pinned_index:
+                self.channel_combo_box.blockSignals(True)
+                self.channel_combo_box.setCurrentIndex(pinned_index)
+                self.channel_combo_box.blockSignals(False)
+            self.current_channel = self.active_capture_channel
+            return
+        self.current_channel = self.channel_combo_box.itemData(index)
+        self._refresh_channel_display()
+
+    def _begin_capture(self, physical_channel):
+        self.active_capture_channel = physical_channel
+        self.channel_combo_box.setEnabled(False)
+        self.channel_status_label.setText("状态: 录制中")
+
+    def _clear_active_capture(self, refresh_display=True):
+        captured_channel = self.active_capture_channel
+        self.active_capture_channel = None
+        if not self.calibration_available:
+            return
+        if captured_channel is not None:
+            captured_index = self.channel_combo_box.findData(captured_channel)
+            if captured_index >= 0:
+                self.channel_combo_box.blockSignals(True)
+                self.channel_combo_box.setCurrentIndex(captured_index)
+                self.channel_combo_box.blockSignals(False)
+                self.current_channel = captured_channel
+        self.channel_combo_box.setEnabled(True)
+        if refresh_display:
+            self._refresh_channel_display()
+
+    def _refresh_channel_display(self):
+        factor = self.saved_v2pa_factors.get(self.current_channel)
+        if factor is None:
+            self.channel_status_label.setText("状态: 未校准")
+            self.v2pa_factor_lineedit.clear()
+            return
+        self.channel_status_label.setText("状态: 已校准")
+        self.v2pa_factor_lineedit.setText(
+            str(np.round(float(factor), decimals=6))
+        )
+
+    def _select_channel(self, physical_channel):
+        index = self.channel_combo_box.findData(physical_channel)
+        self.channel_combo_box.blockSignals(True)
+        self.channel_combo_box.setCurrentIndex(index)
+        self.channel_combo_box.blockSignals(False)
+        self.current_channel = physical_channel if index >= 0 else None
+        self._refresh_channel_display()
+
+    def _next_uncalibrated_channel(self, completed_channel):
+        current_index = self.input_channels.index(completed_channel)
+        search_order = (
+            self.input_channels[current_index + 1 :]
+            + self.input_channels[:current_index]
+        )
+        return next(
+            (
+                channel
+                for channel in search_order
+                if channel not in self.saved_v2pa_factors
+            ),
+            completed_channel,
+        )
 
     def init_ui(self):
         """
@@ -642,17 +822,21 @@ class InputCalibration(QWidget):
             if callable(getter):
                 device_name = str(getter("name") or device_name)
 
-        channel_name = "未选择通道"
-        if len(self.input_channels) == 1:
-            try:
-                channel_name = f"In{int(self.input_channels[0]) + 1}"
-            except (TypeError, ValueError):
-                channel_name = "无效通道"
-
-        self.input_device_label = QLabel(f"{device_name} / {channel_name}")
+        self.input_device_label = QLabel(device_name)
         self.input_device_label.setWordWrap(True)
-        input_device_layout = QHBoxLayout()
-        input_device_layout.addWidget(self.input_device_label)
+        self.channel_combo_box = QComboBox()
+        for channel in self.input_channels:
+            self.channel_combo_box.addItem(f"In{channel + 1}", channel)
+        self.channel_combo_box.currentIndexChanged.connect(
+            self._on_channel_changed
+        )
+        self.channel_status_label = QLabel("状态: 未校准")
+
+        input_device_layout = QGridLayout()
+        input_device_layout.addWidget(self.input_device_label, 0, 0, 1, 2)
+        input_device_layout.addWidget(QLabel("输入通道"), 1, 0)
+        input_device_layout.addWidget(self.channel_combo_box, 1, 1)
+        input_device_layout.addWidget(self.channel_status_label, 2, 0, 1, 2)
         input_device_box.setLayout(input_device_layout)
         return input_device_box
 
@@ -671,7 +855,7 @@ class InputCalibration(QWidget):
         v2pa_factor_label = QLabel("校准系数（Pa/V）：")
         self.v2pa_factor_lineedit = QLineEdit()
         self.v2pa_factor_lineedit.setStyleSheet("background-color: white;")
-        self.v2pa_factor_lineedit.setDisabled(True)
+        self.v2pa_factor_lineedit.setReadOnly(True)
 
         standard_v2pa_factor_layout = QHBoxLayout()
         h_spacer_v2pa_factor_center = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -762,30 +946,19 @@ class InputCalibration(QWidget):
         allowing the UI timer to update the countdown in real-time. No waveform display is needed.
         """
 
-        if self.input_device is None or len(self.input_channels) != 1:
+        if not self.calibration_available or self.current_channel is None:
             self.calibration_popup(
                 success_flag=False,
-                message="输入校准要求先选择一个麦克风设备和一个输入通道。",
+                message=self.calibration_unavailable_message
+                or "请先选择输入设备和有效输入通道。",
             )
             return False
-        try:
-            input_channel = int(self.input_channels[0])
-        except (TypeError, ValueError):
-            self.calibration_popup(
-                success_flag=False,
-                message="当前输入通道无效，请重新选择硬件。",
-            )
-            return False
-        if input_channel < 0:
-            self.calibration_popup(
-                success_flag=False,
-                message="当前输入通道无效，请重新选择硬件。",
-            )
-            return False
+        input_channel = self.current_channel
 
         self.stop_timer = False
         self.recorded_time = 10
         self.v2pa_factor_lineedit.clear()
+        self._begin_capture(input_channel)
 
         recorded_dict = {
             "channels": 1,
@@ -803,6 +976,7 @@ class InputCalibration(QWidget):
             )
         except Exception as exc:
             self.streaming_processor = None
+            self._clear_active_capture()
             self.default_logger.error(f"Failed to start input calibration recording: {exc}")
             self.calibration_popup(
                 success_flag=False,
@@ -840,7 +1014,18 @@ class InputCalibration(QWidget):
         """
         Handle streaming recording completion and calculate calibration result.
         """
+        if not self.calibration_available:
+            self._finish_failed_calibration(
+                self.calibration_unavailable_message
+                or "输入校准当前不可用。"
+            )
+            return
         processor = self.streaming_processor
+        captured_channel = self.active_capture_channel
+        if processor is None or captured_channel is None:
+            self._finish_failed_calibration("输入校准录音通道状态无效")
+            return
+
         try:
             processor.process_queue(emit_signal=False)
             if processor.error_occurred:
@@ -851,33 +1036,61 @@ class InputCalibration(QWidget):
                     f"录音长度不完整：{recorded_data.size}/{processor.target_samples}"
                 )
 
+        except Exception as exc:
+            self.default_logger.error(
+                f"Failed to finish input calibration audio capture: {exc}"
+            )
+            self._finish_failed_calibration(str(exc))
+            return
+
+        try:
             self.average_value = self._calculate_spl_from_data(recorded_data)
             v2pa_factor = self.calculate_v2pa_factor(self.average_value)
-            if not np.isfinite(self.average_value) or not np.isfinite(v2pa_factor) or v2pa_factor <= 0.0:
+            if (
+                not np.isfinite(self.average_value)
+                or not np.isfinite(v2pa_factor)
+                or v2pa_factor <= 0.0
+            ):
                 raise ValueError("输入校准计算结果无效")
+            if (
+                isinstance(processor.sample_rate, bool)
+                or not isinstance(processor.sample_rate, Integral)
+                or processor.sample_rate <= 0
+            ):
+                raise ValueError("输入校准采样率无效")
 
             standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
-            saved, message = save_mic_input_calibration(
+            save_mic_channel_calibration(
                 v2pa_factor=v2pa_factor,
                 input_device=self.input_device,
-                input_channel=self.input_channels[0],
+                input_channel=captured_channel,
                 standard_spl_db=standard_spl_db,
                 sample_rate_hz=processor.sample_rate,
                 duration_seconds=processor.target_samples / processor.sample_rate,
             )
-            if not saved:
-                raise OSError(message)
+        except (
+            ValueError,
+            ArithmeticError,
+            MicCalibrationFormatError,
+            MicCalibrationIOError,
+        ) as exc:
+            self.default_logger.error(
+                f"Failed to calculate or save input calibration: {exc}"
+            )
+            self._finish_failed_calibration("输入校准保存失败，请重试。")
+            return
 
-            self._stop_calibration_timers()
-            self.streaming_processor = None
-            self.v2pa_factor_lineedit.setText(str(np.round(v2pa_factor, decimals=6)))
-            if not self.stop_timer:
-                self.calibration_popup(success_flag=True)
-                self.default_logger.info("Input calibration succeeded and was saved.")
-                self.calibration_finished.emit(True)
-        except Exception as e:
-            self.default_logger.error(f"Error in streaming calibration completion: {e}")
-            self._finish_failed_calibration(str(e))
+        self._stop_calibration_timers()
+        self.streaming_processor = None
+        self.active_capture_channel = None
+        self.saved_v2pa_factors[captured_channel] = float(v2pa_factor)
+        self.channel_combo_box.setEnabled(True)
+        self._select_channel(self._next_uncalibrated_channel(captured_channel))
+        self.calibration_state_changed.emit(True)
+        if not self.stop_timer:
+            self.calibration_popup(success_flag=True)
+            self.default_logger.info("Input calibration succeeded and was saved.")
+            self.calibration_finished.emit(True)
 
     def _stop_calibration_timers(self):
         self.update_ui_timer.stop()
@@ -887,8 +1100,14 @@ class InputCalibration(QWidget):
         self._stop_calibration_timers()
         processor = self.streaming_processor
         self.streaming_processor = None
+        self._clear_active_capture()
         if processor is not None:
-            processor.stop_streaming()
+            try:
+                processor.stop_streaming()
+            except Exception as exc:
+                self.default_logger.error(
+                    f"Failed to stop input calibration processor: {exc}"
+                )
         if not self.stop_timer:
             self.calibration_popup(success_flag=False, message=message)
             self.calibration_finished.emit(False)
@@ -1004,33 +1223,76 @@ class InputCalibration(QWidget):
         It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
         Additionally, it clears the v2pa_factor line edit and stops any ongoing streaming recording.
         """
-        # Stop timers
-        self.update_ui_timer.stop()
-        self.streaming_poll_timer.stop()
+        if not self.calibration_available:
+            return
 
-        # Clean up streaming resources
-        if self.streaming_processor is not None:
+        self._stop_calibration_timers()
+        processor = self.streaming_processor
+        if processor is not None:
             try:
-                self.streaming_processor.stop_streaming()
-            except Exception as e:
-                self.default_logger.error(f"Error stopping streaming processor: {e}")
-            self.streaming_processor = None
-
+                processor.stop_streaming()
+            except Exception as exc:
+                self.default_logger.error(
+                    f"Error stopping input calibration processor for reset: {exc}"
+                )
+        self.streaming_processor = None
+        self._clear_active_capture(refresh_display=False)
         self.stop_timer = False
 
-        # Reset UI
         self.recorded_time = 10
         self.recorded_label.setText(
             f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
         )
-        self.v2pa_factor_lineedit.clear()
+        try:
+            changed = clear_mic_channel_calibrations(
+                self.input_device,
+                self.input_channels,
+            )
+        except (
+            ValueError,
+            MicCalibrationFormatError,
+            MicCalibrationIOError,
+        ) as exc:
+            self.default_logger.error(f"Failed to reset input calibration: {exc}")
+            self.channel_combo_box.setEnabled(True)
+            self._refresh_channel_display()
+            self.calibration_popup(
+                success_flag=False,
+                message="输入校准重置失败，请重试。",
+            )
+            return
+
+        if changed:
+            self.calibration_state_changed.emit(True)
+        try:
+            self.saved_v2pa_factors = load_mic_channel_v2pa_factors(self.input_device)
+        except (MicCalibrationFormatError, MicCalibrationIOError) as exc:
+            self.default_logger.error(
+                f"Failed to reload input calibration after reset: {exc}"
+            )
+            self._set_calibration_unavailable("状态: 输入校准文件错误")
+            self.calibration_popup(
+                success_flag=False,
+                message="输入校准文件错误，无法进行输入校准",
+            )
+            return
+
+        self.channel_combo_box.setEnabled(True)
+        self._select_channel(self.input_channels[0])
 
     def cancel_calibration(self):
         self.stop_timer = True
         self._stop_calibration_timers()
-        if self.streaming_processor is not None:
-            self.streaming_processor.stop_streaming()
-            self.streaming_processor = None
+        processor = self.streaming_processor
+        self.streaming_processor = None
+        self._clear_active_capture()
+        if processor is not None:
+            try:
+                processor.stop_streaming()
+            except Exception as exc:
+                self.default_logger.error(
+                    f"Failed to stop cancelled input calibration processor: {exc}"
+                )
 
 
 if __name__ == "__main__":

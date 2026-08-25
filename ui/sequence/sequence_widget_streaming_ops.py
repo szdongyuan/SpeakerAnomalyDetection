@@ -21,7 +21,11 @@ from base.load_config import LoadUiConfig
 from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
 from base.save_data import ensure_test_result_file, save_audio_simple
-from base.soundcard_calibration_manager import get_mic_v2pa_factor
+from base.soundcard_calibration_manager import (
+    MicCalibrationFormatError,
+    MicCalibrationIOError,
+    get_mic_v2pa_factor,
+)
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
@@ -486,10 +490,25 @@ class SequenceWidgetStreamingOpsMixin:
                 count_board.set_test_available(False, "产品配置校验失败，无法进入测试模式")
 
     def update_v2pa_factor(self):
-        self.v2pa_factor = get_mic_v2pa_factor(
-            getattr(self, "mic", None),
-            getattr(self, "mic_channels", None),
-        )
+        """Refresh the legacy scalar factor for an exact single-channel selection."""
+        mic_channels = getattr(self, "mic_channels", None)
+        if not isinstance(mic_channels, (list, tuple)) or len(mic_channels) != 1:
+            self.v2pa_factor = 0.0
+            return
+        try:
+            self.v2pa_factor = get_mic_v2pa_factor(
+                getattr(self, "mic", None),
+                mic_channels,
+            )
+        except (MicCalibrationFormatError, MicCalibrationIOError) as exc:
+            self.v2pa_factor = 0.0
+            logger = getattr(self, "default_logger", None)
+            if logger is not None:
+                logger.error(
+                    "microphone_calibration_scalar_refresh_error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
 
     @staticmethod
     def _product_condition_signature(condition_configs):
@@ -1588,45 +1607,74 @@ class SequenceWidgetStreamingOpsMixin:
             if callable(on_directional_recording_completed):
                 on_directional_recording_completed()
 
-            if manual_product_cycle_was_active:
-                mark_manual_product_complete = getattr(
-                    self,
-                    "_mark_manual_product_condition_recording_completed",
-                    None,
-                )
-                if callable(mark_manual_product_complete):
-                    mark_manual_product_complete()
-                update_group_count = getattr(self, "_update_manual_product_mark_group_count", None)
-                if callable(update_group_count):
-                    update_group_count(getattr(self, "_manual_product_condition_group_id", ""))
-
             # Motor directional workflow needs left-panel AI results even when the
             # legacy auto-analysis checkbox is off, so run silently in that case too.
+            analysis_succeeded = True
             if self._should_run_silent_analysis_after_recording():
-                self.run(show_windows=False)
+                analysis_succeeded = self.run(show_windows=False)
 
-            finalize_serial_condition = getattr(
-                self,
-                "_finalize_serial_product_condition_after_analysis",
-                None,
-            )
-            if callable(finalize_serial_condition) and not finalize_serial_condition():
-                return
+            analysis_failed = analysis_succeeded is False
+            if analysis_failed:
+                finalize_failed_analysis = getattr(
+                    self,
+                    "_finalize_serial_product_condition_analysis_failure",
+                    None,
+                )
+                failure_finalized = bool(
+                    callable(finalize_failed_analysis)
+                    and finalize_failed_analysis(
+                        "输入校准文件错误，本次分析已停止"
+                    )
+                )
+                if not failure_finalized:
+                    self._awaiting_ok_ng = False
+                    self._sn_clear_on_next_scan = False
+                    self._pending_recent_session_append = False
+            else:
+                if manual_product_cycle_was_active:
+                    mark_manual_product_complete = getattr(
+                        self,
+                        "_mark_manual_product_condition_recording_completed",
+                        None,
+                    )
+                    if callable(mark_manual_product_complete):
+                        mark_manual_product_complete()
+                    update_group_count = getattr(
+                        self,
+                        "_update_manual_product_mark_group_count",
+                        None,
+                    )
+                    if callable(update_group_count):
+                        update_group_count(
+                            getattr(
+                                self,
+                                "_manual_product_condition_group_id",
+                                "",
+                            )
+                        )
 
-            advance_manual_product_cycle = getattr(
-                self,
-                "_advance_manual_product_condition_cycle_after_recording",
-                None,
-            )
-            if callable(advance_manual_product_cycle):
-                advance_manual_product_cycle()
-            serial_condition_completed = getattr(
-                self,
-                "_on_serial_product_condition_completed",
-                None,
-            )
-            if callable(serial_condition_completed):
-                serial_condition_completed()
+                finalize_serial_condition = getattr(
+                    self,
+                    "_finalize_serial_product_condition_after_analysis",
+                    None,
+                )
+                if callable(finalize_serial_condition) and not finalize_serial_condition():
+                    return
+
+                advance_manual_product_cycle = getattr(
+                    self,
+                    "_advance_manual_product_condition_cycle_after_recording",
+                    None,
+                )
+                if callable(advance_manual_product_cycle):
+                    advance_manual_product_cycle()
+                serial_condition_completed = getattr(
+                    self,
+                    "_on_serial_product_condition_completed",
+                    None,
+                )
+                if callable(serial_condition_completed):
+                    serial_condition_completed()
             if manual_product_cycle_was_active:
                 self.data_btn.setEnabled(False)
                 self.replayer_btn.setDisabled(True)
@@ -1640,9 +1688,14 @@ class SequenceWidgetStreamingOpsMixin:
                 self._last_committed_barcode = None
                 self._last_committed_barcode_time = 0.0
 
-            self.default_logger.info(
-                f"{str(completion_source).capitalize()} recording completed successfully"
-            )
+            if analysis_failed:
+                self.default_logger.error(
+                    f"{str(completion_source).capitalize()} recording analysis failed"
+                )
+            else:
+                self.default_logger.info(
+                    f"{str(completion_source).capitalize()} recording completed successfully"
+                )
 
             drain = getattr(self, "_drain_queued_directional_trigger", None)
             if callable(drain):

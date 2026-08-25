@@ -457,6 +457,63 @@ class SequenceWidgetSerialTriggerOpsMixin:
         )
         return True
 
+    def _finalize_serial_product_condition_analysis_failure(self, reason):
+        if not getattr(self, "_serial_product_condition_executing", False):
+            return False
+
+        active_key = str(
+            getattr(self, "_get_active_product_condition_key", lambda: "")()
+            or ""
+        ).strip()
+        completed_keys = set(
+            getattr(self, "_manual_product_condition_completed_keys", set())
+            or set()
+        )
+        completed_keys.discard(active_key)
+        self._manual_product_condition_completed_keys = completed_keys
+        condition_results = dict(
+            getattr(self, "_manual_product_condition_results", {}) or {}
+        )
+        condition_results.pop(active_key, None)
+        self._manual_product_condition_results = condition_results
+
+        self._serial_product_condition_executing = False
+        self._serial_product_session_started = False
+        self._serial_product_latched_frame = ""
+        self._serial_product_waiting_for_close = False
+        self._serial_product_pending_close_frame = ""
+        self._queued_directional_trigger = ""
+        self._pending_serial_trigger_direction = ""
+        self._active_product_condition_key = ""
+        self._active_product_condition_config = None
+        self._waveform_display_override_direction = ""
+        self._current_trigger_direction = ""
+        self._record_workflow_busy = False
+        self.player_status_flag = False
+        self.clicked_player_flag = False
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
+        self._pending_recent_session_append = False
+
+        left_panel = getattr(self, "left_panel", None)
+        if active_key and left_panel is not None:
+            set_condition_result = getattr(
+                left_panel,
+                "set_condition_result",
+                None,
+            )
+            if callable(set_condition_result):
+                set_condition_result(active_key, "待检测", tone="pending")
+            set_current_stage = getattr(left_panel, "set_current_stage", None)
+            if callable(set_current_stage):
+                set_current_stage("分析失败，等待重试", tone="ng")
+
+        self.default_logger.error(
+            "serial_product_condition_analysis_failed "
+            f"condition={active_key or 'unknown'} reason={reason}"
+        )
+        return True
+
     def _on_serial_product_condition_completed(self):
         self._serial_product_condition_executing = False
         self._serial_product_session_started = False
