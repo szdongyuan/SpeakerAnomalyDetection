@@ -4,7 +4,7 @@ from time import sleep
 from PyQt5.QtCore import Qt, QPoint, QTimer, QUrl
 from PyQt5.QtGui import QIcon, QPixmap, QDesktopServices
 from PyQt5.QtWidgets import QApplication, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QDialog
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave, ensure_system_database_ready
@@ -20,6 +20,7 @@ from ui.hardware_management_window import open_hardware_management_window
 from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
+from ui.sequence.sequence_messages import ShutdownReady
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.custom_ui_widget.traypopuppanel import TrayPopupButton
 from ui.ui_src import ui_resources
@@ -29,6 +30,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self._initialize_application_shutdown_state()
         self.setWindowTitle(APP_DISPLAY_NAME)
         # set up statusbar object data
         self.user_name = None
@@ -684,6 +686,84 @@ class MainWindow(QMainWindow):
         # close the window
         self.close()
 
+    def _initialize_application_shutdown_state(self):
+        self._shutdown_generation_counter = -1
+        self._shutdown_active_generation = None
+        self._shutdown_close_permission_generation = None
+        self._shutdown_bound_sequence = None
+
+    def _ensure_application_shutdown_state(self):
+        if not hasattr(self, "_shutdown_generation_counter"):
+            MainWindow._initialize_application_shutdown_state(self)
+
+    def _bind_sequence_shutdown_facade(self, sequence_window):
+        MainWindow._ensure_application_shutdown_state(self)
+        if self._shutdown_bound_sequence is sequence_window:
+            return True
+        register_ready = getattr(
+            sequence_window, "register_shutdown_ready_recipient", None
+        )
+        if callable(register_ready):
+            try:
+                if register_ready(self.on_shutdown_ready, owner=self) is False:
+                    return False
+            except BaseException:
+                return False
+            self._shutdown_bound_sequence = sequence_window
+            aborted = getattr(sequence_window, "shutdown_aborted", None)
+            if aborted is not None and hasattr(aborted, "connect"):
+                try:
+                    aborted.connect(self.on_shutdown_aborted, Qt.QueuedConnection)
+                except (RuntimeError, TypeError):
+                    pass
+            return True
+
+        # Narrow compatibility for old test facades. Production SequenceWindow
+        # always registers the ready recipient with the formal dispatcher.
+        ready = getattr(sequence_window, "shutdown_ready", None)
+        aborted = getattr(sequence_window, "shutdown_aborted", None)
+        if ready is not None and hasattr(ready, "connect"):
+            try:
+                ready.connect(self.on_shutdown_ready, Qt.QueuedConnection)
+            except (RuntimeError, TypeError):
+                pass
+        if aborted is not None and hasattr(aborted, "connect"):
+            try:
+                aborted.connect(self.on_shutdown_aborted, Qt.QueuedConnection)
+            except (RuntimeError, TypeError):
+                pass
+        self._shutdown_bound_sequence = sequence_window
+        return True
+
+    def request_application_shutdown_from_child(self):
+        self.close()
+
+    def on_shutdown_ready(self, event):
+        MainWindow._ensure_application_shutdown_state(self)
+        if type(event) is not ShutdownReady:
+            return False
+        generation = event.shutdown_generation
+        if (
+            generation != self._shutdown_active_generation
+            or self._shutdown_close_permission_generation not in {None, generation}
+        ):
+            return False
+        self._shutdown_close_permission_generation = generation
+        try:
+            closed = self.close()
+        except BaseException:
+            return False
+        return closed is not False
+
+    def on_shutdown_aborted(self, event):
+        MainWindow._ensure_application_shutdown_state(self)
+        generation = getattr(event, "shutdown_generation", event)
+        if generation != self._shutdown_active_generation:
+            return False
+        self._shutdown_active_generation = None
+        self._shutdown_close_permission_generation = None
+        return True
+
     def _close_all_subwindows(self):
         """
         Close all other top-level windows/dialogs besides the main window itself.
@@ -709,54 +789,48 @@ class MainWindow(QMainWindow):
                 pass
 
     def closeEvent(self, event):
-        if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
-            SequenceWindow.tcp_server.stop()
-            SequenceWindow.tcp_server = None
+        MainWindow._ensure_application_shutdown_state(self)
+        generation = self._shutdown_active_generation
+        if (
+            generation is not None
+            and self._shutdown_close_permission_generation == generation
+        ):
+            self._shutdown_close_permission_generation = None
+            self._shutdown_active_generation = None
+            event.accept()
+            return
 
-        # Close any other sub windows/dialogs that may still be open.
-        self._close_all_subwindows()
-
-        # Best-effort: rebuild daily Excel from CSV spool before exit (fast_mode).
-        # Retry loop if there are failures (e.g., Excel file is open)
-        if hasattr(self, "sequence_window") and self.sequence_window is not None:
-            while True:
-                # Show "saving" dialog
-                saving_dialog = QDialog(self)
-                saving_dialog.setWindowTitle("正在保存")
-                saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-                saving_dialog.setFixedSize(250, 80)
-                layout = QVBoxLayout(saving_dialog)
-                label = Label("正在保存数据，请稍候...")
-                label.setAlignment(Qt.AlignCenter)
-                layout.addWidget(label)
-                saving_dialog.show()
-                QApplication.processEvents()
-
+        event.ignore()
+        sequence_window = getattr(self, "sequence_window", None)
+        if generation is not None:
+            raise_progress = getattr(
+                sequence_window, "raise_shutdown_progress", None
+            )
+            if callable(raise_progress):
                 try:
-                    failures = self.sequence_window.flush_excel_spool_build(on_close=False)
-                except Exception as e:
-                    failures = [("unknown", str(e))]
+                    raise_progress(generation)
+                except (RuntimeError, TypeError):
+                    pass
+            return
 
-                saving_dialog.close()
-
-                if not failures:
-                    break
-
-                msg_box = MessageBox(self)
-                msg_box.setIcon(MessageBox.Warning)
-                msg_box.setWindowTitle("Excel同步失败")
-                msg_box.setText("无法将数据同步到Excel文件，可能是文件被占用或权限不足。\n请关闭相关Excel文件后重试。")
-                retry_btn = msg_box.addButton("重试", MessageBox.AcceptRole)
-                msg_box.addButton("忽略", MessageBox.RejectRole)
-                msg_box.setDefaultButton(retry_btn)
-                msg_box.exec_()
-
-                if msg_box.clickedButton() == retry_btn:
-                    continue
-                else:
-                    break
-
-        event.accept()
+        generation = self._shutdown_generation_counter + 1
+        self._shutdown_generation_counter = generation
+        self._shutdown_active_generation = generation
+        if sequence_window is None:
+            QTimer.singleShot(
+                0, lambda: self.on_shutdown_ready(ShutdownReady(generation))
+            )
+            return
+        if not MainWindow._bind_sequence_shutdown_facade(self, sequence_window):
+            self._shutdown_active_generation = None
+            return
+        request = getattr(sequence_window, "request_application_shutdown", None)
+        try:
+            accepted = callable(request) and request(generation) is not False
+        except (RuntimeError, TypeError):
+            accepted = False
+        if not accepted:
+            self._shutdown_active_generation = None
 
     def mousepressevent(self, event):
         # If the mouse is pressed, recoed mouse move data, start the window resizing

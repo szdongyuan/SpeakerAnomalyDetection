@@ -6,7 +6,11 @@ Enables non-blocking audio capture with real-time chunk processing.
 import queue
 import threading
 import time
+import math
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, List, Optional, Sequence, Tuple
+from uuid import uuid4
 import numpy as np
 
 from base.log_manager import LogManager
@@ -14,6 +18,32 @@ from base.sound_device_manager import sd
 from base.utils.custom_signals import sign
 from consts import error_code
 from consts.audio_consts import bit_depth_to_dtype, normalize_float_bit_depth
+from ui.sequence.sequence_messages import (
+    AudioBatch,
+    AudioCancelled,
+    AudioCompleted,
+    AudioFailed,
+)
+
+
+class ProducerGateState(Enum):
+    """Admission state for one finite streaming producer session."""
+
+    OPEN = "open"
+    QUIESCING = "quiescing"
+    TERMINAL_ENQUEUED = "terminal-enqueued"
+
+
+@dataclass(frozen=True, slots=True)
+class AudioFinalizationPending:
+    """Observable retry request for an already claimed producer terminal."""
+
+    session_id: str
+    last_sequence_no: int
+    sample_count: int
+    terminal_kind: str
+    error_code: str
+    message: str
 
 
 class StreamingAudioProcessor:
@@ -29,7 +59,7 @@ class StreamingAudioProcessor:
         """Initialize streaming audio processor."""
         self.logger = LogManager.set_log_handler("streaming_core")
         self.stream = None
-        self.audio_queue = queue.Queue()
+        self.audio_queue = queue.SimpleQueue()
         self.accumulated_chunks = []
         self.accumulated_multi_chunks = []
         self.is_recording = False
@@ -48,6 +78,324 @@ class StreamingAudioProcessor:
         self.bit_depth = 32
         self.sample_dtype = np.dtype("float32")
         self.stream_dtype = "float32"
+        self.callback_block_size = 2048
+        self._event_session_id = f"legacy-{uuid4().hex}"
+        self._event_channel_order = (0,)
+        self._producer_condition = threading.Condition(threading.Lock())
+        self._sequence_lock = threading.Lock()
+        self._producer_gate_state = ProducerGateState.OPEN
+        self._active_callback_count = 0
+        self._terminal_claimed = False
+        self._terminal_kind: str | None = None
+        self._terminal_message_factory = None
+        self._terminal_finalizer_scheduled = False
+        self._terminal_finalization_pending = False
+        self._terminal_finalization_pending_descriptor = None
+        self._terminal_finalization_control_accepted = False
+        self._terminal_finalization_pending_callback = None
+        self._terminal_thread_factory = threading.Thread
+        self._terminal_finalization_lock = threading.Lock()
+        self._hardware_quiescence_diagnostic = ""
+        self._next_sequence_no = 0
+        self._next_sample_start = 0
+
+    @property
+    def gate_state(self) -> ProducerGateState:
+        with self._producer_condition:
+            return self._producer_gate_state
+
+    @property
+    def session_id(self) -> str:
+        return self._event_session_id
+
+    @staticmethod
+    def _validated_finite_admission(
+        *,
+        sample_rate: Any,
+        target_samples: Any,
+        duration: Any,
+        callback_block_size: Any,
+    ) -> tuple[float, int, int]:
+        try:
+            normalized_rate = float(sample_rate)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("sample_rate must be positive and finite") from error
+        if not math.isfinite(normalized_rate) or normalized_rate <= 0:
+            raise ValueError("sample_rate must be positive and finite")
+        if duration is not None:
+            try:
+                normalized_duration = float(duration)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError("duration must be positive and finite") from error
+            if not math.isfinite(normalized_duration) or normalized_duration <= 0:
+                raise ValueError("duration must be positive and finite")
+        else:
+            normalized_duration = None
+        if target_samples is None:
+            if normalized_duration is None:
+                raise ValueError("duration must be positive and finite")
+            target_samples = int(normalized_duration * normalized_rate)
+        if isinstance(target_samples, (bool, np.bool_)):
+            raise ValueError("target_samples must be a positive integer")
+        try:
+            normalized_target = int(target_samples)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("target_samples must be a positive integer") from error
+        if normalized_target <= 0 or normalized_target != target_samples:
+            raise ValueError("target_samples must be a positive integer")
+        if isinstance(callback_block_size, (bool, np.bool_)):
+            raise ValueError("callback_block_size must be a positive integer")
+        try:
+            normalized_block_size = int(callback_block_size)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("callback_block_size must be a positive integer") from error
+        if normalized_block_size <= 0 or normalized_block_size != callback_block_size:
+            raise ValueError("callback_block_size must be a positive integer")
+        return normalized_rate, normalized_target, normalized_block_size
+
+    def configure_event_session(
+        self,
+        *,
+        session_id: str,
+        sample_rate: Any,
+        target_samples: Any,
+        callback_block_size: Any,
+        channel_order: Sequence[int],
+        duration: Any = None,
+    ) -> None:
+        if type(session_id) is not str or not session_id:
+            raise ValueError("session_id must be a non-empty string")
+        normalized_rate, normalized_target, normalized_block_size = (
+            self._validated_finite_admission(
+                sample_rate=sample_rate,
+                target_samples=target_samples,
+                duration=duration,
+                callback_block_size=callback_block_size,
+            )
+        )
+        normalized_channels = tuple(int(channel) for channel in channel_order)
+        if not normalized_channels or any(channel < 0 for channel in normalized_channels):
+            raise ValueError("channel_order must contain non-negative integers")
+        with self._producer_condition:
+            if self._active_callback_count:
+                raise RuntimeError("cannot replace an active streaming session")
+            self.audio_queue = queue.SimpleQueue()
+            self._event_session_id = session_id
+            self._event_channel_order = normalized_channels
+            self._rec_in_sel = list(normalized_channels)
+            self._producer_gate_state = ProducerGateState.OPEN
+            self._terminal_claimed = False
+            self._terminal_kind = None
+            self._terminal_message_factory = None
+            self._terminal_finalizer_scheduled = False
+            self._terminal_finalization_pending = False
+            self._terminal_finalization_pending_descriptor = None
+            self._terminal_finalization_control_accepted = False
+            self._hardware_quiescence_diagnostic = ""
+            self._next_sequence_no = 0
+            self._next_sample_start = 0
+        self.sample_rate = normalized_rate
+        self.target_samples = normalized_target
+        self.callback_block_size = normalized_block_size
+        self.samples_captured = 0
+
+    @staticmethod
+    def _audio_batch_from_callback(**payload: Any) -> AudioBatch:
+        return AudioBatch.from_callback(**payload)
+
+    def _enter_callback(self) -> bool:
+        with self._producer_condition:
+            if self._producer_gate_state is not ProducerGateState.OPEN:
+                return False
+            self._active_callback_count += 1
+            return True
+
+    def _leave_callback(self) -> None:
+        with self._producer_condition:
+            self._active_callback_count -= 1
+            if self._active_callback_count == 0:
+                self._producer_condition.notify_all()
+
+    @staticmethod
+    def _safe_error_message(error: BaseException, fallback: str) -> str:
+        try:
+            raw_message = str(error)
+            if type(raw_message) is not str:
+                return fallback
+            message = str.__getitem__(raw_message, slice(0, 512))
+            if type(message) is not str:
+                return fallback
+        except BaseException:
+            return fallback
+        return message if message else fallback
+
+    def _log_noexcept(self, level: str, message: str) -> None:
+        try:
+            callback = getattr(self.logger, level, None)
+            if callable(callback):
+                callback(message)
+        except BaseException:
+            return
+
+    def _claim_callback_failure(self, code: str, error: BaseException) -> bool:
+        message = self._safe_error_message(error, type(error).__name__)
+        factory = lambda session_id, last_sequence_no, _sample_count: AudioFailed(
+            session_id,
+            last_sequence_no,
+            str(code) or "streaming-failed",
+            message,
+        )
+        claimed = self._claim_terminal("failed", factory)
+        if claimed:
+            self.error_occurred = True
+            self.error_message = message
+        return claimed
+
+    def _request_callback_failure(self, code: str, error: BaseException) -> None:
+        claimed = self._claim_callback_failure(code, error)
+        with self._producer_condition:
+            failure_owns_terminal = self._terminal_kind == "failed"
+        if claimed or failure_owns_terminal:
+            self._schedule_claimed_terminal_finalizer()
+
+    def _launch_terminal_finalizer(self, callback) -> None:
+        thread = self._terminal_thread_factory(target=callback, daemon=True)
+        thread.start()
+
+    @property
+    def terminal_finalization_pending(self) -> bool:
+        with self._producer_condition:
+            return self._terminal_finalization_pending
+
+    def set_terminal_finalization_pending_callback(self, callback) -> None:
+        if callback is not None and not callable(callback):
+            raise TypeError("terminal finalization callback must be callable")
+        with self._producer_condition:
+            self._terminal_finalization_pending_callback = callback
+
+    def take_terminal_finalization_pending(
+        self,
+    ) -> AudioFinalizationPending | None:
+        with self._producer_condition:
+            descriptor = self._terminal_finalization_pending_descriptor
+            if descriptor is None:
+                return None
+            self._terminal_finalization_pending_descriptor = None
+            self._terminal_finalization_pending = False
+            self._terminal_finalization_control_accepted = True
+            self._producer_condition.notify_all()
+            return descriptor
+
+    def retry_terminal_finalization_pending_delivery(self) -> bool:
+        with self._producer_condition:
+            descriptor = self._terminal_finalization_pending_descriptor
+            callback = self._terminal_finalization_pending_callback
+        if descriptor is None:
+            return True
+        if not callable(callback):
+            return False
+        try:
+            accepted = callback(descriptor) is True
+        except BaseException:
+            accepted = False
+        if not accepted:
+            return False
+        with self._producer_condition:
+            if self._terminal_finalization_pending_descriptor is descriptor:
+                self._terminal_finalization_pending_descriptor = None
+                self._terminal_finalization_pending = False
+                self._terminal_finalization_control_accepted = True
+                self._producer_condition.notify_all()
+        return True
+
+    def _publish_terminal_finalization_pending(
+        self, error_code: str, message: str
+    ) -> bool:
+        with self._producer_condition:
+            if (
+                self._producer_gate_state is ProducerGateState.TERMINAL_ENQUEUED
+                or self._terminal_finalization_control_accepted
+            ):
+                return False
+            self._terminal_finalizer_scheduled = False
+            self._terminal_finalization_pending = True
+            if self._terminal_finalization_pending_descriptor is None:
+                self._terminal_finalization_pending_descriptor = (
+                    AudioFinalizationPending(
+                        self._event_session_id,
+                        self._next_sequence_no - 1,
+                        self._next_sample_start,
+                        self._terminal_kind or "unknown",
+                        error_code,
+                        message,
+                    )
+                )
+            event = self._terminal_finalization_pending_descriptor
+            callback = self._terminal_finalization_pending_callback
+            self._producer_condition.notify_all()
+        if not callable(callback):
+            return False
+        try:
+            accepted = callback(event) is True
+        except BaseException:
+            accepted = False
+        if not accepted:
+            return False
+        with self._producer_condition:
+            if self._terminal_finalization_pending_descriptor is event:
+                self._terminal_finalization_pending_descriptor = None
+                self._terminal_finalization_pending = False
+                self._terminal_finalization_control_accepted = True
+                self._producer_condition.notify_all()
+        return True
+
+    def _run_claimed_terminal_finalizer(self) -> None:
+        try:
+            finalized = self._finalize_claimed_terminal()
+        except BaseException as error:
+            finalized = False
+            diagnostic = self._safe_error_message(
+                error, "terminal finalization interrupted"
+            )
+            with self._producer_condition:
+                self._hardware_quiescence_diagnostic = diagnostic
+        finally:
+            with self._producer_condition:
+                self._terminal_finalizer_scheduled = False
+                self._producer_condition.notify_all()
+        if not finalized:
+            diagnostic = self.hardware_quiescence_diagnostic
+            self._publish_terminal_finalization_pending(
+                "terminal-finalization-failed",
+                diagnostic or "streaming terminal finalization failed",
+            )
+
+    def _schedule_claimed_terminal_finalizer(self) -> bool:
+        with self._producer_condition:
+            if (
+                not self._terminal_claimed
+                or self._terminal_finalizer_scheduled
+                or self._producer_gate_state is ProducerGateState.TERMINAL_ENQUEUED
+            ):
+                return False
+            self._terminal_finalizer_scheduled = True
+        try:
+            self._launch_terminal_finalizer(
+                self._run_claimed_terminal_finalizer
+            )
+        except BaseException as error:
+            diagnostic = self._safe_error_message(
+                error, "terminal finalizer thread failed"
+            )
+            with self._producer_condition:
+                self._terminal_finalizer_scheduled = False
+                self._hardware_quiescence_diagnostic = diagnostic
+                self._producer_condition.notify_all()
+            self._publish_terminal_finalization_pending(
+                "terminal-finalizer-thread-failed", diagnostic
+            )
+            return False
+        return True
 
     @staticmethod
     def _normalize_channel_selection(channels: Any) -> List[int]:
@@ -70,7 +418,7 @@ class StreamingAudioProcessor:
             for x in channels:
                 try:
                     out.append(int(x))
-                except Exception:
+                except (TypeError, ValueError, OverflowError):
                     continue
             return sorted({i for i in out if i >= 0})
         return []
@@ -175,7 +523,9 @@ class StreamingAudioProcessor:
             return "float32"
         return bit_depth_to_dtype(bit_depth)
 
-    def _queue_chunk_and_maybe_stop(self, multi_chunk: np.ndarray) -> Tuple[dict, bool]:
+    def _queue_chunk_and_maybe_stop(
+        self, multi_chunk: np.ndarray
+    ) -> Tuple[AudioBatch | None, bool]:
         """
         Update sample counters, trim final chunk if needed, enqueue payload, and stop if target reached.
 
@@ -186,28 +536,57 @@ class StreamingAudioProcessor:
         if multi_chunk.ndim == 1:
             multi_chunk = multi_chunk.reshape(-1, 1)
 
-        samples_before = self.samples_captured
-        self.samples_captured += int(multi_chunk.shape[0])
+        should_schedule_terminal = False
+        with self._sequence_lock:
+            remaining = self.target_samples - self._next_sample_start
+            if remaining <= 0:
+                return None, self._terminal_kind == "completed"
+            accepted_frames = min(int(multi_chunk.shape[0]), remaining)
+            if accepted_frames <= 0:
+                return None, False
+            if accepted_frames != int(multi_chunk.shape[0]):
+                multi_chunk = multi_chunk[:accepted_frames, :]
+            try:
+                mono_chunk = (
+                    multi_chunk.mean(axis=1)
+                    .astype(self.sample_dtype, copy=False)
+                    .reshape(-1)
+                )
+                sequence_no = self._next_sequence_no
+                sample_start = self._next_sample_start
+                payload = self._audio_batch_from_callback(
+                    session_id=self._event_session_id,
+                    sequence_no=sequence_no,
+                    sample_start=sample_start,
+                    channel_order=tuple(self._rec_in_sel),
+                    mono=mono_chunk,
+                    multi=multi_chunk,
+                )
+                sample_stop = payload.sample_stop
+                with self._producer_condition:
+                    self.audio_queue.put(payload)
+                    self._next_sequence_no += 1
+                    self._next_sample_start = sample_stop
+                    self.samples_captured = sample_stop
+                    reached_target = sample_stop == self.target_samples
+                    if reached_target:
+                        should_schedule_terminal = self._claim_terminal_locked(
+                            "completed",
+                            lambda session_id, last_sequence_no, sample_count: AudioCompleted(
+                                session_id, last_sequence_no, sample_count
+                            ),
+                        )
+            except BaseException as error:
+                failure_code = (
+                    "allocation-failed"
+                    if isinstance(error, MemoryError)
+                    else "callback-failed"
+                )
+                self._claim_callback_failure(failure_code, error)
+                raise
 
-        reached_target = samples_before < self.target_samples and self.samples_captured >= self.target_samples
-
-        if reached_target:
-            excess = self.samples_captured - self.target_samples
-            if excess > 0:
-                multi_chunk = multi_chunk[:-excess, :]
-                self.samples_captured = self.target_samples
-                self.logger.info(f"Reached target samples: {self.target_samples}, trimmed {excess} samples")
-
-        mono_chunk = multi_chunk.mean(axis=1).astype(self.sample_dtype, copy=False).reshape(-1)
-        payload = {"mono": mono_chunk, "multi": multi_chunk}
-
-        try:
-            self.audio_queue.put_nowait(payload)
-        except queue.Full:
-            self.logger.warning("Audio queue full, dropping chunk")
-
-        if reached_target:
-            threading.Thread(target=self.stop_streaming, daemon=True).start()
+        if should_schedule_terminal:
+            self._schedule_claimed_terminal_finalizer()
 
         return payload, reached_target
 
@@ -245,68 +624,97 @@ class StreamingAudioProcessor:
             time_info: Time information
             status: Stream status flags
         """
-        if status:
-            self.logger.warning(f"Audio callback status: {status}")
-
-        multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
-        if multi.shape[0] > frames:
-            multi = multi[:frames, :]
-        elif multi.shape[0] < frames:
-            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
-            multi = np.concatenate([multi, pad], axis=0)
-
-        multi, _ = self._discard_initial_multi(multi)
-        if multi.shape[0] == 0:
+        if not self._enter_callback():
             return
+        try:
+            if status:
+                self.logger.warning(f"Audio callback status: {status}")
 
-        self._queue_chunk_and_maybe_stop(multi)
+            multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
+            if multi.shape[0] > frames:
+                multi = multi[:frames, :]
+            elif multi.shape[0] < frames:
+                pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
+                multi = np.concatenate([multi, pad], axis=0)
+
+            multi, _ = self._discard_initial_multi(multi)
+            if multi.shape[0] == 0:
+                return
+
+            self._queue_chunk_and_maybe_stop(multi)
+        except MemoryError as error:
+            self._request_callback_failure("allocation-failed", error)
+        except BaseException as error:
+            self._request_callback_failure("callback-failed", error)
+        finally:
+            self._leave_callback()
 
     def monitor_duplex_callback(self, indata, outdata, frames, time_info, status):
-        if status:
-            self.logger.warning(f"Duplex status: {status}")
-
-        multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
-        if multi.shape[0] > frames:
-            multi = multi[:frames, :]
-        elif multi.shape[0] < frames:
-            pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
-            multi = np.concatenate([multi, pad], axis=0)
-
         outdata.fill(0)
-        multi, discarded = self._discard_initial_multi(multi)
-        if multi.shape[0] == 0:
+        if not self._enter_callback():
             return
+        try:
+            if status:
+                self.logger.warning(f"Duplex status: {status}")
 
-        payload, _ = self._queue_chunk_and_maybe_stop(multi)
+            multi = self._select_multi(indata, self._rec_in_sel, dtype=self.sample_dtype)
+            if multi.shape[0] > frames:
+                multi = multi[:frames, :]
+            elif multi.shape[0] < frames:
+                pad = np.zeros((frames - multi.shape[0], multi.shape[1]), dtype=self.sample_dtype)
+                multi = np.concatenate([multi, pad], axis=0)
 
-        monitor_multi = payload["multi"]
-        if monitor_multi.shape[1] > self._monitor_input_column:
-            monitor_in = monitor_multi[:, self._monitor_input_column]
-        else:
-            monitor_in = monitor_multi[:, 0]
-        play = np.zeros(frames, dtype=self.sample_dtype)
-        copy_count = min(len(monitor_in), max(0, frames - discarded))
-        if copy_count:
-            play[discarded : discarded + copy_count] = monitor_in[:copy_count]
-        play = np.clip(play * self.monitor_gain_linear, -1.0, 1.0).astype(self.sample_dtype, copy=False)
+            multi, discarded = self._discard_initial_multi(multi)
+            if multi.shape[0] == 0:
+                return
 
-        if outdata.shape[1] >= 2:
-            outdata[:, 0] = play
-            outdata[:, 1] = play
-        elif outdata.shape[1] >= 1:
-            outdata[:, 0] = play
+            payload, _ = self._queue_chunk_and_maybe_stop(multi)
+            if payload is None:
+                return
+
+            monitor_multi = payload.multi
+            if monitor_multi.shape[1] > self._monitor_input_column:
+                monitor_in = monitor_multi[:, self._monitor_input_column]
+            else:
+                monitor_in = monitor_multi[:, 0]
+            play = np.zeros(frames, dtype=self.sample_dtype)
+            copy_count = min(len(monitor_in), max(0, frames - discarded))
+            if copy_count:
+                play[discarded : discarded + copy_count] = monitor_in[:copy_count]
+            play = np.clip(play * self.monitor_gain_linear, -1.0, 1.0).astype(self.sample_dtype, copy=False)
+
+            if outdata.shape[1] >= 2:
+                outdata[:, 0] = play
+                outdata[:, 1] = play
+            elif outdata.shape[1] >= 1:
+                outdata[:, 0] = play
+        except MemoryError as error:
+            self._request_callback_failure("allocation-failed", error)
+        except BaseException as error:
+            self._request_callback_failure("callback-failed", error)
+        finally:
+            self._leave_callback()
 
     def process_queue(self):
         """
-        Process audio chunks from queue and emit signals.
+        Compatibility-only drain for non-sequence callers using the old signal.
 
-        Public method to be called by UI layer via QTimer from Qt main thread.
+        Sequence recording owns the same FIFO through its blocking consumer and
+        never calls this method.
         """
         try:
             while True:
                 # Get all available chunks without blocking
                 payload = self.audio_queue.get_nowait()
-                if isinstance(payload, dict) and "mono" in payload and "multi" in payload:
+                if isinstance(payload, AudioBatch):
+                    mono = np.asarray(payload.mono, dtype=self.sample_dtype).reshape(-1)
+                    multi = np.asarray(payload.multi, dtype=self.sample_dtype)
+                    self.accumulated_chunks.append(mono)
+                    self.accumulated_multi_chunks.append(multi)
+                    emit_payload = {"mono": payload.mono, "multi": payload.multi}
+                elif isinstance(payload, (AudioCompleted, AudioFailed, AudioCancelled)):
+                    continue
+                elif isinstance(payload, dict) and "mono" in payload and "multi" in payload:
                     mono = np.asarray(payload.get("mono"), dtype=self.sample_dtype).reshape(-1)
                     multi = np.asarray(payload.get("multi"), dtype=self.sample_dtype)
                     if multi.ndim == 1:
@@ -327,17 +735,7 @@ class StreamingAudioProcessor:
             pass
 
     def _cleanup_failed_startup(self):
-        self.is_recording = False
-        stream = self.stream
-        self.stream = None
-        if stream:
-            for method_name in ("stop", "close"):
-                method = getattr(stream, method_name, None)
-                if callable(method):
-                    try:
-                        method()
-                    except Exception:
-                        pass
+        return self._stop_stream_hardware()
 
     def _coerce_mono_chunk(self, chunk):
         if isinstance(chunk, dict):
@@ -364,6 +762,8 @@ class StreamingAudioProcessor:
         input_channels: Any = None,
         discard_initial_samples: Any = 0,
         bit_depth: int = 32,
+        callback_block_size: int = 2048,
+        session_id: Optional[str] = None,
     ):
         """
         Start streaming audio recording (record-only mode).
@@ -377,17 +777,32 @@ class StreamingAudioProcessor:
         Returns:
             tuple: (error_code, message)
         """
-        # Calculate target samples from duration if not provided
-        if target_samples is None:
-            if duration is None:
-                raise ValueError("Must provide either target_samples or duration")
-            target_samples = int(duration * sample_rate)
+        try:
+            normalized_rate, normalized_target, normalized_block_size = (
+                self._validated_finite_admission(
+                    sample_rate=sample_rate,
+                    target_samples=target_samples,
+                    duration=duration,
+                    callback_block_size=callback_block_size,
+                )
+            )
+        except ValueError as error:
+            self._cleanup_failed_startup()
+            self.error_occurred = True
+            self.error_message = self._safe_error_message(
+                error, "invalid streaming admission"
+            )
+            return (
+                error_code.INVALID_RECORD,
+                "Failed to start streaming: " + self.error_message,
+            )
 
-        self.sample_rate = sample_rate
+        self.sample_rate = normalized_rate
         self.bit_depth = normalize_float_bit_depth(bit_depth)
         self.sample_dtype = np.dtype(bit_depth_to_dtype(self.bit_depth))
         self.stream_dtype = self._stream_transport_dtype(self.bit_depth)
-        self.target_samples = target_samples
+        self.target_samples = normalized_target
+        self.callback_block_size = normalized_block_size
         self.samples_captured = 0
         self.discard_initial_samples = self._coerce_nonnegative_samples(discard_initial_samples, 0)
         self.samples_discarded = 0
@@ -403,6 +818,13 @@ class StreamingAudioProcessor:
             max_input_channels = self._resolve_max_input_channels(input_device)
             in_sel = self._resolve_retained_input_channels(input_channels, max_input_channels)
             self._rec_in_sel = list(in_sel)
+            self.configure_event_session(
+                session_id=session_id or f"stream-{uuid4().hex}",
+                sample_rate=normalized_rate,
+                target_samples=normalized_target,
+                callback_block_size=normalized_block_size,
+                channel_order=in_sel,
+            )
             self._monitor_input_column = self._resolve_monitor_input_column(in_sel, monitor_input_channel)
             in_num = max_input_channels
             self.input_channels = max_input_channels
@@ -427,35 +849,35 @@ class StreamingAudioProcessor:
                     device_selector = (int(input_device["index"]), None)
 
                 self.stream = sd.Stream(
-                    samplerate=sample_rate,
+                    samplerate=normalized_rate,
                     channels=(in_num, out_num),
                     callback=self.monitor_duplex_callback,
-                    blocksize=2048,
+                    blocksize=normalized_block_size,
                     device=device_selector,
                     dtype=self.stream_dtype,
                 )
 
                 self.stream.start()
                 self.logger.info(
-                    f"Started streaming recording with monitor playback: target={target_samples} samples "
-                    f"({target_samples/sample_rate:.2f}s) at {sample_rate}Hz, device={device_selector}, out_channels={out_num}"
+                    f"Started streaming recording with monitor playback: target={normalized_target} samples "
+                    f"({normalized_target/normalized_rate:.2f}s) at {normalized_rate}Hz, device={device_selector}, out_channels={out_num}"
                 )
                 return error_code.OK, "Streaming recording (monitor) started successfully"
 
             # Default: record-only input stream (sd.InputStream)
             input_dev_idx = int(input_device["index"]) if input_device else None
             self.stream = sd.InputStream(
-                samplerate=sample_rate,
+                samplerate=normalized_rate,
                 channels=in_num,
                 callback=self._audio_callback,
-                blocksize=2048,
+                blocksize=normalized_block_size,
                 device=input_dev_idx,
                 dtype=self.stream_dtype,
             )
 
             self.stream.start()
             self.logger.info(
-                f"Started streaming recording: target={target_samples} samples ({target_samples/sample_rate:.2f}s) at {sample_rate}Hz"
+                f"Started streaming recording: target={normalized_target} samples ({normalized_target/normalized_rate:.2f}s) at {normalized_rate}Hz"
             )
             return error_code.OK, "Streaming started successfully"
 
@@ -463,9 +885,16 @@ class StreamingAudioProcessor:
             self._cleanup_failed_startup()
             self._streaming_mode = None
             self.error_occurred = True
-            self.error_message = str(e)
-            self.logger.error(f"Error starting streaming recording: {e}")
-            return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
+            self.error_message = self._safe_error_message(
+                e, "streaming hardware start failed"
+            )
+            self._log_noexcept(
+                "error", "Error starting streaming recording: " + self.error_message
+            )
+            return (
+                error_code.INVALID_RECORD,
+                "Failed to start streaming: " + self.error_message,
+            )
 
     def start_streaming_playrec(
         self,
@@ -478,7 +907,10 @@ class StreamingAudioProcessor:
         prolong_frames=10000,
         input_channels=None,
         discard_initial_samples=0,
+        recording_start_delay_frames=None,
         bit_depth: int = 32,
+        callback_block_size: int = 2048,
+        session_id: Optional[str] = None,
     ):
         """
         Start streaming play and record (simultaneous playback and recording).
@@ -499,18 +931,45 @@ class StreamingAudioProcessor:
         Returns:
             tuple: (error_code, message)
         """
+        try:
+            raw_stimulus = stimulus_dict.get("data")
+            default_target = (
+                None
+                if raw_stimulus is None
+                else int(prepare_frames) + len(raw_stimulus) + int(prolong_frames)
+            )
+            normalized_rate, normalized_target, normalized_block_size = (
+                self._validated_finite_admission(
+                    sample_rate=sample_rate,
+                    target_samples=(default_target if target_samples is None else target_samples),
+                    duration=None,
+                    callback_block_size=callback_block_size,
+                )
+            )
+        except (TypeError, ValueError, OverflowError) as error:
+            self._cleanup_failed_startup()
+            self.error_occurred = True
+            self.error_message = self._safe_error_message(
+                error, "invalid streaming admission"
+            )
+            return (
+                error_code.INVALID_RECORD,
+                "Failed to start streaming: " + self.error_message,
+            )
+
         stimulus_data = stimulus_dict.get("data") * stimulus_dict.get("amplitude")
-
-        if target_samples is None:
-            target_samples = prepare_frames + len(stimulus_data) + prolong_frames
-
-        self.sample_rate = sample_rate
+        self.sample_rate = normalized_rate
         self.bit_depth = normalize_float_bit_depth(bit_depth)
         self.sample_dtype = np.dtype(bit_depth_to_dtype(self.bit_depth))
         self.stream_dtype = self._stream_transport_dtype(self.bit_depth)
-        self.target_samples = target_samples
+        self.target_samples = normalized_target
+        self.callback_block_size = normalized_block_size
         self.samples_captured = 0
         self.discard_initial_samples = self._coerce_nonnegative_samples(discard_initial_samples, 0)
+        playback_start_delay = self._coerce_nonnegative_samples(
+            recording_start_delay_frames,
+            self.discard_initial_samples,
+        )
         self.samples_discarded = 0
         self.accumulated_chunks = []
         self.accumulated_multi_chunks = []
@@ -522,11 +981,18 @@ class StreamingAudioProcessor:
             max_input_channels = self._resolve_max_input_channels(input_device)
             in_sel = self._resolve_retained_input_channels(input_channels, max_input_channels)
             self._rec_in_sel = list(in_sel)
+            self.configure_event_session(
+                session_id=session_id or f"stream-{uuid4().hex}",
+                sample_rate=normalized_rate,
+                target_samples=normalized_target,
+                callback_block_size=normalized_block_size,
+                channel_order=in_sel,
+            )
             self.input_channels = max_input_channels
 
             self.playback_data = np.concatenate(
                 [
-                    np.zeros(self.discard_initial_samples, dtype=self.sample_dtype),
+                    np.zeros(playback_start_delay, dtype=self.sample_dtype),
                     np.zeros(prepare_frames),
                     stimulus_data,
                     np.zeros(prolong_frames),
@@ -548,6 +1014,56 @@ class StreamingAudioProcessor:
                 device = (None, output_device["index"])
 
             def duplex_callback(indata, outdata, frames, time_info, status):
+                outdata.fill(0)
+                if not self._enter_callback():
+                    return
+                try:
+                    self._duplex_playrec_callback_body(
+                        indata, outdata, frames, time_info, status
+                    )
+                except MemoryError as error:
+                    self._request_callback_failure("allocation-failed", error)
+                except BaseException as error:
+                    self._request_callback_failure("callback-failed", error)
+                finally:
+                    self._leave_callback()
+
+            self._duplex_playrec_callback_body = self._make_playrec_callback_body()
+
+            # ONE duplex stream instead of OutputStream + InputStream
+            self.stream = sd.Stream(
+                samplerate=normalized_rate,
+                channels=(max_input_channels, 1),  # (in_channels, out_channels)
+                callback=duplex_callback,
+                blocksize=normalized_block_size,
+                device=device,
+                dtype=self.stream_dtype,
+            )
+
+            self.stream.start()
+            self.logger.info(
+                f"Started duplex play+record: target={normalized_target} samples "
+                f"({normalized_target/normalized_rate:.2f}s) at {normalized_rate}Hz, device={device}"
+            )
+            return error_code.OK, "Streaming play+record started successfully"
+
+        except Exception as e:
+            self._cleanup_failed_startup()
+            self._streaming_mode = None
+            self.error_occurred = True
+            self.error_message = self._safe_error_message(
+                e, "duplex streaming hardware start failed"
+            )
+            self._log_noexcept(
+                "error", "Error starting duplex play+record: " + self.error_message
+            )
+            return (
+                error_code.INVALID_RECORD,
+                "Failed to start streaming: " + self.error_message,
+            )
+
+    def _make_playrec_callback_body(self):
+        def callback_body(indata, outdata, frames, _time_info, status):
                 if status:
                     self.logger.warning(f"Duplex status: {status}")
 
@@ -575,55 +1091,218 @@ class StreamingAudioProcessor:
                 if multi.shape[0] == 0:
                     return
                 self._queue_chunk_and_maybe_stop(multi)
+        return callback_body
 
-            # ONE duplex stream instead of OutputStream + InputStream
-            self.stream = sd.Stream(
-                samplerate=sample_rate,
-                channels=(max_input_channels, 1),  # (in_channels, out_channels)
-                callback=duplex_callback,
-                blocksize=2048,
-                device=device,
-                dtype=self.stream_dtype,
+    def _claim_terminal_locked(self, kind: str, message_factory=None) -> bool:
+        if self._terminal_claimed:
+            return False
+        self._terminal_claimed = True
+        self._terminal_kind = kind
+        self._terminal_message_factory = message_factory
+        self._producer_gate_state = ProducerGateState.QUIESCING
+        return True
+
+    def _claim_terminal(self, kind: str, message_factory=None) -> bool:
+        with self._producer_condition:
+            return self._claim_terminal_locked(kind, message_factory)
+
+    @property
+    def hardware_quiescence_diagnostic(self) -> str:
+        with self._producer_condition:
+            return self._hardware_quiescence_diagnostic
+
+    def _stop_stream_hardware(self) -> bool:
+        self.is_recording = False
+        streams: list[tuple[str, Any]] = []
+        if self.stream is not None:
+            streams.append(("stream", self.stream))
+        output_stream = getattr(self, "output_stream", None)
+        if output_stream is not None and output_stream is not self.stream:
+            streams.append(("output_stream", output_stream))
+        close_failures: list[str] = []
+        warnings: list[str] = []
+        for attribute, stream in streams:
+            try:
+                stop = getattr(stream, "stop", None)
+            except BaseException as error:
+                warning = "Streaming stop lookup failed during quiescence: " + (
+                    self._safe_error_message(error, "stop lookup interrupted")
+                )
+                warnings.append(warning)
+                self._log_noexcept("warning", warning)
+                stop = None
+            if callable(stop):
+                try:
+                    stop()
+                except BaseException as error:
+                    warning = "Streaming stop failed during quiescence: " + (
+                        self._safe_error_message(error, "stop interrupted")
+                    )
+                    warnings.append(warning)
+                    self._log_noexcept("warning", warning)
+            try:
+                close = getattr(stream, "close", None)
+            except BaseException as error:
+                failure = "Streaming close lookup failed during quiescence: " + (
+                    self._safe_error_message(error, "close lookup interrupted")
+                )
+                close_failures.append(failure)
+                self._log_noexcept("warning", failure)
+                continue
+            if callable(close):
+                try:
+                    close()
+                except BaseException as error:
+                    failure = (
+                        "Streaming close failed during quiescence: "
+                        + self._safe_error_message(error, type(error).__name__)
+                    )
+                    close_failures.append(failure)
+                    self._log_noexcept("warning", failure)
+                    continue
+            with self._producer_condition:
+                if getattr(self, attribute, None) is stream:
+                    setattr(self, attribute, None)
+        diagnostic = "; ".join(close_failures or warnings)
+        with self._producer_condition:
+            self._hardware_quiescence_diagnostic = diagnostic
+            self._producer_condition.notify_all()
+        return not close_failures
+
+    def _finalize_claimed_terminal(self) -> bool:
+        with self._terminal_finalization_lock:
+            with self._producer_condition:
+                if (
+                    self._producer_gate_state
+                    is ProducerGateState.TERMINAL_ENQUEUED
+                ):
+                    return True
+            if not self._stop_stream_hardware():
+                return False
+            with self._producer_condition:
+                if (
+                    self._producer_gate_state
+                    is ProducerGateState.TERMINAL_ENQUEUED
+                ):
+                    return True
+                while self._active_callback_count:
+                    self._producer_condition.wait()
+                message_factory = self._terminal_message_factory
+                if message_factory is None:
+                    self._hardware_quiescence_diagnostic = (
+                        "terminal descriptor is unavailable"
+                    )
+                    self._producer_condition.notify_all()
+                    return False
+                try:
+                    message = message_factory(
+                        self._event_session_id,
+                        self._next_sequence_no - 1,
+                        self._next_sample_start,
+                    )
+                    self.audio_queue.put(message)
+                except BaseException as error:
+                    self._hardware_quiescence_diagnostic = (
+                        self._safe_error_message(
+                            error, "terminal queue insertion failed"
+                        )
+                    )
+                    self._producer_condition.notify_all()
+                    return False
+                self._producer_gate_state = ProducerGateState.TERMINAL_ENQUEUED
+                self._terminal_finalization_pending = False
+                self._terminal_finalization_pending_descriptor = None
+                self._producer_condition.notify_all()
+        self._log_noexcept(
+            "info",
+            f"Streaming stopped. Captured {self.samples_captured}/{self.target_samples} samples",
+        )
+        return True
+
+    def _enqueue_terminal(self, kind: str, message_factory) -> bool:
+        if not self._claim_terminal(kind, message_factory):
+            return False
+        return self._finalize_claimed_terminal()
+
+    def complete_streaming(self) -> bool:
+        return self._enqueue_terminal(
+            "completed",
+            lambda session_id, last_sequence_no, sample_count: AudioCompleted(
+                session_id, last_sequence_no, sample_count
             )
+        )
 
-            self.stream.start()
-            self.logger.info(
-                f"Started duplex play+record: target={target_samples} samples "
-                f"({target_samples/sample_rate:.2f}s) at {sample_rate}Hz, device={device}"
+    def fail_streaming(self, code: str, message: str) -> bool:
+        normalized_code = self._safe_error_message(
+            code, "streaming-failed"
+        )
+        normalized_message = self._safe_error_message(
+            message, "streaming failed"
+        )
+        factory = lambda session_id, last_sequence_no, _sample_count: AudioFailed(
+                session_id,
+                last_sequence_no,
+                normalized_code,
+                normalized_message,
             )
-            return error_code.OK, "Streaming play+record started successfully"
+        if not self._claim_terminal("failed", factory):
+            return False
+        self.error_occurred = True
+        self.error_message = normalized_message
+        return self._finalize_claimed_terminal()
 
-        except Exception as e:
-            self._cleanup_failed_startup()
-            self._streaming_mode = None
-            self.error_occurred = True
-            self.error_message = str(e)
-            self.logger.error(f"Error starting duplex play+record: {e}")
-            return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
+    def cancel_streaming(self, reason: str = "recording cancelled") -> bool:
+        normalized_reason = self._safe_error_message(
+            reason, "recording cancelled"
+        )
+        return self._enqueue_terminal(
+            "cancelled",
+            lambda session_id, last_sequence_no, _sample_count: AudioCancelled(
+                session_id, last_sequence_no, normalized_reason
+            )
+        )
+
+    def begin_cancel_streaming(self) -> bool:
+        """Close callback admission synchronously without waiting on the Qt thread."""
+        return self._claim_terminal("cancelled")
+
+    def finish_cancel_streaming(self, reason: str = "recording cancelled") -> bool:
+        normalized_reason = self._safe_error_message(
+            reason, "recording cancelled"
+        )
+        with self._producer_condition:
+            if not self._terminal_claimed or self._terminal_kind != "cancelled":
+                return False
+            if self._terminal_message_factory is None:
+                self._terminal_message_factory = (
+                    lambda session_id, last_sequence_no, _sample_count: AudioCancelled(
+                        session_id,
+                        last_sequence_no,
+                        normalized_reason,
+                    )
+                )
+        return self._finalize_claimed_terminal()
+
+    def retry_terminal_quiescence(self) -> bool:
+        """Retry hardware closure for the already claimed terminal outcome."""
+        with self._producer_condition:
+            if not self._terminal_claimed:
+                return False
+            if self._producer_gate_state is ProducerGateState.TERMINAL_ENQUEUED:
+                return True
+        return self._finalize_claimed_terminal()
+
+    def wait_for_terminal(self, timeout: float | None = None) -> bool:
+        with self._producer_condition:
+            return self._producer_condition.wait_for(
+                lambda: self._producer_gate_state
+                is ProducerGateState.TERMINAL_ENQUEUED,
+                timeout=timeout,
+            )
 
     def stop_streaming(self):
-        """
-        Stop streaming and clean up resources.
-        """
-        self.is_recording = False
-
-        try:
-            # Stop and close input stream
-            if self.stream:
-                self.stream.stop()
-                self.stream.close()
-                self.stream = None
-
-            # Stop and close output stream (for play+record mode)
-            if hasattr(self, "output_stream") and self.output_stream:
-                self.output_stream.stop()
-                self.output_stream.close()
-                self.output_stream = None
-
-            self.logger.info(f"Streaming stopped. Captured {self.samples_captured}/{self.target_samples} samples")
-
-        except Exception as e:
-            self.logger.error(f"Error stopping streaming: {e}")
+        """Compatibility stop: a normal producer stop is a completed sentinel."""
+        return self.complete_streaming()
 
     def get_recorded_data(self):
         """

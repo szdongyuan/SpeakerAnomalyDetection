@@ -1,6 +1,4 @@
-import json
 import os
-from datetime import datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,9 +6,7 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QSplitter, QVBoxLayout, QWidget
 
-from base.utils.custom_signals import MySignals
 import ui.sequence.sequencement_count_board as count_board_module
-import ui.sequence.sequence_widget as sequence_widget_module
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.sequence.sequencement_count_board import SequenceCountBoard
@@ -69,29 +65,8 @@ def qapp():
 
 
 @pytest.fixture
-def count_board_runtime(tmp_path, monkeypatch, qapp):
-    test_signals = MySignals()
-    monkeypatch.setattr(sequence_widget_module, "sign", test_signals)
-
-    root = tmp_path
-    mark_path = root / "ui" / "ui_config" / "mark_result.json"
-    mark_path.parent.mkdir(parents=True, exist_ok=True)
-    mark_path.write_text(
-        json.dumps({"total": 3, "ok": 2, "ng": 1, "not_labels": 0, "datatime": "2026-07-24"}),
-        encoding="utf-8",
-    )
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    test_path = root / "log" / "test_result_log" / f"{today}.dat"
-    test_path.parent.mkdir(parents=True, exist_ok=True)
-    test_path.write_text(
-        f"total: 5\nok: 4\nng: 1\nok_percent: 80%\ndatatime: {today}\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(count_board_module, "DEFAULT_DIR", root.as_posix() + "/")
-    monkeypatch.setattr(count_board_module, "ensure_test_result_file", lambda analysis_config: None)
-    return root
+def count_board_runtime(tmp_path):
+    return tmp_path
 
 
 def test_count_board_collapse_toggle_is_idempotent(qapp, count_board_runtime):

@@ -4,9 +4,19 @@ from types import MethodType, SimpleNamespace
 import numpy as np
 import pytest
 
+from consts import error_code
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.soundcard_calibration_manager import AnalysisV2paBatch
+from base.stimulus_resolver import set_data_struct_analysis_reference_signal
+from ui.sequence import sequence_analysis_controller as analysis_controller_module
+from ui.sequence import sequence_analysis_view as analysis_view_module
 from ui.sequence import sequence_widget
+from ui.sequence.sequence_configuration_controller import SequenceConfigurationController
+from ui.sequence.sequence_configuration_model import SequenceConfigurationModel
+from ui.sequence.sequence_configuration_view import SequenceConfigurationView
+from ui.sequence.sequence_analysis_controller import SequenceAnalysisController
+from ui.sequence.sequence_analysis_model import SequenceAnalysisModel
+from ui.sequence.sequence_analysis_view import SequenceAnalysisView
 
 
 class _Button:
@@ -15,6 +25,9 @@ class _Button:
 
     def setEnabled(self, enabled):
         self.enabled = bool(enabled)
+
+    def isEnabled(self):
+        return self.enabled
 
 
 def _detail(start_freq=100):
@@ -37,7 +50,7 @@ def _sequence(detail, mode="IMPORT_STIMULUS_AUDIO"):
     return [{"seq1": {"acq": {"mode": mode, "detail": detail}}}]
 
 
-def _runtime_window(detail=None):
+def _runtime_window(detail=None, *, analysis_reference_setter=None):
     detail = deepcopy(detail or _detail())
     mono = np.ones(320, dtype=np.float32)
     multi = mono.reshape(-1, 1)
@@ -66,20 +79,76 @@ def _runtime_window(detail=None):
         count_board=None,
         default_logger=SimpleNamespace(warning=lambda *_: None),
         update_using_file_combobox=lambda: None,
-        init_fft_and_stft_flag=lambda: None,
         refresh_channel_windows=lambda: None,
         _clear_plot_area=lambda: None,
         _refresh_test_mode_availability=lambda: None,
         using_config_path="configs/sequence.json",
     )
     for name in (
-        "_is_positive_runtime_integer",
-        "_has_runtime_samples",
         "_has_imported_recording_runtime_state",
         "_has_import_stimulus_runtime_reference",
         "_refresh_import_stimulus_analysis_reference",
     ):
         setattr(window, name, MethodType(getattr(sequence_widget.SequenceWindow, name), window))
+    model = SequenceConfigurationModel(data_struct=data_struct)
+    model.sequence_config = window.sequence_config
+    model.analysis_config = window.analysis_config
+    model.using_config_path = window.using_config_path
+
+    def load_current_config(_path):
+        reload_callback = getattr(window, "get_sequence_config_from_json", None)
+        if callable(reload_callback):
+            reload_callback()
+        return error_code.OK, deepcopy(window.sequence_config)
+
+    def capture_import_identity():
+        return window.recorded_path, window.recorded_signal_info
+
+    def restore_import_identity(state):
+        window.recorded_path, window.recorded_signal_info = state
+        return True
+
+    controller = SequenceConfigurationController(
+        model,
+        SequenceConfigurationView(data_button=window.data_btn),
+        registry_loader=lambda: {
+            "using_config_path": window.using_config_path,
+            "current": window.using_config_path,
+        },
+        config_loader=load_current_config,
+        path_exists=lambda _path: True,
+        using_path_updater=lambda _path: None,
+        stimulus_setter=lambda *args, **kwargs: (
+            sequence_widget.AnalysisModelSelect.set_data_struct_stimulus_signal(
+                *args, **kwargs
+            )
+        ),
+        analysis_reference_setter=(
+            analysis_reference_setter
+            or set_data_struct_analysis_reference_signal
+        ),
+        warning=lambda title, message: sequence_widget.MessageBox.warning(
+            window, title, message
+        ),
+        data_enabled_setter=window.data_btn.setEnabled,
+        refresh_channels=lambda: window.refresh_channel_windows(),
+        clear_plot=lambda: window._clear_plot_area(),
+        clear_import_identity=lambda: (
+            setattr(window, "recorded_path", None),
+            setattr(window, "recorded_signal_info", None),
+        ),
+        import_identity_state_capturer=capture_import_identity,
+        import_identity_state_restorer=restore_import_identity,
+        plot_state_capturer=lambda: None,
+        plot_state_restorer=lambda _state: True,
+        analysis_config_changed=lambda config: setattr(
+            window, "analysis_config", config
+        ),
+        refresh_test_mode_availability=lambda: window._refresh_test_mode_availability(),
+        logger=window.default_logger,
+    )
+    window.configuration_model = model
+    window.configuration_controller = controller
     return window
 
 
@@ -162,17 +231,7 @@ def test_stale_mode_state_preserves_same_import_stimulus_config_refresh():
 
 
 def test_stimulus_config_update_rebuilds_reference_at_imported_rate(monkeypatch):
-    window = _runtime_window()
-    original_mono = window.data_struct.store_wave_data
-    original_multi = window.data_struct.store_wave_data_multi
-    original_calibration = window.data_struct.wav_calibration_metadata
-    original_recorded_path = window.recorded_path
-    original_recorded_signal_info = window.recorded_signal_info
     calls = []
-
-    def reload_config():
-        window.sequence_config = _sequence(_detail(start_freq=200))
-        window.mode = "IMPORT_STIMULUS_AUDIO"
 
     def build_reference(staged, detail, using_config_path=None, *, runtime_sample_rate, logger=None):
         calls.append((detail, using_config_path, runtime_sample_rate))
@@ -181,9 +240,19 @@ def test_stimulus_config_update_rebuilds_reference_at_imported_rate(monkeypatch)
         staged.alignment_sample_count = 320
         return True
 
+    window = _runtime_window(analysis_reference_setter=build_reference)
+    original_mono = window.data_struct.store_wave_data
+    original_multi = window.data_struct.store_wave_data_multi
+    original_calibration = window.data_struct.wav_calibration_metadata
+    original_recorded_path = window.recorded_path
+    original_recorded_signal_info = window.recorded_signal_info
+
+    def reload_config():
+        window.sequence_config = _sequence(_detail(start_freq=200))
+        window.mode = "IMPORT_STIMULUS_AUDIO"
+
     window.get_sequence_config_from_json = reload_config
     window.init_data_struct_stimulus_config = lambda: pytest.fail("import runtime must not be reinitialized")
-    monkeypatch.setattr(sequence_widget, "set_data_struct_analysis_reference_signal", build_reference)
 
     sequence_widget.SequenceWindow.on_sequence_config_updated(window)
 
@@ -200,24 +269,28 @@ def test_stimulus_config_update_rebuilds_reference_at_imported_rate(monkeypatch)
 
 
 @pytest.mark.parametrize("failure", ["false", "raise"])
-def test_failed_stimulus_refresh_clears_only_reference(monkeypatch, failure):
-    window = _runtime_window()
-    original_mono = window.data_struct.store_wave_data
-    original_multi = window.data_struct.store_wave_data_multi
-    original_calibration = window.data_struct.wav_calibration_metadata
+def test_failed_stimulus_refresh_restores_exact_runtime_state(monkeypatch, failure):
     warnings = []
-
-    def reload_config():
-        window.sequence_config = _sequence(_detail(start_freq=200))
 
     def fail_reference(*args, **kwargs):
         if failure == "raise":
             raise RuntimeError("reference failed")
         return False
 
+    window = _runtime_window(analysis_reference_setter=fail_reference)
+    original_mono = window.data_struct.store_wave_data
+    original_multi = window.data_struct.store_wave_data_multi
+    original_calibration = window.data_struct.wav_calibration_metadata
+    original_stimulus = window.data_struct.stimulus_data
+    original_stimulus_info = window.data_struct.stimulus_info
+    original_recorded_path = window.recorded_path
+    original_recorded_signal_info = window.recorded_signal_info
+
+    def reload_config():
+        window.sequence_config = _sequence(_detail(start_freq=200))
+
     window.get_sequence_config_from_json = reload_config
     window.init_data_struct_stimulus_config = lambda: pytest.fail("full import state must not be cleared")
-    monkeypatch.setattr(sequence_widget, "set_data_struct_analysis_reference_signal", fail_reference)
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args: warnings.append(args))
 
     sequence_widget.SequenceWindow.on_sequence_config_updated(window)
@@ -235,14 +308,15 @@ def test_failed_stimulus_refresh_clears_only_reference(monkeypatch, failure):
     assert window.data_struct.wav_calibration_metadata is original_calibration
     assert window.data_struct.sample_rate == 32000
     assert window.data_struct.audio_lenth == 320
-    assert window.data_struct.stimulus_data is None
-    assert window.data_struct.stimulus_info is None
-    assert not hasattr(window.data_struct, "alignment_sample_count")
-    assert window.recorded_path == "recording.wav"
-    assert window.data_btn.enabled is False
+    assert window.data_struct.stimulus_data is original_stimulus
+    assert window.data_struct.stimulus_info is original_stimulus_info
+    assert window.data_struct.alignment_sample_count == 320
+    assert window.recorded_path == original_recorded_path
+    assert window.recorded_signal_info is original_recorded_signal_info
+    assert window.data_btn.enabled is True
 
 
-def test_mode_change_uses_existing_full_reset_path_and_clears_import_runtime():
+def test_mode_change_uses_controller_owned_reset_and_clears_import_runtime():
     window = _runtime_window()
     events = []
 
@@ -269,7 +343,7 @@ def test_mode_change_uses_existing_full_reset_path_and_clears_import_runtime():
 
     sequence_widget.SequenceWindow.on_sequence_config_updated(window)
 
-    assert events == ["clear_plot", "clear_data", "refresh_channels", "init_runtime"]
+    assert events == ["refresh_channels", "clear_plot"]
     assert window.data_btn.enabled is False
     assert window.data_struct.sample_rate is None
     assert window.data_struct.audio_lenth is None
@@ -311,6 +385,93 @@ def test_import_mode_stimulus_config_init_preserves_imported_recording_sample_ra
 READINESS_WARNING = "分析参考激励尚未就绪或采样率与导入音频不一致，请检查激励配置后重试。"
 
 
+class _AnalysisViewHarness:
+    def __init__(self, window, model):
+        self.window = window
+        self.model = model
+        self.summary_window = window._analysis_result_summary_window
+        self.warning_presenter = (
+            lambda title, message: sequence_widget.MessageBox.warning(
+                window, title, message
+            )
+        )
+
+    def uncalibrated_warning_presenter(self, message):
+        sequence_widget.MessageBox.warning(self.window, "提示", message)
+
+    def reset_output(self):
+        self.window.analysis_window = []
+        self.model.analysis_instances = self.window.analysis_window
+        self.window._analysis_result_summary_window = None
+        self.summary_window = None
+
+    def present_calibration_warnings(self, *args, **kwargs):
+        return SequenceAnalysisView.present_calibration_warnings(
+            self, *args, **kwargs
+        )
+
+    def show_channel_mismatch(self, *args, **kwargs):
+        return SequenceAnalysisView.show_channel_mismatch(self, *args, **kwargs)
+
+    def show_instance(self, instance, *, key, default_geometry):
+        geometry = self.window._get_analysis_window_geometry(key) if key else None
+        if geometry is None:
+            geometry = dict(default_geometry)
+            if key:
+                self.window._set_analysis_window_geometry(key, geometry)
+        instance.setGeometry(
+            geometry["x"], geometry["y"], geometry["w"], geometry["h"]
+        )
+        instance.setMinimumSize((200, 155))
+        if key:
+            self.window._analysis_window_key_by_obj[instance] = key
+            instance.installEventFilter(self.window)
+        instance.show()
+
+    def show_summary(self, result_dict, width, height):
+        self.window._maybe_show_analysis_result_summary(width, height)
+
+    def close_windows(self):
+        self.window.analysis_window = []
+        self.model.analysis_instances = self.window.analysis_window
+        self.window._analysis_result_summary_window = None
+
+
+def _compose_analysis_controller(window):
+    model = SequenceAnalysisModel()
+    model.analysis_instances = window.analysis_window
+    view = _AnalysisViewHarness(window, model)
+
+    def instance_factory(key, item_type, config, batch, warning_callback):
+        window._analysis_v2pa_batch = batch
+        window._analysis_v2pa_warning_callback = warning_callback
+        return window.instance_analysis_class(key, item_type, config)
+
+    window.analysis_controller = SequenceAnalysisController(
+        model,
+        view,
+        bus=SimpleNamespace(),
+        runtime=window,
+        class_mapping_provider=lambda: analysis_controller_module.get_class_mapping(),
+        calibration_batch_factory=lambda *args, **kwargs: (
+            analysis_controller_module.AnalysisV2paBatch(*args, **kwargs)
+        ),
+        calibration_resolver=lambda *args, **kwargs: (
+            analysis_controller_module.resolve_analysis_v2pa_factor_for_channel(
+                *args, **kwargs
+            )
+        ),
+        warning_suppressed=lambda **kwargs: (
+            analysis_controller_module.is_uncalibrated_microphone_warning_suppressed(
+                **kwargs
+            )
+        ),
+        instance_factory=instance_factory,
+        logger=window.default_logger,
+    )
+    return window.analysis_controller
+
+
 def _run_window(mode="IMPORT_STIMULUS_AUDIO"):
     window = _runtime_window()
     window.mode = mode
@@ -334,12 +495,12 @@ def _run_window(mode="IMPORT_STIMULUS_AUDIO"):
         size=lambda: SimpleNamespace(width=lambda: 1200, height=lambda: 800)
     )
     window._maybe_show_analysis_result_summary = lambda *args: None
-    window._send_tcp_analysis_result_callback = lambda: None
     if hasattr(sequence_widget.SequenceWindow, "_validate_import_stimulus_analysis_readiness"):
         window._validate_import_stimulus_analysis_readiness = MethodType(
             sequence_widget.SequenceWindow._validate_import_stimulus_analysis_readiness,
             window,
         )
+    _compose_analysis_controller(window)
     return window
 
 
@@ -535,30 +696,30 @@ def _configure_live_batch_run(window, events, raw_channels=(0, 1)):
 
 def _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls, events=None):
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: False,
     )
 
-    def show(parent, text, logger=None):
-        warning_calls.append((parent, text))
+    def show(view, text):
+        warning_calls.append((view.window, text))
         if events is not None:
             events.append("warning")
 
     monkeypatch.setattr(
-        sequence_widget,
-        "_show_uncalibrated_microphone_warning",
+        _AnalysisViewHarness,
+        "uncalibrated_warning_presenter",
         show,
     )
 
 
 @pytest.mark.parametrize(
-    "checked_after_exec",
+    "checked_after_finish",
     [False, True],
 )
 def test_uncalibrated_microphone_warning_uses_dedicated_checkbox_dialog(
     monkeypatch,
-    checked_after_exec,
+    checked_after_finish,
 ):
     events = []
     created_message_boxes = []
@@ -585,6 +746,9 @@ def test_uncalibrated_microphone_warning_uses_dedicated_checkbox_dialog(
             self.text = None
             self.checkbox = None
             self.standard_buttons_were_set = False
+            self.modality = None
+            self.opened = False
+            self.finished = SimpleNamespace(connect=lambda callback: setattr(self, "on_finished", callback))
             created_message_boxes.append(self)
 
         def setIcon(self, icon):
@@ -602,10 +766,12 @@ def test_uncalibrated_microphone_warning_uses_dedicated_checkbox_dialog(
         def setStandardButtons(self, _buttons):
             self.standard_buttons_were_set = True
 
-        def exec_(self):
-            assert self.checkbox.checked is False
-            events.append("exec")
-            self.checkbox.checked = checked_after_exec
+        def setWindowModality(self, modality):
+            self.modality = modality
+
+        def open(self):
+            self.opened = True
+            events.append("open")
 
     def save(*, logger=None):
         assert logger is globals_logger
@@ -613,20 +779,19 @@ def test_uncalibrated_microphone_warning_uses_dedicated_checkbox_dialog(
         return False
 
     globals_logger = logger
-    monkeypatch.setattr(sequence_widget, "MessageBox", FakeMessageBox)
-    monkeypatch.setattr(sequence_widget, "CheckBox", FakeCheckBox, raising=False)
+    monkeypatch.setattr(analysis_view_module, "MessageBox", FakeMessageBox)
+    monkeypatch.setattr(analysis_view_module, "CheckBox", FakeCheckBox)
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_view_module,
         "save_uncalibrated_microphone_warning_suppressed",
         save,
-        raising=False,
     )
 
-    sequence_widget._show_uncalibrated_microphone_warning(
-        parent,
-        "麦克风未进行校准，结果仅供参考。",
-        logger=logger,
-    )
+    view = object.__new__(SequenceAnalysisView)
+    view.parent = parent
+    view.logger = logger
+    view.feedback_dialogs = []
+    view.present_uncalibrated_warning("麦克风未进行校准，结果仅供参考。")
 
     assert len(created_message_boxes) == 1
     message_box = created_message_boxes[0]
@@ -636,8 +801,12 @@ def test_uncalibrated_microphone_warning_uses_dedicated_checkbox_dialog(
     assert message_box.text == "麦克风未进行校准，结果仅供参考。"
     assert message_box.checkbox is created_checkboxes[0]
     assert message_box.standard_buttons_were_set is False
+    assert message_box.opened is True
     assert created_checkboxes[0].text == "不在提示"
-    assert events == (["exec", "save"] if checked_after_exec else ["exec"])
+    created_checkboxes[0].checked = checked_after_finish
+    message_box.on_finished(0)
+    assert view.feedback_dialogs == []
+    assert events == (["open", "save"] if checked_after_finish else ["open"])
 
 
 def test_suppressed_target_only_skips_warning_and_continues_analysis(monkeypatch):
@@ -650,12 +819,12 @@ def test_suppressed_target_only_skips_warning_and_continues_analysis(monkeypatch
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "AnalysisV2paBatch",
         lambda: AnalysisV2paBatch(resolver=resolver),
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: True,
         raising=False,
@@ -683,12 +852,12 @@ def test_suppressed_target_preserves_independent_diagnostic(monkeypatch):
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "AnalysisV2paBatch",
         lambda: AnalysisV2paBatch(resolver=resolver),
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: True,
         raising=False,
@@ -718,17 +887,17 @@ def test_record_only_suppression_omits_channel_context_but_preserves_diagnostic(
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         resolver,
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "AnalysisV2paBatch",
         lambda resolver=None: AnalysisV2paBatch(resolver=resolver),
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: True,
         raising=False,
@@ -774,7 +943,9 @@ def _configure_production_pd_run(window, monkeypatch, events):
         "display_sequence": ["pd"],
         "pd": {"type": "PD", "analysis_channel": 0},
     }
-    window.analysis_types_requiring_v2pa = {"PD", "ED"}
+    assert window.analysis_controller.configure_calibration_types(
+        {"PD", "ED"}, generation=1
+    )
     window.instance_analysis_class = MethodType(
         sequence_widget.SequenceWindow.instance_analysis_class,
         window,
@@ -783,7 +954,7 @@ def _configure_production_pd_run(window, monkeypatch, events):
     window._get_analysis_window_geometry = lambda _key: None
     window._set_analysis_window_geometry = lambda *_args: None
     window._handle_post_analysis_exports = lambda: events.append("export")
-    monkeypatch.setattr(sequence_widget, "get_class_mapping", lambda: {"PD": FakePd})
+    monkeypatch.setattr(analysis_controller_module, "get_class_mapping", lambda: {"PD": FakePd})
     return created
 
 
@@ -800,7 +971,7 @@ def test_non_batched_pd_unsuppressed_target_uses_dedicated_warning(monkeypatch):
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         resolver,
     )
@@ -839,19 +1010,21 @@ def test_non_batched_pd_suppressed_target_shows_no_dialog(monkeypatch):
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         resolver,
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: True,
     )
     monkeypatch.setattr(
-        sequence_widget,
-        "_show_uncalibrated_microphone_warning",
-        lambda *args, **kwargs: pytest.fail("suppressed target must not use dedicated dialog"),
+        _AnalysisViewHarness,
+        "uncalibrated_warning_presenter",
+        lambda *args, **kwargs: pytest.fail(
+            "suppressed target must not use dedicated dialog"
+        ),
     )
     monkeypatch.setattr(
         sequence_widget.MessageBox,
@@ -902,7 +1075,9 @@ def test_non_batched_ed_uses_nested_channel_and_marks_prepared_factor(monkeypatc
             "tail": {"config": {}},
         },
     }
-    window.analysis_types_requiring_v2pa = {"PD", "ED"}
+    assert window.analysis_controller.configure_calibration_types(
+        {"PD", "ED"}, generation=1
+    )
     window.instance_analysis_class = MethodType(
         sequence_widget.SequenceWindow.instance_analysis_class,
         window,
@@ -911,14 +1086,14 @@ def test_non_batched_ed_uses_nested_channel_and_marks_prepared_factor(monkeypatc
     window._get_analysis_window_geometry = lambda _key: None
     window._set_analysis_window_geometry = lambda *_args: None
     window._handle_post_analysis_exports = lambda: events.append("export")
-    monkeypatch.setattr(sequence_widget, "get_class_mapping", lambda: {"ED": FakeEd})
+    monkeypatch.setattr(analysis_controller_module, "get_class_mapping", lambda: {"ED": FakeEd})
 
     def resolver(raw_channel, warn_callback=None):
         resolve_calls.append(raw_channel)
         return 12.5
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         resolver,
     )
@@ -944,12 +1119,12 @@ def test_non_batched_pd_suppression_preserves_independent_diagnostic(monkeypatch
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         resolver,
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: True,
     )
@@ -1006,7 +1181,9 @@ def test_non_batched_value_error_is_deferred_until_all_items_are_prepared(monkey
         "pd": {"type": "PD", "analysis_channel": 0},
         "later": {"type": "FAKE"},
     }
-    window.analysis_types_requiring_v2pa = {"PD", "ED"}
+    assert window.analysis_controller.configure_calibration_types(
+        {"PD", "ED"}, generation=1
+    )
     window.instance_analysis_class = MethodType(
         sequence_widget.SequenceWindow.instance_analysis_class,
         window,
@@ -1016,7 +1193,7 @@ def test_non_batched_value_error_is_deferred_until_all_items_are_prepared(monkey
     window._set_analysis_window_geometry = lambda *_args: None
     window._handle_post_analysis_exports = lambda: events.append("export")
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "get_class_mapping",
         lambda: {"PD": FakePd, "FAKE": LaterAnalysis},
     )
@@ -1026,7 +1203,7 @@ def test_non_batched_value_error_is_deferred_until_all_items_are_prepared(monkey
         raise ValueError("校准系数格式无效")
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         resolver,
     )
@@ -1065,7 +1242,7 @@ def test_record_only_run_lists_uncalibrated_channels_in_first_seen_order_before_
         return 1.0
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         fake_resolver,
     )
@@ -1073,7 +1250,7 @@ def test_record_only_run_lists_uncalibrated_channels_in_first_seen_order_before_
     def batch_factory(resolver=None):
         return AnalysisV2paBatch(resolver=resolver or fake_resolver)
 
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls, events)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1118,11 +1295,11 @@ def test_record_only_run_lists_one_uncalibrated_channel_once(monkeypatch):
         return AnalysisV2paBatch(resolver=resolver or fake_resolver)
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         fake_resolver,
     )
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1156,11 +1333,11 @@ def test_record_only_run_uses_fresh_uncalibrated_channel_collection_each_time(
         return AnalysisV2paBatch(resolver=resolver or fake_resolver)
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         fake_resolver,
     )
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1193,11 +1370,11 @@ def test_record_only_calibrated_run_has_no_calibration_warning(monkeypatch):
         return AnalysisV2paBatch(resolver=resolver or fake_resolver)
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         fake_resolver,
     )
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1224,11 +1401,11 @@ def test_record_only_run_preserves_extra_calibration_diagnostic_in_same_warning(
         return AnalysisV2paBatch(resolver=resolver or fake_resolver)
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         fake_resolver,
     )
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1264,11 +1441,11 @@ def test_record_only_exact_value_error_uses_dedicated_warning_without_channel_co
         return AnalysisV2paBatch(resolver=resolver or fake_resolver)
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "resolve_analysis_v2pa_factor_for_channel",
         fake_resolver,
     )
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1291,7 +1468,7 @@ def test_play_and_record_run_uses_dedicated_uncalibrated_warning(monkeypatch):
     def batch_factory():
         return AnalysisV2paBatch(resolver=fake_resolver)
 
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     _patch_unsuppressed_dedicated_warning(monkeypatch, warning_calls)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1324,7 +1501,7 @@ def test_live_run_batches_warnings_before_calculation_and_repeats_on_second_oper
         warning_calls.append(args)
         events.append("warning")
 
-    monkeypatch.setattr(sequence_widget, "AnalysisV2paBatch", batch_factory)
+    monkeypatch.setattr(analysis_controller_module, "AnalysisV2paBatch", batch_factory)
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", warning)
 
     sequence_widget.SequenceWindow.run(window)
@@ -1365,12 +1542,12 @@ def test_non_target_calibration_value_error_uses_ordinary_warning(monkeypatch):
         raise ValueError("校准系数格式无效")
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "AnalysisV2paBatch",
         lambda: AnalysisV2paBatch(resolver=resolver),
     )
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "is_uncalibrated_microphone_warning_suppressed",
         lambda logger=None: pytest.fail("non-target diagnostics must not read preference"),
     )
@@ -1396,7 +1573,7 @@ def test_calibrated_live_run_has_no_calibration_warning(monkeypatch):
     window._analysis_v2pa_warning_callback = previous_callback
 
     monkeypatch.setattr(
-        sequence_widget,
+        analysis_controller_module,
         "AnalysisV2paBatch",
         lambda: AnalysisV2paBatch(resolver=lambda raw_channel, warn_callback=None: raw_channel + 1.0),
     )

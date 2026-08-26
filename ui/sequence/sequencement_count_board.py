@@ -1,13 +1,8 @@
-import json
-from datetime import datetime
-
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QFrame, QWidget, QStackedWidget, QSizePolicy
 
-from base.save_data import ensure_test_result_file
 from consts import ui_style_const
-from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, LineEdit, Label, MarkPushButton, MessageBox
 from ui.ui_src import ui_resources
 
@@ -133,9 +128,6 @@ class SequenceCountBoard(QWidget):
 
         self.setLayout(layout_main)
         self._refresh_minimum_width()
-
-        self.set_test_text()
-        self.set_mark_text()
 
     def is_collapsed(self):
         return self._collapsed
@@ -335,6 +327,20 @@ class SequenceCountBoard(QWidget):
         self.mark_btn.setEnabled(False)
         self.test_btn.setEnabled(bool(self._test_available))
 
+    def bind_mark_action(self, callback):
+        """Route the raw mark click through its owning Recording controller."""
+        if not callable(callback):
+            raise TypeError("mark action callback must be callable")
+        previous = getattr(self, "_mark_action_callback", None)
+        try:
+            self.mark_btn.clicked.disconnect(
+                previous if callable(previous) else self.on_mark_btn_clicked
+            )
+        except (RuntimeError, TypeError):
+            pass
+        self._mark_action_callback = callback
+        self.mark_btn.clicked.connect(callback)
+
     def set_test_available(self, available: bool, reason: str = ""):
         """
         Control whether test mode can be entered.
@@ -352,83 +358,3 @@ class SequenceCountBoard(QWidget):
             pass
         if (not self._test_available) and self.mode == "test":
             self.on_mark_btn_clicked()
-
-    @staticmethod
-    def _parse_test_log(lines):
-        kv = {}
-        for line in lines or []:
-            if ":" not in str(line):
-                continue
-            k, v = str(line).split(":", 1)
-            kv[k.strip().lower()] = v.strip()
-        return kv
-
-    def set_test_text(self):
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        ensure_test_result_file(self.analysis_config)
-        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        with open(test_result_path, "r") as f:
-            lines = f.readlines()
-            kv = self._parse_test_log(lines)
-            total = kv.get("total", "0")
-            ok = kv.get("ok", "0")
-            ng = kv.get("ng", "0")
-            ok_percent = kv.get("ok_percent", "0%")
-            if ok_percent and (not ok_percent.endswith("%")):
-                ok_percent = f"{ok_percent}%"
-            datatime = kv.get("datatime", current_time)
-            self.total_line_edit.setText(str(total))
-            self.ok_line_edit.setText(str(ok))
-            self.ng_line_edit.setText(str(ng))
-            self.yield_line_edit.setText(str(ok_percent))
-            self.datatime_line_edit.setText(str(datatime))
-
-    def set_mark_text(self):
-        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        with open(mark_result_path, "r") as f:
-            data = json.load(f)
-            self.mark_total_edit.setText(str(data["total"]))
-            self.mark_ok_edit.setText(str(data["ok"]))
-            self.mark_ng_edit.setText(str(data["ng"]))
-
-    def set_test_result_file(self, params):
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        ensure_test_result_file(self.analysis_config)
-        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        lines = list()
-        total = int(self.total_line_edit.text())
-        ok = int(self.ok_line_edit.text())
-        ng = int(self.ng_line_edit.text())
-
-        if params == "OK":
-            ok += 1
-        elif params == "NG":
-            ng += 1
-        total += 1
-        lines.append(f"total: {total}\n")
-        lines.append(f"ok: {ok}\n")
-        lines.append(f"ng: {ng}\n")
-        ok_percent = round(ok / total * 100, 2) if total > 0 else 0
-        lines.append(f"ok_percent: {ok_percent}%\n")
-        lines.append(f"datatime: {current_time}\n")
-        with open(test_result_path, "w") as f:
-            f.writelines(lines)
-
-    def set_mark_result_file(self, params):
-        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        datatime = datetime.now().strftime("%Y-%m-%d")
-        total = int(self.mark_total_edit.text())
-        ok = int(self.mark_ok_edit.text())
-        ng = int(self.mark_ng_edit.text())
-        data = dict()
-        total = total + 1
-        if params == "OK":
-            ok = ok + 1
-        elif params == "NG":
-            ng = ng + 1
-        data["total"] = total
-        data["ng"] = ng
-        data["ok"] = ok
-        data["datatime"] = datatime
-        with open(mark_result_path, "w") as f:
-            json.dump(data, f, indent=4)

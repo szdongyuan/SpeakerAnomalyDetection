@@ -79,6 +79,31 @@ def _chirp_detail(config_rate=44100):
     }
 
 
+def _attach_sequence_configuration_controller(win, sequence_widget):
+    from ui.sequence.sequence_configuration_controller import SequenceConfigurationController
+    from ui.sequence.sequence_configuration_model import SequenceConfigurationModel
+    from ui.sequence.sequence_configuration_view import SequenceConfigurationView
+
+    model = SequenceConfigurationModel(data_struct=win.data_struct)
+    model.sequence_config = win.sequence_config
+    model.using_config_path = win.using_config_path
+    model.mic = win.mic
+    model.speaker = win.speaker
+    model.streaming_stimulus_data = getattr(win, "streaming_stimulus_data", None)
+    controller = SequenceConfigurationController(
+        model,
+        SequenceConfigurationView(),
+        stimulus_setter=lambda *args, **kwargs: (
+            sequence_widget.AnalysisModelSelect.set_data_struct_stimulus_signal(
+                *args, **kwargs
+            )
+        ),
+    )
+    win.configuration_model = model
+    win.configuration_controller = controller
+    return controller
+
+
 def test_ui_import_shim_prefers_importable_real_audio_sample_rate(monkeypatch):
     module_name = "base.audio_sample_rate"
     missing = object()
@@ -440,6 +465,7 @@ def test_sequence_init_play_and_record_resolves_duplex_runtime_rate(monkeypatch)
         mic={"samplerate": 48000},
         speaker={"samplerate": 48000},
     )
+    _attach_sequence_configuration_controller(win, sequence_widget)
 
     sequence_widget.SequenceWindow.init_data_struct_stimulus_config(win)
 
@@ -469,8 +495,6 @@ def test_sequence_init_play_and_record_mismatch_clears_stale_runtime_stimulus_st
         lineedit_type=SimpleNamespace(text=lambda: "model"),
         lineedit_count=SimpleNamespace(text=lambda: "1"),
         lineedit_s_or_n=SimpleNamespace(text=lambda: ""),
-        _excel_export_cache="old",
-        _excel_exported_record_id="old",
         mic_channels=[0],
     )
     monkeypatch.setattr(
@@ -478,18 +502,25 @@ def test_sequence_init_play_and_record_mismatch_clears_stale_runtime_stimulus_st
         "set_data_struct_stimulus_signal",
         staticmethod(lambda *args, **kwargs: calls.append((args, kwargs))),
     )
-    monkeypatch.setattr(sequence_widget, "get_recorded_info", lambda *args: ("out.wav", {}))
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: None)
+    _attach_sequence_configuration_controller(win, sequence_widget)
 
     sequence_widget.SequenceWindow.init_data_struct_stimulus_config(win)
-    reset_result = sequence_widget.SequenceWindow.reset_work_pram(win, "not_labeled")
+    from ui.sequence.sequence_recording_controller import BlockingRecordingAdapter
+
+    with pytest.raises(RuntimeError, match="采样率"):
+        BlockingRecordingAdapter._resolved_sample_rate(
+            "PLAY_AND_RECORD",
+            win.sequence_config[0]["seq1"]["acq"]["detail"],
+            win.mic,
+            win.speaker,
+        )
 
     assert calls == []
     assert win.data_struct.sample_rate is None
     assert win.data_struct.stimulus_data is None
     assert win.data_struct.stimulus_info is None
     assert not hasattr(win.data_struct, "alignment_sample_count")
-    assert reset_result == (None, None, None)
 
 
 def test_sequence_init_import_stimulus_audio_defers_reference_generation(monkeypatch):
@@ -517,15 +548,16 @@ def test_sequence_init_import_stimulus_audio_defers_reference_generation(monkeyp
         mic={"samplerate": 48000},
         speaker={"samplerate": 48000},
     )
+    controller = _attach_sequence_configuration_controller(win, sequence_widget)
 
     sequence_widget.SequenceWindow.init_data_struct_stimulus_config(win)
 
     assert calls == []
-    assert win.data_struct.sample_rate == 48000
+    assert win.data_struct.sample_rate is None
     assert win.data_struct.stimulus_data is None
     assert win.data_struct.stimulus_info is None
     assert not hasattr(win.data_struct, "alignment_sample_count")
-    assert win.streaming_stimulus_data is None
+    assert controller.model.streaming_stimulus_data is None
 
 
 def _golden_sample_window(mic, speaker, data_struct=None):

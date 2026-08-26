@@ -1,9 +1,12 @@
+import hashlib
 import json
 import os
 import re
 import tempfile
+import threading
 import yaml
 
+from contextlib import contextmanager
 from datetime import datetime
 from re import _parser as re_parser
 
@@ -12,6 +15,369 @@ from consts.running_consts import DEFAULT_DIR, SEQUENCE_CONFIG_REGISTRY_PATH, SN
 from base.file_ops import FileOps
 from base.log_manager import LogManager
 from base.stimulus_signal.methods import normalize_stimulus_method
+
+
+def _fsync_parent_directory(file_path):
+    if os.name == "nt":
+        return
+    parent_dir = os.path.dirname(os.path.abspath(file_path)) or os.curdir
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    directory_fd = os.open(parent_dir, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _windows_move_file(source_path, target_path, flags):
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    move_file_ex = kernel32.MoveFileExW
+    move_file_ex.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+    move_file_ex.restype = ctypes.c_int
+    if not move_file_ex(source_path, target_path, flags):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _durable_replace(source_path, target_path):
+    """Replace a file with platform durability semantics."""
+    source_path = os.path.abspath(source_path)
+    target_path = os.path.abspath(target_path)
+    if os.name == "nt":
+        replace_existing = 0x1
+        write_through = 0x8
+        _windows_move_file(
+            source_path, target_path, replace_existing | write_through
+        )
+        return
+    os.replace(source_path, target_path)
+    _fsync_parent_directory(target_path)
+
+
+def _durable_delete(file_path):
+    target_path = os.path.abspath(file_path)
+    if not os.path.exists(target_path):
+        return
+    if os.name == "nt":
+        parent_dir = os.path.dirname(target_path)
+        tombstone_fd, tombstone_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(target_path)}.",
+            suffix=".delete",
+            dir=parent_dir,
+        )
+        os.close(tombstone_fd)
+        try:
+            # A write-through rename makes absence at the original path durable.
+            _durable_replace(target_path, tombstone_path)
+            os.remove(tombstone_path)
+            return
+        finally:
+            if os.path.exists(tombstone_path):
+                try:
+                    os.remove(tombstone_path)
+                except OSError:
+                    pass
+    os.remove(target_path)
+    _fsync_parent_directory(target_path)
+
+
+def _windows_file_lock(lock_file, *, fail_immediately):
+    """Lock byte zero with the kernel's genuinely blocking Windows API."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_size_t),
+            ("InternalHigh", ctypes.c_size_t),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    lock_file_ex = kernel32.LockFileEx
+    lock_file_ex.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    lock_file_ex.restype = wintypes.BOOL
+    overlapped = Overlapped()
+    flags = 0x2  # LOCKFILE_EXCLUSIVE_LOCK
+    if fail_immediately:
+        flags |= 0x1  # LOCKFILE_FAIL_IMMEDIATELY
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(lock_file.fileno()))
+    if lock_file_ex(handle, flags, 0, 1, 0, ctypes.byref(overlapped)):
+        return True
+    error = ctypes.get_last_error()
+    if fail_immediately and error == 33:  # ERROR_LOCK_VIOLATION
+        return False
+    raise ctypes.WinError(error)
+
+
+def _windows_file_unlock(lock_file):
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_size_t),
+            ("InternalHigh", ctypes.c_size_t),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    unlock_file_ex = kernel32.UnlockFileEx
+    unlock_file_ex.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    unlock_file_ex.restype = wintypes.BOOL
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(lock_file.fileno()))
+    overlapped = Overlapped()
+    if not unlock_file_ex(handle, 0, 1, 0, ctypes.byref(overlapped)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _safe_exception_description(error):
+    """Describe cleanup failures without trusting their formatting hooks."""
+    try:
+        detail = str(error)
+    except BaseException:
+        detail = "<unprintable exception>"
+    return f"{type(error).__name__}: {detail}"
+
+
+class PathTransactionCoordinator:
+    """Instance-owned path locks plus a named cross-process lock protocol."""
+
+    def __init__(self, lock_root=None):
+        self._thread_locks_guard = threading.Lock()
+        self._thread_locks = {}
+        self._lock_state = threading.local()
+        self._lock_root = lock_root or os.path.join(
+            tempfile.gettempdir(), "speaker-anomaly-detection-path-locks"
+        )
+
+    @staticmethod
+    def normalize_path(file_path):
+        return os.path.normcase(os.path.abspath(file_path))
+
+    def _reserve_thread_lock(self, target_path):
+        with self._thread_locks_guard:
+            entry = self._thread_locks.get(target_path)
+            if entry is None:
+                entry = [threading.RLock(), 0]
+                self._thread_locks[target_path] = entry
+            entry[1] += 1
+            return entry
+
+    def _release_thread_lock(self, target_path, entry):
+        with self._thread_locks_guard:
+            current = self._thread_locks.get(target_path)
+            if current is not entry:
+                raise RuntimeError("path lock lifecycle lost its reserved entry")
+            entry[1] -= 1
+            if entry[1] == 0:
+                self._thread_locks.pop(target_path, None)
+
+    @staticmethod
+    def _try_interprocess_lock(lock_file):
+        lock_file.seek(0)
+        if os.name == "nt":
+            return _windows_file_lock(lock_file, fail_immediately=True)
+        import fcntl
+
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _acquire_interprocess_lock(lock_file):
+        lock_file.seek(0)
+        if os.name == "nt":
+            _windows_file_lock(lock_file, fail_immediately=False)
+            return
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+    @staticmethod
+    def _release_interprocess_lock(lock_file):
+        lock_file.seek(0)
+        if os.name == "nt":
+            _windows_file_unlock(lock_file)
+            return
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    @staticmethod
+    def _read_lock_owner(lock_file):
+        try:
+            lock_file.seek(1)
+            payload = lock_file.read().decode("utf-8")
+            owner = json.loads(payload) if payload else {}
+            return owner.get("pid"), owner.get("thread_id")
+        except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+            return None, None
+
+    @staticmethod
+    def _write_lock_owner(lock_file, owner):
+        lock_file.seek(1)
+        lock_file.truncate()
+        if owner is not None:
+            lock_file.write(json.dumps(owner).encode("utf-8"))
+        lock_file.flush()
+
+    @contextmanager
+    def transaction(self, file_path):
+        """Lock one normalized path for cooperating callers.
+
+        Raw OS writes that bypass a coordinator are outside this consistency
+        contract. Named lock files are persistent coordination objects; all
+        opened handles are closed on exit.
+        """
+        target_path = self.normalize_path(file_path)
+        lock_name = hashlib.sha256(target_path.encode("utf-8")).hexdigest()
+        lock_path = os.path.join(self._lock_root, f"{lock_name}.lock")
+        entry = self._reserve_thread_lock(target_path)
+        thread_lock_acquired = False
+        lock_file = None
+        interprocess_locked = False
+        owner_metadata_started = False
+        active = None
+        active_registered = False
+        nested = False
+
+        def run_cleanup():
+            failures = []
+
+            def attempt_cleanup(operation, callback):
+                try:
+                    callback()
+                except BaseException as error:
+                    failures.append((operation, error, error.__traceback__))
+
+            if owner_metadata_started:
+                attempt_cleanup(
+                    "clear path lock owner metadata",
+                    lambda: self._write_lock_owner(lock_file, None),
+                )
+            if interprocess_locked:
+                attempt_cleanup(
+                    "release interprocess path lock",
+                    lambda: self._release_interprocess_lock(lock_file),
+                )
+            if lock_file is not None:
+                attempt_cleanup("close path lock handle", lock_file.close)
+
+            if active_registered:
+                def release_active_depth():
+                    if nested:
+                        current_depth = active.get(target_path, 0)
+                        if current_depth <= 1:
+                            active.pop(target_path, None)
+                        else:
+                            active[target_path] = current_depth - 1
+                    else:
+                        active.pop(target_path, None)
+
+                attempt_cleanup(
+                    "release per-thread path lock ownership",
+                    release_active_depth,
+                )
+            if thread_lock_acquired:
+                attempt_cleanup("release path thread lock", entry[0].release)
+            attempt_cleanup(
+                "release path thread lock reservation",
+                lambda: self._release_thread_lock(target_path, entry),
+            )
+            return failures
+
+        def add_cleanup_notes(primary_error, failures):
+            for operation, cleanup_error, _traceback in failures:
+                diagnostic = (
+                    "Path lock cleanup also failed while attempting to "
+                    f"{operation}: {_safe_exception_description(cleanup_error)}"
+                )
+                try:
+                    BaseException.add_note(primary_error, diagnostic)
+                except BaseException:
+                    # Diagnostic attachment must never replace the primary.
+                    continue
+
+        try:
+            entry[0].acquire()
+            thread_lock_acquired = True
+            active = getattr(self._lock_state, "active", {})
+            depth = active.get(target_path, 0)
+            if depth:
+                nested = True
+                active[target_path] = depth + 1
+                self._lock_state.active = active
+                active_registered = True
+                yield
+            else:
+                os.makedirs(self._lock_root, exist_ok=True)
+                lock_file = open(lock_path, "a+b")
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                interprocess_locked = self._try_interprocess_lock(lock_file)
+                if not interprocess_locked:
+                    owner_pid, owner_thread_id = self._read_lock_owner(lock_file)
+                    if (
+                        owner_pid == os.getpid()
+                        and owner_thread_id == threading.get_ident()
+                    ):
+                        raise RuntimeError(
+                            "same-thread path transaction requires the active "
+                            "PathTransactionCoordinator"
+                        )
+                    self._acquire_interprocess_lock(lock_file)
+                    interprocess_locked = True
+                owner_metadata_started = True
+                self._write_lock_owner(
+                    lock_file,
+                    {
+                        "pid": os.getpid(),
+                        "thread_id": threading.get_ident(),
+                    },
+                )
+                active[target_path] = 1
+                self._lock_state.active = active
+                active_registered = True
+                yield
+        except BaseException as primary_error:
+            primary_traceback = primary_error.__traceback__
+            cleanup_failures = run_cleanup()
+            add_cleanup_notes(primary_error, cleanup_failures)
+            primary_error.__traceback__ = primary_traceback
+            raise
+        else:
+            cleanup_failures = run_cleanup()
+            if cleanup_failures:
+                _operation, first_error, first_traceback = cleanup_failures[0]
+                add_cleanup_notes(first_error, cleanup_failures[1:])
+                raise first_error.with_traceback(first_traceback)
 
 
 def load_config(config_path, module_name=None):
@@ -266,7 +632,17 @@ class LoadUiConfig(object):
         return LoadUiConfig._write_json_atomically(config_data, json_file_path)
 
     @staticmethod
-    def _write_json_atomically(config_data, json_file_path):
+    def _write_json_atomically(
+        config_data, json_file_path, *, coordinator=None
+    ):
+        coordinator = coordinator or PathTransactionCoordinator()
+        with coordinator.transaction(json_file_path):
+            return LoadUiConfig._write_json_atomically_unlocked(
+                config_data, json_file_path
+            )
+
+    @staticmethod
+    def _write_json_atomically_unlocked(config_data, json_file_path):
         target_path = os.path.abspath(json_file_path)
         parent_dir = os.path.dirname(target_path)
         temp_file_fd = None
@@ -284,7 +660,7 @@ class LoadUiConfig(object):
                 json.dump(config_data, json_file, indent=6, ensure_ascii=False)
                 json_file.flush()
                 os.fsync(json_file.fileno())
-            os.replace(temp_file_path, target_path)
+            _durable_replace(temp_file_path, target_path)
             return True
         except Exception:
             return False
@@ -299,6 +675,107 @@ class LoadUiConfig(object):
                     os.remove(temp_file_path)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _capture_file_bytes(file_path, *, coordinator=None):
+        """Capture exact durable bytes, including whether the file existed."""
+        coordinator = coordinator or PathTransactionCoordinator()
+        with coordinator.transaction(file_path):
+            return LoadUiConfig._capture_file_bytes_unlocked(file_path)
+
+    @staticmethod
+    def _capture_file_bytes_unlocked(file_path):
+        target_path = os.path.abspath(file_path)
+        if not os.path.exists(target_path):
+            return False, b""
+        with open(target_path, "rb") as source:
+            return True, source.read()
+
+    @staticmethod
+    def _restore_file_bytes_atomically(
+        file_path,
+        checkpoint,
+        *,
+        expected_current=None,
+        coordinator=None,
+    ):
+        """Restore an exact byte checkpoint without exposing a partial file."""
+        coordinator = coordinator or PathTransactionCoordinator()
+        with coordinator.transaction(file_path):
+            return LoadUiConfig._restore_file_bytes_atomically_unlocked(
+                file_path,
+                checkpoint,
+                expected_current=expected_current,
+            )
+
+    @staticmethod
+    def _restore_file_bytes_atomically_unlocked(
+        file_path, checkpoint, *, expected_current=None
+    ):
+        if (
+            expected_current is not None
+            and LoadUiConfig._capture_file_bytes_unlocked(file_path)
+            != expected_current
+        ):
+            return False
+        existed, payload = checkpoint
+        target_path = os.path.abspath(file_path)
+        if not existed:
+            try:
+                _durable_delete(target_path)
+                return True
+            except OSError:
+                return False
+
+        parent_dir = os.path.dirname(target_path)
+        temp_file_fd = None
+        temp_file_path = None
+        try:
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            temp_file_fd, temp_file_path = tempfile.mkstemp(
+                prefix=f".{os.path.basename(target_path)}.",
+                suffix=".tmp",
+                dir=parent_dir,
+            )
+            with os.fdopen(temp_file_fd, "wb") as target:
+                temp_file_fd = None
+                target.write(payload)
+                target.flush()
+                os.fsync(target.fileno())
+            _durable_replace(temp_file_path, target_path)
+            return True
+        except Exception:
+            return False
+        finally:
+            if temp_file_fd is not None:
+                try:
+                    os.close(temp_file_fd)
+                except OSError:
+                    pass
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _restore_sequence_registry_checkpoint(
+        registry_path,
+        checkpoint,
+        *,
+        expected_current=None,
+        coordinator=None,
+    ):
+        registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        coordinator = coordinator or PathTransactionCoordinator()
+        with coordinator.transaction(registry_path):
+            return LoadUiConfig._restore_file_bytes_atomically(
+                registry_path,
+                checkpoint,
+                expected_current=expected_current,
+                coordinator=coordinator,
+            )
 
     @staticmethod
     def get_selected_sn_regex_rule(config_data):
@@ -403,15 +880,31 @@ class LoadUiConfig(object):
             return error_code.INVALID_DATA_LOADING, err_msg
 
     @staticmethod
-    def save_sequence_config_to_json(config_data, json_file_path):
+    def save_sequence_config_to_json(
+        config_data, json_file_path, *, coordinator=None
+    ):
         """Save ``config_data`` (the inner analysis_list dict) back to json file using the new format."""
-        os.makedirs(os.path.dirname(json_file_path), exist_ok=True)
-        try:
-            with open(json_file_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=6, ensure_ascii=False)
-            return True
-        except Exception as e:
-            return False
+        return LoadUiConfig._write_json_atomically(
+            config_data,
+            json_file_path,
+            coordinator=coordinator,
+        )
+
+    @staticmethod
+    def sequence_config_registry_transaction(
+        registry_path: str = None, *, coordinator=None
+    ):
+        """Expose the registry lock for multi-step controller transactions."""
+        coordinator = coordinator or PathTransactionCoordinator()
+        return coordinator.transaction(
+            registry_path or SEQUENCE_CONFIG_REGISTRY_PATH,
+        )
+
+    @staticmethod
+    def sequence_config_file_transaction(file_path: str, *, coordinator=None):
+        """Expose the shared path transaction for controller persistence."""
+        coordinator = coordinator or PathTransactionCoordinator()
+        return coordinator.transaction(file_path)
 
     @staticmethod
     def _load_sequence_config_registry(registry_path: str = None) -> dict:
@@ -434,19 +927,22 @@ class LoadUiConfig(object):
             return {}
 
     @staticmethod
-    def _save_sequence_config_registry(registry: dict, registry_path: str = None) -> bool:
+    def _save_sequence_config_registry(
+        registry: dict, registry_path: str = None, *, coordinator=None
+    ) -> bool:
         """Write registry JSON to disk (creates parent dir)."""
         registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
-        try:
-            os.makedirs(os.path.dirname(registry_path), exist_ok=True)
-            with open(registry_path, "w", encoding="utf-8") as f:
-                json.dump(registry or {}, f, indent=6, ensure_ascii=False)
-            return True
-        except Exception:
-            return False
+        return LoadUiConfig._write_json_atomically(
+            registry or {}, registry_path, coordinator=coordinator
+        )
 
     @staticmethod
-    def append_sequence_config_registry_entry(file_path: str, registry_path: str = None) -> bool:
+    def append_sequence_config_registry_entry(
+        file_path: str,
+        registry_path: str = None,
+        *,
+        coordinator=None,
+    ) -> bool:
         """
         Append/update one entry to registry using filename (without extension) as key,
         and full file path as value.
@@ -454,18 +950,28 @@ class LoadUiConfig(object):
         if not file_path:
             return False
         registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        coordinator = coordinator or PathTransactionCoordinator()
         try:
-            key = os.path.splitext(os.path.basename(file_path))[0]
-            if not key:
-                return False
-            registry = LoadUiConfig._load_sequence_config_registry(registry_path)
-            registry[key] = file_path
-            return LoadUiConfig._save_sequence_config_registry(registry, registry_path)
+            with coordinator.transaction(registry_path):
+                key = os.path.splitext(os.path.basename(file_path))[0]
+                if not key:
+                    return False
+                registry = LoadUiConfig._load_sequence_config_registry(registry_path)
+                registry[key] = file_path
+                return LoadUiConfig._save_sequence_config_registry(
+                    registry, registry_path, coordinator=coordinator
+                )
         except Exception:
             return False
 
     @staticmethod
-    def ensure_sequence_config_registry_field(field_key: str, field_value: str, registry_path: str = None) -> bool:
+    def ensure_sequence_config_registry_field(
+        field_key: str,
+        field_value: str,
+        registry_path: str = None,
+        *,
+        coordinator=None,
+    ) -> bool:
         """
         Ensure registry contains the given field_key.
         If missing, write field_key -> field_value.
@@ -473,26 +979,42 @@ class LoadUiConfig(object):
         if not field_key:
             return False
         registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
+        coordinator = coordinator or PathTransactionCoordinator()
         try:
-            registry = LoadUiConfig._load_sequence_config_registry(registry_path)
-            if field_key in registry:
-                return True
-            registry[field_key] = field_value
-            return LoadUiConfig._save_sequence_config_registry(registry, registry_path)
+            with coordinator.transaction(registry_path):
+                registry = LoadUiConfig._load_sequence_config_registry(registry_path)
+                if field_key in registry:
+                    return True
+                registry[field_key] = field_value
+                return LoadUiConfig._save_sequence_config_registry(
+                    registry, registry_path, coordinator=coordinator
+                )
         except Exception:
             return False
 
     @staticmethod
-    def update_using_config_path(using_config_path, registry_path: str = None) -> bool:
+    def update_using_config_path(
+        using_config_path,
+        registry_path: str = None,
+        *,
+        coordinator=None,
+    ) -> bool:
         """
         Update the using config path in the registry.
         """
         if not using_config_path:
             return False
         registry_path = registry_path or SEQUENCE_CONFIG_REGISTRY_PATH
-        registry = LoadUiConfig._load_sequence_config_registry()
-        registry["using_config_path"] = using_config_path
-        return LoadUiConfig._save_sequence_config_registry(registry)
+        coordinator = coordinator or PathTransactionCoordinator()
+        try:
+            with coordinator.transaction(registry_path):
+                registry = LoadUiConfig._load_sequence_config_registry(registry_path)
+                registry["using_config_path"] = using_config_path
+                return LoadUiConfig._save_sequence_config_registry(
+                    registry, registry_path, coordinator=coordinator
+                )
+        except Exception:
+            return False
 
     @staticmethod
     def load_last_recorded_info(logger):

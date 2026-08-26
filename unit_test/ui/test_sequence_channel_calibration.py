@@ -19,6 +19,8 @@ from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_CHECKED_KEY,
     GOLDEN_SAMPLE_RESULT_PATH_KEY,
 )
+from ui.sequence.sequence_analysis_controller import SequenceAnalysisController
+from ui.sequence.sequence_analysis_model import SequenceAnalysisModel
 
 
 SEQUENCE_WIDGET_PATH = REPO_ROOT / "ui" / "sequence" / "sequence_widget.py"
@@ -275,6 +277,21 @@ def _build_sequence_window(
         analysis_config=analysis_config or {},
         _active_input_channels=list(active_input_channels or [0]),
         analysis_types_requiring_v2pa=namespace["ANALYSIS_TYPES_REQUIRING_V2PA"],
+    )
+    model = SequenceAnalysisModel()
+    model.analysis_instances = window.analysis_window
+    view = types.SimpleNamespace(
+        warning_presenter=lambda title, message: DummyMessageBox.warning(
+            window, title, message
+        )
+    )
+    window.analysis_controller = SequenceAnalysisController(
+        model,
+        view,
+        bus=types.SimpleNamespace(),
+        runtime=window,
+        class_mapping_provider=namespace["get_class_mapping"],
+        calibration_resolver=resolve_impl,
     )
     if analysis_v2pa_batch is not None:
         window._analysis_v2pa_batch = analysis_v2pa_batch

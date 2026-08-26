@@ -30,7 +30,7 @@ class ShortcutTriggerManager(QObject):
     def start(self):
         """注册全局快捷键"""
         if self._hotkey_handle is not None:
-            return
+            return True
 
         try:
             self._hotkey_handle = keyboard.add_hotkey(
@@ -38,22 +38,45 @@ class ShortcutTriggerManager(QObject):
                 self._on_triggered,
                 suppress=True
             )
+        except BaseException as error:
+            self._hotkey_handle = None
+            try:
+                self.logger.error(
+                    "录音快捷键注册失败: "
+                    f"{type(error).__name__}（快捷键: {self.HOTKEY}）"
+                )
+            except BaseException:
+                pass
+            return False
+        try:
             self.logger.info(f"录音快捷键已注册: {self.HOTKEY}")
-        except Exception as e:
-            self.logger.error(f"录音快捷键注册失败: {e}（快捷键: {self.HOTKEY}）")
+        except BaseException:
+            pass
+        return True
 
     def stop(self):
         """移除全局快捷键（精确移除，不影响其他热键）"""
         if self._hotkey_handle is None:
-            return
+            return True
 
+        handle = self._hotkey_handle
         try:
-            keyboard.remove_hotkey(self._hotkey_handle)
+            keyboard.remove_hotkey(handle)
+        except BaseException as error:
+            self._hotkey_handle = handle
+            try:
+                self.logger.warning(
+                    f"录音快捷键移除异常: {type(error).__name__}"
+                )
+            except BaseException:
+                pass
+            return False
+        self._hotkey_handle = None
+        try:
             self.logger.info(f"录音快捷键已移除: {self.HOTKEY}")
-        except Exception as e:
-            self.logger.warning(f"录音快捷键移除异常: {e}")
-        finally:
-            self._hotkey_handle = None
+        except BaseException:
+            pass
+        return True
 
     def _on_triggered(self):
         """快捷键触发回调（在 keyboard 子线程中执行）

@@ -9,6 +9,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import stimulus_resolver
 from ui.sequence import sequence_widget
+from ui.sequence import sequence_recording_import_service as import_service_module
+from ui.sequence.sequence_configuration_controller import SequenceConfigurationController
+from ui.sequence.sequence_configuration_model import SequenceConfigurationModel
+from ui.sequence.sequence_configuration_view import SequenceConfigurationView
+from ui.sequence.sequence_analysis_controller import SequenceAnalysisController
+from ui.sequence.sequence_analysis_model import SequenceAnalysisModel
+from ui.sequence.sequence_recording_import_owner import (
+    SequenceRecordingImportController,
+)
+from ui.sequence.sequence_recording_import_service import SequenceImportedAudioService
+from ui.sequence.sequence_recording_model import RecordingModel
+from ui.sequence.sequence_messages import ConfigurationSnapshot, LoadImportedAudioRequested
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +30,7 @@ def _valid_wav_calibration_metadata(monkeypatch):
             {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
         ]
     }
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
+    monkeypatch.setattr(import_service_module, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
 
 
 class _Button:
@@ -57,7 +69,7 @@ def _window(mode, detail=None):
                 "total_time": 0.01,
             },
         }
-    return SimpleNamespace(
+    window = SimpleNamespace(
         sequence_config=[
             {
                 "seq1": {
@@ -70,6 +82,7 @@ def _window(mode, detail=None):
         ],
         data_struct=SimpleNamespace(sample_rate=None),
         analysis_config={"auto_analysis": False},
+        mode=mode,
         recorded_path=None,
         recorded_signal_info=None,
         _clear_plot_area=lambda: None,
@@ -78,6 +91,20 @@ def _window(mode, detail=None):
         run=lambda: None,
         using_config_path="configs/sequence.json",
     )
+    model = SequenceConfigurationModel(data_struct=window.data_struct)
+    model.sequence_config = window.sequence_config
+    model.analysis_config = window.analysis_config
+    model.using_config_path = window.using_config_path
+    window.configuration_model = model
+    window.configuration_controller = SequenceConfigurationController(
+        model,
+        SequenceConfigurationView(),
+        warning=lambda title, message: sequence_widget.MessageBox.warning(
+            window, title, message
+        ),
+        data_enabled_setter=window.data_btn.setEnabled,
+    )
+    return window
 
 
 def _native_audio_loader(calls, decoded_rate=32000):
@@ -88,13 +115,59 @@ def _native_audio_loader(calls, decoded_rate=32000):
     return fake_load_audio_preserve_rate
 
 
+class _Signal:
+    def __init__(self):
+        self.values = []
+
+    def emit(self, value):
+        self.values.append(value)
+
+
+def _execute_import(window, selected_path):
+    model = getattr(window, "configuration_model", None)
+    snapshot = (
+        model.current_snapshot()
+        if model is not None
+        else ConfigurationSnapshot(
+            window.sequence_config,
+            window.analysis_config,
+            using_config_path=window.using_config_path,
+        )
+    )
+    command = LoadImportedAudioRequested(
+        "compat-command", "compat-import", window.sequence_config[0]["seq1"]["acq"]["mode"], selected_path, snapshot
+    )
+    view = SimpleNamespace(
+        choose_import_audio_path=lambda selected: selected,
+        present_import_warning=lambda title, message: sequence_widget.MessageBox.warning(
+            window, title, message
+        ),
+        clear_import_projection=window._clear_plot_area,
+        show_imported_audio=window.plot_waveform_to_workspace,
+        set_import_data_enabled=window.data_btn.setEnabled,
+    )
+    bus = SimpleNamespace(
+        events=SimpleNamespace(
+            imported_audio_ready=_Signal(), imported_audio_failed=_Signal()
+        )
+    )
+    service = SequenceImportedAudioService(
+        audio_loader=import_service_module.load_audio_preserve_rate,
+        metadata_reader=import_service_module.read_wav_calibration_metadata,
+        reference_builder=import_service_module.set_data_struct_analysis_reference_signal,
+    )
+    controller = SequenceRecordingImportController(
+        RecordingModel(), view, bus=bus, runtime=window, import_service=service
+    )
+    return controller.handle_load_imported_audio_requested(command)
+
+
 def test_import_stimulus_audio_uses_decoded_rate_for_analysis_reference(monkeypatch):
     win = _window("IMPORT_STIMULUS_AUDIO")
     load_calls = []
     reference_calls = []
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("recording.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader(load_calls), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", _native_audio_loader(load_calls), raising=False)
 
     def fake_reference(data_struct, detail, using_config_path=None, *, runtime_sample_rate, logger=None):
         reference_calls.append((detail, using_config_path, runtime_sample_rate))
@@ -103,13 +176,13 @@ def test_import_stimulus_audio_uses_decoded_rate_for_analysis_reference(monkeypa
         return True
 
     monkeypatch.setattr(
-        sequence_widget,
+        import_service_module,
         "set_data_struct_analysis_reference_signal",
         fake_reference,
         raising=False,
     )
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "recording.wav")
 
     assert load_calls == [("recording.wav", False)]
     assert win.data_struct.sample_rate == 32000
@@ -127,8 +200,7 @@ def test_import_stimulus_audio_generated_config_regenerates_reference_at_decoded
     warnings = []
     original_exists = stimulus_resolver.os.path.exists
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("recording.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
     monkeypatch.setattr(
         stimulus_resolver.os.path,
         "exists",
@@ -141,7 +213,7 @@ def test_import_stimulus_audio_generated_config_regenerates_reference_at_decoded
     )
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "recording.wav")
 
     assert warnings == []
     assert win.data_struct.sample_rate == 32000
@@ -179,11 +251,25 @@ def test_import_stimulus_audio_external_reference_length_check_uses_loaded_metad
     win.screen = lambda: _Screen()
     win._handle_post_analysis_exports = lambda *args, **kwargs: None
     win._maybe_show_analysis_result_summary = lambda *args, **kwargs: run_completed.append("summary")
-    win._send_tcp_analysis_result_callback = lambda *args, **kwargs: None
+    analysis_model = SequenceAnalysisModel()
+    analysis_model.analysis_instances = win.analysis_window
+    analysis_view = SimpleNamespace(
+        reset_output=lambda: (win.analysis_window.clear(), setattr(win, "_analysis_result_summary_window", None)),
+        present_calibration_warnings=lambda *args, **kwargs: None,
+        show_summary=lambda _results, width, height: win._maybe_show_analysis_result_summary(width, height),
+    )
+    win._validate_import_stimulus_analysis_readiness = (
+        win.configuration_controller.validate_import_stimulus_analysis_readiness
+    )
+    win.analysis_controller = SequenceAnalysisController(
+        analysis_model,
+        analysis_view,
+        bus=SimpleNamespace(),
+        runtime=win,
+    )
     win.run = lambda: sequence_widget.SequenceWindow.run(win)
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("recording.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
     monkeypatch.setattr(stimulus_resolver.os.path, "exists", lambda path: True)
     monkeypatch.setattr(
         stimulus_resolver,
@@ -192,7 +278,8 @@ def test_import_stimulus_audio_external_reference_length_check_uses_loaded_metad
     )
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "recording.wav")
+    win.run()
 
     assert warnings == []
     assert run_completed == ["summary"]
@@ -216,8 +303,7 @@ def test_import_stimulus_audio_reference_false_clears_state_and_disables_analysi
     win.data_btn.setEnabled(True)
     warnings = []
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("new.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
 
     def fake_reference(data_struct, detail, using_config_path=None, *, runtime_sample_rate, logger=None):
         data_struct.stimulus_data = np.zeros(3, dtype=np.float32)
@@ -226,14 +312,14 @@ def test_import_stimulus_audio_reference_false_clears_state_and_disables_analysi
         return False
 
     monkeypatch.setattr(
-        sequence_widget,
+        import_service_module,
         "set_data_struct_analysis_reference_signal",
         fake_reference,
         raising=False,
     )
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "new.wav")
 
     assert warnings
     assert win.recorded_path is None
@@ -258,16 +344,15 @@ def test_import_audio_preserves_decoded_rate_without_reference_generation(monkey
     load_calls = []
     reference_calls = []
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("recording.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader(load_calls, 22050), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", _native_audio_loader(load_calls, 22050), raising=False)
     monkeypatch.setattr(
-        sequence_widget,
+        import_service_module,
         "set_data_struct_analysis_reference_signal",
         lambda *args, **kwargs: reference_calls.append((args, kwargs)),
         raising=False,
     )
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "recording.wav")
 
     assert load_calls == [("recording.wav", False)]
     assert win.data_struct.sample_rate == 22050
@@ -297,17 +382,16 @@ def test_import_stimulus_audio_reference_failure_does_not_commit_new_recording(m
     win.recorded_signal_info = {"file_path": "old.wav"}
     win.data_btn.setEnabled(True)
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("new.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", _native_audio_loader([], 32000), raising=False)
     monkeypatch.setattr(
-        sequence_widget,
+        import_service_module,
         "set_data_struct_analysis_reference_signal",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("reference failed")),
         raising=False,
     )
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: None)
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "new.wav")
 
     assert win.recorded_path is None
     assert win.recorded_signal_info is None
@@ -335,16 +419,15 @@ def test_import_audio_decode_exception_clears_stale_state_and_disables_analysis(
     win.data_btn.setEnabled(True)
     warnings = []
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("broken.wav", ""))
     monkeypatch.setattr(
-        sequence_widget,
+        import_service_module,
         "load_audio_preserve_rate",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("decode failed")),
         raising=False,
     )
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "broken.wav")
 
     assert warnings
     assert win.recorded_path is None
@@ -373,17 +456,16 @@ def test_import_stimulus_audio_none_load_clears_stale_state_and_disables_analysi
     win.data_btn.setEnabled(True)
     warnings = []
 
-    monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("missing.wav", ""))
-    monkeypatch.setattr(sequence_widget, "load_audio_preserve_rate", lambda *args, **kwargs: (None, None), raising=False)
+    monkeypatch.setattr(import_service_module, "load_audio_preserve_rate", lambda *args, **kwargs: (None, None), raising=False)
     monkeypatch.setattr(
-        sequence_widget,
+        import_service_module,
         "set_data_struct_analysis_reference_signal",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reference setup must not run")),
         raising=False,
     )
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
 
-    sequence_widget.SequenceWindow.import_audio_and_analyze(win)
+    _execute_import(win, "missing.wav")
 
     assert warnings
     assert win.recorded_path is None

@@ -424,7 +424,7 @@ class TestSnRegexRules(object):
             encoding="utf-8",
         )
 
-        with patch("base.load_config.os.replace", side_effect=OSError("replace failed")):
+        with patch("base.load_config._durable_replace", side_effect=OSError("replace failed")):
             save_result = LoadUiConfig.save_sn_regex_rules_to_json(next_payload, str(json_file_path))
 
         saved_payload = json.loads(json_file_path.read_text(encoding="utf-8"))

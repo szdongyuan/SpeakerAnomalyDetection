@@ -173,6 +173,7 @@ class UnifiedHardwareManager(QObject):
 
     def stop(self):
         """停止所有监听"""
+        stopped = True
         self._scanner_enabled = False
         self._scanner_locked_device_id = None
         self._auto_mode = False
@@ -181,22 +182,55 @@ class UnifiedHardwareManager(QObject):
         self._last_barcode = None
         self._last_barcode_time = 0.0
 
-        if self._hid_poll_timer.isActive():
-            self._hid_poll_timer.stop()
+        try:
+            if self._hid_poll_timer.isActive():
+                self._hid_poll_timer.stop()
+        except BaseException as error:
+            stopped = False
+            self._log_stop_failure("poll-timer", error)
 
         # 关闭所有 HID 设备
         for key in list(self.hid_handles.keys()):
-            self.close_hid_device(key)
+            if self.close_hid_device(key) is False:
+                stopped = False
 
         # 移除热键（精确移除，不影响其他模块注册的热键）
         if self.hotkey_registered and self._hotkey_handle is not None:
+            handle = self._hotkey_handle
             try:
-                keyboard.remove_hotkey(self._hotkey_handle)
+                keyboard.remove_hotkey(handle)
+            except BaseException as error:
+                stopped = False
+                self.hotkey_registered = True
+                self._hotkey_handle = handle
+                self._log_stop_failure("hotkey", error)
+            else:
                 self.hotkey_registered = False
                 self._hotkey_handle = None
-                self.logger.info(f"光电热键已移除: {self.hotkey_string}")
-            except Exception as e:
-                self.logger.warning(f"热键移除异常: {e}")
+                try:
+                    self.logger.info(f"光电热键已移除: {self.hotkey_string}")
+                except BaseException:
+                    pass
+        try:
+            timer_stopped = not self._hid_poll_timer.isActive()
+        except BaseException as error:
+            timer_stopped = False
+            self._log_stop_failure("poll-timer-state", error)
+        return bool(
+            stopped
+            and not self.hid_handles
+            and not self.hotkey_registered
+            and timer_stopped
+        )
+
+    def _log_stop_failure(self, resource, error):
+        detail = "returned False" if error is None else type(error).__name__
+        try:
+            self.logger.warning(
+                f"硬件监听停止异常: {resource}/{detail}"
+            )
+        except BaseException:
+            pass
 
     def _register_hotkey(self, hotkey_string):
         """注册全局键盘热键"""
@@ -257,23 +291,43 @@ class UnifiedHardwareManager(QObject):
 
     def close_hid_device(self, key):
         """关闭指定 key 的 HID 设备"""
-        handles = self.hid_handles.pop(key, None)
+        handles = self.hid_handles.get(key)
         if not handles:
-            return
+            self.hid_handles.pop(key, None)
+            return True
         # 兼容历史 list/单对象结构，并支持 dict(device_id -> handle)
         if isinstance(handles, dict):
-            iterable = list(handles.values())
+            entries = list(handles.items())
         elif isinstance(handles, list):
-            iterable = handles
+            entries = list(enumerate(handles))
         else:
-            iterable = [handles]
+            entries = [(None, handles)]
 
-        for h in iterable:
+        failed = []
+        for identity, handle in entries:
             try:
-                h.close()
-            except:
-                pass
-        self.logger.info(f"[{key}] HID 设备已断开")
+                closed = handle.close()
+            except BaseException as error:
+                failed.append((identity, handle))
+                self._log_stop_failure(f"hid:{key}", error)
+                continue
+            if closed is False:
+                failed.append((identity, handle))
+                self._log_stop_failure(f"hid:{key}", None)
+        if failed:
+            if isinstance(handles, dict):
+                self.hid_handles[key] = dict(failed)
+            elif isinstance(handles, list):
+                self.hid_handles[key] = [handle for _identity, handle in failed]
+            else:
+                self.hid_handles[key] = failed[0][1]
+            return False
+        self.hid_handles.pop(key, None)
+        try:
+            self.logger.info(f"[{key}] HID 设备已断开")
+        except BaseException:
+            pass
+        return True
 
     def on_scanner_data(self, report, device_id=None):
         """扫码枪数据回调"""
