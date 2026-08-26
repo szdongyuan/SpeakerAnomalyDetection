@@ -6,7 +6,7 @@ from PyQt5.QtCore import QEvent, QSignalBlocker
 from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
 from base.load_config import LoadUiConfig
-from base.product_test_program_config import ProductTestProgramConfigManager
+from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 
@@ -25,7 +25,7 @@ class SequenceWidgetConfigOpsMixin:
     def _get_product_program_manager(self):
         manager = getattr(self, "product_program_manager", None)
         if manager is None:
-            manager = ProductTestProgramConfigManager()
+            manager = ProductTestProjectConfigManager()
             self.product_program_manager = manager
         return manager
 
@@ -60,11 +60,11 @@ class SequenceWidgetConfigOpsMixin:
         if not active_file:
             return False, "当前未选择有效的产品配置，无法进入测试模式"
 
-        load_code, program_data = manager.load_program(active_file)
+        load_code, program_data = manager.load_project(active_file)
         if load_code != error_code.OK or not isinstance(program_data, dict):
             return False, "当前产品配置无法读取，无法进入测试模式"
 
-        validation = manager.validate_program(program_data, active_file)
+        validation = manager.validate_project(program_data, active_file)
         if not validation.get("is_usable", False):
             details = "\n".join(
                 f"- {message}"
@@ -101,14 +101,10 @@ class SequenceWidgetConfigOpsMixin:
         return not errors, "\n".join(errors)
 
     def load_active_product_test_pdf_report_config(self):
-        return LoadUiConfig.load_product_test_program_pdf_report_config(
-            self._get_active_product_program_path()
-        )
+        return {"enabled": False, "save_dir": ""}
 
     def load_active_product_test_close_trigger_state(self):
-        return LoadUiConfig.load_product_test_program_close_trigger_state(
-            self._get_active_product_program_path()
-        )
+        return ""
 
     def _resolve_sequence_queue_path(self, queue_name):
         queue_name = str(queue_name or "").strip()
@@ -169,7 +165,10 @@ class SequenceWidgetConfigOpsMixin:
         if not isinstance(condition_config, dict):
             return False, "工况配置格式错误"
         condition_name = str(
-            condition_config.get("condition_name") or condition_config.get("name") or ""
+            condition_config.get("display_name")
+            or condition_config.get("condition_name")
+            or condition_config.get("name")
+            or ""
         ).strip()
         queue_name = str(condition_config.get("test_queue") or "").strip()
         if not queue_name:
@@ -489,7 +488,7 @@ class SequenceWidgetConfigOpsMixin:
                 if not isinstance(item, dict):
                     continue
                 file_name = str(item.get("file") or "").strip()
-                name = str(item.get("name") or "").strip()
+                name = str(item.get("project_name") or "").strip()
                 if not file_name or not name:
                     continue
                 self.using_file_combobox.addItem(name, file_name)
@@ -526,12 +525,16 @@ class SequenceWidgetConfigOpsMixin:
             product_file = None
         if product_file:
             manager = self._get_product_program_manager()
-            load_code, program_data = manager.load_program(str(product_file))
+            load_code, program_data = manager.load_project(str(product_file))
             if load_code != error_code.OK or not isinstance(program_data, dict):
                 self.restore_previous_configuration()
-                QMessageBox.warning(self, "产品配置不可用", "产品配置文件无法读取")
+                QMessageBox.warning(
+                    self,
+                    "产品配置不可用",
+                    str(program_data or "产品配置文件无法读取"),
+                )
                 return
-            validation = manager.validate_program(program_data, str(product_file))
+            validation = manager.validate_project(program_data, str(product_file))
             if not validation.get("is_usable", False):
                 self.restore_previous_configuration()
                 message = "\n".join(validation.get("use_errors", []))

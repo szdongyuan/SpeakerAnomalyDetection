@@ -2,13 +2,13 @@ from PyQt5.QtWidgets import QMessageBox
 
 from base.hardware_trigger.serial_full_frame_matcher import normalize_frame_candidates
 from base.load_config import LoadUiConfig
-from base.product_test_program_config import (
-    PRODUCT_TRIGGER_MODE_MANUAL,
-    PRODUCT_TRIGGER_MODE_MIXED,
-    classify_product_trigger_mode,
-)
+from base.product_test_project_config import classify_project_trigger_mode
 from base.recording_management import RecordingManager
 from consts import error_code, ui_style_const
+from consts.product_test_project_consts import (
+    PRODUCT_TRIGGER_MODE_MANUAL,
+    PRODUCT_TRIGGER_MODE_MIXED,
+)
 from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
 
 
@@ -21,7 +21,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
         if not conditions:
             raise ValueError("当前产品未配置可用工况")
 
-        trigger_mode = classify_product_trigger_mode(conditions)
+        trigger_mode = classify_project_trigger_mode(conditions)
         if trigger_mode == PRODUCT_TRIGGER_MODE_MIXED:
             raise ValueError("所有工况状态码必须全部配置或全部留空")
         if trigger_mode == PRODUCT_TRIGGER_MODE_MANUAL:
@@ -30,7 +30,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         result = []
         for index, condition in enumerate(conditions):
             condition_name = str(
-                condition.get("condition_name")
+                condition.get("display_name")
+                or condition.get("condition_name")
                 or condition.get("name")
                 or f"第 {index + 1} 个工况"
             ).strip()

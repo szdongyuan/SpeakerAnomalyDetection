@@ -22,8 +22,8 @@ from ui.config_dialog_theme import (
     CONFIG_DIALOG_BASE_STYLESHEET,
     build_config_dialog_stylesheet,
 )
-from ui.product_test_program_config_dialog import (
-    ProductTestProgramConfigDialog,
+from ui.product_test_project_config_dialog import (
+    ProductTestProjectConfigDialog as ProductTestProgramConfigDialog,
 )
 from ui.serial_discrete_input_config_dialog import (
     SerialDiscreteInputConfigDialog,

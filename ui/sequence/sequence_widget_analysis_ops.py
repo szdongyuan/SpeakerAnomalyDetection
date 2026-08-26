@@ -18,9 +18,9 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.load_config import LoadUiConfig
-from base.product_test_program_config import (
-    classify_product_trigger_mode,
-    is_manual_product_play_allowed,
+from base.product_test_project_config import (
+    classify_project_trigger_mode,
+    is_manual_project_play_allowed,
 )
 
 from base.play_and_record import (
@@ -127,8 +127,8 @@ class SequenceWidgetAnalysisOpsMixin(
         if not isinstance(condition_config, dict):
             return str(index)
         return str(
-            condition_config.get("trigger_state")
-            or condition_config.get("key")
+            condition_config.get("key")
+            or condition_config.get("trigger_state")
             or condition_config.get("test_queue")
             or index
         ).strip()
@@ -210,7 +210,13 @@ class SequenceWidgetAnalysisOpsMixin(
         condition = getattr(self, "_active_product_condition_config", None)
         if not isinstance(condition, dict):
             return ""
-        name = str(condition.get("condition_name") or condition.get("name") or condition.get("key") or "").strip()
+        name = str(
+            condition.get("display_name")
+            or condition.get("condition_name")
+            or condition.get("name")
+            or condition.get("key")
+            or ""
+        ).strip()
         safe_name = self._safe_record_name_suffix(name)
         return f"_{safe_name}" if safe_name else ""
 
@@ -917,7 +923,12 @@ class SequenceWidgetAnalysisOpsMixin(
 
         left_panel = getattr(self, "left_panel", None)
         if left_panel is not None:
-            condition_name = str(condition.get("condition_name") or condition.get("name") or key)
+            condition_name = str(
+                condition.get("display_name")
+                or condition.get("condition_name")
+                or condition.get("name")
+                or key
+            )
             left_panel.set_current_stage(f"{condition_name} 检测中", tone="running")
             left_panel.set_condition_result(key, "采集中", tone="running")
             left_panel.set_final_result("检测中", tone="running")
@@ -1053,8 +1064,8 @@ class SequenceWidgetAnalysisOpsMixin(
             )
             return
         condition_configs = getattr(self, "product_test_condition_configs", [])
-        trigger_mode = classify_product_trigger_mode(condition_configs)
-        if not is_manual_product_play_allowed(condition_configs):
+        trigger_mode = classify_project_trigger_mode(condition_configs)
+        if not is_manual_project_play_allowed(condition_configs):
             self.default_logger.info(
                 f"manual_product_play_ignored_trigger_mode mode={trigger_mode}"
             )
@@ -1456,7 +1467,12 @@ class SequenceWidgetAnalysisOpsMixin(
     def _get_recent_session_mode_text(self, direction: str) -> str:
         condition = self._resolve_recent_session_condition(direction)
         if isinstance(condition, dict):
-            return str(condition.get("condition_name") or condition.get("name") or "-")
+            return str(
+                condition.get("display_name")
+                or condition.get("condition_name")
+                or condition.get("name")
+                or "-"
+            )
         normalized = str(direction or "").strip().lower()
         if normalized == "forward":
             return "正转"

@@ -111,7 +111,8 @@ class SequenceWidgetProductPdfOpsMixin(
                 {
                     "key": key,
                     "name": str(
-                        condition.get("condition_name")
+                        condition.get("display_name")
+                        or condition.get("condition_name")
                         or condition.get("name")
                         or key
                     ),

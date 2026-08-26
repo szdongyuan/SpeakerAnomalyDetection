@@ -6,10 +6,10 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QMessageBox
 
 from base.load_config import LoadUiConfig
-from base.product_test_program_config import (
+from base.product_test_project_config import (
     PRODUCT_TRIGGER_MODE_MIXED,
-    classify_product_trigger_mode,
-    is_manual_product_play_allowed,
+    classify_project_trigger_mode,
+    is_manual_project_play_allowed,
 )
 from base.save_data import save_recorded_data_to_json
 from base.utils.custom_signals import sign
@@ -375,8 +375,8 @@ class SequenceWidgetUiOpsMixin:
         workflow_enabled = callable(getattr(self, "_load_sequence_config_for_product_condition", None))
         if workflow_enabled:
             condition_configs = getattr(self, "product_test_condition_configs", [])
-            trigger_mode = classify_product_trigger_mode(condition_configs)
-            can_start = is_manual_product_play_allowed(condition_configs)
+            trigger_mode = classify_project_trigger_mode(condition_configs)
+            can_start = is_manual_project_play_allowed(condition_configs)
             if trigger_mode == PRODUCT_TRIGGER_MODE_MIXED:
                 tooltip = "所有工况状态码必须全部配置或全部留空"
             elif can_start:
