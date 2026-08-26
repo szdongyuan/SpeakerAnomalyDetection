@@ -293,10 +293,21 @@ class DirectionWaveformPanel(QWidget):
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("condition_name") or item.get("name") or item.get("test_queue") or "").strip()
+            name = str(
+                item.get("display_name")
+                or item.get("condition_name")
+                or item.get("name")
+                or item.get("test_queue")
+                or ""
+            ).strip()
             if not name:
                 continue
-            base_key = str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or index).strip()
+            base_key = str(
+                item.get("key")
+                or item.get("trigger_state")
+                or item.get("test_queue")
+                or index
+            ).strip()
             key = base_key
             if key in used_keys:
                 key = f"{base_key}#{index + 1}"

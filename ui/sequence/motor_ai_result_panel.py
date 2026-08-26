@@ -6,7 +6,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from base.load_config import LoadUiConfig
-from base.product_test_program_config import ProductTestProgramConfigManager
+from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import error_code
 from consts import ui_style_const
 from ui.sequence.motor_panel_common import MotorSectionCard
@@ -401,10 +401,21 @@ class MotorAiResultPanel(QWidget):
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("condition_name") or item.get("name") or item.get("test_queue") or "").strip()
+            name = str(
+                item.get("display_name")
+                or item.get("condition_name")
+                or item.get("name")
+                or item.get("test_queue")
+                or ""
+            ).strip()
             if not name:
                 continue
-            base_key = str(item.get("trigger_state") or item.get("key") or item.get("test_queue") or index).strip()
+            base_key = str(
+                item.get("key")
+                or item.get("trigger_state")
+                or item.get("test_queue")
+                or index
+            ).strip()
             key = base_key
             if key in used_keys:
                 key = f"{base_key}#{index + 1}"
@@ -421,7 +432,7 @@ class MotorAiResultPanel(QWidget):
     @staticmethod
     def _load_queue_catalog_safely():
         try:
-            return ProductTestProgramConfigManager().load_queue_catalog() or {}
+            return ProductTestProjectConfigManager().load_queue_catalog() or {}
         except Exception:
             return {}
 

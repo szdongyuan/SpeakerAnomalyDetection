@@ -93,7 +93,9 @@ def test_save_data_to_json_is_atomic(tmp_path):
         assert json.load(stream) == {"name": "测试"}
 
 
-def test_load_condition_configs_makes_duplicate_test_queue_keys_unique(tmp_path):
+def test_runtime_loader_does_not_treat_legacy_sub_configs_as_project_data(
+    tmp_path,
+):
     program_path = tmp_path / "program.json"
     assert LoadUiConfig.save_data_to_json(
         {
@@ -109,8 +111,7 @@ def test_load_condition_configs_makes_duplicate_test_queue_keys_unique(tmp_path)
 
     configs = LoadUiConfig.load_product_test_program_condition_configs(str(program_path))
 
-    assert [item["condition_name"] for item in configs] == ["6000", "7000", "8000"]
-    assert len({item["key"] for item in configs}) == 3
+    assert configs == []
 
 
 def test_load_pdf_report_config_defaults_to_disabled_for_legacy_program(tmp_path):

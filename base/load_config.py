@@ -195,44 +195,53 @@ class LoadUiConfig(object):
     @staticmethod
     def load_product_test_program_condition_configs(config_path: str = None):
         """
-        Load condition rows from product_test_programs/default_config.json.
+        Load runtime condition rows from a project-level product configuration.
 
-        The UI only needs stable display names plus a lookup key. Keep the raw
-        trigger_state/test_queue fields so later runtime wiring can route by
-        either value without re-reading the file.
+        The composite key keeps equal condition names in different test groups
+        distinct while preserving the configured group and condition order.
         """
         path = config_path or LoadUiConfig.get_product_test_program_default_config_path()
         load_code, data = LoadUiConfig.load_data_from_json(path)
         if load_code != error_code.OK or not isinstance(data, dict):
             return []
 
-        sub_configs = data.get("sub_configs", [])
-        if not isinstance(sub_configs, list):
+        test_groups = data.get("test_groups", [])
+        if not isinstance(test_groups, list):
             return []
 
         result = []
-        used_keys = set()
-        for index, item in enumerate(sub_configs):
-            if not isinstance(item, dict):
+        for group_index, group in enumerate(test_groups, 1):
+            if not isinstance(group, dict):
                 continue
-            condition_name = str(item.get("condition_name") or "").strip()
-            if not condition_name:
+            group_name = str(group.get("group_name") or "").strip()
+            conditions = group.get("test_conditions", [])
+            if not group_name or not isinstance(conditions, list):
                 continue
-            trigger_state = str(item.get("trigger_state") or "").strip()
-            test_queue = str(item.get("test_queue") or "").strip()
-            base_key = trigger_state or test_queue or f"condition_{index + 1}"
-            key = base_key
-            if key in used_keys:
-                key = f"{base_key}#{index + 1}"
-            used_keys.add(key)
-            result.append(
-                {
-                    "key": key,
-                    "condition_name": condition_name,
-                    "trigger_state": trigger_state,
-                    "test_queue": test_queue,
-                }
-            )
+            for condition_index, item in enumerate(conditions, 1):
+                if not isinstance(item, dict):
+                    continue
+                condition_name = str(item.get("condition_name") or "").strip()
+                if not condition_name:
+                    continue
+                result.append(
+                    {
+                        "key": (
+                            f"group_{group_index}:condition_{condition_index}"
+                        ),
+                        "group_name": group_name,
+                        "condition_name": condition_name,
+                        "display_name": f"{group_name} / {condition_name}",
+                        "trigger_state": " ".join(
+                            str(item.get("trigger_state") or "")
+                            .strip()
+                            .upper()
+                            .split()
+                        ),
+                        "test_queue": str(
+                            item.get("test_queue") or ""
+                        ).strip(),
+                    }
+                )
         return result
 
     @staticmethod
