@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 from scipy.io import wavfile
@@ -29,12 +30,25 @@ class TestStreamingProcessorPayload(unittest.TestCase):
         p.samples_captured = 0
         p.is_recording = True
 
-        payload, reached = p._queue_chunk_and_maybe_stop(np.ones((10, 2), dtype=np.float32))
+        fake_sign = SimpleNamespace(
+            stream_audio_chunk_signal=SimpleNamespace(emit=mock.Mock()),
+            stream_audio_queue_ready_signal=SimpleNamespace(emit=mock.Mock()),
+            stream_audio_recording_finished_signal=SimpleNamespace(emit=mock.Mock()),
+        )
+        with (
+            mock.patch("base.streaming_audio_processor.sign", fake_sign),
+            mock.patch("base.streaming_audio_processor.threading.Thread") as thread,
+        ):
+            payload, reached = p._queue_chunk_and_maybe_stop(
+                np.ones((10, 2), dtype=np.float32)
+            )
         self.assertTrue(reached)
         self.assertIn("mono", payload)
         self.assertIn("multi", payload)
         self.assertEqual(payload["multi"].shape, (5, 2))
         self.assertEqual(payload["mono"].shape, (5,))
+        fake_sign.stream_audio_queue_ready_signal.emit.assert_called_once_with(p)
+        thread.assert_called_once()
 
 
 class TestSoundcardProcessorSelection(unittest.TestCase):

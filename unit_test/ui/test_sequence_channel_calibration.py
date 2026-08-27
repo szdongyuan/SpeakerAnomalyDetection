@@ -16,6 +16,12 @@ from ui.sequence.sequence_widget_serial_trigger_ops import (
     SequenceWidgetSerialTriggerOpsMixin,
 )
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from ui.sequence.analysis_channel_preflight import (
+    REQUIRED_CHANNEL_ANALYSIS_TYPES,
+    preflight_analysis_channels,
+)
+from ui.ui_analysis_config.config_normalization import normalize_analysis_channel
+from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +32,185 @@ DEVICE = {
     "hostapi": 3,
     "max_input_channels": 4,
 }
+
+
+class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
+    def __init__(self, *, streaming=False):
+        self.events = []
+        self._streaming = streaming
+        self._record_workflow_busy = False
+        self.last_play_count = 10
+        self.analysis_window = []
+        self._analysis_result_summary_window = None
+        self.player_status_flag = True
+        self.clicked_player_flag = True
+        self.streaming_buffer_multi = []
+        self.replayer_btn = SimpleNamespace(setDisabled=lambda _value: None)
+        self.data_btn = SimpleNamespace(setDisabled=lambda _value: None)
+        self.mic = DEVICE
+        self._active_input_channels = [9]
+        self.recorded_path = "recorded.wav"
+        self.recorded_signal_info = {}
+        self.default_logger = SimpleNamespace(
+            error=mock.Mock(), info=mock.Mock(), warning=mock.Mock()
+        )
+        self.streaming_poll_timer = SimpleNamespace(start=lambda _ms: None)
+        self._unlock_sn_after_recording_if_needed = mock.Mock()
+        self._drain_queued_directional_trigger = mock.Mock()
+        self._on_serial_product_runtime_error = mock.Mock(return_value=False)
+        self.paused_updates = 0
+
+    def checked_work_status_message(self):
+        return False
+
+    def _clear_plot_area(self):
+        return None
+
+    def _cleanup_streaming_resources(self):
+        return None
+
+    def update_player_btn_is_playing(self):
+        return None
+
+    def update_player_btn_is_paused(self):
+        self.paused_updates += 1
+
+    def reset_work_pram(self, _label, count=None):
+        self._active_input_channels = [0, 2]
+        self.events.append(("reset", self._active_input_channels))
+        return {"input_channels": [0, 2]}, 48000
+
+    def _should_use_streaming_recording(self):
+        return self._streaming
+
+    def _begin_recent_session_for_current_run(self):
+        return None
+
+    def _start_blocking_recording(self, _recorded_dict, _sample_rate):
+        self.events.append(
+            ("blocking", self._recording_wav_calibration_metadata)
+        )
+
+
+def test_recording_attempt_captures_once_after_reset_before_blocking_start(monkeypatch):
+    host = RecordingSnapshotHost()
+    snapshots = []
+
+    def build(channels, device):
+        snapshot = {"attempt": len(snapshots) + 1}
+        snapshots.append(snapshot)
+        host.events.append(("snapshot", list(channels), device, snapshot))
+        return snapshot
+
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        build,
+    )
+
+    host.judge_play_and_record()
+
+    assert [event[0] for event in host.events] == ["reset", "snapshot", "blocking"]
+    assert host.events[1][1] == [0, 2]
+    assert host.events[2][1] is snapshots[0]
+    assert host._recording_wav_calibration_metadata is snapshots[0]
+
+
+def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
+    host = RecordingSnapshotHost()
+    built = []
+
+    def build(_channels, _device):
+        snapshot = {"attempt": len(built) + 1}
+        built.append(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        build,
+    )
+
+    host.judge_play_and_record()
+    first = host._recording_wav_calibration_metadata
+    host._record_workflow_busy = False
+    host.judge_play_and_record(is_replay=True)
+
+    assert len(built) == 2
+    assert first is built[0]
+    assert host._recording_wav_calibration_metadata is built[1]
+
+
+def test_streaming_writer_starts_after_snapshot_and_keeps_exact_instance(monkeypatch):
+    host = RecordingSnapshotHost(streaming=True)
+    snapshot = {"recorded_channels": [{"wav_channel_index": 0}]}
+
+    def build(channels, _device):
+        host.events.append(("snapshot", list(channels)))
+        return snapshot
+
+    def writer(*args, **kwargs):
+        host.events.append(
+            ("writer", args, kwargs, host._recording_wav_calibration_metadata)
+        )
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        build,
+    )
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.StreamingWavWriter",
+        writer,
+    )
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.stream_record_without_play",
+        lambda *_args: (SimpleNamespace(), None),
+    )
+
+    host.judge_play_and_record()
+
+    assert [event[0] for event in host.events] == ["reset", "snapshot", "writer"]
+    assert host.events[-1][-1] is snapshot
+    assert host._recording_wav_calibration_metadata is snapshot
+
+
+@pytest.mark.parametrize(
+    "error",
+    [MicCalibrationFormatError("bad"), MicCalibrationIOError("denied")],
+)
+def test_snapshot_file_error_logs_stores_none_and_still_records(monkeypatch, error):
+    host = RecordingSnapshotHost()
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        mock.Mock(side_effect=error),
+    )
+
+    host.judge_play_and_record()
+
+    assert host._recording_wav_calibration_metadata is None
+    assert host.events[-1][0] == "blocking"
+    assert str(error) in host.default_logger.error.call_args.args[0]
+
+
+def test_snapshot_does_not_swallow_programming_error(monkeypatch):
+    host = RecordingSnapshotHost()
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        mock.Mock(side_effect=RuntimeError("bug")),
+    )
+
+    with pytest.raises(RuntimeError, match="bug"):
+        host.judge_play_and_record()
+
+    assert not any(event[0] == "blocking" for event in host.events)
+    assert host._recording_wav_calibration_metadata is None
+    assert host._record_workflow_busy is False
+    assert host.player_status_flag is False
+    host._unlock_sn_after_recording_if_needed.assert_called_once_with()
+    assert host.paused_updates == 1
+    host._drain_queued_directional_trigger.assert_called_once_with()
+    host._on_serial_product_runtime_error.assert_called_once()
+    assert "初始化录音失败" in host._on_serial_product_runtime_error.call_args.args[0]
+    assert "bug" in host.default_logger.error.call_args.args[0]
 
 
 def _load_methods(method_names, extra_globals):
@@ -72,6 +257,31 @@ class FakeAnalysis:
 
     def calculate_spl(self):
         self.events.append(("calculate", self.key))
+        judgment = getattr(self, "analysis_config", {}).get("_test_judgment")
+        if isinstance(judgment, bool):
+            self.data_struct.analysis_result_dict[self.key] = (
+                judgment,
+                0.0,
+            )
+        return True
+
+
+class FakeSpec:
+    def __init__(self, key, events):
+        self.key = key
+        self.events = events
+
+    def calculate_spec(self):
+        self.events.append(("calculate_spec", self.key))
+
+
+class FakeFBA:
+    def __init__(self, key, events):
+        self.key = key
+        self.events = events
+
+    def calculate_fba(self):
+        self.events.append(("calculate_fba", self.key))
         return True
 
 
@@ -93,6 +303,8 @@ def build_sequence(
     import_audio=False,
     items=None,
     legacy_factor=9.5,
+    wav_metadata=None,
+    wav_resolver=resolve_wav_channel_v2pa_factor,
 ):
     events = []
     created = []
@@ -104,6 +316,16 @@ def build_sequence(
 
     def make_rsc(key):
         instance = FakeRSC(key, events)
+        created.append(instance)
+        return instance
+
+    def make_spec(key):
+        instance = FakeSpec(key, events)
+        created.append(instance)
+        return instance
+
+    def make_fba(key):
+        instance = FakeFBA(key, events)
         created.append(instance)
         return instance
 
@@ -131,18 +353,28 @@ def build_sequence(
             "_resolve_live_mic_channel_v2pa_factor",
             "_show_missing_mic_channel_calibration_warning",
             "_abort_live_mic_calibration_batch",
+            "_show_analysis_channel_preflight_warning",
+            "_prepare_imported_wav_calibration_batch",
+            "_show_imported_wav_calibration_warning",
             "_run_analysis_impl",
             "instance_analysis_class",
         ],
         {
             "get_class_mapping": lambda: {
                 "SPL": make_analysis,
+                "Spec": make_spec,
+                "FBA": make_fba,
+                "LP": make_analysis,
                 "RSC": make_rsc,
             },
             "load_mic_channel_v2pa_factors": loader,
             "MicCalibrationFormatError": MicCalibrationFormatError,
             "MicCalibrationIOError": MicCalibrationIOError,
             "QMessageBox": messages,
+            "preflight_analysis_channels": preflight_analysis_channels,
+            "REQUIRED_CHANNEL_ANALYSIS_TYPES": REQUIRED_CHANNEL_ANALYSIS_TYPES,
+            "normalize_analysis_channel": normalize_analysis_channel,
+            "resolve_wav_channel_v2pa_factor": wav_resolver,
             "extract_ai_runtime_state": lambda *_args: {
                 "has_ai_analysis": False,
                 "scores": {},
@@ -154,7 +386,12 @@ def build_sequence(
     sequence.v2pa_factor = legacy_factor
     sequence._active_input_channels = list(active_input_channels or [0])
     sequence._is_import_audio_mode = lambda: import_audio
-    sequence.data_struct = SimpleNamespace(analysis_result_dict={})
+    sequence.data_struct = SimpleNamespace(
+        analysis_result_dict={},
+        store_wave_data_multi=None,
+        wav_calibration_warning_shown=False,
+        wav_calibration_metadata=wav_metadata,
+    )
     sequence.analysis_window = []
     sequence._analysis_result_summary_window = None
     sequence.default_logger = SimpleNamespace(
@@ -295,21 +532,260 @@ def test_calibration_file_error_aborts_whole_live_batch(error):
     sequence._capture_excel_export_cache.assert_not_called()
 
 
-def test_imported_audio_never_loads_microphone_calibration_and_preserves_factor():
+def test_imported_items_use_requested_wav_factor_and_preflight_local_column():
+    resolver = mock.Mock(side_effect=resolve_wav_channel_v2pa_factor)
     sequence, loader, messages, _events, created = build_sequence(
         loader_error=MicCalibrationFormatError("must not load"),
         import_audio=True,
-        legacy_factor=7.25,
-        items=[("spl", "SPL", {"analysis_channel": 3})],
+        legacy_factor=99.0,
+        wav_resolver=resolver,
+        wav_metadata={
+            "recorded_channels": [
+                {
+                    "wav_channel_index": 0,
+                    "v2pa_factor": 2.5,
+                    "standard_spl": 94.0,
+                    "calibrated": True,
+                },
+                {
+                    "wav_channel_index": 1,
+                    "v2pa_factor": 7.0,
+                    "standard_spl": 114.0,
+                    "calibrated": True,
+                },
+            ]
+        },
+        items=[
+            ("spl", "SPL", {"analysis_channel": 0}),
+            ("spec", "Spec", {"analysis_channel": 1}),
+            ("fba", "FBA", {"analysis_channel": 0}),
+        ],
     )
+    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
 
     sequence._run_analysis_impl(show_windows=False)
 
     loader.assert_not_called()
     messages.warning.assert_not_called()
     messages.critical.assert_not_called()
-    assert created[0].v2pa_factor == 7.25
-    assert created[0].analysis_config["analysis_channel"] == 0
+    assert [instance.v2pa_factor for instance in created] == [2.5, 7.0, 2.5]
+    assert [
+        instance.analysis_config["analysis_channel"] for instance in created
+    ] == [0, 1, 0]
+    assert [call.args[1] for call in resolver.call_args_list] == [0, 1, 0]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        {"recorded_channels": "malformed"},
+        {
+            "recorded_channels": [
+                {
+                    "wav_channel_index": 0,
+                    "v2pa_factor": 2.5,
+                    "standard_spl": 94.0,
+                    "calibrated": True,
+                }
+            ]
+        },
+        {
+            "recorded_channels": [
+                {
+                    "wav_channel_index": 1,
+                    "v2pa_factor": None,
+                    "standard_spl": None,
+                    "calibrated": False,
+                }
+            ]
+        },
+    ],
+    ids=["absent", "malformed", "missing-record", "uncalibrated"],
+)
+def test_imported_wav_factor_fallback_warns_once_and_executes_valid_items(metadata):
+    sequence, loader, messages, events, created = build_sequence(
+        import_audio=True,
+        legacy_factor=99.0,
+        wav_metadata=metadata,
+        items=[
+            ("spl", "SPL", {"analysis_channel": 1}),
+            ("spec", "Spec", {"analysis_channel": 1}),
+            ("fba", "FBA", {"analysis_channel": 1}),
+        ],
+    )
+    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+
+    loader.assert_not_called()
+    messages.warning.assert_called_once_with(
+        sequence,
+        "音频校准数据缺失",
+        "该音频文件未包含有效校准数据，分析结果仅供参考。",
+    )
+    assert [instance.v2pa_factor for instance in created] == [1.0, 1.0, 1.0]
+    assert [event[0] for event in events] == [
+        "warning",
+        "calculate",
+        "calculate_spec",
+        "calculate_fba",
+    ]
+
+
+def test_imported_wav_warning_type_error_propagates_without_marking_shown():
+    sequence, _loader, messages, _events, _created = build_sequence(
+        import_audio=True,
+    )
+    messages.warning.side_effect = TypeError("invalid Qt parent")
+
+    with pytest.raises(TypeError, match="invalid Qt parent"):
+        sequence._show_imported_wav_calibration_warning(True)
+
+    assert sequence.data_struct.wav_calibration_warning_shown is False
+
+    messages.warning.side_effect = None
+    sequence._show_imported_wav_calibration_warning(True)
+
+    assert messages.warning.call_count == 2
+    assert sequence.data_struct.wav_calibration_warning_shown is True
+
+
+def test_imported_warning_order_skips_missing_channel_and_rewarns_next_run():
+    sequence, loader, messages, events, _created = build_sequence(
+        import_audio=True,
+        legacy_factor=99.0,
+        items=[
+            ("missing", "SPL", {"analysis_channel": 2}),
+            ("valid", "Spec", {"analysis_channel": 1}),
+        ],
+    )
+    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+    assert [event[0] for event in events] == [
+        "warning",
+        "warning",
+        "calculate_spec",
+    ]
+    assert messages.warning.call_args_list[1].args[2] == (
+        "该音频文件未包含有效校准数据，分析结果仅供参考。"
+    )
+    assert sequence._imported_wav_channel_v2pa_factors == {"valid": 1.0}
+
+    events.clear()
+    assert sequence._run_analysis_impl(show_windows=False) is True
+    assert [event[0] for event in events] == [
+        "warning",
+        "warning",
+        "calculate_spec",
+    ]
+    assert messages.warning.call_count == 4
+    loader.assert_not_called()
+
+
+def test_imported_all_missing_channels_only_emit_preflight_warning():
+    resolver = mock.Mock(side_effect=resolve_wav_channel_v2pa_factor)
+    sequence, loader, messages, events, created = build_sequence(
+        import_audio=True,
+        wav_resolver=resolver,
+        items=[
+            ("missing-spl", "SPL", {"analysis_channel": 2}),
+            ("missing-fba", "FBA", {"analysis_channel": 3}),
+        ],
+    )
+    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
+
+    assert sequence._run_analysis_impl(show_windows=False) is False
+
+    messages.warning.assert_called_once()
+    assert messages.warning.call_args.args[1] == "分析通道不存在"
+    assert [event[0] for event in events] == ["warning"]
+    assert sequence._imported_wav_channel_v2pa_factors == {}
+    assert created == []
+    resolver.assert_not_called()
+    loader.assert_not_called()
+
+
+def test_preflight_warns_once_before_calibration_and_only_runs_valid_items():
+    sequence, loader, messages, events, created = build_sequence(
+        factor_map={0: 2.5, 2: 7.0},
+        active_input_channels=[0, 2],
+        items=[
+            ("missing-spec", "Spec", {"analysis_channel": 1}),
+            ("valid-spl", "SPL", {"analysis_channel": 2}),
+            ("missing-fba", "FBA", {"analysis_channel": 3}),
+        ],
+    )
+    original_prepare = sequence._prepare_live_mic_calibration_batch
+
+    def prepare():
+        events.append(("prepare_calibration",))
+        return original_prepare()
+
+    sequence._prepare_live_mic_calibration_batch = prepare
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+
+    loader.assert_called_once_with(DEVICE)
+    messages.warning.assert_called_once()
+    assert [event[0] for event in events] == [
+        "warning",
+        "prepare_calibration",
+        "calculate",
+    ]
+    body = messages.warning.call_args.args[2]
+    assert "missing-spec" in body and "请求 In2" in body
+    assert "missing-fba" in body and "请求 In4" in body
+    assert "可用 In1、In3" in body
+    assert [instance.key for instance in created] == ["valid-spl--通道3"]
+    assert created[0].analysis_config["analysis_channel"] == 1
+    assert list(sequence._analysis_preflight_skips) == [
+        "missing-spec",
+        "missing-fba",
+    ]
+    assert sequence.data_struct.analysis_result_dict == {}
+    sequence._capture_excel_export_cache.assert_called_once()
+    sequence._maybe_export_excel_results.assert_called_once()
+
+
+def test_all_preflight_items_skipped_returns_false_retains_audio_and_rewarns():
+    sequence, loader, messages, events, created = build_sequence(
+        active_input_channels=[0],
+        items=[
+            ("missing-spl", "SPL", {"analysis_channel": 1}),
+            ("missing-fba", "FBA", {"analysis_channel": 2}),
+        ],
+    )
+    audio = np.asarray([[0.1], [-0.1]], dtype=np.float32)
+    sequence.data_struct.store_wave_data_multi = audio
+
+    assert sequence._run_analysis_impl(show_windows=False) is False
+    assert sequence._run_analysis_impl(show_windows=False) is False
+
+    assert messages.warning.call_count == 2
+    assert loader.call_count == 0
+    assert created == []
+    assert not any(event[0] == "calculate" for event in events)
+    assert sequence.data_struct.store_wave_data_multi is audio
+    sequence._capture_excel_export_cache.assert_not_called()
+    sequence._maybe_export_excel_results.assert_not_called()
+    assert sequence._analysis_preflight_warning_shown is True
+
+
+def test_preflight_returns_false_when_only_remaining_item_is_not_executable():
+    sequence, loader, _messages, _events, created = build_sequence(
+        active_input_channels=[0],
+        items=[
+            ("missing-spl", "SPL", {"analysis_channel": 1}),
+            ("future", "FUTURE", {}),
+        ],
+    )
+
+    assert sequence._run_analysis_impl(show_windows=False) is False
+    loader.assert_not_called()
+    assert created == []
+    sequence._capture_excel_export_cache.assert_not_called()
 
 
 def test_rsc_does_not_enter_microphone_factor_resolution():
@@ -326,6 +802,20 @@ def test_rsc_does_not_enter_microphone_factor_resolution():
     assert not hasattr(instance, "v2pa_factor")
     assert instance.analysis_config["analysis_channel"] == 2
     assert sequence._missing_mic_calibration_channels == []
+
+
+def test_lp_keeps_legacy_channel_coercion_outside_preflight_scope():
+    sequence, _loader, _messages, _events, _created = build_sequence(
+        active_input_channels=[0, 1]
+    )
+    sequence._live_mic_channel_v2pa_factors = {1: 4.0}
+    sequence._missing_mic_calibration_channels = []
+    sequence._missing_mic_calibration_channel_set = set()
+
+    sequence.instance_analysis_class("loose", "LP", {"analysis_channel": True})
+
+    instance = sequence.analysis_window[0]
+    assert instance.analysis_config["analysis_channel"] == 1
 
 
 def test_rsc_only_batch_never_loads_microphone_calibration_and_still_executes():
@@ -397,6 +887,78 @@ class RuntimeButton:
 
     def setDisabled(self, disabled):
         self.enabled = not bool(disabled)
+
+
+def _enable_real_ok_ng_runtime(sequence):
+    sequence._can_output_ok_ng = (
+        SequenceWidgetStreamingOpsMixin._can_output_ok_ng.__get__(sequence)
+    )
+    sequence._summarize_ok_ng = mock.Mock(
+        wraps=SequenceWidgetStreamingOpsMixin._summarize_ok_ng.__get__(sequence)
+    )
+    sequence.count_board = SimpleNamespace(
+        mode="test",
+        set_test_result_file=mock.Mock(),
+        set_test_text=mock.Mock(),
+    )
+    sequence.data_btn = RuntimeButton()
+    sequence.replayer_btn = RuntimeButton()
+    sequence._awaiting_ok_ng = True
+    sequence._sn_clear_on_next_scan = True
+    sequence.update_player_btn_is_paused = mock.Mock()
+    sequence._is_directional_cycle_active = lambda: False
+    sequence._is_manual_product_condition_cycle_active = lambda: False
+    sequence._finalize_test_run = mock.Mock()
+
+
+def test_preflight_skipped_judging_item_cannot_finalize_non_judging_batch():
+    sequence, _loader, messages, events, _created = build_sequence(
+        factor_map={0: 2.5},
+        active_input_channels=[0],
+        items=[
+            ("skipped-spl", "SPL", {"analysis_channel": 1, "limit_checked": True}),
+            ("valid-spec", "Spec", {"analysis_channel": 0}),
+        ],
+    )
+    _enable_real_ok_ng_runtime(sequence)
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+
+    assert ("calculate_spec", "valid-spec--通道1") in events
+    sequence._summarize_ok_ng.assert_not_called()
+    sequence._finalize_test_run.assert_not_called()
+    sequence.count_board.set_test_result_file.assert_not_called()
+    assert sequence.data_struct.analysis_result_dict == {}
+    assert any("无法产出 OK/NG" in call.args[2] for call in messages.warning.call_args_list)
+
+
+def test_preflight_keeps_finalization_when_executable_judging_item_remains():
+    sequence, _loader, _messages, _events, _created = build_sequence(
+        factor_map={0: 2.5},
+        active_input_channels=[0],
+        items=[
+            ("skipped-fba", "FBA", {"analysis_channel": 1, "limit_checked": True}),
+            (
+                "valid-spl",
+                "SPL",
+                {
+                    "analysis_channel": 0,
+                    "limit_checked": True,
+                    "_test_judgment": True,
+                },
+            ),
+        ],
+    )
+    _enable_real_ok_ng_runtime(sequence)
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+
+    sequence._summarize_ok_ng.assert_called_once_with()
+    sequence._finalize_test_run.assert_called_once_with(
+        "OK",
+        update_recent_session=True,
+    )
+    sequence.count_board.set_test_result_file.assert_called_once_with("OK")
 
 
 class RuntimeAnalysis:
@@ -597,6 +1159,10 @@ class StreamingAnalysisHost(
 
 
 def run_streaming_completion(host, factor_loader):
+    host.channel_workspace = SimpleNamespace(
+        all_subwindows=lambda: [SimpleNamespace(channel_index=0)]
+    )
+    host._project_normalized_waveform_to_workspace = mock.Mock()
     recording_manager = SimpleNamespace(
         save_signal_info_to_db=lambda *_args: (error_code.OK, "saved")
     )

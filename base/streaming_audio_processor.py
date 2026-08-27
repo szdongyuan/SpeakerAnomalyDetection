@@ -39,6 +39,11 @@ class StreamingAudioProcessor:
         self.error_occurred = False
         self.error_message = ""
         self._rec_in_sel = []
+        self._completion_lock = threading.Lock()
+        self._completion_cancelled = False
+        self._completion_emitted = False
+        self._completion_scheduled = False
+        self._resource_cleanup_lock = threading.Lock()
         # Number of leading samples to mute on the monitor output so the
         # sound-card / DAC power-on pop is not played back through the
         # speakers when ``monitor_playback`` is enabled. The post-recording
@@ -183,11 +188,12 @@ class StreamingAudioProcessor:
 
         try:
             self.audio_queue.put_nowait(payload)
+            sign.stream_audio_queue_ready_signal.emit(self)
         except queue.Full:
             self.logger.warning("Audio queue full, dropping chunk")
 
         if reached_target:
-            threading.Thread(target=self.stop_streaming, daemon=True).start()
+            self._schedule_stop_after_target()
 
         return payload, reached_target
 
@@ -217,7 +223,7 @@ class StreamingAudioProcessor:
         """
         Process audio chunks from queue and emit signals.
 
-        Public method to be called by UI layer via QTimer from Qt main thread.
+        Public method to be called by the UI layer after a queue-ready event.
         """
         try:
             while True:
@@ -285,6 +291,10 @@ class StreamingAudioProcessor:
         self._monitor_mute_leading_samples = max(int(monitor_mute_leading_samples or 0), 0)
         self._monitor_samples_emitted = 0
         self._monitor_fade_in_samples = max(int(monitor_fade_in_samples or 0), 0)
+        with self._completion_lock:
+            self._completion_cancelled = False
+            self._completion_emitted = False
+            self._completion_scheduled = False
 
         input_device = device  # legacy alias
         in_sel = self._normalize_channel_selection(input_channels or [0])
@@ -410,35 +420,62 @@ class StreamingAudioProcessor:
             return error_code.OK, "Streaming started successfully"
 
         except Exception as e:
-            self.is_recording = False
             self.error_occurred = True
             self.error_message = str(e)
             self.logger.error(f"Error starting streaming recording: {e}")
+            self.stop_streaming()
             return error_code.INVALID_RECORD, f"Failed to start streaming: {e}"
 
-    def stop_streaming(self):
-        """
-        Stop streaming and clean up resources.
-        """
-        self.is_recording = False
+    def _schedule_stop_after_target(self):
+        """Schedule automatic target completion at most once."""
+        with self._completion_lock:
+            if self._completion_cancelled or self._completion_scheduled:
+                return
+            self._completion_scheduled = True
+        threading.Thread(target=self._stop_after_target, daemon=True).start()
 
-        try:
-            # Stop and close input stream
-            if self.stream:
-                self.stream.stop()
-                self.stream.close()
+    def _close_stream_resources(self):
+        """Stop and close owned streams once, preserving cleanup logging."""
+        with self._resource_cleanup_lock:
+            with self._completion_lock:
+                self.is_recording = False
+                stream = self.stream
                 self.stream = None
+                output_stream = getattr(self, "output_stream", None)
+                if output_stream:
+                    self.output_stream = None
 
-            # Stop and close output stream (for play+record mode)
-            if hasattr(self, "output_stream") and self.output_stream:
-                self.output_stream.stop()
-                self.output_stream.close()
-                self.output_stream = None
+            cleanup_failed = False
+            operations = []
+            if stream:
+                operations.extend((stream.stop, stream.close))
+            if output_stream:
+                operations.extend((output_stream.stop, output_stream.close))
 
-            self.logger.info(f"Streaming stopped. Captured {self.samples_captured}/{self.target_samples} samples")
+            for operation in operations:
+                try:
+                    operation()
+                except Exception as e:
+                    cleanup_failed = True
+                    self.logger.error(f"Error stopping streaming: {e}")
 
-        except Exception as e:
-            self.logger.error(f"Error stopping streaming: {e}")
+            if not cleanup_failed:
+                self.logger.info(f"Streaming stopped. Captured {self.samples_captured}/{self.target_samples} samples")
+
+    def _stop_after_target(self):
+        """Close a naturally completed stream and notify listeners once."""
+        self._close_stream_resources()
+        with self._completion_lock:
+            if self._completion_cancelled or self._completion_emitted:
+                return
+            self._completion_emitted = True
+            sign.stream_audio_recording_finished_signal.emit(self)
+
+    def stop_streaming(self):
+        """Manually stop streaming and cancel normal completion."""
+        with self._completion_lock:
+            self._completion_cancelled = True
+        self._close_stream_resources()
 
     def get_recorded_data(self):
         """

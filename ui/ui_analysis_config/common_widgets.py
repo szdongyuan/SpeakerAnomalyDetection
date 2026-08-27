@@ -55,6 +55,7 @@ from ui.ui_analysis_config.config_normalization import (
     OCTAVE_SMOOTHING_OPTIONS,
     WEIGHTING_OPTIONS,
     normalize_analysis_channel,
+    normalize_legacy_available_analysis_channel,
     normalize_octave_smoothing,
     normalize_time_smoothing,
     normalize_weighting,
@@ -804,7 +805,10 @@ class ChannelSelectorWidget(QWidget):
         for ch in self.available_channels:
             self.combo_box.addItem(f"In{int(ch) + 1}", int(ch))
 
-        selected = normalize_analysis_channel(cfg, self.available_channels)
+        selected = normalize_legacy_available_analysis_channel(
+            cfg,
+            self.available_channels,
+        )
         selected_idx = self.combo_box.findData(selected)
         self.combo_box.setCurrentIndex(selected_idx if selected_idx >= 0 else 0)
 
@@ -827,6 +831,69 @@ class ChannelSelectorWidget(QWidget):
 
     def current_channel(self) -> int:
         return int(self.combo_box.currentData())
+
+    def get_config(self) -> dict[str, int]:
+        return {"analysis_channel": self.current_channel()}
+
+
+class _RestrictedAnalysisChannelSpinBox(SpinBox):
+    def __init__(self, allowed_channels: list[int], parent=None):
+        super().__init__(parent)
+        self._display_values = tuple(channel + 1 for channel in allowed_channels)
+        self.setRange(1, 128)
+        self.setWrapping(True)
+        self.lineEdit().setReadOnly(True)
+
+    def stepBy(self, steps: int) -> None:
+        if not steps:
+            return
+        try:
+            current_index = self._display_values.index(self.value())
+        except ValueError:
+            current_index = 0
+        next_index = (current_index + int(steps)) % len(self._display_values)
+        self.setValue(self._display_values[next_index])
+
+
+class AnalysisChannelSpinBoxWidget(QWidget):
+    """One-based channel editor that persists the zero-based channel index."""
+
+    def __init__(
+        self,
+        cfg: dict[str, Any] | None = None,
+        available_channels=None,
+        parent=None,
+        *,
+        restrict_to_available_channels: bool = False,
+    ):
+        super().__init__(parent)
+        selected = normalize_analysis_channel(cfg, available_channels)
+        if restrict_to_available_channels:
+            channels = [
+                channel
+                for channel in available_channels or []
+                if isinstance(channel, int) and 0 <= channel <= 127
+            ]
+            allowed_channels = sorted(set(channels)) or [0]
+            if selected not in allowed_channels:
+                selected = allowed_channels[0]
+            self.spin_box = _RestrictedAnalysisChannelSpinBox(
+                allowed_channels,
+                self,
+            )
+        else:
+            self.spin_box = SpinBox(self)
+            self.spin_box.setRange(1, 128)
+        self.spin_box.setValue(selected + 1)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(Label("通道:"))
+        layout.addWidget(self.spin_box)
+        layout.addStretch()
+
+    def current_channel(self) -> int:
+        return int(self.spin_box.value()) - 1
 
     def get_config(self) -> dict[str, int]:
         return {"analysis_channel": self.current_channel()}

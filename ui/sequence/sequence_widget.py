@@ -24,6 +24,7 @@ from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMi
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_product_pdf_ops import SequenceWidgetProductPdfOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 
 
 class SequenceWindow(
@@ -176,12 +177,26 @@ class SequenceWindow(
         self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
 
         # Streaming state variables
-        self.streaming_buffer_multi = []  # list[np.ndarray] chunks, shape (frames, channels)
+        self._streaming_waveform_session = MultichannelWaveformSession(
+            max_points=self._WAVEFORM_DISPLAY_MAX_POINTS,
+        )
+        self._streaming_waveform_generation = 0
+        self._streaming_waveform_refresh_scheduled = False
+        self._streaming_waveform_pending = False
+        self._streaming_waveform_live_enabled = False
+        self._streaming_waveform_failure_logged = False
+        self._streaming_chunk_contract_failed = False
         self.streaming_wav_writer = None  # WAV file writer for incremental saving
         self.streaming_processor = None  # StreamingAudioProcessor instance
+        self._streaming_completion_processor = None
         self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
         self.streaming_mode = None  # "play_record" or "record_only"
+        self._configured_input_channels = None
+        self._recording_input_channels = None
+        self._pending_configured_input_channels = None
+        self._channel_selection_error = ""
         self._active_input_channels = [0]
+        self._waveform_presentation_owner = "hardware"
         self.channel_workspace = None
         self.recent_session_panel = None
         self.recent_test_sessions = []
@@ -204,9 +219,6 @@ class SequenceWindow(
         self._analysis_window_geometry_dirty = False
 
         self.hw_manager = UnifiedHardwareManager()
-        # Create QTimer in Qt main thread for queue polling
-        self.streaming_poll_timer = QTimer(self)
-        self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
 
         # Startup statistics are daily; keep same-day counters and only roll over on a new date.
         self.reset_statistics_on_startup()

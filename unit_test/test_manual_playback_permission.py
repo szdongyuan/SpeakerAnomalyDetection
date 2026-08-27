@@ -67,6 +67,9 @@ class _PlaybackPermissionHost(SequenceWidgetUiOpsMixin):
         self.data_struct = SimpleNamespace(
             store_wave_data="recorded",
             store_wave_data_multi="recorded_multi",
+            wav_calibration_metadata={"old": True},
+            wav_calibration_metadata_authoritative=True,
+            wav_calibration_warning_shown=True,
         )
 
     def _load_sequence_config_for_product_condition(self, _condition_config):
@@ -187,6 +190,9 @@ def test_mark_reset_does_not_bypass_playback_permission():
     assert host.player_btn.disabled is True
     assert host.replayer_btn.disabled is True
     assert host.data_btn.disabled is True
+    assert host.data_struct.wav_calibration_metadata is None
+    assert host.data_struct.wav_calibration_metadata_authoritative is False
+    assert host.data_struct.wav_calibration_warning_shown is False
 
 
 def test_disabling_serial_trigger_does_not_enable_complete_config(monkeypatch):

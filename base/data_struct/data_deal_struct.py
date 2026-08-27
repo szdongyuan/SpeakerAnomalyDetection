@@ -17,6 +17,9 @@ class DataDealStruct(object):
 
             self.store_wave_data = None
             self.store_wave_data_multi = None
+            self.wav_calibration_metadata = None
+            self.wav_calibration_metadata_authoritative = False
+            self.wav_calibration_warning_shown = False
             self.split_repeat_data = None
             self.stimulus_data = None
             self.stimulus_info = None
@@ -36,6 +39,9 @@ class DataDealStruct(object):
     def clear_data(self):
         self.store_wave_data = None
         self.store_wave_data_multi = None
+        self.wav_calibration_metadata = None
+        self.wav_calibration_metadata_authoritative = False
+        self.wav_calibration_warning_shown = False
         self.split_repeat_data = None
         # self.stimulus_data = None
         self.fft_result = None

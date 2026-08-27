@@ -14,6 +14,10 @@ from ui.graph_widget import LimitPlotUtils
 from ui.operation_sequence import OptionList
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
+from ui.ui_analysis_config.common_widgets import (
+    AnalysisChannelSpinBoxWidget,
+    ChannelSelectorWidget,
+)
 
 
 @pytest.fixture(scope="module")
@@ -67,6 +71,7 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
         "judgment",
     ]
     assert dialog.channel_selector.current_channel() == 1
+    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
     assert dialog.threshold_widget.allow_manual_limits is True
     assert dialog.threshold_widget.allow_constant_limits is True
     assert dialog.curve_color_widget is not None
@@ -138,11 +143,21 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     dialog.close()
 
 
+def test_spec_channel_spinbox_is_not_limited_by_available_channels(qapp):
+    manager = _ConfigManager({"Spec": {"analysis_channel": 127}})
+    dialog = SpecConfigWindow(manager, "Spec", available_channels=[0])
+
+    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
+    assert dialog.channel_selector.spin_box.value() == 128
+    assert dialog.get_default_config()["analysis_channel"] == 127
+    dialog.close()
+
+
 def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     manager = _ConfigManager(
         {
             "SPLF": {
-                "analysis_channel": 0,
+                "analysis_channel": 4,
                 "splf_calc_mode": "total",
                 "octave_smoothing": 3,
                 "golden_sample_checked": True,
@@ -154,7 +169,7 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     dialog = SplConfigWindow(
         manager,
         "SPLF",
-        available_channels=[0],
+        available_channels=[2, 3],
     )
 
     assert dialog.semantic_group_keys() == [
@@ -165,12 +180,16 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
         "judgment",
     ]
     assert dialog.show_overall_spl_box is None
+    assert isinstance(dialog.channel_selector, ChannelSelectorWidget)
+    assert not isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
+    assert dialog.channel_selector.current_channel() == 2
     assert dialog.analysis_time_range_widget is None
     assert dialog.free_field_distance_box is None
     assert dialog.free_field_distance_parameters_widget is None
     assert dialog.directional_correction_widget is None
     assert dialog.directional_correction_box is None
     config = dialog.get_default_config()
+    assert config["analysis_channel"] == 2
     assert config["splf_calc_mode"] == "total"
     assert config["octave_smoothing"] == 3
     assert config["golden_sample_checked"] is True

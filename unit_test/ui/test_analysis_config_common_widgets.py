@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionSpinBox,
     QWidget,
     QVBoxLayout,
 )
@@ -21,6 +23,7 @@ from consts.harmonic_detection_consts import (
 )
 from ui.ui_analysis_config.common_widgets import (
     AnalysisConfigDialogBase,
+    AnalysisChannelSpinBoxWidget,
     ChannelSelectorWidget,
     GoldenSampleWidget,
     HarmonicDetectionMethodSelectorWidget,
@@ -57,6 +60,8 @@ def test_channel_selector_uses_available_channel(qapp):
     [
         ({"analysis_channel": "bad"}, [3, 5], 3),
         ({"analysis_channel": 4}, [0, 1], 0),
+        ({"analysis_channel": "1.5"}, [0, 1], 0),
+        ({"analysis_channel": 128}, [0, 128], 128),
         ({}, [], 0),
         (None, None, 0),
     ],
@@ -65,6 +70,147 @@ def test_channel_selector_falls_back_safely(qapp, cfg, available_channels, expec
     widget = ChannelSelectorWidget(cfg, available_channels)
 
     assert widget.current_channel() == expected
+
+
+def test_analysis_channel_spinbox_uses_one_based_display_and_zero_based_config(qapp):
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": 2},
+        available_channels=[0],
+    )
+
+    assert widget.spin_box.minimum() == 1
+    assert widget.spin_box.maximum() == 128
+    assert widget.spin_box.value() == 3
+    assert widget.current_channel() == 2
+    assert widget.get_config() == {"analysis_channel": 2}
+
+
+def test_analysis_channel_spinbox_allows_channel_absent_from_hardware_list(qapp):
+    widget = AnalysisChannelSpinBoxWidget({}, available_channels=[0, 2])
+
+    assert widget.spin_box.lineEdit().isReadOnly() is False
+    widget.spin_box.setValue(128)
+
+    assert widget.get_config() == {"analysis_channel": 127}
+
+
+@pytest.mark.parametrize(
+    ("cfg", "available_channels", "expected_display"),
+    [
+        ({"analysis_channel": 2}, [0, 2, 7], 3),
+        ({"analysis_channel": 5}, [0, 2, 7], 1),
+        ({"analysis_channel": "bad"}, [2, 7], 3),
+        ({}, [2, 7], 3),
+        ({"analysis_channel": 2}, [-1, 0, 2, 2, 128], 3),
+        ({"analysis_channel": 2}, ["2", 7], 8),
+        ({"analysis_channel": 7}, [-1, 128], 1),
+    ],
+)
+def test_restricted_analysis_channel_spinbox_restores_only_allowed_values(
+    qapp, cfg, available_channels, expected_display
+):
+    widget = AnalysisChannelSpinBoxWidget(
+        cfg,
+        available_channels=available_channels,
+        restrict_to_available_channels=True,
+    )
+
+    assert widget.spin_box.lineEdit().isReadOnly() is True
+    assert widget.spin_box.value() == expected_display
+    assert widget.get_config() == {"analysis_channel": expected_display - 1}
+
+
+def test_restricted_analysis_channel_spinbox_cycles_selected_channels(qapp):
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": 0},
+        available_channels=[7, 0, 2, 2],
+        restrict_to_available_channels=True,
+    )
+
+    widget.spin_box.stepBy(1)
+    assert widget.spin_box.value() == 3
+    widget.spin_box.stepBy(1)
+    assert widget.spin_box.value() == 8
+    widget.spin_box.stepBy(1)
+    assert widget.spin_box.value() == 1
+    widget.spin_box.stepBy(-1)
+    assert widget.spin_box.value() == 8
+    widget.spin_box.stepBy(2)
+    assert widget.spin_box.value() == 3
+    assert widget.get_config() == {"analysis_channel": 2}
+
+
+def test_restricted_analysis_channel_spinbox_single_channel_stays_fixed(qapp):
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": 7},
+        available_channels=[7],
+        restrict_to_available_channels=True,
+    )
+
+    widget.spin_box.stepBy(1)
+    widget.spin_box.stepBy(-3)
+
+    assert widget.spin_box.value() == 8
+    assert widget.get_config() == {"analysis_channel": 7}
+
+
+def test_restricted_analysis_channel_spinbox_arrow_keys_wrap_at_numeric_bounds(qapp):
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": 0},
+        available_channels=[0, 2, 127],
+        restrict_to_available_channels=True,
+    )
+
+    QTest.keyClick(widget.spin_box, Qt.Key_Down)
+    assert widget.spin_box.value() == 128
+    QTest.keyClick(widget.spin_box, Qt.Key_Up)
+    assert widget.spin_box.value() == 1
+
+
+def test_restricted_analysis_channel_spinbox_visible_up_button_wraps_at_maximum(qapp):
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": 127},
+        available_channels=[0, 2, 127],
+        restrict_to_available_channels=True,
+    )
+    widget.show()
+    qapp.processEvents()
+    option = QStyleOptionSpinBox()
+    widget.spin_box.initStyleOption(option)
+    up_button = widget.spin_box.style().subControlRect(
+        QStyle.CC_SpinBox,
+        option,
+        QStyle.SC_SpinBoxUp,
+        widget.spin_box,
+    )
+
+    QTest.mouseClick(widget.spin_box, Qt.LeftButton, pos=up_button.center())
+
+    assert widget.spin_box.value() == 1
+
+
+def test_analysis_channel_spinbox_keeps_strict_fractional_string_fallback(qapp):
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": "1.5"},
+        available_channels=[0, 1],
+    )
+
+    assert widget.spin_box.value() == 1
+    assert widget.get_config() == {"analysis_channel": 0}
+
+
+def test_legacy_selector_and_strict_spinbox_preserve_distinct_overflow_contracts(qapp):
+    with pytest.raises(OverflowError):
+        ChannelSelectorWidget(
+            {"analysis_channel": float("inf")},
+            available_channels=[0],
+        )
+
+    widget = AnalysisChannelSpinBoxWidget(
+        {"analysis_channel": float("inf")},
+        available_channels=[0],
+    )
+    assert widget.get_config() == {"analysis_channel": 0}
 
 
 def test_weighting_selector_saves_z_for_none_display(qapp):
