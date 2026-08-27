@@ -2,9 +2,9 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
-from base.product_test_program_config import (
-    classify_product_trigger_mode,
-    is_manual_product_play_allowed,
+from base.product_test_project_config import (
+    classify_project_trigger_mode,
+    is_manual_project_play_allowed,
 )
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 
@@ -42,8 +42,8 @@ def _load_analysis_method(method_name):
         decorator_list=[],
     )
     namespace = {
-        "classify_product_trigger_mode": classify_product_trigger_mode,
-        "is_manual_product_play_allowed": is_manual_product_play_allowed,
+        "classify_project_trigger_mode": classify_project_trigger_mode,
+        "is_manual_project_play_allowed": is_manual_project_play_allowed,
     }
     exec(
         compile(

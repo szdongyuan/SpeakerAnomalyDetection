@@ -149,7 +149,7 @@ def test_invalid_product_program_switch_keeps_registry_and_serial_runtime(
     events = []
 
     class _Manager:
-        def load_program(self, file_name):
+        def load_project(self, file_name):
             assert file_name == "candidate.json"
             return error_code.OK, {
                 "name": "混合状态码",
@@ -159,7 +159,7 @@ def test_invalid_product_program_switch_keeps_registry_and_serial_runtime(
                 ],
             }
 
-        def validate_program(self, _program, file_name):
+        def validate_project(self, _program, file_name):
             assert file_name == "candidate.json"
             return {
                 "is_usable": False,
@@ -194,14 +194,14 @@ def test_product_program_switch_stops_when_registry_save_fails(monkeypatch):
     events = []
 
     class _Manager:
-        def load_program(self, file_name):
+        def load_project(self, file_name):
             assert file_name == "candidate.json"
             return error_code.OK, {
                 "name": "自动配置",
                 "sub_configs": [{"trigger_state": "01"}],
             }
 
-        def validate_program(self, _program, file_name):
+        def validate_project(self, _program, file_name):
             assert file_name == "candidate.json"
             return {"is_usable": True, "use_errors": []}
 
@@ -237,14 +237,14 @@ def test_valid_product_program_switch_refreshes_serial_match_candidates():
     events = []
 
     class _Manager:
-        def load_program(self, file_name):
+        def load_project(self, file_name):
             assert file_name == "candidate.json"
             return error_code.OK, {
                 "name": "自动配置",
                 "sub_configs": [{"trigger_state": "01"}],
             }
 
-        def validate_program(self, _program, file_name):
+        def validate_project(self, _program, file_name):
             assert file_name == "candidate.json"
             return {"is_usable": True, "use_errors": []}
 

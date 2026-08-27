@@ -362,7 +362,7 @@ class RecentSessionPanel(QWidget):
         display_name = str(name or "").strip()
         if not display_name:
             return ""
-        if "rpm" in display_name.lower():
+        if "rpm" in display_name.lower() or "/" in display_name:
             return display_name
         return f"{display_name} rpm"
 
@@ -373,7 +373,13 @@ class RecentSessionPanel(QWidget):
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("condition_name") or item.get("name") or item.get("test_queue") or "").strip()
+            name = str(
+                item.get("display_name")
+                or item.get("condition_name")
+                or item.get("name")
+                or item.get("test_queue")
+                or ""
+            ).strip()
             if not name:
                 continue
             name = cls._format_condition_display_name(name)

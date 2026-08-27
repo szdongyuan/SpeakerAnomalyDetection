@@ -18,7 +18,7 @@ from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
-from ui.product_test_program_config_dialog import ProductTestProgramConfigDialog
+from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
 from ui.sequence.sequence_widget import SequenceWindow
 
 
@@ -289,7 +289,7 @@ class MainWindow(QMainWindow):
     def on_product_test_program_config(self):
         self.sequence_window._product_test_program_config_dialog_open = True
         try:
-            dialog = ProductTestProgramConfigDialog(
+            dialog = ProductTestProjectConfigDialog(
                 None,
                 self._open_analysis_model_select,
                 self,

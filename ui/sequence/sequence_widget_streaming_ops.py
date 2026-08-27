@@ -521,6 +521,7 @@ class SequenceWidgetStreamingOpsMixin:
                     str(item.get("key") or "").strip(),
                     str(item.get("trigger_state") or "").strip(),
                     str(item.get("test_queue") or "").strip(),
+                    str(item.get("group_name") or "").strip(),
                     str(item.get("condition_name") or item.get("name") or "").strip(),
                 )
             )
@@ -542,12 +543,8 @@ class SequenceWidgetStreamingOpsMixin:
             getattr(self, "product_test_close_trigger_state", "") or ""
         ).strip()
         self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
-        self.product_test_close_trigger_state = (
-            LoadUiConfig.load_product_test_program_close_trigger_state(config_path)
-        )
-        self.product_test_pdf_report_config = (
-            LoadUiConfig.load_product_test_program_pdf_report_config(config_path)
-        )
+        self.product_test_close_trigger_state = ""
+        self.product_test_pdf_report_config = {"enabled": False, "save_dir": ""}
         new_signature = self._product_condition_signature(self.product_test_condition_configs)
         close_trigger_state_changed = (
             old_close_trigger_state != self.product_test_close_trigger_state
