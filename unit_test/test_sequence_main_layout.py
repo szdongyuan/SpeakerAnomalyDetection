@@ -24,6 +24,7 @@ from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_panel_common import MotorSectionCard
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
+from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
@@ -75,6 +76,23 @@ class _DummyChannelWorkspace:
 
     def set_direction_data(self, key, x, y):
         self.direction_data.append((key, list(x), list(y)))
+
+    def set_live_channels(self, channels):
+        workspace = self
+
+        class _LiveWindow:
+            def __init__(self, channel):
+                self.channel_index = channel
+
+            def set_data(self, x, y):
+                workspace.direction_data.append(
+                    (self.channel_index, list(x), list(y))
+                )
+
+        self._live_windows = [_LiveWindow(channel) for channel in channels]
+
+    def all_subwindows(self):
+        return list(self._live_windows)
 
 
 class _SpyLeftPanel:
@@ -156,12 +174,35 @@ class _WaveformRefreshWidget(SequenceWidgetStreamingOpsMixin):
         self.recorded_path = None
         self.recorded_signal_info = {}
         self._current_recent_session_id = ""
+        self.channel_workspace.set_live_channels(self._active_input_channels)
 
     def _apply_condition_mode_to_waveforms(self):
         return None
 
     def _get_active_product_condition_key(self):
         return self._active_product_condition_key
+
+
+def _begin_deferred_streaming_waveform_session(
+    widget, *, sample_rate, startup_trim_samples, direction
+):
+    widget._recording_input_channels = (0, 1)
+    widget.channel_workspace.set_live_channels(widget._recording_input_channels)
+    widget._streaming_waveform_session = MultichannelWaveformSession(
+        max_points=widget._WAVEFORM_DISPLAY_MAX_POINTS
+    )
+    widget._streaming_waveform_generation = 0
+    widget._streaming_waveform_refresh_scheduled = False
+    widget._streaming_waveform_pending = False
+    widget._streaming_waveform_live_enabled = False
+    widget._streaming_waveform_failure_logged = False
+    widget._streaming_chunk_contract_failed = False
+    scheduled_callbacks = []
+    widget._schedule_streaming_waveform_callback = scheduled_callbacks.append
+    widget._begin_streaming_waveform_session(
+        sample_rate, startup_trim_samples, direction
+    )
+    return scheduled_callbacks
 
 
 class _SyncLeftPanel:
@@ -244,8 +285,13 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertIs(top_row_splitter.widget(0), widget.left_panel.ai_result_panel)
         self.assertIs(top_row_splitter.widget(1), widget.channel_workspace)
+        self.assertIsInstance(widget.channel_workspace, ChannelPlotWorkspace)
+        self.assertNotIsInstance(widget.channel_workspace, DirectionWaveformPanel)
         self.assertIs(bottom_row_splitter.widget(0), widget.left_panel.summary_panel)
         self.assertIs(bottom_row_splitter.widget(1), widget.recent_session_panel)
+        widget.hide()
+        widget.deleteLater()
+        self.app.processEvents()
 
     def test_common_window_size_keeps_waveform_and_history_readable(self):
         widget = _DummySequenceWidget()
@@ -260,6 +306,9 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertGreaterEqual(widget.recent_session_panel.height(), 300)
         self.assertGreater(widget.channel_workspace.width(), widget.left_panel.ai_result_panel.width())
         self.assertGreater(widget.recent_session_panel.width(), widget.left_panel.summary_panel.width())
+        widget.hide()
+        widget.deleteLater()
+        self.app.processEvents()
 
     def test_threshold_analyses_can_output_ok_ng(self):
         widget = _DummySequenceWidget()
@@ -312,6 +361,9 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.app.processEvents()
 
         self.assertLessEqual(widget.minimumSizeHint().height(), 700)
+        widget.hide()
+        widget.deleteLater()
+        self.app.processEvents()
 
     def test_left_cards_stretch_to_match_their_row_heights(self):
         widget = _RealisticSequenceWidget()
@@ -332,6 +384,9 @@ class TestSequenceMainLayout(unittest.TestCase):
         recent_title = recent_card.layout().itemAt(0).widget()
         summary_title = summary_card.layout().itemAt(0).widget()
         self.assertEqual(recent_title.sizeHint().height(), summary_title.sizeHint().height())
+        widget.hide()
+        widget.deleteLater()
+        self.app.processEvents()
 
     def test_default_main_splitter_ratio_is_45_to_55(self):
         widget = _RealisticSequenceWidget()
@@ -348,6 +403,9 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertGreater(total_height, 0)
         self.assertAlmostEqual(top_height / total_height, 0.45, delta=0.03)
         self.assertAlmostEqual(bottom_height / total_height, 0.55, delta=0.03)
+        widget.hide()
+        widget.deleteLater()
+        self.app.processEvents()
 
     def test_count_board_keeps_test_summary_visible_in_mark_mode(self):
         board = SequenceCountBoard({})
@@ -439,20 +497,45 @@ class TestSequenceMainLayout(unittest.TestCase):
                 os.path.join(program_dir, "program_registry.json"),
                 os.path.join(queue_dir, "sequence_config_registry.json"),
             )
+            manager.load_queue_catalog = lambda: {
+                "queue_6000": {
+                    "available": True,
+                    "acquisition_mode": "RECORD_ONLY",
+                },
+                "queue_9000": {
+                    "available": True,
+                    "acquisition_mode": "RECORD_ONLY",
+                },
+            }
             manager.save_program(
                 None,
                 {
                     "name": "2条波形",
-                    "sub_configs": [{"condition_name": "6000 rpm", "trigger_state": "01"}],
+                    "sub_configs": [
+                        {
+                            "condition_name": "6000 rpm",
+                            "trigger_state": "01",
+                            "test_queue": "queue_6000",
+                        }
+                    ],
                 },
             )
             manager.save_program(
                 None,
                 {
                     "name": "4条波形",
-                    "sub_configs": [{"condition_name": "9000 rpm", "trigger_state": "08"}],
+                    "sub_configs": [
+                        {
+                            "condition_name": "9000 rpm",
+                            "trigger_state": "08",
+                            "test_queue": "queue_9000",
+                        }
+                    ],
                 },
             )
+            registry = manager.load_registry()
+            registry["active_file"] = "4条波形.json"
+            manager.save_registry(registry)
             widget = _DummyProductProgramWidget(manager)
 
             widget.add_file_to_using_file_combobox()
@@ -585,53 +668,74 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertIsNotNone(panel._cards["01"].plot_item)
         self.assertIsNone(panel._cards["02"].plot_item)
 
-    def test_waveform_workspace_reconfigure_does_not_redraw_unchanged_conditions(self):
+    def test_final_projection_does_not_reconfigure_condition_workspace(self):
         widget = _WaveformRefreshWidget()
-        widget._direction_waveform_cache = {
-            "01": ([0.0, 0.1], 1.0),
-            "02": ([0.0, 0.2], 1.0),
-            "03": ([0.0, 0.3], 1.0),
-        }
 
         widget._configure_direction_waveform_workspace()
 
         self.assertEqual(widget.channel_workspace.set_condition_calls, [])
         self.assertEqual(widget.channel_workspace.direction_data, [])
 
-        widget.plot_waveform_to_workspace([0.0, 0.4], 1.0, direction="01")
+        widget.plot_waveform_to_workspace(
+            [0.0, 0.4],
+            1.0,
+            channel_mapping=(0,),
+        )
 
-        self.assertEqual([entry[0] for entry in widget.channel_workspace.direction_data], ["01"])
+        channel, time_axis, amplitude = widget.channel_workspace.direction_data[-1]
+        self.assertEqual(channel, 0)
+        self.assertTrue(np.array_equal(time_axis, [0.0, 1.0]))
+        self.assertTrue(np.allclose(amplitude, [0.0, 0.4]))
+        self.assertEqual(widget._direction_waveform_cache, {})
 
-    def test_active_product_condition_routes_waveform_to_matching_card(self):
+    def test_final_projection_routes_each_column_to_physical_channel_window(self):
         widget = _WaveformRefreshWidget()
-        widget._active_product_condition_key = "02"
+        widget._active_input_channels = [0, 2]
+        widget.channel_workspace.set_live_channels((0, 2))
+        waveform = np.asarray(
+            [[1.0, 10.0], [2.0, 20.0]],
+            dtype=np.float32,
+        )
 
-        active_direction = widget._resolve_active_recording_waveform_direction(fallback="")
-        widget.plot_waveform_to_workspace([0.0, 0.7], 1.0, direction=active_direction)
+        widget.plot_waveform_to_workspace(
+            waveform,
+            2.0,
+            channel_mapping=(0, 2),
+        )
 
-        self.assertEqual(active_direction, "02")
-        self.assertEqual([entry[0] for entry in widget.channel_workspace.direction_data], ["02"])
-        self.assertIn("02", widget._direction_waveform_cache)
-        self.assertNotIn("01", widget._direction_waveform_cache)
+        self.assertEqual(
+            [entry[0] for entry in widget.channel_workspace.direction_data],
+            [0, 2],
+        )
+        self.assertTrue(
+            np.array_equal(widget.channel_workspace.direction_data[0][2], waveform[:, 0])
+        )
+        self.assertTrue(
+            np.array_equal(widget.channel_workspace.direction_data[1][2], waveform[:, 1])
+        )
+        self.assertEqual(widget._direction_waveform_cache, {})
 
-    def test_waveform_display_downsamples_peaks_without_changing_cached_audio(self):
+    def test_final_waveform_display_downsamples_peaks_per_physical_channel(self):
         widget = _WaveformRefreshWidget()
         waveform = np.zeros(10_000, dtype=np.float32)
         waveform[1_234] = -9.0
         waveform[8_765] = 8.0
 
-        widget.plot_waveform_to_workspace(waveform, 1_000.0, direction="01")
+        widget.plot_waveform_to_workspace(
+            waveform,
+            1_000.0,
+            channel_mapping=(0,),
+        )
 
-        cached_waveform, cached_sample_rate = widget._direction_waveform_cache["01"]
-        _, display_x, display_y = widget.channel_workspace.direction_data[-1]
-        self.assertEqual(cached_sample_rate, 1_000.0)
-        self.assertTrue(np.array_equal(cached_waveform, waveform))
+        channel, display_x, display_y = widget.channel_workspace.direction_data[-1]
+        self.assertEqual(channel, 0)
         self.assertEqual(len(display_x), len(display_y))
         self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
         self.assertEqual(min(display_y), -9.0)
         self.assertEqual(max(display_y), 8.0)
         self.assertEqual(display_x[0], 0.0)
         self.assertAlmostEqual(display_x[-1], 9.999)
+        self.assertEqual(widget._direction_waveform_cache, {})
 
     def test_streaming_writer_receives_full_chunk_when_display_is_downsampled(self):
         class _Writer:
@@ -642,26 +746,39 @@ class TestSequenceMainLayout(unittest.TestCase):
                 self.chunks.append(chunk)
 
         widget = _WaveformRefreshWidget()
-        chunk = np.arange(12_000, dtype=np.float32).reshape(6_000, 2)
-        widget.streaming_buffer_multi = []
+        chunk = np.zeros((6_000, 2), dtype=np.float32)
+        chunk[1_234] = -9.0
+        chunk[5_678] = 8.0
         widget.streaming_wav_writer = _Writer()
-        widget.data_struct = types.SimpleNamespace(sample_rate=48_000)
-        widget.sequence_config = [
-            {"seq1": {"acq": {"detail": {"startup_trim_ms": 0}}}}
-        ]
         widget._active_product_condition_key = "01"
         widget._streaming_first_chunk_logged = True
         widget.default_logger = logging.getLogger(__name__)
+        scheduled_callbacks = _begin_deferred_streaming_waveform_session(
+            widget,
+            sample_rate=48_000,
+            startup_trim_samples=0,
+            direction="01",
+        )
 
         widget.on_audio_chunk_received({"multi": chunk})
 
-        cached_waveform, cached_sample_rate = widget._direction_waveform_cache["01"]
-        _, _, display_y = widget.channel_workspace.direction_data[-1]
-        self.assertEqual(cached_sample_rate, 48_000.0)
-        self.assertEqual(cached_waveform.shape[0], chunk.shape[0])
+        self.assertEqual(widget.channel_workspace.direction_data, [])
+        self.assertEqual(len(scheduled_callbacks), 1)
         self.assertEqual(len(widget.streaming_wav_writer.chunks), 1)
         self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], chunk))
-        self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
+        scheduled_callbacks.pop()()
+
+        self.assertEqual(
+            [entry[0] for entry in widget.channel_workspace.direction_data],
+            [0, 1],
+        )
+        for channel, display_x, display_y in widget.channel_workspace.direction_data:
+            self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
+            self.assertEqual(min(display_y), -9.0)
+            self.assertEqual(max(display_y), 8.0)
+            self.assertEqual(display_x[0], 0.0)
+            self.assertAlmostEqual(display_x[-1], 5_999 / 48_000)
+        self.assertNotIn("01", widget._direction_waveform_cache)
 
     def test_streaming_waveform_hides_startup_trim_but_writer_keeps_raw_chunks(self):
         class _Writer:
@@ -675,29 +792,47 @@ class TestSequenceMainLayout(unittest.TestCase):
         full_audio = np.arange(280, dtype=np.float32).reshape(140, 2)
         first_chunk = full_audio[:60]
         second_chunk = full_audio[60:]
-        widget.streaming_buffer_multi = []
         widget.streaming_wav_writer = _Writer()
-        widget.data_struct = types.SimpleNamespace(sample_rate=1_000)
-        widget.sequence_config = [
-            {"seq1": {"acq": {"detail": {"startup_trim_ms": 100}}}}
-        ]
         widget._active_product_condition_key = "01"
         widget._streaming_first_chunk_logged = True
         widget.default_logger = logging.getLogger(__name__)
+        scheduled_callbacks = _begin_deferred_streaming_waveform_session(
+            widget,
+            sample_rate=1_000,
+            startup_trim_samples=100,
+            direction="01",
+        )
 
         widget.on_audio_chunk_received({"multi": first_chunk})
 
+        self.assertEqual(len(scheduled_callbacks), 1)
+        scheduled_callbacks.pop()()
+        self.assertEqual(
+            widget.channel_workspace.direction_data,
+            [(0, [], []), (1, [], [])],
+        )
         self.assertNotIn("01", widget._direction_waveform_cache)
-        self.assertEqual(widget.channel_workspace.direction_data, [])
         self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], first_chunk))
 
         widget.on_audio_chunk_received({"multi": second_chunk})
 
-        cached_waveform, cached_sample_rate = widget._direction_waveform_cache["01"]
-        expected_waveform = full_audio[100:].mean(axis=1)
-        self.assertEqual(cached_sample_rate, 1_000.0)
-        self.assertTrue(np.array_equal(cached_waveform, expected_waveform))
+        self.assertEqual(len(scheduled_callbacks), 1)
+        scheduled_callbacks.pop()()
+        second_refresh = widget.channel_workspace.direction_data[-2:]
+        self.assertEqual([entry[0] for entry in second_refresh], [0, 1])
+        for channel, display_x, display_y in second_refresh:
+            expected_waveform = full_audio[100:, channel]
+            self.assertEqual(len(display_y), 40)
+            self.assertEqual(display_x[0], 0.0)
+            self.assertAlmostEqual(display_x[-1], 0.039)
+            self.assertTrue(np.array_equal(display_y, expected_waveform))
+        for accumulator in widget._streaming_waveform_session._accumulators.values():
+            self.assertEqual(accumulator.raw_sample_count, 140)
+            self.assertEqual(accumulator.display_sample_count, 40)
+            self.assertEqual(accumulator.capacity, 0)
+        self.assertNotIn("01", widget._direction_waveform_cache)
         self.assertEqual(len(widget.streaming_wav_writer.chunks), 2)
+        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], first_chunk))
         self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[1], second_chunk))
 
     def test_invalid_serial_recording_uses_whole_round_abort(self):
@@ -739,7 +874,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(panel.grid.columnStretch(2), 0)
         self.assertEqual(panel.grid.rowStretch(1), 0)
 
-    def test_clear_plot_area_only_clears_active_condition_card(self):
+    def test_clear_plot_area_clears_channel_plots_without_deleting_condition_state(self):
         widget = _DummySequenceWidget()
         widget.channel_workspace = _DummyChannelWorkspace(["01", "02", "03"])
         widget._waveform_display_override_direction = "03"
@@ -759,12 +894,12 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertEqual(widget._direction_waveform_cache["01"], ("wave_6000", 1.0))
         self.assertEqual(widget._direction_waveform_cache["02"], ("wave_7000", 1.0))
-        self.assertIsNone(widget._direction_waveform_cache["03"])
+        self.assertEqual(widget._direction_waveform_cache["03"], ("wave_8000", 1.0))
         self.assertIn("01", widget._condition_record_cache)
         self.assertIn("02", widget._condition_record_cache)
-        self.assertNotIn("03", widget._condition_record_cache)
-        self.assertEqual(widget.channel_workspace.cleared_directions, ["03"])
-        self.assertEqual(widget.channel_workspace.clear_all_count, 0)
+        self.assertIn("03", widget._condition_record_cache)
+        self.assertEqual(widget.channel_workspace.cleared_directions, [])
+        self.assertEqual(widget.channel_workspace.clear_all_count, 1)
 
     def test_waveform_mark_does_not_update_left_condition_judgement(self):
         widget = _DummySequenceWidget()

@@ -32,6 +32,7 @@ from base.soundcard_calibration_manager import (
     load_mic_channel_v2pa_factors,
     save_mic_channel_calibration,
 )
+from base.utils.custom_signals import sign
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
 
@@ -628,8 +629,15 @@ class InputCalibration(QWidget):
         # Streaming recording state (no waveform display needed)
         self.streaming_processor = None
         self.active_capture_channel = None
-        self.streaming_poll_timer = QTimer(self)
-        self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
+        self._streaming_completion_processor = None
+        sign.stream_audio_queue_ready_signal.connect(
+            self._on_streaming_queue_ready,
+            Qt.QueuedConnection,
+        )
+        sign.stream_audio_recording_finished_signal.connect(
+            self._on_streaming_recording_finished,
+            Qt.QueuedConnection,
+        )
 
         self.init_ui()
         self._initialize_calibration_state()
@@ -968,6 +976,7 @@ class InputCalibration(QWidget):
             "input_channels": [input_channel],
         }
 
+        self._streaming_completion_processor = None
         try:
             self.streaming_processor, _ = stream_record_without_play(
                 recorded_dict,
@@ -985,30 +994,37 @@ class InputCalibration(QWidget):
             return False
 
         self.update_ui_timer.start()
-        self.streaming_poll_timer.start(50)
         return True
 
-    def _poll_streaming_queue(self):
-        """
-        Poll streaming queue and check for completion.
-
-        Called by QTimer every 50ms from Qt main thread.
-        Process audio chunks WITHOUT emitting signals (no waveform display needed).
-        """
-        if self.streaming_processor is None:
+    def _on_streaming_queue_ready(self, processor):
+        if processor is not self.streaming_processor:
+            return
+        if processor is self._streaming_completion_processor:
             return
 
         try:
-            self.streaming_processor.process_queue(emit_signal=False)
+            processor.process_queue(emit_signal=False)
         except Exception as exc:
             self.default_logger.error(f"Failed to process input calibration audio: {exc}")
             self._finish_failed_calibration("输入校准录音数据处理失败，请重试。")
-            return
 
-        # Check if recording is complete
-        if not self.streaming_processor.is_recording:
-            self.streaming_poll_timer.stop()
-            self._on_streaming_complete()
+    def _on_streaming_recording_finished(self, processor):
+        if processor is not self.streaming_processor:
+            return
+        if processor is self._streaming_completion_processor:
+            return
+        self._streaming_completion_processor = processor
+        try:
+            processor.process_queue(emit_signal=False)
+        except Exception as exc:
+            self.default_logger.error(
+                f"Failed to process final input calibration audio: {exc}"
+            )
+            self._finish_failed_calibration(
+                "输入校准录音数据处理失败，请重试。"
+            )
+            return
+        self._on_streaming_complete()
 
     def _on_streaming_complete(self):
         """
@@ -1094,7 +1110,6 @@ class InputCalibration(QWidget):
 
     def _stop_calibration_timers(self):
         self.update_ui_timer.stop()
-        self.streaming_poll_timer.stop()
 
     def _finish_failed_calibration(self, message):
         self._stop_calibration_timers()

@@ -15,3 +15,11 @@ ui/readme.md
 .vscode/*
 .idea/
 requirements.txt
+111.py
+.agents
+.codex
+docs
+.pytest-integration-ui
+vkinging_daq.py
+record_vkinging_continuous.py
+recordings

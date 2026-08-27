@@ -10,6 +10,7 @@ from ui.sequence.analysis_report_snapshot import (
     build_analysis_report_items,
     export_plot_widget_png,
 )
+from ui.sequence.analysis_channel_preflight import AnalysisChannelSkip
 
 
 class _StubTitleLabel:
@@ -85,6 +86,49 @@ def test_build_analysis_report_items_keeps_item_without_threshold():
     assert items[0]["status"] == "未启用判定"
     assert items[0]["state"] == "completed"
     assert items[0]["images"] == []
+
+
+def test_build_analysis_report_items_adds_each_preflight_skip_once_without_values():
+    executed = SimpleNamespace(
+        _sequence_analysis_key="valid-spl",
+        title_name="valid-spl--通道1",
+        _product_report_analysis_state="completed",
+        result={"overall_spl": 72.0},
+        _get_spl_unit=lambda: "dB SPL",
+    )
+    skip = AnalysisChannelSkip(
+        item_key="missing-spec",
+        item_type="Spec",
+        requested_channel=2,
+        available_channels=(0, 1),
+        reason="请求通道 In3 不存在；可用通道：In1、In2",
+    )
+
+    items = build_analysis_report_items(
+        [executed],
+        {
+            "display_sequence": ["valid-spl", "missing-spec"],
+            "valid-spl": {"type": "SPL", "limit_checked": False},
+            "missing-spec": {"type": "Spec", "limit_checked": False},
+        },
+        {},
+        {"missing-spec": skip},
+    )
+
+    assert [item["name"] for item in items] == ["valid-spl", "missing-spec"]
+    assert items[0]["state"] == "completed"
+    skipped = items[1]
+    assert skipped == {
+        "name": "missing-spec",
+        "type": "Spec",
+        "state": "skipped",
+        "reason": skip.reason,
+        "error": "",
+        "image_errors": [],
+        "images": [],
+    }
+    assert "measurement" not in skipped
+    assert "status" not in skipped
 
 
 def test_build_analysis_report_items_adds_structured_spl_measurement_and_limits():

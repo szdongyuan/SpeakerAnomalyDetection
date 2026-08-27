@@ -18,6 +18,7 @@ from ui.custom_ui_widget.widgets import (
     RadioButton,
 )
 from ui.ui_analysis_config.common_widgets import (
+    AnalysisChannelSpinBoxWidget,
     AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
     GoldenSampleWidget,
@@ -114,6 +115,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         config_manager,
         model_type,
         available_channels: Optional[List[int]] = None,
+        restrict_analysis_channel: bool = False,
     ):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
@@ -123,6 +125,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         ) or "SPL"
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
+        self.restrict_analysis_channel = restrict_analysis_channel
         saved_config = self.config_manager.load_config().get(
             self.config_key,
             {},
@@ -142,11 +145,21 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            self.channel_selector = ChannelSelectorWidget(
-                self.load_config,
-                self.available_channels,
-                self,
-            )
+            if self.model_type == "SPL":
+                self.channel_selector = AnalysisChannelSpinBoxWidget(
+                    self.load_config,
+                    self.available_channels,
+                    self,
+                    restrict_to_available_channels=(
+                        self.restrict_analysis_channel
+                    ),
+                )
+            else:
+                self.channel_selector = ChannelSelectorWidget(
+                    self.load_config,
+                    self.available_channels,
+                    self,
+                )
             self.add_semantic_section(
                 "input",
                 widget=self.channel_selector,

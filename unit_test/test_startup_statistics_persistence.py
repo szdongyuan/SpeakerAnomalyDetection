@@ -6,6 +6,7 @@ import tempfile
 import types
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 if "concurrent_log_handler" not in sys.modules:
@@ -48,7 +49,48 @@ class _DummyStartupStatsWidget(SequenceWidgetStreamingOpsMixin):
         self.default_logger = _SpyLogger()
 
 
+class _ButtonSpy:
+    def __init__(self):
+        self.disabled = None
+
+    def setDisabled(self, disabled):
+        self.disabled = bool(disabled)
+
+
+class _DummyResetStatisticsWidget(SequenceWidgetStreamingOpsMixin):
+    def __init__(self):
+        self.data_struct = SimpleNamespace(
+            store_wave_data=[0.1, 0.2],
+            store_wave_data_multi=[[0.1], [0.2]],
+            wav_calibration_metadata={"old": True},
+            wav_calibration_metadata_authoritative=True,
+            wav_calibration_warning_shown=True,
+        )
+        self.replayer_btn = _ButtonSpy()
+        self.data_btn = _ButtonSpy()
+        self.default_logger = _SpyLogger()
+
+    def reset_test_reord(self):
+        return None
+
+    def update_player_btn_is_paused(self):
+        return None
+
+
 class TestStartupStatisticsPersistence(unittest.TestCase):
+    def test_manual_reset_clears_audio_and_wav_metadata_state(self):
+        widget = _DummyResetStatisticsWidget()
+
+        widget.on_reset_statistics_clicked()
+
+        self.assertIsNone(widget.data_struct.store_wave_data)
+        self.assertIsNone(widget.data_struct.store_wave_data_multi)
+        self.assertIsNone(widget.data_struct.wav_calibration_metadata)
+        self.assertFalse(widget.data_struct.wav_calibration_metadata_authoritative)
+        self.assertFalse(widget.data_struct.wav_calibration_warning_shown)
+        self.assertTrue(widget.replayer_btn.disabled)
+        self.assertTrue(widget.data_btn.disabled)
+
     def _write_test_result(self, folder, date_text, total, ok, ng, not_labels=0):
         os.makedirs(os.path.join(folder, "log", "test_result_log"), exist_ok=True)
         ok_percent = round(ok / total * 100, 2) if total > 0 else 0

@@ -6,6 +6,10 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QMessageBox
 
 from base.load_config import LoadUiConfig
+from base.recording_channel_selection import (
+    RecordingChannelSelectionError,
+    canonicalize_recording_input_channels,
+)
 from base.product_test_project_config import (
     PRODUCT_TRIGGER_MODE_MIXED,
     classify_project_trigger_mode,
@@ -109,24 +113,130 @@ class SequenceWidgetUiOpsMixin:
         MainWindow assigns mic_channels after SequenceWindow construction, so this should be
         called at least once after the window is shown, and again after hardware selection changes.
         """
-        channels = []
+        mic = getattr(self, "mic", None)
+        maximum = (
+            mic.get("max_input_channels")
+            if isinstance(mic, dict) and "max_input_channels" in mic
+            else None
+        )
+        raw_channels = getattr(self, "mic_channels", [])
         try:
-            channels = list(getattr(self, "mic_channels", []) or [])
-        except Exception:
-            channels = []
-        if not channels:
-            channels = [0]
+            channels = canonicalize_recording_input_channels(
+                raw_channels,
+                max_input_channels=maximum,
+            )
+        except RecordingChannelSelectionError as error:
+            self._channel_selection_error = str(error)
+            self.default_logger.error(
+                "Invalid recording input channel selection "
+                f"selection={raw_channels!r}: {error}"
+            )
+            return
 
-        self._active_input_channels = [int(x) for x in channels]
+        self._configured_input_channels = tuple(channels)
+        self._channel_selection_error = ""
+        presentation_owner = getattr(
+            self,
+            "_waveform_presentation_owner",
+            "hardware",
+        )
+        if (
+            getattr(self, "_recording_input_channels", None) is not None
+            or presentation_owner in ("recent", "recent_view")
+        ):
+            self._pending_configured_input_channels = tuple(channels)
+            return
 
-        if self.channel_workspace is not None:
-            configure_waveform_workspace = getattr(self, "_configure_direction_waveform_workspace", None)
-            if callable(configure_waveform_workspace):
-                configure_waveform_workspace()
-        try:
-            self.default_logger.info(f"Directional waveform workspace ready, input channels: {self._active_input_channels}")
-        except Exception:
-            pass
+        self._pending_configured_input_channels = None
+        if presentation_owner == "direct_import":
+            self._end_direct_import_presentation(channels)
+        else:
+            self._apply_input_channel_workspace_mapping(channels)
+        self.default_logger.info(
+            f"Channel waveform workspace ready, input channels: {list(channels)}"
+        )
+
+    def _apply_input_channel_workspace_mapping(self, channels) -> bool:
+        channels = tuple(channels)
+        active_channels = tuple(getattr(self, "_active_input_channels", []) or [])
+        if channels == active_channels:
+            return False
+
+        end_live_display = getattr(self, "_end_streaming_waveform_session", None)
+        if callable(end_live_display):
+            end_live_display()
+        self._active_input_channels = list(channels)
+        workspace = getattr(self, "channel_workspace", None)
+        if workspace is not None:
+            workspace.set_channels(channels)
+            workspace.clear_plots()
+        return True
+
+    def _end_direct_import_presentation(self, channels=None) -> bool:
+        if (
+            getattr(self, "_waveform_presentation_owner", "hardware")
+            != "direct_import"
+        ):
+            return False
+
+        if channels is None:
+            channels = getattr(self, "_configured_input_channels", None)
+        self._waveform_presentation_owner = "hardware"
+        if channels is None:
+            self._active_input_channels = []
+            workspace = getattr(self, "channel_workspace", None)
+            if workspace is not None:
+                workspace.clear_plots()
+            return True
+
+        changed = self._apply_input_channel_workspace_mapping(channels)
+        if not changed:
+            workspace = getattr(self, "channel_workspace", None)
+            if workspace is not None:
+                workspace.clear_plots()
+        return True
+
+    def _begin_new_recording_presentation(self) -> bool:
+        """Hand file-owned plots back to hardware before recording setup."""
+        return self._end_direct_import_presentation()
+
+    def _snapshot_recording_input_channels(self, recorded_dict: dict):
+        selection_error = str(getattr(self, "_channel_selection_error", "") or "")
+        configured = getattr(self, "_configured_input_channels", None)
+        if selection_error:
+            raise RecordingChannelSelectionError(selection_error)
+        if configured is None:
+            raise RecordingChannelSelectionError(
+                "no valid recording input channel selection is configured"
+            )
+
+        run_channels = tuple(configured)
+        self._begin_new_recording_presentation()
+        active_channels = tuple(
+            getattr(self, "_active_input_channels", ()) or ()
+        )
+        self._recording_input_channels = run_channels
+        self._active_input_channels = list(run_channels)
+        self._waveform_presentation_owner = "hardware"
+        recorded_dict["input_channels"] = list(run_channels)
+        recorded_dict["channels"] = len(run_channels)
+        workspace = getattr(self, "channel_workspace", None)
+        if workspace is not None and active_channels != run_channels:
+            workspace.set_channels(run_channels)
+        return run_channels
+
+    def _finalize_recording_channel_selection(self) -> None:
+        run_channels = getattr(self, "_recording_input_channels", None)
+        pending_channels = getattr(self, "_pending_configured_input_channels", None)
+        self._recording_input_channels = None
+        self._pending_configured_input_channels = None
+        self._waveform_presentation_owner = "hardware"
+        if pending_channels is None or tuple(pending_channels) == tuple(run_channels or ()):
+            return
+        self._apply_input_channel_workspace_mapping(pending_channels)
+
+    def _abort_recording_channel_selection(self) -> None:
+        self._finalize_recording_channel_selection()
 
     def init_ui(self):
         """
@@ -155,6 +265,14 @@ class SequenceWidgetUiOpsMixin:
         # (No global signal dependency; MainWindow calls on_sequence_config_updated after dialog closes.)
         # Streaming audio chunk signal for real-time waveform updates
         sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
+        sign.stream_audio_queue_ready_signal.connect(
+            self._on_streaming_queue_ready,
+            Qt.QueuedConnection,
+        )
+        sign.stream_audio_recording_finished_signal.connect(
+            self._on_streaming_recording_finished,
+            Qt.QueuedConnection,
+        )
         # Register this instance as current target for TCP callbacks
         self.__class__._active_instance_ref = weakref.ref(self)
         self.setStyleSheet(
@@ -225,6 +343,17 @@ class SequenceWidgetUiOpsMixin:
     def on_mark_btn_clicked(self):
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
+        clear_wav_calibration_state = getattr(
+            self,
+            "_clear_imported_wav_calibration_state",
+            None,
+        )
+        if callable(clear_wav_calibration_state):
+            clear_wav_calibration_state()
+        else:
+            self.data_struct.wav_calibration_metadata = None
+            self.data_struct.wav_calibration_metadata_authoritative = False
+            self.data_struct.wav_calibration_warning_shown = False
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()

@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 import numpy as np
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel, QSplitter
 
 from base.play_and_record import resolve_startup_trim_samples
@@ -26,10 +26,92 @@ from base.soundcard_calibration_manager import (
     MicCalibrationIOError,
     get_mic_v2pa_factor,
 )
+from base.wav_calibration_metadata import append_wav_calibration_metadata
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
+from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.recent_session_panel import RecentSessionPanel
+
+
+class FinalWaveformWorkspaceContractError(ValueError):
+    """The final workspace no longer represents the immutable run mapping."""
+
+
+def _log_streaming_boundary(host, level, message):
+    """Best-effort diagnostics must not interrupt recording cleanup."""
+    try:
+        logger = getattr(host, "default_logger", None)
+        log = getattr(logger, level, None)
+    except Exception:
+        return
+    if not callable(log):
+        return
+    try:
+        log(message)
+    except Exception:
+        return
+
+
+def _run_optional_streaming_cleanup(
+    host,
+    *,
+    active_query_name,
+    cleanup_name,
+    boundary_name,
+):
+    try:
+        active_query = getattr(host, active_query_name, None)
+    except Exception as error:
+        _log_streaming_boundary(
+            host,
+            "error",
+            f"Streaming cleanup {boundary_name} query lookup failed: {error}",
+        )
+        return
+    if not callable(active_query):
+        return
+    try:
+        is_active = active_query()
+    except Exception as error:
+        _log_streaming_boundary(
+            host,
+            "error",
+            f"Streaming cleanup {boundary_name} query failed: {error}",
+        )
+        return
+    if not is_active:
+        return
+
+    try:
+        cleanup = getattr(host, cleanup_name, None)
+    except Exception as error:
+        _log_streaming_boundary(
+            host,
+            "error",
+            f"Streaming cleanup {boundary_name} action lookup failed: {error}",
+        )
+        return
+    if not callable(cleanup):
+        return
+    try:
+        cleanup()
+    except Exception as error:
+        _log_streaming_boundary(
+            host,
+            "error",
+            f"Streaming cleanup {boundary_name} action failed: {error}",
+        )
+
+
+def _claim_and_finalize_streaming_wav_writer(host):
+    """Release writer ownership before making its single terminal attempt."""
+    writer = getattr(host, "streaming_wav_writer", None)
+    if writer is None:
+        return False
+    host.streaming_wav_writer = None
+    writer.finalize()
+    return True
 
 
 class SequenceWidgetStreamingOpsMixin:
@@ -585,7 +667,9 @@ class SequenceWidgetStreamingOpsMixin:
                 if callable(refresh_condition_configs):
                     refresh_condition_configs(self.product_test_condition_configs)
         if getattr(self, "channel_workspace", None) is not None:
-            if should_rebuild_condition_views:
+            if should_rebuild_condition_views and hasattr(
+                self.channel_workspace, "set_conditions"
+            ):
                 self.channel_workspace.set_conditions(self.product_test_condition_configs)
             apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
             if callable(apply_mode):
@@ -633,6 +717,9 @@ class SequenceWidgetStreamingOpsMixin:
         seq = cfg.get("display_sequence") or []
         if not isinstance(seq, list) or len(seq) == 0:
             return False, "当前配置未选择任何分析项"
+        preflight_skips = getattr(self, "_analysis_preflight_skips", {}) or {}
+        if isinstance(preflight_skips, dict) and preflight_skips:
+            seq = [key for key in seq if str(key) not in preflight_skips]
 
         candidates = []
         for key in seq:
@@ -714,6 +801,80 @@ class SequenceWidgetStreamingOpsMixin:
             return y.mean(axis=1).astype(np.float32, copy=False)
         return None
 
+    @staticmethod
+    def _normalize_final_recording_array(recorded_data, run_channels):
+        """Return authoritative final audio only when it matches the run snapshot."""
+        channels = tuple(run_channels or ())
+        expected_channel_count = len(channels)
+        try:
+            recorded_multi = np.asarray(recorded_data, dtype=np.float32)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(
+                "Invalid final recording data: "
+                f"expected {expected_channel_count} channels; "
+                f"actual shape unavailable: {error}"
+            ) from error
+
+        if recorded_multi.ndim == 1 and expected_channel_count == 1:
+            recorded_multi = recorded_multi.reshape(-1, 1)
+        if (
+            expected_channel_count <= 0
+            or recorded_multi.ndim != 2
+            or recorded_multi.shape[0] <= 0
+            or recorded_multi.shape[1] != expected_channel_count
+        ):
+            raise ValueError(
+                "Invalid final recording data: "
+                f"expected {expected_channel_count} channels; "
+                f"actual shape {recorded_multi.shape}"
+            )
+        return recorded_multi
+
+    @staticmethod
+    def _verify_processor_retained_channels(processor, run_channels) -> None:
+        """Validate the lower-level selection when the processor exposes it."""
+        if processor is None:
+            return
+        processor_state = getattr(processor, "__dict__", {})
+        if not isinstance(processor_state, dict) or "_rec_in_sel" not in processor_state:
+            return
+        retained_channels = tuple(processor_state.get("_rec_in_sel") or ())
+        expected_channels = tuple(run_channels or ())
+        if retained_channels != expected_channels:
+            raise ValueError(
+                "Invalid final recording channel mapping: "
+                f"expected retained channels {expected_channels}; "
+                f"actual retained channels {retained_channels}"
+            )
+
+    def _validate_final_waveform_workspace(self, run_channels):
+        """Return ordered windows only when they exactly match the run snapshot."""
+        expected_channels = tuple(run_channels or ())
+        workspace = getattr(self, "channel_workspace", None)
+        all_subwindows = getattr(workspace, "all_subwindows", None)
+        if not callable(all_subwindows):
+            raise FinalWaveformWorkspaceContractError(
+                "Invalid final waveform workspace count: "
+                f"expected {len(expected_channels)}, actual unavailable"
+            )
+
+        windows = list(all_subwindows())
+        if len(windows) != len(expected_channels):
+            raise FinalWaveformWorkspaceContractError(
+                "Invalid final waveform workspace count: "
+                f"expected {len(expected_channels)}, actual {len(windows)}"
+            )
+
+        actual_channels = tuple(
+            getattr(window, "channel_index", None) for window in windows
+        )
+        if actual_channels != expected_channels:
+            raise FinalWaveformWorkspaceContractError(
+                "Invalid final waveform workspace order: "
+                f"expected {expected_channels}, actual {actual_channels}"
+            )
+        return windows
+
     @classmethod
     def _prepare_waveform_display_data(cls, waveform, sample_rate):
         """Build a peak-preserving display copy without changing the full waveform."""
@@ -756,7 +917,9 @@ class SequenceWidgetStreamingOpsMixin:
         return time_axis, waveform[sample_indices]
 
     def _configure_direction_waveform_workspace(self):
-        if self.channel_workspace is None:
+        if self.channel_workspace is None or not hasattr(
+            self.channel_workspace, "set_conditions"
+        ):
             return
         condition_configs = getattr(self, "product_test_condition_configs", []) or []
         signature = self._product_condition_signature(condition_configs)
@@ -785,7 +948,9 @@ class SequenceWidgetStreamingOpsMixin:
             self._refresh_direction_waveform_workspace()
 
     def _refresh_direction_waveform_workspace(self, direction: str = None):
-        if self.channel_workspace is None:
+        if self.channel_workspace is None or not hasattr(
+            self.channel_workspace, "set_direction_data"
+        ):
             return
         keys = self._waveform_condition_keys()
         target_direction = self._normalize_waveform_direction(direction)
@@ -822,11 +987,9 @@ class SequenceWidgetStreamingOpsMixin:
                 QVBoxLayout: The configured layout object.
         """
         layout = QVBoxLayout()
-        self.channel_workspace = DirectionWaveformPanel(
-            self,
-            condition_configs=getattr(self, "product_test_condition_configs", []) or [],
-            on_play_condition=self.on_waveform_condition_play_clicked,
-            on_mark_condition=self.on_waveform_condition_mark_clicked,
+        self.channel_workspace = ChannelPlotWorkspace(self)
+        self.channel_workspace.set_channels(
+            getattr(self, "_active_input_channels", [0]) or [0]
         )
         self.recent_session_panel = RecentSessionPanel(
             on_play_session=self._resolve_recent_session,
@@ -839,7 +1002,6 @@ class SequenceWidgetStreamingOpsMixin:
         self.recent_session_panel.set_result_editable(self._last_recent_session_mode == "mark")
         if self.count_board is not None:
             self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
-        self._configure_direction_waveform_workspace()
 
         ai_result_panel, summary_panel = self.left_panel.take_split_sections()
         if ai_result_panel is not None:
@@ -955,6 +1117,19 @@ class SequenceWidgetStreamingOpsMixin:
 
     def closeEvent(self, event):
         """窗口关闭时释放硬件资源，并强制等待Excel同步完成"""
+        cleanup_streaming = getattr(self, "_cleanup_streaming_resources", None)
+        if callable(cleanup_streaming):
+            cleanup_streaming()
+        else:
+            end_live_waveform = getattr(self, "_end_streaming_waveform_session", None)
+            if callable(end_live_waveform):
+                end_live_waveform()
+            abort_channel_selection = getattr(
+                self, "_abort_recording_channel_selection", None
+            )
+            if callable(abort_channel_selection):
+                abort_channel_selection()
+
         # Startup-close trick: ``MainWindow.init_ui`` constructs the
         # sequence window and immediately calls ``close()`` on it as a
         # UI-reset step *before* it is ever shown. In that path we must
@@ -1166,6 +1341,17 @@ class SequenceWidgetStreamingOpsMixin:
             if hasattr(self.data_struct, "store_wave_data"):
                 self.data_struct.store_wave_data = None
                 self.data_struct.store_wave_data_multi = None
+                clear_wav_calibration_state = getattr(
+                    self,
+                    "_clear_imported_wav_calibration_state",
+                    None,
+                )
+                if callable(clear_wav_calibration_state):
+                    clear_wav_calibration_state()
+                else:
+                    self.data_struct.wav_calibration_metadata = None
+                    self.data_struct.wav_calibration_metadata_authoritative = False
+                    self.data_struct.wav_calibration_warning_shown = False
         except Exception:
             pass
         try:
@@ -1294,33 +1480,21 @@ class SequenceWidgetStreamingOpsMixin:
             self.recorded_signal_info["labels"] = "NG"
 
     def _clear_plot_area(self) -> None:
-        direction = self._resolve_waveform_direction(fallback="")
-        if direction in self._waveform_condition_keys():
-            self._direction_waveform_cache[direction] = None
-            if isinstance(getattr(self, "_condition_record_cache", None), dict):
-                self._condition_record_cache.pop(direction, None)
-            if self.channel_workspace is not None:
-                self.channel_workspace.clear_direction(direction)
-            return
-        for key in self._waveform_condition_keys():
-            self._direction_waveform_cache[key] = None
-        if isinstance(getattr(self, "_condition_record_cache", None), dict):
-            self._condition_record_cache = {}
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
 
     def clear_all_direction_waveforms(self) -> None:
-        for key in self._waveform_condition_keys():
-            self._direction_waveform_cache[key] = None
-        if isinstance(getattr(self, "_condition_record_cache", None), dict):
-            self._condition_record_cache = {}
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
 
-    def plot_waveform_to_workspace(self, recorded_signal, sample_rate: float, direction: str = None) -> None:
-        """
-        Plot waveform data to the directional waveform subwindows.
-        """
+    def plot_waveform_to_workspace(
+        self,
+        recorded_signal,
+        sample_rate: float,
+        *,
+        channel_mapping=None,
+    ) -> None:
+        """Project each ordered WAV column to its physical-channel window."""
         if self.channel_workspace is None:
             return
 
@@ -1328,18 +1502,93 @@ class SequenceWidgetStreamingOpsMixin:
             self._clear_plot_area()
             return
 
-        waveform = self._normalize_waveform_signal(recorded_signal)
-        if waveform is None:
-            self._clear_plot_area()
-            return
+        active_mapping = tuple(
+            getattr(self, "_active_input_channels", None) or ()
+        )
+        explicit_mapping = channel_mapping is not None
+        mapping = tuple(channel_mapping) if explicit_mapping else active_mapping
+        recorded_multi = self._normalize_final_recording_array(
+            recorded_signal,
+            mapping,
+        )
 
-        keys = self._waveform_condition_keys()
-        target_direction = self._normalize_waveform_direction(direction) or self._resolve_waveform_direction("")
-        if target_direction not in keys and keys:
-            target_direction = keys[0]
-        self._direction_waveform_cache[target_direction] = (waveform, float(sample_rate or 1.0))
-        self._cache_condition_record(target_direction)
-        self._refresh_direction_waveform_workspace(target_direction)
+        if explicit_mapping and mapping != active_mapping:
+            self.channel_workspace.set_channels(mapping)
+            self._active_input_channels = list(mapping)
+
+        windows = self._validate_final_waveform_workspace(mapping)
+        self._project_normalized_waveform_to_workspace(
+            recorded_multi,
+            sample_rate,
+            windows,
+        )
+
+    def _project_normalized_waveform_to_workspace(
+        self,
+        recorded_multi,
+        sample_rate,
+        windows,
+    ) -> None:
+        """Render one already-validated column per preflighted window."""
+        prepared_columns = [
+            self._prepare_waveform_display_data(
+                recorded_multi[:, column_index],
+                sample_rate,
+            )
+            for column_index in range(recorded_multi.shape[1])
+        ]
+        window_states = [
+            self._snapshot_waveform_window_state(window)
+            for window in windows
+        ]
+        try:
+            for window, display_data in zip(
+                windows,
+                prepared_columns,
+            ):
+                time_axis, display_waveform = display_data
+                window.set_data(time_axis, display_waveform)
+        except Exception:
+            for window, state in zip(windows, window_states):
+                try:
+                    self._restore_waveform_window_state(window, state)
+                except Exception as restore_error:
+                    _log_streaming_boundary(
+                        self,
+                        "error",
+                        "Final waveform rollback failed: "
+                        f"channel={getattr(window, 'channel_index', None)}, "
+                        f"error={restore_error}",
+                    )
+            raise
+
+    @staticmethod
+    def _snapshot_waveform_window_state(window):
+        snapshot = getattr(window, "snapshot_plot_state", None)
+        if callable(snapshot):
+            return snapshot()
+        plot_item = getattr(window, "plot_item", None)
+        get_data = getattr(plot_item, "getData", None)
+        if not callable(get_data):
+            return None
+        x_data, y_data = get_data()
+        return (
+            np.asarray(x_data).copy(),
+            np.asarray(y_data).copy(),
+        )
+
+    @staticmethod
+    def _restore_waveform_window_state(window, state) -> None:
+        restore = getattr(window, "restore_plot_state", None)
+        if callable(restore):
+            restore(state)
+            return
+        if state is None:
+            clear_plot = getattr(window, "clear_plot", None)
+            if callable(clear_plot):
+                clear_plot()
+            return
+        window.set_data(*state)
 
     def _resolve_recording_acq_detail(self) -> dict:
         try:
@@ -1349,6 +1598,122 @@ class SequenceWidgetStreamingOpsMixin:
         except (AttributeError, IndexError, KeyError, TypeError):
             return {}
         return acq_detail if isinstance(acq_detail, dict) else {}
+
+    def _begin_streaming_waveform_session(
+        self, sample_rate, startup_trim_samples, direction=None, channels=None
+    ):
+        self._streaming_waveform_generation += 1
+        run_channels = channels
+        if run_channels is None:
+            run_channels = getattr(self, "_recording_input_channels", None)
+        if run_channels is None:
+            run_channels = getattr(self, "_active_input_channels", None)
+        self._streaming_waveform_session.begin(
+            channels=tuple(run_channels or ()),
+            sample_rate=sample_rate,
+            startup_trim_samples=startup_trim_samples,
+        )
+        self._streaming_waveform_refresh_scheduled = False
+        self._streaming_waveform_pending = False
+        self._streaming_waveform_live_enabled = True
+        self._streaming_waveform_failure_logged = False
+        self._streaming_chunk_contract_failed = False
+        self._streaming_invalid_terminal_handled = False
+
+    def _end_streaming_waveform_session(self):
+        self._streaming_waveform_generation = (
+            getattr(self, "_streaming_waveform_generation", 0) + 1
+        )
+        self._streaming_waveform_refresh_scheduled = False
+        self._streaming_waveform_pending = False
+        self._streaming_waveform_live_enabled = False
+        session = getattr(self, "_streaming_waveform_session", None)
+        if session is not None:
+            session.clear()
+
+    def _disable_streaming_waveform_projection(self, error):
+        """Disable and release only the live projection for this generation."""
+        should_log = not self._streaming_waveform_failure_logged
+        self._streaming_waveform_failure_logged = True
+        self._end_streaming_waveform_session()
+        if should_log:
+            self.default_logger.error(
+                f"Streaming waveform live projection disabled: {error}"
+            )
+
+    def _schedule_streaming_waveform_callback(self, callback):
+        QTimer.singleShot(0, callback)
+
+    def _schedule_streaming_waveform_refresh(self):
+        if self._streaming_waveform_refresh_scheduled:
+            return
+        generation = self._streaming_waveform_generation
+        self._streaming_waveform_refresh_scheduled = True
+        self._schedule_streaming_waveform_callback(
+            lambda: self._flush_streaming_waveform_refresh(generation)
+        )
+
+    def _flush_streaming_waveform_refresh(self, generation):
+        if generation != getattr(self, "_streaming_waveform_generation", 0):
+            return
+        if not getattr(self, "_streaming_waveform_live_enabled", False):
+            return
+        if not self._streaming_waveform_pending:
+            return
+
+        self._streaming_waveform_pending = False
+        self._streaming_waveform_refresh_scheduled = False
+        try:
+            snapshots = self._streaming_waveform_session.snapshots()
+            windows = self.channel_workspace.all_subwindows()
+            if len(windows) != len(snapshots):
+                raise RuntimeError(
+                    "live waveform workspace count does not match recording channels"
+                )
+            for window, (channel, snapshot) in zip(windows, snapshots.items()):
+                window_channel = getattr(window, "channel_index", channel)
+                if window_channel != channel:
+                    raise RuntimeError(
+                        "live waveform workspace order does not match recording channels"
+                    )
+                window.set_data(snapshot.time, snapshot.amplitude)
+        except Exception as error:
+            self._disable_streaming_waveform_projection(error)
+
+    def _terminate_invalid_streaming_recording(self, reason):
+        """Own invalid terminal cleanup exactly once for the active run."""
+        if getattr(self, "_streaming_invalid_terminal_handled", False):
+            return
+        self._streaming_invalid_terminal_handled = True
+        try:
+            cleanup_streaming = getattr(self, "_cleanup_streaming_resources", None)
+        except Exception as error:
+            cleanup_streaming = None
+            _log_streaming_boundary(
+                self,
+                "error",
+                f"Streaming invalid cleanup capability lookup failed: {error}",
+            )
+        if callable(cleanup_streaming):
+            try:
+                cleanup_streaming()
+            except Exception as error:
+                _log_streaming_boundary(
+                    self,
+                    "error",
+                    f"Streaming invalid cleanup capability failed: {error}",
+                )
+        handle_invalid_recording = getattr(self, "_handle_invalid_recording", None)
+        if callable(handle_invalid_recording):
+            handle_invalid_recording(reason)
+        else:
+            self.default_logger.error(reason)
+
+    def _reject_streaming_chunk_contract(self, reason):
+        if getattr(self, "_streaming_chunk_contract_failed", False):
+            return
+        self._streaming_chunk_contract_failed = True
+        self._terminate_invalid_streaming_recording(reason)
 
     def on_audio_chunk_received(self, chunk):
         """
@@ -1361,18 +1726,41 @@ class SequenceWidgetStreamingOpsMixin:
             chunk (object): Either a dict payload {"mono": 1D, "multi": 2D} or a legacy numpy array.
         """
         payload = chunk
-        if isinstance(payload, dict) and "multi" in payload:
-            multi = payload.get("multi")
-        else:
-            multi = payload
+        multi = payload.get("multi") if isinstance(payload, dict) else payload
 
-        if multi is None:
+        if getattr(self, "_streaming_chunk_contract_failed", False) or getattr(
+            self, "_streaming_invalid_terminal_handled", False
+        ):
             return
 
-        multi_arr = np.asarray(multi, dtype=np.float32)
+        run_channels = getattr(self, "_recording_input_channels", None)
+        if run_channels is None:
+            session = getattr(self, "_streaming_waveform_session", None)
+            run_channels = session.channels if session is not None else ()
+        run_channels = tuple(run_channels or ())
+        if not run_channels:
+            return
+
+        try:
+            multi_arr = np.asarray(multi, dtype=np.float32)
+        except (TypeError, ValueError, OverflowError) as error:
+            self._reject_streaming_chunk_contract(
+                "Invalid streaming audio chunk: "
+                f"expected {len(run_channels)} channels; actual shape unavailable: {error}"
+            )
+            return
         if multi_arr.ndim == 1:
-            multi_arr = multi_arr.reshape(-1, 1)
-        if multi_arr.ndim != 2 or multi_arr.shape[0] <= 0:
+            if len(run_channels) == 1:
+                multi_arr = multi_arr.reshape(-1, 1)
+        if (
+            multi_arr.ndim != 2
+            or multi_arr.shape[0] <= 0
+            or multi_arr.shape[1] != len(run_channels)
+        ):
+            self._reject_streaming_chunk_contract(
+                "Invalid streaming audio chunk: "
+                f"expected {len(run_channels)} channels; actual shape {multi_arr.shape}"
+            )
             return
 
         if not getattr(self, "_streaming_first_chunk_logged", False):
@@ -1382,48 +1770,82 @@ class SequenceWidgetStreamingOpsMixin:
                 pass
             self._streaming_first_chunk_logged = True
 
-        self.streaming_buffer_multi.append(multi_arr)
-        if len(self.streaming_buffer_multi) == 1:
-            accumulated = self.streaming_buffer_multi[0]
-        else:
-            accumulated = np.concatenate(self.streaming_buffer_multi, axis=0)
-
-        sample_rate = float(self.data_struct.sample_rate or 1.0)
-        direction = self._resolve_active_recording_waveform_direction() or "forward"
-        trim_samples = resolve_startup_trim_samples(
-            self._resolve_recording_acq_detail(), sample_rate
-        )
-        visible_accumulated = accumulated[trim_samples:]
-        if visible_accumulated.shape[0] > 0:
-            self._direction_waveform_cache[direction] = (
-                visible_accumulated.mean(axis=1).astype(np.float32, copy=False),
-                sample_rate,
-            )
-            self._refresh_direction_waveform_workspace(direction)
-
         if self.streaming_wav_writer:
             try:
                 self.streaming_wav_writer.write_chunk(multi_arr)
-            except Exception as e:
-                self.default_logger.error(f"Error writing audio chunk to file: {e}")
+            except Exception as error:
+                self._terminate_invalid_streaming_recording(
+                    f"Recording WAV chunk write failed: {error}"
+                )
+                return
 
-    def _poll_streaming_queue(self):
-        """
-        Poll streaming queue and check for completion.
-
-        Called by QTimer every 50ms from Qt main thread.
-        Processes audio chunks from queue and checks if recording is finished.
-        """
-        if self.streaming_processor is None:
+        if not getattr(self, "_streaming_waveform_live_enabled", False):
             return
 
-        # Process all available chunks from queue (non-blocking)
-        self.streaming_processor.process_queue()
+        try:
+            self._streaming_waveform_session.append(multi_arr)
+        except Exception as error:
+            self._disable_streaming_waveform_projection(error)
+            return
+        self._streaming_waveform_pending = True
+        self._schedule_streaming_waveform_refresh()
 
-        # Check if recording is complete
-        if not self.streaming_processor.is_recording:
-            self.streaming_poll_timer.stop()
+    def _on_streaming_queue_ready(self, processor):
+        """Drain queued chunks for the active, not-yet-completing processor."""
+        if processor is not self.streaming_processor:
+            return
+        if processor is self._streaming_completion_processor:
+            return
+        try:
+            processor.process_queue()
+        except Exception as error:
+            self._terminate_invalid_streaming_recording(
+                f"Streaming queue drain failed: {error}"
+            )
+
+    def _on_streaming_recording_finished(self, processor):
+        """Final-drain and complete the active processor exactly once."""
+        if processor is not self.streaming_processor:
+            return
+        if processor is self._streaming_completion_processor:
+            return
+        self._streaming_completion_processor = processor
+        generation = getattr(self, "_streaming_waveform_generation", 0)
+        invalid_terminal = False
+        try:
+            try:
+                processor.process_queue()
+            except Exception as error:
+                invalid_terminal = True
+                self._terminate_invalid_streaming_recording(
+                    f"Streaming final queue drain failed: {error}"
+                )
+                return
+            if getattr(self, "_streaming_invalid_terminal_handled", False):
+                invalid_terminal = True
+                return
+            if processor is not self.streaming_processor:
+                return
+            self._flush_streaming_waveform_refresh(generation)
             self._on_streaming_complete()
+            if getattr(self, "_streaming_invalid_terminal_handled", False):
+                invalid_terminal = True
+        finally:
+            _run_optional_streaming_cleanup(
+                self,
+                active_query_name="_streaming_waveform_session_is_active",
+                cleanup_name="_end_streaming_waveform_session",
+                boundary_name="live-session",
+            )
+            if invalid_terminal:
+                self._streaming_completion_processor = None
+            else:
+                _run_optional_streaming_cleanup(
+                    self,
+                    active_query_name="_recording_channel_selection_is_active",
+                    cleanup_name="_finalize_recording_channel_selection",
+                    boundary_name="channel-selection",
+                )
 
     def _on_streaming_complete(
         self,
@@ -1444,6 +1866,17 @@ class SequenceWidgetStreamingOpsMixin:
         - Enable buttons and optionally run analysis
         """
         try:
+            processor = getattr(self, "streaming_processor", None)
+            run_channels = getattr(self, "_recording_input_channels", None)
+            if run_channels is None:
+                # Compatibility for isolated callers. The main recording path
+                # always owns an immutable run snapshot.
+                run_channels = tuple(
+                    getattr(self, "_active_input_channels", None) or ()
+                )
+            else:
+                run_channels = tuple(run_channels)
+
             if recorded_mono is None:
                 recorded_mono = self.streaming_processor.get_recorded_data()
                 try:
@@ -1465,20 +1898,29 @@ class SequenceWidgetStreamingOpsMixin:
                         f"Recording complete: {actual_samples} samples captured (matches target)"
                     )
             elif recorded_multi is None:
-                recorded_multi = np.asarray(recorded_mono, dtype=np.float32).reshape(-1, 1)
+                recorded_multi = np.asarray(recorded_mono, dtype=np.float32)
 
-            # Record-only mode - no alignment needed
-            # Store mono for analysis pipeline compatibility
-            recorded_multi = np.asarray(recorded_multi, dtype=np.float32)
-            if recorded_multi.ndim == 1:
-                recorded_multi = recorded_multi.reshape(-1, 1)
-            self.data_struct.store_wave_data_multi = recorded_multi
-            self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(np.float32, copy=False)
+            try:
+                self._verify_processor_retained_channels(processor, run_channels)
+                recorded_multi = self._normalize_final_recording_array(
+                    recorded_multi,
+                    run_channels,
+                )
+                final_waveform_windows = self._validate_final_waveform_workspace(
+                    run_channels
+                )
+            except (TypeError, ValueError, OverflowError) as error:
+                self._terminate_invalid_streaming_recording(str(error))
+                return
 
             # Finalize WAV file (for record-only, this is the final file)
-            if self.streaming_wav_writer:
-                self.streaming_wav_writer.finalize()
-                self.streaming_wav_writer = None
+            try:
+                _claim_and_finalize_streaming_wav_writer(self)
+            except Exception as error:
+                self._terminate_invalid_streaming_recording(
+                    f"Recording WAV finalization failed: {error}"
+                )
+                return
 
             acq_detail = self._resolve_recording_acq_detail()
 
@@ -1492,10 +1934,6 @@ class SequenceWidgetStreamingOpsMixin:
             trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
             if 0 < trim_samples < recorded_multi.shape[0]:
                 recorded_multi = recorded_multi[trim_samples:]
-                self.data_struct.store_wave_data_multi = recorded_multi
-                self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(
-                    np.float32, copy=False
-                )
                 self._rewrite_recorded_wav(recorded_multi, sample_rate)
                 self.default_logger.info(
                     f"startup_trim_applied samples={trim_samples} "
@@ -1532,12 +1970,44 @@ class SequenceWidgetStreamingOpsMixin:
                 self._handle_invalid_recording(quality_reason)
                 return
 
-            # Update plots with final multi-channel data using the direction fixed when this run started.
-            active_direction = self._resolve_active_recording_waveform_direction(fallback="")
-            self.plot_waveform_to_workspace(recorded_multi, sample_rate, direction=active_direction or None)
+            # Publish the validated, trimmed recording atomically to the
+            # authoritative analysis state. Invalid captures must leave the
+            # previous recording available to downstream analysis.
+            self.data_struct.store_wave_data_multi = recorded_multi
+            self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(
+                np.float32,
+                copy=False,
+            )
+
+            self._append_recording_wav_calibration_metadata()
+
+            self.recorded_signal_info["sample_rate"] = sample_rate
+            condition_key = self._resolve_active_recording_waveform_direction(
+                fallback=""
+            )
+            self._cache_condition_record(condition_key)
+
+            # Final data and workspace semantic validation have succeeded, so
+            # waveform preparation / Qt failures are presentation-only.
+            try:
+                self._project_normalized_waveform_to_workspace(
+                    recorded_multi,
+                    sample_rate,
+                    final_waveform_windows,
+                )
+            except Exception as error:
+                self.default_logger.error(
+                    "Final waveform projection failed after recording save: "
+                    f"channels={run_channels}, shape={recorded_multi.shape}, "
+                    f"error={error}"
+                )
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "录音已保存，但波形刷新失败。",
+                )
 
             # Save to database
-            self.recorded_signal_info["sample_rate"] = sample_rate
             save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
             if save_code == error_code.OK:
                 self.default_logger.info(f"Database save successful: {save_msg}")
@@ -1701,9 +2171,12 @@ class SequenceWidgetStreamingOpsMixin:
         except Exception as e:
             self.default_logger.error(f"Error in streaming completion: {e}")
             # Clean up on error
-            if self.streaming_wav_writer:
-                self.streaming_wav_writer.finalize()
-                self.streaming_wav_writer = None
+            try:
+                _claim_and_finalize_streaming_wav_writer(self)
+            except Exception as finalize_error:
+                self.default_logger.error(
+                    f"Error finalizing WAV file during completion cleanup: {finalize_error}"
+                )
             self.streaming_processor = None
             self.streaming_stimulus_data = None
             self.streaming_mode = None
@@ -1732,6 +2205,23 @@ class SequenceWidgetStreamingOpsMixin:
                 self._last_committed_barcode_time = 0.0
 
             self._queued_directional_trigger = ""
+
+    def _append_recording_wav_calibration_metadata(self) -> bool:
+        metadata = getattr(self, "_recording_wav_calibration_metadata", None)
+        if not metadata:
+            return False
+
+        appended = append_wav_calibration_metadata(
+            self.recorded_path,
+            metadata,
+            logger=self.default_logger,
+        )
+        if not appended:
+            self.default_logger.warning(
+                "recording_calibration_metadata_append_failed "
+                f"path={self.recorded_path}"
+            )
+        return appended
 
     def _rewrite_recorded_wav(self, samples, sample_rate) -> None:
         """Overwrite the just-finalized WAV file with trimmed ``samples``.
@@ -1768,6 +2258,19 @@ class SequenceWidgetStreamingOpsMixin:
         analysis entirely so the bad audio cannot pollute downstream
         statistics or training data.
         """
+        _run_optional_streaming_cleanup(
+            self,
+            active_query_name="_streaming_waveform_session_is_active",
+            cleanup_name="_end_streaming_waveform_session",
+            boundary_name="live-session",
+        )
+        _run_optional_streaming_cleanup(
+            self,
+            active_query_name="_recording_channel_selection_is_active",
+            cleanup_name="_abort_recording_channel_selection",
+            boundary_name="channel-selection",
+        )
+
         serial_product_condition_was_executing = bool(
             getattr(self, "_serial_product_condition_executing", False)
         )
@@ -1873,40 +2376,101 @@ class SequenceWidgetStreamingOpsMixin:
 
     def _cleanup_streaming_resources(self):
         """
-        Clean up all streaming resources (timer, processor, wav_writer).
+        Clean up all streaming resources (processor and wav_writer).
 
         Called before starting a new recording to prevent resource conflicts.
         Safe to call multiple times (idempotent).
         """
-        # 1. Stop timer first (prevent callbacks during cleanup)
-        try:
-            if self.streaming_poll_timer.isActive():
-                self.streaming_poll_timer.stop()
-                self.default_logger.debug("Stopped streaming poll timer")
-        except Exception as e:
-            self.default_logger.error(f"Error stopping timer: {e}")
+        _run_optional_streaming_cleanup(
+            self,
+            active_query_name="_streaming_waveform_session_is_active",
+            cleanup_name="_end_streaming_waveform_session",
+            boundary_name="live-session",
+        )
+        _run_optional_streaming_cleanup(
+            self,
+            active_query_name="_recording_channel_selection_is_active",
+            cleanup_name="_abort_recording_channel_selection",
+            boundary_name="channel-selection",
+        )
 
-        # 2. Stop processor (stops audio streams - CRITICAL for preventing device conflicts)
+        # 1. Stop processor (stops audio streams - CRITICAL for preventing device conflicts)
         try:
-            if self.streaming_processor is not None:
-                self.streaming_processor.stop_streaming()
+            processor = getattr(self, "streaming_processor", None)
+        except Exception as error:
+            processor = None
+            _log_streaming_boundary(
+                self,
+                "error",
+                f"Streaming cleanup processor query failed: {error}",
+            )
+        if processor is not None:
+            try:
                 self.streaming_processor = None
-                self.default_logger.debug("Stopped streaming processor")
-        except Exception as e:
-            self.default_logger.error(f"Error stopping processor: {e}")
+            except Exception as error:
+                _log_streaming_boundary(
+                    self,
+                    "error",
+                    f"Streaming cleanup processor release failed: {error}",
+                )
+            else:
+                try:
+                    processor.stop_streaming()
+                except Exception as error:
+                    _log_streaming_boundary(
+                        self,
+                        "error",
+                        f"Error stopping processor: {error}",
+                    )
+                else:
+                    _log_streaming_boundary(
+                        self,
+                        "debug",
+                        "Stopped streaming processor",
+                    )
 
-        # 3. Finalize wav writer
+        # 2. Finalize wav writer
         try:
-            if self.streaming_wav_writer is not None:
-                self.streaming_wav_writer.finalize()
-                self.streaming_wav_writer = None
-                self.default_logger.debug("Finalized wav writer")
-        except Exception as e:
-            self.default_logger.error(f"Error finalizing wav writer: {e}")
+            finalized_writer = _claim_and_finalize_streaming_wav_writer(self)
+        except Exception as error:
+            _log_streaming_boundary(
+                self,
+                "error",
+                f"Error finalizing wav writer: {error}",
+            )
+        else:
+            if finalized_writer:
+                _log_streaming_boundary(
+                    self,
+                    "debug",
+                    "Finalized wav writer",
+                )
 
-        # 4. Clean up other state
-        self.streaming_stimulus_data = None
-        self.streaming_mode = None
+        # 3. Clean up other state
+        for attribute in ("streaming_stimulus_data", "streaming_mode"):
+            try:
+                setattr(self, attribute, None)
+            except Exception as error:
+                _log_streaming_boundary(
+                    self,
+                    "error",
+                    f"Streaming cleanup {attribute} reset failed: {error}",
+                )
+
+    def _streaming_waveform_session_is_active(self):
+        session = getattr(self, "_streaming_waveform_session", None)
+        return bool(
+            getattr(self, "_streaming_waveform_live_enabled", False)
+            or getattr(self, "_streaming_waveform_refresh_scheduled", False)
+            or getattr(self, "_streaming_waveform_pending", False)
+            or (session is not None and session.channels)
+        )
+
+    def _recording_channel_selection_is_active(self):
+        return bool(
+            getattr(self, "_recording_input_channels", None) is not None
+            or getattr(self, "_pending_configured_input_channels", None) is not None
+        )
 
     def _close_analysis_windows(self):
         """

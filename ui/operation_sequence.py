@@ -732,8 +732,23 @@ class OptionList(QListView):
         self, model: QDialog, config_manager: ConfigManager, name, type, signal_len
     ):
         available_channels = list(self.mic_channels or [0])
+        restrict_analysis_channel = False
+        if type in {"SPL", "Spec", "FBA"}:
+            mode = getattr(self.config[0], "mode", None) if self.config else None
+            if mode == "RECORD_ONLY":
+                restrict_analysis_channel = True
+            elif mode != "IMPORT_AUDIO":
+                self.default_logger.warning(
+                    f"Cannot open {type} config for unsupported acquisition mode: {mode}"
+                )
+                return None
         if type == "SPL":
-            return SplConfigWindow(config_manager, name, available_channels=available_channels)
+            return SplConfigWindow(
+                config_manager,
+                name,
+                available_channels=available_channels,
+                restrict_analysis_channel=restrict_analysis_channel,
+            )
         if type == "AI":
             return AIConfigWindow(
                 config_manager,
@@ -742,7 +757,12 @@ class OptionList(QListView):
                 available_channels=available_channels,
             )
         if type == "Spec":
-            return SpecConfigWindow(config_manager, name, available_channels=available_channels)
+            return SpecConfigWindow(
+                config_manager,
+                name,
+                available_channels=available_channels,
+                restrict_analysis_channel=restrict_analysis_channel,
+            )
         if type == "RSC":
             return ReferenceSpectrumConfigWindow(
                 config_manager,
@@ -756,6 +776,7 @@ class OptionList(QListView):
                 config_manager,
                 name,
                 available_channels=available_channels,
+                restrict_analysis_channel=restrict_analysis_channel,
             )
         if type == "FFT":
             return FftConfigWindow(

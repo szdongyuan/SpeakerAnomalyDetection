@@ -22,6 +22,9 @@ from base.product_test_project_config import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
 )
+from base.recording_calibration_snapshot import (
+    build_recording_wav_calibration_metadata,
+)
 
 from base.play_and_record import (
     get_recorded_info,
@@ -40,11 +43,22 @@ from base.pre_processing.spl_runtime_config import calculate_overall_spl, resolv
 
 from base.streaming_file_writer import StreamingWavWriter
 from base.temp_tcp_client import TempTcpClient
+from base.wav_calibration_metadata import (
+    WavCalibrationMetadataReadStatus,
+    inspect_wav_calibration_metadata,
+    resolve_wav_channel_v2pa_factor,
+)
+from base.wav_channel_mapping import resolve_wav_plot_channels
 
 from consts.running_consts import DEFAULT_DIR
 
 from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
+from ui.sequence.analysis_channel_preflight import (
+    REQUIRED_CHANNEL_ANALYSIS_TYPES,
+    preflight_analysis_channels,
+)
 from ui.sequence.analysis_report_snapshot import build_analysis_report_items
+from ui.ui_analysis_config.config_normalization import normalize_analysis_channel
 from ui.sequence.product_condition_result_ops import (
     SequenceWidgetProductConditionResultOpsMixin,
 )
@@ -221,6 +235,17 @@ class SequenceWidgetAnalysisOpsMixin(
         return f"_{safe_name}" if safe_name else ""
 
     def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
+        ended_direct_import = False
+        if clear_waveforms:
+            begin_hardware_presentation = getattr(
+                self,
+                "_begin_new_recording_presentation",
+                None,
+            )
+            if callable(begin_hardware_presentation):
+                ended_direct_import = bool(
+                    begin_hardware_presentation()
+                )
         unlock_product_round_barcode = getattr(
             self,
             "_unlock_sn_for_product_round",
@@ -239,7 +264,7 @@ class SequenceWidgetAnalysisOpsMixin(
         self._waveform_display_override_direction = ""
         self._current_cycle_recorded_count = None
         self._serial_product_waiting_for_close = False
-        if clear_waveforms:
+        if clear_waveforms and not ended_direct_import:
             clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
             if callable(clear_all_direction_waveforms):
                 clear_all_direction_waveforms()
@@ -1121,12 +1146,27 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._abort_imported_product_condition_step()
             return False
 
+        previous_presentation = self._snapshot_import_presentation_state()
+        presentation_mutated = False
         self._record_workflow_busy = True
         try:
             try:
-                audio_mono, target_sample_rate = self._decode_audio_file(
+                audio_multi, target_sample_rate = self._decode_audio_file(
                     file_path,
+                    mono=False,
                 )
+                diagnostic = inspect_wav_calibration_metadata(
+                    file_path,
+                    logger=self.default_logger,
+                )
+                column_count = self._audio_column_count(audio_multi)
+                channel_mapping = resolve_wav_plot_channels(
+                    diagnostic,
+                    column_count=column_count,
+                )
+                presentation_mutated = True
+                self._clear_imported_wav_calibration_state()
+                self.data_struct.wav_calibration_metadata_authoritative = True
                 self.recorded_path = file_path
                 self.recorded_signal_info = {
                     "file_path": file_path,
@@ -1134,12 +1174,35 @@ class SequenceWidgetAnalysisOpsMixin(
                     "labels": "not_labeled",
                     "source_type": "imported",
                 }
-                self._apply_audio_to_data_struct(
-                    audio_mono,
-                    target_sample_rate,
+                self._pending_wav_plot_channel_mapping = channel_mapping
+                try:
+                    self._apply_audio_to_data_struct(
+                        audio_multi,
+                        target_sample_rate,
+                    )
+                    self._active_input_channels = list(channel_mapping)
+                finally:
+                    self._pending_wav_plot_channel_mapping = None
+                self.data_struct.wav_calibration_metadata = (
+                    diagnostic.metadata
+                    if diagnostic.status
+                    is WavCalibrationMetadataReadStatus.VALID
+                    else None
                 )
+                self._waveform_presentation_owner = "direct_import"
             except Exception as exc:
-                self._clear_failed_import_audio_state(product_condition_key)
+                if product_condition_key:
+                    self._abort_imported_product_condition_step()
+                if presentation_mutated or product_condition_key:
+                    try:
+                        self._restore_import_presentation_state(
+                            previous_presentation
+                        )
+                    except Exception as restore_error:
+                        self.default_logger.error(
+                            "Failed to restore waveform presentation after "
+                            f"import error: {restore_error}"
+                        )
                 QMessageBox.warning(
                     self,
                     "提示",
@@ -1150,7 +1213,7 @@ class SequenceWidgetAnalysisOpsMixin(
             self.data_btn.setEnabled(True)
             if product_condition_key or self.analysis_config.get("auto_analysis"):
                 try:
-                    self.run(
+                    analysis_succeeded = self.run(
                         show_windows=True,
                         capture_product_report=False,
                     )
@@ -1161,6 +1224,10 @@ class SequenceWidgetAnalysisOpsMixin(
                         f"音频分析失败: {exc}",
                     )
                     return False
+                if analysis_succeeded is False:
+                    if product_condition_key:
+                        self._abort_imported_product_condition_step()
+                    return False
             if product_condition_key:
                 self._capture_imported_product_condition_record()
                 self._complete_imported_product_condition_step()
@@ -1168,6 +1235,195 @@ class SequenceWidgetAnalysisOpsMixin(
         finally:
             self._record_workflow_busy = False
             self.update_player_btn_is_paused()
+
+    @staticmethod
+    def _audio_column_count(audio_data) -> int:
+        audio_array = np.asarray(audio_data)
+        if audio_array.ndim == 1:
+            return 1
+        if audio_array.ndim == 2:
+            return int(audio_array.shape[1])
+        raise ValueError(f"不支持的音频数据维度: {audio_array.shape}")
+
+    def _snapshot_import_presentation_state(self):
+        def copied(value):
+            return None if value is None else np.asarray(value).copy()
+
+        return {
+            "recorded_path": getattr(self, "recorded_path", None),
+            "recorded_signal_info": dict(
+                getattr(self, "recorded_signal_info", {}) or {}
+            ),
+            "store_wave_data": copied(
+                getattr(self.data_struct, "store_wave_data", None)
+            ),
+            "store_wave_data_multi": copied(
+                getattr(self.data_struct, "store_wave_data_multi", None)
+            ),
+            "sample_rate": getattr(self.data_struct, "sample_rate", None),
+            "audio_lenth": getattr(self.data_struct, "audio_lenth", None),
+            "analysis_result_dict": dict(
+                getattr(self.data_struct, "analysis_result_dict", {}) or {}
+            ),
+            "wav_calibration_metadata": copy.deepcopy(
+                getattr(self.data_struct, "wav_calibration_metadata", None)
+            ),
+            "wav_calibration_metadata_authoritative": bool(
+                getattr(
+                    self.data_struct,
+                    "wav_calibration_metadata_authoritative",
+                    False,
+                )
+            ),
+            "wav_calibration_warning_shown": bool(
+                getattr(
+                    self.data_struct,
+                    "wav_calibration_warning_shown",
+                    False,
+                )
+            ),
+            "active_input_channels": tuple(
+                getattr(self, "_active_input_channels", ()) or ()
+            ),
+            "owner": getattr(
+                self,
+                "_waveform_presentation_owner",
+                "hardware",
+            ),
+            "analysis_preflight_warning_shown": bool(
+                getattr(self, "_analysis_preflight_warning_shown", False)
+            ),
+            "analysis_preflight_skips": dict(
+                getattr(self, "_analysis_preflight_skips", {}) or {}
+            ),
+            "analysis_channel_local_columns": dict(
+                getattr(self, "_analysis_channel_local_columns", {}) or {}
+            ),
+            "imported_wav_channel_v2pa_factors": dict(
+                getattr(
+                    self,
+                    "_imported_wav_channel_v2pa_factors",
+                    {},
+                )
+                or {}
+            ),
+            "workspace_plot_states": (
+                self._snapshot_channel_workspace_plot_states()
+            ),
+        }
+
+    def _snapshot_channel_workspace_plot_states(self):
+        try:
+            workspace = getattr(self, "channel_workspace", None)
+            all_subwindows = getattr(workspace, "all_subwindows", None)
+            if not callable(all_subwindows):
+                return None
+            windows = list(all_subwindows())
+            states = []
+            for window in windows:
+                snapshot_plot_state = getattr(
+                    window,
+                    "snapshot_plot_state",
+                    None,
+                )
+                if not callable(snapshot_plot_state):
+                    return None
+                states.append(snapshot_plot_state())
+            return tuple(states)
+        except Exception as error:
+            self.default_logger.warning(
+                f"Failed to snapshot waveform presentation: {error}"
+            )
+            return None
+
+    def _restore_channel_workspace_plot_states(
+        self,
+        mapping,
+        states,
+    ) -> bool:
+        if states is None:
+            return False
+        try:
+            workspace = getattr(self, "channel_workspace", None)
+            all_subwindows = getattr(workspace, "all_subwindows", None)
+            if workspace is None or not callable(all_subwindows):
+                return False
+            workspace.set_channels(mapping)
+            windows = list(all_subwindows())
+            if len(windows) != len(states):
+                return False
+            for window, state in zip(windows, states):
+                restore_plot_state = getattr(
+                    window,
+                    "restore_plot_state",
+                    None,
+                )
+                if not callable(restore_plot_state):
+                    return False
+                restore_plot_state(state)
+            return True
+        except Exception as error:
+            self.default_logger.warning(
+                f"Failed to restore waveform presentation snapshot: {error}"
+            )
+            return False
+
+    def _restore_import_presentation_state(self, snapshot) -> None:
+        self.recorded_path = snapshot["recorded_path"]
+        self.recorded_signal_info = snapshot["recorded_signal_info"]
+        self.data_struct.store_wave_data = snapshot["store_wave_data"]
+        self.data_struct.store_wave_data_multi = snapshot[
+            "store_wave_data_multi"
+        ]
+        self.data_struct.sample_rate = snapshot["sample_rate"]
+        self.data_struct.audio_lenth = snapshot["audio_lenth"]
+        self.data_struct.analysis_result_dict = snapshot[
+            "analysis_result_dict"
+        ]
+        self.data_struct.wav_calibration_metadata = snapshot[
+            "wav_calibration_metadata"
+        ]
+        self.data_struct.wav_calibration_metadata_authoritative = snapshot[
+            "wav_calibration_metadata_authoritative"
+        ]
+        self.data_struct.wav_calibration_warning_shown = snapshot[
+            "wav_calibration_warning_shown"
+        ]
+        mapping = tuple(snapshot["active_input_channels"])
+        self._active_input_channels = list(mapping)
+        self._waveform_presentation_owner = snapshot["owner"]
+        self._analysis_preflight_warning_shown = snapshot[
+            "analysis_preflight_warning_shown"
+        ]
+        self._analysis_preflight_skips = snapshot[
+            "analysis_preflight_skips"
+        ]
+        self._analysis_channel_local_columns = snapshot[
+            "analysis_channel_local_columns"
+        ]
+        self._imported_wav_channel_v2pa_factors = snapshot[
+            "imported_wav_channel_v2pa_factors"
+        ]
+        previous_multi = snapshot["store_wave_data_multi"]
+        restored_plot_states = self._restore_channel_workspace_plot_states(
+            mapping,
+            snapshot["workspace_plot_states"],
+        )
+        if not restored_plot_states and previous_multi is not None and mapping:
+            self.plot_waveform_to_workspace(
+                previous_multi,
+                snapshot["sample_rate"],
+                channel_mapping=mapping,
+            )
+
+    def _clear_imported_wav_calibration_state(self) -> None:
+        self.data_struct.wav_calibration_metadata = None
+        self.data_struct.wav_calibration_metadata_authoritative = False
+        self.data_struct.wav_calibration_warning_shown = False
+        self._analysis_preflight_warning_shown = False
+        self._analysis_preflight_skips = {}
+        self._analysis_channel_local_columns = {}
+        self._imported_wav_channel_v2pa_factors = {}
 
     def _decode_audio_file(
         self,
@@ -1232,8 +1488,13 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         self.data_struct.sample_rate = sample_rate
         self.data_struct.audio_lenth = int(audio_multi.shape[0])
-        if self._is_import_audio_mode():
-            self._active_input_channels = [0]
+        channel_mapping = getattr(
+            self,
+            "_pending_wav_plot_channel_mapping",
+            None,
+        )
+        if self._is_import_audio_mode() and channel_mapping is None:
+            channel_mapping = tuple(range(audio_multi.shape[1]))
 
         if self._is_manual_product_condition_cycle_active():
             self._clear_plot_area()
@@ -1247,21 +1508,117 @@ class SequenceWidgetAnalysisOpsMixin(
                 clear_all_direction_waveforms()
             else:
                 self._clear_plot_area()
-        self.plot_waveform_to_workspace(
-            self.data_struct.store_wave_data_multi,
-            self.data_struct.sample_rate,
+        if channel_mapping is None:
+            self.plot_waveform_to_workspace(
+                self.data_struct.store_wave_data_multi,
+                self.data_struct.sample_rate,
+            )
+        else:
+            self._plot_file_audio_to_workspace(
+                self.data_struct.store_wave_data_multi,
+                self.data_struct.sample_rate,
+                channel_mapping,
+            )
+
+    def _plot_file_audio_to_workspace(
+        self,
+        audio_multi,
+        sample_rate: float,
+        channel_mapping,
+    ) -> None:
+        """Rebuild file-backed plots without weakening final-run preflight."""
+        mapping = tuple(channel_mapping or ())
+        workspace = getattr(self, "channel_workspace", None)
+        all_subwindows = getattr(workspace, "all_subwindows", None)
+        normalize = getattr(self, "_normalize_final_recording_array", None)
+        validate = getattr(self, "_validate_final_waveform_workspace", None)
+        project = getattr(
+            self,
+            "_project_normalized_waveform_to_workspace",
+            None,
         )
 
-    def _load_audio_file_to_data_struct(self, file_path: str, sample_rate: float | None = None):
+        if all(
+            callable(method)
+            for method in (all_subwindows, normalize, validate, project)
+        ):
+            normalized = normalize(audio_multi, mapping)
+            actual_mapping = tuple(
+                getattr(window, "channel_index", None)
+                for window in all_subwindows()
+            )
+            if actual_mapping != mapping:
+                workspace.set_channels(mapping)
+            windows = validate(mapping)
+            project(normalized, sample_rate, windows)
+        else:
+            self.plot_waveform_to_workspace(
+                audio_multi,
+                sample_rate,
+                channel_mapping=mapping,
+            )
+
+        self._active_input_channels = list(mapping)
+
+    def _load_audio_file_to_data_struct(
+        self,
+        file_path: str,
+        sample_rate: float | None = None,
+        *,
+        saved_active_input_channels=None,
+        presentation_owner=None,
+    ):
+        if saved_active_input_channels is None:
+            saved_active_input_channels = getattr(
+                self,
+                "_pending_recent_saved_active_input_channels",
+                None,
+            )
+        if presentation_owner is None:
+            presentation_owner = getattr(
+                self,
+                "_pending_recent_presentation_owner",
+                None,
+            )
+        import_audio_mode = self._is_import_audio_mode()
         audio_data, target_sample_rate = self._decode_audio_file(
             file_path,
             sample_rate=sample_rate,
-            mono=self._is_import_audio_mode(),
+            mono=False,
         )
-        self._apply_audio_to_data_struct(
-            audio_data,
-            target_sample_rate,
-        )
+        diagnostic = None
+        channel_mapping = None
+        if import_audio_mode or presentation_owner is not None:
+            diagnostic = inspect_wav_calibration_metadata(
+                file_path,
+                logger=self.default_logger,
+            )
+            channel_mapping = resolve_wav_plot_channels(
+                diagnostic,
+                column_count=self._audio_column_count(audio_data),
+                saved_active_input_channels=saved_active_input_channels,
+            )
+        self._clear_imported_wav_calibration_state()
+        self._pending_wav_plot_channel_mapping = channel_mapping
+        try:
+            self._apply_audio_to_data_struct(
+                audio_data,
+                target_sample_rate,
+            )
+            if channel_mapping is not None:
+                self._active_input_channels = list(channel_mapping)
+        finally:
+            self._pending_wav_plot_channel_mapping = None
+        if diagnostic is not None:
+            self.data_struct.wav_calibration_metadata = (
+                diagnostic.metadata
+                if diagnostic.status
+                is WavCalibrationMetadataReadStatus.VALID
+                else None
+            )
+            self.data_struct.wav_calibration_metadata_authoritative = True
+        if presentation_owner is not None:
+            self._waveform_presentation_owner = presentation_owner
 
     def _capture_imported_product_condition_record(self) -> None:
         condition_key = self._get_active_product_condition_key()
@@ -1279,6 +1636,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 list(getattr(self, "analysis_window", []) or []),
                 getattr(self, "analysis_config", {}) or {},
                 getattr(self.data_struct, "analysis_result_dict", {}) or {},
+                getattr(self, "_analysis_preflight_skips", {}) or {},
             )
             if report_items:
                 report_state = (
@@ -1423,6 +1781,7 @@ class SequenceWidgetAnalysisOpsMixin(
         else:
             self.data_struct.store_wave_data = None
             self.data_struct.store_wave_data_multi = None
+        self._clear_imported_wav_calibration_state()
         self.data_struct.sample_rate = None
         self.data_struct.audio_lenth = None
         analysis_results = getattr(
@@ -1545,12 +1904,6 @@ class SequenceWidgetAnalysisOpsMixin(
                 using_config_path = snapshot.get("using_config_path")
                 if using_config_path:
                     self.using_config_path = str(using_config_path)
-                active_channels = snapshot.get("active_input_channels")
-                if isinstance(active_channels, list) and active_channels:
-                    try:
-                        self._active_input_channels = [int(ch) for ch in active_channels]
-                    except Exception:
-                        pass
                 if getattr(self, "count_board", None) is not None:
                     self.count_board.analysis_config = self.analysis_config
                 init_fft_and_stft_flag = getattr(self, "init_fft_and_stft_flag", None)
@@ -1706,6 +2059,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 list(getattr(self, "analysis_window", []) or []),
                 getattr(self, "analysis_config", {}) or {},
                 getattr(self.data_struct, "analysis_result_dict", {}) or {},
+                getattr(self, "_analysis_preflight_skips", {}) or {},
             )
             if not report_items:
                 report_state = "not_required"
@@ -1931,6 +2285,31 @@ class SequenceWidgetAnalysisOpsMixin(
         previous_sample_rate = self.data_struct.sample_rate
         previous_audio_length = getattr(self.data_struct, "audio_lenth", 0)
         previous_analysis_result_dict = dict(getattr(self.data_struct, "analysis_result_dict", {}) or {})
+        previous_wav_calibration_metadata = copy.deepcopy(
+            getattr(self.data_struct, "wav_calibration_metadata", None)
+        )
+        previous_wav_calibration_metadata_authoritative = bool(
+            getattr(
+                self.data_struct,
+                "wav_calibration_metadata_authoritative",
+                False,
+            )
+        )
+        previous_wav_calibration_warning_shown = bool(
+            getattr(self.data_struct, "wav_calibration_warning_shown", False)
+        )
+        previous_analysis_preflight_warning_shown = bool(
+            getattr(self, "_analysis_preflight_warning_shown", False)
+        )
+        previous_analysis_preflight_skips = dict(
+            getattr(self, "_analysis_preflight_skips", {}) or {}
+        )
+        previous_analysis_channel_local_columns = dict(
+            getattr(self, "_analysis_channel_local_columns", {}) or {}
+        )
+        previous_imported_wav_channel_v2pa_factors = dict(
+            getattr(self, "_imported_wav_channel_v2pa_factors", {}) or {}
+        )
         previous_mode = getattr(self.count_board, "mode", "")
         previous_direction_waveform_cache = dict(getattr(self, "_direction_waveform_cache", {}) or {})
         previous_waveform_display_override_direction = str(
@@ -1938,8 +2317,17 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         previous_excel_export_cache = self._excel_export_cache
         previous_excel_exported_record_id = self._excel_exported_record_id
+        previous_workspace_plot_states = (
+            self._snapshot_channel_workspace_plot_states()
+        )
+        previous_waveform_presentation_owner = getattr(
+            self,
+            "_waveform_presentation_owner",
+            "hardware",
+        )
 
         try:
+            self._waveform_presentation_owner = "recent_view"
             self._close_analysis_windows()
             applied_config, config_message = self._apply_recent_session_config_for_view(session_record)
             if not applied_config:
@@ -1949,10 +2337,21 @@ class SequenceWidgetAnalysisOpsMixin(
             if not self.recorded_signal_info.get("file_path"):
                 self.recorded_signal_info["file_path"] = playback_path
             self._waveform_display_override_direction = str(session_record.get("mode") or "")
-            self._load_audio_file_to_data_struct(
-                playback_path,
-                sample_rate=session_record.get("sample_rate") or previous_sample_rate or None,
+            config_snapshot = session_record.get("config_snapshot")
+            self._pending_recent_saved_active_input_channels = (
+                config_snapshot.get("active_input_channels")
+                if isinstance(config_snapshot, dict)
+                else None
             )
+            self._pending_recent_presentation_owner = "recent_view"
+            try:
+                self._load_audio_file_to_data_struct(
+                    playback_path,
+                    sample_rate=session_record.get("sample_rate") or previous_sample_rate or None,
+                )
+            finally:
+                self._pending_recent_saved_active_input_channels = None
+                self._pending_recent_presentation_owner = None
             self.count_board.mode = "view"
             self.run(show_windows=True, capture_product_report=False)
         except Exception as e:
@@ -1965,6 +2364,9 @@ class SequenceWidgetAnalysisOpsMixin(
             self.analysis_config = previous_analysis_config
             self.using_config_path = previous_using_config_path
             self._active_input_channels = previous_active_input_channels
+            self._waveform_presentation_owner = (
+                previous_waveform_presentation_owner
+            )
             if getattr(self, "count_board", None) is not None:
                 self.count_board.analysis_config = (
                     previous_count_board_analysis_config
@@ -1976,17 +2378,68 @@ class SequenceWidgetAnalysisOpsMixin(
             self.data_struct.sample_rate = previous_sample_rate
             self.data_struct.audio_lenth = previous_audio_length
             self.data_struct.analysis_result_dict = previous_analysis_result_dict
+            self.data_struct.wav_calibration_metadata = (
+                previous_wav_calibration_metadata
+            )
+            self.data_struct.wav_calibration_metadata_authoritative = (
+                previous_wav_calibration_metadata_authoritative
+            )
+            self.data_struct.wav_calibration_warning_shown = (
+                previous_wav_calibration_warning_shown
+            )
+            self._analysis_preflight_warning_shown = (
+                previous_analysis_preflight_warning_shown
+            )
+            self._analysis_preflight_skips = previous_analysis_preflight_skips
+            self._analysis_channel_local_columns = (
+                previous_analysis_channel_local_columns
+            )
+            self._imported_wav_channel_v2pa_factors = (
+                previous_imported_wav_channel_v2pa_factors
+            )
             self._direction_waveform_cache = previous_direction_waveform_cache
             self._waveform_display_override_direction = previous_waveform_display_override_direction
             self._excel_export_cache = previous_excel_export_cache
             self._excel_exported_record_id = previous_excel_exported_record_id
-            refresh_direction_waveform_workspace = getattr(self, "_refresh_direction_waveform_workspace", None)
-            if callable(refresh_direction_waveform_workspace):
-                refresh_direction_waveform_workspace()
-            elif previous_store_wave_data_multi is not None:
-                self.plot_waveform_to_workspace(previous_store_wave_data_multi, previous_sample_rate)
+            pending_channels = getattr(
+                self,
+                "_pending_configured_input_channels",
+                None,
+            )
+            if pending_channels is not None:
+                self._pending_configured_input_channels = None
+                self._waveform_presentation_owner = "hardware"
+                apply_mapping = getattr(
+                    self,
+                    "_apply_input_channel_workspace_mapping",
+                    None,
+                )
+                mapping_changed = (
+                    apply_mapping(pending_channels)
+                    if callable(apply_mapping)
+                    else False
+                )
+                if not mapping_changed:
+                    self._active_input_channels = list(pending_channels)
+                    self._clear_plot_area()
             else:
-                self._clear_plot_area()
+                restored_plot_states = (
+                    self._restore_channel_workspace_plot_states(
+                        previous_active_input_channels,
+                        previous_workspace_plot_states,
+                    )
+                )
+                if not restored_plot_states:
+                    refresh_direction_waveform_workspace = getattr(self, "_refresh_direction_waveform_workspace", None)
+                    if callable(refresh_direction_waveform_workspace):
+                        refresh_direction_waveform_workspace()
+                    elif previous_store_wave_data_multi is not None:
+                        self.plot_waveform_to_workspace(
+                            previous_store_wave_data_multi,
+                            previous_sample_rate,
+                        )
+                    else:
+                        self._clear_plot_area()
 
         self.data_btn.setEnabled(True)
         # Viewing a historical record already runs analysis once with visible windows.
@@ -2052,6 +2505,13 @@ class SequenceWidgetAnalysisOpsMixin(
         return False
 
     def reset_work_pram(self, label, count=None):
+        begin_hardware_presentation = getattr(
+            self,
+            "_begin_new_recording_presentation",
+            None,
+        )
+        if callable(begin_hardware_presentation):
+            begin_hardware_presentation()
         self.data_struct.clear_data()
         self._excel_export_cache = None
         self._excel_exported_record_id = None
@@ -2121,16 +2581,9 @@ class SequenceWidgetAnalysisOpsMixin(
         # Add device information for streaming mode
         recorded_dict["device"] = self.mic
 
-        # Channel selection (0-based indices). Used for multi-channel recording + per-channel plots.
-        try:
-            input_channels = list(getattr(self, "mic_channels", []) or [])
-        except Exception:
-            input_channels = []
-        if not input_channels:
-            input_channels = [0]
-
-        recorded_dict["input_channels"] = input_channels
-        recorded_dict["channels"] = max(1, len(input_channels))
+        # The UI refresh owns normalization. Recording consumes one immutable
+        # tuple snapshot and only converts to lists at existing API boundaries.
+        run_channels = self._snapshot_recording_input_channels(recorded_dict)
 
         if monitor_playback:
             recorded_dict["monitor_playback"] = True
@@ -2145,11 +2598,7 @@ class SequenceWidgetAnalysisOpsMixin(
             recorded_dict["output_channels"] = list(range(max_out)) if max_out > 0 else []
 
         # Keep the active input channels for downstream analysis mapping.
-        self._active_input_channels = [int(x) for x in input_channels]
-        if self.channel_workspace is not None:
-            configure_waveform_workspace = getattr(self, "_configure_direction_waveform_workspace", None)
-            if callable(configure_waveform_workspace):
-                configure_waveform_workspace()
+        self._active_input_channels = list(run_channels)
 
         in_dev = recorded_dict.get("input_device")
         out_dev = recorded_dict.get("output_device")
@@ -2197,8 +2646,25 @@ class SequenceWidgetAnalysisOpsMixin(
             if record_code != error_code.OK or recorded_data is None:
                 raise RuntimeError(recorded_data if recorded_data is not None else record_code)
 
-            recorded_multi = self._normalize_blocking_recorded_data(recorded_data, recorded_dict)
+            recorded_multi = self._normalize_blocking_recorded_data(
+                recorded_data,
+                recorded_dict,
+            )
+            run_channels = getattr(self, "_recording_input_channels", None)
+            if run_channels is None:
+                run_channels = tuple(recorded_dict.get("input_channels") or ())
+            if not run_channels:
+                # Compatibility for isolated lower-level callers. The main UI
+                # always creates the run snapshot before blocking capture.
+                run_channels = tuple(range(recorded_multi.shape[1]))
+            recorded_multi = self._normalize_final_recording_array(
+                recorded_multi,
+                run_channels,
+            )
             recorded_mono = recorded_multi.mean(axis=1).astype(np.float32, copy=False)
+            # This is only the preliminary blocking-mode audio write. Calibration
+            # metadata is published by the shared completion path after trimming
+            # and quality validation have produced the final successful WAV.
             save_audio_simple(self.recorded_path, recorded_multi, sample_rate)
             self._on_streaming_complete(
                 recorded_mono=recorded_mono,
@@ -2207,8 +2673,63 @@ class SequenceWidgetAnalysisOpsMixin(
                 completion_source="blocking",
             )
         except Exception as error:
+            self._recording_wav_calibration_metadata = None
             self.default_logger.error(f"blocking_recording_error: {error}")
             self._handle_invalid_recording(f"录音失败: {error}")
+        finally:
+            finalize_channel_selection = getattr(
+                self, "_finalize_recording_channel_selection", None
+            )
+            if callable(finalize_channel_selection):
+                finalize_channel_selection()
+
+    def _capture_recording_wav_calibration_metadata(self):
+        self._recording_wav_calibration_metadata = None
+        try:
+            run_channels = getattr(self, "_recording_input_channels", None)
+            if run_channels is None:
+                # Compatibility for isolated calibration callers; the main
+                # recording path always has the immutable run snapshot.
+                run_channels = tuple(
+                    getattr(self, "_active_input_channels", None) or [0]
+                )
+            snapshot = build_recording_wav_calibration_metadata(run_channels, self.mic)
+        except (MicCalibrationFormatError, MicCalibrationIOError) as error:
+            self.default_logger.error(
+                f"recording_calibration_snapshot_error: {error}"
+            )
+            return None
+        self._recording_wav_calibration_metadata = snapshot
+        return snapshot
+
+    def _cleanup_failed_recording_initialization(self, reason):
+        abort_channel_selection = getattr(
+            self, "_abort_recording_channel_selection", None
+        )
+        if callable(abort_channel_selection):
+            abort_channel_selection()
+        unlock_sn_after_recording = getattr(
+            self,
+            "_unlock_sn_after_recording_if_needed",
+            None,
+        )
+        if callable(unlock_sn_after_recording):
+            unlock_sn_after_recording()
+        self.player_status_flag = False
+        self._record_workflow_busy = False
+        self.update_player_btn_is_paused()
+        drain = getattr(self, "_drain_queued_directional_trigger", None)
+        if callable(drain):
+            drain()
+        serial_runtime_error = getattr(
+            self,
+            "_on_serial_product_runtime_error",
+            None,
+        )
+        return bool(
+            callable(serial_runtime_error)
+            and serial_runtime_error(reason)
+        )
 
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
         if getattr(self, "_record_workflow_busy", False):
@@ -2218,6 +2739,17 @@ class SequenceWidgetAnalysisOpsMixin(
         if is_replay and self.last_play_count is None:
             QMessageBox.warning(self, "提示", "请先进行录音")
             return
+
+        begin_hardware_presentation = getattr(
+            self,
+            "_begin_new_recording_presentation",
+            None,
+        )
+        presentation_transitioned = False
+        if callable(begin_hardware_presentation):
+            presentation_transitioned = bool(
+                begin_hardware_presentation()
+            )
 
         close_analysis_windows = getattr(self, "_close_analysis_windows", None)
         if callable(close_analysis_windows):
@@ -2229,6 +2761,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
+        self._recording_wav_calibration_metadata = None
         is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
         sync_active_recording_direction = getattr(self, "_sync_active_recording_direction_from_trigger", None)
         clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
@@ -2242,7 +2775,8 @@ class SequenceWidgetAnalysisOpsMixin(
         if callable(lock_sn_for_recording):
             lock_sn_for_recording()
 
-        self._clear_plot_area()
+        if not presentation_transitioned:
+            self._clear_plot_area()
         # CRITICAL: Clean up any existing streaming resources before starting new recording
         # This prevents device conflicts and freezing when replay is clicked multiple times
         self._cleanup_streaming_resources()
@@ -2253,8 +2787,10 @@ class SequenceWidgetAnalysisOpsMixin(
         if self.player_status_flag:
             self._clear_plot_area()
 
-        self.streaming_buffer_multi = []
         self._streaming_first_chunk_logged = False
+        self._streaming_completion_processor = None
+        self._streaming_chunk_contract_failed = False
+        self._streaming_invalid_terminal_handled = False
 
         self.player_status_flag = True
 
@@ -2274,33 +2810,67 @@ class SequenceWidgetAnalysisOpsMixin(
                 recorded_dict, sample_rate = self.reset_work_pram(label)
         except Exception as e:
             self.default_logger.error(f"reset_work_pram_error: {e}")
-            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
-            if callable(unlock_sn_after_recording):
-                unlock_sn_after_recording()
-            self.player_status_flag = False
-            self._record_workflow_busy = False
-            self.update_player_btn_is_paused()
-            drain = getattr(self, "_drain_queued_directional_trigger", None)
-            if callable(drain):
-                drain()
-            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
-            handled = bool(
-                callable(serial_runtime_error)
-                and serial_runtime_error(f"初始化录音失败: {e}")
+            handled = self._cleanup_failed_recording_initialization(
+                f"初始化录音失败: {e}"
             )
             if not handled:
                 QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
             return
 
+        try:
+            self._capture_recording_wav_calibration_metadata()
+        except Exception as error:
+            self._recording_wav_calibration_metadata = None
+            self.default_logger.error(
+                f"recording_calibration_snapshot_unexpected_error: {error}"
+            )
+            self._cleanup_failed_recording_initialization(
+                f"初始化录音失败: 无法创建录音校准快照: {error}"
+            )
+            raise
+
         if not self._should_use_streaming_recording():
+            end_streaming_waveform_session = getattr(
+                self, "_end_streaming_waveform_session", None
+            )
+            if callable(end_streaming_waveform_session):
+                end_streaming_waveform_session()
             self._begin_recent_session_for_current_run()
             self._start_blocking_recording(recorded_dict, sample_rate)
             return
 
         # Start streaming record-only (non-blocking)
         try:
+            resolve_active_direction = getattr(
+                self, "_resolve_active_recording_waveform_direction", None
+            )
+            active_direction = (
+                resolve_active_direction(fallback="")
+                if callable(resolve_active_direction)
+                else ""
+            ) or "forward"
+            resolve_acq_detail = getattr(self, "_resolve_recording_acq_detail", None)
+            acq_detail = resolve_acq_detail() if callable(resolve_acq_detail) else {}
+            begin_streaming_waveform_session = getattr(
+                self, "_begin_streaming_waveform_session", None
+            )
+            if callable(begin_streaming_waveform_session):
+                begin_streaming_waveform_session(
+                    sample_rate,
+                    resolve_startup_trim_samples(acq_detail, sample_rate),
+                    active_direction,
+                )
             # Create WAV file writer for streaming saves (useful for long recordings)
-            nch = max(1, len(getattr(self, "_active_input_channels", []) or [0]))
+            run_channels = getattr(self, "_recording_input_channels", None)
+            if run_channels is None:
+                # Compatibility for isolated workflow hosts that override
+                # reset_work_pram; SequenceWindow always has the run snapshot.
+                run_channels = tuple(
+                    recorded_dict.get("input_channels")
+                    or getattr(self, "_active_input_channels", None)
+                    or [0]
+                )
+            nch = len(run_channels)
             self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
 
             self.streaming_processor, _ = stream_record_without_play(
@@ -2309,10 +2879,13 @@ class SequenceWidgetAnalysisOpsMixin(
             self.streaming_mode = "record_only"
             self.streaming_stimulus_data = None
             self._begin_recent_session_for_current_run()
-
-            # Start polling timer to process queue and detect completion
-            self.streaming_poll_timer.start(50)  # Poll every 50ms
         except Exception as e:
+            end_streaming_waveform_session = getattr(
+                self, "_end_streaming_waveform_session", None
+            )
+            if callable(end_streaming_waveform_session):
+                end_streaming_waveform_session()
+            self._recording_wav_calibration_metadata = None
             self.default_logger.error(f"start_streaming_error: {e}")
             unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
             if callable(unlock_sn_after_recording):
@@ -2365,14 +2938,15 @@ class SequenceWidgetAnalysisOpsMixin(
         self._missing_mic_calibration_channels = []
         self._missing_mic_calibration_channel_set = set()
 
-    def _live_batch_requires_mic_calibration(self):
+    def _live_batch_requires_mic_calibration(self, item_sort_list=None):
         if self._is_import_audio_mode():
             return False
         class_mapping = get_class_mapping()
-        item_sort_list = (self.analysis_config or {}).get(
-            "display_sequence",
-            [],
-        )
+        if item_sort_list is None:
+            item_sort_list = (self.analysis_config or {}).get(
+                "display_sequence",
+                [],
+            )
         for key in item_sort_list:
             key_config = self.analysis_config.get(key)
             if not isinstance(key_config, dict):
@@ -2449,6 +3023,67 @@ class SequenceWidgetAnalysisOpsMixin(
             "输入校准文件错误，本次分析已停止",
         )
 
+    def _show_analysis_channel_preflight_warning(self, skipped):
+        if not skipped or self._analysis_preflight_warning_shown:
+            return
+        lines = []
+        for skip in skipped:
+            available = "、".join(
+                f"In{channel + 1}" for channel in skip.available_channels
+            ) or "无"
+            lines.append(
+                f"{skip.item_key}：请求 In{skip.requested_channel + 1}；"
+                f"可用 {available}"
+            )
+        QMessageBox.warning(
+            self,
+            "分析通道不存在",
+            "以下分析项目将被跳过：\n" + "\n".join(lines),
+        )
+        self._analysis_preflight_warning_shown = True
+
+    def _prepare_imported_wav_calibration_batch(self, item_sort_list):
+        self._imported_wav_channel_v2pa_factors = {}
+        fallback_used = False
+        metadata = getattr(
+            self.data_struct,
+            "wav_calibration_metadata",
+            None,
+        )
+        local_columns = getattr(
+            self,
+            "_analysis_channel_local_columns",
+            {},
+        )
+        for key in item_sort_list:
+            key_config = self.analysis_config.get(key)
+            if not isinstance(key_config, dict):
+                continue
+            if key_config.get("type") not in REQUIRED_CHANNEL_ANALYSIS_TYPES:
+                continue
+            if str(key) not in local_columns:
+                continue
+            requested_local_channel = normalize_analysis_channel(key_config)
+            resolution = resolve_wav_channel_v2pa_factor(
+                metadata,
+                requested_local_channel,
+            )
+            self._imported_wav_channel_v2pa_factors[str(key)] = (
+                resolution.factor
+            )
+            fallback_used = fallback_used or not resolution.used_file_metadata
+        return fallback_used
+
+    def _show_imported_wav_calibration_warning(self, fallback_used):
+        if not fallback_used or self.data_struct.wav_calibration_warning_shown:
+            return
+        QMessageBox.warning(
+            self,
+            "音频校准数据缺失",
+            "该音频文件未包含有效校准数据，分析结果仅供参考。",
+        )
+        self.data_struct.wav_calibration_warning_shown = True
+
     def _run_analysis_impl(self, show_windows=True, *, report_session_id=None):
         """
         Executes the analysis tasks and optionally displays the analysis windows.
@@ -2458,6 +3093,54 @@ class SequenceWidgetAnalysisOpsMixin(
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
+        self._analysis_preflight_skips = {}
+        self._analysis_channel_local_columns = {}
+        self._analysis_preflight_warning_shown = False
+        self._imported_wav_channel_v2pa_factors = {}
+        self.data_struct.wav_calibration_warning_shown = False
+
+        configured_items = (self.analysis_config or {}).get(
+            "display_sequence",
+            [],
+        )
+        if not isinstance(configured_items, (list, tuple)):
+            configured_items = []
+        imported_channel_count = None
+        if self._is_import_audio_mode():
+            imported_audio = getattr(
+                self.data_struct,
+                "store_wave_data_multi",
+                None,
+            )
+            imported_shape = getattr(imported_audio, "shape", ())
+            if len(imported_shape) >= 2:
+                imported_channel_count = int(imported_shape[1])
+            else:
+                # Compatibility for lightweight/legacy hosts. A real imported
+                # WAV always has the canonical two-dimensional buffer.
+                imported_channel_count = len(
+                    getattr(self, "_active_input_channels", None) or [0]
+                )
+        preflight = preflight_analysis_channels(
+            self.analysis_config,
+            active_input_channels=getattr(
+                self,
+                "_active_input_channels",
+                (0,),
+            ),
+            imported_channel_count=imported_channel_count,
+        )
+        self._analysis_channel_local_columns = dict(preflight.local_channels)
+        self._analysis_preflight_skips = {
+            skip.item_key: skip for skip in preflight.skipped
+        }
+        self._show_analysis_channel_preflight_warning(preflight.skipped)
+        item_sort_list = [
+            key
+            for key in configured_items
+            if str(key) not in self._analysis_preflight_skips
+        ]
+
         # Only reflect THIS run(): clear previous summary results first
         self.data_struct.analysis_result_dict.clear()
         close_analysis_windows = getattr(self, "_close_analysis_windows", None)
@@ -2470,7 +3153,18 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._analysis_result_summary_window = None
 
         self._reset_live_mic_calibration_batch()
-        if self._live_batch_requires_mic_calibration():
+        class_mapping = get_class_mapping()
+        has_executable_item = any(
+            isinstance(self.analysis_config.get(key), dict)
+            and class_mapping.get(self.analysis_config[key].get("type")) is not None
+            for key in item_sort_list
+        )
+        if preflight.skipped and not has_executable_item:
+            if report_session_id:
+                self._capture_current_analysis_report_snapshot(report_session_id)
+            return False
+
+        if self._live_batch_requires_mic_calibration(item_sort_list):
             try:
                 self._prepare_live_mic_calibration_batch()
             except (MicCalibrationFormatError, MicCalibrationIOError) as error:
@@ -2482,10 +3176,15 @@ class SequenceWidgetAnalysisOpsMixin(
                     )
                 return False
 
+        if self._is_import_audio_mode():
+            fallback_used = self._prepare_imported_wav_calibration_batch(
+                item_sort_list
+            )
+            self._show_imported_wav_calibration_warning(fallback_used)
+
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
         if self.analysis_config:
-            item_sort_list = self.analysis_config.get("display_sequence", [])
             for key in item_sort_list:
                 key_config = self.analysis_config.get(key)
                 if not isinstance(key_config, dict):
@@ -2502,7 +3201,8 @@ class SequenceWidgetAnalysisOpsMixin(
                 if getattr(instance, "_channel_mismatch", False):
                     setattr(instance, "_product_report_analysis_state", "failed")
                     setattr(instance, "_product_report_analysis_error", "分析通道与录音通道不匹配")
-                    self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
+                    if not getattr(instance, "_channel_preflighted", False):
+                        self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
                     continue
                 try:
                     if hasattr(instance, "calculate_reference_spectrum"):
@@ -2562,7 +3262,8 @@ class SequenceWidgetAnalysisOpsMixin(
                     if self._is_channel_mismatch_error(e):
                         setattr(instance, "_product_report_analysis_state", "failed")
                         setattr(instance, "_product_report_analysis_error", str(e))
-                        self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
+                        if not getattr(instance, "_channel_preflighted", False):
+                            self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
                         continue
                     setattr(instance, "_product_report_analysis_state", "failed")
                     setattr(instance, "_product_report_analysis_error", str(e))
@@ -3080,17 +3781,24 @@ class SequenceWidgetAnalysisOpsMixin(
                     self.analysis_window.append(class_instance)
                     return
 
-                raw_channel = 0
-                if self._is_import_audio_mode():
+                preflight_columns = getattr(
+                    self,
+                    "_analysis_channel_local_columns",
+                    {},
+                )
+                channel_preflighted = key in preflight_columns
+                if channel_preflighted:
+                    raw_channel = normalize_analysis_channel(params)
+                else:
                     raw_channel = 0
-                elif isinstance(params, dict):
-                    raw_channel = params.get("analysis_channel", 0)
-                    try:
-                        raw_channel = int(raw_channel)
-                    except (TypeError, ValueError):
+                    if not self._is_import_audio_mode() and isinstance(params, dict):
+                        raw_channel = params.get("analysis_channel", 0)
+                        try:
+                            raw_channel = int(raw_channel)
+                        except (TypeError, ValueError):
+                            raw_channel = 0
+                    if raw_channel < 0:
                         raw_channel = 0
-                if raw_channel < 0:
-                    raw_channel = 0
 
                 # 配置里保存的是硬件绝对通道号；运行分析时需要映射到“本次录制子集”的局部列索引。
                 mapped_channel = 0
@@ -3100,7 +3808,9 @@ class SequenceWidgetAnalysisOpsMixin(
                     active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", None) or [0])]
                 except Exception:
                     active_input_channels = [0]
-                if raw_channel in active_input_channels:
+                if channel_preflighted:
+                    mapped_channel = int(preflight_columns[key])
+                elif raw_channel in active_input_channels:
                     mapped_channel = int(active_input_channels.index(raw_channel))
                 else:
                     channel_mismatch = True
@@ -3111,6 +3821,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 # Bind analysis key for geometry restore/persist
                 setattr(class_instance, "_sequence_analysis_key", key)
                 setattr(class_instance, "_channel_mismatch", channel_mismatch)
+                setattr(class_instance, "_channel_preflighted", channel_preflighted)
                 setattr(
                     class_instance,
                     "_channel_mismatch_info",
@@ -3119,7 +3830,16 @@ class SequenceWidgetAnalysisOpsMixin(
                         "active_input_channels": list(active_input_channels),
                     },
                 )
-                if self._is_import_audio_mode():
+                if (
+                    self._is_import_audio_mode()
+                    and type in REQUIRED_CHANNEL_ANALYSIS_TYPES
+                ):
+                    class_instance.v2pa_factor = getattr(
+                        self,
+                        "_imported_wav_channel_v2pa_factors",
+                        {},
+                    ).get(str(key), 1.0)
+                elif self._is_import_audio_mode():
                     class_instance.v2pa_factor = self.v2pa_factor
                 else:
                     class_instance.v2pa_factor = (

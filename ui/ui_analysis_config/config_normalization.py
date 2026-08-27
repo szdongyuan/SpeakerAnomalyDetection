@@ -7,6 +7,8 @@ dialogs and shared widgets use clearer internal concept names.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import math
+import numbers
 from typing import Any
 
 from consts.acoustic_analysis.common_consts import (
@@ -169,18 +171,61 @@ def normalize_time_smoothing(
 
 def normalize_analysis_channel(
     cfg: Mapping[str, Any] | None,
+    available_channels: Iterable[Any] | None = None,
+) -> int:
+    """Return a canonical zero-based channel index in the range 0 through 127."""
+    _ = available_channels  # Compatibility only; hardware availability is checked at runtime.
+    value = (cfg or {}).get("analysis_channel", 0)
+
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, numbers.Integral):
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    elif isinstance(value, numbers.Real):
+        try:
+            real_value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+        if not math.isfinite(real_value) or not real_value.is_integer():
+            return 0
+        normalized = int(real_value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text or not text.isdecimal():
+            return 0
+        significant_text = text.lstrip("0") or "0"
+        if len(significant_text) > 3:
+            return 0
+        try:
+            normalized = int(significant_text)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    else:
+        return 0
+
+    return normalized if 0 <= normalized <= 127 else 0
+
+
+def normalize_legacy_available_analysis_channel(
+    cfg: Mapping[str, Any] | None,
     available_channels: Iterable[Any] | None,
 ) -> int:
-    """Return a valid analysis channel, falling back to the first available one."""
+    """Preserve the availability-based coercion used by legacy combo boxes."""
     channels = []
-    for ch in available_channels or []:
+    for channel in available_channels or []:
         try:
-            channels.append(int(ch))
+            channels.append(int(channel))
         except (TypeError, ValueError):
             continue
     channels = sorted(set(channels))
     if not channels:
         channels = [0]
 
-    selected = _to_int((cfg or {}).get("analysis_channel", channels[0]), channels[0])
+    selected = _to_int(
+        (cfg or {}).get("analysis_channel", channels[0]),
+        channels[0],
+    )
     return selected if selected in channels else channels[0]
