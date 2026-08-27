@@ -10,6 +10,10 @@ class MySignals(QObject):
     # - dict {"mono": np.ndarray(frames,), "multi": np.ndarray(frames, channels)} (preferred)
     # - legacy np.ndarray(frames,) for backward compatibility
     stream_audio_chunk_signal = pyqtSignal(object)
+    # Wake-up only; payload is the source StreamingAudioProcessor, not audio.
+    stream_audio_queue_ready_signal = pyqtSignal(object)
+    # Automatic target completion; payload is the source processor.
+    stream_audio_recording_finished_signal = pyqtSignal(object)
 
 
 sign = MySignals()

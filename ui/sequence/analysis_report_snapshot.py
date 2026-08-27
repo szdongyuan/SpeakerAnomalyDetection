@@ -415,6 +415,7 @@ def build_analysis_report_items(
     analysis_instances: list[Any],
     analysis_config: dict[str, Any],
     analysis_result_dict: dict[str, Any],
+    preflight_skips: Any = None,
 ) -> list[dict[str, Any]]:
     report_items = []
     analysis_config = analysis_config if isinstance(analysis_config, dict) else {}
@@ -476,6 +477,34 @@ def build_analysis_report_items(
                 "error": error,
                 "image_errors": image_errors,
                 "images": images,
+            }
+        )
+    reported_keys = {item["name"] for item in report_items}
+    if isinstance(preflight_skips, dict):
+        skipped_values = preflight_skips.values()
+    else:
+        skipped_values = preflight_skips or ()
+    for skip in skipped_values:
+        if isinstance(skip, dict):
+            item_key = str(skip.get("item_key") or "").strip()
+            item_type = str(skip.get("item_type") or "")
+            reason = str(skip.get("reason") or "").strip()
+        else:
+            item_key = str(getattr(skip, "item_key", "") or "").strip()
+            item_type = str(getattr(skip, "item_type", "") or "")
+            reason = str(getattr(skip, "reason", "") or "").strip()
+        if not item_key or item_key in reported_keys:
+            continue
+        reported_keys.add(item_key)
+        report_items.append(
+            {
+                "name": item_key,
+                "type": item_type,
+                "state": "skipped",
+                "reason": reason,
+                "error": "",
+                "image_errors": [],
+                "images": [],
             }
         )
     return report_items

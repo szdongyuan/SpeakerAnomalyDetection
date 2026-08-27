@@ -15,7 +15,7 @@ from ui.custom_ui_widget.widgets import (
     SpinBox,
 )
 from ui.ui_analysis_config.common_widgets import (
-    ChannelSelectorWidget,
+    AnalysisChannelSpinBoxWidget,
     SemanticAnalysisConfigDialogBase,
 )
 
@@ -34,6 +34,7 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
         config_manager,
         model_type,
         available_channels: Optional[List[int]] = None,
+        restrict_analysis_channel: bool = False,
     ):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
@@ -44,6 +45,7 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
         )
         self.show_channel_selector = available_channels is not None
         self.available_channels = available_channels
+        self.restrict_analysis_channel = restrict_analysis_channel
         self.init_ui()
 
     def init_ui(self):
@@ -58,10 +60,13 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            self.channel_selector = ChannelSelectorWidget(
+            self.channel_selector = AnalysisChannelSpinBoxWidget(
                 self.load_config,
                 self.available_channels,
                 self,
+                restrict_to_available_channels=(
+                    self.restrict_analysis_channel
+                ),
             )
             self.add_semantic_section(
                 "input",

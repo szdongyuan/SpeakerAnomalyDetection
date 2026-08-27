@@ -6,6 +6,7 @@ from scipy.io import wavfile
 import numpy as np
 
 from consts.running_consts import DEFAULT_DIR
+from base.wav_calibration_metadata import append_wav_calibration_metadata
 
 
 def save_audio_simple(save_path, audio, sr=44100):
@@ -30,6 +31,23 @@ def save_audio_simple(save_path, audio, sr=44100):
         raise ValueError(f"Unsupported audio shape: {audio_arr.shape}")
 
     wavfile.write(save_path, int(sr), audio_arr)
+
+
+def save_audio_with_calibration_metadata(
+    save_path,
+    audio,
+    sr=44100,
+    calibration_metadata=None,
+    logger=None,
+):
+    save_audio_simple(save_path, audio, sr)
+    if calibration_metadata is None:
+        return True
+    return append_wav_calibration_metadata(
+        save_path,
+        calibration_metadata,
+        logger=logger,
+    )
 
 
 def save_recorded_data_to_json(

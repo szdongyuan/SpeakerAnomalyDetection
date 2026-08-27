@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
+import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QPoint, QRect, Qt, QTimer
 from PyQt5.QtGui import QFont
@@ -134,6 +135,27 @@ class ChannelPlotSubWindow(QFrame):
         else:
             self.plot_item.setData(x, y)
 
+    def snapshot_plot_state(self):
+        """Copy the displayed series so a multi-window update can roll back."""
+        if self.plot_item is None:
+            return None
+        x_data, y_data = self.plot_item.getData()
+        return (
+            np.asarray(x_data).copy(),
+            np.asarray(y_data).copy(),
+        )
+
+    def restore_plot_state(self, state) -> None:
+        """Restore a snapshot without changing the window's channel identity."""
+        if state is None:
+            self.clear_plot()
+            return
+        x_data, y_data = state
+        if self.plot_item is None:
+            self.plot_item = self.plot_widget.plot(x_data, y_data, pen="k")
+        else:
+            self.plot_item.setData(x_data, y_data)
+
 
 class ChannelPlotCanvas(QWidget):
     def __init__(self, parent=None):
@@ -208,10 +230,8 @@ class ChannelPlotWorkspace(QWidget):
         self._channel_indices: List[int] = []
         self._subwins: List[ChannelPlotSubWindow] = []
 
-    def set_channels(self, channel_indices: List[int]) -> None:
+    def set_channels(self, channel_indices: Sequence[int]) -> None:
         channel_indices = [int(i) for i in (channel_indices or [])]
-        if not channel_indices:
-            channel_indices = [0]
 
         if channel_indices == self._channel_indices and self._subwins:
             return
@@ -255,8 +275,12 @@ class ChannelPlotWorkspace(QWidget):
             title = titles[idx] if idx < len(titles or []) else f"In{idx + 1}"
             w.set_title(title)
 
-    def subwindows(self) -> List[ChannelPlotSubWindow]:
+    def all_subwindows(self) -> List[ChannelPlotSubWindow]:
         return list(self._subwins)
+
+    def subwindows(self) -> List[ChannelPlotSubWindow]:
+        """Compatibility alias for older callers."""
+        return self.all_subwindows()
 
     def clear_plots(self) -> None:
         for w in self._subwins:

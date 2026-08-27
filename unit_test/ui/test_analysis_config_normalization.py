@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 import pytest
 
 from consts.harmonic_detection_consts import (
@@ -85,24 +87,62 @@ def test_normalize_time_smoothing_accepts_legacy_smooth_checked():
     assert normalized["unit"] == "time"
 
 
-def test_normalize_analysis_channel_uses_selected_available_channel():
-    assert normalize_analysis_channel({"analysis_channel": "2"}, [0, 2, 4]) == 2
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, 0),
+        (127, 127),
+        (2.0, 2),
+        (127.0, 127),
+        ("2", 2),
+        (" 127 ", 127),
+    ],
+)
+def test_normalize_analysis_channel_accepts_compatible_zero_based_values(value, expected):
+    assert normalize_analysis_channel({"analysis_channel": value}) == expected
 
 
 @pytest.mark.parametrize(
-    ("cfg", "available_channels", "expected"),
+    "value",
     [
-        ({"analysis_channel": "bad"}, [3, 5], 3),
-        ({"analysis_channel": 4}, [0, 1], 0),
-        ({}, [2, 1], 1),
-        ({"analysis_channel": 5}, ["bad", 5], 5),
-        ({"analysis_channel": 5}, ["bad"], 0),
-        ({"analysis_channel": 9}, [], 0),
-        (None, None, 0),
+        True,
+        False,
+        -1,
+        128,
+        2.5,
+        float("inf"),
+        float("-inf"),
+        float("nan"),
+        "+2",
+        "-2",
+        "",
+        "   ",
+        "2.0",
+        "channel 2",
+        None,
     ],
 )
-def test_normalize_analysis_channel_falls_back_safely(cfg, available_channels, expected):
-    assert normalize_analysis_channel(cfg, available_channels) == expected
+def test_normalize_analysis_channel_rejects_out_of_contract_values(value):
+    assert normalize_analysis_channel({"analysis_channel": value}) == 0
+
+
+def test_normalize_analysis_channel_defaults_missing_config_to_zero():
+    assert normalize_analysis_channel({}) == 0
+    assert normalize_analysis_channel(None) == 0
+
+
+def test_normalize_analysis_channel_ignores_hardware_availability():
+    assert normalize_analysis_channel({"analysis_channel": 127}, [0, 2]) == 127
+
+
+def test_normalize_analysis_channel_rejects_oversized_decimal_without_raising():
+    assert normalize_analysis_channel({"analysis_channel": "9" * 5000}) == 0
+
+
+def test_normalize_analysis_channel_rejects_overflowing_real_without_raising():
+    assert normalize_analysis_channel(
+        {"analysis_channel": Fraction(10**1000, 1)}
+    ) == 0
 
 
 @pytest.mark.parametrize(

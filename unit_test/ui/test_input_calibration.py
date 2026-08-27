@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -26,9 +27,9 @@ DEVICE = {
 }
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
+@pytest.fixture(scope="session")
+def qapp(ui_qapp):
+    return ui_qapp
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +50,14 @@ def isolated_logger():
 
 
 class _FakeProcessor:
-    def __init__(self, data=None, *, target_samples=4, error_message=""):
+    def __init__(
+        self,
+        data=None,
+        *,
+        target_samples=4,
+        error_message="",
+        process_error=None,
+    ):
         self.data = np.asarray(
             data if data is not None else [0.1, 0.1, 0.1, 0.1],
             dtype=np.float32,
@@ -61,9 +69,12 @@ class _FakeProcessor:
         self.error_message = error_message
         self.process_calls = []
         self.stop_calls = 0
+        self.process_error = process_error
 
     def process_queue(self, emit_signal=True):
         self.process_calls.append(emit_signal)
+        if self.process_error is not None:
+            raise self.process_error
 
     def get_recorded_data(self):
         return self.data
@@ -272,6 +283,7 @@ def test_factor_display_is_read_only_without_manual_mode_controls(qapp):
 def test_calibration_uses_selected_device_and_physical_channel(qapp):
     widget = InputCalibration(DEVICE, [1])
     processor = _FakeProcessor()
+    widget._streaming_completion_processor = object()
 
     with mock.patch(
         "ui.calibration_window.stream_record_without_play",
@@ -284,6 +296,7 @@ def test_calibration_uses_selected_device_and_physical_channel(qapp):
     assert recorded_dict["device"] is DEVICE
     assert recorded_dict["input_channels"] == [1]
     assert recorded_dict["num_frames"] == 441000
+    assert widget._streaming_completion_processor is None
     widget.cancel_calibration()
 
 
@@ -379,13 +392,12 @@ def test_capture_cleanup_clears_pinned_channel_and_restores_selector(
     assert widget.channel_combo_box.isEnabled() is True
 
 
-def test_streaming_poll_uses_normalized_queue_processing(qapp):
+def test_queue_ready_accumulates_without_waveform_for_active_processor(qapp):
     widget = InputCalibration(DEVICE, [1])
     processor = _FakeProcessor()
-    processor.is_recording = True
     widget.streaming_processor = processor
 
-    widget._poll_streaming_queue()
+    widget._on_streaming_queue_ready(processor)
 
     assert processor.process_calls == [False]
     assert widget.streaming_processor is processor
@@ -401,13 +413,96 @@ def test_queue_failure_clears_pinned_channel_and_restores_selector(qapp):
     widget.channel_combo_box.setEnabled(False)
     widget.calibration_popup = mock.Mock()
 
-    widget._poll_streaming_queue()
+    widget._on_streaming_queue_ready(processor)
 
     assert widget.active_capture_channel is None
     assert widget.streaming_processor is None
     assert widget.current_channel == 2
     assert widget.channel_combo_box.currentData() == 2
     assert widget.channel_combo_box.isEnabled() is True
+
+
+def test_queue_ready_ignores_stale_processor(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    active = _FakeProcessor()
+    stale = _FakeProcessor()
+    widget.streaming_processor = active
+
+    widget._on_streaming_queue_ready(stale)
+
+    assert stale.process_calls == []
+    assert active.process_calls == []
+
+
+def test_recording_finished_drains_before_completion_and_ignores_stale(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    active = _FakeProcessor()
+    stale = _FakeProcessor()
+    widget.streaming_processor = active
+    events = []
+    active.process_queue = mock.Mock(side_effect=lambda **_: events.append("drain"))
+    widget._on_streaming_complete = mock.Mock(
+        side_effect=lambda: events.append("complete")
+    )
+
+    widget._on_streaming_recording_finished(stale)
+    widget._on_streaming_recording_finished(active)
+
+    assert stale.process_calls == []
+    assert events == ["drain", "complete"]
+    active.process_queue.assert_called_once_with(emit_signal=False)
+
+
+def test_duplicate_finish_and_delayed_queue_ready_are_ignored(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    processor = _FakeProcessor()
+    widget.streaming_processor = processor
+    widget._on_streaming_complete = mock.Mock()
+
+    widget._on_streaming_recording_finished(processor)
+    widget._on_streaming_recording_finished(processor)
+    widget._on_streaming_queue_ready(processor)
+
+    assert processor.process_calls == [False]
+    widget._on_streaming_complete.assert_called_once_with()
+
+
+def test_finish_processing_failure_guard_prevents_duplicate_dispatch(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    processor = _FakeProcessor(process_error=RuntimeError("final drain failed"))
+    widget.streaming_processor = processor
+    widget._finish_failed_calibration = mock.Mock()
+
+    widget._on_streaming_recording_finished(processor)
+    widget._on_streaming_recording_finished(processor)
+
+    assert processor.process_calls == [False]
+    widget._finish_failed_calibration.assert_called_once_with(
+        "输入校准录音数据处理失败，请重试。"
+    )
+
+
+def test_calibration_connections_are_explicitly_queued():
+    source = (Path(__file__).resolve().parents[2] / "ui" / "calibration_window.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "sign.stream_audio_queue_ready_signal.connect(" in source
+    assert "self._on_streaming_queue_ready,\n            Qt.QueuedConnection," in source
+    assert "sign.stream_audio_recording_finished_signal.connect(" in source
+    assert "self._on_streaming_recording_finished,\n            Qt.QueuedConnection," in source
+
+
+def test_only_countdown_timer_remains_for_input_calibration(qapp):
+    widget = InputCalibration(DEVICE, [1])
+
+    assert not hasattr(widget, "streaming_poll_timer")
+    widget.update_ui_timer.start()
+    assert widget.update_ui_timer.isActive() is True
+
+    widget.cancel_calibration()
+
+    assert widget.update_ui_timer.isActive() is False
 
 
 def test_completed_calibration_saves_before_emitting_success(qapp):
@@ -713,7 +808,7 @@ def test_cancel_does_not_save_or_emit_change(qapp):
     assert widget.streaming_processor is None
     assert widget.active_capture_channel is None
     assert widget.update_ui_timer.isActive() is False
-    assert widget.streaming_poll_timer.isActive() is False
+    assert not hasattr(widget, "streaming_poll_timer")
 
 
 def test_partial_completion_can_close_without_starting_or_saving_remaining(qapp):

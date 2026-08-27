@@ -62,7 +62,7 @@ def test_main_window_connects_program_changes_before_opening_dialog():
     )
     on_product_test_program_config = _load_main_window_method(
         "on_product_test_program_config",
-        {"ProductTestProgramConfigDialog": FakeDialog},
+        {"ProductTestProjectConfigDialog": FakeDialog},
     )
 
     on_product_test_program_config(window)
@@ -137,6 +137,9 @@ def _program_switch_host(manager, events):
         data_struct=SimpleNamespace(
             store_wave_data="recorded",
             store_wave_data_multi="recorded_multi",
+            wav_calibration_metadata={"old": True},
+            wav_calibration_metadata_authoritative=True,
+            wav_calibration_warning_shown=True,
         ),
         lineedit_s_or_n=SimpleNamespace(isEnabled=lambda: False),
         setFocus=lambda: None,
@@ -267,3 +270,42 @@ def test_valid_product_program_switch_refreshes_serial_match_candidates():
         ("reset", True),
     ]
     assert host.active_product_program_file == "candidate.json"
+    assert host.data_struct.wav_calibration_metadata is None
+    assert host.data_struct.wav_calibration_metadata_authoritative is False
+    assert host.data_struct.wav_calibration_warning_shown is False
+
+
+def test_legacy_queue_switch_clears_imported_wav_metadata(monkeypatch):
+    host = SimpleNamespace(
+        player_status_flag=False,
+        using_file_combobox=_ComboBoxStub(None),
+        registry={"legacy": "legacy.json"},
+        using_config_path="current.json",
+        get_sequence_config_from_json=lambda: None,
+        init_data_struct_stimulus_config=lambda: None,
+        update_player_btn_is_paused=lambda: None,
+        replayer_btn=_ButtonStub(),
+        data_btn=_ButtonStub(),
+        data_struct=SimpleNamespace(
+            store_wave_data="recorded",
+            store_wave_data_multi="recorded_multi",
+            wav_calibration_metadata={"old": True},
+            wav_calibration_metadata_authoritative=True,
+            wav_calibration_warning_shown=True,
+        ),
+        lineedit_s_or_n=SimpleNamespace(isEnabled=lambda: False),
+        setFocus=lambda: None,
+    )
+    monkeypatch.setattr(
+        config_ops_module.LoadUiConfig,
+        "update_using_config_path",
+        lambda _path: None,
+    )
+
+    SequenceWidgetConfigOpsMixin.on_using_file_combobox_changed(host, "legacy")
+
+    assert host.data_struct.store_wave_data is None
+    assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.wav_calibration_metadata is None
+    assert host.data_struct.wav_calibration_metadata_authoritative is False
+    assert host.data_struct.wav_calibration_warning_shown is False

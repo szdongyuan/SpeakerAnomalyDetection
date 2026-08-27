@@ -15,6 +15,7 @@ from ui.operation_sequence import (
     OptionList,
 )
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
+from ui.ui_analysis_config.common_widgets import AnalysisChannelSpinBoxWidget
 
 
 @pytest.fixture(scope="module")
@@ -57,7 +58,11 @@ def test_fba_is_registered_and_dispatches_its_config_dialog(qapp):
     assert "频段能量 (FBA) " in SUPPORTED_ANALYSIS_ITEMS
 
     dialog = OptionList.create_config_dialog(
-        SimpleNamespace(mic_channels=[0, 1]),
+        SimpleNamespace(
+            mic_channels=[0, 1],
+            config=[SimpleNamespace(mode="IMPORT_AUDIO")],
+            default_logger=SimpleNamespace(warning=lambda message: None),
+        ),
         None,
         _manager(),
         "频段能量 (FBA) 1",
@@ -66,7 +71,23 @@ def test_fba_is_registered_and_dispatches_its_config_dialog(qapp):
     )
 
     assert isinstance(dialog, FbaConfigWindow)
+    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
     assert dialog.channel_selector.current_channel() == 1
+    dialog.close()
+
+
+def test_fba_channel_spinbox_is_not_limited_by_available_channels(qapp):
+    manager = _manager()
+    manager.config["频段能量 (FBA) 1"]["analysis_channel"] = 127
+    dialog = FbaConfigWindow(
+        manager,
+        "频段能量 (FBA) 1",
+        available_channels=[0],
+    )
+
+    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
+    assert dialog.channel_selector.spin_box.value() == 128
+    assert dialog.get_default_config()["analysis_channel"] == 127
     dialog.close()
 
 

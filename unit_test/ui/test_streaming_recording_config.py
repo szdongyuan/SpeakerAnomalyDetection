@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtWidgets import QApplication
 
 from ui.acquisition_config_window import RecordConfigWindow
+from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 
 
 ANALYSIS_OPS_PATH = (
@@ -46,8 +47,8 @@ def _load_method(method_name, extra_globals=None):
 
 
 @pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
+def qapp(ui_qapp):
+    return ui_qapp
 
 
 def test_record_config_defaults_to_blocking_and_persists_streaming_choice(qapp):
@@ -126,6 +127,7 @@ def test_disabling_streaming_disables_live_monitoring(qapp):
 def test_blocking_recording_reuses_the_existing_completion_pipeline():
     recorded_multi = np.array([[1.0, 3.0], [2.0, 4.0]], dtype=np.float32)
     calls = {}
+    ordered_calls = []
 
     class FakeSoundcardAudioProcessor:
         @staticmethod
@@ -134,13 +136,19 @@ def test_blocking_recording_reuses_the_existing_completion_pipeline():
             return 0, recorded_multi.mean(axis=1)
 
     def fake_save_audio(path, samples, sample_rate):
+        ordered_calls.append("save")
         calls["save"] = (path, samples.copy(), sample_rate)
+
+    def fake_complete(**kwargs):
+        ordered_calls.append("complete")
+        calls["complete"] = kwargs
 
     instance = SimpleNamespace(
         recorded_path="record.wav",
         default_logger=SimpleNamespace(error=lambda message: calls.setdefault("error", message)),
         _normalize_blocking_recorded_data=lambda recorded_data, recorded_dict: recorded_dict["_recorded_multi"],
-        _on_streaming_complete=lambda **kwargs: calls.setdefault("complete", kwargs),
+        _normalize_final_recording_array=SequenceWidgetStreamingOpsMixin._normalize_final_recording_array,
+        _on_streaming_complete=fake_complete,
         _handle_invalid_recording=lambda reason: calls.setdefault("invalid", reason),
     )
     start_blocking = _load_method(
@@ -162,6 +170,7 @@ def test_blocking_recording_reuses_the_existing_completion_pipeline():
     assert calls["save"][2] == 48000
     assert calls["complete"]["completion_source"] == "blocking"
     np.testing.assert_array_equal(calls["complete"]["recorded_multi"], recorded_multi)
+    assert ordered_calls == ["save", "complete"]
     assert "invalid" not in calls
 
 
@@ -195,3 +204,49 @@ def test_blocking_recording_failure_uses_existing_invalid_recording_cleanup():
     assert "device unavailable" in calls["invalid"]
     assert "complete" not in calls
     assert "save" not in calls
+
+
+@pytest.mark.parametrize(
+    "recorded_multi",
+    [
+        np.ones((4, 1), dtype=np.float32),
+        np.ones((4, 3), dtype=np.float32),
+    ],
+)
+def test_blocking_recording_rejects_final_column_mismatch_before_save(recorded_multi):
+    calls = {}
+
+    class FakeSoundcardAudioProcessor:
+        @staticmethod
+        def sd_rec(recorded_dict):
+            recorded_dict["_recorded_multi"] = recorded_multi
+            return 0, recorded_multi.mean(axis=1)
+
+    instance = SimpleNamespace(
+        _recording_input_channels=(0, 2),
+        recorded_path="record.wav",
+        default_logger=SimpleNamespace(
+            error=lambda message: calls.setdefault("error", message)
+        ),
+        _normalize_blocking_recorded_data=lambda recorded_data, recorded_dict: recorded_dict[
+            "_recorded_multi"
+        ],
+        _normalize_final_recording_array=SequenceWidgetStreamingOpsMixin._normalize_final_recording_array,
+        _on_streaming_complete=lambda **kwargs: calls.setdefault("complete", kwargs),
+        _handle_invalid_recording=lambda reason: calls.setdefault("invalid", reason),
+    )
+    start_blocking = _load_method(
+        "_start_blocking_recording",
+        {
+            "SoundcardAudioProcessor": FakeSoundcardAudioProcessor,
+            "error_code": SimpleNamespace(OK=0),
+            "np": np,
+            "save_audio_simple": lambda *args: calls.setdefault("save", args),
+        },
+    )
+
+    start_blocking(instance, {"input_channels": [0, 2]}, 48000)
+
+    assert "expected 2 channels" in calls["invalid"]
+    assert "save" not in calls
+    assert "complete" not in calls

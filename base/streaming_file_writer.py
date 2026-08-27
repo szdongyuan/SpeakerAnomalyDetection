@@ -33,6 +33,8 @@ class StreamingWavWriter:
         self.sample_rate = sample_rate
         self.channels = channels
         self.logger = LogManager.set_log_handler("streaming_core")
+        self._terminal_attempted = False
+        self.is_open = False
 
         try:
             # Try using soundfile for better performance (if available)
@@ -100,16 +102,17 @@ class StreamingWavWriter:
         This method must be called after all chunks have been written
         to properly close the file and update the WAV header.
         """
-        if not self.is_open:
+        if getattr(self, "_terminal_attempted", False) or not self.is_open:
             return
 
+        self._terminal_attempted = True
+        self.is_open = False
         try:
             if self.use_soundfile:
                 self.sf_file.close()
             else:
                 self.wave_file.close()
 
-            self.is_open = False
             self.logger.info(f"StreamingWavWriter finalized. Total frames: {self.total_frames}")
 
         except Exception as e:
@@ -127,5 +130,10 @@ class StreamingWavWriter:
 
     def __del__(self):
         """Destructor - ensures file is closed if not already."""
-        if self.is_open:
-            self.finalize()
+        try:
+            if getattr(self, "is_open", False):
+                self.finalize()
+        except Exception:
+            # ``finalize`` already records the external close failure. A
+            # destructor cannot safely propagate it during garbage collection.
+            return
