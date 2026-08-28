@@ -5,16 +5,14 @@ from typing import List, Optional
 
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from base.pre_processing.spl_runtime_config import (
-    resolve_directional_additional_correction_db,
-    resolve_free_field_distance_correction_db,
-)
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
     CheckBox,
+    ComboBox,
     DoubleSpinBox,
     GroupBox,
     Label,
+    MessageBox,
     RadioButton,
 )
 from ui.ui_analysis_config.common_widgets import (
@@ -22,9 +20,14 @@ from ui.ui_analysis_config.common_widgets import (
     AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
     GoldenSampleWidget,
+    MultiChannelSelectorWidget,
     OctaveSmoothingSelectorWidget,
     SemanticAnalysisConfigDialogBase,
     WeightingSelectorWidget,
+)
+from ui.ui_analysis_config.manual_limit_segments import (
+    ManualLimitValidationError,
+    validate_constant_limit_config,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
 
@@ -37,14 +40,14 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         "analysis_time_range_enabled": False,
         "analysis_start_time_sec": 0.0,
         "analysis_end_time_sec": 0.0,
-        "free_field_distance_enabled": False,
-        "measurement_distance_m": 0.05,
-        "target_distance_m": 1.0,
-        "directional_correction_enabled": False,
-        "directional_additional_correction_db": 0.0,
         "weighting": "Z",
         "smooth_checked": False,
         "limit_checked": False,
+        "limit_metric": "overall_spl",
+        "scalar_upper_enabled": True,
+        "scalar_upper_value": 100.0,
+        "scalar_lower_enabled": False,
+        "scalar_lower_value": 0.0,
         "limit_data": None,
         "limit_mode": "csv",
         "manual_input_mode": "constant",
@@ -58,6 +61,11 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         "manual_lower_segments": [],
     }
     _MODERN_THRESHOLD_KEYS = {
+        "limit_metric",
+        "scalar_upper_enabled",
+        "scalar_upper_value",
+        "scalar_lower_enabled",
+        "scalar_lower_value",
         "limit_data",
         "limit_mode",
         "manual_input_mode",
@@ -82,6 +90,9 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
     def _merge_config_defaults(cls, raw_config=None):
         raw = dict(raw_config or {})
         config = {**cls.DEFAULT_CONFIG, **raw}
+        # Keep active legacy curve limits unchanged when reopening the dialog.
+        if raw.get("limit_checked", False) and not raw.get("limit_metric"):
+            config["limit_metric"] = "curve_y"
         if (
             "manual_input_mode" not in raw
             and str(raw.get("limit_mode", "csv") or "csv").lower()
@@ -116,6 +127,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         model_type,
         available_channels: Optional[List[int]] = None,
         restrict_analysis_channel: bool = False,
+        allow_multiple_channels: bool = False,
     ):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
@@ -124,6 +136,7 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             re.findall(r"[A-Za-z]", str(model_type))
         ) or "SPL"
         self.show_channel_selector = available_channels is not None
+        self.allow_multiple_channels = allow_multiple_channels
         self.available_channels = available_channels
         self.restrict_analysis_channel = restrict_analysis_channel
         saved_config = self.config_manager.load_config().get(
@@ -145,7 +158,11 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            if self.model_type == "SPL":
+            if self.allow_multiple_channels:
+                self.channel_selector = MultiChannelSelectorWidget(
+                    self.load_config, self.available_channels, self,
+                )
+            elif self.model_type == "SPL":
                 self.channel_selector = AnalysisChannelSpinBoxWidget(
                     self.load_config,
                     self.available_channels,
@@ -189,13 +206,6 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
         compute_layout.addWidget(self.weighting_selector)
 
         self.show_overall_spl_box = None
-        self.free_field_distance_box = None
-        self.free_field_distance_parameters_widget = None
-        self.measurement_distance_spin = None
-        self.target_distance_spin = None
-        self.directional_correction_widget = None
-        self.directional_correction_box = None
-        self.directional_additional_correction_spin = None
         if self.model_type != "SPLF":
             self.show_overall_spl_box = CheckBox(
                 "显示总体声压级",
@@ -209,90 +219,6 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
                     )
                 )
             )
-            self.free_field_distance_box = CheckBox(
-                "启用球面扩散距离推算",
-                self,
-            )
-            self.free_field_distance_box.setChecked(
-                bool(
-                    self.load_config.get(
-                        "free_field_distance_enabled",
-                        False,
-                    )
-                )
-            )
-
-            self.free_field_distance_parameters_widget = QWidget(
-                compute_widget
-            )
-            parameters_layout = QVBoxLayout(
-                self.free_field_distance_parameters_widget
-            )
-            parameters_layout.setContentsMargins(24, 0, 0, 0)
-            parameters_layout.setSpacing(8)
-
-            distance_row = QHBoxLayout()
-            self.measurement_distance_spin = self._create_distance_spin(
-                self.load_config.get("measurement_distance_m", 0.05)
-            )
-            self.target_distance_spin = self._create_distance_spin(
-                self.load_config.get("target_distance_m", 1.0)
-            )
-            distance_row.addWidget(Label("测量距离："))
-            distance_row.addWidget(self.measurement_distance_spin)
-            distance_row.addWidget(Label("目标距离："))
-            distance_row.addWidget(self.target_distance_spin)
-            distance_row.addStretch(1)
-            parameters_layout.addLayout(distance_row)
-
-            self.directional_correction_widget = QWidget(compute_widget)
-            correction_row = QHBoxLayout(
-                self.directional_correction_widget
-            )
-            correction_row.setContentsMargins(0, 0, 0, 0)
-            self.directional_correction_box = CheckBox(
-                "方向修正",
-                self.directional_correction_widget,
-            )
-            self.directional_correction_box.setChecked(
-                bool(
-                    self.load_config.get(
-                        "directional_correction_enabled",
-                        False,
-                    )
-                )
-            )
-            self.directional_additional_correction_spin = (
-                self._create_correction_spin(
-                    self.load_config.get(
-                        "directional_additional_correction_db",
-                        0.0,
-                    )
-                )
-            )
-            correction_row.addWidget(self.directional_correction_box)
-            correction_row.addWidget(
-                self.directional_additional_correction_spin
-            )
-            correction_row.addStretch(1)
-
-            for spin in (
-                self.measurement_distance_spin,
-                self.target_distance_spin,
-                self.directional_additional_correction_spin,
-            ):
-                spin.valueChanged.connect(
-                    self._update_spl_correction_tooltip
-                )
-            self.directional_correction_box.stateChanged.connect(
-                self._sync_directional_correction_controls
-            )
-            self.free_field_distance_box.stateChanged.connect(
-                self._sync_free_field_distance_controls
-            )
-            self._sync_directional_correction_controls()
-            self._sync_free_field_distance_controls()
-
         self.smooth_checkbox = None
         self.splf_mode_group = None
         self.smoothing_selector = None
@@ -335,11 +261,6 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             )
             compute_layout.addWidget(self.smooth_checkbox)
             compute_layout.addWidget(self.show_overall_spl_box)
-            compute_layout.addWidget(self.free_field_distance_box)
-            compute_layout.addWidget(
-                self.free_field_distance_parameters_widget
-            )
-            compute_layout.addWidget(self.directional_correction_widget)
 
         self.add_semantic_section("compute", widget=compute_widget)
 
@@ -362,6 +283,15 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
                 else None
             ),
         )
+        self.limit_metric_widget = None
+        self.limit_metric_combo = None
+        self.overall_spl_limit_widget = None
+        self.scalar_upper_check = None
+        self.scalar_upper_spin = None
+        self.scalar_lower_check = None
+        self.scalar_lower_spin = None
+        if self.model_type != "SPLF":
+            self._add_spl_limit_metric_controls()
 
         self.enable_plot_view_config(
             self.load_config,
@@ -391,131 +321,172 @@ class SplConfigWindow(SemanticAnalysisConfigDialogBase):
             config["show_overall_spl"] = (
                 self.show_overall_spl_box.isChecked()
             )
-            config.update(
-                {
-                    "free_field_distance_enabled": (
-                        self.free_field_distance_box.isChecked()
-                    ),
-                    "measurement_distance_m": float(
-                        self.measurement_distance_spin.value()
-                    ),
-                    "target_distance_m": float(
-                        self.target_distance_spin.value()
-                    ),
-                    "directional_correction_enabled": (
-                        self.directional_correction_box.isChecked()
-                    ),
-                    "directional_additional_correction_db": float(
-                        self.directional_additional_correction_spin.value()
-                    ),
-                }
-            )
             config.update(self.analysis_time_range_widget.get_config())
 
         config.update(self.weighting_selector.get_config())
         config.update(self.threshold_widget.get_config())
+        if self.model_type != "SPLF":
+            config["limit_metric"] = str(
+                self.limit_metric_combo.currentData() or "overall_spl"
+            )
+            config.update(self._overall_spl_limit_config())
         if self.show_channel_selector:
             config.update(self.channel_selector.get_config())
         else:
-            config["analysis_channel"] = int(
-                self.load_config.get("analysis_channel", 0) or 0
-            )
+            config.update(ChannelSelectorWidget.normalized_config(self.load_config))
         return self.merge_plot_view_config(config)
 
     def _validate_config(self):
         if not self.validate_plot_view_config():
             return False
+        if (
+            self.model_type != "SPLF"
+            and self.threshold_widget.limit_checkbox.isChecked()
+            and self.limit_metric_combo.currentData() == "overall_spl"
+        ):
+            try:
+                validate_constant_limit_config(
+                    self._overall_spl_limit_validation_config()
+                )
+            except ManualLimitValidationError as exc:
+                MessageBox.warning(self, "提示", str(exc))
+                return False
+            return True
         return self.threshold_widget.validate()
 
-    def _create_distance_spin(self, value):
-        spin = DoubleSpinBox(self)
-        spin.setRange(0.0001, 1000000.0)
-        spin.setDecimals(4)
-        spin.setSingleStep(0.1)
-        spin.setSuffix(" m")
-        spin.setValue(float(value))
-        spin.setMinimumWidth(140)
-        spin.setMaximumWidth(180)
-        return spin
+    def _add_spl_limit_metric_controls(self):
+        self.limit_metric_widget = QWidget(self.threshold_widget)
+        metric_layout = QHBoxLayout(self.limit_metric_widget)
+        metric_layout.setContentsMargins(0, 0, 0, 0)
+        metric_layout.addWidget(Label("判定依据：", self.limit_metric_widget))
+        self.limit_metric_combo = ComboBox(self.limit_metric_widget)
+        self.limit_metric_combo.addItem("总体声压级判定", "overall_spl")
+        self.limit_metric_combo.addItem("声压级曲线逐点判定", "curve_y")
+        metric = str(
+            self.load_config.get("limit_metric", "overall_spl")
+            or "overall_spl"
+        ).lower()
+        metric_index = self.limit_metric_combo.findData(metric)
+        if metric_index < 0:
+            metric_index = self.limit_metric_combo.findData("overall_spl")
+        self.limit_metric_combo.setCurrentIndex(metric_index)
+        self.limit_metric_combo.setMinimumWidth(220)
+        self.limit_metric_combo.setMaximumWidth(320)
+        self.limit_metric_combo.setToolTip(
+            "声压级曲线逐点判定：每个时间点均需满足曲线阈值。\n"
+            "总体声压级判定：分析时间段内的 RMS 总体声压级需满足固定上下限。"
+        )
+        metric_layout.addWidget(self.limit_metric_combo)
+        metric_layout.addStretch(1)
 
-    def _create_correction_spin(self, value):
-        spin = DoubleSpinBox(self)
-        spin.setRange(-200.0, 200.0)
-        spin.setDecimals(2)
+        self.overall_spl_limit_widget = QWidget(self.threshold_widget)
+        scalar_layout = QVBoxLayout(self.overall_spl_limit_widget)
+        scalar_layout.setContentsMargins(0, 0, 0, 0)
+        scalar_layout.setSpacing(8)
+
+        self.scalar_upper_check = CheckBox(
+            "上限",
+            self.overall_spl_limit_widget,
+        )
+        self.scalar_upper_check.setChecked(
+            bool(self.load_config.get("scalar_upper_enabled", True))
+        )
+        self.scalar_upper_spin = self._create_overall_spl_limit_spin(
+            self.load_config.get("scalar_upper_value", 100.0)
+        )
+        upper_layout = QHBoxLayout()
+        upper_layout.addWidget(self.scalar_upper_check)
+        upper_layout.addWidget(Label("固定值：", self.overall_spl_limit_widget))
+        upper_layout.addWidget(self.scalar_upper_spin)
+        upper_layout.addStretch(1)
+        scalar_layout.addLayout(upper_layout)
+
+        self.scalar_lower_check = CheckBox(
+            "下限",
+            self.overall_spl_limit_widget,
+        )
+        self.scalar_lower_check.setChecked(
+            bool(self.load_config.get("scalar_lower_enabled", False))
+        )
+        self.scalar_lower_spin = self._create_overall_spl_limit_spin(
+            self.load_config.get("scalar_lower_value", 0.0)
+        )
+        lower_layout = QHBoxLayout()
+        lower_layout.addWidget(self.scalar_lower_check)
+        lower_layout.addWidget(Label("固定值：", self.overall_spl_limit_widget))
+        lower_layout.addWidget(self.scalar_lower_spin)
+        lower_layout.addStretch(1)
+        scalar_layout.addLayout(lower_layout)
+
+        threshold_layout = self.threshold_widget.layout()
+        threshold_layout.insertWidget(1, self.limit_metric_widget)
+        threshold_layout.insertWidget(2, self.overall_spl_limit_widget)
+        self.threshold_widget.limit_checkbox.stateChanged.connect(
+            self._sync_spl_limit_metric_controls
+        )
+        self.limit_metric_combo.currentIndexChanged.connect(
+            self._sync_spl_limit_metric_controls
+        )
+        self.scalar_upper_check.stateChanged.connect(
+            self._sync_overall_spl_limit_inputs
+        )
+        self.scalar_lower_check.stateChanged.connect(
+            self._sync_overall_spl_limit_inputs
+        )
+        self._sync_overall_spl_limit_inputs()
+        self._sync_spl_limit_metric_controls()
+
+    def _create_overall_spl_limit_spin(self, value):
+        spin = DoubleSpinBox(self.overall_spl_limit_widget)
+        spin.setRange(-10000.0, 10000.0)
+        spin.setDecimals(3)
         spin.setSingleStep(0.1)
         spin.setSuffix(" dB")
         spin.setValue(float(value))
-        spin.setMinimumWidth(140)
-        spin.setMaximumWidth(180)
+        spin.setMinimumWidth(160)
+        spin.setMaximumWidth(220)
         return spin
 
-    def _sync_free_field_distance_controls(self, *args):
-        enabled = self.free_field_distance_box.isChecked()
-        self.free_field_distance_parameters_widget.setVisible(enabled)
-        self._update_spl_correction_tooltip()
-        self.free_field_distance_parameters_widget.updateGeometry()
-        parent_widget = self.free_field_distance_parameters_widget.parentWidget()
-        parent_layout = parent_widget.layout()
-        if parent_layout is not None:
-            parent_layout.invalidate()
-            parent_layout.activate()
-        self._refresh_section_container_minimum_height()
+    def _sync_spl_limit_metric_controls(self, *args):
+        enabled = self.threshold_widget.limit_checkbox.isChecked()
+        use_overall_spl = (
+            self.limit_metric_combo.currentData() == "overall_spl"
+        )
+        self.limit_metric_widget.setVisible(enabled)
+        if not use_overall_spl:
+            self.threshold_widget._sync_limit_mode_controls()
+        self.threshold_widget.limit_group_box.setVisible(
+            enabled and not use_overall_spl
+        )
+        self.overall_spl_limit_widget.setVisible(
+            enabled and use_overall_spl
+        )
+        self.threshold_widget._refresh_parent_scroll_layout()
 
-    def _sync_directional_correction_controls(self, *args):
-        enabled = self.directional_correction_box.isChecked()
-        self.directional_additional_correction_spin.setVisible(enabled)
-        self.directional_additional_correction_spin.setEnabled(enabled)
-        self._update_spl_correction_tooltip()
+    def _sync_overall_spl_limit_inputs(self, *args):
+        self.scalar_upper_spin.setEnabled(
+            self.scalar_upper_check.isChecked()
+        )
+        self.scalar_lower_spin.setEnabled(
+            self.scalar_lower_check.isChecked()
+        )
 
-    def _update_spl_correction_tooltip(self, *args):
-        correction_config = {
-            "free_field_distance_enabled": (
-                self.free_field_distance_box.isChecked()
-            ),
-            "measurement_distance_m": self.measurement_distance_spin.value(),
-            "target_distance_m": self.target_distance_spin.value(),
-            "directional_correction_enabled": (
-                self.directional_correction_box.isChecked()
-            ),
-            "directional_additional_correction_db": (
-                self.directional_additional_correction_spin.value()
-            ),
+    def _overall_spl_limit_config(self):
+        return {
+            "scalar_upper_enabled": self.scalar_upper_check.isChecked(),
+            "scalar_upper_value": self.scalar_upper_spin.value(),
+            "scalar_lower_enabled": self.scalar_lower_check.isChecked(),
+            "scalar_lower_value": self.scalar_lower_spin.value(),
         }
-        distance_correction_db = (
-            resolve_free_field_distance_correction_db(correction_config)
-        )
-        directional_correction_db = (
-            resolve_directional_additional_correction_db(correction_config)
-        )
-        total_correction_db = (
-            distance_correction_db + directional_correction_db
-        )
-        status_text = f"当前总修正量：{total_correction_db:+.2f} dB"
-        if self.free_field_distance_box.isChecked():
-            distance_text = f"球面扩散：{distance_correction_db:+.2f} dB"
-        else:
-            distance_text = "球面扩散：未启用"
-        if self.directional_correction_box.isChecked():
-            directional_text = (
-                f"方向修正：{directional_correction_db:+.2f} dB"
-            )
-        else:
-            directional_text = "方向修正：未启用"
-        tooltip = (
-            f"{status_text}\n"
-            f"{distance_text}\n"
-            f"{directional_text}（正值提高，负值降低）"
-        )
-        for widget in (
-            self.free_field_distance_box,
-            self.free_field_distance_parameters_widget,
-            self.measurement_distance_spin,
-            self.target_distance_spin,
-            self.directional_correction_widget,
-            self.directional_correction_box,
-            self.directional_additional_correction_spin,
-        ):
-            widget.setToolTip(tooltip)
+
+    def _overall_spl_limit_validation_config(self):
+        config = self._overall_spl_limit_config()
+        return {
+            "constant_upper_enabled": config["scalar_upper_enabled"],
+            "constant_upper_value": config["scalar_upper_value"],
+            "constant_lower_enabled": config["scalar_lower_enabled"],
+            "constant_lower_value": config["scalar_lower_value"],
+        }
 
     def on_default_btn_clicked(self):
         if not self._validate_config():

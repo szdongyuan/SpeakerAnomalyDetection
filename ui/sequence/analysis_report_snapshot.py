@@ -74,6 +74,17 @@ def _configured_limit_value(
     *,
     preferred_prefixes: tuple[str, ...] | None = None,
 ) -> str:
+    if (
+        str(item_config.get("type") or "").upper() == "SPL"
+        and preferred_prefixes == ("scalar",)
+    ):
+        if not item_config.get("limit_checked", False) or not item_config.get(
+            f"scalar_{side}_enabled", side == "upper"
+        ):
+            return "-"
+        return _format_measurement(
+            item_config.get(f"scalar_{side}_value", 100.0 if side == "upper" else 0.0)
+        )
     result_key = f"{side}_limits"
     if result_key in result:
         return _format_limit_range(result.get(result_key))
@@ -163,8 +174,11 @@ def _analysis_measurement_fields(
     limit_prefixes = None
     metric = ""
     if item_type == "SPL":
+        metric = str(item_config.get("limit_metric") or "curve_y").lower()
+        if metric == "overall_spl":
+            limit_prefixes = ("scalar",)
         values = _finite_values(result.get("overall_spl"))
-        if not values:
+        if not values and metric != "overall_spl":
             signal_values = _finite_values(result.get("signal_spl"))
             values = [max(signal_values)] if signal_values else []
         measurement = _format_measurement(values)
@@ -263,7 +277,10 @@ def _analysis_measurement_fields(
             )
 
     uses_curve_judgment = bool(item_config.get("limit_checked", False)) and (
-        item_type in _CURVE_JUDGMENT_ANALYSIS_TYPES
+        (
+            item_type in _CURVE_JUDGMENT_ANALYSIS_TYPES
+            and not (item_type == "SPL" and metric == "overall_spl")
+        )
         or (item_type == "LOUD" and metric == "curve_y")
     )
     if uses_curve_judgment:
@@ -310,7 +327,10 @@ def _analysis_judgment(
 ) -> tuple[str, str]:
     result = None
     title_name = str(getattr(instance, "title_name", "") or "")
-    for candidate in (title_name, item_key):
+    runtime_key = str(
+        getattr(instance, "_sequence_runtime_key", "") or ""
+    )
+    for candidate in (title_name, runtime_key, item_key):
         if candidate and candidate in analysis_result_dict:
             result = analysis_result_dict[candidate]
             break
@@ -430,6 +450,19 @@ def build_analysis_report_items(
         item_config = analysis_config.get(item_key)
         if not isinstance(item_config, dict):
             item_config = {}
+        runtime_key = str(
+            getattr(instance, "_sequence_runtime_key", item_key)
+            or item_key
+        )
+        report_name = (
+            runtime_key
+            if getattr(
+                instance,
+                "_sequence_multi_channel_expansion",
+                False,
+            )
+            else item_key
+        )
 
         state = str(
             getattr(instance, "_product_report_analysis_state", "completed")
@@ -457,7 +490,9 @@ def build_analysis_report_items(
         for index, plot_widget in enumerate(_report_plot_widgets(instance)):
             caption = _plot_title(
                 plot_widget,
-                item_key if index == 0 else f"{item_key} - 图 {index + 1}",
+                report_name
+                if index == 0
+                else f"{report_name} - 图 {index + 1}",
             )
             try:
                 png_data = export_plot_widget_png(plot_widget)
@@ -468,7 +503,7 @@ def build_analysis_report_items(
 
         report_items.append(
             {
-                "name": item_key,
+                "name": report_name,
                 "type": str(item_config.get("type") or ""),
                 "state": state,
                 "status": status,

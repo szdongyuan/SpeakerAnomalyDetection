@@ -14,6 +14,8 @@ from ui.custom_ui_widget.widgets import (
 )
 from ui.ui_analysis_config.common_widgets import (
     AnalysisChannelSpinBoxWidget,
+    ChannelSelectorWidget,
+    MultiChannelSelectorWidget,
     SemanticAnalysisConfigDialogBase,
     WeightingSelectorWidget,
 )
@@ -60,12 +62,14 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
         model_type,
         available_channels: Optional[List[int]] = None,
         restrict_analysis_channel: bool = False,
+        allow_multiple_channels: bool = False,
     ):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.config_key = model_type
         self.model_type_str = "".join(re.findall(r"[A-Za-z]", str(model_type))) or "FBA"
         self.show_channel_selector = available_channels is not None
+        self.allow_multiple_channels = allow_multiple_channels
         self.available_channels = available_channels
         self.restrict_analysis_channel = restrict_analysis_channel
 
@@ -86,14 +90,17 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            self.channel_selector = AnalysisChannelSpinBoxWidget(
-                self.load_config,
-                self.available_channels,
-                self,
-                restrict_to_available_channels=(
-                    self.restrict_analysis_channel
-                ),
-            )
+            if self.allow_multiple_channels:
+                self.channel_selector = MultiChannelSelectorWidget(
+                    self.load_config, self.available_channels, self,
+                )
+            else:
+                self.channel_selector = AnalysisChannelSpinBoxWidget(
+                    self.load_config,
+                    self.available_channels,
+                    self,
+                    restrict_to_available_channels=self.restrict_analysis_channel,
+                )
             self.add_semantic_section("input", widget=self.channel_selector)
 
         compute_widget = QWidget(self)
@@ -291,13 +298,11 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
             "f_min": int(self.f_min_spin.value()),
             "f_max": int(self.f_max_spin.value()),
             "bandwidth": int(self.bandwidth_spin.value()),
-            "analysis_channel": (
-                self.channel_selector.current_channel()
-                if self.show_channel_selector
-                and hasattr(self, "channel_selector")
-                else int(self.load_config.get("analysis_channel", 0) or 0)
-            ),
         }
+        if self.show_channel_selector and hasattr(self, "channel_selector"):
+            config.update(self.channel_selector.get_config())
+        else:
+            config.update(ChannelSelectorWidget.normalized_config(self.load_config))
         if self.strategy_combo.currentText() == "自定义":
             config["custom_bands_text"] = (
                 self.custom_bands_edit.toPlainText()

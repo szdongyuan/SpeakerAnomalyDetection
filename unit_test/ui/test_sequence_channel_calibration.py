@@ -5,6 +5,8 @@ from unittest import mock
 
 import pytest
 import numpy as np
+from PyQt5.QtCore import QSize
+from PyQt5.QtWidgets import QApplication
 
 from consts import error_code
 from base.soundcard_calibration_manager import (
@@ -17,10 +19,14 @@ from ui.sequence.sequence_widget_serial_trigger_ops import (
 )
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from ui.sequence.analysis_channel_preflight import (
+    MULTI_CHANNEL_ANALYSIS_TYPES,
     REQUIRED_CHANNEL_ANALYSIS_TYPES,
     preflight_analysis_channels,
 )
-from ui.ui_analysis_config.config_normalization import normalize_analysis_channel
+from ui.ui_analysis_config.config_normalization import (
+    normalize_analysis_channel,
+    normalize_analysis_channels,
+)
 from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
 
 
@@ -361,6 +367,9 @@ def build_sequence(
         ],
         {
             "get_class_mapping": lambda: {
+                "AI": make_analysis,
+                "FFT": make_analysis,
+                "LOUD": make_analysis,
                 "SPL": make_analysis,
                 "Spec": make_spec,
                 "FBA": make_fba,
@@ -371,9 +380,12 @@ def build_sequence(
             "MicCalibrationFormatError": MicCalibrationFormatError,
             "MicCalibrationIOError": MicCalibrationIOError,
             "QMessageBox": messages,
+            "QSize": QSize,
             "preflight_analysis_channels": preflight_analysis_channels,
             "REQUIRED_CHANNEL_ANALYSIS_TYPES": REQUIRED_CHANNEL_ANALYSIS_TYPES,
+            "MULTI_CHANNEL_ANALYSIS_TYPES": MULTI_CHANNEL_ANALYSIS_TYPES,
             "normalize_analysis_channel": normalize_analysis_channel,
+            "normalize_analysis_channels": normalize_analysis_channels,
             "resolve_wav_channel_v2pa_factor": wav_resolver,
             "extract_ai_runtime_state": lambda *_args: {
                 "has_ai_analysis": False,
@@ -532,7 +544,8 @@ def test_calibration_file_error_aborts_whole_live_batch(error):
     sequence._capture_excel_export_cache.assert_not_called()
 
 
-def test_imported_items_use_requested_wav_factor_and_preflight_local_column():
+@pytest.mark.parametrize("recorded_channels", [None, [0, 7]])
+def test_imported_items_use_requested_wav_factor_and_preflight_local_column(recorded_channels):
     resolver = mock.Mock(side_effect=resolve_wav_channel_v2pa_factor)
     sequence, loader, messages, _events, created = build_sequence(
         loader_error=MicCalibrationFormatError("must not load"),
@@ -562,6 +575,9 @@ def test_imported_items_use_requested_wav_factor_and_preflight_local_column():
         ],
     )
     sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
+    if recorded_channels is not None:
+        for key in sequence.analysis_config["display_sequence"]:
+            sequence.analysis_config[key]["analysis_channels"] = recorded_channels
 
     sequence._run_analysis_impl(show_windows=False)
 
@@ -573,6 +589,232 @@ def test_imported_items_use_requested_wav_factor_and_preflight_local_column():
         instance.analysis_config["analysis_channel"] for instance in created
     ] == [0, 1, 0]
     assert [call.args[1] for call in resolver.call_args_list] == [0, 1, 0]
+    assert all(not instance._sequence_multi_channel_expansion for instance in created)
+
+
+@pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
+def test_recorded_item_expands_with_physical_calibration_and_local_columns(item_type):
+    params = {"analysis_channel": 0, "analysis_channels": [7, 2], "limit_checked": True}
+    sequence, loader, messages, _events, created = build_sequence(
+        factor_map={2: 2.5, 7: 8.0},
+        active_input_channels=[7, 2],
+        items=[("item", item_type, params)],
+    )
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+
+    loader.assert_called_once_with(DEVICE)
+    messages.warning.assert_not_called()
+    assert [instance._sequence_runtime_key for instance in created] == [
+        "item--通道3", "item--通道8"
+    ]
+    assert [instance.analysis_config["analysis_channel"] for instance in created] == [1, 0]
+    assert [instance.v2pa_factor for instance in created] == [2.5, 8.0]
+    assert [instance._analysis_raw_channel for instance in created] == [2, 7]
+    assert all(instance._sequence_analysis_key == "item" for instance in created)
+    assert all(instance._sequence_window_key == instance.key for instance in created)
+    assert all(instance._sequence_multi_channel_expansion for instance in created)
+    assert sequence.analysis_config["display_sequence"] == ["item"]
+    assert sequence.analysis_config["item"]["analysis_channels"] == [7, 2]
+    assert sequence.analysis_config["item"]["analysis_channel"] == 0
+
+
+def test_recorded_multichannel_results_and_export_cache_do_not_overwrite():
+    sequence, _loader, _messages, _events, _created = build_sequence(
+        factor_map={0: 1.0, 2: 3.0},
+        active_input_channels=[0, 2],
+        items=[("item", "SPL", {
+            "analysis_channels": [0, 2],
+            "limit_checked": True,
+            "_test_judgment": True,
+        })],
+    )
+
+    sequence._run_analysis_impl(show_windows=False)
+    sequence.recorded_path = "recorded.wav"
+    SequenceWidgetAnalysisOpsMixin._capture_excel_export_cache(sequence)
+
+    assert sequence.data_struct.analysis_result_dict == {
+        "item--通道1": (True, 0.0), "item--通道3": (True, 0.0),
+    }
+    cached = sequence._excel_export_cache["analysis_items_data"]
+    assert list(cached) == ["item--通道1", "item--通道3"]
+    assert [entry["raw_channel"] for entry in cached.values()] == [0, 2]
+    assert all(entry["config_key"] == "item" for entry in cached.values())
+    assert all(entry["multi_channel_expansion"] for entry in cached.values())
+
+
+def test_partly_missing_recorded_item_runs_valid_channel_and_keeps_runtime_name():
+    sequence, loader, messages, _events, created = build_sequence(
+        factor_map={0: 2.5},
+        active_input_channels=[0],
+        items=[("item", "SPL", {"analysis_channels": [0, 7]})],
+    )
+
+    assert sequence._run_analysis_impl(show_windows=False) is True
+
+    loader.assert_called_once_with(DEVICE)
+    assert [instance.key for instance in created] == ["item--通道1"]
+    assert created[0]._sequence_multi_channel_expansion is True
+    assert created[0]._sequence_window_key == "item--通道1"
+    assert list(sequence._analysis_preflight_skips) == ["item--通道8"]
+    messages.warning.assert_called_once()
+    assert "In8" in messages.warning.call_args.args[2]
+
+
+def test_all_recorded_channels_missing_does_not_load_calibration_or_analyze():
+    sequence, loader, messages, _events, created = build_sequence(
+        active_input_channels=[0],
+        items=[("item", "SPL", {"analysis_channels": [2, 7]})],
+    )
+
+    assert sequence._run_analysis_impl(show_windows=False) is False
+
+    assert created == []
+    loader.assert_not_called()
+    sequence._capture_excel_export_cache.assert_not_called()
+    messages.warning.assert_called_once()
+
+
+def test_single_recorded_channel_keeps_legacy_window_key():
+    sequence, _loader, _messages, _events, created = build_sequence(
+        factor_map={2: 2.5},
+        active_input_channels=[2],
+        items=[("item", "SPL", {"analysis_channels": [2]})],
+    )
+
+    sequence._run_analysis_impl(show_windows=False)
+
+    assert len(created) == 1
+    assert created[0]._sequence_window_key == "item"
+    assert created[0]._sequence_multi_channel_expansion is False
+
+
+def test_expanded_windows_restore_and_register_distinct_geometry_keys(monkeypatch):
+    sequence, _loader, _messages, _events, created = build_sequence(
+        factor_map={0: 1.0, 2: 1.0},
+        active_input_channels=[0, 2],
+        items=[("item", "SPL", {"analysis_channels": [0, 2]})],
+    )
+    for method in ("setMinimumSize", "setGeometry", "installEventFilter", "show"):
+        monkeypatch.setattr(FakeAnalysis, method, mock.Mock(), raising=False)
+    sequence._analysis_window_key_by_obj = {}
+    sequence._maybe_show_analysis_result_summary = mock.Mock()
+    sequence._analysis_window_display_geometry = mock.Mock(
+        side_effect=lambda _key, default, **_kwargs: default
+    )
+
+    sequence._run_analysis_impl(show_windows=True)
+
+    assert [call.args[0] for call in sequence._analysis_window_display_geometry.call_args_list] == [
+        "item--通道1", "item--通道3"
+    ]
+    assert sequence._analysis_window_key_by_obj == {
+        created[0]: "item--通道1", created[1]: "item--通道3"
+    }
+
+
+@pytest.mark.parametrize("limit_metric", ["curve_y", "overall_spl"])
+def test_real_spl_runtime_reads_distinct_recorded_columns_and_judges_each_channel(monkeypatch, limit_metric):
+    from ui.signal_analysis_window import Spl
+
+    app = QApplication.instance() or QApplication([])
+    sequence, _loader, _messages, _events, _created = build_sequence(
+        factor_map={2: 2.0, 7: 1.0},
+        active_input_channels=[7, 2],
+        items=[("item", "SPL", {
+            "analysis_channels": [2, 7],
+            "weighting": "Z",
+            "smooth_checked": False,
+            "show_overall_spl": True,
+            "limit_checked": True,
+            "limit_metric": limit_metric,
+            "scalar_upper_enabled": True,
+            "scalar_upper_value": 70.0,
+            "limit_mode": "manual",
+            "manual_input_mode": "constant",
+            "constant_upper_enabled": True,
+            "constant_lower_enabled": False,
+            "constant_upper_value": 70.0,
+        })],
+    )
+    monkeypatch.setitem(
+        sequence.instance_analysis_class.__func__.__globals__,
+        "get_class_mapping", lambda: {"SPL": Spl},
+    )
+    sequence.data_struct.store_wave_data_multi = np.column_stack([
+        np.full(2401, 0.2), np.full(2401, 0.01),
+    ])
+    sequence.data_struct.store_wave_data = np.full(2401, 99.0)
+    sequence.data_struct.sample_rate = 48000
+
+    try:
+        assert sequence._run_analysis_impl(show_windows=False) is True
+        first, second = sequence.analysis_window
+        assert first.result["recorded_signal"] == pytest.approx(np.full(2401, 0.01))
+        assert second.result["recorded_signal"] == pytest.approx(np.full(2401, 0.2))
+        assert first.result["overall_spl"] == pytest.approx(60.0)
+        assert second.result["overall_spl"] == pytest.approx(80.0)
+        results = sequence.data_struct.analysis_result_dict
+        assert results["item--通道3"][0] is True
+        assert results["item--通道8"][0] is False
+        assert SequenceWidgetStreamingOpsMixin._summarize_ok_ng(sequence) == (False, "NG")
+    finally:
+        for instance in sequence.analysis_window:
+            instance.close()
+        app.processEvents()
+
+
+def test_real_imported_spl_overall_judgment_uses_one_wav_column_and_file_calibration(monkeypatch):
+    from ui.signal_analysis_window import Spl
+
+    app = QApplication.instance() or QApplication([])
+    sequence, loader, messages, _events, _created = build_sequence(
+        import_audio=True,
+        legacy_factor=99.0,
+        loader_error=MicCalibrationFormatError("must not load"),
+        wav_metadata={
+            "recorded_channels": [{
+                "wav_channel_index": 1,
+                "v2pa_factor": 2.0,
+                "standard_spl": 94.0,
+                "calibrated": True,
+            }],
+        },
+        items=[("item", "SPL", {
+            "analysis_channel": 1,
+            "analysis_channels": [2, 7],
+            "weighting": "Z",
+            "limit_checked": True,
+            "limit_metric": "overall_spl",
+            "scalar_upper_value": 65.0,
+            "show_overall_spl": False,
+        })],
+    )
+    monkeypatch.setitem(
+        sequence.instance_analysis_class.__func__.__globals__,
+        "get_class_mapping", lambda: {"SPL": Spl},
+    )
+    sequence.data_struct.store_wave_data_multi = np.column_stack([
+        np.full(2401, 0.2), np.full(2401, 0.01),
+    ])
+    sequence.data_struct.store_wave_data = np.full(2401, 99.0)
+    sequence.data_struct.sample_rate = 48000
+
+    try:
+        assert sequence._run_analysis_impl(show_windows=False) is True
+        assert len(sequence.analysis_window) == 1
+        instance = sequence.analysis_window[0]
+        assert instance.analysis_config["analysis_channel"] == 1
+        assert instance.v2pa_factor == 2.0
+        assert instance.result["overall_spl"] == pytest.approx(60.0)
+        assert sequence.data_struct.analysis_result_dict["item--通道2"][0] is True
+        loader.assert_not_called()
+        messages.warning.assert_not_called()
+    finally:
+        for instance in sequence.analysis_window:
+            instance.close()
+        app.processEvents()
 
 
 @pytest.mark.parametrize(
@@ -911,12 +1153,16 @@ def _enable_real_ok_ng_runtime(sequence):
     sequence._finalize_test_run = mock.Mock()
 
 
-def test_preflight_skipped_judging_item_cannot_finalize_non_judging_batch():
+@pytest.mark.parametrize("channel_config", [
+    {"analysis_channel": 1},
+    {"analysis_channels": [1, 2]},
+])
+def test_preflight_skipped_judging_item_cannot_finalize_non_judging_batch(channel_config):
     sequence, _loader, messages, events, _created = build_sequence(
         factor_map={0: 2.5},
         active_input_channels=[0],
         items=[
-            ("skipped-spl", "SPL", {"analysis_channel": 1, "limit_checked": True}),
+            ("skipped-spl", "SPL", {**channel_config, "limit_checked": True}),
             ("valid-spec", "Spec", {"analysis_channel": 0}),
         ],
     )
@@ -932,7 +1178,11 @@ def test_preflight_skipped_judging_item_cannot_finalize_non_judging_batch():
     assert any("无法产出 OK/NG" in call.args[2] for call in messages.warning.call_args_list)
 
 
-def test_preflight_keeps_finalization_when_executable_judging_item_remains():
+@pytest.mark.parametrize("channel_config", [
+    {"analysis_channel": 0},
+    {"analysis_channels": [0, 2]},
+])
+def test_preflight_keeps_finalization_when_executable_judging_item_remains(channel_config):
     sequence, _loader, _messages, _events, _created = build_sequence(
         factor_map={0: 2.5},
         active_input_channels=[0],
@@ -942,7 +1192,7 @@ def test_preflight_keeps_finalization_when_executable_judging_item_remains():
                 "valid-spl",
                 "SPL",
                 {
-                    "analysis_channel": 0,
+                    **channel_config,
                     "limit_checked": True,
                     "_test_judgment": True,
                 },

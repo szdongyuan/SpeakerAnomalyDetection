@@ -6,7 +6,7 @@ from functools import partial
 from string import Template
 from typing import Any, Callable
 
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -55,6 +55,7 @@ from ui.ui_analysis_config.config_normalization import (
     OCTAVE_SMOOTHING_OPTIONS,
     WEIGHTING_OPTIONS,
     normalize_analysis_channel,
+    normalize_analysis_channels,
     normalize_legacy_available_analysis_channel,
     normalize_octave_smoothing,
     normalize_time_smoothing,
@@ -800,6 +801,7 @@ class ChannelSelectorWidget(QWidget):
 
     def __init__(self, cfg: dict[str, Any] | None = None, available_channels=None, parent=None):
         super().__init__(parent)
+        self._saved_channel_config = dict(cfg or {})
         self.available_channels = self._normalize_available_channels(available_channels)
         self.combo_box = ComboBox(self)
         for ch in self.available_channels:
@@ -832,8 +834,147 @@ class ChannelSelectorWidget(QWidget):
     def current_channel(self) -> int:
         return int(self.combo_box.currentData())
 
-    def get_config(self) -> dict[str, int]:
-        return {"analysis_channel": self.current_channel()}
+    @staticmethod
+    def normalized_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
+        config = cfg or {}
+        result = {"analysis_channel": int(config.get("analysis_channel", 0) or 0)}
+        if "analysis_channels" in config:
+            # Editing an imported WAV column must not erase recorded selections.
+            result["analysis_channels"] = normalize_analysis_channels(config)
+        return result
+
+    def get_config(self) -> dict[str, Any]:
+        return self.normalized_config({
+            **self._saved_channel_config,
+            "analysis_channel": self.current_channel(),
+        })
+
+
+class _CheckableChannelComboBox(ComboBox):
+    """Keep the popup open while selecting at least one physical channel."""
+
+    selectionChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._keep_popup_open = False
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.view().installEventFilter(self)
+        self.view().viewport().installEventFilter(self)
+        # QComboBox may replace the summary even when its current index is unchanged.
+        self.lineEdit().textChanged.connect(self._sync_display_text)
+
+    def add_checkable_item(self, text: str, channel: int) -> None:
+        self.addItem(text, channel)
+        item = self.model().item(self.count() - 1, 0)
+        item.setFlags(item.flags() | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+        item.setData(Qt.Unchecked, Qt.CheckStateRole)
+
+    def selected_data(self) -> list[int]:
+        return sorted(
+            int(self.itemData(row))
+            for row in range(self.count())
+            if self.model().item(row, 0).data(Qt.CheckStateRole) == Qt.Checked
+        )
+
+    def set_selected_data(self, channels) -> None:
+        available = {int(self.itemData(row)) for row in range(self.count())}
+        requested = available.intersection(channels)
+        if not requested:
+            requested = set(self.selected_data()[:1]) or {int(self.itemData(0))}
+        for row in range(self.count()):
+            self.model().item(row, 0).setData(
+                Qt.Checked if int(self.itemData(row)) in requested else Qt.Unchecked,
+                Qt.CheckStateRole,
+            )
+        self._sync_display_text()
+
+    def _sync_display_text(self) -> None:
+        text = "、".join(f"In{ch + 1}" for ch in self.selected_data())
+        self.lineEdit().setText(text)
+        self.lineEdit().setToolTip(text)
+        self.lineEdit().setCursorPosition(0)
+
+    def eventFilter(self, watched, event):
+        if watched is self.view().viewport() and event.type() == QEvent.MouseButtonRelease:
+            index = self.view().indexAt(event.pos())
+            self._toggle_index(index)
+            self._keep_popup_open = True
+            QTimer.singleShot(0, self._allow_popup_close)
+            return True
+        if (
+            watched is self.view()
+            and event.type() == QEvent.KeyPress
+            and event.key() == Qt.Key_Space
+        ):
+            self._toggle_index(self.view().currentIndex())
+            return True
+        return super().eventFilter(watched, event)
+
+    def _toggle_index(self, index) -> None:
+        if not index.isValid():
+            return
+        item = self.model().itemFromIndex(index)
+        checked = item.data(Qt.CheckStateRole) == Qt.Checked
+        if checked and len(self.selected_data()) == 1:
+            return
+        item.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
+        self._sync_display_text()
+        self.selectionChanged.emit()
+
+    def _allow_popup_close(self) -> None:
+        self._keep_popup_open = False
+
+    def hidePopup(self) -> None:
+        if not self._keep_popup_open:
+            super().hidePopup()
+            self._sync_display_text()
+
+
+class MultiChannelSelectorWidget(QWidget):
+    """Recorded input selection; imported-audio widgets remain single-select."""
+
+    def __init__(self, cfg=None, available_channels=None, parent=None):
+        super().__init__(parent)
+        self.available_channels = normalize_analysis_channels({
+            "analysis_channels": list(available_channels or []),
+        })
+        config = dict(cfg or {})
+        if "analysis_channels" not in config and "analysis_channel" not in config:
+            config["analysis_channel"] = self.available_channels[0]
+        selected = normalize_analysis_channels(config)
+        self.combo_box = _CheckableChannelComboBox(self)
+        self.combo_box.setMinimumWidth(220)
+        for channel in sorted(set(self.available_channels).union(selected)):
+            label = f"In{channel + 1}"
+            if channel not in self.available_channels:
+                label += "（未录制）"
+            self.combo_box.add_checkable_item(label, channel)
+        self.combo_box.set_selected_data(selected)
+        self.combo_box.setToolTip("各通道共用参数和阈值；未录制通道将在分析时单独提示。")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(Label("通道:"))
+        layout.addWidget(self.combo_box)
+        layout.addStretch()
+
+    def current_channel(self) -> int:
+        return self.selected_channels()[0]
+
+    def selected_channels(self) -> list[int]:
+        return self.combo_box.selected_data()
+
+    def set_selected_channels(self, channels) -> None:
+        self.combo_box.set_selected_data(channels)
+
+    @staticmethod
+    def normalized_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
+        channels = normalize_analysis_channels(cfg)
+        return {"analysis_channel": channels[0], "analysis_channels": channels}
+
+    def get_config(self) -> dict[str, Any]:
+        return self.normalized_config({"analysis_channels": self.selected_channels()})
 
 
 class _RestrictedAnalysisChannelSpinBox(SpinBox):
@@ -867,6 +1008,7 @@ class AnalysisChannelSpinBoxWidget(QWidget):
         restrict_to_available_channels: bool = False,
     ):
         super().__init__(parent)
+        self._saved_channel_config = dict(cfg or {})
         selected = normalize_analysis_channel(cfg, available_channels)
         if restrict_to_available_channels:
             channels = [
@@ -895,8 +1037,11 @@ class AnalysisChannelSpinBoxWidget(QWidget):
     def current_channel(self) -> int:
         return int(self.spin_box.value()) - 1
 
-    def get_config(self) -> dict[str, int]:
-        return {"analysis_channel": self.current_channel()}
+    def get_config(self) -> dict[str, Any]:
+        return ChannelSelectorWidget.normalized_config({
+            **self._saved_channel_config,
+            "analysis_channel": self.current_channel(),
+        })
 
 
 class WeightingSelectorWidget(QWidget):

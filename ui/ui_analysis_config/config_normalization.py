@@ -175,38 +175,52 @@ def normalize_analysis_channel(
 ) -> int:
     """Return a canonical zero-based channel index in the range 0 through 127."""
     _ = available_channels  # Compatibility only; hardware availability is checked at runtime.
-    value = (cfg or {}).get("analysis_channel", 0)
+    channel = _parse_analysis_channel((cfg or {}).get("analysis_channel", 0))
+    return channel if channel is not None else 0
 
+
+def normalize_analysis_channels(cfg: Mapping[str, Any] | None) -> list[int]:
+    """Normalize recorded selections without replacing unavailable channels."""
+    config = cfg or {}
+    values = config.get("analysis_channels")
+    if not isinstance(values, (list, tuple)):
+        return [normalize_analysis_channel(config)]
+    channels = {_parse_analysis_channel(value) for value in values}
+    channels.discard(None)
+    return sorted(channels) or [normalize_analysis_channel(config)]
+
+
+def _parse_analysis_channel(value: Any) -> int | None:
     if isinstance(value, bool):
-        return 0
+        return None
     if isinstance(value, numbers.Integral):
         try:
             normalized = int(value)
         except (TypeError, ValueError, OverflowError):
-            return 0
+            return None
     elif isinstance(value, numbers.Real):
         try:
             real_value = float(value)
         except (TypeError, ValueError, OverflowError):
-            return 0
+            return None
         if not math.isfinite(real_value) or not real_value.is_integer():
-            return 0
+            return None
         normalized = int(real_value)
     elif isinstance(value, str):
         text = value.strip()
         if not text or not text.isdecimal():
-            return 0
+            return None
         significant_text = text.lstrip("0") or "0"
         if len(significant_text) > 3:
-            return 0
+            return None
         try:
             normalized = int(significant_text)
         except (TypeError, ValueError, OverflowError):
-            return 0
+            return None
     else:
-        return 0
+        return None
 
-    return normalized if 0 <= normalized <= 127 else 0
+    return normalized if 0 <= normalized <= 127 else None
 
 
 def normalize_legacy_available_analysis_channel(

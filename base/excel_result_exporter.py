@@ -26,6 +26,7 @@ EXCEL_MAX_DATA_POINTS = EXCEL_MAX_COLUMNS - EXCEL_RESERVED_COLUMNS
 
 _INVALID_SHEET_CHARS_RE = re.compile(r"[\[\]\:\*\?\/\\]")
 _INVALID_FILENAME_CHARS_RE = re.compile(r"[<>:\"/\\\\|?*]")
+_CHANNEL_RUNTIME_SUFFIX_RE = re.compile(r"--通道\d+")
 
 
 @dataclass(frozen=True)
@@ -385,6 +386,39 @@ def resolve_excel_max_points(excel_cfg: dict[str, Any]) -> int:
     return max(10, min(max_points, EXCEL_MAX_DATA_POINTS))
 
 
+def _iter_selected_runtime_items(
+    save_items: list[str],
+    analysis_items_data: dict[str, dict[str, Any]],
+) -> Iterable[tuple[str, str, str, dict[str, Any]]]:
+    """Expand saved base item keys to the runtime instances in this record.
+
+    A single-channel runtime keeps the historical sheet name.  When one saved
+    analysis item selected several channels, each runtime key becomes
+    an independent export name so no cache entry, worksheet, or CSV is
+    overwritten, even if some selected channels are missing in this record.
+    """
+    for saved_item in save_items:
+        saved_key = str(saved_item)
+        matches = []
+        for cache_key, item_data in analysis_items_data.items():
+            if not isinstance(item_data, dict):
+                continue
+            runtime_key = str(cache_key)
+            config_key = str(item_data.get("config_key") or runtime_key)
+            if config_key != saved_key:
+                continue
+            result_key = str(item_data.get("result_key") or runtime_key)
+            matches.append(
+                (runtime_key, config_key, result_key, item_data)
+            )
+
+        if len(matches) == 1 and not matches[0][3].get("multi_channel_expansion"):
+            _runtime_key, config_key, result_key, item_data = matches[0]
+            yield saved_key, config_key, result_key, item_data
+        else:
+            yield from matches
+
+
 class ExcelExportSession:
     """
     Keep an Excel workbook in memory for repeated appends, and save on demand.
@@ -456,10 +490,9 @@ class ExcelExportSession:
             created_any_sheet = True
             return wb.create_sheet(title=desired_name)
 
-        for item_name in save_items:
-            item_data = analysis_items_data.get(item_name)
-            if not isinstance(item_data, dict):
-                continue
+        for item_name, config_key, result_key, item_data in (
+            _iter_selected_runtime_items(save_items, analysis_items_data)
+        ):
             item_type = item_data.get("type")
             if item_type == "Spec":
                 # user-invisible: never export
@@ -509,10 +542,10 @@ class ExcelExportSession:
                     _ensure_header(ws, header)
                 _append_row(ws, [sn, date_text] + y)
 
-            result_tuple = analysis_result_dict.get(item_name)
+            result_tuple = analysis_result_dict.get(result_key)
             if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
                 ok_val, deviation = result_tuple
-                cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
+                cfg = analysis_config.get(config_key) if isinstance(analysis_config, dict) else None
                 result_sheet_name = _make_margin_sheet_title(item_name)
                 rs = wb[result_sheet_name] if result_sheet_name in wb.sheetnames else ensure_sheet(result_sheet_name)
                 if rs.max_row < 1 or rs.cell(row=1, column=1).value is None:
@@ -570,6 +603,13 @@ def _sanitize_sheet_name(name: str) -> str:
     name = _INVALID_SHEET_CHARS_RE.sub("_", name)
     if not name:
         name = "Sheet"
+    if len(name) <= 31:
+        return name
+    channel_match = _CHANNEL_RUNTIME_SUFFIX_RE.search(name)
+    if channel_match is not None:
+        suffix = name[channel_match.start():]
+        if len(suffix) < 31:
+            return f"{name[:31 - len(suffix)]}{suffix}"
     return name[:31]
 
 
@@ -821,11 +861,16 @@ def _make_margin_sheet_title(item_name: str) -> str:
     base = _INVALID_SHEET_CHARS_RE.sub("_", base)
     if not base:
         base = "Sheet"
-    max_base_len = 31 - len(suffix)
+    channel_match = _CHANNEL_RUNTIME_SUFFIX_RE.search(base)
+    channel_suffix = ""
+    if channel_match is not None:
+        channel_suffix = base[channel_match.start():]
+        base = base[:channel_match.start()]
+    max_base_len = 31 - len(suffix) - len(channel_suffix)
     if max_base_len <= 0:
         return _sanitize_sheet_name(suffix.strip() or "margin")
     base = base[:max_base_len]
-    return f"{base}{suffix}"[:31]
+    return f"{base}{channel_suffix}{suffix}"[:31]
 
 
 def _coerce_csv_number(v: Any) -> Any:
@@ -989,10 +1034,9 @@ def export_analysis_to_csv_spool(
         except Exception as e:
             return ExportResult(ok=False, message=f"Excel加锁失败: {e}")
 
-    for item_name in save_items:
-        item_data = analysis_items_data.get(item_name)
-        if not isinstance(item_data, dict):
-            continue
+    for item_name, config_key, result_key, item_data in (
+        _iter_selected_runtime_items(save_items, analysis_items_data)
+    ):
         item_type = item_data.get("type")
         if item_type == "Spec":
             continue
@@ -1029,10 +1073,10 @@ def export_analysis_to_csv_spool(
                 if not ret.ok:
                     return ret
 
-        result_tuple = analysis_result_dict.get(item_name)
+        result_tuple = analysis_result_dict.get(result_key)
         if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
             ok_val, deviation = result_tuple
-            cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
+            cfg = analysis_config.get(config_key) if isinstance(analysis_config, dict) else None
             sheet_name = _make_margin_sheet_title(item_name)
             csv_path = os.path.join(spool_dir, f"{_sanitize_filename(sheet_name)}.csv")
 
@@ -1250,10 +1294,9 @@ def export_analysis_to_excel(
         created_any_sheet = True
         return wb.create_sheet(title=desired_name)
 
-    for item_name in save_items:
-        item_data = analysis_items_data.get(item_name)
-        if not isinstance(item_data, dict):
-            continue
+    for item_name, config_key, result_key, item_data in (
+        _iter_selected_runtime_items(save_items, analysis_items_data)
+    ):
         item_type = item_data.get("type")
         if item_type == "Spec":
             # user-invisible: never export
@@ -1306,10 +1349,10 @@ def export_analysis_to_excel(
                     _ensure_header(ws, header)
                 _append_row(ws, [sn, date_text] + y)
 
-        result_tuple = analysis_result_dict.get(item_name)
+        result_tuple = analysis_result_dict.get(result_key)
         if isinstance(result_tuple, tuple) and len(result_tuple) == 2:
             ok_val, deviation = result_tuple
-            cfg = analysis_config.get(item_name) if isinstance(analysis_config, dict) else None
+            cfg = analysis_config.get(config_key) if isinstance(analysis_config, dict) else None
             result_sheet_name = _make_margin_sheet_title(item_name)
             rs = wb[result_sheet_name] if result_sheet_name in wb.sheetnames else ensure_sheet(result_sheet_name)
             if rs.max_row < 1 or rs.cell(row=1, column=1).value is None:

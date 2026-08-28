@@ -37,6 +37,63 @@ class _ConfigManager:
         return True
 
 
+def test_spl_overall_limit_controls_preserve_curve_settings_and_selected_channels(qapp):
+    manager = _ConfigManager({"SPL": {
+        "limit_checked": True,
+        "limit_mode": "manual",
+        "manual_input_mode": "constant",
+        "constant_upper_enabled": True,
+        "constant_upper_value": 85.0,
+        "analysis_channels": [0, 2],
+        "free_field_distance_enabled": True,
+        "measurement_distance_m": 0.0,
+        "directional_correction_enabled": True,
+        "directional_additional_correction_db": float("inf"),
+    }})
+    dialog = SplConfigWindow(manager, "SPL", available_channels=[0, 2], allow_multiple_channels=True)
+    assert dialog.limit_metric_combo.currentData() == "curve_y"
+    dialog.limit_metric_combo.setCurrentIndex(dialog.limit_metric_combo.findData("overall_spl"))
+    dialog.scalar_upper_spin.setValue(75.0)
+    assert not dialog.overall_spl_limit_widget.isHidden()
+    assert dialog.threshold_widget.limit_group_box.isHidden()
+    assert dialog._validate_config() is True
+    saved = dialog.get_default_config()
+    assert saved["limit_metric"] == "overall_spl"
+    assert saved["scalar_upper_value"] == 75.0
+    assert saved["constant_upper_value"] == 85.0
+    assert saved["analysis_channels"] == [0, 2]
+    assert "free_field_distance_enabled" not in saved
+    assert "directional_correction_enabled" not in saved
+    manager.config["SPL"] = saved
+    dialog.on_restore_default_btn_clicked()
+    assert dialog.limit_metric_combo.currentData() == "overall_spl"
+    dialog.limit_metric_combo.setCurrentIndex(dialog.limit_metric_combo.findData("curve_y"))
+    assert dialog.overall_spl_limit_widget.isHidden()
+    assert not dialog.threshold_widget.limit_group_box.isHidden()
+    assert dialog.threshold_widget.get_config()["constant_upper_value"] == 85.0
+    dialog.close()
+
+
+def test_spl_overall_limits_validate_without_a_csv_and_reject_invalid_bounds(qapp, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        "ui.ui_analysis_config.spl_config_dialog.MessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+    dialog = SplConfigWindow(_ConfigManager({"SPL": {
+        "limit_checked": True, "limit_metric": "overall_spl",
+    }}), "SPL")
+    assert dialog._validate_config() is True
+    dialog.scalar_upper_check.setChecked(False)
+    assert dialog._validate_config() is False
+    dialog.scalar_upper_check.setChecked(True)
+    dialog.scalar_lower_check.setChecked(True)
+    dialog.scalar_lower_spin.setValue(101.0)
+    assert dialog._validate_config() is False
+    assert len(warnings) == 2
+    dialog.close()
+
+
 def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     manager = _ConfigManager(
         {
@@ -48,10 +105,6 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
                 "analysis_time_range_enabled": True,
                 "analysis_start_time_sec": 0.25,
                 "analysis_end_time_sec": 1.5,
-                "free_field_distance_enabled": True,
-                "measurement_distance_m": 0.2,
-                "target_distance_m": 1.5,
-                "directional_additional_correction_db": -12.5,
                 "limit_checked": False,
                 "limit_data": None,
             }
@@ -71,44 +124,20 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
         "judgment",
     ]
     assert dialog.channel_selector.current_channel() == 1
-    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
     assert dialog.threshold_widget.allow_manual_limits is True
     assert dialog.threshold_widget.allow_constant_limits is True
     assert dialog.curve_color_widget is not None
     assert dialog.show_overall_spl_box.text() == "显示总体声压级"
+    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
     assert dialog.show_overall_spl_box.isChecked() is True
     assert dialog.analysis_time_range_widget.enabled_checkbox.isChecked() is True
     assert dialog.analysis_time_range_widget.start_spin.value() == pytest.approx(0.25)
     assert dialog.analysis_time_range_widget.end_spin.value() == pytest.approx(1.5)
-    assert not hasattr(dialog, "free_field_distance_group")
-    assert dialog.free_field_distance_box.isChecked() is True
-    assert dialog.free_field_distance_parameters_widget.isHidden() is False
-    assert dialog.directional_correction_widget.isHidden() is False
-    assert dialog.measurement_distance_spin.value() == pytest.approx(0.2)
-    assert dialog.target_distance_spin.value() == pytest.approx(1.5)
-    assert dialog.directional_correction_box.text() == "方向修正"
-    assert dialog.directional_correction_box.isChecked() is False
-    assert dialog.directional_additional_correction_spin.isHidden() is True
-    assert dialog.directional_additional_correction_spin.isEnabled() is False
-    assert dialog.directional_additional_correction_spin.value() == pytest.approx(
-        -12.5
-    )
+    assert not hasattr(dialog, "free_field_distance_box")
+    assert not hasattr(dialog, "directional_correction_box")
     compute_layout = dialog.smooth_checkbox.parentWidget().layout()
     assert compute_layout.indexOf(dialog.show_overall_spl_box) == (
         compute_layout.indexOf(dialog.smooth_checkbox) + 1
-    )
-    assert compute_layout.indexOf(dialog.free_field_distance_box) == (
-        compute_layout.indexOf(dialog.show_overall_spl_box) + 1
-    )
-    assert compute_layout.indexOf(dialog.free_field_distance_parameters_widget) == (
-        compute_layout.indexOf(dialog.free_field_distance_box) + 1
-    )
-    assert compute_layout.indexOf(dialog.directional_correction_widget) == (
-        compute_layout.indexOf(dialog.free_field_distance_parameters_widget) + 1
-    )
-    assert (
-        dialog.directional_correction_widget.layout().contentsMargins().left()
-        == 0
     )
 
     plot_view = dialog.plot_view_config_widget
@@ -124,11 +153,9 @@ def test_spl_uses_semantic_sections_and_shared_display_config(qapp):
     assert config["analysis_time_range_enabled"] is True
     assert config["analysis_start_time_sec"] == pytest.approx(0.25)
     assert config["analysis_end_time_sec"] == pytest.approx(1.5)
-    assert config["free_field_distance_enabled"] is True
-    assert config["measurement_distance_m"] == pytest.approx(0.2)
-    assert config["target_distance_m"] == pytest.approx(1.5)
-    assert config["directional_correction_enabled"] is False
-    assert config["directional_additional_correction_db"] == pytest.approx(-12.5)
+    assert "free_field_distance_enabled" not in config
+    assert "directional_correction_enabled" not in config
+    assert config["limit_metric"] == "overall_spl"
     assert config["limit_checked"] is False
     assert config["limit_mode"] == "csv"
     assert config["manual_input_mode"] == "constant"
@@ -157,7 +184,7 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     manager = _ConfigManager(
         {
             "SPLF": {
-                "analysis_channel": 4,
+                "analysis_channel": 2,
                 "splf_calc_mode": "total",
                 "octave_smoothing": 3,
                 "golden_sample_checked": True,
@@ -184,10 +211,8 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     assert not isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
     assert dialog.channel_selector.current_channel() == 2
     assert dialog.analysis_time_range_widget is None
-    assert dialog.free_field_distance_box is None
-    assert dialog.free_field_distance_parameters_widget is None
-    assert dialog.directional_correction_widget is None
-    assert dialog.directional_correction_box is None
+    assert not hasattr(dialog, "free_field_distance_box")
+    assert not hasattr(dialog, "directional_correction_box")
     config = dialog.get_default_config()
     assert config["analysis_channel"] == 2
     assert config["splf_calc_mode"] == "total"
@@ -202,127 +227,6 @@ def test_splf_keeps_existing_analysis_fields_in_semantic_layout(qapp):
     assert config["limit_mode"] == "csv"
     assert dialog.threshold_widget.allow_manual_limits is True
     assert dialog.threshold_widget.allow_constant_limits is True
-    dialog.close()
-
-
-def test_spl_free_field_distance_controls_follow_enable_switch(qapp):
-    dialog = SplConfigWindow(
-        _ConfigManager({"SPL": {"limit_checked": False}}),
-        "SPL",
-        available_channels=[0],
-    )
-
-    assert dialog.free_field_distance_box.isChecked() is False
-    assert dialog.free_field_distance_parameters_widget.isHidden() is True
-    assert dialog.directional_correction_widget.isHidden() is False
-    assert dialog.measurement_distance_spin.value() == pytest.approx(0.05)
-    assert dialog.target_distance_spin.value() == pytest.approx(1.0)
-    assert dialog.directional_correction_box.isChecked() is False
-    assert dialog.directional_additional_correction_spin.isHidden() is True
-    assert dialog.directional_additional_correction_spin.isEnabled() is False
-    assert dialog.directional_additional_correction_spin.value() == pytest.approx(0.0)
-
-    dialog.free_field_distance_box.setChecked(True)
-    dialog.show()
-    qapp.processEvents()
-
-    assert dialog.free_field_distance_parameters_widget.isHidden() is False
-    assert dialog.directional_correction_widget.isVisible() is True
-    assert dialog.directional_additional_correction_spin.isVisible() is False
-    compute_section = dialog._semantic_sections["compute"]
-    parameters_bottom = dialog.free_field_distance_parameters_widget.mapTo(
-        compute_section,
-        dialog.free_field_distance_parameters_widget.rect().bottomLeft(),
-    ).y()
-    assert parameters_bottom <= compute_section.height()
-    assert dialog.directional_correction_widget.geometry().x() == (
-        dialog.free_field_distance_box.geometry().x()
-    )
-    dialog.free_field_distance_box.setChecked(False)
-    qapp.processEvents()
-    assert dialog.free_field_distance_parameters_widget.isHidden() is True
-    assert dialog.directional_correction_widget.isVisible() is True
-    config = dialog.get_default_config()
-    assert config["free_field_distance_enabled"] is False
-    assert config["measurement_distance_m"] == pytest.approx(0.05)
-    assert config["target_distance_m"] == pytest.approx(1.0)
-    assert config["directional_correction_enabled"] is False
-    assert config["directional_additional_correction_db"] == pytest.approx(0.0)
-    dialog.close()
-
-
-def test_spl_distance_tooltip_shows_dynamic_combined_correction(qapp):
-    dialog = SplConfigWindow(
-        _ConfigManager({"SPL": {"limit_checked": False}}),
-        "SPL",
-        available_channels=[0],
-    )
-
-    assert "当前总修正量：+0.00 dB" in (
-        dialog.free_field_distance_box.toolTip()
-    )
-    assert "球面扩散：未启用" in dialog.free_field_distance_box.toolTip()
-    assert dialog.directional_correction_box.text() == "方向修正"
-    assert dialog.directional_correction_box.isChecked() is False
-    assert "方向修正：未启用" in dialog.free_field_distance_box.toolTip()
-
-    dialog.free_field_distance_box.setChecked(True)
-    dialog.measurement_distance_spin.setValue(0.02)
-    dialog.target_distance_spin.setValue(1.0)
-    dialog.directional_additional_correction_spin.setValue(-5.0)
-
-    assert "当前总修正量：-33.98 dB" in (
-        dialog.free_field_distance_box.toolTip()
-    )
-    assert "方向修正：未启用" in dialog.free_field_distance_box.toolTip()
-    dialog.directional_correction_box.setChecked(True)
-    assert dialog.directional_additional_correction_spin.isHidden() is False
-    assert dialog.directional_additional_correction_spin.isEnabled() is True
-
-    expected_tooltip_parts = (
-        "当前总修正量：-38.98 dB",
-        "球面扩散：-33.98 dB",
-        "方向修正：-5.00 dB",
-    )
-    tooltip_widgets = (
-        dialog.free_field_distance_box,
-        dialog.free_field_distance_parameters_widget,
-        dialog.measurement_distance_spin,
-        dialog.target_distance_spin,
-        dialog.directional_correction_widget,
-        dialog.directional_correction_box,
-        dialog.directional_additional_correction_spin,
-    )
-    for widget in tooltip_widgets:
-        tooltip = widget.toolTip()
-        for expected_part in expected_tooltip_parts:
-            assert expected_part in tooltip
-        assert "估算结果" not in tooltip
-
-    dialog.free_field_distance_box.setChecked(False)
-    assert "当前总修正量：-5.00 dB" in (
-        dialog.directional_correction_box.toolTip()
-    )
-    assert "球面扩散：未启用" in (
-        dialog.directional_correction_box.toolTip()
-    )
-    config = dialog.get_default_config()
-    assert config["free_field_distance_enabled"] is False
-    assert config["directional_correction_enabled"] is True
-
-    dialog.directional_additional_correction_spin.setValue(5.0)
-    assert "当前总修正量：+5.00 dB" in (
-        dialog.free_field_distance_box.toolTip()
-    )
-    assert "方向修正：+5.00 dB" in (
-        dialog.free_field_distance_box.toolTip()
-    )
-    dialog.directional_correction_box.setChecked(False)
-    assert dialog.directional_additional_correction_spin.isHidden() is True
-    assert dialog.directional_additional_correction_spin.isEnabled() is False
-    assert "当前总修正量：+0.00 dB" in (
-        dialog.directional_correction_box.toolTip()
-    )
     dialog.close()
 
 
@@ -480,11 +384,8 @@ def test_spl_new_item_replaces_legacy_threshold_defaults(monkeypatch):
     assert config["analysis_time_range_enabled"] is False
     assert config["analysis_start_time_sec"] == 0.0
     assert config["analysis_end_time_sec"] == 0.0
-    assert config["free_field_distance_enabled"] is False
-    assert config["measurement_distance_m"] == pytest.approx(0.05)
-    assert config["target_distance_m"] == pytest.approx(1.0)
-    assert config["directional_correction_enabled"] is False
-    assert config["directional_additional_correction_db"] == pytest.approx(0.0)
+    assert "free_field_distance_enabled" not in config
+    assert "directional_correction_enabled" not in config
     assert config["manual_upper_segments"] == []
     assert config["manual_lower_segments"] == []
     assert "upper_limit" not in config
@@ -513,6 +414,7 @@ def test_spl_new_item_uses_code_defaults_when_config_file_fails(monkeypatch):
     assert config["limit_checked"] is False
     assert config["limit_mode"] == "csv"
     assert config["limit_data"] is None
+    assert config["limit_metric"] == "overall_spl"
 
 
 def test_spl_new_item_keeps_legacy_modern_manual_segments(monkeypatch):
@@ -552,6 +454,7 @@ def test_spl_new_item_keeps_legacy_modern_manual_segments(monkeypatch):
 
     config = sequence_config.analysis_list["声压级 (SPL) 1"]
     assert config["manual_input_mode"] == "segments"
+    assert config["limit_metric"] == "curve_y"
     assert config["manual_upper_segments"] == [segment]
 
 
@@ -621,3 +524,45 @@ def test_limit_plot_uses_configured_main_and_limit_colors(qapp):
     ]
     assert colors == ["#112233", "#445566", "#778899"]
     plot_widget.close()
+
+
+def test_spl_overall_limit_metric_uses_independent_scalar_limits(qapp):
+    dialog = SplConfigWindow(
+        _ConfigManager(
+            {
+                "SPL": {
+                    "limit_checked": True,
+                    "limit_metric": "overall_spl",
+                    "scalar_upper_enabled": True,
+                    "scalar_upper_value": 86.5,
+                    "scalar_lower_enabled": True,
+                    "scalar_lower_value": 72.0,
+                }
+            }
+        ),
+        "SPL",
+        available_channels=[0],
+    )
+    dialog.show()
+    qapp.processEvents()
+
+    assert dialog.limit_metric_combo.itemData(0) == "overall_spl"
+    assert dialog.limit_metric_combo.currentData() == "overall_spl"
+    assert dialog.threshold_widget.limit_group_box.isHidden() is True
+    assert dialog.overall_spl_limit_widget.isVisible() is True
+    assert dialog.scalar_upper_spin.value() == pytest.approx(86.5)
+    assert dialog.scalar_lower_spin.value() == pytest.approx(72.0)
+
+    config = dialog.get_default_config()
+    assert config["limit_metric"] == "overall_spl"
+    assert config["scalar_upper_enabled"] is True
+    assert config["scalar_upper_value"] == pytest.approx(86.5)
+    assert config["scalar_lower_enabled"] is True
+    assert config["scalar_lower_value"] == pytest.approx(72.0)
+
+    curve_index = dialog.limit_metric_combo.findData("curve_y")
+    dialog.limit_metric_combo.setCurrentIndex(curve_index)
+    qapp.processEvents()
+    assert dialog.threshold_widget.limit_group_box.isVisible() is True
+    assert dialog.overall_spl_limit_widget.isHidden() is True
+    dialog.close()

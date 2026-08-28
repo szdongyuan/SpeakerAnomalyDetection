@@ -38,6 +38,7 @@ from ui.custom_ui_widget.widgets import (
 from ui.ui_analysis_config.common_widgets import (
     AnalysisTimeRangeWidget,
     ChannelSelectorWidget,
+    MultiChannelSelectorWidget,
     SemanticAnalysisConfigDialogBase,
 )
 from ui.ui_analysis_config.manual_limit_segments import (
@@ -790,7 +791,11 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
             )
         return merged
 
-    def __init__(self, config_manager, model_type, available_channels: Optional[List[int]] = None):
+    def __init__(
+        self, config_manager, model_type,
+        available_channels: Optional[List[int]] = None,
+        allow_multiple_channels: bool = False,
+    ):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.model_type = model_type
@@ -798,6 +803,7 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
             self.config_manager.load_config().get(model_type, {})
         )
         self.show_channel_selector = available_channels is not None
+        self.allow_multiple_channels = allow_multiple_channels
         self.available_channels = available_channels
         self.panel = None
         self.init_ui()
@@ -814,7 +820,13 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            self.channel_selector = ChannelSelectorWidget(self.load_config, self.available_channels, self)
+            selector_type = (
+                MultiChannelSelectorWidget
+                if self.allow_multiple_channels else ChannelSelectorWidget
+            )
+            self.channel_selector = selector_type(
+                self.load_config, self.available_channels, self
+            )
             self.add_semantic_section("input", title="输入参数", widget=self.channel_selector)
 
         self.panel = LoudnessConfigPanel(self.load_config, comparison_only=False, parent=self)
@@ -827,7 +839,7 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
         if self.show_channel_selector and hasattr(self, "channel_selector"):
             config.update(self.channel_selector.get_config())
         else:
-            config["analysis_channel"] = int(self.load_config.get("analysis_channel", 0) or 0)
+            config.update(ChannelSelectorWidget.normalized_config(self.load_config))
         return config
 
     def on_default_btn_clicked(self):
