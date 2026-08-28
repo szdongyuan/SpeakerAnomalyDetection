@@ -24,8 +24,14 @@ from ui.sequence.sequence_widget import SequenceWindow
 
 class MainWindow(QMainWindow):
 
-    def __init__(self):
+    def __init__(self, *, recording_bridge=None):
         super().__init__()
+        if recording_bridge is None:
+            from base.recording_service import RecordingService
+            from ui.recording_service_bridge import RecordingServiceBridge
+            recording_bridge = RecordingServiceBridge(RecordingService(), self)
+        self.recording_bridge = recording_bridge
+        QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         # set up statusbar object data
         self.user_name = None
         self.access_lvl = None
@@ -181,7 +187,7 @@ class MainWindow(QMainWindow):
         # create sequence widget, and set main window layout
         main_window = QWidget()
         layout = QVBoxLayout()
-        self.sequence_window = SequenceWindow()
+        self.sequence_window = SequenceWindow(recording_bridge=self.recording_bridge)
         menu_bar = self.init_menu()
         title_bar = self.set_title()
         menu_row = self._create_menu_row(menu_bar)
@@ -420,6 +426,7 @@ class MainWindow(QMainWindow):
         dlg = CalibrationWindow(
             input_device=self.mic,
             input_channels=self.mic_channels,
+            recording_bridge=getattr(self, "recording_bridge", None),
         )
         dlg.speaker = self.speaker
         dlg.exec()
@@ -465,6 +472,19 @@ class MainWindow(QMainWindow):
             shutdown_product_pdf()
 
     def closeEvent(self, event):
+        bridge = getattr(self, "recording_bridge", None)
+        if (bridge is not None and not bridge.service.closed.is_set()
+                and not getattr(self, "_recording_shutdown_reported", False)):
+            event.ignore()
+            if not getattr(self, "_recording_close_requested", False):
+                self._recording_close_requested = True
+                sequence = getattr(self, "sequence_window", None)
+                cancel = getattr(sequence, "_cancel_process_recording", None)
+                if callable(cancel):
+                    cancel()
+                self.setEnabled(False)
+                bridge.shutdown(self._finish_recording_shutdown)
+            return
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None
@@ -514,6 +534,17 @@ class MainWindow(QMainWindow):
 
         self._shutdown_product_pdf_exporter_before_exit()
         event.accept()
+
+    def _finish_recording_shutdown(self):
+        self._recording_shutdown_reported = True
+        if not self.recording_bridge.service.closed.is_set():
+            # The bounded service callback confirms worker death, not every
+            # parent reader/path release. Report honestly and permit app exit;
+            # no pending audio is moved/deleted and no lease is fabricated.
+            diagnostics = "\n".join(self.recording_bridge.service.diagnostics[-5:])
+            QMessageBox.warning(self, "录音资源清理未完成",
+                "录音进程已停止，部分文件资源尚未释放。退出后请检查这些文件；本次不再移动或删除它们。\n" + diagnostics)
+        self.close()
 
     def mousepressevent(self, event):
         # If the mouse is pressed, recoed mouse move data, start the window resizing

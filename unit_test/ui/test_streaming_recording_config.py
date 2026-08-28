@@ -90,7 +90,7 @@ def test_streaming_runtime_flag_is_opt_in(detail, expected):
     assert should_use_streaming(instance) is expected
 
 
-def test_recording_entry_routes_between_streaming_and_blocking_paths():
+def test_recording_entry_routes_all_modes_to_process():
     module_tree = ast.parse(ANALYSIS_OPS_PATH.read_text(encoding="utf-8"))
     calls = {
         node.func.attr
@@ -98,8 +98,8 @@ def test_recording_entry_routes_between_streaming_and_blocking_paths():
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
 
-    assert "_should_use_streaming_recording" in calls
-    assert "_start_blocking_recording" in calls
+    assert "_start_process_recording" in calls
+    assert "_start_blocking_recording" not in calls
 
 
 def test_disabling_streaming_disables_live_monitoring(qapp):

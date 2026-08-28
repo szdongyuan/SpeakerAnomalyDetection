@@ -123,7 +123,7 @@ class _NewRecordingOwnershipHost(
         )
         self._fail_reset = fail_reset
         self.capture_count = 0
-        self.blocking_count = 0
+        self.process_count = 0
 
     def checked_work_status_message(self):
         return False
@@ -179,8 +179,8 @@ class _NewRecordingOwnershipHost(
     def _begin_recent_session_for_current_run(self):
         return None
 
-    def _start_blocking_recording(self, _recorded_dict, _sample_rate):
-        self.blocking_count += 1
+    def _start_process_recording(self, _recorded_dict, _sample_rate, *, tcp_completion_address=None):
+        self.process_count += 1
 
 
 def test_workspace_builds_ordered_physical_channel_windows(ui_qapp):
@@ -467,7 +467,7 @@ def test_successful_new_recording_transition_is_idempotent_through_snapshot(
     assert host.channel_workspace.clear_count == 1
     assert host._recording_input_channels == (0, 2)
     assert host.capture_count == 1
-    assert host.blocking_count == 1
+    assert host.process_count == 1
 
 
 def test_reset_work_pram_transitions_before_data_clear_can_fail():

@@ -4,7 +4,8 @@ import os
 import shutil
 import struct
 import tempfile
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import Enum
 from numbers import Integral, Real
 from typing import Any, Optional
@@ -40,6 +41,46 @@ class WavCalibrationMetadataReadStatus(Enum):
 class WavCalibrationMetadataReadResult:
     status: WavCalibrationMetadataReadStatus
     metadata: Optional[dict]
+
+
+@dataclass(frozen=True)
+class WavCalibrationMetadataAppendResult:
+    """Local ownership handoff, not an IPC payload (may retain open file objects)."""
+    appended: bool
+    handles_released: bool
+    cleanup_paths: tuple[str, ...] = ()
+    close_errors: tuple[str, ...] = ()
+    retained_handles: tuple[tuple[str, Any], ...] = field(default=(), repr=False, compare=False)
+
+
+class _AppendFileOwnership:
+    def __init__(self):
+        self.cleanup_paths = set()
+        self.retained_handles = []
+        self.close_errors = []
+
+    @property
+    def handles_released(self):
+        return not self.retained_handles
+
+    @contextmanager
+    def hold(self, handle, *, temporary=False):
+        path = os.fspath(handle.name)
+        if temporary:
+            self.cleanup_paths.add(path)
+        try:
+            yield handle
+        finally:
+            try:
+                handle.close()
+            except Exception as exc:
+                # Actual file-wrapper close boundary: a failed close cannot prove
+                # release. Keep references and paths for the caller's retirement
+                # policy, and normalize arbitrary wrapper failures for bool callers.
+                self.retained_handles.append((path, handle))
+                detail = f"WAV metadata file close failed for {path}: {exc}"
+                self.close_errors.append(detail)
+                raise OSError(detail) from exc
 
 
 def normalize_wav_calibration_metadata(payload: Any) -> Optional[dict]:
@@ -96,6 +137,23 @@ def resolve_wav_channel_v2pa_factor(
 
 
 def append_wav_calibration_metadata(path, metadata, logger=None) -> bool:
+    """Legacy warning/bool API; recording capture uses the ownership result below."""
+    return append_wav_calibration_metadata_result(path, metadata, logger).appended
+
+
+def append_wav_calibration_metadata_result(path, metadata, logger=None) -> WavCalibrationMetadataAppendResult:
+    ownership = _AppendFileOwnership()
+    appended = _append_wav_calibration_metadata(path, metadata, logger, ownership)
+    return WavCalibrationMetadataAppendResult(
+        appended=appended,
+        handles_released=ownership.handles_released,
+        cleanup_paths=tuple(sorted(ownership.cleanup_paths)),
+        close_errors=tuple(ownership.close_errors),
+        retained_handles=tuple(ownership.retained_handles),
+    )
+
+
+def _append_wav_calibration_metadata(path, metadata, logger, ownership) -> bool:
     normalized = normalize_wav_calibration_metadata(metadata)
     if normalized is None:
         _log_metadata_issue(logger, "Invalid WAV calibration metadata", "metadata payload was rejected")
@@ -123,7 +181,7 @@ def append_wav_calibration_metadata(path, metadata, logger=None) -> bool:
     temp_path = None
     try:
         target_path = os.path.abspath(os.fspath(path))
-        with open(target_path, "rb") as wav_file:
+        with ownership.hold(open(target_path, "rb")) as wav_file:
             if not _is_riff_wave_file(wav_file):
                 _log_metadata_issue(logger, "Unsupported WAV file", "file is not a RIFF/WAVE file")
                 return False
@@ -151,13 +209,13 @@ def append_wav_calibration_metadata(path, metadata, logger=None) -> bool:
                 )
                 return False
 
-            with tempfile.NamedTemporaryFile(
+            with ownership.hold(tempfile.NamedTemporaryFile(
                 mode="w+b",
                 dir=os.path.dirname(target_path),
                 prefix=f".{os.path.basename(target_path)}.",
                 suffix=".tmp",
                 delete=False,
-            ) as temp_file:
+            ), temporary=True) as temp_file:
                 temp_path = temp_file.name
                 wav_file.seek(0)
                 _copy_stream_exact(wav_file, temp_file, riff_end)
@@ -171,20 +229,23 @@ def append_wav_calibration_metadata(path, metadata, logger=None) -> bool:
             temp_path,
             normalized,
             logger,
+            ownership=ownership,
         ):
             raise OSError("temporary WAV validation failed")
 
         shutil.copystat(target_path, temp_path)
         os.replace(temp_path, target_path)
+        ownership.cleanup_paths.discard(temp_path)
         temp_path = None
         return True
     except (OSError, OverflowError, struct.error) as exc:
         _log_metadata_issue(logger, "Failed to append WAV calibration metadata", exc)
         return False
     finally:
-        if temp_path is not None:
+        if temp_path is not None and ownership.handles_released:
             try:
                 os.unlink(temp_path)
+                ownership.cleanup_paths.discard(temp_path)
             except OSError as exc:
                 _log_metadata_issue(
                     logger,
@@ -561,9 +622,11 @@ def _write_all(destination, data: bytes) -> None:
         view = view[written:]
 
 
-def _validate_appended_wav(path, expected_metadata, logger=None) -> bool:
+def _validate_appended_wav(path, expected_metadata, logger=None, *, ownership=None) -> bool:
+    if ownership is None:
+        ownership = _AppendFileOwnership()
     try:
-        with open(path, "rb") as wav_file:
+        with ownership.hold(open(path, "rb")) as wav_file:
             if not _is_riff_wave_file(wav_file):
                 _log_metadata_issue(
                     logger,

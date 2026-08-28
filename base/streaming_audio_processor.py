@@ -10,6 +10,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 import numpy as np
 
 from base.log_manager import LogManager
+from base.recording_capture import apply_monitor_startup_mute
 from base.sound_device_manager import sd
 from base.utils.custom_signals import sign
 from consts import error_code
@@ -79,19 +80,11 @@ class StreamingAudioProcessor:
         upstream buffer (typically the raw captured ``mono_in``) is not
         mutated.
         """
-        mute_total = self._monitor_mute_leading_samples
         emitted_before = self._monitor_samples_emitted
-        if mute_total > 0 and emitted_before < mute_total:
-            remaining_mute = mute_total - emitted_before
-            play = play.copy()
-            hard_mute = min(remaining_mute, len(play))
-            play[:hard_mute] = 0.0
-            if hard_mute < len(play) and fade_len > 0:
-                ramp_len = min(fade_len, len(play) - hard_mute)
-                ramp = np.linspace(
-                    0.0, 1.0, ramp_len, endpoint=False, dtype=np.float32
-                )
-                play[hard_mute : hard_mute + ramp_len] *= ramp
+        play = apply_monitor_startup_mute(
+            play, mute_total=self._monitor_mute_leading_samples,
+            emitted_before=emitted_before, fade_len=fade_len,
+        )
         self._monitor_samples_emitted = emitted_before + len(play)
         return play
 

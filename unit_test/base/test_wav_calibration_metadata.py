@@ -623,6 +623,50 @@ def test_append_temp_validation_failure_keeps_original_bytes_and_cleans_temp(
     assert any("validation failed" in call.args[0] for call in logger.warning.call_args_list)
 
 
+@pytest.mark.parametrize("stage", ["source", "temporary", "validation"])
+def test_structured_append_reports_uncertain_file_ownership(tmp_path, monkeypatch, stage):
+    from unit_test.base.recording_process_fakes import MetadataFileFaults
+    path = tmp_path / "ownership.wav"
+    _write_wav(path)
+    original = path.read_bytes()
+    faults = MetadataFileFaults(stage)
+    faults.install(monkeypatch)
+    try:
+        result = wav_calibration_metadata.append_wav_calibration_metadata_result(path, _metadata(_channel()))
+        assert not result.appended and not result.handles_released
+        assert result.cleanup_paths == tuple(faults.temporary_paths)
+        assert result.retained_handles and result.close_errors
+        assert all(os.path.exists(temporary) for temporary in result.cleanup_paths)
+        assert path.read_bytes() == original
+    finally:
+        faults.release_all()
+
+
+def test_structured_append_safe_rejection_preserves_legacy_bool_api(tmp_path):
+    path = tmp_path / "rejected.wav"
+    _write_wav(path)
+    result = wav_calibration_metadata.append_wav_calibration_metadata_result(path, None)
+    assert not result.appended and result.handles_released
+    assert result.cleanup_paths == () and result.retained_handles == ()
+    assert wav_calibration_metadata.append_wav_calibration_metadata(path, None) is False
+    assert wav_calibration_metadata.append_wav_calibration_metadata(path, _metadata(_channel())) is True
+
+
+@pytest.mark.parametrize("stage", ["source", "temporary", "validation"])
+def test_legacy_append_close_failure_still_returns_false(tmp_path, monkeypatch, stage):
+    from unit_test.base.recording_process_fakes import MetadataFileFaults
+    path = tmp_path / "legacy-close.wav"
+    _write_wav(path)
+    faults = MetadataFileFaults(stage)
+    faults.install(monkeypatch)
+    logger = Mock()
+    try:
+        assert wav_calibration_metadata.append_wav_calibration_metadata(path, _metadata(_channel()), logger) is False
+        assert any("close failed" in call.args[0] for call in logger.warning.call_args_list)
+    finally:
+        faults.release_all()
+
+
 def test_append_riff_size_overflow_does_not_mutate_readable_wav(tmp_path, monkeypatch):
     append_wav_calibration_metadata = wav_calibration_metadata.append_wav_calibration_metadata
     path = tmp_path / "overflow.wav"

@@ -92,13 +92,13 @@ class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
     def _begin_recent_session_for_current_run(self):
         return None
 
-    def _start_blocking_recording(self, _recorded_dict, _sample_rate):
+    def _start_process_recording(self, _recorded_dict, _sample_rate, *, tcp_completion_address=None):
         self.events.append(
-            ("blocking", self._recording_wav_calibration_metadata)
+            ("process", self._recording_wav_calibration_metadata)
         )
 
 
-def test_recording_attempt_captures_once_after_reset_before_blocking_start(monkeypatch):
+def test_recording_attempt_captures_once_after_reset_before_process_start(monkeypatch):
     host = RecordingSnapshotHost()
     snapshots = []
 
@@ -115,7 +115,7 @@ def test_recording_attempt_captures_once_after_reset_before_blocking_start(monke
 
     host.judge_play_and_record()
 
-    assert [event[0] for event in host.events] == ["reset", "snapshot", "blocking"]
+    assert [event[0] for event in host.events] == ["reset", "snapshot", "process"]
     assert host.events[1][1] == [0, 2]
     assert host.events[2][1] is snapshots[0]
     assert host._recording_wav_calibration_metadata is snapshots[0]
@@ -145,37 +145,15 @@ def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
     assert host._recording_wav_calibration_metadata is built[1]
 
 
-def test_streaming_writer_starts_after_snapshot_and_keeps_exact_instance(monkeypatch):
+def test_streaming_process_start_keeps_calibration_snapshot(monkeypatch):
     host = RecordingSnapshotHost(streaming=True)
     snapshot = {"recorded_channels": [{"wav_channel_index": 0}]}
-
-    def build(channels, _device):
-        host.events.append(("snapshot", list(channels)))
-        return snapshot
-
-    def writer(*args, **kwargs):
-        host.events.append(
-            ("writer", args, kwargs, host._recording_wav_calibration_metadata)
-        )
-        return SimpleNamespace()
-
     monkeypatch.setattr(
         "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
-        build,
+        lambda channels, device: snapshot,
     )
-    monkeypatch.setattr(
-        "ui.sequence.sequence_widget_analysis_ops.StreamingWavWriter",
-        writer,
-    )
-    monkeypatch.setattr(
-        "ui.sequence.sequence_widget_analysis_ops.stream_record_without_play",
-        lambda *_args: (SimpleNamespace(), None),
-    )
-
     host.judge_play_and_record()
-
-    assert [event[0] for event in host.events] == ["reset", "snapshot", "writer"]
-    assert host.events[-1][-1] is snapshot
+    assert host.events[-1] == ("process", snapshot)
     assert host._recording_wav_calibration_metadata is snapshot
 
 
@@ -193,7 +171,7 @@ def test_snapshot_file_error_logs_stores_none_and_still_records(monkeypatch, err
     host.judge_play_and_record()
 
     assert host._recording_wav_calibration_metadata is None
-    assert host.events[-1][0] == "blocking"
+    assert host.events[-1][0] == "process"
     assert str(error) in host.default_logger.error.call_args.args[0]
 
 
@@ -207,7 +185,7 @@ def test_snapshot_does_not_swallow_programming_error(monkeypatch):
     with pytest.raises(RuntimeError, match="bug"):
         host.judge_play_and_record()
 
-    assert not any(event[0] == "blocking" for event in host.events)
+    assert not any(event[0] == "process" for event in host.events)
     assert host._recording_wav_calibration_metadata is None
     assert host._record_workflow_busy is False
     assert host.player_status_flag is False
