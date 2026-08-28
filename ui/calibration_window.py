@@ -1,5 +1,7 @@
+import os
 import sys
 import threading
+import uuid
 from numbers import Integral
 
 import numpy as np
@@ -22,7 +24,9 @@ from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QWidget, QRadioButton
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.swept_sine_chirps import StimulusSignal
-from base.play_and_record import stream_record_without_play
+from base.recording_process_protocol import RecordingRequest
+from base.recording_service import RecordingCallbacks, RecordingService
+from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
@@ -32,15 +36,15 @@ from base.soundcard_calibration_manager import (
     load_mic_channel_v2pa_factors,
     save_mic_channel_calibration,
 )
-from base.utils.custom_signals import sign
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
 
 
 class CalibrationWindow(QDialog):
 
-    def __init__(self, input_device=None, input_channels=None):
+    def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None):
         super().__init__()
+        self.recording_bridge = recording_bridge
         self.input_device = input_device
         self.input_channels = list(input_channels or [])
         self.init_ui()
@@ -66,6 +70,7 @@ class CalibrationWindow(QDialog):
         self.input_cal_wnd = InputCalibration(
             input_device=self.input_device,
             input_channels=self.input_channels,
+            recording_bridge=self.recording_bridge,
         )
         self.input_cal_wnd.calibration_finished.connect(
             self._on_input_calibration_finished
@@ -187,8 +192,16 @@ class CalibrationWindow(QDialog):
         self.reject()
 
     def reject(self):
-        self.input_cal_wnd.cancel_calibration()
+        self.input_cal_wnd.close_recording()
         super().reject()
+
+    def closeEvent(self, event):
+        self.input_cal_wnd.close_recording()
+        super().closeEvent(event)
+
+    def done(self, result):
+        self.input_cal_wnd.close_recording()
+        super().done(result)
 
 
 class OutputCalibration(QWidget):
@@ -612,8 +625,14 @@ class InputCalibration(QWidget):
     calibration_finished = pyqtSignal(bool)
     calibration_state_changed = pyqtSignal(bool)
 
-    def __init__(self, input_device=None, input_channels=None):
+    def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None):
         super().__init__()
+        self.recording_bridge = recording_bridge
+        self._owns_recording_bridge = False
+        self._recording_closed = False
+        self._release_notice_session = None
+        if recording_bridge is not None:
+            recording_bridge.shutting_down.connect(self.close_recording)
         self.input_device = input_device
         self.input_channels = self._normalize_input_channels(input_channels)
         self.saved_v2pa_factors = {}
@@ -629,15 +648,6 @@ class InputCalibration(QWidget):
         # Streaming recording state (no waveform display needed)
         self.streaming_processor = None
         self.active_capture_channel = None
-        self._streaming_completion_processor = None
-        sign.stream_audio_queue_ready_signal.connect(
-            self._on_streaming_queue_ready,
-            Qt.QueuedConnection,
-        )
-        sign.stream_audio_recording_finished_signal.connect(
-            self._on_streaming_recording_finished,
-            Qt.QueuedConnection,
-        )
 
         self.init_ui()
         self._initialize_calibration_state()
@@ -946,113 +956,145 @@ class InputCalibration(QWidget):
         elif self.standard_spl_ii.isChecked():
             self.standard_spl_flag = False
 
+    def _get_recording_bridge(self):
+        if self.recording_bridge is None:
+            self.recording_bridge = RecordingServiceBridge(RecordingService(), self)
+            self._owns_recording_bridge = True
+            self.recording_bridge.shutting_down.connect(self.close_recording)
+            QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
+        return self.recording_bridge
+
     def clicked_calibration(self):
-        """
-        Execute the calibration process upon clicking the calibration button using streaming approach.
-
-        This function initializes the recording parameters and starts streaming recording in a non-blocking way,
-        allowing the UI timer to update the countdown in real-time. No waveform display is needed.
-        """
-
-        if not self.calibration_available or self.current_channel is None:
-            self.calibration_popup(
-                success_flag=False,
-                message=self.calibration_unavailable_message
-                or "请先选择输入设备和有效输入通道。",
-            )
+        """Start one asynchronous, single-channel ten-second calibration."""
+        if self._recording_closed:
             return False
-        input_channel = self.current_channel
-
+        if not self.calibration_available or self.current_channel is None:
+            self.calibration_popup(success_flag=False,
+                message=self.calibration_unavailable_message or "请先选择输入设备和有效输入通道。")
+            return False
+        bridge = self._get_recording_bridge()
+        if self.streaming_processor is not None or bridge.service.busy:
+            self.calibration_popup(success_flag=False, message="录音设备忙，请等待当前录音结束后再校准。")
+            return False
         self.stop_timer = False
         self.recorded_time = 10
         self.v2pa_factor_lineedit.clear()
-        self._begin_capture(input_channel)
-
-        recorded_dict = {
-            "channels": 1,
-            "sample_rate": 44100,
-            "num_frames": 10 * 44100,
-            "device": self.input_device,
-            "input_channels": [input_channel],
-        }
-
-        self._streaming_completion_processor = None
+        self._begin_capture(self.current_channel)
+        self._capture_standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
         try:
-            self.streaming_processor, _ = stream_record_without_play(
-                recorded_dict,
-                None,
-                None,
+            request = RecordingRequest(
+                request_id=uuid.uuid4().hex, purpose="calibration", sample_rate=44100,
+                target_samples=441000, channels=(self.active_capture_channel,),
+                device=self.input_device,
+                # The service replaces this unused placeholder in its background
+                # allocator; the widget neither creates nor removes temp files.
+                path=os.path.abspath("calibration-unused.wav"),
+                streaming=False, trim_samples=0, monitor={},
+                calibration_metadata=None, validation_thresholds={},
             )
-        except Exception as exc:
+            session = bridge.start(request, RecordingCallbacks(
+                result_ready=self._on_calibration_result_ready,
+                accepted=self._on_calibration_accepted,
+                failed=self._on_calibration_failed,
+                cancelled=self._on_calibration_cancelled,
+                released=self._on_calibration_released,
+                release_failed=self._on_calibration_release_failed,
+            ))
+            self.streaming_processor = RecordingProcessorFacade(session)
+            self._release_notice_session = session
+        except (RuntimeError, ValueError, TypeError) as exc:
             self.streaming_processor = None
             self._clear_active_capture()
             self.default_logger.error(f"Failed to start input calibration recording: {exc}")
-            self.calibration_popup(
-                success_flag=False,
-                message=f"输入校准录音启动失败：{str(exc)[:80]}",
-            )
+            self.calibration_popup(success_flag=False, message=f"输入校准录音启动失败：{str(exc)[:80]}")
             return False
-
         self.update_ui_timer.start()
         return True
 
-    def _on_streaming_queue_ready(self, processor):
-        if processor is not self.streaming_processor:
-            return
-        if processor is self._streaming_completion_processor:
-            return
+    def _is_current_session(self, session):
+        return (not self._recording_closed and not self.stop_timer
+                and self.streaming_processor is not None
+                and self.streaming_processor.session is session)
 
-        try:
-            processor.process_queue(emit_signal=False)
-        except Exception as exc:
-            self.default_logger.error(f"Failed to process input calibration audio: {exc}")
-            self._finish_failed_calibration("输入校准录音数据处理失败，请重试。")
+    def _on_calibration_result_ready(self, session, audio):
+        if not self._is_current_session(session):
+            session.reject_result("calibration window no longer owns this result")
+            return
+        request, descriptor = session.request, audio.descriptor
+        if (descriptor.request_id != request.request_id
+                or descriptor.purpose != "calibration"
+                or descriptor.channels != (self.active_capture_channel,)
+                or descriptor.sample_rate != request.sample_rate
+                or descriptor.raw_frames != request.target_samples
+                or descriptor.final_frames != request.target_samples
+                or descriptor.path != request.path
+                or audio.multi.shape != (request.target_samples, 1)
+                or audio.mono.shape != (request.target_samples,)
+                or audio.multi.dtype != np.float32 or audio.mono.dtype != np.float32
+                or not np.isfinite(audio.multi).all()
+                or not np.array_equal(audio.mono, audio.multi[:, 0])):
+            session.reject_result("输入校准录音长度或通道数据无效")
+            return
+        session.accept_result()
 
-    def _on_streaming_recording_finished(self, processor):
-        if processor is not self.streaming_processor:
+    def _on_calibration_accepted(self, session, audio):
+        if not self._is_current_session(session):
             return
-        if processor is self._streaming_completion_processor:
-            return
-        self._streaming_completion_processor = processor
-        try:
-            processor.process_queue(emit_signal=False)
-        except Exception as exc:
-            self.default_logger.error(
-                f"Failed to process final input calibration audio: {exc}"
-            )
-            self._finish_failed_calibration(
-                "输入校准录音数据处理失败，请重试。"
-            )
-            return
+        self.streaming_processor.set_recorded_audio(audio)
         self._on_streaming_complete()
+
+    def _on_calibration_failed(self, session, failure):
+        if self._is_current_session(session):
+            self.default_logger.error(f"Input calibration recording failed: {failure}")
+            self._finish_failed_calibration(f"输入校准录音失败：{failure.message}")
+
+    def _on_calibration_cancelled(self, session, _cancelled):
+        if self._is_current_session(session):
+            self.cancel_calibration()
+
+    def _on_calibration_released(self, session):
+        if self._release_notice_session is session:
+            self._release_notice_session = None
+
+    def _on_calibration_release_failed(self, session, error):
+        current = self._release_notice_session is session
+        if current:
+            self._release_notice_session = None
+        self.default_logger.error(
+            f"Input calibration temporary cleanup failed for {session.request.path}: {error}")
+        if current and not self._recording_closed and not self.stop_timer:
+            QMessageBox.warning(self, "录音资源未释放",
+                "输入校准临时文件未能清理，文件仍被保留。此问题不会改变本次校准结果。\n"
+                "请检查路径与访问权限：\n"
+                + session.request.path + "\n" + str(error))
 
     def _on_streaming_complete(self):
         """
         Handle streaming recording completion and calculate calibration result.
         """
+        processor = self.streaming_processor
+        if (self.stop_timer or self._recording_closed or processor is None
+                or processor.session.state != "completed"):
+            return
         if not self.calibration_available:
             self._finish_failed_calibration(
                 self.calibration_unavailable_message
                 or "输入校准当前不可用。"
             )
             return
-        processor = self.streaming_processor
         captured_channel = self.active_capture_channel
-        if processor is None or captured_channel is None:
+        if captured_channel is None:
             self._finish_failed_calibration("输入校准录音通道状态无效")
             return
 
         try:
-            processor.process_queue(emit_signal=False)
-            if processor.error_occurred:
-                raise RuntimeError(processor.error_message or "录音设备发生错误")
             recorded_data = processor.get_recorded_data()
             if recorded_data.size != processor.target_samples:
                 raise ValueError(
                     f"录音长度不完整：{recorded_data.size}/{processor.target_samples}"
                 )
 
-        except Exception as exc:
+        except (RuntimeError, ValueError) as exc:
             self.default_logger.error(
                 f"Failed to finish input calibration audio capture: {exc}"
             )
@@ -1061,7 +1103,7 @@ class InputCalibration(QWidget):
 
         try:
             self.average_value = self._calculate_spl_from_data(recorded_data)
-            v2pa_factor = self.calculate_v2pa_factor(self.average_value)
+            v2pa_factor = self.calculate_v2pa_factor(self.average_value, self._capture_standard_spl_db)
             if (
                 not np.isfinite(self.average_value)
                 or not np.isfinite(v2pa_factor)
@@ -1075,10 +1117,10 @@ class InputCalibration(QWidget):
             ):
                 raise ValueError("输入校准采样率无效")
 
-            standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
+            standard_spl_db = self._capture_standard_spl_db
             save_mic_channel_calibration(
                 v2pa_factor=v2pa_factor,
-                input_device=self.input_device,
+                input_device=processor.session.request.device.to_dict(),
                 input_channel=captured_channel,
                 standard_spl_db=standard_spl_db,
                 sample_rate_hz=processor.sample_rate,
@@ -1117,12 +1159,7 @@ class InputCalibration(QWidget):
         self.streaming_processor = None
         self._clear_active_capture()
         if processor is not None:
-            try:
-                processor.stop_streaming()
-            except Exception as exc:
-                self.default_logger.error(
-                    f"Failed to stop input calibration processor: {exc}"
-                )
+            processor.stop_streaming()
         if not self.stop_timer:
             self.calibration_popup(success_flag=False, message=message)
             self.calibration_finished.emit(False)
@@ -1211,7 +1248,7 @@ class InputCalibration(QWidget):
             # Reset time for next calibration
             self.recorded_time = 10
 
-    def calculate_v2pa_factor(self, average_value):
+    def calculate_v2pa_factor(self, average_value, standard_spl_db=None):
         """
         Calculate the v2pa_factor from the standard sound pressure level.
 
@@ -1224,10 +1261,9 @@ class InputCalibration(QWidget):
         Returns:
             float: The calculated v2pa_factor value rounded to three decimal places.
         """
-        if self.standard_spl_flag:
-            deviation_value = round(94 - average_value, 3)
-        else:
-            deviation_value = round(114 - average_value, 3)
+        if standard_spl_db is None:
+            standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
+        deviation_value = round(standard_spl_db - average_value, 3)
         v2pa_factor = 10 ** (deviation_value / 20)
         return v2pa_factor
 
@@ -1241,16 +1277,12 @@ class InputCalibration(QWidget):
         if not self.calibration_available:
             return
 
+        self._release_notice_session = None
         self._stop_calibration_timers()
         processor = self.streaming_processor
-        if processor is not None:
-            try:
-                processor.stop_streaming()
-            except Exception as exc:
-                self.default_logger.error(
-                    f"Error stopping input calibration processor for reset: {exc}"
-                )
         self.streaming_processor = None
+        if processor is not None:
+            processor.stop_streaming()
         self._clear_active_capture(refresh_display=False)
         self.stop_timer = False
 
@@ -1296,18 +1328,24 @@ class InputCalibration(QWidget):
         self._select_channel(self.input_channels[0])
 
     def cancel_calibration(self):
+        self._release_notice_session = None
         self.stop_timer = True
         self._stop_calibration_timers()
         processor = self.streaming_processor
         self.streaming_processor = None
         self._clear_active_capture()
         if processor is not None:
-            try:
-                processor.stop_streaming()
-            except Exception as exc:
-                self.default_logger.error(
-                    f"Failed to stop cancelled input calibration processor: {exc}"
-                )
+            processor.stop_streaming()
+
+    def close_recording(self):
+        self._recording_closed = True
+        self.cancel_calibration()
+        if self._owns_recording_bridge:
+            self.recording_bridge.shutdown()
+
+    def closeEvent(self, event):
+        self.close_recording()
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":

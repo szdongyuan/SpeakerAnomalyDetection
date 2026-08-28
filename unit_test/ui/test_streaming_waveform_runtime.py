@@ -97,6 +97,9 @@ class _Button:
 
 class _RecordingBoundaryHost(SequenceWidgetAnalysisOpsMixin):
     def __init__(self, *, streaming=True):
+        from unit_test.ui.test_recording_process_integration import CapturingBridge
+        self.recording_bridge = CapturingBridge()
+        self._recording_input_channels = (0, 1)
         self.use_streaming = streaming
         self.events = []
         self._record_workflow_busy = False
@@ -136,7 +139,8 @@ class _RecordingBoundaryHost(SequenceWidgetAnalysisOpsMixin):
         return None
 
     def reset_work_pram(self, label, count=None):
-        return {"use_streaming_recording": self.use_streaming}, 48_000
+        from unit_test.base.recording_process_fakes import device_info
+        return {"device": device_info(), "num_frames": 4800}, 48_000
 
     def _capture_recording_wav_calibration_metadata(self):
         return None
@@ -176,65 +180,37 @@ class _RecordingBoundaryHost(SequenceWidgetAnalysisOpsMixin):
         return True
 
 
-def test_judge_begins_live_session_with_trim_and_frozen_direction_before_hardware(
-    monkeypatch,
-):
+def test_judge_snapshots_trim_and_direction_before_async_service_start():
     host = _RecordingBoundaryHost(streaming=True)
-
-    def writer(*args, **kwargs):
-        host.events.append("writer")
-        return _Writer()
-
-    def start_streaming(*args):
-        host.events.append("hardware")
-        return SimpleNamespace(), None
-
-    monkeypatch.setattr(sequence_widget_analysis_ops, "StreamingWavWriter", writer)
-    monkeypatch.setattr(
-        sequence_widget_analysis_ops, "stream_record_without_play", start_streaming
-    )
-
     host.judge_play_and_record()
     host._current_trigger_direction = "reverse"
 
-    assert host.events[:4] == [
-        "resolve-direction",
-        ("begin", 48_000, 1_200, "forward"),
-        "writer",
-        "hardware",
-    ]
-    assert host.captured_direction == "forward"
+    assert host.recording_bridge.request.trim_samples == 1200
+    assert host._recording_process_direction == "forward"
+    assert host.events == ["end", "resolve-direction", "recent"]
+    assert host._recording_process_preview_enabled is True
 
 
-def test_judge_blocking_path_invalidates_live_session_before_capture():
+def test_judge_ordinary_path_invalidates_live_session_before_async_capture():
     host = _RecordingBoundaryHost(streaming=False)
     host.captured_direction = "forward"
-
     host.judge_play_and_record()
 
-    assert host.events[:2] == ["end", "recent"]
-    assert host.events[2] == ("blocking", 48_000)
+    assert host.events == ["end", "resolve-direction", "recent"]
+    assert host._recording_process_preview_enabled is False
     assert host.captured_direction == ""
+    assert host._record_workflow_busy is True
 
 
-def test_judge_streaming_start_failure_invalidates_begun_live_session(monkeypatch):
+def test_judge_service_start_failure_restores_controls(monkeypatch):
     host = _RecordingBoundaryHost(streaming=True)
-
-    def fail_writer(*args, **kwargs):
-        host.events.append("writer")
-        raise OSError("device unavailable")
-
-    monkeypatch.setattr(sequence_widget_analysis_ops, "StreamingWavWriter", fail_writer)
-
+    host.recording_bridge.start = mock.Mock(side_effect=RuntimeError("device unavailable"))
     host.judge_play_and_record()
 
-    assert host.events[:4] == [
-        "resolve-direction",
-        ("begin", 48_000, 1_200, "forward"),
-        "writer",
-        "end",
-    ]
     assert host.captured_direction == ""
+    assert host._record_workflow_busy is False
+    assert host.player_status_flag is False
+    assert host._recording_process_id is None
 
 
 def test_payload_normalization_appends_exact_multichannel_chunk_and_ignores_mono():

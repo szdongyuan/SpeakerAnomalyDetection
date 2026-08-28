@@ -68,7 +68,11 @@ from ui.sequence.product_condition_result_ops import (
 )
 
 
+from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
+
+
 class SequenceWidgetAnalysisOpsMixin(
+    SequenceWidgetRecordingProcessOpsMixin,
     SequenceWidgetProductConditionResultOpsMixin
 ):
     _RECENT_SESSION_WAITING_TEXT = "等待测试完成"
@@ -2460,10 +2464,14 @@ class SequenceWidgetAnalysisOpsMixin(
         if self.checked_work_status_message():
             return
 
-        if self.clicked_player_flag is False:
+        tcp_completion_address = None
+        manual_start = self.clicked_player_flag is True
+        if not manual_start:
             if self.tcp_flag and self.__class__.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
                 return
+            if self.tcp_flag:
+                tcp_completion_address = tuple(self.__class__.tcp_server.client_address)
 
         close_analysis_windows = getattr(self, "_close_analysis_windows", None)
         if callable(close_analysis_windows):
@@ -2476,16 +2484,21 @@ class SequenceWidgetAnalysisOpsMixin(
 
         self._current_run_recording_token = self._reserve_recorded_count_for_run()
 
-        # Record with new count
-        self.judge_play_and_record(label, is_replay=False)
-
-        if self.clicked_player_flag is True:
+        # Consume this invocation's manual intent before a callback can start
+        # another run. TCP completion belongs to the admitted request, not to
+        # the mutable current client/toolbar state after submission returns.
+        if manual_start:
             self.clicked_player_flag = False
-        elif self.clicked_player_flag is False:
-            if self.tcp_flag:
-                TempTcpClient(
-                    self.__class__.tcp_server.client_address[0], self.__class__.tcp_server.client_address[1], "finish"
-                )
+        self.judge_play_and_record(
+            label, is_replay=False, tcp_completion_address=tcp_completion_address)
+
+    def _send_recording_tcp_finish(self, address):
+        try:
+            TempTcpClient(address[0], address[1], "finish")
+        except OSError as error:
+            # Notification failure cannot invalidate already saved audio or
+            # retry a possibly delivered completion message.
+            self.default_logger.error(f"Recording TCP completion failed: {address}: {error}")
 
     def checked_work_status_message(self):
         if not self.sequence_config:
@@ -2707,11 +2720,18 @@ class SequenceWidgetAnalysisOpsMixin(
         return snapshot
 
     def _cleanup_failed_recording_initialization(self, reason):
+        workflow_token = getattr(self, "_recording_workflow_token", None)
+
+        def superseded():
+            return getattr(self, "_recording_workflow_token", None) is not workflow_token
+
         abort_channel_selection = getattr(
             self, "_abort_recording_channel_selection", None
         )
         if callable(abort_channel_selection):
             abort_channel_selection()
+        if superseded():
+            return True
         unlock_sn_after_recording = getattr(
             self,
             "_unlock_sn_after_recording_if_needed",
@@ -2719,24 +2739,43 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         if callable(unlock_sn_after_recording):
             unlock_sn_after_recording()
+        if superseded():
+            return True
         self.player_status_flag = False
         self._record_workflow_busy = False
         self.update_player_btn_is_paused()
-        drain = getattr(self, "_drain_queued_directional_trigger", None)
-        if callable(drain):
-            drain()
+        if superseded():
+            return True
         serial_runtime_error = getattr(
             self,
             "_on_serial_product_runtime_error",
             None,
         )
-        return bool(
+        handled = bool(
             callable(serial_runtime_error)
             and serial_runtime_error(reason)
         )
+        if handled or superseded():
+            return True
+        # Serial abort owns its disabled controls. Only an unhandled ordinary
+        # failure restores them, before callbacks may begin another workflow.
+        for name in ("data_btn", "replayer_btn"):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setDisabled(False)
+            if superseded():
+                return True
+        drain = getattr(self, "_drain_queued_directional_trigger", None)
+        if callable(drain):
+            drain()
+        return superseded()
 
-    def judge_play_and_record(self, label="not_labeled", is_replay=False):
+    def judge_play_and_record(self, label="not_labeled", is_replay=False, *, tcp_completion_address=None):
         if getattr(self, "_record_workflow_busy", False):
+            return
+        bridge = getattr(self, "recording_bridge", None)
+        if bridge is not None and bridge.service.busy:
+            QMessageBox.warning(self, "提示", "录音服务正在使用或等待文件释放，请稍后重试。")
             return
         if self.checked_work_status_message():
             return
@@ -2765,6 +2804,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
+        self._recording_workflow_token = object()
         self._recording_wav_calibration_metadata = None
         is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
         sync_active_recording_direction = getattr(self, "_sync_active_recording_direction_from_trigger", None)
@@ -2833,81 +2873,15 @@ class SequenceWidgetAnalysisOpsMixin(
             )
             raise
 
-        if not self._should_use_streaming_recording():
-            end_streaming_waveform_session = getattr(
-                self, "_end_streaming_waveform_session", None
-            )
-            if callable(end_streaming_waveform_session):
-                end_streaming_waveform_session()
-            self._begin_recent_session_for_current_run()
-            self._start_blocking_recording(recorded_dict, sample_rate)
-            return
-
-        # Start streaming record-only (non-blocking)
         try:
-            resolve_active_direction = getattr(
-                self, "_resolve_active_recording_waveform_direction", None
-            )
-            active_direction = (
-                resolve_active_direction(fallback="")
-                if callable(resolve_active_direction)
-                else ""
-            ) or "forward"
-            resolve_acq_detail = getattr(self, "_resolve_recording_acq_detail", None)
-            acq_detail = resolve_acq_detail() if callable(resolve_acq_detail) else {}
-            begin_streaming_waveform_session = getattr(
-                self, "_begin_streaming_waveform_session", None
-            )
-            if callable(begin_streaming_waveform_session):
-                begin_streaming_waveform_session(
-                    sample_rate,
-                    resolve_startup_trim_samples(acq_detail, sample_rate),
-                    active_direction,
-                )
-            # Create WAV file writer for streaming saves (useful for long recordings)
-            run_channels = getattr(self, "_recording_input_channels", None)
-            if run_channels is None:
-                # Compatibility for isolated workflow hosts that override
-                # reset_work_pram; SequenceWindow always has the run snapshot.
-                run_channels = tuple(
-                    recorded_dict.get("input_channels")
-                    or getattr(self, "_active_input_channels", None)
-                    or [0]
-                )
-            nch = len(run_channels)
-            self.streaming_wav_writer = StreamingWavWriter(self.recorded_path, sample_rate, channels=nch)
-
-            self.streaming_processor, _ = stream_record_without_play(
-                recorded_dict, self.recorded_path, self.recorded_signal_info
-            )
-            self.streaming_mode = "record_only"
-            self.streaming_stimulus_data = None
-            self._begin_recent_session_for_current_run()
-        except Exception as e:
-            end_streaming_waveform_session = getattr(
-                self, "_end_streaming_waveform_session", None
-            )
-            if callable(end_streaming_waveform_session):
-                end_streaming_waveform_session()
+            self._start_process_recording(
+                recorded_dict, sample_rate, tcp_completion_address=tcp_completion_address)
+        except (RuntimeError, ValueError, TypeError, KeyError, OSError) as error:
             self._recording_wav_calibration_metadata = None
-            self.default_logger.error(f"start_streaming_error: {e}")
-            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
-            if callable(unlock_sn_after_recording):
-                unlock_sn_after_recording()
-            self._cleanup_streaming_resources()
-            self.player_status_flag = False
-            self._record_workflow_busy = False
-            self.update_player_btn_is_paused()
-            drain = getattr(self, "_drain_queued_directional_trigger", None)
-            if callable(drain):
-                drain()
-            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
-            handled = bool(
-                callable(serial_runtime_error)
-                and serial_runtime_error(f"启动录音失败: {e}")
-            )
+            self.default_logger.error(f"start_recording_process_error: {error}")
+            handled = self._cleanup_failed_recording_initialization(f"启动录音失败: {error}")
             if not handled:
-                QMessageBox.warning(self, "提示", f"启动录音失败: {e}")
+                QMessageBox.warning(self, "提示", f"启动录音失败: {error}")
             return
 
         # Return immediately - completion will be handled by _on_streaming_complete()

@@ -639,12 +639,19 @@ class SequenceWidgetSerialTriggerOpsMixin:
                 normalized_path = recorded_path.replace("\\", "/").lower()
                 if normalized_path not in deleted_paths:
                     deleted_paths.add(normalized_path)
-                    delete_code, delete_message = recording_manager.delete_audio(recorded_path)
-                    if delete_code != error_code.OK:
-                        self.default_logger.warning(
-                            "serial_product_round_audio_delete_failed "
-                            f"path={recorded_path} message={delete_message}"
-                        )
+                    def delete_exact_record(path, manager=recording_manager):
+                        delete_code, delete_message = manager.delete_audio(path)
+                        if delete_code != error_code.OK:
+                            raise OSError(f"serial_product_round_audio_delete_failed path={path} message={delete_message}")
+
+                    bridge = getattr(self, "recording_bridge", None)
+                    deferred = bridge is not None and bridge.service.defer_path_cleanup(
+                        recorded_path, delete_exact_record)
+                    if not deferred:
+                        try:
+                            delete_exact_record(recorded_path)
+                        except OSError as error:
+                            self.default_logger.warning(str(error))
 
             try:
                 self.recent_test_sessions.remove(session_id)

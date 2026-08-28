@@ -41,24 +41,17 @@ def _class_method_source(path, class_name, method_name):
     return ast.get_source_segment(source, method_node)
 
 
-def test_main_ui_wires_streaming_events_with_queued_delivery_before_capture():
+def test_legacy_streaming_events_retain_queued_delivery():
     ui_ops = _class_method_source(
         ROOT / "ui/sequence/sequence_widget_ui_ops.py",
         "SequenceWidgetUiOpsMixin",
         "init_ui",
     )
-    analysis_ops = (ROOT / "ui/sequence/sequence_widget_analysis_ops.py").read_text(
-        encoding="utf-8"
-    )
-
     assert "stream_audio_queue_ready_signal.connect" in ui_ops
     assert "self._on_streaming_queue_ready" in ui_ops
     assert "stream_audio_recording_finished_signal.connect" in ui_ops
     assert "self._on_streaming_recording_finished" in ui_ops
     assert ui_ops.count("Qt.QueuedConnection") >= 2
-    assert ui_ops.index("stream_audio_queue_ready_signal.connect") < analysis_ops.index(
-        "stream_record_without_play("
-    )
 
 
 def test_main_streaming_lifecycle_has_no_poll_timer():
@@ -338,31 +331,21 @@ class _WorkflowHost(SequenceWidgetAnalysisOpsMixin, SequenceWidgetStreamingOpsMi
 
 @pytest.mark.parametrize("monitor_playback", [False, True])
 def test_main_workflow_routes_start_through_event_completion(monkeypatch, monitor_playback):
-    events = []
+    from unit_test.base.recording_process_fakes import device_info
+    from unit_test.ui.test_recording_process_integration import CapturingBridge
     recorded_dict = {
-        "sample_rate": 48_000,
+        "num_frames": 4800, "device": device_info(),
         "monitor_playback": monitor_playback,
-        "use_streaming_recording": True,
+        "output_device": device_info(), "output_channels": [0, 1],
     }
-    processor = _FakeProcessor(events)
-    calls = []
-
-    def start_streaming(actual_dict, path, signal_info):
-        calls.append((actual_dict, path, signal_info))
-        return processor, "ok"
-
-    monkeypatch.setattr(sequence_widget_analysis_ops, "StreamingWavWriter", _Writer)
-    monkeypatch.setattr(sequence_widget_analysis_ops, "stream_record_without_play", start_streaming)
-    host = _WorkflowHost(recorded_dict, events)
-
+    host = _WorkflowHost(recorded_dict, [])
+    host.recording_bridge = CapturingBridge()
     host.judge_play_and_record()
 
-    assert calls == [(recorded_dict, "record.wav", {"name": "capture"})]
-    assert host.streaming_processor is processor
+    request = host.recording_bridge.request
+    assert request.channels == (0, 1)
+    assert request.monitor["enabled"] is monitor_playback
+    assert host.streaming_processor.session is host._recording_process_session
     assert not hasattr(host, "streaming_poll_timer")
     assert host._streaming_completion_processor is None
-
-    host._on_streaming_recording_finished(processor)
-
-    assert events == ["drain", "complete"]
-    processor.process_queue.assert_called_once_with()
+    assert host._record_workflow_busy is True

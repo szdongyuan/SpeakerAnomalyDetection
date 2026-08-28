@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -17,13 +16,15 @@ from base.soundcard_calibration_manager import (
     save_mic_channel_calibration,
 )
 from ui.calibration_window import CalibrationWindow, InputCalibration
+from base.recording_process_protocol import FrozenConfig
+from unit_test.ui.test_recording_process_integration import CapturingBridge
 
 
 DEVICE = {
     "index": 7,
     "name": "Test Microphone",
     "hostapi": 3,
-    "max_input_channels": 2,
+    "max_input_channels": 3,
 }
 
 
@@ -33,7 +34,13 @@ def qapp(ui_qapp):
 
 
 @pytest.fixture(autouse=True)
-def isolated_logger():
+def isolated_logger(monkeypatch):
+    def bridge_for(widget):
+        if widget.recording_bridge is None:
+            widget.recording_bridge = CapturingBridge()
+            widget.recording_bridge.service.cancel = mock.Mock()
+        return widget.recording_bridge
+    monkeypatch.setattr(InputCalibration, "_get_recording_bridge", bridge_for)
     logger = SimpleNamespace(
         info=mock.Mock(),
         warning=mock.Mock(),
@@ -56,8 +63,8 @@ class _FakeProcessor:
         *,
         target_samples=4,
         error_message="",
-        process_error=None,
     ):
+        self.session = SimpleNamespace(state="completed", request=SimpleNamespace(device=FrozenConfig.snapshot(DEVICE)))
         self.data = np.asarray(
             data if data is not None else [0.1, 0.1, 0.1, 0.1],
             dtype=np.float32,
@@ -67,21 +74,167 @@ class _FakeProcessor:
         self.is_recording = False
         self.error_occurred = bool(error_message)
         self.error_message = error_message
-        self.process_calls = []
         self.stop_calls = 0
-        self.process_error = process_error
-
-    def process_queue(self, emit_signal=True):
-        self.process_calls.append(emit_signal)
-        if self.process_error is not None:
-            raise self.process_error
 
     def get_recorded_data(self):
+        if self.error_message:
+            raise RuntimeError(self.error_message)
         return self.data
 
     def stop_streaming(self):
         self.stop_calls += 1
         self.is_recording = False
+
+
+def _deliver_accepted(widget):
+    widget._capture_standard_spl_db = 94.0 if widget.standard_spl_flag else 114.0
+    widget._on_streaming_complete()
+
+
+def _provisional_capture(widget):
+    from base.recording_process_protocol import RecordingResult
+    from base.recording_result_reader import RecordingAudio
+    assert widget.clicked_calibration()
+    session = widget.streaming_processor.session
+    session.state = "delivering"
+    session.service.accept_result = mock.Mock()
+    session.service.reject_result = mock.Mock()
+    data = np.full((441000, 1), .125, dtype=np.float32)
+    request = session.request
+    descriptor = RecordingResult(request.request_id, "calibration", request.path,
+        44100, request.channels, 441000, 441000, False)
+    return session, RecordingAudio(descriptor, data, data[:, 0].copy())
+
+
+def test_provisional_only_requests_acceptance_and_authoritative_event_saves_once(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    widget.calibration_popup = mock.Mock()
+    widget._calculate_spl_from_data = mock.Mock(return_value=90)
+    session, audio = _provisional_capture(widget)
+    with mock.patch("ui.calibration_window.save_mic_channel_calibration") as save:
+        widget._on_calibration_result_ready(session, audio)
+        session.service.accept_result.assert_called_once_with(session.request.request_id)
+        save.assert_not_called()
+        widget._on_streaming_complete()
+        save.assert_not_called()
+        session.state = "completed"
+        widget._on_calibration_accepted(session, audio)
+        widget._on_calibration_accepted(session, audio)
+        save.assert_called_once()
+
+
+@pytest.mark.parametrize("invalid", ["short", "channels", "nan"])
+def test_invalid_provisional_result_rejected_without_json(qapp, invalid):
+    from dataclasses import replace
+    widget = InputCalibration(DEVICE, [1])
+    session, audio = _provisional_capture(widget)
+    if invalid == "short":
+        audio = replace(audio, multi=audio.multi[:-1], mono=audio.mono[:-1])
+    elif invalid == "channels":
+        audio = replace(audio, descriptor=replace(audio.descriptor, channels=(0,)))
+    else:
+        audio.multi[0, 0] = np.nan
+    with mock.patch("ui.calibration_window.save_mic_channel_calibration") as save:
+        widget._on_calibration_result_ready(session, audio)
+        session.service.reject_result.assert_called_once()
+        session.service.accept_result.assert_not_called()
+        save.assert_not_called()
+    widget.cancel_calibration()
+
+
+def test_service_failure_restores_controls_and_reports_once(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    widget.calibration_popup = mock.Mock()
+    session, _audio = _provisional_capture(widget)
+    finished = []
+    widget.calibration_finished.connect(finished.append)
+    with mock.patch("ui.calibration_window.save_mic_channel_calibration") as save:
+        session.state = "failed"
+        failure = SimpleNamespace(message="device failed")
+        widget._on_calibration_failed(session, failure)
+        widget._on_calibration_failed(session, failure)
+        assert finished == [False]
+        assert widget.streaming_processor is None
+        assert widget.channel_combo_box.isEnabled()
+        widget.calibration_popup.assert_called_once()
+        save.assert_not_called()
+
+
+def test_cleanup_warning_does_not_claim_json_saved_after_save_failure(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    widget.calibration_popup = mock.Mock()
+    widget._calculate_spl_from_data = mock.Mock(return_value=90)
+    session, audio = _provisional_capture(widget)
+    finished = []
+    widget.calibration_finished.connect(finished.append)
+    with mock.patch("ui.calibration_window.save_mic_channel_calibration",
+            side_effect=MicCalibrationIOError("JSON denied")), mock.patch(
+            "ui.calibration_window.QMessageBox.warning") as warning:
+        session.state = "completed"
+        widget._on_calibration_accepted(session, audio)
+        widget._on_calibration_release_failed(session, "temporary cleanup denied")
+        assert finished == [False]
+        warning.assert_called_once()
+        assert "已保存" not in warning.call_args.args[2]
+
+
+@pytest.mark.parametrize("action", ["cancel", "reset", "close"])
+def test_late_calibration_events_cannot_save_or_change_new_ui(qapp, action):
+    widget = InputCalibration(DEVICE, [1, 0])
+    widget.calibration_popup = mock.Mock()
+    session, audio = _provisional_capture(widget)
+    with mock.patch("ui.calibration_window.save_mic_channel_calibration") as save, mock.patch(
+            "ui.calibration_window.clear_mic_channel_calibrations", return_value=False), mock.patch(
+            "ui.calibration_window.QMessageBox.warning") as resource_warning:
+        getattr(widget, {"cancel": "cancel_calibration", "reset": "reset_btn_clicked", "close": "close"}[action])()
+        if action != "close":
+            assert widget.clicked_calibration()
+        current = widget.streaming_processor
+        channel = widget.current_channel
+        widget.calibration_popup.reset_mock()
+        session.state = "completed"
+        widget._on_calibration_result_ready(session, audio)
+        widget._on_calibration_accepted(session, audio)
+        widget._on_calibration_failed(session, SimpleNamespace(message="late"))
+        session.release_error = "old cleanup failure"
+        widget._on_calibration_release_failed(session, session.release_error)
+        widget._on_calibration_released(session)
+        assert widget.streaming_processor is current
+        assert widget.current_channel == channel
+        widget.calibration_popup.assert_not_called()
+        resource_warning.assert_not_called()
+        save.assert_not_called()
+    widget.close()
+
+
+def test_calibration_uses_capture_snapshot_for_device_and_reference_level(qapp):
+    device = dict(DEVICE)
+    widget = InputCalibration(device, [1])
+    widget.calibration_popup = mock.Mock()
+    widget._calculate_spl_from_data = mock.Mock(return_value=90)
+    session, audio = _provisional_capture(widget)
+    widget.standard_spl_flag = False
+    device["index"] = 99
+    with mock.patch("ui.calibration_window.save_mic_channel_calibration") as save:
+        session.state = "completed"
+        widget._on_calibration_accepted(session, audio)
+        assert save.call_args.kwargs["input_device"] == DEVICE
+        assert save.call_args.kwargs["standard_spl_db"] == 94
+        assert save.call_args.kwargs["v2pa_factor"] == pytest.approx(10 ** (4 / 20))
+
+
+def test_start_does_not_probe_temp_files_on_gui_thread(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    with mock.patch("tempfile.gettempdir", side_effect=AssertionError("GUI temp-directory probe")):
+        assert widget.clicked_calibration()
+    widget.cancel_calibration()
+
+
+def test_factor_helper_respects_new_selection_after_capture(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    widget._capture_standard_spl_db = 94
+    widget.standard_spl_flag = False
+    assert widget.calculate_v2pa_factor(90) == pytest.approx(10 ** (24 / 20))
 
 
 @pytest.mark.parametrize(
@@ -101,7 +254,7 @@ def test_input_calibration_requires_one_valid_channel(
     widget.calibration_popup = mock.Mock()
 
     with mock.patch(
-        "ui.calibration_window.stream_record_without_play"
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start"
     ) as start_recording:
         started = widget.clicked_calibration()
 
@@ -214,7 +367,7 @@ def test_missing_device_does_not_load_or_start_recording(qapp):
     with mock.patch(
         "ui.calibration_window.load_mic_channel_v2pa_factors"
     ) as load, mock.patch(
-        "ui.calibration_window.stream_record_without_play"
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start"
     ) as start_recording:
         widget = InputCalibration(None, [0, 1])
         widget.calibration_popup = mock.Mock()
@@ -234,7 +387,7 @@ def test_invalid_channels_do_not_load_or_start_recording(qapp, input_channels):
     with mock.patch(
         "ui.calibration_window.load_mic_channel_v2pa_factors"
     ) as load, mock.patch(
-        "ui.calibration_window.stream_record_without_play"
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start"
     ) as start_recording:
         widget = InputCalibration(DEVICE, input_channels)
         widget.calibration_popup = mock.Mock()
@@ -282,37 +435,34 @@ def test_factor_display_is_read_only_without_manual_mode_controls(qapp):
 
 def test_calibration_uses_selected_device_and_physical_channel(qapp):
     widget = InputCalibration(DEVICE, [1])
-    processor = _FakeProcessor()
-    widget._streaming_completion_processor = object()
 
     with mock.patch(
-        "ui.calibration_window.stream_record_without_play",
-        return_value=(processor, 44100),
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start",
+        autospec=True, side_effect=CapturingBridge.start,
     ) as start_recording:
         started = widget.clicked_calibration()
 
     assert started is True
-    recorded_dict = start_recording.call_args.args[0]
-    assert recorded_dict["device"] is DEVICE
-    assert recorded_dict["input_channels"] == [1]
-    assert recorded_dict["num_frames"] == 441000
-    assert widget._streaming_completion_processor is None
+    request = start_recording.call_args.args[1]
+    assert request.device.to_dict() == DEVICE
+    assert request.channels == (1,)
+    assert request.target_samples == 441000
+    assert request.sample_rate == 44100
     widget.cancel_calibration()
 
 
 def test_non_first_selector_channel_is_pinned_for_capture(qapp):
     widget = InputCalibration(DEVICE, [0, 2])
     widget.channel_combo_box.setCurrentIndex(1)
-    processor = _FakeProcessor()
 
     with mock.patch(
-        "ui.calibration_window.stream_record_without_play",
-        return_value=(processor, 44100),
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start",
+        autospec=True, side_effect=CapturingBridge.start,
     ) as start_recording:
         started = widget.clicked_calibration()
 
     assert started is True
-    assert start_recording.call_args.args[0]["input_channels"] == [2]
+    assert start_recording.call_args.args[1].channels == (2,)
     assert widget.active_capture_channel == 2
     assert widget.current_channel == 2
     assert widget.channel_combo_box.currentData() == 2
@@ -335,7 +485,7 @@ def test_completion_saves_pinned_channel_when_current_is_disturbed(qapp):
     with mock.patch(
         "ui.calibration_window.save_mic_channel_calibration",
     ) as save:
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     assert save.call_args.kwargs["input_channel"] == 2
     assert widget.active_capture_channel is None
@@ -350,7 +500,7 @@ def test_startup_failure_clears_pinned_channel_and_restores_selector(qapp):
     widget.calibration_popup = mock.Mock()
 
     with mock.patch(
-        "ui.calibration_window.stream_record_without_play",
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start",
         side_effect=RuntimeError("device unavailable"),
     ):
         started = widget.clicked_calibration()
@@ -392,107 +542,6 @@ def test_capture_cleanup_clears_pinned_channel_and_restores_selector(
     assert widget.channel_combo_box.isEnabled() is True
 
 
-def test_queue_ready_accumulates_without_waveform_for_active_processor(qapp):
-    widget = InputCalibration(DEVICE, [1])
-    processor = _FakeProcessor()
-    widget.streaming_processor = processor
-
-    widget._on_streaming_queue_ready(processor)
-
-    assert processor.process_calls == [False]
-    assert widget.streaming_processor is processor
-
-
-def test_queue_failure_clears_pinned_channel_and_restores_selector(qapp):
-    widget = InputCalibration(DEVICE, [0, 2])
-    widget.channel_combo_box.setCurrentIndex(1)
-    processor = _FakeProcessor()
-    processor.process_queue = mock.Mock(side_effect=RuntimeError("queue failed"))
-    widget.streaming_processor = processor
-    widget.active_capture_channel = 2
-    widget.channel_combo_box.setEnabled(False)
-    widget.calibration_popup = mock.Mock()
-
-    widget._on_streaming_queue_ready(processor)
-
-    assert widget.active_capture_channel is None
-    assert widget.streaming_processor is None
-    assert widget.current_channel == 2
-    assert widget.channel_combo_box.currentData() == 2
-    assert widget.channel_combo_box.isEnabled() is True
-
-
-def test_queue_ready_ignores_stale_processor(qapp):
-    widget = InputCalibration(DEVICE, [1])
-    active = _FakeProcessor()
-    stale = _FakeProcessor()
-    widget.streaming_processor = active
-
-    widget._on_streaming_queue_ready(stale)
-
-    assert stale.process_calls == []
-    assert active.process_calls == []
-
-
-def test_recording_finished_drains_before_completion_and_ignores_stale(qapp):
-    widget = InputCalibration(DEVICE, [1])
-    active = _FakeProcessor()
-    stale = _FakeProcessor()
-    widget.streaming_processor = active
-    events = []
-    active.process_queue = mock.Mock(side_effect=lambda **_: events.append("drain"))
-    widget._on_streaming_complete = mock.Mock(
-        side_effect=lambda: events.append("complete")
-    )
-
-    widget._on_streaming_recording_finished(stale)
-    widget._on_streaming_recording_finished(active)
-
-    assert stale.process_calls == []
-    assert events == ["drain", "complete"]
-    active.process_queue.assert_called_once_with(emit_signal=False)
-
-
-def test_duplicate_finish_and_delayed_queue_ready_are_ignored(qapp):
-    widget = InputCalibration(DEVICE, [1])
-    processor = _FakeProcessor()
-    widget.streaming_processor = processor
-    widget._on_streaming_complete = mock.Mock()
-
-    widget._on_streaming_recording_finished(processor)
-    widget._on_streaming_recording_finished(processor)
-    widget._on_streaming_queue_ready(processor)
-
-    assert processor.process_calls == [False]
-    widget._on_streaming_complete.assert_called_once_with()
-
-
-def test_finish_processing_failure_guard_prevents_duplicate_dispatch(qapp):
-    widget = InputCalibration(DEVICE, [1])
-    processor = _FakeProcessor(process_error=RuntimeError("final drain failed"))
-    widget.streaming_processor = processor
-    widget._finish_failed_calibration = mock.Mock()
-
-    widget._on_streaming_recording_finished(processor)
-    widget._on_streaming_recording_finished(processor)
-
-    assert processor.process_calls == [False]
-    widget._finish_failed_calibration.assert_called_once_with(
-        "输入校准录音数据处理失败，请重试。"
-    )
-
-
-def test_calibration_connections_are_explicitly_queued():
-    source = (Path(__file__).resolve().parents[2] / "ui" / "calibration_window.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert "sign.stream_audio_queue_ready_signal.connect(" in source
-    assert "self._on_streaming_queue_ready,\n            Qt.QueuedConnection," in source
-    assert "sign.stream_audio_recording_finished_signal.connect(" in source
-    assert "self._on_streaming_recording_finished,\n            Qt.QueuedConnection," in source
-
-
 def test_only_countdown_timer_remains_for_input_calibration(qapp):
     widget = InputCalibration(DEVICE, [1])
 
@@ -525,7 +574,7 @@ def test_completed_calibration_saves_before_emitting_success(qapp):
         widget.calibration_state_changed.connect(
             lambda _changed: events.append("changed")
         )
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     save.assert_called_once_with(
         v2pa_factor=pytest.approx(10 ** (4.0 / 20.0)),
@@ -565,7 +614,7 @@ def test_completed_calibration_round_trips_through_runtime_resolver(qapp, tmp_pa
         "ui.calibration_window.save_mic_channel_calibration",
         side_effect=save_to_temporary_path,
     ):
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
         factor = get_mic_v2pa_factor(
             DEVICE,
             [1],
@@ -597,7 +646,7 @@ def test_failure_never_emits_success_or_replaces_result(
     with mock.patch(
         "ui.calibration_window.save_mic_channel_calibration",
     ) as save:
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     save.assert_not_called()
     assert emitted == [False]
@@ -648,9 +697,9 @@ def test_success_saves_current_channel_then_advances_without_starting_next(qapp)
     with mock.patch(
         "ui.calibration_window.save_mic_channel_calibration"
     ) as save, mock.patch(
-        "ui.calibration_window.stream_record_without_play"
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start"
     ) as start_next:
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     assert save.call_args.kwargs["input_channel"] == 0
     assert widget.saved_v2pa_factors[0] == pytest.approx(10 ** (4.0 / 20.0))
@@ -674,7 +723,7 @@ def test_advancement_wraps_in_stable_order_and_excludes_current(qapp):
     widget.calibration_popup = mock.Mock()
 
     with mock.patch("ui.calibration_window.save_mic_channel_calibration"):
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     assert widget.current_channel == 0
 
@@ -691,7 +740,7 @@ def test_final_channel_stays_selected(qapp):
     widget.calibration_popup = mock.Mock()
 
     with mock.patch("ui.calibration_window.save_mic_channel_calibration"):
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     assert widget.current_channel == 2
     assert widget.channel_combo_box.currentData() == 2
@@ -709,7 +758,7 @@ def test_114_db_selection_is_saved_exactly(qapp):
     with mock.patch(
         "ui.calibration_window.save_mic_channel_calibration"
     ) as save:
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     assert save.call_args.kwargs["standard_spl_db"] == 114.0
 
@@ -740,7 +789,7 @@ def test_save_failure_preserves_current_display_and_emits_no_change(qapp, error)
         "ui.calibration_window.save_mic_channel_calibration",
         side_effect=error,
     ):
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     assert widget.saved_v2pa_factors == {0: 1.25}
     assert widget.current_channel == 2
@@ -764,7 +813,7 @@ def test_invalid_calculated_result_never_saves_or_emits_change(qapp):
     with mock.patch(
         "ui.calibration_window.save_mic_channel_calibration"
     ) as save:
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
 
     save.assert_not_called()
     assert changes == []
@@ -778,7 +827,7 @@ def test_startup_failure_never_saves_or_emits_change(qapp):
     widget.calibration_state_changed.connect(changes.append)
 
     with mock.patch(
-        "ui.calibration_window.stream_record_without_play",
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start",
         side_effect=RuntimeError("device unavailable"),
     ), mock.patch(
         "ui.calibration_window.save_mic_channel_calibration"
@@ -822,9 +871,9 @@ def test_partial_completion_can_close_without_starting_or_saving_remaining(qapp)
     with mock.patch(
         "ui.calibration_window.save_mic_channel_calibration"
     ) as save, mock.patch(
-        "ui.calibration_window.stream_record_without_play"
+        "unit_test.ui.test_recording_process_integration.CapturingBridge.start"
     ) as start_next:
-        widget._on_streaming_complete()
+        _deliver_accepted(widget)
         dialog.reject()
 
     assert save.call_count == 1

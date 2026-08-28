@@ -218,7 +218,8 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
             self.spacing = spacing
 
     class FakeSequenceWindow:
-        def __init__(self):
+        def __init__(self, *, recording_bridge):
+            self.recording_bridge = recording_bridge
             self.v2pa_factor = 9.0
             self.default_logger = default_logger
             self.update_v2pa_factor = MethodType(update_factor, self)
@@ -227,6 +228,7 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
     menu_bar = object()
     menu_row = object()
     window = SimpleNamespace(
+        recording_bridge=object(),
         mic=DEVICE,
         mic_channels=[1],
         speaker={"name": "Speaker"},
@@ -250,6 +252,7 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
 
     init_sequence(window)
 
+    assert window.sequence_window.recording_bridge is window.recording_bridge
     assert window.sequence_window.v2pa_factor == 0.0
     resolve.assert_called_once_with(DEVICE, [1])
     central_widget = window.setCentralWidget.call_args.args[0]
@@ -282,6 +285,7 @@ def test_main_window_passes_current_input_to_calibration_and_refreshes_on_succes
         update_v2pa_factor=lambda: events.append(("refresh", None))
     )
     window = SimpleNamespace(
+        recording_bridge=object(),
         mic=DEVICE,
         mic_channels=[1],
         speaker={"name": "Speaker"},
@@ -299,7 +303,7 @@ def test_main_window_passes_current_input_to_calibration_and_refreshes_on_succes
     assert events == [
         (
             "init",
-            {"input_device": DEVICE, "input_channels": [1]},
+            {"input_device": DEVICE, "input_channels": [1], "recording_bridge": window.recording_bridge},
         ),
         ("exec", None),
         ("refresh", None),
@@ -345,6 +349,7 @@ def test_successful_calibration_contains_scalar_refresh_errors(error_type):
 
     speaker = {"name": "Speaker"}
     window = SimpleNamespace(
+        recording_bridge=object(),
         mic=DEVICE,
         mic_channels=[1],
         speaker=speaker,
@@ -364,6 +369,7 @@ def test_successful_calibration_contains_scalar_refresh_errors(error_type):
     assert dialog.kwargs == {
         "input_device": DEVICE,
         "input_channels": [1],
+        "recording_bridge": window.recording_bridge,
     }
     assert dialog.speaker == speaker
     dialog.exec.assert_called_once_with()

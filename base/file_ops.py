@@ -351,21 +351,8 @@ class FileOps(object):
             return error_code.INVALID_DELETE, f"Failed to delete directory: {str(e)[:40]}"
             
     @staticmethod
-    def move_wav_to_dir(recorded_path, label, recording_root=""):
-        """
-        Move the recorded WAV file to the directory corresponding to its label.
-
-        This function moves the recorded audio file to a predefined directory structure based on its label
-        (OK/NG/not_labeled).
-        If the target directories do not exist, they will be created automatically.
-
-        Args:
-            recorded_path (str): The full path of the recorded file
-            label (str): File label, should be either "OK", "NG" or "not_labeled"
-
-        Returns:
-            str: The full path of the file after moving, or an empty string if the filename is empty
-        """
+    def resolve_wav_label_target(recorded_path, label, recording_root=""):
+        """Resolve the exact relabel destination without creating or moving files."""
         source_path_text = str(recorded_path or "").strip()
         if not source_path_text:
             return ""
@@ -387,6 +374,34 @@ class FileOps(object):
             if os.path.normcase(common_root) == os.path.normcase(storage_root):
                 target_root = source_storage_dir
 
+        file_name = os.path.basename(source_path)
+        if not file_name:
+            return ""
+        if label not in ("OK", "NG", "not_labeled"):
+            return None
+        return os.path.join(target_root, label, file_name)
+
+    @staticmethod
+    def move_wav_to_dir(recorded_path, label, recording_root=""):
+        """
+        Move the recorded WAV file to the directory corresponding to its label.
+
+        This function moves the recorded audio file to a predefined directory structure based on its label
+        (OK/NG/not_labeled).
+        If the target directories do not exist, they will be created automatically.
+
+        Args:
+            recorded_path (str): The full path of the recorded file
+            label (str): File label, should be either "OK", "NG" or "not_labeled"
+
+        Returns:
+            str: The full path of the file after moving, or an empty string if the filename is empty
+        """
+        target_path = FileOps.resolve_wav_label_target(recorded_path, label, recording_root)
+        if not target_path:
+            return target_path
+        source_path = os.path.abspath(str(recorded_path).strip())
+        target_root = os.path.dirname(os.path.dirname(target_path))
         dir_paths = [
             os.path.join(target_root, "not_labeled"),
             os.path.join(target_root, "OK"),
@@ -395,20 +410,9 @@ class FileOps(object):
         for path in dir_paths:
             if not os.path.exists(path):
                 os.makedirs(path)
-        file_name = os.path.basename(source_path)
-        target_path = ""
-        if file_name:
-            if label == "OK":
-                target_path = os.path.join(target_root, "OK", file_name)
-            elif label == "NG":
-                target_path = os.path.join(target_root, "NG", file_name)
-            elif label == "not_labeled":
-                target_path = os.path.join(target_root, "not_labeled", file_name)
-            else:
-                return
-            if os.path.abspath(source_path) == os.path.abspath(target_path):
-                return target_path
-            if os.path.exists(target_path):
-                raise FileExistsError(f"Target file already exists: {target_path}")
-            shutil.move(source_path, target_path)
+        if os.path.abspath(source_path) == os.path.abspath(target_path):
+            return target_path
+        if os.path.exists(target_path):
+            raise FileExistsError(f"Target file already exists: {target_path}")
+        shutil.move(source_path, target_path)
         return target_path

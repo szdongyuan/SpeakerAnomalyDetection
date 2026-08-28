@@ -460,6 +460,9 @@ class SequenceWidgetStreamingOpsMixin:
             return error_code.INVALID_TYPE_DATA, "缺少录音元信息。", None, None
 
         source_path = self._resolve_audio_path_to_abs(recorded_path or recorded_signal_info.get("file_path"))
+        leased = getattr(self, "_recording_path_is_leased", None)
+        if source_path and callable(leased) and leased(source_path):
+            return error_code.INVALID_PATH, "录音文件尚未释放，请稍后重试。", None, None
         if not source_path or not os.path.isfile(source_path):
             return error_code.INVALID_PATH, "当前记录音频文件不存在。", None, None
 
@@ -482,6 +485,10 @@ class SequenceWidgetStreamingOpsMixin:
                 )
                 or ""
             ).strip()
+            target_path = FileOps.resolve_wav_label_target(
+                source_path, target_label, recording_root)
+            if target_path and callable(leased) and leased(target_path):
+                return error_code.INVALID_PATH, "目标录音文件尚未释放，请稍后重试。", None, None
             new_file_path = FileOps.move_wav_to_dir(
                 source_path,
                 target_label,
@@ -1865,6 +1872,8 @@ class SequenceWidgetStreamingOpsMixin:
         recorded_multi=None,
         sample_rate=None,
         completion_source="streaming",
+        prefinalized=False,
+        final_waveform_windows=None,
     ):
         """
         Handle streaming completion: alignment, file save, and analysis.
@@ -1912,75 +1921,76 @@ class SequenceWidgetStreamingOpsMixin:
             elif recorded_multi is None:
                 recorded_multi = np.asarray(recorded_mono, dtype=np.float32)
 
-            try:
-                self._verify_processor_retained_channels(processor, run_channels)
-                recorded_multi = self._normalize_final_recording_array(
-                    recorded_multi,
-                    run_channels,
-                )
-                final_waveform_windows = self._validate_final_waveform_workspace(
-                    run_channels
-                )
-            except (TypeError, ValueError, OverflowError) as error:
-                self._terminate_invalid_streaming_recording(str(error))
-                return
-
-            # Finalize WAV file (for record-only, this is the final file)
-            try:
-                _claim_and_finalize_streaming_wav_writer(self)
-            except Exception as error:
-                self._terminate_invalid_streaming_recording(
-                    f"Recording WAV finalization failed: {error}"
-                )
-                return
-
-            acq_detail = self._resolve_recording_acq_detail()
-
-            # Startup pop trim: drop the leading samples that capture the
-            # sound-card / DAC power-on transient before the quality gate
-            # sees them, so a pop cannot keep an otherwise-dead recording
-            # above threshold. The just-finalized WAV is rewritten so the
-            # file on disk matches the in-memory buffer used by the AI /
-            # plotting / DB. Configs can explicitly set
-            # ``startup_trim_ms`` to 0 when verbatim capture is required.
-            trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
-            if 0 < trim_samples < recorded_multi.shape[0]:
-                recorded_multi = recorded_multi[trim_samples:]
-                self._rewrite_recorded_wav(recorded_multi, sample_rate)
-                self.default_logger.info(
-                    f"startup_trim_applied samples={trim_samples} "
-                    f"ms={trim_samples * 1000.0 / sample_rate:.1f}"
-                )
-            elif trim_samples >= recorded_multi.shape[0]:
-                # Config asked for more trim than the recording has; skip
-                # (leave the untrimmed WAV on disk) and warn loudly instead
-                # of producing an empty buffer.
-                self.default_logger.warning(
-                    f"startup_trim_skipped_too_large samples={trim_samples} "
-                    f"recording_samples={recorded_multi.shape[0]}"
-                )
-
-            # Audio quality gate: reject silent / flat recordings before they
-            # reach analysis. A device that is not powered on, an unplugged
-            # microphone or a stuck audio stream would otherwise pollute the
-            # recent-session history, the audio database and (in mark mode)
-            # any future training/export pipeline.
-            quality_ok, quality_reason, quality_detail = validate_recorded_audio(
-                recorded_multi, merge_audio_validation_thresholds(acq_detail)
-            )
-            if not quality_ok:
-                # Keep the dialog short; the measured values + thresholds go
-                # to the log so an offline analyst can still distinguish a
-                # genuine hardware fault from an over-tight threshold.
-                if quality_detail:
-                    self.default_logger.warning(
-                        f"audio_validation_failed {quality_detail}"
+            if not prefinalized:
+                try:
+                    self._verify_processor_retained_channels(processor, run_channels)
+                    recorded_multi = self._normalize_final_recording_array(
+                        recorded_multi,
+                        run_channels,
                     )
-                self.streaming_processor = None
-                self.streaming_stimulus_data = None
-                self.streaming_mode = None
-                self._handle_invalid_recording(quality_reason)
-                return
+                    final_waveform_windows = self._validate_final_waveform_workspace(
+                        run_channels
+                    )
+                except (TypeError, ValueError, OverflowError) as error:
+                    self._terminate_invalid_streaming_recording(str(error))
+                    return
+
+                # Finalize WAV file (for record-only, this is the final file)
+                try:
+                    _claim_and_finalize_streaming_wav_writer(self)
+                except Exception as error:
+                    self._terminate_invalid_streaming_recording(
+                        f"Recording WAV finalization failed: {error}"
+                    )
+                    return
+
+                acq_detail = self._resolve_recording_acq_detail()
+
+                # Startup pop trim: drop the leading samples that capture the
+                # sound-card / DAC power-on transient before the quality gate
+                # sees them, so a pop cannot keep an otherwise-dead recording
+                # above threshold. The just-finalized WAV is rewritten so the
+                # file on disk matches the in-memory buffer used by the AI /
+                # plotting / DB. Configs can explicitly set
+                # ``startup_trim_ms`` to 0 when verbatim capture is required.
+                trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
+                if 0 < trim_samples < recorded_multi.shape[0]:
+                    recorded_multi = recorded_multi[trim_samples:]
+                    self._rewrite_recorded_wav(recorded_multi, sample_rate)
+                    self.default_logger.info(
+                        f"startup_trim_applied samples={trim_samples} "
+                        f"ms={trim_samples * 1000.0 / sample_rate:.1f}"
+                    )
+                elif trim_samples >= recorded_multi.shape[0]:
+                    # Config asked for more trim than the recording has; skip
+                    # (leave the untrimmed WAV on disk) and warn loudly instead
+                    # of producing an empty buffer.
+                    self.default_logger.warning(
+                        f"startup_trim_skipped_too_large samples={trim_samples} "
+                        f"recording_samples={recorded_multi.shape[0]}"
+                    )
+
+                # Audio quality gate: reject silent / flat recordings before they
+                # reach analysis. A device that is not powered on, an unplugged
+                # microphone or a stuck audio stream would otherwise pollute the
+                # recent-session history, the audio database and (in mark mode)
+                # any future training/export pipeline.
+                quality_ok, quality_reason, quality_detail = validate_recorded_audio(
+                    recorded_multi, merge_audio_validation_thresholds(acq_detail)
+                )
+                if not quality_ok:
+                    # Keep the dialog short; the measured values + thresholds go
+                    # to the log so an offline analyst can still distinguish a
+                    # genuine hardware fault from an over-tight threshold.
+                    if quality_detail:
+                        self.default_logger.warning(
+                            f"audio_validation_failed {quality_detail}"
+                        )
+                    self.streaming_processor = None
+                    self.streaming_stimulus_data = None
+                    self.streaming_mode = None
+                    self._handle_invalid_recording(quality_reason)
+                    return
 
             # Publish the validated, trimmed recording atomically to the
             # authoritative analysis state. Invalid captures must leave the
@@ -1991,11 +2001,13 @@ class SequenceWidgetStreamingOpsMixin:
                 copy=False,
             )
 
-            self._append_recording_wav_calibration_metadata()
+            if not prefinalized:
+                self._append_recording_wav_calibration_metadata()
 
             self.recorded_signal_info["sample_rate"] = sample_rate
-            condition_key = self._resolve_active_recording_waveform_direction(
-                fallback=""
+            condition_key = (
+                self._recording_process_direction if prefinalized
+                else self._resolve_active_recording_waveform_direction(fallback="")
             )
             self._cache_condition_record(condition_key)
 
@@ -2179,6 +2191,9 @@ class SequenceWidgetStreamingOpsMixin:
             drain = getattr(self, "_drain_queued_directional_trigger", None)
             if callable(drain):
                 drain()
+            # Only the completed business path authorizes a remote finish.
+            # Early returns and caught failures intentionally do not report it.
+            return save_code == error_code.OK and not analysis_failed
 
         except Exception as e:
             self.default_logger.error(f"Error in streaming completion: {e}")
@@ -2294,7 +2309,9 @@ class SequenceWidgetStreamingOpsMixin:
                 return
 
         bad_path = str(getattr(self, "recorded_path", "") or "")
-        if bad_path:
+        process_session = getattr(self, "_recording_process_session", None)
+        process_owned = process_session is not None and os.path.normcase(os.path.abspath(bad_path)) == os.path.normcase(process_session.request.path)
+        if bad_path and not process_owned:
             try:
                 if os.path.isfile(bad_path):
                     os.remove(bad_path)
@@ -2393,6 +2410,9 @@ class SequenceWidgetStreamingOpsMixin:
         Called before starting a new recording to prevent resource conflicts.
         Safe to call multiple times (idempotent).
         """
+        cancel_process = getattr(self, "_cancel_process_recording", None)
+        if callable(cancel_process):
+            cancel_process()
         _run_optional_streaming_cleanup(
             self,
             active_query_name="_streaming_waveform_session_is_active",
